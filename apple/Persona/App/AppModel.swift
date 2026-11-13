@@ -1559,23 +1559,35 @@ final class AppModel {
     }
 
 
+    /// The terminal of key can be streamed and typed into: what its session's row says (a read-only Agent's has none),
+    /// or a pane addressed directly (`pane:<id>`, a plain terminal), which has no row. Refusing those left Open Terminal
+    /// Here on Taking over… for good: nothing was sent, and the terminal waited for an answer (#6327).
+    func canUseTerminal(_ key: SessionKey) -> Bool { Self.terminalUsable(session(key), key) }
+
+    nonisolated static func terminalUsable(_ session: Session?, _ key: SessionKey) -> Bool {
+        session.map(\.canTerminal) ?? key.isPane
+    }
+
     /// Starts (or continues, with the last epoch and seq the view holds) a session's terminal stream. grid: drive it at
-    /// that size (the phone's); takeover: even if another program on the computer holds it.
+    /// that size (the phone's); takeover: even if another program on the computer holds it. False: nothing went out (no
+    /// terminal there, or no socket): the view asks again later.
+    @discardableResult
     func terminalSubscribe(_ key: SessionKey, epoch: String?, after: Int, grid: TerminalGridSize? = nil, takeover: Bool = false,
-                           handler: @escaping (TerminalEvent) -> Void) {
-        guard session(key)?.canTerminal == true else { return }
+                           handler: @escaping (TerminalEvent) -> Void) -> Bool {
+        guard canUseTerminal(key), let socket = socket(key.group) else { return false }
         terminalHandlers[key] = handler
         var msg: [String: Any] = ["type": "terminal_subscribe", "machine_id": key.machineID, "session_id": key.sessionID]
         if let epoch { msg["epoch"] = epoch; msg["after_seq"] = after }
         if let grid { msg["control"] = ["cols": grid.cols, "rows": grid.rows] }
         if takeover { msg["takeover"] = true }
-        socket(key.group)?.send(msg)
+        socket.send(msg)
+        return true
     }
 
     /// Typed into a terminal the phone drives: the bytes go straight to it (in order, over the WebSocket). grid: the
     /// terminal's new size (the keyboard came up, the font changed).
     func terminalInput(_ key: SessionKey, _ text: String, grid: TerminalGridSize? = nil) {
-        guard session(key)?.canTerminal == true else { return }
+        guard canUseTerminal(key) else { return }
         var msg: [String: Any] = ["type": "terminal_input", "machine_id": key.machineID, "session_id": key.sessionID]
         if !text.isEmpty { msg["text"] = text }
         if let grid { msg["control"] = ["cols": grid.cols, "rows": grid.rows] }
@@ -1586,7 +1598,7 @@ final class AppModel {
     /// gives it to a program that takes the mouse (Claude Code, Codex scroll their conversation) and scrolls its own
     /// scrollback for one that does not — what a herdr client does with the wheel, as in Moshi.
     func terminalScroll(_ key: SessionKey, lines: Int, at: (col: Int, row: Int)?) {
-        guard session(key)?.canTerminal == true, lines != 0 else { return }
+        guard canUseTerminal(key), lines != 0 else { return }
         var msg: [String: Any] = ["type": "terminal_input", "machine_id": key.machineID, "session_id": key.sessionID, "scroll": lines]
         if let at { msg["at"] = [at.col, at.row] }
         socket(key.group)?.send(msg)
@@ -1594,14 +1606,14 @@ final class AppModel {
 
     /// A tap on a terminal the app drives: a left click at that cell of its screen (0-based).
     func terminalClick(_ key: SessionKey, column: Int, row: Int) {
-        guard session(key)?.canTerminal == true else { return }
+        guard canUseTerminal(key) else { return }
         socket(key.group)?.send(["type": "terminal_input", "machine_id": key.machineID, "session_id": key.sessionID, "click": [column, row]])
     }
 
     /// The pointer on a terminal the app drives (docs/integrations/terminal.md section 25): action down / up / drag, button left /
     /// middle / right, at a cell of its screen (0-based), mods herdr's bits (shift 1, ctrl 2, alt 4).
     func terminalMouse(_ key: SessionKey, action: String, button: String, column: Int, row: Int, mods: Int) {
-        guard session(key)?.canTerminal == true else { return }
+        guard canUseTerminal(key) else { return }
         socket(key.group)?.send(["type": "terminal_input", "machine_id": key.machineID, "session_id": key.sessionID,
                                  "mouse": ["action": action, "button": button, "at": [column, row], "mods": mods]])
     }

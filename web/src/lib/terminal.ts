@@ -108,6 +108,10 @@ export class FrameOrder {
 
 /** Older than this without a fresh screen counts as stale even before anything fails (a request may hang). */
 export const STALE_AFTER_MS = 4000;
+/** How long a subscription may go unanswered (no first frame, no word on taking the terminal over) before the feed
+ * gives up on it, says why and tries again: the takeover went with a node connection that dropped, or the computer
+ * doesn't answer (iOS TerminalFeed.answerLimit, #6327). */
+export const ANSWER_LIMIT_MS = 10_000;
 
 /** Seconds to wait after the n-th failure in a row: 1, 2, 4, 8, then every 15. */
 export function backoff(failures: number): number {

@@ -10,10 +10,39 @@ A manager is the assistant's process, `personad assistant` (`docs/assistant/assi
 ## Repository references
 
 Repository bindings (#5330) belong to one manager's Settings entry `assistant.repositories`, not a hub-wide catalog.
-The document uses Settings CAS and a revision; at most 200 active records contain a stable ID, provider, HTTPS
+The document uses Settings CAS and a revision; at most 200 active records contain a stable ID, provider, HTTP(S)
 instance, full namespace path, canonical URL, optional name/aliases/purpose and `verified_at`. No credentials,
-computer or checkout are stored. HTTPS, `git@host:path.git` and `ssh://git@host/path.git` normalize to the same
+computer or checkout are stored. HTTP(S), `git@host:path.git` and `ssh://git@host/path.git` normalize to the same
 identity. GitHub Enterprise and self-hosted GitLab require an explicit provider; nested GitLab groups are preserved.
+
+The web form parses locally on every URL/provider change and immediately shows the provider, full repository path,
+canonical web root and an explicit not-yet-checked state. No preview button or remote request is needed. The server
+reparses on preview and save; both parsers share `spec/fixtures/repository-remotes.json`. GitHub repository pages
+(such as `/pull/5581`) and GitLab's `/-/` project pages discard their page suffix, ordinary query and fragment.
+GitLab paths without `/-/` keep every namespace segment; ambiguous old page URLs are not guessed by taking two
+segments. Explicit credential-bearing URLs and credential query parameters remain invalid. Only exact known
+aliases (`www.github.com`, `api.github.com/repos/...`, SSH `ssh.github.com` and `altssh.gitlab.com`) map to public
+providers; lookalike subdomains never imply trust. Public HTTP/SSH references become HTTPS web roots. Custom
+instances keep their web scheme/port, while an unknown SSH port cannot imply a web port. No `.git`, page suffix,
+query, fragment or clone form is stored. Static parsing never claims remote existence.
+
+The checker makes one anonymous GitHub REST or GitLab projects metadata GET, never a Git subprocess, clone, content
+fetch or model call. Its total budget stays eight seconds (including DNS/body), with three-second TCP/TLS limits,
+a four-second header limit and no request retry. All DNS answers pass policy before numeric dials start; attempts
+are staggered by 250 ms with at most four in flight, and losing connections are canceled/closed. This prevents a
+stalled first address from hiding another reachable one without relaxing DNS pinning. Cancellation has its own
+error, distinct from deadline expiry. The browser allows the server's budget plus five seconds for mutations; an
+expired browser wait is an unconfirmed write, so the draft stays and the user is told to refresh before retrying.
+Late replies cannot replace a different assistant or a new draft. Public GitHub checks use this manager's
+`github.proxy` when configured; otherwise checks use the process's `HTTP_PROXY` / `HTTPS_PROXY` and `NO_PROXY`
+(including lowercase spellings). Explicit `github.proxy` takes priority over environment bypass rules, as for the
+extension market. GitLab and self-hosted instances use the environment rules. An invalid explicit GitHub proxy
+fails the check rather than falling back to another route; a selected proxy failure never falls back to direct.
+Proxy tunnels carry only validated numeric destinations (HTTP CONNECT or SOCKS5); destination DNS is never
+delegated to the proxy. HTTP(S) and SOCKS5 environment proxies are supported; plain HTTP repository endpoints
+also require the HTTP proxy to permit CONNECT to their port. A rate limit is not a timeout diagnosis.
+The shared server routes serve every caller; repository binding UI currently exists only on the web, not Apple or
+Android. Browser fixtures cover synthetic saves, while Go route and isolated database tests cover persistence.
 
 The manager-owned `/api/v1/assistant/repositories` routes list/create; `/{id}` reads/updates/unbinds;
 `/preview` parses without contacting a remote. Mutations require full access. `/{id}/restore` accepts the unbind
@@ -25,8 +54,9 @@ repositories). Descriptive edits and reads do not probe or synchronize. Checks a
 existence, never identity, membership, ownership, roles or push permission. Hidden/private 404, login HTML,
 authentication failures, rate limits, timeouts and ambiguous metadata cannot pass verification.
 
-Checks allow HTTPS only, reject redirects, use no ambient proxy/cookies/credentials, cap body/headers/time, validate
-all DNS answers and dial pinned numeric destinations with ordinary TLS hostname verification. Special, metadata,
+Checks retain a self-hosted instance's HTTP(S) scheme and web port, reject redirects, use no repository
+cookies/credentials, cap body/headers/time, validate all DNS answers and dial pinned numeric destinations with
+ordinary TLS hostname verification. Configured proxy credentials go only to the proxy, never to the repository. Special, metadata,
 loopback and link-local addresses are always refused. Private RFC1918/ULA destinations require an operator's
 explicit `repository_trusted_targets` entry in this manager's `manager.json`; no Web/API input can grant trust:
 
@@ -34,7 +64,7 @@ explicit `repository_trusted_targets` entry in this manager's `manager.json`; no
 {"repository_trusted_targets":[{"instance_url":"https://code.example.com","networks":["<private CIDR>"]}]}
 ```
 
-The exact HTTPS instance (including nondefault port) and private CIDR must both match. Broad public/default-route
+The exact HTTP(S) instance (including nondefault port) and private CIDR must both match. Broad public/default-route
 CIDRs cannot opt in private networks. Configure only infrastructure the operator trusts; this is not a connector
 or sign-in system. Public-only installations need no configuration.
 

@@ -1,14 +1,14 @@
 // Assistant-owned references, not checkout locations or task authorization.
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
-import { api, credentialOwner, errorText, getToken } from "../../lib/api";
+import { api, credentialOwner, errorText, getToken, HubTimeoutError, pastHub } from "../../lib/api";
+import { parseRepository, type RepositoryIdentity as Identity } from "../../lib/repository-identity";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { Button, Dialog, Loading, toast } from "../../ui/atoms";
 import { Group, Row, settingsInputClass } from "./SettingsParts";
 
-type Identity = { provider: string; instance_url: string; path: string; canonical_url: string };
 type Binding = Identity & { id: string; name?: string; aliases?: string[]; purpose?: string; verified_at: string };
-type Draft = { id?: string; url: string; provider: string; name: string; aliases: string; purpose: string; identity?: Identity };
+type Draft = { id?: string; url: string; provider: string; name: string; aliases: string; purpose: string };
 type Reply = { manager: string; repositories?: Binding[]; repository?: Binding; identity?: Identity; receipt?: string };
 const blank = (): Draft => ({ url: "", provider: "", name: "", aliases: "", purpose: "" });
 const validIdentity = (value?: Identity): value is Identity => !!value && ["github", "gitlab"].includes(value.provider)
@@ -26,13 +26,15 @@ export function Repositories({ manager, owner }: { manager: string; owner: strin
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [removing, setRemoving] = useState<Binding | null>(null);
+  const identity = draft ? parseRepository(draft.url, draft.provider) : undefined;
   const original = rows?.find((value) => value.id === draft?.id);
-  const needsCheck = !original || original.canonical_url !== draft?.identity?.canonical_url || original.provider !== draft?.identity?.provider;
+  const needsCheck = !original || original.canonical_url !== identity?.canonical_url || original.provider !== identity?.provider;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const current = () => alive.current && owner === credentialOwner();
   async function request(path: string, method = "GET", json?: unknown) {
     const result = await api<Reply>(`/assistant/repositories${path}`, {
       method, json, token, tokenOwner: owner, isAuthContextCurrent: current, headers: { [MANAGER_HEADER]: manager },
+      timeout: method === "GET" ? undefined : pastHub(8_000),
     });
     if (result.manager !== manager) throw new Error(t("settings-repositories.load_failed"));
     return result;
@@ -41,7 +43,7 @@ export function Repositories({ manager, owner }: { manager: string; owner: strin
     if (locked.current || !current()) return;
     locked.current = true; setBusy(kind); setError("");
     try { await action(); }
-    catch (e) { if (current()) setError(errorText(e)); }
+    catch (e) { if (current()) setError(e instanceof HubTimeoutError && kind !== "load" ? t("settings-repositories.save_unconfirmed") : errorText(e)); }
     finally { locked.current = false; if (current()) setBusy(""); }
   }
   const load = () => run("load", async () => {
@@ -50,17 +52,16 @@ export function Repositories({ manager, owner }: { manager: string; owner: strin
     if (current()) setRows(result.repositories);
   });
   const body = () => ({
-    url: draft!.url, provider: draft!.provider, name: draft!.name,
+    url: identity!.canonical_url, provider: identity!.provider, name: draft!.name,
     aliases: draft!.aliases.split(",").map((v) => v.trim()).filter(Boolean), purpose: draft!.purpose,
-  });
-  const preview = () => run("preview", async () => {
-    const result = await request("/preview", "POST", body());
-    if (!validIdentity(result.identity)) throw new Error(t("settings-repositories.load_failed"));
-    if (current()) setDraft((value) => value && ({ ...value, identity: result.identity }));
   });
   const save = () => run("save", async () => {
     const result = await request(draft!.id ? `/${encodeURIComponent(draft!.id)}` : "", draft!.id ? "PUT" : "POST", body());
-    if (!validBinding(result.repository)) throw new Error(t("settings-repositories.save_unconfirmed"));
+    if (!validBinding(result.repository) || result.repository.provider !== identity!.provider
+      || result.repository.instance_url !== identity!.instance_url || result.repository.path !== identity!.path
+      || result.repository.canonical_url !== identity!.canonical_url || (draft!.id && result.repository.id !== draft!.id)) {
+      throw new Error(t("settings-repositories.save_unconfirmed"));
+    }
     if (!current()) return;
     const saved = result.repository;
     setRows((values) => [...(values ?? []).filter((v) => v.id !== saved.id), saved]);
@@ -81,12 +82,12 @@ export function Repositories({ manager, owner }: { manager: string; owner: strin
     } });
   });
   const edit = (value: Binding) => {
-    setError(""); setDraft({ id: value.id, url: value.canonical_url, provider: value.provider, name: value.name ?? "", aliases: value.aliases?.join(", ") ?? "", purpose: value.purpose ?? "", identity: value });
+    setError(""); setDraft({ id: value.id, url: value.canonical_url, provider: value.provider, name: value.name ?? "", aliases: value.aliases?.join(", ") ?? "", purpose: value.purpose ?? "" });
   };
   const field = (key: "url" | "name" | "aliases" | "purpose", label: string, max: number) => (
     <label className="block text-[12.5px] text-ink-2">{label}
       <input className={`${settingsInputClass} mt-1`} value={draft![key]} maxLength={max} disabled={!!busy} autoComplete="off" spellCheck={false}
-        onChange={(e) => setDraft({ ...draft!, [key]: e.target.value, identity: key === "url" ? undefined : draft!.identity })} />
+        onChange={(e) => { setDraft({ ...draft!, [key]: e.target.value }); if (key === "url") setError(""); }} />
     </label>
   );
   return <Group anchor="repositories" title={t("settings-repositories.title")} footer={t("settings-repositories.hint")}>
@@ -116,19 +117,20 @@ export function Repositories({ manager, owner }: { manager: string; owner: strin
       </div>)}
     </div>}
     <Dialog open={!!draft} onClose={() => { if (!busy) { setDraft(null); setError(""); } }} title={t(draft?.id ? "settings-repositories.edit_title" : "settings-repositories.bind")}
-      footer={<><Button disabled={!!busy} onClick={() => { setDraft(null); setError(""); }}>{t("common.cancel")}</Button><Button tone="primary" busy={busy === "save"} disabled={!!busy || !draft?.identity} onClick={() => void save()}>{t(draft?.id ? "settings-repositories.save" : "settings-repositories.check_save")}</Button></>}>
+      footer={<><Button disabled={!!busy} onClick={() => { setDraft(null); setError(""); }}>{t("common.cancel")}</Button><Button tone="primary" busy={busy === "save"} disabled={!!busy || !identity} onClick={() => void save()}>{t(draft?.id ? "settings-repositories.save" : "settings-repositories.check_save")}</Button></>}>
       {draft && <div className="space-y-3">
         {field("url", t("settings-repositories.url"), 2048)}
         <label className="block text-[12.5px] text-ink-2">{t("settings-repositories.provider")}
-          <select className={`${settingsInputClass} mt-1`} value={draft.provider} disabled={!!busy} onChange={(e) => setDraft({ ...draft, provider: e.target.value, identity: undefined })}>
+          <select className={`${settingsInputClass} mt-1`} value={draft.provider} disabled={!!busy} onChange={(e) => { setDraft({ ...draft, provider: e.target.value }); setError(""); }}>
             <option value="">{t("settings-repositories.detect")}</option><option value="github">GitHub / GitHub Enterprise</option><option value="gitlab">GitLab</option>
           </select>
         </label>
-        <Button busy={busy === "preview"} disabled={!!busy || !draft.url.trim()} onClick={() => void preview()}>{t("settings-repositories.preview")}</Button>
-        {draft.identity && <div className="rounded-control bg-field p-3 text-[12px] text-ink-2">
-          <p>{draft.identity.provider} · {draft.identity.instance_url}</p><p className="break-all font-mono">{draft.identity.path}</p>
-          <p>{t(draft.id ? "settings-repositories.edit_check" : "settings-repositories.unchecked")}</p>
+        {identity && <div data-repository-preview role="status" aria-live="polite" className="rounded-control bg-field p-3 text-[12px] text-ink-2">
+          <p>{identity.provider} · {identity.instance_url}</p><p className="break-all font-mono">{identity.path}</p>
+          <p className="break-all font-mono">{identity.canonical_url}</p>
+          <p>{t(needsCheck ? "settings-repositories.unchecked" : "settings-repositories.edit_check")}</p>
         </div>}
+        {draft.url && !identity && <p role="status" className="text-[12px] text-ink-2">{t("settings-repositories.invalid_url")}</p>}
         {field("name", t("settings-repositories.name"), 80)}
         {field("aliases", t("settings-repositories.aliases"), 809)}
         {field("purpose", t("settings-repositories.purpose"), 500)}

@@ -496,6 +496,7 @@ Previously streams (sections 2/11) resolved pane from session id (`paneFor`: `ag
 
 On an address, node validates the pane against the host's latest snapshot (refresh once if missing); otherwise `pane … is not running`, never pointing outside snapshots.
 Web opens panes with Agent sessions by **session id** (sharing the exact hub stream with chat terminal panels, same control/taken rules); only sessionless panes use addresses.
+The iOS app opens a plain terminal by its address too (the Terminals page, Open Terminal Here); such an address has no session row, so the app's gate for streams and keys lets it through on its own (section 30).
 
 ### List panes: `panes.list`
 
@@ -1088,3 +1089,24 @@ The herdr server is the one the computer's own herdr window uses too. iOS keeps 
 ### Tests
 
 - `cd web && npm test`: `lib/terminal-appearance.test.ts` (default, stored values, notifications), `terminal/colors.test.ts` (`styles.css` scopes every token the terminal reads; a dark terminal on a light page is Match page on a dark page, with a theme color and with an extension theme), `terminal/appearance.test.ts` (both feeds: palette; Full view's 996 answers and 2031 reports on page and setting changes), `terminal/TerminalOptions.test.tsx` (the row), `terminal/FullTerminal.test.tsx` (Full view's gear: only Appearance).
+
+## 30. A subscription nobody answers: the wait is bounded (iOS and web, #6327)
+
+Open Terminal Here on the iPhone sat on **Taking over…** with a spinner for good. The app never sent `terminal_subscribe`: it allowed streams and keys only for a session whose row says it has a terminal (`canTerminal`), and a `pane:` address (section 19) has no row. `AppModel.canUseTerminal` now lets a `pane:` address through for the subscription, the keys, the wheel, clicks and the mouse. `keys()` over HTTP stays session-only, as the node's `session.keys` does. The mock UI tests had missed it because they run without `MOCK_TERMINAL_STREAM`, where the feed polls `GET …/screen` and never subscribes.
+
+The same page could also wait forever on a subscription the hub never answers, for example a takeover whose `terminal.watch` went with a node connection that a deploy closed. Both feeds (`TerminalFeed.swift`, `web/src/views/session/terminal/feed.ts`) now bound that wait:
+
+- **What counts as an answer**: a subscription from a whole frame is answered by its first frame. One that asks to drive needs the hub's `terminal_control` too, together with a frame or the screen it continues. A subscription that continues the frames the page already has, and only watches, is not timed: an idle pane sends nothing.
+- **From 4 seconds** without a first screen, the link status says **No terminal yet · Waiting for the computer…** with Retry, as the web already did (`TerminalLinkStatus` counts from `waitingSince` until a screen came).
+- **At 10 seconds** (`answerLimit`, `ANSWER_LIMIT_MS`) the feed unsubscribes at the hub and fails with a reason: **<computer> is offline** when the hub lists it offline, else **<computer> isn't answering**. The spinner gives way to the reason, and the backoff (1, 2, 4, 8, 15 s) subscribes again from a whole frame. A hub error for an offline computer is shown in those words too, never the hub's raw text, which can name the machine by id.
+- **Retry** while a subscription is still unanswered unsubscribes first. Otherwise the hub would treat it as the same subscription again and start no new watch (`terminalSubscribe`: same device, same size).
+- **The computer comes back online** (the `machines` push): the feed subscribes again, and takes the terminal over, at once rather than at the backoff's turn.
+- **The size chip** (iOS) and the size label (web) say **Taking over…** between tries: the feed still takes the terminal over, and the next try asks again. Before, a failed try set it back to off, and the chip showed Wrap (the web: View only), the controls of a mirror that had given up. Only a session that isn't running, or a node that can't stream (the feed reads the screen instead), goes back to watching. On iOS the chip also goes back to Taking over… while the hub link is down, as the web's does: the hub no longer knows who drives.
+
+Hub: when a computer's connection ends (`connectionEnded` → `terminalsEnded`), a `terminal.watch` still on its way to that connection is cancelled (`termRelay.life`). Before, it held the session's call lock until its 20-second deadline, so the next takeover, on the node's new connection, waited behind it. A node's own `terminal.end` does not cancel anything: watches to a live connection stay one at a time.
+
+### Tests
+
+- Hub: `terminal_reconnect_test.go`. The node's connection closes with the takeover's watch on its way: the app is told at once, and subscribing again takes over on the new connection. The hub hears of the reconnect before the old call fails: the next takeover goes through within 3 seconds, not after 20.
+- iOS: `TerminalTakeoverTests` (a `pane:` terminal takes over and takes keys; the 10-second limit, its reason and the fresh subscription; Retry unsubscribes first; back online subscribes at once). `TerminalTakeoverHangTests` is the UI flow with screenshots, against the mock's `/mock/terminal_node?state=stalled|gone|back`.
+- Web: `terminal/feed.test.ts` (the same three cases).

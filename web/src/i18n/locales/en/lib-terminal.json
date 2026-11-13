@@ -8,5 +8,8 @@
   "waiting": "Waiting for the computer…",
   "retry_in_one": "Retrying in {count}s",
   "retry_in_other": "Retrying in {count}s",
-  "retrying": "Retrying…"
+  "retrying": "Retrying…",
+  "offline": "{name} is offline",
+  "not_answering": "{name} isn't answering",
+  "not_answered_yet": "This computer hasn't answered yet"
 }

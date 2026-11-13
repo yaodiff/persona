@@ -55,6 +55,13 @@ type termRelay struct {
 	takeover     bool
 	synced       *termCtl // what the node runs: controlled at that size, or (nil) observing if observing
 	observing    bool
+
+	// Done when the machine's connection ends with the relay on it (terminalsEnded): a watch still on its way to that
+	// connection stops waiting, so it does not hold the session's call lock, and the next subscribe's watch goes to the
+	// node's new connection at once instead of after the old call's deadline (#6327). Nil in tests that make a relay
+	// by hand.
+	life context.Context
+	end  context.CancelFunc
 }
 
 // termCtl is a controlled terminal's grid.
@@ -129,6 +136,7 @@ func (h *Hub) terminalSubscribe(ctx context.Context, c *client, machineID, sessi
 	first := r == nil
 	if first {
 		r = &termRelay{subs: map[*client]map[string]bool{}}
+		r.life, r.end = context.WithCancel(context.Background())
 		t.relays[key] = r
 	}
 	if r.subs[c] == nil {
@@ -219,7 +227,12 @@ func (h *Hub) terminalSyncOnce(ctx context.Context, m *Machine, key [2]string, r
 		Control *bool `json:"control"`
 	}
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	stop := func() bool { return false }
+	if r.life != nil { // the machine's connection went meanwhile: this watch went with it
+		stop = context.AfterFunc(r.life, cancel)
+	}
 	err := m.call(cctx, "terminal.watch", params, &res)
+	stop()
 	cancel()
 
 	t.mu.Lock()
@@ -608,18 +621,25 @@ func (c *client) sendTerm(v any) {
 	c.queue(b)
 }
 
-// terminalsEnded ends every terminal stream of the machine, saying why.
+// terminalsEnded ends every terminal stream of the machine, saying why: its connection is gone (connectionEnded). A
+// watch still on its way went with that connection; it stops waiting for it, so the next subscribe's watch goes to the
+// node's new connection now, not after the old call's deadline (#6327).
 func (h *Hub) terminalsEnded(machineID, why string) {
 	t := &h.terms
 	t.mu.Lock()
 	var ids []string
-	for k := range t.relays {
+	var relays []*termRelay
+	for k, r := range t.relays {
 		if k[0] == machineID {
 			ids = append(ids, k[1])
+			relays = append(relays, r)
 		}
 	}
 	t.mu.Unlock()
-	for _, id := range ids {
-		h.terminalEnded(machineID, id, why, nil)
+	for i, id := range ids {
+		h.terminalEnded(machineID, id, why, relays[i]) // one subscribed since, on the new connection, stays
+		if relays[i].end != nil {
+			relays[i].end()
+		}
 	}
 }

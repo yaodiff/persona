@@ -131,6 +131,9 @@ func (s *Service) checkRepository(ctx context.Context, id repository.Identity) e
 	}
 	var cfg struct {
 		Targets []repository.TrustedTarget `json:"repository_trusted_targets"`
+		GitHub  struct {
+			Proxy string `json:"proxy"`
+		} `json:"github"`
 	}
 	if s.repositoryConfig != "" {
 		raw, err := managerconf.ReadFile(s.repositoryConfig)
@@ -138,7 +141,7 @@ func (s *Service) checkRepository(ctx context.Context, id repository.Identity) e
 			return repositoryProblem("store")
 		}
 	}
-	return (repository.Checker{TrustedTargets: cfg.Targets}).Check(ctx, id)
+	return (repository.Checker{TrustedTargets: cfg.Targets, GitHubProxy: cfg.GitHub.Proxy}).Check(ctx, id)
 }
 
 func (s *Service) saveRepository(ctx context.Context, id string, binding RepositoryBinding) (RepositoryBinding, error) {

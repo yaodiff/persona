@@ -41,5 +41,6 @@
   "today_title": "今天的 Token",
   "now": "现在",
   "tokens": "Token",
+  "tokens_last_hour": "最近一小时 Tokens",
   "today_value": "今天 {n}"
 }

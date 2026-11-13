@@ -218,7 +218,9 @@ struct TodoCalendarTests {
                                   axis: CGRect(x: 0, y: 81, width: 340, height: 500), scrolled: 8 * 52, hour: 52)
         #expect(map.day(10) == 0 && map.day(61) == 0 && map.day(101) == 1 && map.day(339) == 6 && map.day(500) == 6)
         // a finger 20 pt into the block, 26 pt (half an hour) below the axis's top: the block's top is at 8:30 − 20 pt
-        #expect(map.spot(CGPoint(x: 150, y: 81 + 26), grab: 20) == .axis(day: 2, minutes: (8 * 52 + 26 - 20) / 52 * 60))
+        // (the minutes as a typed constant: inside `#expect`, Xcode 26.0 reads the literals as Int)
+        let top: Double = (8 * 52 + 26 - 20) / 52 * 60
+        #expect(map.spot(CGPoint(x: 150, y: 81 + 26), grab: 20) == .axis(day: 2, minutes: top))
         #expect(map.spot(CGPoint(x: 150, y: 60), grab: 20) == .allDay(day: 2))
         #expect(map.spot(CGPoint(x: 150, y: 40), grab: 20) == nil)
         #expect(map.spot(CGPoint(x: 150, y: 600), grab: 20) == nil)

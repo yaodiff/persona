@@ -16,7 +16,9 @@ import { toast } from "../../ui/atoms";
 import { t } from "../../i18n";
 import type { QueuePanelProps } from "./QueuePanel";
 
-const QueuePanel = lazyPage(() => import("./QueuePanel").then((m) => m.QueuePanel), { idle: true });
+// Not `idle`: ChatView renders QueueStrip only while a message is queued (hasQueue), so this chunk loads on that first
+// queued message instead of in every cold start's idle tier. The Suspense below holds the composer while it arrives.
+const QueuePanel = lazyPage(() => import("./QueuePanel").then((m) => m.QueuePanel));
 
 /** A photo of a queued message, read back from the session's machine for the composer's tray; null when it can't be. */
 export async function readPhoto(mid: string, path: string, cwd?: string): Promise<DraftImage | null> {

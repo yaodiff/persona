@@ -5,5 +5,8 @@
   "updated_at": "{time}に更新",
   "waiting": "コンピューターの応答を待っています…",
   "retry_in_other": "{count}秒後に再試行",
-  "retrying": "再試行中…"
+  "retrying": "再試行中…",
+  "offline": "{name} はオフラインです",
+  "not_answering": "{name} から応答がありません",
+  "not_answered_yet": "このコンピューターからまだ応答がありません"
 }

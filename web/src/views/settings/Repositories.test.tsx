@@ -12,7 +12,7 @@ import { Repositories } from "./Repositories";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 type Call = { path: string; init: RequestInit; answer: (body: unknown, status?: number) => void };
 let root: Root, host: HTMLDivElement, calls: Call[];
-const identity = { provider: "gitlab", instance_url: "https://gitlab.example.com", path: "team/sub/sample", canonical_url: "https://gitlab.example.com/team/sub/sample" };
+const identity = { provider: "gitlab", instance_url: "https://gitlab.com", path: "team/sub/sample", canonical_url: "https://gitlab.com/team/sub/sample" };
 const binding = { ...identity, id: "repo_sample", name: "Sample", aliases: ["demo"], purpose: "Public-safe sample", verified_at: "2026-11-12T00:00:00Z" };
 const text = () => document.body.textContent ?? "";
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
@@ -30,45 +30,59 @@ const open = async (rows: unknown[] = []) => { await render(); await click("Mana
 beforeEach(async () => {
   await initI18n("en"); setToken("synthetic-repository-session"); calls = [];
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
-  vi.stubGlobal("fetch", vi.fn((url: RequestInfo | URL, init: RequestInit = {}) => new Promise<Response>((resolve) => calls.push({
-    path: String(url).split("/api/v1")[1], init,
-    answer: (body, status = 200) => resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })),
-  }))));
+  vi.stubGlobal("fetch", vi.fn((url: RequestInfo | URL, init: RequestInit = {}) => new Promise<Response>((resolve, reject) => {
+    init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    calls.push({
+      path: String(url).split("/api/v1")[1], init,
+      answer: (body, status = 200) => resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })),
+    });
+  })));
 });
 afterEach(async () => {
-  act(() => { document.querySelectorAll<HTMLButtonElement>('[data-toast] button[aria-label]').forEach((b) => b.click()); });
+  act(() => { document.querySelectorAll<HTMLButtonElement>('[aria-live="polite"] button[aria-label]').forEach((b) => b.click()); });
   act(() => root.unmount()); host.remove(); document.body.innerHTML = ""; handleUnauthorized(() => {}); vi.unstubAllGlobals(); setToken(""); await initI18n("zh-Hans");
 });
 
-it("loads only on demand and requires parsed identity before existence-check/save", async () => {
+it("loads only on demand and previews locally before existence-check/save", async () => {
   await render(); expect(calls).toHaveLength(0);
   await click("Manage repositories"); expect(text()).toContain("Loading");
   await answer(calls[0], { manager: "assistant", repositories: [] });
   expect(text()).toContain("No repositories bound");
   await click("Bind repository");
-  await input("Repository URL", "git@gitlab.example.com:team/sub/sample.git");
-  expect(button("Check existence and save").disabled).toBe(true);
-  await click("Preview repository");
-  expect(calls[1].path).toBe("/assistant/repositories/preview");
-  await answer(calls[1], { manager: "assistant", identity });
-  expect(text()).toContain(identity.path); expect(text()).toContain("Not yet checked");
+  await input("Repository URL", "git@" + "gitlab.com:team/sub/sample.git");
+  expect(button("Check existence and save").disabled).toBe(false);
+  expect(calls).toHaveLength(1);
+  expect(text()).toContain(identity.path); expect(text()).toContain("Parsed locally; existence not yet checked");
   await click("Check existence and save");
   expect(text()).toContain("Checking repository existence");
-  expect(new Headers(calls[2].init.headers).get("X-Persona-Manager")).toBe("assistant");
-  await answer(calls[2], { manager: "assistant", repository: binding });
+  expect(new Headers(calls[1].init.headers).get("X-Persona-Manager")).toBe("assistant");
+  await answer(calls[1], { manager: "assistant", repository: binding });
   expect(text()).toContain("Repository saved"); expect(text()).toContain(binding.purpose);
 });
 
-it("invalidates a preview after a URL change and leaves an inconclusive check unsaved", async () => {
-  await open(); await click("Bind repository"); await input("Repository URL", identity.canonical_url); await click("Preview repository");
-  await answer(calls[1], { manager: "assistant", identity });
-  await input("Repository URL", `${identity.canonical_url}-other`);
+it("immediately replaces local identity and clears invalid input without preview requests", async () => {
+  await open(); await click("Bind repository");
+  await input("Repository URL", "https://github.com/example/project/pull/5581?diff=split#review");
+  expect(text()).toContain("https://github.com/example/project");
+  expect(button("Check existence and save").disabled).toBe(false);
+  await input("Repository URL", "https://github.com/example/other");
+  expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain("example/project");
+  await input("Repository URL", "https://token@" + "github.com/example/other");
   expect(button("Check existence and save").disabled).toBe(true);
-  await click("Preview repository"); await answer(calls[2], { manager: "assistant", identity });
+  expect(document.querySelector('[data-repository-preview]')).toBeNull();
+  expect(calls).toHaveLength(1);
+});
+
+it("submits the canonical preview and leaves a failed check unsaved with its draft", async () => {
+  await open(); await click("Bind repository");
+  await input("Repository URL", "git@" + "github.com:Example/Project.git");
   await click("Check existence and save");
-  await answer(calls[3], { code: "repository_unavailable", error: "Existence could not be confirmed." }, 422);
-  expect(text()).toContain("Existence could not be confirmed.");
+  expect(JSON.parse(calls[1].init.body as string)).toMatchObject({url:"https://github.com/example/project",provider:"github"});
+  await answer(calls[1], { code: "repository_timeout", error: "Repository check timed out; nothing was saved." }, 422);
+  expect(text()).toContain("Repository check timed out; nothing was saved.");
   expect(document.querySelector('[role="dialog"][aria-modal="true"]')).toBeTruthy();
+  expect(document.querySelector<HTMLInputElement>('input')!.value).toBe("git@" + "github.com:Example/Project.git");
+  expect(text()).toContain("No repositories bound");
 });
 
 it("edits descriptive metadata and restores an unbound record with its single-use receipt", async () => {
@@ -102,4 +116,41 @@ it("rejects an out-of-scope or malformed success instead of showing an empty sta
   await render(); await click("Manage repositories");
   await answer(calls[0], { manager: "work", repositories: [binding] });
   expect(text()).toContain("Could not load repositories"); expect(text()).not.toContain("No repositories bound");
+});
+
+it("bounds a stalled save and ignores its late response after a new draft", async () => {
+  await open(); await click("Bind repository"); await input("Repository URL", identity.canonical_url);
+  const savedNotices = text().split("Repository saved").length;
+  vi.useFakeTimers();
+  try {
+    await click("Check existence and save");
+    await act(async () => { await vi.advanceTimersByTimeAsync(13_000); });
+    expect(text()).toContain("The change is unconfirmed. Refresh repositories before trying again.");
+    expect(document.querySelector<HTMLInputElement>("input")!.value).toBe(identity.canonical_url);
+    expect(calls[1].init.signal?.aborted).toBe(true);
+    await click("Cancel");
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    await click("Bind repository"); await input("Repository URL", "https://github.com/example/new");
+    await answer(calls[1], {manager:"assistant",repository:binding});
+    expect(document.querySelector<HTMLInputElement>("input")!.value).toBe("https://github.com/example/new");
+    expect(text().split("Repository saved").length).toBe(savedNotices);
+  } finally { vi.useRealTimers(); }
+});
+
+it("does not accept a late save for a previous manager", async () => {
+  await open(); await click("Bind repository"); await input("Repository URL", identity.canonical_url);
+  const savedNotices = text().split("Repository saved").length;
+  await click("Check existence and save"); await render("work");
+  await answer(calls[1], {manager:"assistant",repository:binding});
+  expect(text().split("Repository saved").length).toBe(savedNotices);
+  expect(text()).not.toContain(binding.purpose);
+});
+
+it("requires the saved identity to match the canonical preview", async () => {
+  await open(); await click("Bind repository"); await input("Repository URL", identity.canonical_url);
+  await click("Check existence and save");
+  await answer(calls[1], { manager: "assistant", repository: { ...binding, path: "team/other" } });
+  expect(text()).toContain("The change is unconfirmed. Refresh repositories before trying again.");
+  expect(document.querySelector('[role="dialog"][aria-modal="true"]')).toBeTruthy();
+  expect(document.querySelector('[data-repository]')).toBeNull();
 });

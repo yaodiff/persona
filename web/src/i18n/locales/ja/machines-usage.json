@@ -41,5 +41,6 @@
   "today_title": "今日のトークン",
   "now": "現在",
   "tokens": "トークン",
+  "tokens_last_hour": "直近1時間のトークン",
   "today_value": "今日 {n}"
 }

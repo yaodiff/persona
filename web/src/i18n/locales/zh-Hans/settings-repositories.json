@@ -9,11 +9,10 @@
   "url": "仓库 URL",
   "provider": "服务提供方",
   "detect": "根据公共主机自动识别",
-  "preview": "预览仓库",
   "name": "名称（可选）",
   "aliases": "别名（可选，英文逗号分隔）",
   "purpose": "用途（可选）",
-  "unchecked": "尚未检查",
+  "unchecked": "已解析；尚未确认远端存在",
   "edit_check": "仅仓库身份变更时重新检查。",
   "check_hint": "仅匿名检查仓库是否存在，空仓库也有效。私有、隐藏或不可用的仓库可能无法确认；无法确认时不能保存。私网自托管目标需由管理员明确配置信任。",
   "check_save": "检查存在并保存",
@@ -30,5 +29,6 @@
   "unbound": "仓库已解绑",
   "undo": "撤销",
   "load_failed": "无法加载仓库：响应缺失或属于其他助手。",
-  "save_unconfirmed": "修改结果尚未确认。请先刷新仓库再重试。"
+  "save_unconfirmed": "修改结果尚未确认。请先刷新仓库再重试。",
+  "invalid_url": "请输入不含凭据的 GitHub 或 GitLab HTTP(S) 或 git SSH 链接，也可粘贴仓库子页面链接。自托管实例需选择服务类型。"
 }

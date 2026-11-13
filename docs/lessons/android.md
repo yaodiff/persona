@@ -9,6 +9,12 @@ Do not route task entries or notification/session links through that reset. Exer
 those entry paths and after a restored stack; a navigator test that expects the old detail to survive a tab selection
 can accidentally pin the bug rather than prevent it.
 
+## A drag on the chat list hides the keyboard; Robolectric hands the focus back (#4210)
+
+`ChatListEffects` clears the focus and hides the keyboard on the list's `DragInteraction.Start`, which only a finger past the touch slop starts. Do not use `isScrollInProgress` for this: it is also true while the page's own `scrollToItem` or `animateScrollToItem` runs (following the newest message while someone types, a jump to a message, a search hit), and those must leave the keyboard up. A bare touch is not enough either, since it may still be a tap on a field inside the list (iOS tells the two apart as `.tracking` and `.interacting`).
+
+Test it by what the page asks of the focus manager and the keyboard controller, wrapped around the real ones (`KeyboardProbe`), and by the field losing focus once, not by the field staying unfocused: Robolectric is not in touch mode, where Android gives the focus straight back to the first field after `clearFocus()`, and in one test every second drag did. Aim the swipe at a message in the middle of the page: a swipe injected on the last message of the semantics tree never reached an Agent chat's list, because the top bar is drawn over it. Check that a test of this kind fails without the change; the tests that guard a tap, a long press and a scroll the page starts pass either way, by design.
+
 ## Keep a worktree fixed while Gradle verifies it (#5233)
 
 Do not merge main or edit source while a multi-task Gradle invocation is running in that worktree. Earlier tasks can

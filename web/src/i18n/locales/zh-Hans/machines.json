@@ -36,6 +36,5 @@
   "network": "网络",
   "load_value": "负载 {value}",
   "memory_last_hour": "最近一小时内存",
-  "network_last_hour": "最近一小时网络：下载（橙色）、上传（紫色）",
-  "tokens_last_hour": "最近一小时 Tokens"
+  "network_last_hour": "最近一小时网络：下载（橙色）、上传（紫色）"
 }

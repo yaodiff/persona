@@ -257,7 +257,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * Collapse all, out for Expand all) and its name as the tooltip, less the two list-menu items it replaces and the
  * Recent row's ⓘ words, and the decisions' words in the to-dos' catalog; main's 11 B of room stay).
  */
-export const FIRST_SCREEN_BUDGET = 478_302;
+// #6575: verified runtime checkout display membership adds 79 B to the first screen on main at 2e57ac117
+// (ja 478,119 B to 478,198 B). Carry that measured feature allowance onto the current main budget.
+export const FIRST_SCREEN_BUDGET = 478_381;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -431,14 +433,16 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
  * query typed, off the idle tier; 31 B of room so the next main does not tip it). And 108 B for the same main
  * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
- * And 141 B for the later additions: 44,724 B as measured, with 0 B of room.
+ * The foldable sidebar Recent (#6228) adds nothing to this tier: the fold stays on the first screen. Later mains then
+ * drifted past 44,583 through shared-chunk minifier growth alone (#6512/#6521/#6528 changed no idle page's own source):
+ * on main at d65cad3b4 the idle pages send 44,718 B, 135 B over this ceiling with only the queue panel still idle.
+ * And moving the queue panel off the idle tier (#6571, 2026-11-13): QueueStrip renders QueuePanel only while a message
+ * is queued (ChatView hasQueue), so preloading it at idle on every cold start never served a first open; it now loads
+ * on intent like the other lazy pages. That takes the tier to 40,467 B measured on this machine, 4,116 B under the
+ * ceiling, so the budget is held here at 44,583 B — not raised to cover the drift, which the move removes instead.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
- * The foldable sidebar Recent (#6228) adds nothing to this tier: the fold stays on the first screen. On main at
- * eaa68818e the idle pages send 44,608 B (25 B over the 44,583 B ceiling from the intervening #6458 / #5935 growth), and
- * this branch measures 44,585 B — 23 B less than main, two over the old ceiling; the ceiling moves to 44,608 B so it
- * covers main, 0 B of room for this branch's measured 44,585 B.
  */
-export const IDLE_TIER_BUDGET = 44_734;
+export const IDLE_TIER_BUDGET = 44_583;
 
 const gzip = promisify(gzipCompress);
 

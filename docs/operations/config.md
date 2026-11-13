@@ -493,6 +493,9 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   `http://[user:password@]host:port`, same format as `google.proxy`; omitted means direct (does not read process `HTTPS_PROXY`). Some networks reach only `api.github.com`, not `github.com`,
   so device-code login cannot obtain a code and needs this proxy. An invalid value does not fall back to direct: every GitHub request fails, and the settings page states that `github.proxy` in manager.json is invalid. Actual addresses belong only in manager.json.
   The extension market also uses it to read markets on GitHub and download extension packages from Releases (`github.com`, `*.github.com`, `*.githubusercontent.com`; when unset, uses process `HTTPS_PROXY`, #3277).
+  Repository binding checks of public GitHub repositories use `github.proxy` too; when unset they use the manager process's `HTTPS_PROXY` and `NO_PROXY`.
+  GitLab and self-hosted repository checks use the process's proxy environment. Checks validate destination DNS locally and tunnel to a pinned IP, preserving TLS hostname checks;
+  they do not pass connector tokens to the repository or fall back to direct when a selected proxy fails. See `docs/assistant/managers.md` ("Repository references").
   `github.inbox` (optional) supplies default Inbox rules (App changes take priority, `docs/assistant/inbox.md` ("Noise reduction")): `ci` (`off` / `default_branch` / `mine` (default) / `all`),
   `muted_repos` (`["owner/name"]`), `ignore_branches` (branches not to notify for, `path.Match` patterns, default `["train/*"]`).
 - `imessage` (optional, **old syntax, retained for one version, read-only**): now choose the Mac to read in **Settings › Extensions › Messages** in the App (#1830). If configured here, the manager migrates it once at startup;

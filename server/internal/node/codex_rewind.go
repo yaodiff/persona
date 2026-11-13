@@ -26,7 +26,8 @@ func (n *Node) canRewindCodex(id string) bool {
 
 func (n *Node) codexRewindRow(id string, s *proto.Session) {
 	if s.Capabilities == nil {
-		s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Terminal: true}
+		// Native panes previously allowed these operations through the clients' legacy capability fallback.
+		s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true, Approve: true, Terminal: true}
 	}
 	s.Capabilities.Rewind = proto.CanModes(!s.IsSubagent && n.canRewindCodex(id))
 	s.Capabilities.RewindCode = proto.CanModes(false)

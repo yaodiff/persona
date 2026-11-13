@@ -5,5 +5,8 @@
   "updated_at": "上次更新 {time}",
   "waiting": "等待电脑回应…",
   "retry_in_other": "{count} 秒后重试",
-  "retrying": "正在重试…"
+  "retrying": "正在重试…",
+  "offline": "{name} 不在线",
+  "not_answering": "{name} 没有回应",
+  "not_answered_yet": "这台电脑还没有回应"
 }

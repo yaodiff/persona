@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // A turn of a session in Claude's desktop app that ended while nobody looked at it is Unread: its row says done (not
@@ -119,8 +120,8 @@ func (s *desktopSeenStore) note(dir, id string, at int64, x claudeDesktopIndex) 
 var claudeAppAttended = claudeAppAttendedNow
 
 var (
-	bundleIDLine = regexp.MustCompile(`"CFBundleIdentifier"\s*=\s*"([^"]*)"`)
-	hidIdleLine  = regexp.MustCompile(`"HIDIdleTime"\s*=\s*(\d+)`)
+	bundleIDLine = lazyre.New(`"CFBundleIdentifier"\s*=\s*"([^"]*)"`)
+	hidIdleLine  = lazyre.New(`"HIDIdleTime"\s*=\s*(\d+)`)
 )
 
 // frontBundleID is the bundle id in `lsappinfo info -only bundleid` output; "" none.

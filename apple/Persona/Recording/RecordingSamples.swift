@@ -202,9 +202,12 @@ enum RecordingSamples {
                 buffer.frameLength = AVAudioFrameCount(frames)
                 let voiced = tick % 50 < 30
                 for i in 0..<frames {
-                    let t = Double(tick * frames + i) / 16000
+                    let t: Double = Double(tick * frames + i) / 16000
                     // A low hum with a slower swell: loud enough to count as speech (`MeetingTalkWindow.speechLevel`).
-                    channel[i] = voiced ? Float(0.12 * sin(2 * .pi * 180 * t) * (0.6 + 0.4 * sin(2 * .pi * 3 * t))) : 0
+                    // In steps with their types written out: as one expression Xcode 26.0 gives up type-checking it.
+                    let hum: Double = sin(2 * Double.pi * 180 * t)
+                    let swell: Double = 0.6 + 0.4 * sin(2 * Double.pi * 3 * t)
+                    channel[i] = voiced ? Float(0.12 * hum * swell) : 0
                 }
                 RecordingCapture.shared.feedSample(buffer)
                 tick += 1

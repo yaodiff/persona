@@ -357,6 +357,17 @@ const catalogPath = (value?: string) => {
   return /^[a-z]:/i.test(clean) ? clean[0].toLowerCase() + clean.slice(1) : clean;
 };
 
+/** Runtime logical spaces share a repository display row at a verified checkout. Action attribution continues
+ *  to use sessionWorkspace and its native binding rules. */
+function repositoryWorkspace(s: Session, catalog: readonly HostWorkspace[], manager: string): HostWorkspace | undefined {
+  const bound = sessionWorkspace(s, catalog, manager);
+  if (bound || s.workspace_id || s.source_kind !== "runtime") return bound;
+  const checkout = catalogPath(s.worktree);
+  if (!checkout) return undefined;
+  const candidate = sessionWorkspace({ ...s, space_id: undefined, cwd: checkout }, catalog, manager);
+  return candidate && catalogPath(candidate.cwd) === checkout ? candidate : undefined;
+}
+
 /** Older hubs still get title navigation for pinned Agents, without rendering or counting them twice. */
 function legacyNavigationRepos(sessions: Session[], machineId: string, options: RepoCatalogOptions): RepoTree[] {
   if (!options.navigationSessions) return buildRepos(sessions, machineId);
@@ -397,13 +408,13 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
   }
   const loose: Session[] = [];
   for (const s of sessions) {
-    const w = sessionWorkspace(s, inventory, options.manager);
+    const w = repositoryWorkspace(s, inventory, options.manager);
     const node = w && nodes.get(keyOf(w));
     if (node) node.sessions.push(s); else loose.push(s);
   }
   for (const s of options.navigationSessions ?? sessions) {
     if (s.assistant || s.machine_id !== machineId) continue;
-    const w = sessionWorkspace(s, inventory, options.manager);
+    const w = repositoryWorkspace(s, inventory, options.manager);
     if (w) nodes.get(keyOf(w))?.directSessions!.push(s);
   }
   const parentOf = (node: RepoWorktree) => {
@@ -457,7 +468,8 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
     repo.count += root.tree.length;
   }
   const unmatched = query ? loose.filter((s) => `${s.title} ${s.cwd}`.toLocaleLowerCase().includes(query)) : loose;
-  const navigation = options.navigationSessions?.filter((s) => !sessionWorkspace(s, inventory, options.manager)
+  const groupedNavigation = new Set([...nodes.values()].flatMap((node) => node.directSessions!));
+  const navigation = options.navigationSessions?.filter((s) => !groupedNavigation.has(s)
     && (!query || `${s.title} ${s.cwd}`.toLocaleLowerCase().includes(query)));
   return [...repos.values(), ...legacyNavigationRepos(unmatched, machineId, { ...options, navigationSessions: navigation })].sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }

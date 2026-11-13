@@ -64,6 +64,19 @@ afterEach(() => {
 });
 
 describe("By repo catalog integration", () => {
+  it("renders native and logical runtime sessions under one checkout with one row per Agent", async () => {
+    inventory = [workspace("native", { source: "herdr", title: "app", cwd: "/code/app", project_id: undefined, project_name: undefined })];
+    sessions = [agent("codex", "native", { space_kind: "herdr", workspace_id: "native", cwd: "/code/app", repo_root: "/code/app", worktree: "/code/app" }),
+      ...["agy-one", "agy-two", "omp"].map((id) => agent(id, "/code/app", { space_kind: "agy", source_kind: "runtime", cwd: "/code/app", repo_root: "/code/app", worktree: "/code/app" }))];
+    await render();
+    expect(host.querySelectorAll("[data-workspace-key]")).toHaveLength(1);
+    const row = title("app").closest("[data-workspace-key]")!;
+    for (const session of sessions) {
+      expect(row.querySelectorAll(`a[href="/s/${machine.id}/${session.session_id}"]`)).toHaveLength(1);
+      expect(host.querySelectorAll(`a[href="/s/${machine.id}/${session.session_id}"]`)).toHaveLength(1);
+    }
+  });
+
   it("does not rebuild Agent rows on an unchanged catalog refresh", async () => {
     await render();
     const before = title("root"); previews.clear();

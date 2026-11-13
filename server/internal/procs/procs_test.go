@@ -138,8 +138,10 @@ func TestAtStart(t *testing.T) {
 	}
 }
 
-// On a host or container with Max CPUs, the runtime's default is the cap already: AtStart leaves it (and the runtime's
-// own updates) alone and hands nothing on.
+// When the runtime's default is at or below the cap, AtStart leaves it (and the runtime's own updates) alone and hands
+// nothing on. taskset asks for Max CPUs, but a container's cpuset can intersect that range (one that excludes CPUs 0
+// and 1 leaves only two of 0-3), so the default the runtime reports may be below Max; the contract under test is the
+// same at every value at or below Max.
 func TestAtStartLeavesADefaultAtTheCap(t *testing.T) {
 	taskset, err := exec.LookPath("taskset")
 	if err != nil {
@@ -150,7 +152,10 @@ func TestAtStartLeavesADefaultAtTheCap(t *testing.T) {
 	if err != nil {
 		t.Skip("taskset -c", cpus, "on this host:", err)
 	}
-	if want := (state{Before: Max, After: Max}); !equal(got, want) {
+	if got.Before > Max {
+		t.Fatalf("taskset -c %s left %d Ps, want at most %d", cpus, got.Before, Max)
+	}
+	if want := (state{Before: got.Before, After: got.Before}); !equal(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }

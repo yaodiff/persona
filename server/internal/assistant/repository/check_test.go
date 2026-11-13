@@ -77,7 +77,7 @@ func TestCheckTimeoutAndRateLimit(t *testing.T) {
 	})}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := c.Check(ctx, id); code(err) != "timeout" {
+	if err := c.Check(ctx, id); code(err) != "canceled" {
 		t.Fatalf("cancel: %v", err)
 	}
 	c.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -193,7 +193,7 @@ func TestBodyDeadline(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}},
 			Body: cancelBody{cancel: cancel}, Request: r}, nil
 	})}
-	if err := c.Check(ctx, id); code(err) != "timeout" {
+	if err := c.Check(ctx, id); code(err) != "canceled" {
 		t.Fatalf("body deadline: %v", err)
 	}
 }
@@ -202,3 +202,164 @@ type cancelBody struct{ cancel context.CancelFunc }
 
 func (b cancelBody) Read([]byte) (int, error) { b.cancel(); return 0, context.DeadlineExceeded }
 func (cancelBody) Close() error               { return nil }
+
+func TestStalledAddressDoesNotHideReachableRepository(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":1,"full_name":"example/project","html_url":"http://code.example.com/example/project"}`)
+	}))
+	defer srv.Close()
+	stopped := make(chan struct{})
+	c := Checker{
+		resolve: func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}, {IP: net.ParseIP("93.184.216.35")}}, nil
+		},
+		dial: func(ctx context.Context, network, target string) (net.Conn, error) {
+			if strings.HasPrefix(target, "93.184.216.34:") {
+				<-ctx.Done()
+				close(stopped)
+				return nil, ctx.Err()
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, strings.TrimPrefix(srv.URL, "http://"))
+		},
+	}
+	id, _ := Parse("http://code.example.com/example/project", "github")
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := c.Check(ctx, id); err != nil {
+		t.Fatalf("reachable second address hidden: %v (after %v)", err, time.Since(start))
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("losing attempt not canceled")
+	}
+	t.Logf("reachable fallback checked in %v", time.Since(start))
+}
+
+func TestLocalSlowResponseAndCancellation(t *testing.T) {
+	for _, phase := range []string{"headers", "body"} {
+		t.Run(phase, func(t *testing.T) {
+			stopped := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer close(stopped)
+				if phase == "body" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(200)
+					w.(http.Flusher).Flush()
+				}
+				<-r.Context().Done()
+			}))
+			defer srv.Close()
+			c := Checker{transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				req := r.Clone(r.Context())
+				u := *r.URL
+				req.URL = &u
+				req.URL.Scheme = "http"
+				req.URL.Host = strings.TrimPrefix(srv.URL, "http://")
+				return srv.Client().Transport.RoundTrip(req)
+			})}
+			id, _ := Parse("https://github.com/example/project", "")
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			if err := c.Check(ctx, id); code(err) != "timeout" {
+				t.Fatalf("%s: %v", phase, err)
+			}
+			select {
+			case <-stopped:
+			case <-time.After(time.Second):
+				t.Fatal("remote request was not canceled")
+			}
+		})
+	}
+}
+
+func TestCanceledCheckStopsDNS(t *testing.T) {
+	started, stopped := make(chan struct{}), make(chan struct{})
+	c := Checker{resolve: func(ctx context.Context, _ string) ([]net.IPAddr, error) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return nil, ctx.Err()
+	}}
+	id, _ := Parse("https://github.com/example/project", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- c.Check(ctx, id) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("DNS did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if code(err) != "canceled" {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("check did not cancel")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("DNS work outlived canceled check")
+	}
+}
+
+func TestCanceledCheckRejectsLateMetadata(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := Checker{transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		cancel()
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":1,"full_name":"example/project","html_url":"https://github.com/example/project"}`)), Request: r}, nil
+	})}
+	id, _ := Parse("https://github.com/example/project", "")
+	if err := c.Check(ctx, id); code(err) != "canceled" {
+		t.Fatalf("late metadata confirmed canceled check: %v", err)
+	}
+}
+
+func TestPinnedDialClosesLateConnection(t *testing.T) {
+	first, peer := net.Pipe()
+	winner, other := net.Pipe()
+	defer peer.Close()
+	defer other.Close()
+	ips := []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}, {IP: net.ParseIP("93.184.216.35")}}
+	conn, err := dialPinned(context.Background(), "tcp", "443", ips, func(ctx context.Context, _, target string) (net.Conn, error) {
+		if strings.HasPrefix(target, "93.184.216.34:") {
+			<-ctx.Done()
+			return first, nil
+		}
+		return winner, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := peer.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("late connection leaked: %v", err)
+	}
+}
+
+func TestUnreachableMetadataIsNetworkFailure(t *testing.T) {
+	id, _ := Parse("https://code.example.com/example/project", "github")
+	for _, phase := range []string{"dns", "tcp"} {
+		t.Run(phase, func(t *testing.T) {
+			c := Checker{resolve: func(context.Context, string) ([]net.IPAddr, error) {
+				if phase == "dns" {
+					return nil, &net.DNSError{Err: "synthetic missing host", IsNotFound: true}
+				}
+				return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+			}, dial: func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("synthetic refused connection")
+			}}
+			if err := c.Check(context.Background(), id); code(err) != "network" {
+				t.Fatalf("%s: %v", phase, err)
+			}
+		})
+	}
+}

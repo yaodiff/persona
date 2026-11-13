@@ -9512,6 +9512,12 @@ def terminal_frames(cols=96, rows=24, ticks=40):
 # another program holds the terminal — busy until the app subscribes with takeover.
 TERMINAL_CONTROL = bool(os.environ.get("MOCK_TERMINAL_CONTROL"))
 TERMINAL_INPUT = []
+# GET /mock/terminal_node?state=stalled|gone|back[&machine=<id>] (with MOCK_TERMINAL_STREAM, #6327): a computer's node as a
+# deploy replaces it. stalled: its terminals' subscribes go unanswered (the takeover went with the old connection: no
+# frame, no terminal_control); gone: the computer is offline, the subscriptions left unanswered end with the hub's
+# words and new ones fail at once, as the hub's connectionEnded and errOffline do; back: online again, subscribes
+# answered as before. machine: macbook unless named.
+TERMINAL_NODE = {"state": "", "machine": "macbook", "stalled": []}
 
 
 def cell_width(ch):
@@ -23021,6 +23027,23 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/queue": return self.send_json(queue_messages(q.get("text", [None])[0], "clear" in q, int(q.get("photos", ["0"])[0] or 0)))
         if p == "/mock/queue_edits": return self.send_json({"edits": QUEUE_EDITS})
         if p == "/mock/terminal_input": return self.send_json({"input": TERMINAL_INPUT})
+        if p == "/mock/terminal_node":
+            state, mid = q.get("state", [""])[0], q.get("machine", [TERMINAL_NODE["machine"]])[0]
+            if state not in ("stalled", "gone", "back"):
+                return self.send_json({"error": "state is stalled, gone or back"}, 400)
+            TERMINAL_NODE.update(state="" if state == "back" else state, machine=mid)
+            m = next((x for x in MACHINES if x["id"] == mid), None)
+            if m and state in ("gone", "back"):
+                m["online"] = state == "back"
+                for send, _ in list(LIVE):
+                    try: send({"type": "machines", "machines": out_machines()})
+                    except Exception: pass
+            if state == "gone":  # what waited on the old connection ends now, after the machines say it is offline
+                for send, smid, sid in TERMINAL_NODE["stalled"]:
+                    try: send({"type": "terminal", "machine_id": smid, "session_id": sid, "error": "rpc: connection closed"})
+                    except Exception: pass
+                TERMINAL_NODE["stalled"] = []
+            return self.send_json({"state": state, "machine": mid})
         if p == "/mock/herdr_client": return self.send_json({"log": FULL_LOG})
         if p == "/mock/herdr_focus":
             # ?pane=w1:p2[&session=<id>&source=client|persona|other&mine=1|0&view=<id>]: herdr's focus moved, as the hub tells the views
@@ -25547,6 +25570,14 @@ class H(BaseHTTPRequestHandler):
                     # Nothing runs it (#4328): the stream ends with the node's words (node/send.go paneFor), watched or driven.
                     send({"type": "terminal", "machine_id": msg.get("machine_id"), "session_id": msg.get("session_id"),
                           "error": "session %s is not running" % msg.get("session_id")})
+                    continue
+                if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and TERMINAL_NODE["state"] and msg.get("machine_id") == TERMINAL_NODE["machine"]:
+                    mid, sid = msg.get("machine_id"), msg.get("session_id")
+                    drive.clear()
+                    if TERMINAL_NODE["state"] == "gone":  # the hub answers at once: the computer's node is not connected
+                        send({"type": "terminal", "machine_id": mid, "session_id": sid, "error": "%s: offline" % mid})
+                    else:  # stalled: nothing comes back
+                        TERMINAL_NODE["stalled"].append((send, mid, sid))
                     continue
                 if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and TERMINAL_CONTROL and msg.get("control"):
                     sid, mid, ctl = msg.get("session_id"), msg.get("machine_id"), msg["control"]

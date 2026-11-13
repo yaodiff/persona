@@ -9,11 +9,10 @@
   "url": "Repository URL",
   "provider": "Provider",
   "detect": "Detect from public host",
-  "preview": "Preview repository",
   "name": "Name (optional)",
   "aliases": "Aliases (comma-separated, optional)",
   "purpose": "Purpose (optional)",
-  "unchecked": "Not yet checked",
+  "unchecked": "Parsed locally; existence not yet checked",
   "edit_check": "Only a changed repository identity is checked again.",
   "check_hint": "Checks repository existence only, anonymously. Empty repositories are valid. Private, hidden or unavailable repositories may be impossible to confirm; an inconclusive check cannot be saved. Self-hosted private networks require administrator-configured trusted targets.",
   "check_save": "Check existence and save",
@@ -30,5 +29,6 @@
   "unbound": "Repository unbound",
   "undo": "Undo",
   "load_failed": "Could not load repositories: the response is missing or belongs to another assistant.",
-  "save_unconfirmed": "The change is unconfirmed. Refresh repositories before trying again."
+  "save_unconfirmed": "The change is unconfirmed. Refresh repositories before trying again.",
+  "invalid_url": "Use a GitHub or GitLab HTTP(S) or git SSH link without credentials. Repository pages are accepted. Choose the provider for a self-hosted instance."
 }

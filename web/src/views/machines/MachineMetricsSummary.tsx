@@ -38,7 +38,7 @@ export function MachineMetricsSummary({ machine, metrics }: { machine: Machine; 
       </MetricCell>
       {usage && (
         <MetricCell label={t("machines-usage.tokens")} value={t("machines-usage.per_minute_value", { n: formatTokens(usage.per_minute) })} detail={t("machines-usage.today_value", { n: formatTokens(totalTokens(usage.today)) })}>
-          <Spark points={tokenPoints} end={now} minimumMax={1} label={t("machines.tokens_last_hour")} />
+          <Spark points={tokenPoints} end={now} minimumMax={1} label={t("machines-usage.tokens_last_hour")} />
         </MetricCell>
       )}
     </div>

@@ -48,7 +48,7 @@ struct UsageWidgetEdit: HomeWidgetEdit {
     func apply(to entry: inout HomeEntry) { entry.account = HomeChoices.filter(account?.id) }
 }
 
-extension HomeAgentsShow: AppEnum {
+nonisolated extension HomeAgentsShow: AppEnum {
     nonisolated static let typeDisplayRepresentation: TypeDisplayRepresentation = "Show [Home Widgets]"
     nonisolated static let caseDisplayRepresentations: [HomeAgentsShow: DisplayRepresentation] = [
         .all: "All Agents [Home Widgets]",

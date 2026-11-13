@@ -11,6 +11,69 @@ const flatten = (rows: RepoWorktree[]): RepoWorktree[] => rows.flatMap((w) => [w
 const rows = (all: Session[], opts: RepoCatalogOptions) => buildRepoMachineTree(all, machines, opts).flatMap((m) => m.repos.flatMap((r) => flatten(r.worktrees)));
 
 describe("catalog-backed By repo projection", () => {
+  const runtime = (id: string, patch: Partial<Session> = {}) => session(id, "/code/app", {
+    source_kind: "runtime", space_kind: "agy", cwd: "/code/app", repo_root: "/code/app", worktree: "/code/app", workspace_cwd: "/code/app", ...patch,
+  });
+  const native = () => workspace("native", { source: "herdr", cwd: "/code/app", title: "app", project_id: undefined, project_name: undefined });
+
+  it("groups native and logical-folder runtime Agents at one verified checkout exactly once", () => {
+    const catalog = [native()];
+    const codex = session("codex", "native", { space_kind: "herdr", workspace_id: "native", cwd: "/code/app", repo_root: "/code/app", worktree: "/code/app" });
+    const agents = [codex, runtime("agy"), runtime("other-agy"), runtime("omp", { space_kind: "omp-history" })];
+    const tree = buildRepoMachineTree(agents, machines, options(catalog));
+    expect(tree[0].repos).toHaveLength(1);
+    expect(tree[0].repos[0].count).toBe(4);
+    const worktrees = tree[0].repos[0].worktrees;
+    expect(worktrees).toHaveLength(1);
+    expect(new Set(worktrees[0].sessions.map((s) => s.session_id))).toEqual(new Set(agents.map((s) => s.session_id)));
+    expect(worktrees[0].navigationTree).toHaveLength(4);
+    expect(worktrees[0].target?.workspaceId).toBe("native");
+    expect(sessionWorkspace(agents[1], catalog, "manager-a")).toBeUndefined();
+  });
+
+  it("keeps runtime pinned navigation in the shared row without drawing or counting it twice", () => {
+    const regular = runtime("regular"), pinned = runtime("pinned", { state: "needs_you", status: "blocked" });
+    const tree = buildRepoMachineTree([regular], machines, options([native()], { navigationSessions: [regular, pinned], hideEmpty: true }));
+    expect(tree[0].repos).toHaveLength(1); expect(tree[0].repos[0].count).toBe(1);
+    const row = tree[0].repos[0].worktrees[0];
+    expect(row.sessions).toEqual([regular]); expect(row.directSessions).toEqual([pinned, regular]);
+    expect(row.navigationTree).toEqual([pinned, regular]);
+    expect(rows([regular], options([native()], { search: "regular" }))[0].sessions).toEqual([regular]);
+  });
+
+  it("requires verified checkout metadata and preserves explicit native bindings", () => {
+    const catalog = [native()];
+    for (const agent of [runtime("unverified", { worktree: undefined }), runtime("explicit", { workspace_id: "missing" }),
+      runtime("native-binding", { space_kind: "herdr", space_id: "missing" }), runtime("foreign-manager", { manager: "manager-b" }),
+      runtime("clone", { cwd: "/other/app", repo_root: "/other/app", worktree: "/other/app" }), runtime("different-tree", { worktree: "/code/app/.worktrees/other" })]) {
+      expect(rows([agent], options(catalog)).find((row) => row.workspace === catalog[0])?.sessions).toEqual([]);
+    }
+  });
+
+  it("retains ambiguous host identities, including when one source is hidden", () => {
+    const catalog = [native(), workspace("other", { cwd: "/code/app" })];
+    for (const hiddenSources of [undefined, ["orca"]]) {
+      const actual = rows([runtime("runtime")], options(catalog, { hiddenSources }));
+      expect(actual.filter((row) => row.workspace).every((row) => row.sessions.length === 0)).toBe(true);
+      expect(actual.filter((row) => !row.workspace).flatMap((row) => row.sessions).map((s) => s.session_id)).toEqual(["runtime"]);
+    }
+  });
+
+  it("normalizes checkout paths while retaining computer partitions", () => {
+    const catalog = [native(), { ...native(), id: "other-machine", machine_id: "machine-b" }];
+    const actual = rows([runtime("local"), runtime("remote", { machine_id: "machine-b" })], options(catalog));
+    expect(actual.filter((row) => row.workspace).map((row) => row.sessions.map((s) => s.session_id))).toEqual([["local"], ["remote"]]);
+    const windows = workspace("windows", { cwd: "C:\\code\\app", source: "herdr" });
+    expect(rows([runtime("windows", { cwd: "c:/code/app/src", worktree: "c:/code/app/", repo_root: "c:/code/app" })], options([windows]))[0].sessions).toHaveLength(1);
+  });
+
+  it("retains a runtime Agent when its catalog source is hidden among other visible sources", () => {
+    const agent = runtime("runtime");
+    const catalog = [native(), workspace("unrelated")];
+    const tree = buildRepoMachineTree([agent], machines, options(catalog, { hiddenSources: ["herdr"], navigationSessions: [agent] }));
+    expect(tree.flatMap((m) => m.repos.flatMap((r) => r.worktrees.flatMap((w) => w.sessions)))).toEqual([agent]);
+  });
+
   it("preserves three empty ancestors, a standalone empty workspace, metadata and zero Agent counts", () => {
     const catalog = [workspace("root", { is_main: true }), workspace("middle", { parent_source_id: "root" }), workspace("leaf", { parent_source_id: "middle", workspace_kind: "folder", head: "abc" }), workspace("standalone")];
     const tree = buildRepoMachineTree([], machines, options(catalog));

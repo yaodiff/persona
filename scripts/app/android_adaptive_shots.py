@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run same-process adaptive Android scenes from scripts/app/android.sh shots-live."""
 
+from __future__ import annotations
+
 import argparse
 import copy
 import hashlib

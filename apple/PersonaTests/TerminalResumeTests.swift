@@ -30,7 +30,7 @@ import Testing
         let herdr = machine(#"["herdr"]"#)
         #expect(session(stoppedCaps).terminalResume(on: herdr) == .available)
         #expect(session(stoppedCaps, status: "interrupted").terminalResume(on: herdr) == .available) // read as unknown
-        let codex = session(#","source_kind":"codex_history"# + stoppedCaps, agent: "codex")
+        let codex = session(#","source_kind":"codex_history""# + stoppedCaps, agent: "codex")
         #expect(codex.isStopped, "a Codex thread nothing has open is a stopped Agent too")
         #expect(codex.terminalResume(on: herdr) == .available)
         #expect(session(stoppedCaps).terminalResume(on: machine(nil)) == .available, "a hub before engine sets: the node's word holds")

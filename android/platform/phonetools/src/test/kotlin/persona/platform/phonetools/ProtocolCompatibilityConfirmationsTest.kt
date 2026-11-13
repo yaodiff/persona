@@ -32,9 +32,9 @@ class ProtocolCompatibilityConfirmationsTest {
     }
 
     /**
-     * A stale notification's delete intent (jarvis- or persona-scheme, from before a upgrade) only ends the
-     * confirmation its token names. With no live confirmation under that token nothing happens, so a late
-     * "Clear all" cannot answer the next write's card.
+     * A stale notification's delete intent (jarvis-phone or persona-phone scheme, from before an upgrade) only
+     * ends the confirmation its token names. With no live confirmation under that token nothing happens, so a
+     * late "Clear all" cannot answer the next write's card.
      */
     @Test fun aStaleDeleteIntentDoesNotAnswerALaterConfirmation() {
         val context = ApplicationProvider.getApplicationContext<Context>()

@@ -1,6 +1,6 @@
 {
   "store": "Couldn't confirm the repository references were read or saved. Refresh before retrying; a change may have taken effect.",
-  "remote": "Use an HTTPS or git SSH repository URL without credentials, a query or a fragment. Choose a provider for a self-hosted instance.",
+  "remote": "Use a GitHub or GitLab HTTP(S) or git SSH link without credentials. Repository pages are accepted. Choose the provider for a self-hosted instance.",
   "metadata": "Couldn't read these details. Use a name and up to 10 aliases of at most 80 characters each, and a purpose of at most 500 characters.",
   "duplicate": "This assistant already has a reference to that repository.",
   "conflict": "The saved references changed, or this undo has expired. Reload and retry.",
@@ -13,5 +13,6 @@
   "inconclusive": "The response didn't confirm this repository's identity. Sign-in pages and redirects aren't verification; nothing was saved.",
   "network": "Couldn't reach the repository metadata service. Check the connection and retry; nothing was saved.",
   "timeout": "The repository check timed out. Retry; nothing was saved.",
-  "unsafe_target": "This destination isn't allowed for repository checks. Private instances need an explicitly trusted instance and network in the assistant's configuration; nothing was saved."
+  "unsafe_target": "This destination isn't allowed for repository checks. Private instances need an explicitly trusted instance and network in the assistant's configuration; nothing was saved.",
+  "canceled": "The repository check was canceled. Nothing was saved."
 }

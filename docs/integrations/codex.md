@@ -71,6 +71,9 @@ Multiple existing app-server instances on one computer (desktop App, separate `C
 
 ## Sessions on the daemon (app-server route)
 
+Rewind metadata preserves native terminal sessions' read, send, interrupt, approval and terminal capabilities.
+An existing explicit capability object retains its operation restrictions when the node adds rewind flags.
+
 Since 2026-11-02, for Codex panes running on a shared app-server daemon, Persona joins their threads as a second client. Questions, approvals, and messaging use the protocol,
 not screen reading or typing into the terminal. Panes it cannot join retain the terminal route under "Questions and approvals" below (#214).
 

@@ -1711,6 +1711,9 @@ nonisolated struct SessionKey: Hashable, Sendable, Codable {
         set { hubGroup = newValue.isEmpty ? nil : newValue }
     }
     var machineRef: MachineRef { MachineRef(group: group, id: machineID) }
+    /// A terminal addressed by its pane (`pane:<id>`, docs/integrations/terminal.md section 19): a plain terminal of the
+    /// Terminals page or Open Terminal Here, with no session row of its own.
+    var isPane: Bool { sessionID.hasPrefix("pane:") }
 
     /// "machine/session", or "group|machine/session" for another group: what launch arguments, remembered chats and
     /// deep links write.

@@ -921,7 +921,7 @@ private struct TerminalFeedLink: View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("TerminalFeedLink")
         #endif
-        TerminalLinkStatus(lastOK: feed.lastOK, failure: feed.failure, nextTry: feed.nextTry) {
+        TerminalLinkStatus(lastOK: feed.lastOK, failure: feed.failure, nextTry: feed.nextTry, waitingSince: feed.waitingSince) {
             Haptics.tap()
             feed.retryNow(model)
         }
@@ -994,18 +994,20 @@ struct TerminalTips: View {
 }
 
 /// Atop the terminal while what it shows may be old: how long since the last fresh screen, why, when the
-/// next try is — and a button to try now. Hidden while refreshes keep arriving.
+/// next try is — and a button to try now. Hidden while refreshes keep arriving. Before the first screen it counts from
+/// when the terminal asked for it (waitingSince), as the web does: a wait never goes unexplained (#6327).
 struct TerminalLinkStatus: View {
     var lastOK: Date?
     var failure: String?
     var nextTry: Date
+    var waitingSince: Date? = nil
     var retry: () -> Void
 
     private var tint: Color { failure != nil ? Theme.danger : Theme.caution }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let stale = lastOK.map { ctx.date.timeIntervalSince($0) > TerminalPanel.staleAfter } ?? false
+            let stale = (lastOK ?? waitingSince).map { ctx.date.timeIntervalSince($0) > TerminalPanel.staleAfter } ?? false
             if failure != nil || stale {
                 HStack(spacing: Theme.Space.s) {
                     ThemedIcon(failure != nil ? Theme.Icon.offline : Theme.Icon.recent)

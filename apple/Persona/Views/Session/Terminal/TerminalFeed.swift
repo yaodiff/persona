@@ -46,6 +46,12 @@ final class TerminalFeed {
     private(set) var failure: String?
     private(set) var nextTry = Date.distantPast
     private var failures = 0
+    /// When the subscription still waiting for its answer went out: its first frame, and when it takes the terminal over,
+    /// what the hub says of that (nil: answered, or nothing asked). Past `answerLimit` the feed gives up on it (#6327).
+    private(set) var waitingSince: Date?
+
+    /// The time (unit tests move it on rather than wait out a limit).
+    @ObservationIgnored var now: () -> Date = { Date() }
 
     @ObservationIgnored private let grid = TerminalGrid(cols: 1, rows: 1)
     @ObservationIgnored private var epoch: String?
@@ -54,10 +60,17 @@ final class TerminalFeed {
     /// Stream unavailable for this session (old node / herdr): stay on polling.
     @ObservationIgnored private var unsupported = false
     @ObservationIgnored private var takeover = false
+    /// The screen the last subscription builds on is there: its first frame came, or it continues the frames the feed has.
+    @ObservationIgnored private var framed = false
+    /// The computer was offline at the last tick: once it is back, subscribe again at once.
+    @ObservationIgnored private var computerWasOffline = false
 
     static let page = 200
     static let scrollbackLimit = 3000
     static let linkDown = String(localized: "Can't reach the hub")
+    /// How long a subscription may go unanswered: the takeover went with a node connection that dropped (a deploy
+    /// restarts the node), or the computer doesn't answer. Then the terminal says why and tries again, never spins on.
+    static let answerLimit: TimeInterval = 10
 
     init(key: SessionKey) { self.key = key }
 
@@ -92,27 +105,66 @@ final class TerminalFeed {
             guard model.isLive(key.group) else {
                 subscribed = false // the connection's hello subscribes again
                 if failure == nil { failure = Self.linkDown }
+                // The hub no longer knows who drives it: taking it over again, no keys until it says so (as the web).
+                if control == .active { control = .starting }
                 return
             }
             if failure == Self.linkDown { failure = nil } // back: an idle pane sends nothing, that is not a failure
-            if !subscribed, Date() >= nextTry {
+            let offline = model.machine(key.machineRef)?.online == false
+            if offline != computerWasOffline {
+                computerWasOffline = offline
+                if !offline { // its node is back: subscribe (and take the terminal over) again now, not at the backoff's turn
+                    failures = 0
+                    nextTry = .distantPast
+                }
+            }
+            if let waitingSince, now().timeIntervalSince(waitingSince) > Self.answerLimit {
+                unanswered(model)
+            } else if !subscribed, now() >= nextTry {
                 subscribe(model, continuing: true)
             } else if subscribed, loaded, failure == nil {
-                lastOK = Date()
+                lastOK = now()
             }
         case .poll:
-            if !paused, Date() >= nextTry { await refresh(model) }
+            if !paused, now() >= nextTry { await refresh(model) }
         }
     }
 
     func stop(_ model: AppModel) {
         if mode == .stream { model.terminalUnsubscribe(key) }
         subscribed = false
+        waitingSince = nil // back on screen it asks afresh, with a wait of its own
     }
 
+    /// Retry: subscribe again now. One still unanswered goes first, at the hub too, so this one has it ask the node
+    /// again (the same subscription again would only be told what it has).
     func retryNow(_ model: AppModel) {
         nextTry = .distantPast
-        if mode == .stream, model.isLive(key.group) { subscribe(model, continuing: true) }
+        guard mode == .stream, model.isLive(key.group) else { return }
+        if waitingSince != nil, subscribed { drop(model) }
+        subscribe(model, continuing: true)
+    }
+
+    /// Nothing answered the subscription within `answerLimit`: it goes, at the hub too, and the terminal says why; the
+    /// next one goes at the backoff's turn, or at once when the computer comes back.
+    private func unanswered(_ model: AppModel) {
+        drop(model) // still taking it over (the size chip says so): the next try asks again
+        loaded = true // the reason, not a spinner
+        failed(Self.notAnswering(model.machine(key.machineRef)))
+    }
+
+    /// Unsubscribes at the hub and starts the next subscription from a whole frame.
+    private func drop(_ model: AppModel) {
+        model.terminalUnsubscribe(key)
+        subscribed = false
+        waitingSince = nil
+        epoch = nil
+    }
+
+    /// Why the terminal hasn't come: its computer is offline, or isn't answering.
+    static func notAnswering(_ machine: Machine?) -> String {
+        guard let machine else { return String(localized: "This computer hasn't answered yet.") }
+        return machine.online ? String(localized: "\(machine.name) isn't answering") : String(localized: "\(machine.name) is offline")
     }
 
     private func willDrive(_ model: AppModel) -> Bool {
@@ -120,15 +172,30 @@ final class TerminalFeed {
     }
 
     private func subscribe(_ model: AppModel, continuing: Bool) {
-        subscribed = true
         let drive = willDrive(model)
         if drive, control == .off { control = .starting }
-        model.terminalSubscribe(key, epoch: continuing ? epoch : nil, after: seq, grid: drive ? phoneGrid : nil, takeover: takeover) {
+        // Answered for sure: a stream from its whole frame, and taking it over (terminal_control). One continuing from
+        // the frame it has may hear nothing of an idle pane, which is no failure.
+        let fresh = !continuing || epoch == nil
+        if waitingSince == nil, fresh || control == .starting { waitingSince = now() }
+        framed = !fresh
+        let sent = model.terminalSubscribe(key, epoch: continuing ? epoch : nil, after: seq, grid: drive ? phoneGrid : nil, takeover: takeover) {
             [weak self, weak model] event in
             guard let self, let model else { return }
             self.receive(event, model)
         }
+        subscribed = sent
+        if !sent { // nothing went out (no socket yet, the session's row not in yet): again in a moment, still bounded
+            if waitingSince == nil { waitingSince = now() }
+            nextTry = now().addingTimeInterval(1)
+            return
+        }
         takeover = false
+    }
+
+    /// The subscription's answer is in: a frame, and the hub's word on taking the terminal over when it asked to.
+    private func answeredIfSo() {
+        if framed, control != .starting { waitingSince = nil }
     }
 
     // MARK: Driving the terminal
@@ -142,6 +209,7 @@ final class TerminalFeed {
 
     /// What the hub said about driving it (terminal_control).
     func controlChanged(_ state: String, why: String?) {
+        defer { answeredIfSo() }
         switch state {
         case "active":
             control = .active
@@ -211,6 +279,8 @@ final class TerminalFeed {
                 healthy()
                 offline = false
                 loaded = true
+                framed = true
+                answeredIfSo()
             case .duplicate:
                 break
             case .gap:
@@ -219,16 +289,22 @@ final class TerminalFeed {
         case .ended(let why, let unsupported):
             subscribed = false
             epoch = nil
+            waitingSince = nil
             if unsupported {
                 self.unsupported = true
                 mode = .poll
                 nextTry = .distantPast
+                if control == .active || control == .starting { control = .off } // a screen read can't be driven: it only watches
                 return
             }
             offline = why.contains("not running")
-            failed(offline ? String(localized: "The session isn't running in herdr") : why)
+            let machine = model.machine(key.machineRef)
+            // An offline computer in the app's words, whatever the hub's error says (it may name the machine by id).
+            failed(offline ? String(localized: "The session isn't running in herdr") : machine?.online == false ? Self.notAnswering(machine) : why)
             loaded = true
-            if control == .active || control == .starting { control = .off } // it asks again when it subscribes again
+            // Nothing runs it: nothing to take over. Otherwise it still takes the terminal over, and the size chip says so
+            // until the next try is answered (with "Wrap" between tries, it read as a mirror that had given up, #6327).
+            if offline, control == .active || control == .starting { control = .off } else if control == .active { control = .starting }
         case .reconnected:
             if mode == .stream { subscribe(model, continuing: true) }
         case .control(let state, _, _, let why):
@@ -274,7 +350,7 @@ final class TerminalFeed {
     }
 
     private func healthy() {
-        lastOK = Date()
+        lastOK = now()
         failure = nil
         failures = 0
     }
@@ -282,7 +358,7 @@ final class TerminalFeed {
     private func failed(_ why: String) {
         failure = why
         failures += 1
-        nextTry = Date().addingTimeInterval(Self.backoff(failures))
+        nextTry = now().addingTimeInterval(Self.backoff(failures))
     }
 
     /// 1, 2, 4, 8 and then every 15 seconds.
@@ -301,7 +377,7 @@ final class TerminalFeed {
             cursor = nil
             if screen.count < Self.page - 1 { hasOlder = false }
             healthy()
-            nextTry = Date().addingTimeInterval(1)
+            nextTry = now().addingTimeInterval(1)
         } catch {
             guard !error.isCancellation else { return }
             failed(error.shown ?? String(localized: "Couldn't read the terminal"))

@@ -10,6 +10,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -113,6 +115,8 @@ fun ChatListEffects(
     val older by rememberUpdatedState(hasOlder)
     val loading by rememberUpdatedState(loadingOlder)
     val atLatest by rememberUpdatedState(canFollowEnd)
+    val focusManager by rememberUpdatedState(LocalFocusManager.current)
+    val keyboard by rememberUpdatedState(LocalSoftwareKeyboardController.current)
     SideEffect { state.rowIds = rowIds }
     val owner = LocalLifecycleOwner.current
     val lifecycle by owner.lifecycle.currentStateAsState()
@@ -131,6 +135,12 @@ fun ChatListEffects(
     LaunchedEffect(state) {
         state.list.interactionSource.interactions.collect { interaction ->
             if (interaction is DragInteraction.Start) {
+                // As on iOS (`ChatView`'s `.interacting` scroll phase): a real drag on the conversation puts the keyboard
+                // away and takes the focus from whatever field has it, a request card's too. Only a finger past the touch
+                // slop starts a DragInteraction: a tap and a scroll the app starts (following the newest message, a jump)
+                // do not, and they leave the keyboard up (#4210).
+                focusManager.clearFocus()
+                keyboard?.hide()
                 state.epoch++
                 state.dragged = true
                 state.restored = true

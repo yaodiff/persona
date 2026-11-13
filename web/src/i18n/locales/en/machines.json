@@ -38,6 +38,5 @@
   "network": "Network",
   "load_value": "Load {value}",
   "memory_last_hour": "Memory over the last hour",
-  "network_last_hour": "Network over the last hour: download (orange), upload (purple)",
-  "tokens_last_hour": "Tokens over the last hour"
+  "network_last_hour": "Network over the last hour: download (orange), upload (purple)"
 }

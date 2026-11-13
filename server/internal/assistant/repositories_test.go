@@ -195,3 +195,60 @@ func TestRepositoryPreviewAndWriteFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestRepositoryPreviewCheckAndStorageUseSameIdentity(t *testing.T) {
+	for _, remote := range []string{
+		"https://github.com/example/project/pull/5581?diff=split#review",
+		"git@" + "github.com:example/project.git",
+		"ssh://git@" + "ssh.github.com:443/example/project.git",
+		"https://gitlab.com/group/sub/project/-/merge_requests/1#note",
+		"http://code.example.com:8080/group/sub/project/-/tree/main",
+	} {
+		t.Run(remote, func(t *testing.T) {
+			provider := ""
+			if strings.Contains(remote, "code.example.com") {
+				provider = "gitlab"
+			}
+			body, _ := json.Marshal(repositoryInput{URL: remote, Provider: provider})
+			st := ruleStore{&memStore{}}
+			s, calls := repositoryService(t, st)
+			w := placeDo(s, "", "POST", repoBase+"/preview", string(body))
+			var preview struct{ Identity repository.Identity }
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &preview) != nil || *calls != 0 {
+				t.Fatalf("static preview: %d %s", w.Code, w.Body)
+			}
+			s.repositoryCheck = func(_ context.Context, id repository.Identity) error {
+				*calls++
+				if id != preview.Identity {
+					t.Fatalf("check identity differs from preview: %+v", id)
+				}
+				return nil
+			}
+			w = placeDo(s, "", "POST", repoBase, string(body))
+			var saved struct{ Repository RepositoryBinding }
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &saved) != nil || saved.Repository.Identity != preview.Identity || *calls != 1 {
+				t.Fatalf("save: %d %s", w.Code, w.Body)
+			}
+			doc, err := s.repositoryDocument(context.Background())
+			if err != nil || len(doc.Repositories) != 1 || doc.Repositories[0].Identity != preview.Identity {
+				t.Fatalf("stored identity: %+v %v", doc, err)
+			}
+		})
+	}
+}
+
+func TestRepositoryFailedChecksNeverPersist(t *testing.T) {
+	for _, code := range []string{"timeout", "canceled", "network", "rate_limited", "unsafe_target"} {
+		t.Run(code, func(t *testing.T) {
+			s, _ := repositoryService(t, ruleStore{&memStore{}})
+			s.repositoryCheck = func(context.Context, repository.Identity) error { return &repository.CheckError{Code: code} }
+			if w := placeDo(s, "", "POST", repoBase, repoExample); w.Code != 422 {
+				t.Fatalf("%d %s", w.Code, w.Body)
+			}
+			doc, err := s.repositoryDocument(context.Background())
+			if err != nil || len(doc.Repositories) != 0 || doc.Revision != 0 {
+				t.Fatalf("failed check changed storage: %+v %v", doc, err)
+			}
+		})
+	}
+}

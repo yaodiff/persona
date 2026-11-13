@@ -1,0 +1,360 @@
+{
+  "valid": [
+    {
+      "url": "https://GitHub.com/Example/Project.git/",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      }
+    },
+    {
+      "url": "https://github.com/example/project/pull/5581",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      }
+    },
+    {
+      "url": "https://github.com/example/project/pull/5581/files?diff=split#review",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      }
+    },
+    {
+      "url": "http://github.com/example/project?tab=readme-ov-file#readme",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      }
+    },
+    {
+      "url": "github.com:Example/Project.git",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      },
+      "prefix": "git@"
+    },
+    {
+      "url": "github.com:22/example/project.git",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      },
+      "prefix": "ssh://git@"
+    },
+    {
+      "url": "ssh.github.com:443/example/project.git",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      },
+      "prefix": "ssh://git@"
+    },
+    {
+      "url": "https://www.github.com/example/project/issues/1",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      }
+    },
+    {
+      "url": "https://api.github.com/repos/example/project/pulls/1",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      }
+    },
+    {
+      "url": "https://github.com/example/project/blob/main/a%20file.md",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      }
+    },
+    {
+      "url": "https://gitlab.com/group/subgroup/project/-/merge_requests/42?view=parallel#note_1",
+      "provider": "",
+      "identity": {
+        "provider": "gitlab",
+        "instance_url": "https://gitlab.com",
+        "path": "group/subgroup/project",
+        "canonical_url": "https://gitlab.com/group/subgroup/project"
+      }
+    },
+    {
+      "url": "https://gitlab.com/group/subgroup/project.git",
+      "provider": "",
+      "identity": {
+        "provider": "gitlab",
+        "instance_url": "https://gitlab.com",
+        "path": "group/subgroup/project",
+        "canonical_url": "https://gitlab.com/group/subgroup/project"
+      }
+    },
+    {
+      "url": "gitlab.com:group/subgroup/project.git",
+      "provider": "",
+      "identity": {
+        "provider": "gitlab",
+        "instance_url": "https://gitlab.com",
+        "path": "group/subgroup/project",
+        "canonical_url": "https://gitlab.com/group/subgroup/project"
+      },
+      "prefix": "git@"
+    },
+    {
+      "url": "altssh.gitlab.com:443/group/subgroup/project.git",
+      "provider": "",
+      "identity": {
+        "provider": "gitlab",
+        "instance_url": "https://gitlab.com",
+        "path": "group/subgroup/project",
+        "canonical_url": "https://gitlab.com/group/subgroup/project"
+      },
+      "prefix": "ssh://git@"
+    },
+    {
+      "url": "https://gitlab.com/group/issues/project",
+      "provider": "",
+      "identity": {
+        "provider": "gitlab",
+        "instance_url": "https://gitlab.com",
+        "path": "group/issues/project",
+        "canonical_url": "https://gitlab.com/group/issues/project"
+      }
+    },
+    {
+      "url": "https://code.example.com:8443/team/project.git",
+      "provider": "github",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://code.example.com:8443",
+        "path": "team/project",
+        "canonical_url": "https://code.example.com:8443/team/project"
+      }
+    },
+    {
+      "url": "http://code.example.com:8080/team/sub/project/-/tree/main",
+      "provider": "gitlab",
+      "identity": {
+        "provider": "gitlab",
+        "instance_url": "http://code.example.com:8080",
+        "path": "team/sub/project",
+        "canonical_url": "http://code.example.com:8080/team/sub/project"
+      }
+    },
+    {
+      "url": "http://code.example.com:80/team/project",
+      "provider": "github",
+      "identity": {
+        "provider": "github",
+        "instance_url": "http://code.example.com",
+        "path": "team/project",
+        "canonical_url": "http://code.example.com/team/project"
+      }
+    },
+    {
+      "url": "code.example.com:22/team/sub/project.git",
+      "provider": "gitlab",
+      "identity": {
+        "provider": "gitlab",
+        "instance_url": "https://code.example.com",
+        "path": "team/sub/project",
+        "canonical_url": "https://code.example.com/team/sub/project"
+      },
+      "prefix": "ssh://git@"
+    },
+    {
+      "url": "http://[fd00::2]:8080/team/project",
+      "provider": "gitlab",
+      "identity": {
+        "provider": "gitlab",
+        "instance_url": "http://[fd00::2]:8080",
+        "path": "team/project",
+        "canonical_url": "http://[fd00::2]:8080/team/project"
+      }
+    },
+    {
+      "url": "https://github.com/Example/Project.GIT",
+      "provider": "",
+      "identity": {
+        "provider": "github",
+        "instance_url": "https://github.com",
+        "path": "example/project",
+        "canonical_url": "https://github.com/example/project"
+      }
+    },
+    {
+      "url": "https://[fd00:0:0:0:0:0:0:2]:8443/team/project",
+      "provider": "gitlab",
+      "identity": {
+        "provider": "gitlab",
+        "instance_url": "https://[fd00::2]:8443",
+        "path": "team/project",
+        "canonical_url": "https://[fd00::2]:8443/team/project"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "url": "file:///etc/passwd",
+      "provider": ""
+    },
+    {
+      "url": "git://github.com/example/project",
+      "provider": ""
+    },
+    {
+      "url": "github.com/example/project",
+      "provider": "",
+      "prefix": "https://token@"
+    },
+    {
+      "url": "https://user:pass@code.example.com/example/project",
+      "provider": "github"
+    },
+    {
+      "url": "https://github.com/example/project?token=secret",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/project?access_token=secret",
+      "provider": ""
+    },
+    {
+      "url": "github.com/example/project",
+      "provider": "",
+      "prefix": "ssh://other@"
+    },
+    {
+      "url": "code.example.com:2222/example/project",
+      "provider": "github",
+      "prefix": "ssh://git@"
+    },
+    {
+      "url": "https://code.example.com/example/project",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/project",
+      "provider": "gitlab"
+    },
+    {
+      "url": "https://github.com.evil.example/example/project",
+      "provider": ""
+    },
+    {
+      "url": "https://foo.github.com/example/project",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com./example/project",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com:80/example/project",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/project/extra",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example//project",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/../project",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/%2e%2e/project",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/project.git.git",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/project\n",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/project/pull/../other",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/project/pull/%2e%2e/other",
+      "provider": ""
+    },
+    {
+      "url": "https://gitlab.com/group/-/issues/1",
+      "provider": ""
+    },
+    {
+      "url": "https://api.github.com/users/example",
+      "provider": ""
+    },
+    {
+      "url": "https://ssh.github.com/example/project",
+      "provider": ""
+    },
+    {
+      "url": "github.com:443/example/project",
+      "provider": "",
+      "prefix": "ssh://git@"
+    },
+    {
+      "url": "https://[fe80::1%25eth0]/example/project",
+      "provider": "gitlab"
+    },
+    {
+      "url": "https://github.com/example/project.GIT.git",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com:/example/project",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/project?tab=readme;token=secret",
+      "provider": ""
+    },
+    {
+      "url": "https://github.com/example/project#%ZZ",
+      "provider": ""
+    }
+  ]
+}

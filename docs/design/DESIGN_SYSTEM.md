@@ -1088,6 +1088,7 @@ before common choices. It introduces no visual style, color palette, model defau
 | Horizontal drag between pages | pager with 3x resistance past the ends; flick above 300 pt/s or past half way |
 | Edge swipe back | system; the pan yields to it |
 | Swipe on a message (Agents) | quote, threshold 66 pt, with a VoiceOver "Quote" action |
+| Drag on a conversation | puts the keyboard away as soon as the finger starts to drag, not at the touch, which may still be a tap; a field in a request card loses it too (#4210). iOS: `ChatView`'s `.interacting` scroll phase calls `Keyboard.dismiss()`; Android: `ChatListEffects` on the list's `DragInteraction.Start`, for the Agent chat, Persona's conversation and Lark chats, in every style. A tap on blank space does it as well; a scroll the app starts (following the newest message, a jump) does not; Android's keyboard does not follow the finger |
 | Long press on a message | your own folded long message opens in place, with no bar (#5676); otherwise a lifted menu with an action bar, over the whole page dimmed (a page's floating top bar included); a message taller than the room shows the part pressed and scrolls inside, the bar fixed; a selection handle held within `Theme.Lift.edgeScroll` of its top or bottom edge scrolls it on, up to `Theme.Lift.edgeScrollSpeed`; its selected words take touches `Theme.Lift.handleReach` past them, so a handle's knob over the first line or under the last can be dragged (#5291); a message only on this device ends the bar in a red Delete (Don't Send while it waits), Undo in a toast (#4626) |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Touch and hold the composer's + (iPhone) | system menu of the attach panel's More list; a tap still opens the panel, whose More tab is the plain alternative (#3225) |
@@ -2215,3 +2216,13 @@ as finished without verifying a star, and opens GitHub outside the app.
   and waits three days. It stays away while requests or sessions need the user, or a search is active.
 - **Onboarding toast**: once per device on Android's setup **Done** (proposed iOS **Get started**), unless Star was
   already tapped. It uses the platform's timed toast and action.
+
+## Repository link preview
+
+Settings › Assistant › Repositories reuses the existing `Dialog`, form controls, inset preview and `Loading`.
+A local parse of each link/provider change immediately replaces the provider, full path and canonical web root in
+an announced status region. Invalid input clears that preview and disables Save; it never leaves the old identity
+visible. The preview explicitly says remote existence is unconfirmed. Check and save is a separate explicit action,
+keeps the draft on failure, and a browser timeout asks the user to refresh because persistence is unconfirmed.
+This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
+options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.

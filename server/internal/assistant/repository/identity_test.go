@@ -1,6 +1,10 @@
 package repository
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"testing"
+)
 
 func TestParseRemote(t *testing.T) {
 	for _, tc := range []struct{ remote, provider, instance, path string }{
@@ -23,9 +27,9 @@ func TestParseRemote(t *testing.T) {
 
 func TestRejectUnsafeOrAmbiguousRemote(t *testing.T) {
 	for _, remote := range []string{
-		"http://github.com/example/project", "file:///etc/passwd", "git://github.com/example/project",
+		"file:///etc/passwd", "git://github.com/example/project",
 		"https://user:password@code.example.com/example/project", "https://token@code.example.com/example/project",
-		"https://github.com/example/project?token=secret", "https://github.com/example/project#fragment",
+		"https://github.com/example/project?token=secret",
 		"ssh://user:password@code.example.com/example/project", "ssh://other@code.example.com/example/project",
 		"git@code.example.com:example/../project", "https://github.com/example/%2e%2e/project",
 		"https://github.com/example/project/extra", "https://github.com/example//project",
@@ -42,5 +46,45 @@ func TestRejectUnsafeOrAmbiguousRemote(t *testing.T) {
 	}
 	if _, err := Parse("https://github.com/example/project", "gitlab"); err == nil {
 		t.Fatal("a known provider cannot be relabeled")
+	}
+}
+
+// Both parsers consume this contract so local preview cannot drift from save.
+// Prefix + URL keeps Git transport users separate from email-like fixture text.
+func TestSharedRemoteFixtures(t *testing.T) {
+	raw, err := os.ReadFile("../../../../spec/fixtures/repository-remotes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures struct {
+		Valid []struct {
+			URL, Provider, Prefix string
+			Identity              Identity
+		}
+		Invalid []struct{ URL, Provider, Prefix string }
+	}
+	if err := json.Unmarshal(raw, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range fixtures.Valid {
+		tc.URL = tc.Prefix + tc.URL
+		t.Run(tc.URL, func(t *testing.T) {
+			got, err := Parse(tc.URL, tc.Provider)
+			if err != nil || got != tc.Identity {
+				t.Fatalf("got %+v, %v; want %+v", got, err, tc.Identity)
+			}
+			again, err := Parse(got.CanonicalURL, got.Provider)
+			if err != nil || again != got {
+				t.Fatalf("not idempotent: %+v, %v", again, err)
+			}
+		})
+	}
+	for _, tc := range fixtures.Invalid {
+		tc.URL = tc.Prefix + tc.URL
+		t.Run(tc.URL, func(t *testing.T) {
+			if got, err := Parse(tc.URL, tc.Provider); err == nil {
+				t.Fatalf("accepted unsafe/ambiguous input: %+v", got)
+			}
+		})
 	}
 }

@@ -41,5 +41,6 @@
   "today_title": "Today's tokens",
   "now": "Now",
   "tokens": "Tokens",
+  "tokens_last_hour": "Tokens over the last hour",
   "today_value": "Today {n}"
 }
