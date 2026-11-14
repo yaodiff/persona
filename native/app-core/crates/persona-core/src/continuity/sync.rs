@@ -64,7 +64,8 @@ pub struct Session {
 /// One fold being opened: how far its range reaches, the pages so far and the work they carried.
 #[derive(Debug, Default)]
 struct Opening {
-    through: i64,
+    through_seq: i64,
+    through_id: String,
     pages: u32,
     work: Vec<Item>,
 }
@@ -267,11 +268,12 @@ impl Session {
         let Some(range) = &item.fold else {
             return Step::default();
         };
-        let (seq, through) = (item.seq, range.through_seq);
+        let (seq, through_seq, through_id) = (item.seq, range.through_seq, range.through_id.clone());
         self.openings.insert(
             id.to_owned(),
             Opening {
-                through,
+                through_seq,
+                through_id,
                 pages: 0,
                 work: Vec::new(),
             },
@@ -281,7 +283,7 @@ impl Session {
             requests: vec![Request::FetchRange {
                 fold_id: Some(id.to_owned()),
                 from_seq: seq,
-                through_seq: through,
+                through_seq,
             }],
         }
     }
@@ -298,13 +300,43 @@ impl Session {
         } else {
             fold_id.to_owned()
         };
+        // A response for the old range must not unfold over a fold that changed while the request was in flight.
+        // Drop its unpublished pages and restart from the fold's current bounds, leaving chat coverage untouched.
+        let restart = self.openings.get(&id).and_then(|opening| {
+            let item = self.reducer.find(&id).filter(|item| item.kind == "fold")?;
+            let range = item.fold.as_ref()?;
+            (range.through_seq != opening.through_seq || range.through_id != opening.through_id).then_some((
+                item.seq,
+                range.through_seq,
+                range.through_id.clone(),
+            ))
+        });
+        if let Some((from_seq, through_seq, through_id)) = restart {
+            self.openings.insert(
+                id.clone(),
+                Opening {
+                    through_seq,
+                    through_id,
+                    pages: 0,
+                    work: Vec::new(),
+                },
+            );
+            return Step {
+                gap: None,
+                requests: vec![Request::FetchRange {
+                    fold_id: Some(id),
+                    from_seq,
+                    through_seq,
+                }],
+            };
+        }
         let Some(opening) = self.openings.get_mut(&id) else {
             return Step::default();
         };
         let last = items.last().map(|i| i.seq);
         opening.work.extend(items);
         opening.pages += 1;
-        let through = opening.through;
+        let through_seq = opening.through_seq;
         if more
             && let Some(last) = last
             && opening.pages < MAX_RANGE_PAGES
@@ -314,7 +346,7 @@ impl Session {
                 requests: vec![Request::FetchRange {
                     fold_id: Some(id.clone()),
                     from_seq: last + 1,
-                    through_seq: through,
+                    through_seq,
                 }],
             };
         }

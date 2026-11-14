@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The password card (secret_run): what the card shows from its input, and how the chat's tool row reads the tool's
 /// JSON result back, command by command.

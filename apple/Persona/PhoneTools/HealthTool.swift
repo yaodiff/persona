@@ -1,5 +1,6 @@
 import Foundation
 import HealthKit
+import PersonaWire
 
 /// `phone_health_summary`: per-day aggregates, one HealthKit collection query
 /// per metric. `phone_health_write_sample`: one sample the user approved on the

@@ -1,5 +1,6 @@
 import XCTest
 @testable import Persona
+import PersonaWire
 
 /// Replays the shared fixture spec/fixtures/needs-you/cases.json: the Agents tab's Needs You is one row per session that
 /// waits for the user (its cards under it), the section, the filter and the badge count those rows, and the badge leaves

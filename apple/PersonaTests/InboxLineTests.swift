@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Thread (#2128): the hub's tree decoded, its rows in reading order, and the route asked.
 struct InboxLineTests {

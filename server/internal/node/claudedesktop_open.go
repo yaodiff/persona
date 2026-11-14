@@ -20,7 +20,7 @@ import (
 // transcript. Before, the node resumed it with `claude --resume` in a terminal tab, so the session ran outside the app,
 // and was refused on a machine without a terminal engine.
 //
-// Only the index's sessions (macOS: the index is read there alone), and only when no claude has the session open: one
+// Only the index's sessions, on macOS (claudeDesktopOpens), and only when no claude has the session open: one
 // that does (a terminal's claude without an inbox, a program's) is refused as before, never given a second claude.
 
 // desktopOpenWait bounds the wait for the app to start the session's claude and its inbox; desktopInboxGrace is how
@@ -42,8 +42,12 @@ const (
 
 // sendThroughDesktopApp sends text to session id through the desktop app when the app's sidebar lists it and nothing
 // runs it: the app opens it, then the message goes to its inbox. handled false for any other session, and when the link
-// cannot be opened at all (nothing was started: the caller goes on as before).
+// cannot be opened at all (nothing was started: the caller goes on as before), or not in the background here
+// (claudeDesktopOpens).
 func (n *Node) sendThroughDesktopApp(ctx context.Context, id, text string, images []proto.Image) (handled bool, err error) {
+	if !claudeDesktopOpens {
+		return false, nil
+	}
 	local := readClaudeDesktopIndex(n.home).about[id].local
 	if local == "" {
 		return false, nil

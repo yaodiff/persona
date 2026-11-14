@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Settings › Extensions and Connectors with several managers (docs/assistant/managers.md "Grouping", #1827): `manager` decodes on
 /// extensions and connectors, the lists group under each manager's name (the default first, then the roster's order, empty

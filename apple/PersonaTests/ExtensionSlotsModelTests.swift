@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The plugins' UI slots (docs/extensions/extensions.md「UI slots」): what the hub lists and the app keeps (entries, cards, badges),
 /// the new items (chart, stat_grid), refresh_after, and the plugin_ui event.

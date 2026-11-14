@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Feishu through the Lark gateway is a plugin's (#1530): what the app shows of it goes by the hub's features
 /// (`LarkFeatures`), and the company feed has no tenant's name built in (`KBMoments`).

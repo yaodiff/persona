@@ -2,6 +2,7 @@ import Foundation
 import ImageIO
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct ExtensionArtworkTests {
     @Test func optionalMetadataDecodesOnBothAPIPathsAndRanksDeterministically() async throws {

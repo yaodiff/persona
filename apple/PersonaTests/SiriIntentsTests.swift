@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Pure logic behind AskPersonaIntent / AgentTaskIntent / AgentsStatusIntent.
 struct SiriIntentsTests {

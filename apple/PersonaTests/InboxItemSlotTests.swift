@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The inbox_item slot (docs/extensions/extensions.md「Inbox items」, #1682): which sources' items a plugin draws, the item's body as
 /// the plugin's View (`context.item`, its buttons), today's body whenever that cannot be (quietly, or with a line and

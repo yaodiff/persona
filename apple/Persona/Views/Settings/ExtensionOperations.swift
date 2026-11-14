@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 // Installing, upgrading and removing extensions, with what the hub is doing meanwhile (docs/protocol/protocol.md「Extension install, upgrade and uninstall progress」,
 // #3277, #3307).

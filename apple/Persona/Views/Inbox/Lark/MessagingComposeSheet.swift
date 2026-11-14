@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// What a messaging source asks for before a mode's send (#2138, docs/extensions/extension-messaging.md「Composer modes」): its view's text and
 /// fields (a word, a secret, a choice, a switch), and the submit button that takes their values back to `compose`.

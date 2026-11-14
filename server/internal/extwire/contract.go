@@ -22,6 +22,9 @@ const (
 	// ScopeLeadersRead: being told of the leader conversations (leader.changed) and what they report (leader.report),
 	// and listing them (GET /api/v1/assistant/leaders); #3484.
 	ScopeLeadersRead = "leaders.read"
+	// ScopeAssistantDispatchPolicy: reading and writing the assistant's dispatch policy
+	// (GET/PUT /api/v1/assistant/dispatch-policy), the organization rule for which conversations may hand out work.
+	ScopeAssistantDispatchPolicy = "assistant.dispatch_policy"
 	// ScopeAgentsPermissionMode: changing the permission mode of a conversation the extension opened itself, and of no
 	// other (the hub checks who opened it: hub/extension_modes.go).
 	ScopeAgentsPermissionMode = "agents.permission_mode"

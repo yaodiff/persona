@@ -91,12 +91,13 @@ private fun Todo.entryRank(status: TriageStatus): Int {
 fun assistantEntries(
     conversation: String, main: String?, todos: List<Todo>, sessions: List<Session>, interactions: List<Interaction>,
     plans: Collection<TaskPlan>, feed: List<FeedItem>, now: Long, restored: Map<String, Long> = emptyMap(),
+    hierarchy: Boolean = false,
 ): AssistantEntries {
     val isMain = !main.isNullOrBlank() && main == conversation
-    val bySession = sessions.associateBy { GroupKeys.rawKey(it.key) }
+    val bySession = persona.core.domain.sort.foldedSessions(sessions, hierarchy).associateBy { GroupKeys.rawKey(it.key) }
     val lookup = { key: SessionKey -> bySession[GroupKeys.rawKey(key)] }
     val asksOf = interactions.sortedWith(compareBy<Interaction> { parseTime(it.createdAt) ?: Instant.MIN }.thenBy { it.id })
-        .groupBy { GroupKeys.rawKey(it.sessionKey) }
+        .groupBy { GroupKeys.rawKey(it.homeKey) }
     val time = { at: String? -> parseTime(at) ?: Instant.MIN }
 
     val asking = mutableListOf<NeedsYouEntry>()
@@ -148,7 +149,7 @@ fun assistantEntries(
     // Agents that belong to no task, the main conversation's only: asking ones wait on the user, working ones run.
     val agentsAsking = mutableListOf<NeedsYouEntry>()
     val agentsRunning = mutableListOf<RunningEntry>()
-    for (session in dockAgents(conversation, main, sessions, todos)) {
+    for (session in dockAgents(conversation, main, sessions, todos, hierarchy)) {
         if (session.key in folded) continue
         if (session.agentState == AgentState.NeedsYou) agentsAsking += NeedsYouEntry.Agent(session, asksOf[GroupKeys.rawKey(session.key)].orEmpty())
         else agentsRunning += RunningEntry.Agent(session)

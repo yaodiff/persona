@@ -19,6 +19,7 @@ import persona.core.domain.fleet.FleetSummary
 import persona.core.domain.fleet.FleetText
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.foldedSubtasks
+import persona.core.domain.sort.foldRows
 import persona.core.hub.HubError
 import persona.core.hub.HubFailure
 import java.time.Instant
@@ -134,9 +135,10 @@ object RecentAgents {
 
     // Each session's time is parsed once: `updated` parses its text on every read, and reading it inside the
     // comparator parsed every session's date on each comparison of each push.
-    fun pick(sessions: Collection<Session>): List<Session> {
-        val folded = foldedSubtasks(sessions.map(::AgentSession)) { !it.session.assistant && it.isLive }
-        return sessions.filter { !it.assistant && it.isLive && it.key.path !in folded }
+    fun pick(sessions: Collection<Session>, hierarchy: Boolean = false): List<Session> {
+        val rows = foldRows(sessions.map(::AgentSession), hierarchy)
+        val folded = foldedSubtasks(rows) { !it.session.assistant && it.isLive }
+        return rows.map { it.session }.filter { !it.assistant && it.isLive && it.key.path !in folded }
             .map { it to (it.updated ?: Instant.EPOCH) }
             .sortedWith(compareByDescending<Pair<Session, Instant>> { it.second }.thenBy { it.first.key.path })
             .take(COUNT).map { it.first }

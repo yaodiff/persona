@@ -1,0 +1,18 @@
+{
+  "held_entry": "Held pushes",
+  "held_entry_label": "Held pushes, {count} today",
+  "held_entry_hint": "P1 and P2 pushes held while low-distraction mode is on",
+  "held_title": "Held pushes today",
+  "held_explanation": "P1 is waiting for your review. P2 is quiet and starts folded.",
+  "held_p1": "P1 · Needs your review",
+  "held_p1_count": "P1 · Needs your review ({count})",
+  "held_p2": "P2 · Quiet",
+  "held_p2_count": "P2 · Quiet ({count})",
+  "held_empty": "No pushes were held today.",
+  "held_untitled": "No summary",
+  "held_reason_p1": "Held for the briefing",
+  "held_reason_p2": "Kept silent",
+  "held_reason_dedup": "A related push already alerted in the last 12 hours",
+  "held_loading": "Loading held pushes…",
+  "held_load_failed": "Couldn't load held pushes. Check the connection and retry."
+}

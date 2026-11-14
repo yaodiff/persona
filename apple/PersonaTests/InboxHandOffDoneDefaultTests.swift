@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Hand to AI files nothing unless the user asks (docs/assistant/inbox.md "Item actions"): these check that the rule
 /// holds on the bar's queued path as well as on a direct send, and that the box is read when the send goes.

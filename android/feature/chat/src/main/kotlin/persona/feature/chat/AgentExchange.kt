@@ -34,8 +34,6 @@ import persona.core.contracts.FeedItem
 import persona.core.contracts.SessionKey
 import persona.core.contracts.Todo
 import persona.core.designsystem.AssistantAnswerFrame
-import persona.core.designsystem.JCard
-import persona.core.designsystem.JTag
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.PersonaTheme
@@ -171,21 +169,19 @@ internal fun newAgentKey(item: FeedItem, todo: Todo?): SessionKey? {
     return SessionKey(machine, id)
 }
 
-/** The same New handoff as iOS and web when messaging a task starts a successor Agent. */
+/** The same New hand-off as the web when messaging a task starts a successor Agent (#5110): one card, opening that Agent. */
 @Composable
-internal fun NewAgentHandoff(item: FeedItem, title: String, todo: Todo?, host: AssistantTaskHost, openTask: (() -> Unit)?) {
+internal fun NewAgentHandoff(item: FeedItem, title: String, todo: Todo?, host: AssistantTaskHost) {
     val key = newAgentKey(item, todo)
-    val session = key?.let { target -> host.sessions.firstOrNull { it.key == target } }
-    val open = key?.let { target -> { host.onOpen(target) } } ?: openTask
-    JCard(Modifier.padding(top = Tokens.Space.s).testTag("new-agent-handoff"), onClick = open, padding = Tokens.Space.m) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            Text(session?.displayTitle ?: title, Modifier.weight(1f), style = PersonaTheme.type.bodyStrong,
-                color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            JTag(stringResource(R.string.chat_new_agent_started))
-        }
-        Text(session?.status()?.localizedLabel ?: stringResource(R.string.chat_tasks_now_starting),
-            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
-    }
+    val handoff = persona.core.domain.tasks.AgentHandoff(
+        key = key?.let { "${it.machineId}/${it.sessionId}" } ?: item.id,
+        title = title,
+        wake = persona.core.domain.tasks.HandoffWake.Created,
+        machineId = key?.machineId,
+        sessionId = key?.sessionId,
+        todoId = todo?.id,
+    )
+    AgentHandoffCards(listOf(handoff), host, Modifier.padding(top = Tokens.Space.s), cardTag = "new-agent-handoff")
 }
 
 /** A task's agent to Persona (`report`, iOS `ReportExchange`): a question, a block, done, or how far it got. */

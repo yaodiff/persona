@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Dependency status in the details and the install preview; not the manifest's version constraint itself.
 nonisolated struct ExtensionDependencyStatus: Codable, Hashable, Sendable, Identifiable {

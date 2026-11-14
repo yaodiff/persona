@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/chatsearch"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -335,17 +336,17 @@ func searchVersion(c proto.Session) int64 {
 	return c.UpdatedAt.UnixNano()
 }
 
-// searchRows is what the index keeps of a page (searchIndexText), and the page's last seq.
+// searchRows is what the index keeps of a page (chatsearch.IndexText), and the page's last seq.
 func searchRows(items []proto.Item) ([]db.SearchItemRow, int) {
 	var rows []db.SearchItemRow
 	last := 0
 	for _, it := range items {
 		last = max(last, it.Seq)
-		text, ok := searchIndexText(it)
+		text, ok := chatsearch.IndexText(it)
 		if !ok {
 			continue
 		}
-		rows = append(rows, db.SearchItemRow{Seq: it.Seq, ItemID: it.ID, Role: it.Role, TS: it.TS, Body: text, Folded: searchFold(text)})
+		rows = append(rows, db.SearchItemRow{Seq: it.Seq, ItemID: it.ID, Role: it.Role, TS: it.TS, Body: text, Folded: chatsearch.Fold(text)})
 	}
 	return rows, last
 }

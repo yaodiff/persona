@@ -4,6 +4,7 @@ import UIKit
 #elseif os(macOS)
 import AppKit
 #endif
+import PersonaWire
 
 /// How the whole app is drawn, picked in Settings › Interface Style: panels, cards and buttons, the page they sit on, the type,
 /// the components. The colors are Theme Color (`ThemeColor`), a choice of its own; `StyleSpec` puts the two together.

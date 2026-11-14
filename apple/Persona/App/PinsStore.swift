@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Pinned and muted spaces / agents. The hub keeps them; this keeps a copy in UserDefaults so the list orders right
 /// before the hub answers, and changes them optimistically: a change the hub does not save goes back to what the hub

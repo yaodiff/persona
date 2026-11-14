@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct MachineMetricsTests {
     @Test func decodesTheHubsResponse() throws {

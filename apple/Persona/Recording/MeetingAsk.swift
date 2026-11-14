@@ -1,6 +1,7 @@
 #if os(iOS)
 import Foundation
 import Observation
+import PersonaWire
 
 /// Asking Persona during a meeting it attends (#2981; docs/assistant/meeting-minutes.md「Asking」). Only by a tap: there is
 /// no wake phrase. A typed question, or none: then the question is what was just said in the room (the open segment is

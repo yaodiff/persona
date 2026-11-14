@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Feishu changes heard with no Feishu list in front wait, and the newest are fetched when one is back (#4693).
 struct LarkCatchUpTests {

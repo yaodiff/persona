@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Where Hand to AI last sent an item from each source (#2121; docs/assistant/inbox.md "Item actions";
 /// spec/fixtures/inbox/handoff_memory.json): the repository, else the chat, else the sender (the item's `mutes`), in the

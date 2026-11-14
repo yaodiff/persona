@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Source subscriptions (#2041, docs/extensions/subscriptions.md "Pages"): the manager draws their pages as declarative UI at
 /// `POST /api/v1/subscriptions/-/ui`, and the app opens them as an extension page under a reserved id.

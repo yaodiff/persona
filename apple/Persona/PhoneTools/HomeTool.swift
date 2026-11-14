@@ -2,6 +2,7 @@ import Foundation
 #if os(iOS)
 import HomeKit
 #endif
+import PersonaWire
 
 /// Home accessories and scenes through HomeKit (#2285). Every change is approved on the phone, one at a time; locks,
 /// garage doors and security systems say so on the card. Needs the HomeKit capability in the build (`HomeAccess.isBuilt`):

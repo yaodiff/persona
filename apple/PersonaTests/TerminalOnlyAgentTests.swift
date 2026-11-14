@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Which Agents get the Terminal button over the composer (#6170): a CLI in a terminal pane the node has no reader for.
 /// The node marks those with `read_only_reason` (server/internal/node sessions.go `otherAgent`, pi.go, opencode.go).

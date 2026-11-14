@@ -31,8 +31,8 @@ class HubRestartTest {
     @Test fun theSocketUrlCarriesTheResumePoint() {
         Fixture().use { fixture ->
             val base = "https://hub.example:8443/".toHttpUrl()
-            assertEquals("https://hub.example:8443/api/v1/ws?features=sessions_list%2Cextension_ui_stream_v1%2Cpersona_contracts_v1", (fixture.connection.socketUrl(base, null).toString()).zhAny())
-            assertEquals("https://hub.example:8443/api/v1/ws?features=sessions_list%2Cextension_ui_stream_v1%2Cpersona_contracts_v1&event_stream=s%201&event_seq=42",
+            assertEquals("https://hub.example:8443/api/v1/ws?features=sessions_list%2Csessions_hierarchy%2Cextension_ui_stream_v1%2Cpersona_contracts_v1", (fixture.connection.socketUrl(base, null).toString()).zhAny())
+            assertEquals("https://hub.example:8443/api/v1/ws?features=sessions_list%2Csessions_hierarchy%2Cextension_ui_stream_v1%2Cpersona_contracts_v1&event_stream=s%201&event_seq=42",
                 (fixture.connection.socketUrl(base, "s 1" to 42L).toString()).zhAny())
         }
     }
@@ -41,7 +41,7 @@ class HubRestartTest {
         Fixture().use { fixture ->
             fixture.hello = { """{"type":"hello","hub_id":"test-hub","event_stream":"s1","event_seq":5,"resumed":false}""" }
             val first = fixture.start()
-            assertEquals("sessions_list,extension_ui_stream_v1,persona_contracts_v1", first.request.url.queryParameter("features"))
+            assertEquals("sessions_list,sessions_hierarchy,extension_ui_stream_v1,persona_contracts_v1", first.request.url.queryParameter("features"))
             assertNull(first.request.url.queryParameter("event_stream"))
             assertFalse(fixture.connection.resumed)
             assertEquals("s1" to 5L, (fixture.connection.resumePoint).zhAny())

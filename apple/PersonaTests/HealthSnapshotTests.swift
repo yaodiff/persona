@@ -2,6 +2,7 @@ import Foundation
 import HealthKit
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The locked-phone health snapshot: what gets written while the device is
 /// unlocked, and what `phone_health_summary` answers while it is locked.

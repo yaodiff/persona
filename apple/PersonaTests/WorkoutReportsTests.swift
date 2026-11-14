@@ -1,6 +1,7 @@
 #if os(iOS)
 import Foundation
 import Testing
+import PersonaWire
 @testable import Persona
 
 /// Records which reports reached the fake hub, in order.

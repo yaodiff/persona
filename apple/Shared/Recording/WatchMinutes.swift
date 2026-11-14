@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Meetings' minutes as the watch shows them (docs/apple/recording.md「Apple Watch」): a short version of the hub's minutes
 /// (key points, decisions, action items) the phone relays in the WatchConnectivity application context. The watch never

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The hand-off card (`secret_handoff`, #3962) and secret references on the iPhone: the card is answered on itself only
 /// (every quick path is off), says what goes where without a reference, and only its own approval carries the card's

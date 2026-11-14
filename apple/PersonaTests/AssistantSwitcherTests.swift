@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The sidebar's assistant switcher (docs/assistant/managers.md "Clients"): what each row says, the list's order, the
 /// avatar colors every client shares, what a roster kept across launches holds, and the install code a row of one still

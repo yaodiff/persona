@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct AgentListProjectionTests {
     private func session(_ id: String, state: String = "idle", group: String = "", cwd: String = "/code/project") throws -> Session {

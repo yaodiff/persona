@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import PersonaWire
 
 /// Takes a value-type snapshot on the delegate callback thread so the system's mutable userInfo never reaches the MainActor.
 nonisolated struct ExtensionNotificationEvent: Sendable {

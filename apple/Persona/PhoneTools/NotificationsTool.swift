@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import PersonaWire
 
 /// `phone_notify`: post a local notification, now or after a delay.
 enum NotificationsTool {

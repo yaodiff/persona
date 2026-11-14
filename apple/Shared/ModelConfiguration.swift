@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The hub owns the purpose catalog and inheritance; clients edit only supported fields.
 nonisolated struct ModelBinding: Codable, Hashable, Sendable {

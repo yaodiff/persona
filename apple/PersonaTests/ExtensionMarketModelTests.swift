@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Extension Market (ExtensionMarketModel, MarketExtensionModel) and a plugin's declarative UI (ExtensionViewModel, ExtensionLauncherModel):
 /// what the hub sends decodes; the catalog is searched and filtered by market; markets are added (the hub's reason

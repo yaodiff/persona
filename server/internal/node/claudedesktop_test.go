@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,10 +49,30 @@ func useDesktopDirs(t *testing.T) (first, third string) {
 	t.Helper()
 	base := t.TempDir()
 	first, third = filepath.Join(base, "Claude"), filepath.Join(base, "Claude-3p")
-	old := claudeDesktopDirs
+	old, oldOpens := claudeDesktopDirs, claudeDesktopOpens
 	claudeDesktopDirs = func(string) []string { return []string{first, third} }
-	t.Cleanup(func() { claudeDesktopDirs = old })
+	claudeDesktopOpens = true // the Mac's app, on any system the tests run on
+	t.Cleanup(func() { claudeDesktopDirs, claudeDesktopOpens = old, oldOpens })
 	return first, third
+}
+
+// The index is read from macOS's Application Support and Windows' local app data, both builds' directories; another
+// system has none.
+func TestDesktopDataDirs(t *testing.T) {
+	home := filepath.Join("h", "me")
+	for goos, base := range map[string]string{
+		"darwin":  filepath.Join(home, "Library", "Application Support"),
+		"windows": filepath.Join(home, "AppData", "Local"),
+	} {
+		got := desktopDataDirs(goos, home)
+		want := []string{filepath.Join(base, "Claude"), filepath.Join(base, "Claude-3p")}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: %v, want %v", goos, got, want)
+		}
+	}
+	if got := desktopDataDirs("linux", home); got != nil {
+		t.Errorf("linux: %v", got)
+	}
 }
 
 // The offline list shows the desktop app's sessions as its sidebar does (#3304): not archived sessions, not a session's
@@ -187,13 +208,6 @@ func TestClaudeDesktopIndexFollowsChanges(t *testing.T) {
 	os.Remove(p)
 	if hidden() {
 		t.Fatal("without an entry nothing is hidden")
-	}
-}
-
-func TestClaudeDesktopDirsAreMacOnly(t *testing.T) {
-	dirs := claudeDesktopDirs("/home/u")
-	if len(dirs) != 0 && (len(dirs) != 2 || !strings.HasSuffix(dirs[0], filepath.Join("Application Support", "Claude")) || !strings.HasSuffix(dirs[1], "Claude-3p")) {
-		t.Fatalf("dirs = %v", dirs)
 	}
 }
 

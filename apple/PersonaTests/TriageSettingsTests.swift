@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Settings › Session Triage (`TriageSettingsModel`, `TriageSwitches`) without the page.
 @MainActor struct TriageSettingsTests {

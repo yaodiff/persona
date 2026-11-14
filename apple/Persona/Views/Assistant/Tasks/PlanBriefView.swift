@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Whether `text` needs more than `lines` lines at the width it is drawn at: two copies of it, one held to `lines` and one
 /// not, measured out of sight (they are a background, never part of the layout). Drives the Show All a clamp needs.

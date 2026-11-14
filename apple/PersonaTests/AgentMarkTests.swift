@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Which mark an agent's row draws and whether it carries the command line's </> badge (#6390), read off the session
 /// as the hub sends it.

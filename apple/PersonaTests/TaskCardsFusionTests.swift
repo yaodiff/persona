@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// docs/design/task-cards.md (#5569): the usage limit's reading, a decision round's Later / Don't handle, a plan task's
 /// brief, the receipt's actions and the hand-off card's wake.

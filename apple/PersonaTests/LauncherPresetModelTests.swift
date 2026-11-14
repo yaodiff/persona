@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Add Provider › From Extension (LauncherPresetModel) and the quota's gateway name: what the hub sends decodes, a launcher
 /// added from a preset sends only the name, the key, the preset and a model picked other than the default, and an

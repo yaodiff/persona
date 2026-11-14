@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Text from someone else inside a `<persona-context>` block cannot close it, however the closing tag is written
 /// (#3831; the hub's `TestContextBodyLeavesNothingThatCloses`, the web's `context-body.test.ts`).

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Subtasks under the session that started them (`CodexTasks`): Codex subagents under their chat, as the Codex App's
 /// sidebar shows them, and a runtime's sessions under the agent that created them (#4494), as Android's `CodexTaskForest`

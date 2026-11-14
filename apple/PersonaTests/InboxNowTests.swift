@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The iOS rendering of the manager's shared state-key and row-line contracts. Every case and language comes from the
 /// same fixtures as the other clients; no expected sentence is duplicated in this test.

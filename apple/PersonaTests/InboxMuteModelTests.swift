@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What an inbox item can be muted by, as the hub lists it (`mutes`), and the menu's words for it.
 struct InboxMuteModelTests {

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The composer and its outgoing rows share one atomic record: a crash cannot restore both copies of a send.
 nonisolated struct LarkOutboxSnapshot: Sendable {

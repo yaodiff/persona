@@ -1,5 +1,6 @@
 import ImageIO
 import SwiftUI
+import PersonaWire
 
 // UI version 6's pictures (docs/extensions/extensions.md "UI version 6", "Pictures through the hub", #827): an `image`
 // component, and a picture in a tile or a row's thumbnail. An https `url` loads without any of the app's credentials; a

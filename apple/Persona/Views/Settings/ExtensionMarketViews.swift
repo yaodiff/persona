@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Settings › Extensions › Extension Market (docs/extensions/extensions.md「Extension marketplace」): the plugins of every market the hub has, searched and filtered by
 /// market; a row each with its name, version, what it does, its tags and how it stands on this hub. The markets

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agents_row_children_running">子 Agent %1$d 个在跑</string>
+</resources>

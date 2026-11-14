@@ -1,5 +1,6 @@
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 import SwiftUI
+import PersonaWire
 
 /// Settings › Knowledge Selection (`KnowledgeSelectionModel`): the chats and documents with a setting of their own
 /// first (they come before every rule), then the chat rules and the document rules, a section per priority level.

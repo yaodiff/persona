@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The navigation decisions behind Inbox Back: a pushed route carries the item's manager, every nil-push path keeps its
 /// previous destination, automatic main-chat selection preserves pushed pages, and a real hub-group change clears them.

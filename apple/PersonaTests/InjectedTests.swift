@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Messages Persona types in for the model (`Injected`, docs/protocol/protocol.md「Messages injected by Persona」): read off the text the way
 /// the hub does (the shared cases in spec/fixtures/injected), taken from the hub's mark, never from a line the user sent,

@@ -1,5 +1,6 @@
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // Settings › Connectors (2026-11-01): where Persona' data comes from and acts — this device's data (phone_* tools), the mail
 // accounts, Lark (the hub's Lark gateway), and the Lark Bot the user talks to Persona through (FeishuBotView). Mail used to be managed from the inbox's ⋯ menu, this device's data was Phone Data.

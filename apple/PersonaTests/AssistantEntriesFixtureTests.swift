@@ -1,5 +1,6 @@
 import XCTest
 @testable import Persona
+import PersonaWire
 
 /// Replays the shared fixture spec/fixtures/entries/cases.json (#3387) through `AssistantEntries.split`: the iPhone, iPad
 /// and Mac action bar splits the same input into Needs You / In Progress / shelved exactly as the web

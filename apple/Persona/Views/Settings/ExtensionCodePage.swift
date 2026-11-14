@@ -1,5 +1,6 @@
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // An extension's page with UI version 4's code-hosting parts (#2961, docs/extensions/extensions.md「UI version 4: code hosting」): tabs at the
 // top, a header across, and on a wide display (iPad, Mac) the `side` sections (a file tree) in a column on the left

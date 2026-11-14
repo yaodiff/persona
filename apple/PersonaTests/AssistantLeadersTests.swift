@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The directions' names, counts and order from the hub's tree, and its `directions` push (#4331, #4352).
 struct AssistantLeadersTests {

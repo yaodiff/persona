@@ -1,17 +1,26 @@
 import SwiftUI
+import PersonaWire
 
-/// One dispatch, one card per task (docs/design/task-cards.md §3.2; the web's `HandoffCard`): an arrow, the task's title with
-/// how its Agent came to it (New, Already Active, Resumed), when the Agent last moved and its state, and an arrow out. A plan
-/// names only its own tasks, each independently openable. Titles come from the live to-do when loaded; a task whose Agent
-/// did not start says why in red, and one with none yet says it is starting. The web draws one card per Agent; here a
-/// task is one card, its lead Agent.
+/// One dispatch, one card per Agent (docs/design/DESIGN_SYSTEM.md §3.3; the web's `HandoffCard`): an arrow, the Agent's
+/// title with how it came to the task (New, Already Active, Resumed), when it last moved and its state, and an arrow out.
+/// A plan names only its own tasks. Before an Agent is up the card stands for the task: starting, why it did not start,
+/// or that it closed. Agents linked together are each a card; a later Agent is not on this hand-off.
 struct DispatchHandoffCards: View {
     var tasks: [DispatchedTasks.Entry]
+    private var store: TasksStore { .shared }
+
+    private var cards: [DispatchedTasks.Entry] {
+        tasks.flatMap { entry in
+            DispatchedTasks.cards(of: entry, todo: entry.todoID.flatMap { store.todos[$0] })
+        }
+    }
 
     var body: some View {
-        if !tasks.isEmpty {
+        let rows = cards
+        if !rows.isEmpty {
+            let shared = Set(Dictionary(grouping: rows, by: { $0.todoID ?? $0.id }).filter { $0.value.count > 1 }.map(\.key))
             VStack(alignment: .leading, spacing: Theme.Space.s) {
-                ForEach(tasks) { DispatchHandoffCard(entry: $0) }
+                ForEach(rows) { DispatchHandoffCard(entry: $0, disambiguate: shared.contains($0.todoID ?? $0.id)) }
             }
         }
     }
@@ -22,6 +31,8 @@ struct DispatchHandoffCards: View {
 /// `Equatable`: a change that leaves it as it was redraws nothing below (docs/apple/performance.md P5, P6).
 struct DispatchHandoffCard: View {
     var entry: DispatchedTasks.Entry
+    /// Two Agents of one task need different accessibility ids. One keeps `dispatch.task.<todo>`.
+    var disambiguate = false
     private var store: TasksStore { .shared }
 
     /// What the meta line under the title says.
@@ -38,17 +49,36 @@ struct DispatchHandoffCard: View {
 
     var body: some View {
         let todo = entry.todoID.flatMap { store.todos[$0] }
-        let lead = todo.flatMap { store.leadSession($0) }
-        let meta = meta(todo: todo, lead: lead)
-        DispatchHandoffCardBody(entry: entry, meta: meta).equatable()
+        let session = agentSession(todo)
+        let meta = meta(todo: todo, session: session)
+        DispatchHandoffCardBody(entry: titled(session), meta: meta, disambiguate: disambiguate).equatable()
     }
 
-    private func meta(todo: TodoItem?, lead: Session?) -> Meta {
-        if let lead, let todo {
-            let at = lead.activityAt ?? lead.updatedAt
-            let state = store.state(todo)
-            let limit = Self.limited(state: state, closed: todo.doneAt != nil, lead: lead)
-            return .agent(at: at.flatMap { $0.isMeaningful ? $0 : nil }, state: state, limit: limit)
+    private func titled(_ session: Session?) -> DispatchedTasks.Entry {
+        var shown = entry
+        shown.title = title(session: session)
+        return shown
+    }
+
+    /// The session's own title, then the Agent row's, then the task's. Same order as the web, including a session
+    /// whose title is the runtime's default.
+    private func title(session: Session?) -> String {
+        DispatchedTasks.cardTitle(sessionTitle: session?.title, agentTitle: entry.agentTitle, taskTitle: entry.title)
+    }
+
+    private func agentSession(_ todo: TodoItem?) -> Session? {
+        guard let mid = entry.machineID, let sid = entry.sessionID, !mid.isEmpty, !sid.isEmpty else { return nil }
+        if let todo, let found = store.sessions(todo).first(where: { $0.machineID == mid && $0.sessionID == sid }) { return found }
+        let group = AppModel.shared.hub?.group ?? ""
+        return AppModel.shared.sessionWithLine(SessionKey(group: group, machineID: mid, sessionID: sid))
+    }
+
+    private func meta(todo: TodoItem?, session: Session?) -> Meta {
+        if entry.sessionID != nil, let todo {
+            let at = (session?.activityAt ?? session?.updatedAt).flatMap { $0.isMeaningful ? $0 : nil }
+            let state = session.map { TaskState(todo: todo, sessions: [$0]) } ?? store.state(todo)
+            let limit = session.map { Self.limited(state: state, closed: todo.doneAt != nil, lead: $0) } ?? false
+            return .agent(at: at, state: state, limit: limit)
         }
         if let failure = failure(todo) { return Self.failedMeta(failure, receiptBelow: failedReceipt(todo)) }
         if todo?.doneAt != nil { return .closedEarly }
@@ -87,6 +117,7 @@ struct DispatchHandoffCard: View {
 struct DispatchHandoffCardBody: View, Equatable {
     var entry: DispatchedTasks.Entry
     var meta: DispatchHandoffCard.Meta
+    var disambiguate = false
     private var store: TasksStore { .shared }
 
     /// "3 min. ago": minutes are enough for when an Agent last moved.
@@ -110,7 +141,7 @@ struct DispatchHandoffCardBody: View, Equatable {
                 metaLine
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if entry.todoID != nil {
+            if entry.todoID != nil || entry.sessionID != nil {
                 ThemedIcon(Theme.Icon.open).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                     .accessibilityHidden(true)
             }
@@ -118,11 +149,12 @@ struct DispatchHandoffCardBody: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .card(padding: Theme.Space.m)
         if let id = entry.todoID {
+            let ident = (disambiguate && entry.sessionID != nil) ? "dispatch.task.\(id).\(entry.sessionID!)" : "dispatch.task.\(id)"
             Button { open(id) } label: { card.contentShape(.rect) }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityIdentifier("dispatch.task.\(id)")
+                .accessibilityIdentifier(ident)
         } else {
             card
                 .accessibilityElement(children: .combine)
@@ -187,7 +219,12 @@ struct DispatchHandoffCardBody: View, Equatable {
 
     private func open(_ id: String) {
         Haptics.tap()
-        let agent = store.todos[id].flatMap { store.leadSession($0)?.key }
+        let agent: SessionKey? = {
+            if let mid = entry.machineID, let sid = entry.sessionID, !mid.isEmpty, !sid.isEmpty {
+                return SessionKey(group: AppModel.shared.hub?.group ?? "", machineID: mid, sessionID: sid)
+            }
+            return store.todos[id].flatMap { store.leadSession($0)?.key }
+        }()
         #if os(iOS)
         store.openDispatchedTask(id, agent: agent, pushAgent: true)
         #else

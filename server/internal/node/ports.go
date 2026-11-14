@@ -743,6 +743,9 @@ func (n *Node) portDial(ctx context.Context, params json.RawMessage) (any, error
 		if n.screenStart != nil {
 			n.askScreenPermission(p.Pair, nil) // once it signs in: macOS asks for the helper's grant, once per version
 		}
+		if n.inputs != nil {
+			c = n.inputs.wrap(p.Pair, c) // the phone's scroll records out of the stream, to Persona Input (#7775)
+		}
 	}
 	if link {
 		_, relay := n.links.Open(p.Pair, c) // the session owns Screen Sharing's connection from here

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Pure, round-wide visibility policy shared by every chat UI. Pass all items in the round (including continuations
 /// after recaps), and a result index from the complete loaded transcript: a receipt can arrive after the next input.

@@ -230,6 +230,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/assistant/conversations/{id}/stop":   "path",
 		"GET /api/v1/assistant/reporters":                  "manager",
 		"GET /api/v1/assistant/leaders":                    "manager",
+		"GET /api/v1/assistant/dispatch-policy":            "manager",
+		"PUT /api/v1/assistant/dispatch-policy":            "manager",
 		"GET /api/v1/todos":                                "manager", "GET /api/v1/todos/{id}/decisions": "manager",
 		"POST /api/v1/todos": "manager", "PATCH /api/v1/todos/{id}": "manager",
 		"POST /api/v1/todos/{id}/decisions":                 "manager",

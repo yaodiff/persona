@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Settings › Connectors › GitHub's sign-in (docs/extensions/connectors.md「Login supports」): where the token comes from — one of the user's
 // computers' gh login, or the device flow with the GitHub CLI's built-in OAuth App — chosen here and kept on the hub (hub.json's

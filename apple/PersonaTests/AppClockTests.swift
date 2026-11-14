@@ -1,5 +1,6 @@
 import XCTest
 @testable import Persona
+import PersonaWire
 
 #if DEBUG
 final class AppClockTests: XCTestCase {

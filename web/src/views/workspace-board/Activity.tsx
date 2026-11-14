@@ -4,6 +4,7 @@ import { credentialOwner, subscribeCredentialOwner } from "../../lib/api";
 import { fromDefaultManager, useKnownDefault } from "../../lib/manager-choice";
 import { relativeTime, exactTime } from "../../lib/relative-time";
 import { onHubEvent } from "../../lib/store";
+import { isResumed } from "../../lib/reconnect";
 import { BoardActivityModel, type ActivityChange, type ActivitySummary, type DetailState } from "../../lib/workspace-board-activity";
 import type { BoardCard } from "../../lib/workspace-board";
 import { Button, Dialog, Loading, useNow } from "../../ui/atoms";
@@ -64,9 +65,10 @@ function ActivityReader({ cardID, currentCards, onOpenCard }: {
     const off = onHubEvent("workspace_board", (event) => {
       if (fromDefaultManager(event) && (typeof event.revision === "number" || typeof event.revision === "string")) model.noteRevision(event.revision);
     });
+    const offHello = onHubEvent("hello", (event) => { if (!isResumed(event)) void model.refresh(); });
     const visibility = () => setVisible(document.visibilityState !== "hidden");
     document.addEventListener("visibilitychange", visibility);
-    return () => { off(); document.removeEventListener("visibilitychange", visibility); model.dispose(); };
+    return () => { off(); offHello(); document.removeEventListener("visibilitychange", visibility); model.dispose(); };
   }, [model]);
   return <section aria-label={word(cardID ? "card_title" : "title")} className="min-w-0 space-y-3" data-board-activity>
     <div className="flex flex-wrap items-center gap-2">

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// UI version 4's code-hosting parts on Apple (#2961, docs/extensions/extensions.md「UI version 4: code hosting」): the schema's examples read
 /// with every component known, a diff's lines numbered and paired, a file tree built from paths, the page's blocks

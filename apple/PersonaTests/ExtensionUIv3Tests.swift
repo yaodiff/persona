@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// UI version 3 (docs/extensions/extensions.md「UI version 3」, #1850): the schema's types read the new components, push opens a page
 /// without asking the extension, answers push and pop, the search, filter and `more` send what they should, and

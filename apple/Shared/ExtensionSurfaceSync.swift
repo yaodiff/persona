@@ -2,6 +2,7 @@
 import Foundation
 #if canImport(WidgetKit)
 import WidgetKit
+import PersonaWire
 #endif
 
 /// The containing app owns credential changes; refresh only updates directories and reports actual configurations.

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Settings › Knowledge Selection (`KBSelection`, `KnowledgeSelectionModel`) without the page.
 @MainActor struct KnowledgeSelectionTests {

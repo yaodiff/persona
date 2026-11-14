@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // MARK: - Feishu (Lark gateway) wire types
 

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import PersonaWire
 
 /// How far a todo's work got, as the hub sends it in `TodoItem.stage` (#2776): the six steps, in order. A hub that
 /// sends nothing, or a name this build does not know (an older or a newer hub), has none, and no stage bar is drawn.

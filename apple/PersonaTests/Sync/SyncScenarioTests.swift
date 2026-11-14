@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The shared chat sync scenarios (spec/fixtures/sync, #1073), replayed against the real AppModel (#1112): the case's
 /// frames reach it through the demo config's socket, its requests through the demo config's transport, and after every

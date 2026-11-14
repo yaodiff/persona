@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Persona › Scheduled Tasks: the rules in words, the times, and what runs next (docs/assistant/assistant.md).
 @MainActor

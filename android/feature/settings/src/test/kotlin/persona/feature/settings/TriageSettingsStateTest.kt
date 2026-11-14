@@ -63,10 +63,30 @@ class TriageSettingsStateTest {
         assertFalse(model.state.value.busy)
     }
 
+    @Test fun theCloseoutAskSwitchIsSavedWithoutChangingTheOtherSwitches() = runBlocking {
+        val before = TriageSwitches(enabled = true, autoContinue = true, wake = true, decide = true,
+            replyReminder = false, closeout = true, closeoutAsk = false)
+        val after = before.copy(closeoutAsk = true)
+        val api = FakeTriage(before)
+        val model = TriageSettingsModel(api)
+        model.load()
+        model.change(after)
+        assertEquals(after, api.switches)
+        assertEquals(after, model.state.value.switches)
+        assertFalse(model.state.value.busy)
+
+        api.saveFailure = HubFailure(HubError.Timeout)
+        model.change(after.copy(closeoutAsk = false))
+        assertEquals(after, model.state.value.switches)
+        assertEquals("没改成：连不上 hub", model.state.value.saveError?.resolve(res))
+        assertFalse(model.state.value.busy)
+    }
+
     @Test fun anOlderHubHasNoCloseoutSwitch() = runBlocking {
         val model = TriageSettingsModel(FakeTriage(TriageSwitches(enabled = true)))
         model.load()
         assertNull(model.state.value.switches?.closeout)
+        assertNull(model.state.value.switches?.closeoutAsk)
     }
 
     @Test fun aHubWithoutTriageIsNotOfferedARetry() = runBlocking {

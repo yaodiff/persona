@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Messages (Settings › Connectors › Messages): pages from the hub as Go writes them, paging both ways, and how a conversation is laid out.
 /// Every name, number and text is made up.

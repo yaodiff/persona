@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// 「全部子 Agent」 (#1559): every subagent under the one that launched it, the same order as the web's `subagentTree`.
 struct SubagentTreeTests {

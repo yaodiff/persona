@@ -983,7 +983,7 @@ class OkHttpHubConnection(
     /** The socket's URL; with the stream and last broadcast seen, so the hub replays what was missed (#1574). */
     internal fun socketUrl(base: HttpUrl, resumeFrom: Pair<String, Long>?): HttpUrl =
         base.hubUrl("/api/v1/ws").newBuilder().apply {
-            addQueryParameter("features", "sessions_list,extension_ui_stream_v1,${ProtocolCompatibility.CAPABILITY}")
+            addQueryParameter("features", "sessions_list,sessions_hierarchy,extension_ui_stream_v1,${ProtocolCompatibility.CAPABILITY}")
             resumeFrom?.let { (stream, seq) ->
                 addQueryParameter("event_stream", stream)
                 addQueryParameter("event_seq", seq.toString())

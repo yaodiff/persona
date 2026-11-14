@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// New Agent in Claude's desktop app (#5480): the launcher it is, where browsing starts, a new folder's path.
 struct DesktopStartTests {

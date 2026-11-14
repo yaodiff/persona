@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Agents list's row styles (#2530): one choice kept in the two stored values it always was, and the place line the
 /// styles draw (no agent kind, the machine only when the list names it).

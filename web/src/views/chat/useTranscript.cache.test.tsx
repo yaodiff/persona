@@ -65,6 +65,7 @@ afterEach(() => {
   localStorage.clear();
   Object.assign(getState(), { assistant: null });
   resetManagerChoice();
+  vi.useRealTimers();
 });
 
 describe("main conversation first-screen cache", () => {
@@ -228,6 +229,34 @@ describe("main conversation first-screen cache", () => {
     await fail();
     expect(shown.items).toEqual([]);
     expect(readFeedCache(scope)).toBeNull();
+  });
+
+  it("saves a multi-page gap fill only after the continuation closes", async () => {
+    vi.useFakeTimers();
+    render();
+    await answer({ items: [item("u100", 100, "u100", "user")], history: "v1", to_seq: 100 });
+    push({ items: [item("u150", 150, "u150", "user")], history: "v1", from_seq: 150, to_seq: 150 });
+    await act(async () => { vi.advanceTimersByTime(1600); await Promise.resolve(); });
+    expect(calls[0].path).toContain("after_seq=100");
+    await answer({
+      items: [item("u110", 110, "u110", "user"), item("u111", 111, "u111", "user")],
+      history: "v1", to_seq: 111, more_after: true,
+    });
+    expect(calls[0].path).toContain("after_seq=111");
+    expect(readFeedCache(scope)?.items.map((row) => row.id)).toEqual(["u100"]);
+
+    calls.shift(); // leave the continuation unanswered while the chat remounts
+    act(() => root.unmount());
+    root = createRoot(document.createElement("div"));
+    renders = [];
+    render();
+    await answer({
+      items: [item("u140", 140, "u140", "user"), item("u141", 141, "u141"), item("u150", 150, "u150", "user")],
+      history: "v1", to_seq: 150, has_more: true,
+    });
+    expect(ids()).toEqual(["u140", "u141", "u150"]);
+    act(() => { void shown.loadEarlier(); });
+    expect(calls[0].path).toContain("before_seq=140");
   });
 });
 

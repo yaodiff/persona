@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The avatar chosen on the hub and followed by every device (#2406, docs/apple/persona.md "On the phone"): read from
 /// GET /api/v1/looks (an older hub's /api/v1/personas, the choice then this device's own), this device's old choice

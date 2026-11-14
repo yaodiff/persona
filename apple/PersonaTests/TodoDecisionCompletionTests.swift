@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Completing an owner decision is a todo edit, not a recommendation or runtime answer.
 @MainActor struct TodoDecisionCompletionTests {

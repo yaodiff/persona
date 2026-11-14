@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Realtime voice in the meeting on the phone (#3862 phase 4; contract docs/assistant/meeting-minutes.md「Phase 4: realtime
 /// voice in the meeting」, the phone's side docs/apple/recording.md「Realtime voice (phase 4)」): who has a meeting call,

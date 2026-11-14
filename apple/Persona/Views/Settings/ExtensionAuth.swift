@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import PersonaKit
+import PersonaWire
 
 // An extension's sign-in (docs/extensions/extensions.md「Sign-in」, #4507): the hub asks the extension's program for its
 // status and passes the steps of a sign-in on (the connectors' Prompt: fields, a device code, a QR code); what the

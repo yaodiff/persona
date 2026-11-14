@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// quota-relay's sidebar page (nav_page `sidebar`, #4576) as the extension draws it: the fixture is the extension's
 /// own export (extensions repo `testdata/relay-accounts-view.json`, made-up

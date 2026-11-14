@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sort"
@@ -21,6 +22,8 @@ type runtimeRegistry struct {
 	// watching: sessions the hub watches -> the last seq pushed for each, so a runtime that reconnects is asked to
 	// watch them again from where the phone is.
 	watching map[string]int
+	// watchParents: the hub connection each watch belongs to, including a runtime-only watch before its transcript exists.
+	watchParents map[string]context.Context
 	// known: session id -> the runtime that listed it or said it has it, kept after it leaves the list. A runtime
 	// lists only its recent sessions (DSH: the latest 80 of thousands), but an older one is still its own: calls
 	// about it go to that runtime, never to the terminal host as a Claude session to resume (that sent a DSH
@@ -50,7 +53,7 @@ const maxKnown = 8192
 
 func newRuntimeRegistry() *runtimeRegistry {
 	return &runtimeRegistry{conns: map[int]*runtimeConn{}, owner: map[string]*runtimeConn{}, watching: map[string]int{},
-		known: map[string]knownSession{}, unclaimed: map[string]time.Time{}, warned: map[string]bool{}}
+		watchParents: map[string]context.Context{}, known: map[string]knownSession{}, unclaimed: map[string]time.Time{}, warned: map[string]bool{}}
 }
 
 // setHostOff replaces how launcher ownership excludes engine runtimes the serving node does not enable.
@@ -282,6 +285,7 @@ func (b *runtimeRegistry) resetWatches() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.watching = map[string]int{}
+	b.watchParents = map[string]context.Context{}
 	for _, h := range b.conns {
 		h.mu.Lock()
 		h.watched = map[string]bool{}
@@ -488,11 +492,16 @@ func (b *runtimeRegistry) launcherRuntime(name string) *runtimeConn {
 	return b.launcherOwners()[name]
 }
 
-func (b *runtimeRegistry) watch(h *runtimeConn, id string, since int) {
+func (b *runtimeRegistry) watch(h *runtimeConn, id string, since int, parent context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if cur, ok := b.watching[id]; !ok || since > cur {
 		b.watching[id] = since
+	}
+	if parent != nil {
+		b.watchParents[id] = parent
+	} else {
+		delete(b.watchParents, id)
 	}
 	h.mu.Lock()
 	h.watched[id] = true
@@ -503,11 +512,25 @@ func (b *runtimeRegistry) unwatch(id string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.watching, id)
+	delete(b.watchParents, id)
 	for _, h := range b.conns {
 		h.mu.Lock()
 		delete(h.watched, id)
 		h.mu.Unlock()
 	}
+}
+
+// watchParent is the connection a transcriptMoved watch must inherit, including when the original watch was runtime-only.
+// A parent already gone is forgotten rather than given a persistent replacement.
+func (b *runtimeRegistry) watchParent(id string) context.Context {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	parent := b.watchParents[id]
+	if parent != nil && parent.Err() != nil {
+		delete(b.watchParents, id)
+		return nil
+	}
+	return parent
 }
 
 // pushed moves a watched session's seq forward (the items a runtime pushed reached the hub).

@@ -365,6 +365,15 @@ describe("tasks in progress", () => {
     expect(html).not.toContain("查看全部");
     expect(html).toContain("已合未上线");
   });
+  it("labels a concern beside its existing status, without labelling an ordinary task", () => {
+    fake.todos = [todo("concern", { kind: "concern" }), todo("ordinary")];
+    const html = render([]);
+    fake.todos = [];
+    const concernCard = html.slice(html.indexOf('data-task="concern"'), html.indexOf('data-task="ordinary"'));
+    expect(concernCard).toContain(`data-testid="todo-concern">${t("todos.concern")}<`);
+    expect(concernCard).toContain("rounded-full");
+    expect(html.match(/data-testid="todo-concern"/g)).toHaveLength(1);
+  });
   it("offers See all past six tasks", () => {
     fake.todos = Array.from({ length: 7 }, (_, i) => todo(`t${i}`));
     const html = render([]);

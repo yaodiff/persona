@@ -16,8 +16,12 @@ final class TodoPlanTests: XCTestCase {
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos"]
         app.launchPinned()
 
-        let nas = app.staticTexts["给 NAS 配自动备份"]
-        XCTAssertTrue(nas.waitForExistence(timeout: 60))
+        // The list is in once its first row is. The NAS to-do is the first row under Other Open, below the first screen
+        // since the PR section came in, and a List makes a row only as it comes near: drag up to it (#6782).
+        let firstRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "todos.row.")).firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 60))
+        XCTAssertTrue(scrollIntoView(app.descendants(matching: .any)["todos.row.todo_nas"]), "the NAS to-do never came into view")
+        XCTAssertTrue(app.staticTexts["给 NAS 配自动备份"].exists)
         shot("todos-list")
 
         // The detail, as the screenshots open it (`-openTodoTitled`): a row's push needs the shell's destinations.
@@ -53,6 +57,22 @@ final class TodoPlanTests: XCTestCase {
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let todos = try XCTUnwrap(body["todos"] as? [[String: Any]])
         return try XCTUnwrap(todos.first { $0["id"] as? String == id })
+    }
+
+    /// Drags the list up until element is wholly inside it (a row under the bars above the list still reports hittable).
+    /// Slow and held at the end, so no fling carries it past the top. Dragged by the list's margin at the leading edge,
+    /// outside the rows: from the middle the finger lands on whatever row is there, and a to-do row has swipe actions
+    /// and an "N related" button (#6783 hit the same with a date wheel).
+    @MainActor private func scrollIntoView(_ element: XCUIElement, timeout: TimeInterval = 20) -> Bool {
+        let list = app.collectionViews.firstMatch
+        let deadline = Date.now.addingTimeInterval(timeout)
+        while !(element.exists && list.frame.contains(element.frame)) {
+            guard Date.now < deadline else { return false }
+            list.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.6))
+                .press(forDuration: 0.1, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.35)),
+                       withVelocity: .slow, thenHoldForDuration: 0.2)
+        }
+        return true
     }
 
     /// Whether check holds within ten seconds (a change is saved shortly after it is made).

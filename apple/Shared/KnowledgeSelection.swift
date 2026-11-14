@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The knowledge base's selection (docs/assistant/knowledge.md "Selection"): the one document that decides what the hub
 /// reads and stores from chats and documents, and for how many days (`GET` / `PUT /api/v1/kb/selection`, the whole

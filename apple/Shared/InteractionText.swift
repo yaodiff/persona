@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The first heading line of an agent's plan: the first non-empty line without Markdown markers
 /// ("### Plan" -> "Plan"), what every card and the Mac menu bar title shows. An empty plan is Plan.

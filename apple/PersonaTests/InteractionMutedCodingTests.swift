@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// `Interaction.muted` (#4360) is optional on the wire: the hub sends it `omitempty`, older hubs not at all, and the
 /// app's own snapshot cache and watch transfer encode and decode cards again (#4763).

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A card on no session (`personad ask` outside herdr, #4059) can be answered in the app, and Agents' Needs your input lists
 /// every card its badge counts.

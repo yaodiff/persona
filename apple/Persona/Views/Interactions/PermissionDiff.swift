@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// What a file tool's permission card asks to change (#4621), read off its `tool_input` the way the chat reads the same
 /// call once it runs (`ToolDetail`): Claude Code's Edit (old and new text), MultiEdit (each edit), Write (the whole new

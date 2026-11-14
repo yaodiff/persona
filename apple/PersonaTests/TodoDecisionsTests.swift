@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A todo's decision log (#1618): the hub's JSON, which decisions are in effect and which an entry may be marked as
 /// revising, where each came from, and the Decisions section's model against a FakeHub.

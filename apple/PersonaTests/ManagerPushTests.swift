@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// This device's notifications per manager and its quiet hours (#1863, the device prefs' `muted_managers` and `quiet`):
 /// each goes alone in its PUT so the hub merges nothing else, a hub without the field shows no switch, a refused change

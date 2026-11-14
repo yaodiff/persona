@@ -56,4 +56,16 @@
     <plurals name="chat_stack_more">
         <item quantity="other">ほか%1$d件</item>
     </plurals>
+    <string name="chat_tray_held_entry">保留された通知</string>
+    <string name="chat_tray_held_title">今日保留された通知</string>
+    <string name="chat_tray_held_explanation">P1は確認が必要です。P2は通知されず、折りたたまれています。</string>
+    <string name="chat_tray_held_p1">P1・要確認（%1$d）</string>
+    <string name="chat_tray_held_p2">P2・通知なし（%1$d）</string>
+    <string name="chat_tray_held_empty">今日保留された通知はありません。</string>
+    <string name="chat_tray_held_untitled">概要なし</string>
+    <string name="chat_tray_held_reason_p1">ブリーフィングへ</string>
+    <string name="chat_tray_held_reason_p2">通知せずに記録</string>
+    <string name="chat_tray_held_reason_dedup">関連する通知は過去12時間以内に送信済みです</string>
+    <string name="chat_tray_held_load_failed">保留された通知を読み込めませんでした。接続を確認して再試行してください。</string>
+    <string name="chat_tray_held_p2_toggle">通知なしの項目を展開または折りたたむ</string>
 </resources>

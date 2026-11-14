@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The conversations Persona opened by itself (#3264, docs/protocol/protocol.md「Origin of assistant chats」): All Chats' filters by
 /// source, and the mark a row of one carries (#5195); a hub that never says who opened them lists them as before.

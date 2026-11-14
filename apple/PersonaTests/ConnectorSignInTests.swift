@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Settings › Connectors › Telegram: the sign-in a step at a time against the hub (docs/archive/extensions/plan-telegram.md), the switch, deleting
 /// what it brought in. Made-up values only.

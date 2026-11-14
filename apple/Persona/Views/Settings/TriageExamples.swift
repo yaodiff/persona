@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Settings › Session Triage (#1413): what each switch changes, with made-up agents. Look only: drawn in an
 /// `ExampleFrame`, never tapped, never sent anywhere.

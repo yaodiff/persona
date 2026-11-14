@@ -177,9 +177,7 @@ rows for `AssistantTrayActivityUITests` on iPhone and Mac. No new endpoint, task
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
 Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
-the existing task details. On iOS the dispatch answer is one hand-off card per task (`DispatchHandoffCard`, #5569: title, New / Already Active / Resumed, when its Agent last moved and its state, ↗); on Android a small line naming what it dispatched ("Dispatched: <title> · Open", or each
-title when there are several); each opens that task's details, as its tray row does, not the tray (#3700). The web draws a hand-off card
-for each Agent instead, which opens that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; Android's Glass style draws receipts, reviews, reports, Persona's hand-offs, message cards and the hub's notice lines in the chat as iOS does (`docs/plans/android-ios-alignment/chats.md` C13).
+the existing task details. On iOS and Android the dispatch answer is one hand-off card per Agent a dispatch started or a task took over (#5110; iOS `DispatchHandoffCard`: title, New / Already Active / Resumed, when that Agent last moved and its state, ↗). A card with an Agent opens that Agent's page. The web draws the same cards, which open that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; Android's Glass style draws receipts, reviews, reports, Persona's hand-offs, message cards and the hub's notice lines in the chat as iOS does (`docs/plans/android-ios-alignment/chats.md` C13).
 
 **Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
 on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
@@ -355,19 +353,19 @@ lines, and in the user's own color and alignment they read as something the user
   (dismiss the sheet, switch to Agents, and open this Agent with the normal tab bar).
 - If a task has multiple Agents, add ⌄ beside the title. Tapping the title lists the task's Agents for switching (plus "Session Info"; web does the same, #3333).
 - Without an Agent (starting or failed to start), there is no chat page; the sheet uses its own header: state, task name, ⋯, Close.
-- **What a dispatch opens (#3700, #3711, contract in #3718, card since #5569)**: each dispatched task is one hand-off card
-  (iOS `DispatchHandoffCard`, in a `DispatchHandoffCards` list; no "Dispatched N" heading). These cards name only that dispatch's tasks,
+- **What a dispatch opens (#3700, #3711, contract in #3718, card since #5569, one card per Agent #5110)**: each Agent a dispatch started or a task took over is one hand-off card
+  (iOS `DispatchHandoffCard`, in a `DispatchHandoffCards` list; no "Dispatched N" heading). These cards name only that dispatch's Agents,
   never the whole In Progress tray. The ids are already on the client: a standalone `task` feed item's `ref` is the
   to-do and its `wake` (`created`, `active`, `resumed`) is the badge; a started plan's `tasks[].todo_id` identify its tasks
   (a plan's tasks are New). Live to-do titles override plan titles. A plan task without a to-do keeps its title as a card
   with no link, red "Didn't start: <reason>" from the plan task's `error`, and its per-task feed items do not add
-  duplicate cards. The second line is the lead Agent's `activity_at` (else `updated_at`) as a relative time and the
-  task's state (`TaskState`); before there is an Agent it says "Starting the agent", a task closed without one "Closed
-  before an Agent started", a task the list no longer has "This task no longer exists". The web draws one card per Agent
-  (merged within 120 s); iOS one per task, which is its lead Agent.
-  Apple renders this with `DispatchHandoffCards` and `DispatchedTasks`: on iPhone a live lead Agent is pushed using
+  duplicate cards. Agents linked within 120 s of the first are each a card; a later Agent is not on this hand-off.
+  The title is the session's, then the Agent row's, then the task's. The second line is that Agent's `activity_at` (else `updated_at`) as a relative time and
+  its state; before there is an Agent it says "Starting the agent", a task closed without one "Closed
+  before an Agent started", a task the list no longer has "This task no longer exists".
+  Apple renders this with `DispatchHandoffCards` and `DispatchedTasks`: on iPhone that Agent is pushed using
   `TasksStore.expand`, and Back returns to the same Assistant conversation without switching to Agents. On Mac the
-  task's own detail hosts the Agent chat, carrying the resolved `SessionKey` into its initial selection (validated
+  task's own detail hosts the Agent chat, carrying that `SessionKey` into its initial selection (validated
   against that task's active sessions); while no Agent is available, the detail shows its starting/failure state.
   The card is one accessibility element and button (`dispatch.task.<todo id>`); the badge never wraps.
   Open plans keep Start / Edit / Don't Start. No new hub field or setting is needed. A dispatch has no full task
@@ -407,7 +405,7 @@ page one setting away (#5424):
   - `/s/…` and `/todos?id=…` links in a reply open in the side panel on a wide window while it is chosen, else as those
     pages (a phone-sized window has no room beside the chat).
 - **The way back** (Full page). The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end.
-- Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/lib/agent-open.ts`, `web/src/views/assistant/TaskPanel.tsx`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `TaskPanel.test.tsx`, `AgentOpenSetting.test.tsx`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`; browser: `web/e2e/handoff-cards.py` (both settings). iOS and Android keep the dispatched line and task details for now (#5110).
+- Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/lib/agent-open.ts`, `web/src/views/assistant/TaskPanel.tsx`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `TaskPanel.test.tsx`, `AgentOpenSetting.test.tsx`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`; browser: `web/e2e/handoff-cards.py` (both settings). iOS and Android draw the same cards in the chat (#5110).
 
 ### Task board
 

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 nonisolated struct ServerConfig: Codable, Hashable, Sendable {
     var url: URL
@@ -764,6 +765,18 @@ nonisolated struct APIClient: Sendable {
     func launcherList(machine: String, purpose: String? = nil) async throws -> LaunchersResponse {
         try await get("/api/v1/machines/\(machine)/launchers",
                       query: purpose.map { ["purpose": $0] } ?? [:], as: LaunchersResponse.self)
+    }
+    /// Built-in catalog prices for the ids a turn used (`POST /api/v1/launchers/catalog`, #5426). An id the catalog
+    /// leaves out is absent; a known id with no price is present and nil. Empty in, empty out.
+    func catalogPrices(_ ids: [String]) async throws -> [String: ModelPrice?] {
+        if ids.isEmpty { return [:] }
+        struct Query: Encodable { var ids: [String] }
+        struct Row: Decodable { var id: String; var price: ModelPrice? }
+        struct List: Decodable { var models: [Row] }
+        let list: List = try await post("/api/v1/launchers/catalog", body: Query(ids: ids))
+        var out: [String: ModelPrice?] = [:]
+        for row in list.models where !row.id.isEmpty { out[row.id] = row.price }
+        return out
     }
     /// Keeps a pick (launcher, optional model and effort) for one of the assistant's conversations (#5033): its next
     /// messages run on it, on every device, until it is changed or follows the default again (`deleteConversationModel`).

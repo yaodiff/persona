@@ -2,6 +2,7 @@ import MarkdownUI
 import PersonaKit
 import Photos
 import SwiftUI
+import PersonaWire
 
 /// A message to share as a picture (Share in the long-press bar).
 struct ShareMessage: Identifiable {

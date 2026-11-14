@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A message card's reply: open (Send), sent, or handled elsewhere (#4797). The card's own `sent_at` / `filed_at` from
 /// the hub decide where the inbox list (done items of the last 3 days only) has no word.

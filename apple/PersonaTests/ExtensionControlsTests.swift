@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// UI version 6's controls in rows (docs/extensions/extensions.md "UI version 6", "Controls", #827): the numbers a
 /// slider or a stepper writes, and what a change does: shown at once, sent with `{name: value}`, one request a control

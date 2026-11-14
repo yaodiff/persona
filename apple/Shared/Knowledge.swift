@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The knowledge base under the hub's ~/.persona/data (docs/assistant/knowledge.md): projects, topics, chats, people, docs,
 /// meetings and events, each ranked by importance (P0–P3) and relevance to the user, with free tags. Topics (#3783, #7251)

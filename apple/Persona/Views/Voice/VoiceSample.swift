@@ -1,6 +1,7 @@
 // i18n-ignore-file: DEBUG screenshot samples (made-up captions, runs and cards)
 #if DEBUG
 import SwiftUI
+import PersonaWire
 
 /// The voice mode's screenshot switches (docs/assistant/voice.md 6.8):
 /// - `-showVoiceSample listening|speaking|working|paused|asking|approval|refused|plan_feedback|unprompted|ended|setup`: a

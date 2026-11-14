@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // A conversation an inbox item was handed to writes back to it (inbox_suggest with item): the reply or conclusion is
 // also a card in that conversation (#5932, docs/assistant/inbox.md "Item actions"). The card is the suggestion as it

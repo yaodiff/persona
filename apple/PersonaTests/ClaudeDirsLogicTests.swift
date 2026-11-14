@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Settings › Claude Code › Blocked Config Folders (`ClaudeDirsLogic`): the same cases as web `agent-settings.test.ts`.
 struct ClaudeDirsLogicTests {

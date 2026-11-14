@@ -1,3 +1,5 @@
+import PersonaWire
+
 #if os(iOS)
 import AVFoundation
 import Foundation

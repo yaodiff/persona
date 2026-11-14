@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Inbox Sources' relationship view on the iPhone (#5741, docs/extensions/subscriptions.md "Pages"): what brings each
 // source (an extension, or Persona itself), how it is read, the source and where its things go, from

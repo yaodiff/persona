@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 private let shanghai = TimeZone(identifier: "Asia/Shanghai")!
 /// The contract's example day: 2026-11-11, recording since 08:02:11 in Shanghai.

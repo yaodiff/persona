@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The app's errors and crashes for the hub's error reports (#5621, docs/protocol/protocol.md "Error reports"): sent only while
 /// the hub's `features` has `error_reports` (an extension such as Sentry takes them). A report says what failed where

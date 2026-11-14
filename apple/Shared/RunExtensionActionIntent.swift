@@ -2,6 +2,7 @@
 import AppIntents
 import Foundation
 import SwiftUI
+import PersonaWire
 
 nonisolated struct ExtensionActionEntity: AppEntity, Hashable, Sendable {
     static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Extension Action")

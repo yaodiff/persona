@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import PersonaWire
 
 /// Owns a private snapshot: picker access can end and the original can change without affecting a retry.
 /// Temporary snapshots follow their last reference; durable copies are collected by LarkOutboxStore.

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The outbox on a link that is up, against a FakeHub: a message whose sends keep coming back waiting fails after
 /// `OutboxWait.connectedLimit`, and the waiting messages behind it in its chat go out in the same pass, or fail with it

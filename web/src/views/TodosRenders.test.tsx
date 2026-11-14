@@ -6,7 +6,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Todo } from "../lib/todos";
-import { t } from "../i18n";
 import type { Session } from "../lib/types";
 
 vi.hoisted(() => {
@@ -42,6 +41,7 @@ vi.mock("./assistant/Supervision", async (orig) => {
 
 const { getState, putTodo, upsertSession, refreshTodos } = await import("../lib/store");
 const { TodosView } = await import("./Todos");
+const { t } = await import("../i18n");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -146,5 +146,21 @@ describe("todo rows on a sessions push", () => {
     expect(renders.get("ta")).toBeUndefined();
     const titles = [...host.querySelectorAll("[role=button] .truncate.font-semibold")].map((el) => el.textContent);
     expect(titles).toEqual(["修登录页", "整理发布清单"]);
+  });
+
+  it("labels open and closed concerns, not ordinary to-dos", async () => {
+    const list = [
+      { ...todo("ta", "Working concern", "s1"), kind: "concern" },
+      todo("tb", "Ordinary task", "s2"),
+      { ...todo("tc", "Reported concern", "s3"), kind: "concern", done_at: now, done_by: "reported", agents: [] },
+      { ...todo("td", "Open concern", "s4"), kind: "concern", agents: [] },
+    ];
+    api.mockImplementation(async (path) => path === "/todos" ? { todos: list } : {});
+    await act(async () => { await refreshTodos(); });
+    const tag = (id: string) => host.querySelector(`[data-todo="${id}"] [data-testid="todo-concern"]`);
+    expect(tag("ta")?.textContent).toBe(t("todos.concern"));
+    expect(tag("tc")?.textContent).toBe(t("todos.concern"));
+    expect(tag("td")?.textContent).toBe(t("todos.concern"));
+    expect(tag("tb")).toBeNull();
   });
 });

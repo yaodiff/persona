@@ -421,6 +421,8 @@
     <string name="settings_triage_actions_about">モデルサービスの一時的なエラー（503など）のあとは「続行」を最大3回自動で送ります。デプロイ、CI、ほかのエージェントを待っているものは、時間になったら起こして自分で確認させます。どちらもエージェント自身のモデルでもう1ターン実行します。コードのプッシュ、デプロイ、他人へのメッセージ送信などは、ハブがあなたに確認するだけで自分では行いません。</string>
     <string name="settings_triage_closeout">クローズアウトを求める</string>
     <string name="settings_triage_closeout_about">作業したエージェントが、完了したか、マージとデプロイの有無、不足しているものを報告せずに止まったとき、一度だけ停止を保留してその記録を求めます。エージェント自身のモデルで短い1ターンを余分に使います</string>
+    <string name="settings_triage_closeout_ask">あとから状況を聞く</string>
+    <string name="settings_triage_closeout_ask_about">誰も監督していないエージェントが作業後に止まり、クローズアウトもなく完了したかも分からないとき、Persona がすでに行った作業の状況を一度だけ尋ねます。エージェント自身のモデルで1ターンを使います</string>
     <string name="settings_triage_reply_reminder">既読で未返信なら通知</string>
     <string name="settings_triage_reply_reminder_about">エージェントに質問され、見てから30分返信していないと1回だけ通知します。ルールだけで判断し、トークンは使いません。</string>
     <plurals name="settings_notify_long_turn">

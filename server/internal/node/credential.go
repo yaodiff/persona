@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/node/nodekit"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // Credentials the hub reads from this machine for a connector (docs/plans/plan-connectors.md "Credentials"). Only the hub
@@ -51,7 +51,5 @@ func ghToken(ctx context.Context, host string) (map[string]any, error) {
 	return map[string]any{"token": token}, nil
 }
 
-func firstLine(s string) string {
-	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
-	return textfmt.Cut(s, 200)
-}
+// firstLine lives in nodekit, shared with the subpackages.
+var firstLine = nodekit.FirstLine

@@ -132,6 +132,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/directions/offers
 -                    GET /api/v1/assistant/directions/tree
+assistant.dispatch_policy GET /api/v1/assistant/dispatch-policy
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
 leaders.read         GET /api/v1/assistant/leaders
@@ -606,6 +607,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    PUT /api/v1/assistant
 -                    PUT /api/v1/assistant/conversations/{id}/model
 -                    PUT /api/v1/assistant/directions/{id}/name
+assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/feishu/companions
 -                    PUT /api/v1/assistant/memory/{name}
 -                    PUT /api/v1/assistant/places/{id}

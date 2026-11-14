@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// UI version 6's tiles on iOS (#827): the showcase's grids and carousels read whole, with what a tile can hold
 /// (schema/extension/examples/showcase/grid.json, carousel.json, home-demo.json).

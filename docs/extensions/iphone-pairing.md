@@ -148,10 +148,10 @@ Errors are `*iphone.Error{Code, Message}`: the bridge's codes, plus `not_paired`
 
 ## The node program `iphone` (#3450)
 
-The manager reaches the paired phones through the node's built-in program `iphone` (`server/internal/node/iphone.go`,
+The manager reaches the paired phones through the node's built-in program `iphone` (`server/internal/node/iphone/iphone.go`,
 listed in `node.info`'s `builtin_programs`), over `plugin.node.call {id: "iphone", method, params}` only: it has no old
 method names, and a node without it answers the manager's `iphone.*` with "unknown method". It reads the phones through
-the sessions above (`node/iphone_host.go`) and hands looks and steps to the phone control core (`node/iphone_core.go`:
+the sessions above (`node/iphone/iphone_host.go`) and hands looks and steps to the phone control core (`node/iphone/iphone_core.go`:
 one `iphonectl.Controller` for the node process, [iphone-control.md](iphone-control.md)); types are in `proto/iphone.go`.
 
 | Method | Params → result | What it does |

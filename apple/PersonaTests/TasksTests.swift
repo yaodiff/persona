@@ -2,6 +2,7 @@ import Foundation
 import MapKit
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Tasks from the assistant's conversation (docs/assistant/unified-entry.md): the hub's shapes decode, a task's state follows
 /// its agents, the feed lands at the end of the exchange it happened in, and the @ of a mention is told from an address.

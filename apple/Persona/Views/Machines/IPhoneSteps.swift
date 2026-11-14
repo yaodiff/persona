@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// What the assistant's iphone_do does, in words (docs/extensions/iphone.md): "Tap item 3 → Type “hello” → Press Home".
 /// Steps as the node core reads them: a target is `{"n"}`, `{"label", "role"?}` or a point `{"x", "y"}`.

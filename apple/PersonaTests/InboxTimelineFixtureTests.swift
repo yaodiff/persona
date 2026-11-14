@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Replays spec/fixtures/inbox/timeline.json, the timeline contract shared with the hub, web app and Android.
 @MainActor

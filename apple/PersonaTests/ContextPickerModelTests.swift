@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Add as Context in the composer's + (#3721) against a FakeHub: each kind's list, narrowed to the words typed, and what a
 /// pick carries to the model.

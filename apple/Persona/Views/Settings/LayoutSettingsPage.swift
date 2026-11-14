@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 #if os(iOS)
 /// Settings › Appearance › Layout (#2530): how the Agents list draws its agents, each choice showing two agents as the

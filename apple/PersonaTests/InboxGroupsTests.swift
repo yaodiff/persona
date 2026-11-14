@@ -1,5 +1,6 @@
 import XCTest
 @testable import Persona
+import PersonaWire
 
 /// The inbox's groups (InboxGroups, #2059): the time boundaries (calendar days; "just now" only in Done; the last
 /// week by day, then 7+ days and 1+ month), the source order (the chips'), the groups open at first. The web's

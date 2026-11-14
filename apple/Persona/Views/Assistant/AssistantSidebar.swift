@@ -4,6 +4,7 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
+import PersonaWire
 
 #if os(iOS) || os(visionOS)
 /// How far the Persona tab's sidebar is out (0 closed … 1 open). Its own object so following the finger only redraws

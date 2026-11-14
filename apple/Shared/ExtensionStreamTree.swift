@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// A session-local, immutable-at-publication keyed tree. Generated wire envelopes are validated
 /// against their canonical schemas; all mutations operate on original JSON, never legacy DTOs.

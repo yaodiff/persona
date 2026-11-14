@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 // What This Computer Can Do (#3018, the web's #2429, docs/server/machines.md「Doctor: what this computer can do」): what `personad node doctor` finds on a computer, read
 // as features. The node reports individual checks (server/internal/node/doctor.go, DoctorReport as it is); a person

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import SwiftUI
 @testable import Persona
+import PersonaWire
 
 /// A recording's Summary on iPhone (#5026, docs/apple/recording.md「Minutes」): which view the page shows, which cards the
 /// Summary has and in what order, what an item carries, and the transcript lines it opens to (`RecordingMinutesCards`).

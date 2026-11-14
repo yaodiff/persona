@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The number on the app's icon (#5824, `AppIconBadge`): the tab badges added up, the same rule on the iPhone and the
 /// Mac's Dock (this file runs in both test targets); nothing while signed out; the system told only when the number

@@ -26,7 +26,7 @@ class AssistantSearchRuleTests(unittest.TestCase):
                 self.assertEqual(mock["search_index_text"](case["item"]), case["index"])
 
     def test_a_reply_is_indexed_without_markdown(self):
-        # the manager's searchPlain cases (server/internal/assistant/search_text_test.go, #7072), the same answers
+        # the manager's searchPlain cases (server/internal/assistant/chatsearch/text_test.go, #7072), the same answers
         mock = runpy.run_path(str(HERE / "mock_hub.py"))
         for md, want in [
             ("2. **照片同步脚本**（Mac Studio）", "照片同步脚本（Mac Studio）"),

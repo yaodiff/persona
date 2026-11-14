@@ -2,6 +2,7 @@ import Foundation
 import PersonaCore
 import PersonaCoreTestSupport
 @testable import Persona
+import PersonaWire
 
 public typealias ContinuityCase = PersonaCoreTestSupport.ContinuityCase
 private typealias ContinuityJSON = PersonaCoreTestSupport.ContinuityJSON

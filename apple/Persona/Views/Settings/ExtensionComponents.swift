@@ -1,5 +1,6 @@
 import MarkdownUI
 import SwiftUI
+import PersonaWire
 
 // The components of an extension's View (docs/extensions/extensions.md「Declarative UI」「UI 版本 3」), drawn by `ExtensionItemRow`.
 

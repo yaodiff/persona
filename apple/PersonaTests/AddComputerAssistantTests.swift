@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Add Computer for the current assistant (docs/protocol/protocol.md "Computer pairing codes", docs/assistant/managers.md
 /// "The current assistant"): the request names the assistant's real id, the reply says where the computer went, an offline

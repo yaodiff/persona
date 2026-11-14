@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Share › Persona's targets (#1460, `ShareTargets`): what the sheet lists, which come first, which one it starts on,
 /// search, and sending to an agent and to a new chat, against a hub in memory.

@@ -4,6 +4,7 @@ import Security
 import Testing
 import UserNotifications
 @testable import Persona
+import PersonaWire
 
 /// Several hubs on one device (docs/protocol/multi-hub.md): keys, grouping, routes, events, the merged Live Activity, the push
 /// keys. The default group's keys and JSON must stay byte for byte what they were before several hubs.

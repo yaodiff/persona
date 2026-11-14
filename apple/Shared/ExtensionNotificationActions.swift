@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import PersonaWire
 
 /// Button definitions shared by the notification service extension and the app: decoded and registered only, no credentials read, no actions run.
 nonisolated enum ExtensionNotificationActions {

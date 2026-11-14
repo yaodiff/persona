@@ -22,10 +22,20 @@ data class MergedTaskCard(
     }
 }
 
-/** One task a reply dispatched (#3700): its to-do, null when the hub could not start it, and its title. */
-data class DispatchedTask(val todoId: String?, val title: String)
+/**
+ * One task a reply dispatched (#3700, #5110): its to-do (null when the hub could not start it), the title to show until
+ * the to-do arrives, the plan task's [error], and a standalone task item's [wake] (`active` / `resumed`; null is New).
+ * [key] keeps the card stable across title changes.
+ */
+data class DispatchedTask(
+    val todoId: String?,
+    val title: String,
+    val error: String? = null,
+    val wake: String? = null,
+    val key: String? = null,
+)
 
-/** The line under a reply that dispatched work: the tasks themselves, in plan order, each opening its own task. */
+/** The hand-off cards under a reply that dispatched work: the tasks, in plan order. Each card opens its Agent. */
 data class DispatchHint(val tasks: List<DispatchedTask>) : AssistantExtra {
     val count: Int get() = tasks.size
 }
@@ -150,9 +160,14 @@ object AssistantTaskCards {
         }
         val payloads = dispatched.mapValues { (_, group) ->
             DispatchHint(group.sortedBy { it.identity.index ?: Int.MAX_VALUE }.map { card ->
+                val planned = card.identity.index?.let { card.plan?.tasks?.getOrNull(it) }
                 // the to-do's current title, the plan's until the to-do arrives
                 DispatchedTask(card.todo?.id ?: card.identity.todoId,
-                    card.todo?.title ?: card.identity.index?.let { card.plan?.tasks?.getOrNull(it)?.title }.orEmpty())
+                    card.todo?.title ?: planned?.title.orEmpty(),
+                    error = planned?.error,
+                    // A plan's tasks are New. A standalone task item's wake is the badge (#5110).
+                    wake = if (card.identity.index == null) card.records.lastOrNull { it.kind == "task" }?.field("wake") else null,
+                    key = card.identity.id)
             })
         }
         val drawn = if (inline) drawnPlans(feed, plans, dispatched.keys) else emptySet()

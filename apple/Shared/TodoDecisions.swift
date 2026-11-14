@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// One call made on a todo (#1618, docs/assistant/todos.md "Decision records"): written by hand, the user's answer to a
 /// question card of an agent on it, or noted when its task finished. The current ones go along when the todo is handed

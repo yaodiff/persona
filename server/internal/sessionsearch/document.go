@@ -5,16 +5,16 @@ package sessionsearch
 import (
 	"encoding/json"
 	"path"
-	"regexp"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/sessionlist"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
-var modelPattern = regexp.MustCompile(`(?i)^claude-([a-z]+)((?:-[0-9]{1,2})*)(?:-[0-9]{8})?(\[1m\])?$`)
-var launcherPrefix = regexp.MustCompile(`(?i)^(claude|codex|opencode|gemini|pi)[-_:/\s]+`)
+var modelPattern = lazyre.New(`(?i)^claude-([a-z]+)((?:-[0-9]{1,2})*)(?:-[0-9]{8})?(\[1m\])?$`)
+var launcherPrefix = lazyre.New(`(?i)^(claude|codex|opencode|gemini|pi)[-_:/\s]+`)
 
 func first(values ...string) string {
 	for _, v := range values {

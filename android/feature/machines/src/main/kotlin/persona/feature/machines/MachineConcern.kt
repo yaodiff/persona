@@ -75,12 +75,13 @@ internal fun machineListEntries(
     metrics: Map<String, MachineMetrics>,
     sessions: List<Session>,
     now: Long,
+    hierarchy: (String) -> Boolean = { false },
 ): List<MachineListEntry> {
     val machinesById = machines.associateBy { it.id }
     return ids.mapIndexed { index, id ->
         val machine = machinesById[id]
         val metric = (metrics[id] ?: MachineMetrics(id, machine?.online ?: false, machine?.system)).live(machine)
-        val tally = AgentTally(machineSessions(sessions, id))
+        val tally = AgentTally(machineSessions(sessions, id, hierarchy(id)))
         val currentAlerts = alerts(metric.current(now), (metric.system ?: machine?.system)?.cores)
         val concern = machineConcern(machine, metric.online, currentAlerts, tally.needsYou)
         Triple(index, concern, MachineListEntry(id, machine, metric, tally, concern))

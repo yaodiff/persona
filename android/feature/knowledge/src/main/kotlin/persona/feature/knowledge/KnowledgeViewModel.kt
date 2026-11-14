@@ -137,6 +137,7 @@ internal class KnowledgeDetailViewModel(
     val owner: String? = null,
     private val conversations: AssistantConversations? = null,
     private val messages: MessageSender? = null,
+    private val hierarchy: () -> Boolean = { false },
 ) : ViewModel() {
     // The hub this page was opened on: its pin names nothing on another one.
     private val pins: kotlin.coroutines.CoroutineContext = ManagerPins.of(KnowledgePrefixes, owner, AssistantManagerChoice.current.value.hubId)
@@ -162,7 +163,7 @@ internal class KnowledgeDetailViewModel(
             emit(initial.copy(detail = shown?.detail, agents = shown?.agents.orEmpty()))
             if (repository != null) try {
                 val response = withContext(pins) { repository.entry(kind, id) }
-                emit(initial.copy(loading = false, detail = response.detail, agents = projectAgents(response.agents)))
+                emit(initial.copy(loading = false, detail = response.detail, agents = projectAgents(response.agents, hierarchy())))
             } catch (cancelled: CancellationException) { throw cancelled }
             // A failed reload keeps the entry on screen; the page says it could not reload (#3991).
             catch (error: Exception) { emit(initial.copy(loading = false, detail = shown?.detail, agents = shown?.agents.orEmpty(), message = loadMessage(error))) }

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct DemoKnowledgeSearchTests {
     private func entry(_ id: String, _ name: String, _ summary: String, tags: [String] = []) -> JSONValue {

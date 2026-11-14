@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// One tool invocation with its result, as shown in a chat.
 nonisolated struct ToolCall: Identifiable, Hashable, Sendable {

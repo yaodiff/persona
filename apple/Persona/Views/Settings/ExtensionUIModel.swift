@@ -1,11 +1,12 @@
 import Foundation
 import Observation
+import PersonaWire
 
 // A plugin's declarative UI (docs/extensions/extensions.md「Declarative UI」): the plugin sends a View made of a few fixed kinds of items, the
 // app draws them with its own design system (ExtensionViewRenderer) and sends the buttons back. Nothing of the plugin
 // runs here; its tones become the app's role colors, it gives no colors, sizes or icons.
 
-// The View, its components, actions and places are the schema's (apple/Shared/Generated/ExtensionWire.swift,
+// The View, its components, actions and places are the schema's (apple/Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift,
 // schema/extension/view.schema.json); what follows is how the app reads them.
 
 nonisolated extension ExtensionUIPlace: Identifiable {
@@ -57,7 +58,7 @@ nonisolated extension ExtensionUIContext {
 }
 
 nonisolated extension ExtensionChoice: Identifiable {
-    var id: String { value }
+    public var id: String { value }
     var label: String { title?.isEmpty == false ? title! : value }
 }
 

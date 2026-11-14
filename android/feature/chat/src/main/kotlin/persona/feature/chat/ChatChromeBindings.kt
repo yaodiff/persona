@@ -13,6 +13,8 @@ import dagger.hilt.components.SingletonComponent
 data class ChatChromeBindings(
     val covered: Boolean = false,
     val requestId: String? = null,
+    /** A child link opens its parent's work summary and this card. */
+    val childSessionId: String? = null,
     val onFiles: (() -> Unit)? = null,
     val onGit: (() -> Unit)? = null,
     val gitLabel: String = "Git",
@@ -63,6 +65,8 @@ data class ChatChromeBindings(
      * rounds fold like the main conversation's. Empty from an older hub or a non-assistant surface.
      */
     val leaderConversations: Set<String> = emptySet(),
+    /** Parent/child rows resolved for a cold link outside the root page; not list membership. */
+    val lookupRows: List<persona.core.contracts.Session> = emptyList(),
 )
 
 /** Where a branch made by "Branch to new chat" opens: an assistant's branch is an assistant conversation, an agent's an agent chat. */

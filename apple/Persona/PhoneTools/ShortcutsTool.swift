@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The user's own shortcuts Persona may run (#2283). Only shortcuts the user allowed on the phone run: registering one
 /// asks first, and running one opens the Shortcuts app from the foreground, which comes back to Persona with its

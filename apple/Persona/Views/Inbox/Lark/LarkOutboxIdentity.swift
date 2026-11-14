@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import PersonaWire
 
 /// A routed URL or a rotated device token is not an account identity.
 nonisolated struct LarkOutboxIdentity: Hashable, Sendable {

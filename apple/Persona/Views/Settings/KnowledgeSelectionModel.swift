@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// Settings › Knowledge Selection (docs/assistant/knowledge.md "Selection", the web's KnowledgeSelection): what the hub
 /// reads and stores from chats and documents, and for how long. One document on the hub (`KBSelection`), the same on

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/chatsearch"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -90,7 +91,7 @@ func (s *Service) searchChats(ctx context.Context, q string, limit int) searchAn
 	ans.Indexed.Total = len(list)
 	ans.Indexed.Done = s.searchProgress(list)
 	ans.Partial = ans.Indexed.Done < ans.Indexed.Total
-	words := searchWords(q)
+	words := chatsearch.Words(q)
 	if len(words) == 0 {
 		return ans
 	}
@@ -100,7 +101,7 @@ func (s *Service) searchChats(ctx context.Context, q string, limit int) searchAn
 	for _, c := range list {
 		r := &searchResult{SessionID: c.SessionID, MachineID: c.MachineID, Title: c.Title, Main: c.SessionID == main,
 			Archived: c.Archived, Origin: c.Origin, UpdatedAt: c.UpdatedAt, Hits: []searchHit{}}
-		if t := searchFold(searchTitleOf(c, main)); t != "" && searchHolds(t, words) {
+		if t := chatsearch.Fold(searchTitleOf(c, main)); t != "" && chatsearch.Holds(t, words) {
 			r.TitleMatch, r.titleRank = true, 1
 			if strings.HasPrefix(t, whole) {
 				r.titleRank = 2
@@ -122,7 +123,7 @@ func (s *Service) searchChats(ctx context.Context, q string, limit int) searchAn
 			if r == nil {
 				continue
 			}
-			snippet, ranges := searchSnippet(row.Body, words)
+			snippet, ranges := chatsearch.Snippet(row.Body, words)
 			r.Hits = append(r.Hits, searchHit{ItemID: row.ItemID, Seq: row.Seq, Role: row.Role, TS: row.TS, Snippet: snippet, Ranges: ranges})
 			r.MoreHits = max(0, row.Hits-searchPerChat)
 			if row.TS.After(r.newest) {

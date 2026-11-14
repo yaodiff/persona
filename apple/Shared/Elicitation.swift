@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// An MCP server's request on an `elicitation` card (docs/protocol/protocol.md "MCP elicitation"): a form to fill in
 /// (`requestedSchema`, a flat JSON Schema object) or a link to open (`url`).

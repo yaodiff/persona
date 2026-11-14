@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Settings › Model (docs/integrations/launchers.md): every launcher, from each machine's rc file (~/.zshrc, ~/.bashrc), added in
 /// Persona, or the built-in plain claude.

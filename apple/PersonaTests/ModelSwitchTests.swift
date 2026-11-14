@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Switching models in the effort capsule (#3119, the web's #2434): which sessions offer it, when it waits, and what goes to the hub.
 struct ModelSwitchTests {

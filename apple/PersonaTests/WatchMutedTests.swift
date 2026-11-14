@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Muted agents and spaces stay off the watch (#4360): the phone's summary drops their cards, and the cards the watch
 /// pulls itself carry the hub's `muted` flag so the watch hides them and never buzzes — the same rule as the Agents

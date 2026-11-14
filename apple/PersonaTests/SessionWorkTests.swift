@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A stopped session's work state as the lists show it (`Session.work`, docs/assistant/agent-work.md; the web's lib/work.ts).
 @MainActor

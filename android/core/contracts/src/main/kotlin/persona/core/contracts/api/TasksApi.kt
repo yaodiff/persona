@@ -1,6 +1,8 @@
 package persona.core.contracts.api
 
 import persona.core.contracts.FeedItem
+import persona.core.contracts.LnModeResponse
+import persona.core.contracts.PushInterceptsResponse
 import persona.core.contracts.FeedResponse
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
@@ -15,6 +17,9 @@ fun interface FeedPageReader {
 
 /** Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; docs/protocol/protocol.md "Tasks and the chat feed"). */
 interface TasksApi {
+    /** Low-distraction mode and today's held pushes; demo/older test hubs keep the entry hidden. */
+    suspend fun lnMode(): LnModeResponse = LnModeResponse(false)
+    suspend fun pushIntercepts(): PushInterceptsResponse = PushInterceptsResponse(emptyList())
     /** Exact metadata for a bound agent, independent of the Agents list filter and page. */
     suspend fun taskAgent(key: persona.core.contracts.SessionKey): persona.core.contracts.Session? = null
     suspend fun todos(): List<Todo>

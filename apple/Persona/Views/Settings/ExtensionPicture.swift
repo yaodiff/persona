@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // An extension's View drawn into a picture (`extensionPicture`, #7261: Share as Image of a reply with a card). A picture
 // has nothing to use, and `ImageRenderer` draws neither scroll views nor UIKit controls (a progress bar, a switch, a

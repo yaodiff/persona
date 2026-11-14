@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agents_row_children_running">サブエージェント %1$d 件が実行中</string>
+</resources>

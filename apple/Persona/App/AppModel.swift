@@ -6,6 +6,7 @@ import SwiftUI
 import UIKit
 #endif
 import UserNotifications
+import PersonaWire
 
 /// App-wide state: server pairing, live connection, machines, sessions, interactions and per-session chats.
 @Observable

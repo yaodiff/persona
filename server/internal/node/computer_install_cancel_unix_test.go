@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 func TestInstallCuaCancellationKillsInstallerTree(t *testing.T) {
@@ -28,10 +27,11 @@ func TestInstallCuaCancellationKillsInstallerTree(t *testing.T) {
 	if err := startJob("install", installCua); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(3 * time.Second); child == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	waitFor(t, "the installer child to start", func() bool {
 		data, _ := os.ReadFile(childPath)
 		child, _ = strconv.Atoi(strings.TrimSpace(string(data)))
-	}
+		return child > 0
+	})
 	if child <= 0 {
 		t.Fatal("installer did not start its child")
 	}
@@ -39,20 +39,19 @@ func TestInstallCuaCancellationKillsInstallerTree(t *testing.T) {
 		t.Fatal("running install was not cancellable")
 	}
 	cancelled := false
-	for deadline := time.Now().Add(750 * time.Millisecond); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	waitFor(t, "the install job to cancel", func() bool {
 		if j := currentJob(); j != nil && j.State == "cancelled" {
 			cancelled = true
-			break
+			return true
 		}
-	}
+		return false
+	})
 	if !cancelled {
 		// Clean up the descendant that the production cancellation left behind.
 		killChild()
-		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-			if j := currentJob(); j != nil && j.State == "cancelled" {
-				break
-			}
-		}
+		waitFor(t, "the installer job to remain cancelled", func() bool {
+			return currentJob() != nil && currentJob().State == "cancelled"
+		})
 		t.Fatal("install job remained running until the installer shell's child was killed separately")
 	}
 }

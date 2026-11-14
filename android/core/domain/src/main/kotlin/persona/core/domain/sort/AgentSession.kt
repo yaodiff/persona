@@ -12,11 +12,11 @@ data class AgentSession(
     val session: Session,
     val stateSince: String? = null,
     val hasRunningSubagent: Boolean = false,
+    /** The hub supplies the authoritative hierarchy; parent-id inference belongs only to older hubs. */
+    val hierarchyKnown: Boolean = false,
 ) {
     val id: String get() = session.key.path
-    val state: AgentState get() = session.state?.let { wire ->
-        AgentState.entries.firstOrNull { it.wire == wire } ?: AgentState.Unknown
-    } ?: AgentState.of(null, session.status)
+    val state: AgentState get() = session.foldedState
     val isLive: Boolean get() = state != AgentState.Offline
     val isQuiet: Boolean get() = state == AgentState.Idle || state == AgentState.Unknown
     val isWaiting: Boolean get() = isQuiet && (session.waiting
@@ -27,7 +27,8 @@ data class AgentSession(
      */
     val asksYou: Boolean get() = state == AgentState.Idle && session.awaitsReply
     /** Working, but all it still runs in the background only waits (iOS `Session.waitsInBackground`, #6045). */
-    val waitsInBackground: Boolean get() = state == AgentState.Working && session.backgroundWaiting
+    val waitsInBackground: Boolean get() = state == AgentState.Working && session.backgroundWaiting &&
+        (session.children?.working ?: 0) == 0 && (session.children?.needsYou ?: 0) == 0
     /**
      * Working while its turn has ended, because a workflow runs (iOS `Session.isBackgroundWorking`, #2935): its state is written
      * "Working (Background)" where a state is spelled out ([stateWord]). iOS reads it off the running workflows, not off the

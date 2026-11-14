@@ -117,11 +117,28 @@ class AssistantConversationTest {
         val feed = listOf(FeedItem("p-event", "main", plan.createdAt, "plan", "p"))
         val hint = AssistantTaskCards.lines(emptyList(), feed, mapOf("p" to plan), todos)
             .filterIsInstance<ChatLine.Extra>().single { it.payload is DispatchHint }.payload as DispatchHint
-        assertEquals(listOf(DispatchedTask("t", "First, renamed"), DispatchedTask("s", "Second"), DispatchedTask(null, "Failed")), hint.tasks)
+        assertEquals(listOf(
+            DispatchedTask("t", "First, renamed", key = "plan:p:0"),
+            DispatchedTask("s", "Second", key = "plan:p:1"),
+            DispatchedTask(null, "Failed", error = "machine offline", key = "plan:p:2"),
+        ), hint.tasks)
         val one = TaskPlan("q", "main", listOf(PlanTask("Only", todoId = "o")), "started", "2026-11-10T11:00:00Z")
         val single = AssistantTaskCards.lines(emptyList(), listOf(FeedItem("q-event", "main", one.createdAt, "plan", "q")), mapOf("q" to one), emptyList())
             .filterIsInstance<ChatLine.Extra>().single { it.payload is DispatchHint }.payload as DispatchHint
-        assertEquals(listOf(DispatchedTask("o", "Only")), single.tasks)
+        assertEquals(listOf(DispatchedTask("o", "Only", key = "plan:q:0")), single.tasks)
+    }
+
+    @Test fun aPlanTaskIsNewEvenWhenItsTaskRecordSaysOtherwise() {
+        val plan = TaskPlan("p", "main", listOf(PlanTask("First", todoId = "t")), "started", "2026-11-10T10:00:00Z")
+        val active = FeedItem("t-event", "main", "2026-11-10T10:01:00Z", "task", "t", buildJsonObject { put("wake", "active") })
+        val planned = AssistantTaskCards.lines(emptyList(), listOf(FeedItem("p-event", "main", plan.createdAt, "plan", "p"), active),
+            mapOf("p" to plan), listOf(Todo("t", "First", origin = "main", planId = "p")))
+            .filterIsInstance<ChatLine.Extra>().single { it.payload is DispatchHint }.payload as DispatchHint
+        assertNull(planned.tasks.single().wake)
+        val resumed = FeedItem("z-event", "main", "2026-11-10T10:02:00Z", "task", "z", buildJsonObject { put("wake", "resumed") })
+        val standalone = AssistantTaskCards.lines(emptyList(), listOf(resumed), emptyMap(), listOf(Todo("z", "Standalone", origin = "main")))
+            .filterIsInstance<ChatLine.Extra>().single { it.payload is DispatchHint }.payload as DispatchHint
+        assertEquals("resumed", standalone.tasks.single().wake)
     }
 
     @Test fun aReusedTodoChoosesItsCurrentPlanOverBothHeldCacheSlots() {

@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Supervised tasks (#3124, docs/assistant/unified-entry.md ("Supervision")) and their agents' reports (#5112): `supervision` decodes
 /// leniently, the chip, the checklist and the lines say what the web says (web/src/lib/supervision.test.ts). Tests run

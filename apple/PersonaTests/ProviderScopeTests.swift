@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A provider's Computers page (#2333, docs/integrations/launchers.md "Device scope and on-demand delivery"): what the hub's
 /// scope fields decode to (and an older hub's lack of them), what a POST / PUT carries (only what differs from the defaults

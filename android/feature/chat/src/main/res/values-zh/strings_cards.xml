@@ -6,12 +6,17 @@
     <plurals name="chat_assistant_checked">
         <item quantity="other">查了 %1$d 处</item>
     </plurals>
-    <plurals name="chat_assistant_dispatched">
-        <item quantity="other">派出 %1$d 件</item>
-    </plurals>
-    <string name="chat_assistant_dispatched_one">派出 1 件：%1$s</string>
-    <string name="chat_assistant_dispatch_open">打开</string>
-    <string name="chat_assistant_dispatch_open_line">· %1$s</string>
+    <string name="chat_handoff_wake_active">已在运行</string>
+    <string name="chat_handoff_wake_resumed">已恢复</string>
+    <string name="chat_handoff_last_active">%1$s活跃过</string>
+    <string name="chat_handoff_active_now">刚刚活跃过</string>
+    <string name="chat_handoff_not_active">还没有动静</string>
+    <string name="chat_handoff_not_started">没开起来</string>
+    <string name="chat_handoff_gone">没有这个任务了</string>
+    <string name="chat_handoff_closed">还没开 Agent 就结束了</string>
+    <string name="chat_handoff_minutes_ago">%1$d 分钟前</string>
+    <string name="chat_handoff_hours_ago">%1$d 小时前</string>
+    <string name="chat_handoff_days_ago">%1$d 天前</string>
     <!-- #4314: a background round of the main conversation folded into one line. -->
     <string name="chat_background_round">%1$s · 后台回报</string>
     <string name="chat_background_round_live">%1$s · 后台处理中…</string>

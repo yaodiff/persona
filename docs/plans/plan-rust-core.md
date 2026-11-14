@@ -123,7 +123,7 @@ How each client calls the entry points:
   the SSH core uses.
 
 Generated codecs are committed, with a check that regenerating them changes nothing. This follows the repository's
-precedent for generated code: `apple/Shared/Generated/ExtensionWire.swift`. Compiled libraries are never committed (the
+precedent for generated code: `apple/Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift`. Compiled libraries are never committed (the
 SSH core's rule). One pinned toolchain serves the whole workspace, starting from the SSH core's 1.98.0.
 
 ### A deterministic core: actions in, effects and patches out

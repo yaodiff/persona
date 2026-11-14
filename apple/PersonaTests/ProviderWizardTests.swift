@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Settings › Model Providers' wizard (ProviderWizardModel), Import from ~/.zshrc (LauncherImportModel) and Main Chat's How It Runs
 /// (#2455), against FakeHub: what each sends, and what the hub's answers come to.

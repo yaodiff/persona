@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import PersonaWire
 
 nonisolated struct LarkEncryptedDraft: Codable, Hashable, Sendable {
     var cover = ""

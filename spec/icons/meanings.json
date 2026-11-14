@@ -229,6 +229,10 @@
       "sf": "folder.fill",
       "phosphor": "folder"
     },
+    "followOn": {
+      "sf": "arrow.turn.down.right",
+      "phosphor": "arrow-bend-down-right"
+    },
     "forkChat": {
       "sf": "arrow.branch",
       "phosphor": "git-branch"
@@ -424,6 +428,10 @@
     "offline": {
       "sf": "wifi.exclamationmark",
       "phosphor": "wifi-slash"
+    },
+    "open": {
+      "sf": "arrow.up.right",
+      "phosphor": "arrow-up-right"
     },
     "openDocument": {
       "sf": "arrow.up.forward.square",

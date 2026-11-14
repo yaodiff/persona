@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// An agent's closeout (`Closeout`, docs/assistant/agent-work.md "Closeout", #3612): what the hub sends on `work`, how a
 /// claim stands against the hub's finding, the list rows' line, and the raw block left out of the last reply while

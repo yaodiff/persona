@@ -377,6 +377,9 @@ struct AssistantActionBar: View {
             }
             row {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
+                if conversation == AppModel.shared.assistantMain?.sessionID, let api = AppModel.shared.api {
+                    PushInterceptsEntry(api: api, otherTrayOpen: open != nil, onOpen: { open = nil })
+                }
                 if ComputerActivityPill.shows(computer) {
                     ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
                 }

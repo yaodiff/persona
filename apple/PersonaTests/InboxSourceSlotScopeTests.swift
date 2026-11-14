@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What the inbox's source page opens (docs/assistant/inbox.md, "Plugin-rendered details"): an item whose only block is
 /// its chat opens the conversation; every other source keeps today's page. The page keeps the source's order — a document,

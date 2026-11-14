@@ -1,5 +1,6 @@
 import EventKit
 import Foundation
+import PersonaWire
 
 /// Calendar tools: read a time window, and create an event after the user
 /// confirms on the phone.

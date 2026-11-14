@@ -2,6 +2,7 @@ import Foundation
 #if os(iOS)
 import UIKit
 #endif
+import PersonaWire
 
 /// Whether HealthKit can be read right now. A locked phone answers HealthKit
 /// collection queries with `HKError.errorDatabaseInaccessible`: the app must not

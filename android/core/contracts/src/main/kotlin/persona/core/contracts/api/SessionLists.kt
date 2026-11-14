@@ -15,6 +15,9 @@ data class SessionListFilter(
     val query: String = "",
     /** Local policy: the caller derives membership the paged API cannot express (#6108). Never sent as a query. */
     val requiresCompleteMembership: Boolean = false,
+    /** Runtime lists fold children when sessions_hierarchy is advertised. Complete membership keeps their rows. */
+    val roots: Boolean = true,
+    val parentSessionId: String? = null,
 )
 
 @Serializable

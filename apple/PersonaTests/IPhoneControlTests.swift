@@ -2,6 +2,7 @@ import Foundation
 import PersonaKit
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Phone control in the app (docs/extensions/iphone.md): what the hub sends decodes, this iPhone finds itself among the
 /// iPhones the computers list only by an exact model and version (several alike: the user picks; none: no switch),

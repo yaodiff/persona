@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 // Hub transcription on the phone (#3862 phase 5; contract docs/assistant/meeting-minutes.md「Phase 5: hub transcription」,
 // the phone's side docs/apple/recording.md「Hub transcription (phase 5)」): the audio socket's frames, the 60 seconds kept

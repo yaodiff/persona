@@ -3,6 +3,7 @@ import Foundation
 import ImageIO
 import Observation
 import UniformTypeIdentifiers
+import PersonaWire
 
 // Settings › Appearance › Avatar › New from Photo (#2405, docs/apple/persona.md "Uploading an image"): the user picks an
 // image, crops it square (a circle shows what the avatar keeps), names it, and the hub makes a package of it

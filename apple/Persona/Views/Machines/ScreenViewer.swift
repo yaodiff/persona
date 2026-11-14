@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // A Mac's VNC (docs/extensions/computer-use.md「Live view」, #1343): opened from a machine's page, a tool, the running work or a
 // chat's ··· menu (`AppModel.openVNC`), it comes up in the small window (VNCPiP) when this device keeps the Mac's

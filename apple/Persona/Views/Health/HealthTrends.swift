@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The health trends the app draws from the phone's own Health data (#3272): steps, sleep and weight per day, each as a
 /// ```persona-card (#886) so they look like the cards in a health answer. Pure: the days and their values in, the card

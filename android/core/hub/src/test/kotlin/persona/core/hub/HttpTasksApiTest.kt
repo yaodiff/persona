@@ -23,6 +23,23 @@ class HttpTasksApiTest {
         }, kotlinx.coroutines.flow.MutableStateFlow(if (lookup) setOf("sessions_lookup") else emptySet()))
     }
 
+    @Test fun lnModeAndInterceptsUseThePushRoutesAndSkipMalformedRows() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"enabled":true}"""))
+            server.enqueue(MockResponse().setBody("""{"intercepts":[
+                {"at":"2026-11-14T01:00:00.123456789Z","level":"P1","reason":"ln_p1_held","title":"One","future":true},
+                {"at":17,"level":"P2","reason":"ln_p2_silent"},
+                {"at":"2026-11-14T02:00:00Z","level":"P2","reason":"ln_p2_silent","body":"Two"}
+            ]}"""))
+            val api = api(server)
+            assertEquals(true, api.lnMode().enabled)
+            val rows = api.pushIntercepts().intercepts
+            assertEquals(listOf("One", "Two"), rows.map { it.title ?: it.body })
+            assertEquals("/api/v1/push/ln-mode", server.takeRequest().path)
+            assertEquals("/api/v1/push/intercepts", server.takeRequest().path)
+            assertEquals("2026-11-14T01:00:00.123456789Z", rows.first().at)
+        }
+    }
     @Test fun boundAgentLookupEscapesExactIdentityAndRejectsAnUnrelatedRow() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"sessions":[{"machine_id":"box","session_id":"original/1","state":"working"}]}"""))

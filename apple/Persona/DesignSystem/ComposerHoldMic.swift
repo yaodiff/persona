@@ -102,7 +102,9 @@ struct ComposerHoldMic: View {
                 if hold.holding { hold.finish(.lock, dictation, text: $text, reduceMotion: reduceMotion) }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(ComposerHold.space)) } action: { hold.micFrame = $0 }
-            .onDisappear { // the line's mic gone under the finger (the box opened): the hold carries on, as a taken-away touch does
+            .onDisappear {
+                // The mic gone under the finger (the page went away, or the box closed to a line of voice and stop): the
+                // hold carries on, as a taken-away touch does.
                 pending?.cancel()
                 pending = nil
                 if hold.holding { hold.finish(.lock, dictation, text: $text, reduceMotion: reduceMotion) }

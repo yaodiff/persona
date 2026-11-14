@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Several Feishu accounts on the hub's Lark gateway (docs/extensions/feishu.md「Multiple accounts」).
 @MainActor struct LarkAccountsTests {

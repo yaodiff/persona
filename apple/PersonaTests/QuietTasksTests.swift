@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Tasks the main conversation starts with "notify about main-chat tasks only in the main chat" on (#1731): the hub's `quiet` decodes (missing is
 /// false, for a hub from before), and their agents stay off the Live Activity, the watch and the To-dos badge.

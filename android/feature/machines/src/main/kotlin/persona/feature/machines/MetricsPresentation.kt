@@ -7,6 +7,7 @@ import persona.core.contracts.*
 import persona.core.designsystem.LocalizedFormats
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.isNestedSubtask
+import persona.core.domain.sort.foldRows
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -45,8 +46,9 @@ internal fun alerts(sample: MetricSample?, cores: Int?): List<MetricAlert> {
  * A computer's running sessions, as the Agents list counts them on its computer chip and header: a subtask another
  * session started, listed under that one's "Subtasks", is not one of them unless it needs the user (#4494).
  */
-internal fun machineSessions(sessions: List<Session>, machineId: String): List<Session> = sessions
-    .filter { it.machineId == machineId && !it.assistant && it.isLive && !AgentSession(it).isNestedSubtask }
+internal fun machineSessions(sessions: List<Session>, machineId: String, hierarchy: Boolean = false): List<Session> =
+    foldRows(sessions.filter { it.machineId == machineId }.map(::AgentSession), hierarchy)
+    .filter { !it.session.assistant && it.isLive && !it.isNestedSubtask }.map { it.session }
     .sortedWith(compareBy<Session> { it.agentState.priority }.thenByDescending { it.updated })
 
 /** History keeps the disk's used bytes; the chart shows them as a share of [total] (gaps stay gaps). */
