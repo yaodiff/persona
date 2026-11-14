@@ -31,6 +31,17 @@ func codexStartProgram(path string, _ bool, env []string) (string, []string, err
 	return path, env, nil
 }
 
+// codexStartShellProgram loads a native launcher's functions from the user's supported login shell, even if another
+// shell's rc file exists. Unknown or unavailable shells retain the general launcher's supported-shell fallback.
+func codexStartShellProgram() string {
+	if sh := userLoginShell(); sh == "bash" || sh == "zsh" {
+		if _, err := exec.LookPath(sh); err == nil {
+			return sh
+		}
+	}
+	return loginShellProgram()
+}
+
 // loginShellProgram is the interactive shell loginShell runs scripts in: zsh, so ~/.zshrc functions and PATH are
 // there, else bash. A user whose login shell is bash and who has no ~/.zshrc gets bash even where zsh is installed
 // (a Linux server with zsh around but everything in ~/.bashrc), so ~/.bashrc's launchers and PATH are there.

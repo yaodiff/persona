@@ -36,6 +36,8 @@ func msysCmdLine(cmd *exec.Cmd) {
 // there is no Git Bash: the command then fails to start rather than run somewhere else.
 func loginShellProgram() string { return gitBash() }
 
+func codexStartShellProgram() string { return loginShellProgram() }
+
 func gitBash() string {
 	exists := func(p string) bool {
 		st, err := os.Stat(p)

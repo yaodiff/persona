@@ -615,8 +615,8 @@ func codexStartExec(path string, argv, env, explicit []string) (string, []string
 	inner := func() string { return codexInner(argv, env, cwd, home) }
 	run := append([]string{path}, argv[1:]...)
 	if argv[0] == "codex" && runtime.GOOS != "windows" {
-		// loginShellProgram selects only zsh or bash, never an arbitrary executable named by $SHELL.
-		if shell, err := exec.LookPath(loginShellProgram()); err == nil {
+		// A different shell's rc file must not override the user's native launcher function.
+		if shell, err := exec.LookPath(codexStartShellProgram()); err == nil {
 			// Resolve a same-name function after its rc file, without expanding aliases twice or parsing data as code.
 			run = []string{shell, "-ic", codexNativeStartScript, "persona-codex-start", cwd}
 			prefix := "__PERSONA_CODEX_START_" + rand.Text() + "_"
