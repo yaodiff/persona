@@ -65,6 +65,15 @@ func (e *routeEnv) feishuCards() func() int {
 	return func() int { mu.Lock(); defer mu.Unlock(); return n }
 }
 
+// settleReports waits until s's task reports due have gone out or been dropped: nothing pending, no timer armed, and the
+// run under way done (sendReports holds sending from before it takes the batch until its posts are out).
+func settleReports(t *testing.T, s *Service) {
+	t.Helper()
+	waitFor(t, "the task reports due", func() bool { n, timer := reportsState(s); return n == 0 && !timer })
+	s.reports.sending.Lock()
+	s.reports.sending.Unlock()
+}
+
 func (e *routeEnv) announced(id string) bool {
 	e.s.chans.mu.Lock()
 	defer e.s.chans.mu.Unlock()
@@ -215,7 +224,8 @@ func TestEscalateLevelByWhyOwner(t *testing.T) {
 			if tc.announce {
 				waitFor(t, "the Feishu card", func() bool { return cards() == 1 })
 			} else {
-				time.Sleep(100 * time.Millisecond)
+				// The held path notes the card announced and makes no Feishu call before its push (ask_route.go
+				// ringAsks), so after the push nothing is on its way; announced keeps the channels' catch-up off it.
 				if n := cards(); n != 0 {
 					t.Fatalf("a held escalation posted %d Feishu cards", n)
 				}
@@ -274,14 +284,15 @@ func TestQuietConclusionPostsNoCard(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
 	pushQuietFor(t, s, true)
 	waitsForReview(t, s, f, todo.ID, "查了，对方接口不对外开放，直连做不了。")
-	time.Sleep(6 * testReportDelay)
+	settleReports(t, s)
 	before := len(posts())
 	if before != 0 {
 		t.Fatalf("progress cards with the switch on:\n%s", strings.Join(posts(), "\n---\n"))
 	}
 	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "outcome": "cannot", "reason": "对方接口不对外开放",
 		"link": "https://docs.example.com/api"})
-	time.Sleep(6 * testReportDelay)
+	settleService(t, s)
+	settleReports(t, s)
 	if after := posts(); len(after) != 0 {
 		t.Fatalf("cards with the switch on:\n%s", strings.Join(after, "\n---\n"))
 	}
@@ -302,7 +313,7 @@ func TestQuietPleaseVerifyPostsNoCard(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
 	waitFor(t, "the ask", func() bool { a := askOf(s, todo.ID); return a != nil && !a.AskedAt.IsZero() })
-	time.Sleep(6 * testReportDelay)
+	settleReports(t, s)
 	if n := countAcceptCards(posts()); n != 0 {
 		t.Fatalf("%d 请验收 cards", n)
 	}
@@ -328,6 +339,8 @@ func TestHeldEscalationIsNotReEscalatable(t *testing.T) {
 	if err != nil || !strings.Contains(res, "without a push") {
 		t.Fatalf("first escalation: %s %v", res, err)
 	}
+	// notifyInteractionAt sends the held card's push on a goroutine of its own: count from there.
+	waitFor(t, "the held card's push", func() bool { return len(e.cardPushes("ix1")) == 1 })
 	for _, args := range []map[string]any{
 		{"todo_id": e.todo.ID, "reason": "now urgent", "p0": true},
 		{"todo_id": e.todo.ID, "reason": "now urgent", "why_owner": "irreversible"},
@@ -337,6 +350,7 @@ func TestHeldEscalationIsNotReEscalatable(t *testing.T) {
 			t.Fatalf("re-escalation %v: %v", args, err)
 		}
 	}
+	e.settle()
 	if got := e.cardPushes("ix1"); len(got) != 1 || got[0] != assistantwire.LevelP1 {
 		t.Fatalf("the rejected re-escalation pushed: %v", got)
 	}
@@ -359,7 +373,7 @@ func TestQuietTaskReportPostsNothing(t *testing.T) {
 	startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "修好了，https://github.com/o/r/pull/901 已合并", 0)
-	time.Sleep(6 * testReportDelay)
+	settleReports(t, s)
 	if n := len(posts()); n != 0 {
 		t.Fatalf("%d progress cards with the switch on", n)
 	}

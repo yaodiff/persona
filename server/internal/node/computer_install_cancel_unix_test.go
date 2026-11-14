@@ -28,31 +28,36 @@ func TestInstallCuaCancellationKillsInstallerTree(t *testing.T) {
 	if err := startJob("install", installCua); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(3 * time.Second); child == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	if !holdsWithin(3*time.Second, func() bool {
 		data, _ := os.ReadFile(childPath)
 		child, _ = strconv.Atoi(strings.TrimSpace(string(data)))
-	}
-	if child <= 0 {
+		return child > 0
+	}) {
 		t.Fatal("installer did not start its child")
 	}
 	if !cancelJob() {
 		t.Fatal("running install was not cancellable")
 	}
-	cancelled := false
-	for deadline := time.Now().Add(750 * time.Millisecond); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if j := currentJob(); j != nil && j.State == "cancelled" {
-			cancelled = true
-			break
-		}
-	}
-	if !cancelled {
+	cancelled := func() bool { j := currentJob(); return j != nil && j.State == "cancelled" }
+	if !holdsWithin(750*time.Millisecond, cancelled) {
 		// Clean up the descendant that the production cancellation left behind.
 		killChild()
-		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-			if j := currentJob(); j != nil && j.State == "cancelled" {
-				break
-			}
-		}
+		holdsWithin(2*time.Second, cancelled)
 		t.Fatal("install job remained running until the installer shell's child was killed separately")
 	}
+}
+
+// holdsWithin reports whether ok holds within d, checking it every 10 ms.
+func holdsWithin(d time.Duration, ok func() bool) bool {
+	deadline := time.After(d)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for !ok() {
+		select {
+		case <-deadline:
+			return ok()
+		case <-tick.C:
+		}
+	}
+	return true
 }

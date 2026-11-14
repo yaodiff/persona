@@ -40,27 +40,22 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 	}()
 
 	deadline := time.Now().Add(3 * time.Second)
-	for {
+	var stack string
+	if !holdsBy(deadline, func() bool {
 		buf := make([]byte, 1<<20)
 		n := runtime.Stack(buf, true)
-		stack := string(buf[:n])
-		blocked := false
+		stack = string(buf[:n])
 		for _, gr := range strings.Split(stack, "\n\n") {
 			if strings.Contains(gr, "sync.Mutex.Lock") &&
 				strings.Contains(gr, "hub.(*Machine).snapshot") &&
 				strings.Contains(gr, "hub.(*Hub).broadcastMachines") {
-				blocked = true
-				break
+				return true
 			}
 		}
-		if blocked {
-			break
-		}
-		if time.Now().After(deadline) {
-			unlockM2()
-			t.Fatalf("old broadcast did not reach m2:\n%s", stack)
-		}
-		time.Sleep(time.Millisecond)
+		return false
+	}) {
+		unlockM2()
+		t.Fatalf("old broadcast did not reach m2:\n%s", stack)
 	}
 
 	goneDone := make(chan struct{})
@@ -68,12 +63,9 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 		h.machineGone("m2")
 		close(goneDone)
 	}()
-	for len(h.machinesNow()) != 1 {
-		if time.Now().After(deadline) {
-			unlockM2()
-			t.Fatal("machineGone did not remove m2")
-		}
-		time.Sleep(time.Millisecond)
+	if !holdsBy(deadline, func() bool { return len(h.machinesNow()) == 1 }) {
+		unlockM2()
+		t.Fatal("machineGone did not remove m2")
 	}
 
 	reportDone := make(chan struct{})
@@ -83,18 +75,13 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 		}}})
 		close(reportDone)
 	}()
-	for {
+	if !holdsBy(deadline, func() bool {
 		m1.mu.Lock()
-		online := m1.online
-		m1.mu.Unlock()
-		if online {
-			break
-		}
-		if time.Now().After(deadline) {
-			unlockM2()
-			t.Fatal("manager report did not bring m1 online")
-		}
-		time.Sleep(time.Millisecond)
+		defer m1.mu.Unlock()
+		return m1.online
+	}) {
+		unlockM2()
+		t.Fatal("manager report did not bring m1 online")
 	}
 	unlockM2()
 
@@ -134,4 +121,20 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 	if len(last) != 1 || last[0].ID != "m1" || !last[0].Online {
 		t.Fatalf("final machine list is stale: %+v", last)
 	}
+}
+
+// holdsBy reports whether ok holds by deadline, checking it every millisecond.
+func holdsBy(deadline time.Time, ok func() bool) bool {
+	expire := time.NewTimer(time.Until(deadline))
+	defer expire.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for !ok() {
+		select {
+		case <-expire.C:
+			return ok()
+		case <-tick.C:
+		}
+	}
+	return true
 }
