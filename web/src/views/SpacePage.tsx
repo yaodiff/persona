@@ -17,6 +17,7 @@ import { shortPath } from "../lib/format";
 import { Button, cx, EASE, IconButton, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { MarkSeenDialog, SpaceMenu } from "./AgentMenus";
+import { Tag } from "./assistant/parts";
 import { RenameSpaceDialog } from "./chat/SessionDialogs";
 import { LinkTodoDialog, type LinkTargetSpace } from "./LinkTodoDialog";
 import { AgentRow } from "./machines/AgentRow";
@@ -201,6 +202,7 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
                         <Icon name="todo" size={14} className="shrink-0 text-ink-3" />
                         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{x.title}</span>
                         <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3">{x.via === "space" ? t("space-page.todo_via_space") : t("space-page.todo_via_agent")}</span>
+                        {x.todo?.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
                         {status && x.todo && (
                           <span className={cx("inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full px-1.5 text-[11px] font-medium", TONE[TODO_STATUS_INFO[status].tone])}>{todoStatusLabel(x.todo, status)}</span>
                         )}

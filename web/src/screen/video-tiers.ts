@@ -54,9 +54,9 @@ export class ScreenVideoTiers {
   }
 
   /** A frame arrived whole at `arrival` (µs), its first bytes at `firstByte` when it came over several reads. */
-  frame(captureMicros: number, arrival: number, firstByte: number | null, bytes: number, refinement: boolean): void {
+  frame(captureMicros: number, arrival: number, firstByte: number | null, bytes: number, refinement: boolean, keyframe: boolean): void {
     if (!this.policy) return;
-    this.signals.frame(captureMicros, arrival, firstByte, bytes, refinement, this.policy.tier.fps);
+    this.signals.frame(captureMicros, arrival, firstByte, bytes, refinement, keyframe, this.policy.tier.fps);
   }
 
   decoded(ms: number, at: number): void {

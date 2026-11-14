@@ -53,7 +53,7 @@ describe("ScreenVideoTiers", () => {
     let change = null;
     for (let i = 0; i < 120 && !change; i++) {
       at += 33_333;
-      t.frame(at - 20_000 - i * 10_000, at, null, 6_000, false);
+      t.frame(at - 20_000 - i * 10_000, at, null, 6_000, false, false);
       t.helper({ type: "timing", kbps: start.tier.minKbps, fps: 30, target_kbps: start.tier.minKbps });
       if (i % 8 === 7) change = t.tick(at);
     }

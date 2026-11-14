@@ -85,8 +85,10 @@ export function openPR(todo: Todo): boolean {
 }
 
 /** Whether a to-do may be shelved at all: it is a task (an agent was linked, or a conversation handed it out) with no
- *  due date ahead. The user's own to-dos without agents — reminders, errands — never shelve themselves. */
+ *  due date ahead. The user's own to-dos without agents — reminders, errands — never shelve themselves. An open concern
+ *  never shelves either: it waits for its report (docs/assistant/todos.md "Concerns", #3582). */
 function shelvable(todo: Todo, now: number): boolean {
+  if (todo.kind === "concern") return false;
   const due = todoDueBy(todo);
   if (due !== undefined && due >= now) return false;
   return (todo.agents ?? []).length > 0 || Boolean(todo.origin);
@@ -121,11 +123,15 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   const fresh = (at: number) => now - at < JUST_DONE_MS && !seen(at);
   const ask = openAsk(todo);
   const at = (section: TriageSection, rule: TriageRule): Triage => ({ section, rule, last });
+  // An open concern closes only with its report: nothing else files it with the finished ones.
+  const concern = todo.kind === "concern" && !todo.done_at;
 
   if (status === "failed") {
     // the same piece of work finished in a related to-do (`supersededFailedStarts`): history, nothing left to retry
     if (superseded) return at(fresh(ms(todo.done_at) || last) ? "just_done" : "done", "superseded");
-    return at(now - last < SHELVE_AFTER_MS ? "waiting" : "done", "failed_start");
+    if (now - last < SHELVE_AFTER_MS) return at("waiting", "failed_start");
+    if (concern) return at("other", "rest");
+    return at("done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
   if (!todo.done_at && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
@@ -136,13 +142,13 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
     const until = ms(todo.supervision?.parked?.until);
     return at(until && until <= now ? "other" : "parked", "parked");
   }
-  if (acceptanceStands(todo)) return at(fresh(ms(latestReview(todo.supervision)?.at)) ? "just_done" : "done", "accepted");
-  if (todo.delivery?.state === "live") return at(fresh(ms(todo.delivery.at) || last) ? "just_done" : "done", "deployed");
+  if (!concern && acceptanceStands(todo)) return at(fresh(ms(latestReview(todo.supervision)?.at)) ? "just_done" : "done", "accepted");
+  if (!concern && todo.delivery?.state === "live") return at(fresh(ms(todo.delivery.at) || last) ? "just_done" : "done", "deployed");
   const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
   if (finished && !seen(last)) return at("just_done", "finished_unseen");
   if (openPR(todo)) return at("pr", "pr_open");
-  // seen since it last moved, and no PR waits on the owner
-  if (finished) return at("done", "seen");
+  // seen since it last moved, and no PR waits on the owner (an open concern is never Done open)
+  if (finished && !concern) return at("done", "seen");
   if (shelvable(todo, now) && now - last >= SHELVE_AFTER_MS) return at("shelved", "stale");
   return at("other", "rest");
 }
@@ -196,7 +202,8 @@ export function relatedKeys(todo: Todo): string[] {
 }
 
 /** The row each to-do is in: the root of its related to-dos (union of shared keys). Closed to-dos and open ones never
- *  share a row: a closed one is history, not part of the open work. */
+ *  share a row: a closed one is history, not part of the open work. An open concern always has a row of its own; a closed
+ *  concern groups like any closed to-do. */
 function relatedRoots(list: Todo[]): (id: string) => string {
   const parent = new Map(list.map((td) => [td.id, td.id]));
   const find = (id: string): string => {
@@ -207,6 +214,7 @@ function relatedRoots(list: Todo[]): (id: string) => string {
   };
   const owner = new Map<string, string>();
   for (const td of list) {
+    if (!td.done_at && td.kind === "concern") continue;
     const side = td.done_at ? "c" : "o";
     for (const k of relatedKeys(td)) {
       const key = side + "|" + k;
@@ -256,8 +264,9 @@ const ORDER = new Map(TRIAGE_SECTIONS.map((s, i) => [s, i]));
 
 /**
  * Every to-do placed in its section, related ones merged into one row (union of shared keys). Closed to-dos are not
- * merged into open ones' rows: a group is open members only, or closed members only. A group takes its most urgent
- * member's section (a superseded failed start never leads); rows in a section go most recently active first. `quiet: false` leaves quiet tasks (#1731) out,
+ * merged into open ones' rows: a group is open members only, or closed members only. An open concern always has a row of
+ * its own. A group takes its most urgent member's section (a superseded failed start never leads); rows in a section go
+ * most recently active first. `quiet: false` leaves quiet tasks (#1731) out,
  * as the sidebar's badge does; the page lists them.
  */
 export function triageTodos(

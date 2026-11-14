@@ -243,6 +243,7 @@
   "section_done": "已完成",
   "shelved_hint": "超过 48 小时没有进展、也没有 Agent 在跑。不计入没完成，数据都还在。",
   "related": "相关 {count} 项",
+  "concern": "关注点",
   "pr_idle": "{age}动过",
   "restore": "恢复",
   "restored": "已恢复到列表",

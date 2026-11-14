@@ -94,7 +94,7 @@ import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-proje
 import { useFolded } from "../lib/use-folded";
 import { stateName } from "../lib/state-labels";
 import { answeredLookup } from "./assistant/answered-lookup";
-import { Empty, Segmented } from "./assistant/parts";
+import { Empty, Segmented, Tag } from "./assistant/parts";
 import { OfflineState, useShownOffline } from "./ManagerParts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
 import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } from "../lib/todo-calendar";
@@ -1566,10 +1566,11 @@ const TodoListItem = memo(function TodoListItem({
       {/* Body */}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
-          {view.ultracode ? (
+          {view.ultracode || todo.kind === "concern" ? (
             <span className="flex min-w-0 items-center gap-1">
-              <span className="truncate text-[13.5px] font-semibold text-ink" data-testid="todo-title">{todo.title}</span>
-              <UltraMark size={11} />
+              <span className={cx("truncate text-[13.5px] font-semibold text-ink", !view.ultracode && !open && "line-through text-ink-3 font-normal")} data-testid="todo-title">{todo.title}</span>
+              {view.ultracode && <UltraMark size={11} />}
+              {todo.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
             </span>
           ) : (
             <span className={cx("truncate text-[13.5px] font-semibold text-ink", !open && "line-through text-ink-3 font-normal")} data-testid="todo-title">

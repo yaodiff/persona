@@ -135,9 +135,12 @@ struct DictationBar: View {
         let on = model.on
         // Always built, hidden while off: what a tap shows already exists (the wave's canvas and its render layer,
         // the buttons), so turning the bar on only animates scale and opacity (inserting them on the tap cost a ~40 ms
-        // frame on a simulator).
+        // frame on a simulator). Off, the parts also drop their accessibility labels and identifiers: XCUITest still
+        // lists built views hidden from accessibility, and the off ↑ answered UI tests' lookups of the composer's send
+        // (#7684).
+        let named = { (name: String) in on ? name : "" }
         HStack(spacing: Theme.Space.xs) {
-            ComposerRoundButton(symbol: Theme.Icon.close, label: String(localized: "Cancel"), id: "dictation-bar-cancel",
+            ComposerRoundButton(symbol: Theme.Icon.close, label: named(String(localized: "Cancel")), id: named("dictation-bar-cancel"),
                                 pressScales: !reduceMotion, muted: true, action: cancel)
                 .disabled(ending != nil)
                 .modifier(BarPart(on: on, reduceMotion: reduceMotion))
@@ -149,14 +152,14 @@ struct DictationBar: View {
                 .opacity(on ? 1 : Theme.DictationBar.hiddenInk)
                 // VoiceOver reads the wave as where dictation stands, between ✕ and ■.
                 .accessibilityElement()
-                .accessibilityLabel(ending == nil ? String(localized: "Listening…") : String(localized: "Transcribing…"))
+                .accessibilityLabel(named(ending == nil ? String(localized: "Listening…") : String(localized: "Transcribing…")))
                 .accessibilityAddTraits(.updatesFrequently)
                 .accessibilityHidden(!on)
-            ComposerRoundButton(symbol: Theme.Icon.stopDictating, label: String(localized: "Stop Dictation"), id: "dictation-bar-stop",
+            ComposerRoundButton(symbol: Theme.Icon.stopDictating, label: named(String(localized: "Stop Dictation")), id: named("dictation-bar-stop"),
                                 pressScales: !reduceMotion, muted: true, busy: model.slow && ending == .stop, action: stop)
                 .disabled(ending != nil)
                 .modifier(BarPart(on: on, reduceMotion: reduceMotion))
-            ComposerRoundButton(symbol: Theme.Icon.send, label: String(localized: "Send"), id: "dictation-bar-send",
+            ComposerRoundButton(symbol: Theme.Icon.send, label: named(String(localized: "Send")), id: named("dictation-bar-send"),
                                 pressScales: !reduceMotion, busy: model.slow && ending == .send, action: send)
                 .disabled(ending != nil)
                 .modifier(BarPart(on: on, reduceMotion: reduceMotion))

@@ -6,7 +6,7 @@ import type { Bias } from "./ladder";
 import { TierPolicy, type Change, type HelperTiming, type Link, type PolicyInit } from "./policy";
 import type { TierSignals } from "./signals";
 
-type ChangeCase = { index: number; scale: number; fps: number; width: number; height: number; minKbps: number; maxKbps: number; targetKbps: number; reason: string } | null;
+type ChangeCase = { index: number; scale: number; fps: number; width: number; height: number; minKbps: number; maxKbps: number; pixelsPerPoint: number; targetKbps: number; reason: string } | null;
 type Step =
   | { helper: HelperTiming }
   | { tick: { signals: TierSignals; now: number }; expected: ChangeCase }
@@ -17,7 +17,7 @@ type Case = { name: string; init: PolicyInit; start: ChangeCase; steps: Step[] }
 const cases = scenarios<Case>("policy");
 
 const asCase = (c: Change | null): ChangeCase =>
-  c && { index: c.index, scale: c.tier.scale, fps: c.tier.fps, width: c.tier.width, height: c.tier.height, minKbps: c.tier.minKbps, maxKbps: c.tier.maxKbps, targetKbps: c.targetKbps, reason: c.reason };
+  c && { index: c.index, scale: c.tier.scale, fps: c.tier.fps, width: c.tier.width, height: c.tier.height, minKbps: c.tier.minKbps, maxKbps: c.tier.maxKbps, pixelsPerPoint: c.tier.pixelsPerPoint, targetKbps: c.targetKbps, reason: c.reason };
 
 describe("the shared tier policy timelines", () => {
   it("has the scenarios", () => expect(cases.length).toBeGreaterThanOrEqual(20));
