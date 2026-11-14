@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// A full native page belongs to one authenticated app connection. Private frames are never
 /// broadcast/replayed. Lifecycle and receipt fencing are separate from the legacy HTTP model.

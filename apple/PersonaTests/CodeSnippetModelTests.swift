@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct CodeSnippetModelTests {
     @Test func presentationAndEquivalentLanguagesHaveTheSamePreparationKey() {

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What the phone gives the watch (#1185): each group's answer-only watch credential, never the phone's own in its
 /// place (that one opens everything), and which groups have none yet so the watch can ask for a sync.

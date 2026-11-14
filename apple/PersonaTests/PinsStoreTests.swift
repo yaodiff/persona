@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Pins and mutes (`PinsStore`): kept across launches, changed at once and sent to the hub, the mute rule.
 @MainActor struct PinsStoreTests {

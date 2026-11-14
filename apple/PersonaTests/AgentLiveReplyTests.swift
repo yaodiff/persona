@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// An agent's live reply in its chat (#1309, docs/integrations/claude-integration.md "Live replies (MessageDisplay)"): the
 /// words Claude shows before its transcript has them are drawn under the newest items, matched against them

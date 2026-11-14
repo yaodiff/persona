@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Assistant Profile › Standing Authorizations (#7002): the hub's list in plain words, read and revoked through the page's
 /// assistant, a revoke that leaves at once and comes back when the hub refuses. Made-up grants.

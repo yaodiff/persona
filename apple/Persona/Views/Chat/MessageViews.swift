@@ -2,6 +2,7 @@ import BeautifulUI
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 extension MarkdownUI.Theme {
     /// Reading-first markdown: system body text, roomy lists, quiet code blocks.

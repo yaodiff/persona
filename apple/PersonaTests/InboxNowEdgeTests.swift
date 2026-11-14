@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Edges of the shared inbox state words and row line that the fixture cases do not reach: empty values, the row's
 /// convenience path (which supplies the clock), the old mark yielding to `now`, and the showcase's raw wire JSON.

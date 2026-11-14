@@ -224,7 +224,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         // Not what the stream brought while this was on its way: those are merged as they are, and not a miss.
         fresh += got.filter((i) => i.seq > covered.current).length;
         apply(got);
-        remember(got);
+        remember(got, Boolean(p.more_after));
         showLive(got);
         if (p.to_seq) covered.current = Math.max(covered.current, p.to_seq);
         lastArrival = Date.now();

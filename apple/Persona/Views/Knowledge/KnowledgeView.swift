@@ -2,6 +2,7 @@ import BeautifulUI
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// What Persona knows (the hub's ~/.persona/data, docs/assistant/knowledge.md): projects first, then chats, people, docs, meetings and
 /// events, most important and most relevant first. Not a browser of Feishu: every row is Persona' own digest, and the

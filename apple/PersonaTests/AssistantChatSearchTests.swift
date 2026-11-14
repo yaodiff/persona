@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Finding a Persona chat by what was said in it (#6284): the manager's answer decoded, merged into the local matches,
 /// the matched sentence emphasized, and the search asked once the keys settle, never again of a manager without it.

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A conversation's feed longer than one page of the hub's (500, tasks.go `feedPage`) is read whole (#4642).
 @MainActor

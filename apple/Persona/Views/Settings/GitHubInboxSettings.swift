@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Settings › Connectors › GitHub › Inbox (docs/assistant/inbox.md「Connector: GitHub」): which CI failures come in, and repositories
 // that bring nothing in. Kept on the hub (PUT /api/v1/connectors/github/settings {"options": …}).

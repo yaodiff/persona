@@ -2,6 +2,7 @@ import AppIntents
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Pure logic behind the intents: wording, selection rules and what each interaction kind resolves to.
 /// Everything here runs without a hub, which is why it is testable at all.

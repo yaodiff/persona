@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Segments describe themselves, so the watch's uploads can arrive out of order. The format comes from Hourhand's WatchProtocol.
 nonisolated struct RecordingSegment: Codable, Hashable, Sendable {

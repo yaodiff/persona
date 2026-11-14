@@ -1,6 +1,7 @@
 #if os(iOS)
 import Foundation
 import Observation
+import PersonaWire
 
 /// The live sentences of a meeting Persona attends (#2981, docs/assistant/meeting-minutes.md「Live sentences」): every
 /// finished sentence that ended while Persona attended, and isn't Persona's echo (#5905), goes into the recording's

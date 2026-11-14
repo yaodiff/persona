@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// A phone capability Claude can call through the hub (`phone_*` MCP tools).
 struct PhoneTool {

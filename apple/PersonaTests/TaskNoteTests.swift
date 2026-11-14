@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Background tasks reporting back (`Item.task`): which call each came from, and the words of their one-line rows.
 @MainActor

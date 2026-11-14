@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Routing and ownership stay fixed while an assistant settings page has unsaved edits.
 @MainActor

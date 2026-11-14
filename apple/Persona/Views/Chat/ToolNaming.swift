@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The words a tool call reads as when no table names it (#2986): a third-party MCP tool as "<Server> · <Tool>"
 /// ("mcp__github__create_issue" is "GitHub · Create issue"), any other unknown tool as its name in words, a subject

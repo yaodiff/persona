@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A model provider's key as a secret provider's reference (#3962 step 4c, docs/extensions/secret-providers.md
 /// "Launcher keys"), against FakeHub: the wizard sends `api_key_reference` / `machine_key_references` in place of the key

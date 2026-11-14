@@ -1,0 +1,18 @@
+{
+  "held_entry": "保留された通知",
+  "held_entry_label": "保留された通知、今日{count}件",
+  "held_entry_hint": "通知を抑えるモード中に保留されたP1/P2通知",
+  "held_title": "今日保留された通知",
+  "held_explanation": "P1は確認が必要です。P2は通知されず、折りたたまれています。",
+  "held_p1": "P1・要確認",
+  "held_p1_count": "P1・要確認（{count}）",
+  "held_p2": "P2・通知なし",
+  "held_p2_count": "P2・通知なし（{count}）",
+  "held_empty": "今日保留された通知はありません。",
+  "held_untitled": "概要なし",
+  "held_reason_p1": "ブリーフィングへ",
+  "held_reason_p2": "通知せずに記録",
+  "held_reason_dedup": "関連する通知は過去12時間以内に送信済みです",
+  "held_loading": "保留された通知を読み込み中…",
+  "held_load_failed": "保留された通知を読み込めませんでした。接続を確認して再試行してください。"
+}

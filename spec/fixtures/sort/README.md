@@ -100,7 +100,7 @@ SPEC_SORT_FIXTURES="$PWD/spec/fixtures" go -C server test \
 
 | 探针组成 | 从哪里提取，如何调用 |
 | --- | --- |
-| Swift 解码与状态 | 从 Models 提取 SessionStatus、Session、Subagent、LoopInfo、BackgroundTask、AgentState、SessionKey、MailAddress，以及含 isQuiet 的 Session 扩展；编译时直接加上 `apple/Shared/JSONValue.swift`；用 `JSON.decoder` 解 input.sessions。 |
+| Swift 解码与状态 | 从 Models 提取 SessionStatus、Session、Subagent、LoopInfo、BackgroundTask、AgentState、SessionKey、MailAddress，以及含 isQuiet 的 Session 扩展；编译时直接加上 `apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift`；用 `JSON.decoder` 解 input.sessions。 |
 | Swift 空间和筛选 | 从 ChatsView 提取 SpaceGroup、AgentFilter、isWaiting 扩展、`StateCounts.spoken`；从 Theme 的 AgentState 扩展提取 label。 |
 | Swift 偏好 | 从 APIClient 提取 Pins；以输入数组充当 AppModel 的数据，原文提取 pinKey、isPinned、isMuted、spaceKey 方法。 |
 | Swift 列表 | 原文提取 ChatsView 的 base、counts、stays、rank、ordered，以及 body 中从 `let base = base` 到 `SplitNavigation` 之前的数据计算块；用 settings 填充同名属性。 |
@@ -108,7 +108,7 @@ SPEC_SORT_FIXTURES="$PWD/spec/fixtures" go -C server test \
 | Go 状态 | 在 `/tmp` 建 `package hub` 的 `TestSpecSortFixtures`，循环读取 hub_state.json，把 session 解码为 proto.Session，seen_at 缺失时使用 time.Time 零值，直接断言 `agentState(session, seen) == expected.state`。 |
 | Go 虚拟测试文件 | overlay.json 的 Replace 将仓库中不存在的 `server/internal/hub/spec_sort_fixture_test.go` 绝对路径映射到 `/tmp` 的测试源码，真实目录不写文件。 |
 
-编译形式为 `swiftc -parse-as-library -module-cache-path /tmp/spec-sort-check/module-cache apple/Shared/JSONValue.swift /tmp/spec-sort-check/Reference.swift -o /tmp/spec-sort-check/check`。驱动遍历 JSON 的 cases，只比较结构化输出，不生成 expected；两个跨机器同标识用例对照 ios_expected，并另外核对 expected 的完整 id 排序和反向输入不变性；编译用 Python `subprocess.run(timeout=120)`，运行用 `timeout=60`，Go 自带 `-timeout 120s`。收件箱适配契约见[收件箱 README](../inbox/README.md)。这些时间是验证脚本的超时设置，不是性能结果。
+编译形式为 `swiftc -parse-as-library -module-cache-path /tmp/spec-sort-check/module-cache apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift /tmp/spec-sort-check/Reference.swift -o /tmp/spec-sort-check/check`。驱动遍历 JSON 的 cases，只比较结构化输出，不生成 expected；两个跨机器同标识用例对照 ios_expected，并另外核对 expected 的完整 id 排序和反向输入不变性；编译用 Python `subprocess.run(timeout=120)`，运行用 `timeout=60`，Go 自带 `-timeout 120s`。收件箱适配契约见[收件箱 README](../inbox/README.md)。这些时间是验证脚本的超时设置，不是性能结果。
 
 本次 Swift 编译和客户端对照通过；Go overlay 直接调用真实 hub 实现，全部通过。仓库服务端的 build、vet、全量 test 也通过；沙箱中默认 build 无法读取 VCS 状态，因此复跑使用 `GOFLAGS=-buildvcs=false`，未改仓库构建设置。
 

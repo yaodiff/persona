@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Agents › ⋯ › Terminals (#4754, docs/integrations/engines.md「Agents run in a terminal」): every pane of each computer's
 // terminal engine, the Agents' and plain terminals alike, to open in the terminal (watch and type) and close. A plain pane

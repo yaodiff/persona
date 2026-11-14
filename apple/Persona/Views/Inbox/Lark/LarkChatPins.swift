@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 nonisolated struct LarkChatPin: Codable, Identifiable, Hashable, Sendable {
     var id: String

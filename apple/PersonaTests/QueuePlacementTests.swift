@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Where a message sent from this phone is drawn before the transcript has it (#1461): one written while the agent
 /// worked goes straight into the queue strip; one written while it was idle stays a bubble in the chat.

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Home Screen widgets' snapshot (docs/apple/home-widgets.md): the numbers are the app's own, the file is written only
 /// when it changes and read back only in its own shape, and the moods follow the rules the doc gives.

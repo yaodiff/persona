@@ -47,14 +47,24 @@ final class DispatchedTaskCardTests: XCTestCase {
         try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/iphone-\(appearance)-\(name).png"))
     }
 
+    /// The first card can sit under the Assistant tabs. `isHittable` is then true while a tap lands on the tab, so
+    /// keep scrolling until the whole card is between the tab bar and the dock. Their frames come from the app.
     @MainActor private func link(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         let link = app.buttons["dispatch.task.\(id)"]
+        let tabs = app.buttons["shell-assistant"]
+        let dock = app.otherElements["action-bar"]
         let deadline = Date.now.addingTimeInterval(30)
-        while !(link.exists && link.isHittable) && Date.now < deadline {
-            usleep(500_000)
-            if !(link.exists && link.isHittable) { app.swipeDown(velocity: .slow) }
+        while Date.now < deadline {
+            if link.exists {
+                let frame = link.frame
+                let top = tabs.exists ? tabs.frame.maxY : app.frame.minY
+                let bottom = dock.exists ? dock.frame.minY : app.frame.maxY
+                if link.isHittable, frame.minY >= top, frame.maxY <= bottom { return link }
+                if frame.minY < top { app.swipeDown(velocity: .slow) } else { app.swipeUp(velocity: .slow) }
+            }
+            usleep(400_000)
         }
-        XCTAssertTrue(link.exists && link.isHittable, "no dispatch link for \(id):\n\(app.debugDescription)")
+        XCTFail("no dispatch link for \(id):\n\(app.debugDescription)")
         return link
     }
 
@@ -86,7 +96,7 @@ final class DispatchedTaskCardTests: XCTestCase {
         let app = launch()
         let one = link(app, "todo_task_widget")
         // one card: the title, how the Agent came to it, when it last moved and its state, in one element
-        XCTAssertTrue(one.label.contains("修小组件横屏崩溃"), one.label)
+        XCTAssertTrue(one.label.contains("给天气 App 加主屏幕小组件"), one.label)
         XCTAssertFalse(one.label.contains("派出"), "the old \"Dispatched\" line is back: \(one.label)")
         try shot(app, "one")
         one.tap()

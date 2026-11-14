@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A market plugin's auto-upgrade (docs/extensions/extensions.md「Auto-upgrade」): the hub's fields decode, the Update section says what
 /// happens to a newer version (and when it waits for the user), the switches go to the hub; a hub without the feature

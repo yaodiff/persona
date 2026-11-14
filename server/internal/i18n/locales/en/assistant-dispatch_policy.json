@@ -1,0 +1,7 @@
+{
+  "refused_dispatch": "The current organization policy requires this conversation to stay read-only: it cannot hand out work here ({action}).",
+  "refused_send_main": "The current organization policy requires this conversation to stay read-only: it cannot forward work to the main conversation.",
+  "refused_send_leader": "The current organization policy requires this conversation to stay read-only: it cannot forward work to a leader conversation.",
+  "refused_unreadable": "The current organization policy requires this conversation to stay read-only: it cannot forward work to the main conversation, and whether these are the owner's own words could not be confirmed because the conversation could not be read.",
+  "refused_schedule": "The current organization policy requires this conversation to stay read-only: it cannot change its own scheduled task."
+}

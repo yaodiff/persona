@@ -117,7 +117,9 @@ func TestPassedSocketsReachNoChild(t *testing.T) {
 		}
 		base = append(base, kv)
 	}
-	base = append(base, "HOME="+home, "LISTEN_FDS=1", "LISTEN_FDNAMES=personad.socket")
+	// These helpers test socket activation, not the resolver. The pure Go resolver keeps a cold system lookup from
+	// making their descriptor assertions depend on osproc's deliberately fail-soft warm-up deadline.
+	base = append(base, "HOME="+home, "LISTEN_FDS=1", "LISTEN_FDNAMES=personad.socket", "GODEBUG=netdns=go")
 
 	for _, c := range []struct {
 		name, mode string

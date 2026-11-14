@@ -797,6 +797,210 @@
         "finished": 3
       },
       "from_test": "web/src/lib/todo-triage.test.ts > unfinished to-dos lead a row and come before Just finished; seen ones are Done"
+    },
+    {
+      "name": "concern_open_related_task",
+      "description": "An open concern and an open task related by plan keep separate rows; both still count as open.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Related to-dos\"",
+        "server/internal/assistant/todo_triage.go triageTodos"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todos": [
+          {
+            "id": "concern-open",
+            "title": "Answer the launch concern",
+            "kind": "concern",
+            "created_at": "2026-11-09T00:00:00.000Z",
+            "updated_at": "2026-11-10T11:00:00.000Z",
+            "done_at": null,
+            "agents": [],
+            "origin": "main",
+            "plan_id": "plan-concern"
+          },
+          {
+            "id": "task-open",
+            "title": "Implement the launch task",
+            "created_at": "2026-11-09T00:00:00.000Z",
+            "updated_at": "2026-11-10T10:00:00.000Z",
+            "done_at": null,
+            "agents": [],
+            "origin": "main",
+            "plan_id": "plan-concern"
+          }
+        ],
+        "include_quiet": true
+      },
+      "expected": {
+        "sections": {
+          "other": [
+            [
+              "concern-open"
+            ],
+            [
+              "task-open"
+            ]
+          ]
+        },
+        "open": 2,
+        "shelved": 0,
+        "finished": 0
+      }
+    },
+    {
+      "name": "concern_open_related_concern",
+      "description": "Two related open concerns keep one row each.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Related to-dos\"",
+        "server/internal/assistant/todo_triage.go triageTodos"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todos": [
+          {
+            "id": "concern-first",
+            "title": "Answer the first concern",
+            "kind": "concern",
+            "created_at": "2026-11-09T00:00:00.000Z",
+            "updated_at": "2026-11-10T11:00:00.000Z",
+            "done_at": null,
+            "agents": [],
+            "origin": "main",
+            "plan_id": "plan-two-concerns"
+          },
+          {
+            "id": "concern-second",
+            "title": "Answer the second concern",
+            "kind": "concern",
+            "created_at": "2026-11-09T00:00:00.000Z",
+            "updated_at": "2026-11-10T10:00:00.000Z",
+            "done_at": null,
+            "agents": [],
+            "origin": "main",
+            "plan_id": "plan-two-concerns"
+          }
+        ],
+        "include_quiet": true
+      },
+      "expected": {
+        "sections": {
+          "other": [
+            [
+              "concern-first"
+            ],
+            [
+              "concern-second"
+            ]
+          ]
+        },
+        "open": 2,
+        "shelved": 0,
+        "finished": 0
+      }
+    },
+    {
+      "name": "concern_closed_related_todo",
+      "description": "A closed concern and a closed to-do related by plan share a row as before; both count as finished.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Related to-dos\"",
+        "server/internal/assistant/todo_triage.go triageTodos"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todos": [
+          {
+            "id": "concern-closed",
+            "title": "Answer the reported concern",
+            "kind": "concern",
+            "created_at": "2026-11-09T00:00:00.000Z",
+            "updated_at": "2026-11-10T11:00:00.000Z",
+            "done_at": "2026-11-10T11:00:00.000Z",
+            "done_by": "reported",
+            "agents": [],
+            "origin": "main",
+            "plan_id": "plan-closed-concern"
+          },
+          {
+            "id": "task-closed",
+            "title": "Finish the reported task",
+            "created_at": "2026-11-09T00:00:00.000Z",
+            "updated_at": "2026-11-10T10:00:00.000Z",
+            "done_at": "2026-11-10T10:00:00.000Z",
+            "agents": [],
+            "origin": "main",
+            "plan_id": "plan-closed-concern"
+          }
+        ],
+        "include_quiet": true
+      },
+      "expected": {
+        "sections": {
+          "just_done": [
+            [
+              "concern-closed",
+              "task-closed"
+            ]
+          ]
+        },
+        "open": 0,
+        "shelved": 0,
+        "finished": 2
+      }
+    },
+    {
+      "name": "concern_stale_next_to_task",
+      "description": "A weeks-quiet concern stays open beside an ordinary task of the same age that shelves; counts stay per to-do.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Related to-dos\"",
+        "server/internal/assistant/todo_triage.go triageTodos"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todos": [
+          {
+            "id": "stale-concern",
+            "title": "Answer the quiet concern",
+            "kind": "concern",
+            "created_at": "2026-10-20T12:00:00.000Z",
+            "updated_at": "2026-10-20T12:00:00.000Z",
+            "done_at": null,
+            "agents": [],
+            "origin": "main"
+          },
+          {
+            "id": "stale-task",
+            "title": "Finish the quiet task",
+            "created_at": "2026-10-20T12:00:00.000Z",
+            "updated_at": "2026-10-20T12:00:00.000Z",
+            "done_at": null,
+            "agents": [],
+            "origin": "main"
+          }
+        ],
+        "include_quiet": true
+      },
+      "expected": {
+        "sections": {
+          "other": [
+            [
+              "stale-concern"
+            ]
+          ],
+          "shelved": [
+            [
+              "stale-task"
+            ]
+          ]
+        },
+        "open": 1,
+        "shelved": 1,
+        "finished": 0
+      }
     }
   ]
 }

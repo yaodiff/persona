@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- What a finished turn cost, under its reply (#5470, the web's chat-replybar). -->
+    <string name="chat_reply_worth">价值 %1$s</string>
+    <string name="chat_reply_tokens">%1$s tokens</string>
+    <string name="chat_reply_approx">约 %1$s</string>
+    <string name="chat_reply_details">本轮明细</string>
+    <string name="chat_reply_value">本轮 token 价值：%1$s</string>
+    <string name="chat_reply_by_model">按模型拆分：</string>
+    <string name="chat_reply_model_cost">· %1$s %2$s</string>
+    <string name="chat_reply_token_line">Tokens：共 %1$s · 输入 %2$s · 输出 %3$s</string>
+    <string name="chat_reply_cache">缓存拆分：读取 %1$s · 写入 %2$s · 命中率 %3$s</string>
+    <string name="chat_reply_cache_no_rate">缓存拆分：读取 %1$s · 写入 %2$s</string>
+    <string name="chat_reply_time">耗时 %1$s</string>
+    <string name="chat_reply_model">模型：%1$s</string>
+    <plurals name="chat_reply_models">
+        <item quantity="other">%1$d 个模型</item>
+    </plurals>
+    <string name="chat_reply_suggestion">建议：%1$s</string>
+    <string name="chat_reply_low_cache">缓存命中率偏低，本轮较多上下文重新计费</string>
+    <string name="chat_reply_no_cost">本轮费用暂不可用，仅显示用量</string>
+    <string name="chat_reply_persona_cost">这条回复约 %1$s，按公开价格估算</string>
+    <string name="chat_reply_persona_title">这条回复的估算费用</string>
+    <string name="chat_reply_dur_hours">%1$d 小时 %2$d 分</string>
+    <string name="chat_reply_dur_days">%1$d 天 %2$d 小时 %3$d 分</string>
+</resources>

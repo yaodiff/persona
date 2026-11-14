@@ -10,7 +10,8 @@ import kotlinx.serialization.json.*
 
 /** Only metadata supplied by the hook is a source; tool names are not proof. */
 fun Interaction.requestSourceLabel(): CoreText? = listOfNotNull(
-    agentType?.trim()?.takeIf(String::isNotEmpty)?.let { CoreText.of(Key.RequestFromSubagent, it) },
+    (if (!foldedUnder.isNullOrBlank()) sessionTitle else agentType)?.trim()?.takeIf(String::isNotEmpty)
+        ?.let { CoreText.of(Key.RequestFromSubagent, persona.core.domain.lines.Subagents.compact(it, 48)) },
     mcpServerName?.trim()?.takeIf(String::isNotEmpty)?.let { server ->
         val name = mcpServerLabel(server)
         mcpConfigSource?.trim()?.takeIf(String::isNotEmpty)?.let { CoreText.of(Key.RequestFromMcpConfigured, name, it) }

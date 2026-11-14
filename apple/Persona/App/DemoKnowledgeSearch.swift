@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Searches only bundled demo entries; never reads files or calls the hub.
 nonisolated enum DemoKnowledgeSearch {

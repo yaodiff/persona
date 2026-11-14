@@ -50,6 +50,8 @@ var RouteScopes = map[string]string{
 	"DELETE /api/v1/inbox/policies/{id}":                 ScopeInboxWrite,
 	"POST /api/v1/inbox/refresh":                         ScopeInboxWrite,
 	"GET /api/v1/assistant/leaders":                      ScopeLeadersRead,
+	"GET /api/v1/assistant/dispatch-policy":              ScopeAssistantDispatchPolicy,
+	"PUT /api/v1/assistant/dispatch-policy":              ScopeAssistantDispatchPolicy,
 	"GET /api/v1/sessions/archived":                      ScopeAgentsRead,
 	"GET /api/v1/sessions":                               ScopeAgentsRead,
 	"GET /api/v1/sessions/{mid}/{sid}/info":              ScopeAgentsRead,

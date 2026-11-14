@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The highlights on the phone (#3862 phase 2b; contract docs/assistant/meeting-minutes.md「Phase 2b: highlights」 and
 /// 「The meeting card」, the phone's side docs/apple/recording.md「Highlights (phase 2b)」): the flag kept only beside the

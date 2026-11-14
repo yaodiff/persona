@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Different simulated phones and runs can use the same hub/session/history. Their disk must still be their own.
 @MainActor

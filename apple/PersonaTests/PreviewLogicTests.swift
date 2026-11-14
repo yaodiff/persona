@@ -1,6 +1,7 @@
 import Foundation
 @testable import Persona
 import Testing
+import PersonaWire
 
 /// The iPhone preview's logic (#150, docs/web/preview.md "iPhone"): the servers it offers, the command Start shows, the
 /// address and `Page:` of a forwarded page, and a picked element as the same element comment the web writes (the cases

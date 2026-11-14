@@ -3460,6 +3460,418 @@
         "rule": "finished_unseen"
       },
       "from_test": "spec fixture (PR #7614 review): rule 8 before rule 9"
+    },
+    {
+      "name": "concern_agent_running",
+      "description": "R1: an open concern is Working while an agent of it runs.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "run",
+            "state": "working",
+            "status": "working",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "concern-run",
+          "title": "Answer the backup question",
+          "kind": "concern",
+          "created_at": "2026-10-01T00:00:00.000Z",
+          "updated_at": "2026-10-20T00:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "run",
+              "linked_at": "2026-11-10T10:00:00.000Z"
+            }
+          ],
+          "origin": "main"
+        }
+      },
+      "expected": {
+        "section": "working",
+        "rule": "agent_running"
+      }
+    },
+    {
+      "name": "concern_failed_start_old",
+      "description": "R2: an open concern whose agent failed to start over 48 hours ago stays in Other open.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todo": {
+          "id": "concern-failed",
+          "title": "Answer the launch question",
+          "kind": "concern",
+          "created_at": "2026-11-01T00:00:00.000Z",
+          "updated_at": "2026-11-08T00:00:00.000Z",
+          "done_at": null,
+          "agents": [],
+          "origin": "main",
+          "start_error": "no launcher"
+        }
+      },
+      "expected": {
+        "section": "other",
+        "rule": "rest"
+      }
+    },
+    {
+      "name": "concern_accepted",
+      "description": "R3: an accepted review does not finish an open concern.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todo": {
+          "id": "concern-accepted",
+          "title": "Answer the review question",
+          "kind": "concern",
+          "created_at": "2026-11-09T00:00:00.000Z",
+          "updated_at": "2026-11-10T10:00:00.000Z",
+          "done_at": null,
+          "agents": [],
+          "origin": "main",
+          "supervision": {
+            "supervisor": "main",
+            "done_when": [],
+            "state": "accepted",
+            "reviews": [
+              {
+                "at": "2026-11-10T09:00:00.000Z",
+                "verdict": "accepted",
+                "checks": []
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "section": "other",
+        "rule": "rest"
+      }
+    },
+    {
+      "name": "concern_deployed",
+      "description": "R3: a live delivery does not finish an open concern.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todo": {
+          "id": "concern-deployed",
+          "title": "Answer the deployment question",
+          "kind": "concern",
+          "created_at": "2026-11-09T00:00:00.000Z",
+          "updated_at": "2026-11-10T10:00:00.000Z",
+          "done_at": null,
+          "agents": [],
+          "origin": "main",
+          "delivery": {
+            "state": "live",
+            "at": "2026-11-10T09:00:00.000Z"
+          }
+        }
+      },
+      "expected": {
+        "section": "other",
+        "rule": "rest"
+      }
+    },
+    {
+      "name": "concern_finished_unseen",
+      "description": "R4: a concern with a finished unseen turn is Just finished.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "unseen",
+            "state": "unread",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "concern-unseen",
+          "title": "Answer the report question",
+          "kind": "concern",
+          "created_at": "2026-11-09T00:00:00.000Z",
+          "updated_at": "2026-11-10T10:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "unseen",
+              "linked_at": "2026-11-10T09:00:00.000Z"
+            }
+          ],
+          "origin": "main"
+        }
+      },
+      "expected": {
+        "section": "just_done",
+        "rule": "finished_unseen"
+      }
+    },
+    {
+      "name": "concern_pr_open",
+      "description": "R4: an open concern with an open PR stays in PR to merge.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todo": {
+          "id": "concern-pr",
+          "title": "Answer the merge question",
+          "kind": "concern",
+          "created_at": "2026-11-01T00:00:00.000Z",
+          "updated_at": "2026-11-04T10:00:00.000Z",
+          "done_at": null,
+          "agents": [],
+          "origin": "main",
+          "pr_url": "https://example.com/pull/7",
+          "stage": "review",
+          "pr_status": {
+            "url": "https://example.com/pull/7",
+            "state": "open",
+            "draft": false,
+            "review": "pending",
+            "checks": "none",
+            "conflicts": false,
+            "checked_at": "2026-11-10T12:00:00Z"
+          }
+        }
+      },
+      "expected": {
+        "section": "pr",
+        "rule": "pr_open"
+      }
+    },
+    {
+      "name": "concern_finished_seen",
+      "description": "R5: seeing a finished turn leaves an open concern in Other open, not Done.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "unseen",
+            "state": "unread",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "concern-seen",
+          "title": "Answer the seen question",
+          "kind": "concern",
+          "created_at": "2026-11-09T00:00:00.000Z",
+          "updated_at": "2026-11-10T10:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "unseen",
+              "linked_at": "2026-11-10T09:00:00.000Z"
+            }
+          ],
+          "origin": "main",
+          "seen_at": "2026-11-10T11:30:00.000Z"
+        }
+      },
+      "expected": {
+        "section": "other",
+        "rule": "rest"
+      }
+    },
+    {
+      "name": "concern_stale",
+      "description": "R6: an open concern quiet for weeks is never Shelved.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "old",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-10-20T12:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "concern-stale",
+          "title": "Answer the quiet question",
+          "kind": "concern",
+          "created_at": "2026-10-01T00:00:00.000Z",
+          "updated_at": "2026-10-20T12:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "old",
+              "linked_at": "2026-10-02T00:00:00.000Z"
+            }
+          ],
+          "origin": "main"
+        }
+      },
+      "expected": {
+        "section": "other",
+        "rule": "rest"
+      }
+    },
+    {
+      "name": "concern_stale_ordinary_task_control",
+      "description": "R6 control: an ordinary task of the same age is Shelved.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "old",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-10-20T12:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "task-stale-control",
+          "title": "Answer the quiet question",
+          "created_at": "2026-10-01T00:00:00.000Z",
+          "updated_at": "2026-10-20T12:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "old",
+              "linked_at": "2026-10-02T00:00:00.000Z"
+            }
+          ],
+          "origin": "main"
+        }
+      },
+      "expected": {
+        "section": "shelved",
+        "rule": "stale"
+      }
+    },
+    {
+      "name": "concern_rest",
+      "description": "R7: an otherwise unremarkable open concern is Other open.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todo": {
+          "id": "concern-rest",
+          "title": "Answer the ordinary question",
+          "kind": "concern",
+          "created_at": "2026-11-09T00:00:00.000Z",
+          "updated_at": "2026-11-10T11:00:00.000Z",
+          "done_at": null,
+          "agents": [],
+          "origin": "main"
+        }
+      },
+      "expected": {
+        "section": "other",
+        "rule": "rest"
+      }
+    },
+    {
+      "name": "concern_closed_fresh",
+      "description": "A concern closed by its report is Just finished for 24 hours.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todo": {
+          "id": "concern-closed-fresh",
+          "title": "Answer the fresh report question",
+          "kind": "concern",
+          "created_at": "2026-11-09T00:00:00.000Z",
+          "updated_at": "2026-11-10T10:00:00.000Z",
+          "done_at": "2026-11-10T10:00:00.000Z",
+          "done_by": "reported",
+          "agents": [],
+          "origin": "main"
+        }
+      },
+      "expected": {
+        "section": "just_done",
+        "rule": "closed"
+      }
+    },
+    {
+      "name": "concern_closed_old",
+      "description": "A concern closed by its report over 24 hours ago is Done.",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "server/internal/assistant/todo_triage.go triageTodo"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [],
+        "todo": {
+          "id": "concern-closed-old",
+          "title": "Answer the old report question",
+          "kind": "concern",
+          "created_at": "2026-11-01T00:00:00.000Z",
+          "updated_at": "2026-11-08T10:00:00.000Z",
+          "done_at": "2026-11-08T10:00:00.000Z",
+          "done_by": "reported",
+          "agents": [],
+          "origin": "main"
+        }
+      },
+      "expected": {
+        "section": "done",
+        "rule": "closed"
+      }
     }
   ]
 }

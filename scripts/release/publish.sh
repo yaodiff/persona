@@ -34,18 +34,24 @@ SITE_LANGUAGE_FAILED=""
 DL_BUCKET="${PERSONA_DL_BUCKET:-persona-dl}" # the r2_buckets binding DL in site/wrangler.jsonc
 # wr <dir> <args…>: wrangler in <dir> (a copy of site/, for its account).
 wr() { local dir="$1"; shift; (cd "$dir" && if [ -n "$WRANGLER" ]; then "$WRANGLER" "$@"; else npx wrangler "$@"; fi); }
-# check_served <SHA256SUMS> <slot>: what the site serves now is that release: dl/SLOT, and every download at its size.
+# check_served <SHA256SUMS> <slot>: what the site serves now is that release: dl/SLOT, and every download's sha256.
 check_served() {
-  local sums="$1" slot="$2" dir name size got
+  local sums="$1" slot="$2" dir name expected size got actual
   dir="$(dirname "$sums")"
   [ "$(curl -fsSL "$PERSONA_PUBLISH_URL/dl/SLOT" 2>/dev/null)" = "$slot" ] || { echo "served dl/SLOT is not $slot" >&2; return 1; }
-  while read -r _ name; do
+  while read -r expected name; do
     size=""
     [ -f "$dir/$name" ] && size="$(wc -c <"$dir/$name" | tr -d ' ')"
     got="$(curl -fsSI "$PERSONA_PUBLISH_URL/dl/$name" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')"
     [ -n "$got" ] || { echo "served dl/$name is missing" >&2; return 1; }
     [ -z "$size" ] || [ "$got" = "$size" ] || { echo "served dl/$name is $got bytes, not $size" >&2; return 1; }
+    actual="$(served_sha256 "$PERSONA_PUBLISH_URL/dl/$name" "$got")" || { echo "served dl/$name could not be downloaded" >&2; return 1; }
+    [ "$actual" = "$expected" ] || { echo "served dl/$name has sha256 $actual, not $expected" >&2; return 1; }
   done < "$sums"
+}
+# served_sha256 <url> <size>: hash the served bytes themselves, bounded by the HEAD's size and five minutes.
+served_sha256() {
+  curl -fsSL --max-time 300 --max-filesize "$2" "$1" | shasum -a 256 | awk '{print $1}'
 }
 # settled <what> <command…>: the command passes now, or within about two minutes. Right after a deploy the site can
 # still serve the release before for a while (the entry and the edge cache; three releases on 2026-11-06, #5698).
@@ -68,14 +74,17 @@ node_archives() {
   done
   return 0
 }
-# check_versioned <dir> <version>: dl/<version>/ serves that release: its manifest, and every node build at its size.
+# check_versioned <dir> <version>: dl/<version>/ serves that release: its exact manifest, and every node build's sha256.
 check_versioned() {
-  local dir="$1" v="$2" gz size got
+  local dir="$1" v="$2" gz size got expected actual
   curl -fsSL "$PERSONA_PUBLISH_URL/dl/$v/manifest.json" | cmp -s - "$dir/latest.json" || { echo "served dl/$v/manifest.json differs" >&2; return 1; }
   while IFS= read -r gz; do
     size="$(wc -c <"$gz" | tr -d ' ')"
     got="$(curl -fsSI "$PERSONA_PUBLISH_URL/dl/$v/${gz##*/}" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')"
     [ "$got" = "$size" ] || { echo "served dl/$v/${gz##*/} is ${got:-missing}, not $size bytes" >&2; return 1; }
+    expected="$(shasum -a 256 "$gz" | awk '{print $1}')"
+    actual="$(served_sha256 "$PERSONA_PUBLISH_URL/dl/$v/${gz##*/}" "$size")" || { echo "served dl/$v/${gz##*/} could not be downloaded" >&2; return 1; }
+    [ "$actual" = "$expected" ] || { echo "served dl/$v/${gz##*/} has sha256 $actual, not $expected" >&2; return 1; }
   done < <(node_archives "$dir")
 }
 same_as_served() { curl -fsSL "$PERSONA_PUBLISH_URL/$1" | cmp -s - "$2"; }

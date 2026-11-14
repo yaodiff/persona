@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/node/iphone"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -109,15 +110,15 @@ func builtinCall(ctx context.Context, id, method string, params json.RawMessage,
 		}
 	case "iphone":
 		switch method {
-		case "status": // the iPhones this computer reaches, asked only while the user has the extension on (iphone.go)
-			return iphoneStatus(ctx), nil
+		case "status": // the iPhones this computer reaches, asked only while the user has the extension on (iphone/)
+			return iphone.Status(ctx), nil
 		case "call":
-			return iphoneCall(ctx, params)
+			return iphone.Call(ctx, params)
 		case "pair", "forget": // background jobs; their state comes back with status
-			return iphonePair(ctx, method, params)
+			return iphone.Pair(ctx, method, params)
 		case "cancel":
-			iphones.Cancel()
-			return iphoneStatus(ctx), nil
+			iphone.Cancel()
+			return iphone.Status(ctx), nil
 		}
 	case "imessage":
 		switch method {

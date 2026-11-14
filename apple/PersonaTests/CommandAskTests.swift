@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Claude Code's permission prompt for a shell command read off its terminal (#5266): what the screen card says of it in
 /// plain words, from the hub's dialog.

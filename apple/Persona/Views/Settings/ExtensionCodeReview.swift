@@ -1,5 +1,6 @@
 import Foundation
 import PersonaKit
+import PersonaWire
 
 // UI version 5's code review (docs/extensions/extensions.md "UI version 5: code review", #3136, #827), the logic
 // without the looks, as the web's web/src/lib/code-review.ts and Android's ExtensionCodeReview.kt: which words of a

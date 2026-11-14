@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Agents list's order and sections (`AgentListOrder`), without the list.
 @MainActor struct AgentListOrderTests {

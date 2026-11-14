@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// System-level placements exist only on the new paths; reuses the schema types without pulling the app's view models into system extensions.
 #if !WIDGET_EXTENSION

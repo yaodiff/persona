@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Agents list's quick filters and what a space header says when folded (AgentsListTests drives the screens).
 @MainActor struct AgentFilterTests {

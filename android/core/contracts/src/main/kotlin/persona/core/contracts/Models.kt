@@ -326,7 +326,7 @@ data class Session(
     @SerialName("session_id") val sessionId: String,
     @SerialName("title") val title: String = "",
     @SerialName("cwd") val cwd: String = "",
-    @WireEnum("idle", "working", "blocked", "done", "offline", "unknown")
+    @WireEnum("idle", "working", "blocked", "done", "offline", "interrupted", "unknown")
     @SerialName("status") val status: String = "unknown",
     @SerialName("tab_id") val tabId: String? = null,
     @SerialName("workspace_id") val workspaceId: String? = null,
@@ -362,6 +362,12 @@ data class Session(
     @SerialName("parent_session_id") val parentSessionId: String? = null,
     @SerialName("root_session_id") val rootSessionId: String? = null,
     @SerialName("is_subagent") val isSubagent: Boolean = false,
+    @SerialName("asking_parent_session_id") val askingParentSessionId: String? = null,
+    /** The listed ancestor whose chat owns this child (sessions_hierarchy). */
+    @SerialName("folded_under") val foldedUnder: String? = null,
+    @SerialName("folded_as") val foldedAs: String? = null,
+    val children: SessionChildren? = null,
+    @WireTime @SerialName("started_at") val startedAt: String? = null,
     /** Why the source only lets the phone read this session. */
     @SerialName("read_only_reason") val readOnlyReason: String? = null,
     val capabilities: SessionCapabilities? = null,
@@ -555,6 +561,13 @@ data class Session(
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
     val isHealth: Boolean get() = space == persona.core.contracts.api.AssistantSpace.HEALTH
     val agentState: AgentState get() = AgentState.of(state, status)
+    /** The list state of this session and its folded children; its own wire state stays intact. */
+    val foldedState: AgentState get() = when {
+        agentState == AgentState.NeedsYou || (children?.needsYou ?: 0) > 0 -> AgentState.NeedsYou
+        (children?.working ?: 0) > 0 && agentState != AgentState.Unread &&
+            !(agentState == AgentState.Idle && awaitsReply) -> AgentState.Working
+        else -> agentState
+    }
     /** Stopped on a model API error ([turnError]): cut off, not finished (#1516). */
     val interrupted: Boolean get() = !turnError.isNullOrBlank() && (agentState == AgentState.Unread || agentState == AgentState.Idle)
     val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
@@ -614,6 +627,15 @@ data class Session(
 /** A host's failure notice without its leading warning signs (U+26A0, U+FE0F) and spaces, as iOS `Session.failureText`. */
 fun failureNoticeText(reason: String): String = reason.trim().trimStart('\u26A0', '\uFE0F').trim()
 
+/** All descendants folded under a listed session, counted by their own states. */
+@Serializable
+data class SessionChildren(
+    val total: Int = 0,
+    val working: Int = 0,
+    @SerialName("needs_you") val needsYou: Int = 0,
+    val workers: Int = 0,
+)
+
 @KeepGeneratedSerializer
 @Serializable(with = SessionCompactionSerializer::class)
 data class SessionCompaction(
@@ -642,6 +664,39 @@ data class ImagePayload(
     @SerialName("width") val width: Int? = null,
     @SerialName("height") val height: Int? = null,
     val size: Int? = null,
+)
+
+/**
+ * What one model request used (`proto.TokenUsage`, docs/protocol/protocol.md "Token usage on items"). Counts are tokens;
+ * [cacheWrite1h] is the part of [cacheWrite] kept for an hour. [id] (`agent:<id>`) marks one subagent's report, counted
+ * once per model and speed. Older nodes omit the list.
+ */
+@Serializable
+data class TokenUsage(
+    val id: String? = null,
+    val model: String? = null,
+    @SerialName("in") val input: Long = 0,
+    @SerialName("out") val output: Long = 0,
+    @SerialName("cache_read") val cacheRead: Long = 0,
+    @SerialName("cache_write") val cacheWrite: Long = 0,
+    @SerialName("cache_write_1h") val cacheWrite1h: Long = 0,
+    val fast: Boolean = false,
+) {
+    /** A subagent's or workflow agent's report. Entries with the same id, model and speed are one report. */
+    val report: Boolean get() = !id.isNullOrBlank()
+}
+
+/**
+ * The built-in catalog's reference price in USD per one million tokens (`proto.ModelPrice`). A missing kind is unknown,
+ * not free. Input and output are present whenever the catalog has a price.
+ */
+@Serializable
+data class ModelPrice(
+    val input: Double? = null,
+    val output: Double? = null,
+    @SerialName("cache_read") val cacheRead: Double? = null,
+    @SerialName("cache_write") val cacheWrite: Double? = null,
+    @SerialName("cache_write_1h") val cacheWrite1h: Double? = null,
 )
 
 @KeepGeneratedSerializer
@@ -685,6 +740,8 @@ data class Item(
      * model); null where it does not say (user items, older hubs). The chat marks where the replies' model changes by it.
      */
     val model: String? = null,
+    /** What the model requests this item stands for used (#5426). Older hubs omit it. */
+    val usage: List<TokenUsage> = emptyList(),
 )
 
 /**
@@ -877,6 +934,8 @@ data class Interaction(
     @SerialName("machine_id") val machineId: String = "",
     @SerialName("session_id") val sessionId: String = "",
     @SerialName("session_title") val sessionTitle: String? = null,
+    @SerialName("folded_under") val foldedUnder: String? = null,
+    @SerialName("folded_as") val foldedAs: String? = null,
     /** The task its agent works for (docs/assistant/unified-entry.md), named by the hub. */
     @SerialName("task_title") val taskTitle: String? = null,
     @SerialName("cwd") val cwd: String? = null,
@@ -929,6 +988,8 @@ data class Interaction(
     val suggestion: RuleSuggestion? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** The page that answers it; resolution still uses this interaction's own id and session. */
+    val homeKey: SessionKey get() = SessionKey(machineId, foldedUnder?.takeIf(String::isNotBlank) ?: sessionId)
 
     /** The agent's name on a card not from Claude Code ("Codex", "a compatible CLI", "DSH"); null for Claude's. */
     val agentDisplayName: String?

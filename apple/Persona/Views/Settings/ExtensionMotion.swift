@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // What an extension's View shows when it is drawn again (#37, as on the web and Android): under the same
 // key, a `metric`, `stat_grid` or row value whose numbers alone changed rolls to the new ones (`numericText`), and any

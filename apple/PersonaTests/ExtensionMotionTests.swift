@@ -1,6 +1,7 @@
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// An extension's View drawn again (#37, as on the web and Android): which value changes roll and which
 /// fade, that a block keeps its place under its key and carries the new text, that only blocks coming or going move the

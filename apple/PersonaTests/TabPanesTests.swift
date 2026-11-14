@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The agents of one herdr tab as one group (#2320, `TabPanes`): their order, the Started It, which ones share a tab, and
 /// how the Agents list and the chat's tabs show them. The same rules as the web's `herdr-tree.ts`.

@@ -3,6 +3,7 @@ import Network
 #if canImport(UIKit)
 import UIKit
 #endif
+import PersonaWire
 
 /// `phone_device_info`: model, OS, battery, storage, network, locale, the app's version.
 enum DeviceTool {

@@ -28,6 +28,12 @@ data class TriageSwitches(
      * value, and a change always sends it.
      */
     val closeout: Boolean? = null,
+    /**
+     * Ask for the status afterwards (#3616, docs/assistant/agent-work.md "Closeout"): ask once about work already done when an
+     * unsupervised agent stops without a closeout. Null from a hub that predates it, which has no such switch; a PUT
+     * without it keeps the hub's value, and a change always sends it.
+     */
+    @SerialName("closeout_ask") val closeoutAsk: Boolean? = null,
 ) {
     val remindsReply: Boolean get() = replyReminder != false
 }

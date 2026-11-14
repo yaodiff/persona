@@ -18,7 +18,9 @@ import (
 // This process keeps using what it holds; only an exec drops it. A descriptor handed to a child on purpose through
 // exec.Cmd.ExtraFiles still reaches it: the child gets a copy whatever the flag says. Never call it in a process that
 // hands an inherited descriptor on by exec without ExtraFiles (the sandbox's launcher passes its mount data that way).
+// On macOS it first warms the system resolver, whose persistent control socket otherwise opens only after this seal.
 func SealInherited() {
+	warmResolver()
 	for _, fd := range openFDs() {
 		if fd > 2 {
 			syscall.CloseOnExec(fd)

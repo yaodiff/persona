@@ -1,5 +1,6 @@
 import SwiftUI
 import OSLog
+import PersonaWire
 
 /// Message positions are decimal strings that can outgrow Int64 in theory; compare them as numbers.
 nonisolated enum LarkPosition {

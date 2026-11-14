@@ -65,9 +65,9 @@ describe("the space page", () => {
     expect(html).toContain('aria-label="空间操作"');
   });
 
-  it("shows the todos the space and its agents hang on, each opening the todo", () => {
+  it("shows the todos the space and its agents hang on, each opening the todo, with a concern labelled", () => {
     const todos: Todo[] = [
-      { id: "t1", title: "ship space page", created_at: "", updated_at: "", spaces: [{ machine_id: "mac", space: "app", linked_at: "" }] },
+      { id: "t1", title: "ship space page", kind: "concern", created_at: "", updated_at: "", spaces: [{ machine_id: "mac", space: "app", linked_at: "" }] },
       { id: "t2", title: "agent task", created_at: "", updated_at: "" },
     ];
     const html = render([agent("working", { todo: { id: "t2", title: "agent task" } })], todos);
@@ -76,6 +76,8 @@ describe("the space page", () => {
     expect(html).toContain('href="/todos?id=t1"');
     expect(html).toContain("空间关联");
     expect(html).toContain("改挂");
+    expect(html).toContain('data-testid="todo-concern">关注点<');
+    expect(html.match(/data-testid="todo-concern"/g)).toHaveLength(1);
   });
 
   it("offers to link a todo when the space has none", () => {

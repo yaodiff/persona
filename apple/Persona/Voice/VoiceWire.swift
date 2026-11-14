@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // The app's side of the voice extension's socket (docs/assistant/voice.md「Protocol changes」: protocol 2; protocol 1 is in
 // docs/extensions/extensions.md「Voice」). Pure data and parsing: it builds for every platform the Persona folder is

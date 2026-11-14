@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A GitHub pull request or issue as GitHub's thread (#1055): the page's fields decode, consecutive checks are one
 /// card, a quote reply is a Markdown quote without an @ (GitHub would notify), a hunk's lines are marked. Made-up

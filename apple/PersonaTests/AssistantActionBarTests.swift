@@ -1,6 +1,7 @@
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The action bar above the assistant's composer (#3393): what its two trays, Needs You and In Progress, list and count
 /// (each thing in one of them at most, finished things in neither), and its entries drawn exactly as low as the dock's

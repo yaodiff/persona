@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -14,6 +15,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import persona.core.contracts.FeedItem
 import persona.core.contracts.FeedResponse
+import persona.core.contracts.LnModeResponse
+import persona.core.contracts.PushIntercept
+import persona.core.contracts.PushInterceptsResponse
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.PlanTask
 import kotlinx.serialization.builtins.ListSerializer
@@ -56,6 +60,16 @@ class HttpTasksApi internal constructor(
         query.forEach { (k, v) -> url.addQueryParameter(k, v) }
         val built = url.build()
         return built.encodedPath + (built.encodedQuery?.let { "?$it" } ?: "")
+    }
+
+    override suspend fun lnMode(): LnModeResponse =
+        JsonCodec.decodeFromJsonElement<LnModeResponse>(call(path("push", "ln-mode")))
+
+    override suspend fun pushIntercepts(): PushInterceptsResponse {
+        val rows = call(path("push", "intercepts"))["intercepts"]?.jsonArray?.mapNotNull {
+            runCatching { JsonCodec.decodeFromJsonElement<PushIntercept>(it) }.getOrNull()
+        }.orEmpty()
+        return PushInterceptsResponse(rows)
     }
 
     override suspend fun taskAgent(key: persona.core.contracts.SessionKey): persona.core.contracts.Session? {

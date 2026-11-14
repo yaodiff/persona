@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Persona page's conversations (`AssistantLists`, behind `AppModel.assistantConversations`): only the group's
 /// assistant conversations, newest first, open and archived apart; the same value for a push that changed only agents,

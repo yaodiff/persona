@@ -68,7 +68,7 @@ The hub's own checks come first: answer-only devices are limited to an allow-lis
 (`hub/devicetokens.go`), and no extension scope opens these routes (`extwire.RouteScopes`). The manager checks the
 relayed role again.
 
-## Node (`server/internal/node/clipshare*.go`, `clipdib.go`)
+## Node (`server/internal/node/clipshare/`)
 
 `clipboard.get` / `clipboard.set` are announced with the capability `clipboard`; `node.info` carries
 `clipboard: {supported, reason?}`. The node does not know about the switch; the manager only calls it while it is on.
@@ -76,7 +76,7 @@ relayed role again.
 | OS | How | Unsupported when |
 | --- | --- | --- |
 | macOS | `osascript -l JavaScript` (JXA) talks to `NSPasteboard` directly. `pbcopy` / `pbpaste` were not enough: they see only plain text, cannot see pasteboard types (so not the concealed marker), and use the locale's encoding (a LaunchAgent without `LANG` turns Chinese into MacRoman). JXA ships with every macOS and needs no cgo or extra binary to build and sign. | never (the resident node runs in `gui/<uid>`) |
-| Windows | user32 (`OpenClipboard` …): `CF_UNICODETEXT`; images from the registered `PNG` format, else `CF_DIB` converted to PNG (`clipdib.go`); writing an image puts both `PNG` and a 32-bit `CF_DIB` | the node runs in session 0 (`no_session`) |
+| Windows | user32 (`OpenClipboard` …): `CF_UNICODETEXT`; images from the registered `PNG` format, else `CF_DIB` converted to PNG (`clipdib.go` in that package); writing an image puts both `PNG` and a 32-bit `CF_DIB` | the node runs in session 0 (`no_session`) |
 | Linux | `wl-paste` / `wl-copy` under Wayland, `xclip` under X11 (or XWayland without wl-clipboard) | no `DISPLAY` / `WAYLAND_DISPLAY` (`no_display`), or neither tool installed (`no_tool`) |
 | other | | always (`os`) |
 

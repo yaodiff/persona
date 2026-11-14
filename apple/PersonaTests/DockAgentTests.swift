@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The main conversation's dock shows the agents opened by hand after its tasks (#1113): only the main conversation,
 /// only the ones waiting or working, never one a task already stands for.

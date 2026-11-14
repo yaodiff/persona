@@ -66,6 +66,8 @@ private val Whitespace = Regex("\\s+")
 /** Each session's card that came first (then by id), the one its row speaks of; the chat lists the rest after it. */
 fun List<Interaction>.firstBySession(): Map<SessionKey, Interaction> = groupBy { it.sessionKey }.mapValues { (_, cards) ->
     cards.minWith(EarliestFirst)
+} + groupBy { it.homeKey }.mapValues { (home, cards) ->
+    cards.filter { it.sessionKey == home }.minWithOrNull(EarliestFirst) ?: cards.minWith(EarliestFirst)
 }
 
 private val EarliestFirst = compareBy<Interaction> { parseTime(it.createdAt) ?: Instant.MAX }.thenBy { it.id }
@@ -79,7 +81,7 @@ fun Todo.waitingCard(lead: Session?, cards: Map<SessionKey, Interaction>): Inter
 
 /** What a session's row says it waits for (#3964): its own [card]'s [askLine] while it needs you; null otherwise. */
 fun Session.askingLine(card: Interaction?): CoreText? =
-    card?.takeIf { agentState == AgentState.NeedsYou && it.sessionKey == key }?.askLine()
+    card?.takeIf { foldedState == AgentState.NeedsYou && it.homeKey == key }?.askLine()
 
 /**
  * The line under an agent row's title: what its card asks while it waits for you ([askingLine]), else why its host says

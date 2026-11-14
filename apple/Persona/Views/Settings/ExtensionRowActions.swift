@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // UI version 6's row actions (docs/extensions/extensions.md "UI version 6", #827): a row's or a tile's `actions`, the
 // platform's way. A long press (a right click on the Mac) opens their menu; the `swipe` ones are also under a swipe

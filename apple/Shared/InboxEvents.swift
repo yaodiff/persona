@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Inbox phase 1 (docs/assistant/inbox.md): an inbox item grows into an event — the manager's processing conversation
 // (`handling`), at most one suggestion to confirm, and the chain (`chain`). Mirrors the hub's inbox item fields; every

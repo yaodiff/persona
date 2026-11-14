@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A space's tabs (`AppModel.siblings(of:)`): one per pane, the open one winning its pane, slot order; worked out once
 /// per update of the lists, and a view reading them is drawn again only for its own space.

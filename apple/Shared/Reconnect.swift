@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // How the socket comes back after a drop without the app noticing (docs/operations/hub-restart.md「Clients tolerate short disconnects」, #1634):
 // when to retry, how long the titles keep saying nothing while it does, and where the hub's numbered broadcasts left

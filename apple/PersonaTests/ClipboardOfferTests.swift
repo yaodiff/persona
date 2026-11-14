@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// "Send what you just copied to …?" (#3064): when it is offered, and to which computer.
 struct ClipboardOfferTests {

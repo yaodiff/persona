@@ -10,30 +10,31 @@ import (
 
 // Defined in the contract package extwire (docs/server/architecture.md "Contract packages"); the old names stay.
 const (
-	ScopeAgentsControl        = extwire.ScopeAgentsControl
-	ScopeAgentsPermissionMode = extwire.ScopeAgentsPermissionMode
-	ScopeAgentsRead           = extwire.ScopeAgentsRead
-	ScopeAssistantAsk         = extwire.ScopeAssistantAsk
-	ScopeCallPrefix           = extwire.ScopeCallPrefix
-	ScopeInboxRead            = extwire.ScopeInboxRead
-	ScopeInboxWrite           = extwire.ScopeInboxWrite
-	ScopeKBRead               = extwire.ScopeKBRead
-	ScopeKBWrite              = extwire.ScopeKBWrite
-	ScopeSentRead             = extwire.ScopeSentRead
-	ScopeMachinesRead         = extwire.ScopeMachinesRead
-	ScopeNotify               = extwire.ScopeNotify
-	ScopeTodosRead            = extwire.ScopeTodosRead
-	ScopeTodosWrite           = extwire.ScopeTodosWrite
-	ScopeLeadersRead          = extwire.ScopeLeadersRead
-	ScopeModels               = extwire.ScopeModels
-	ScopeAssistantRead        = extwire.ScopeAssistantRead
-	ScopeAssistantMemoryRead  = extwire.ScopeAssistantMemoryRead
+	ScopeAgentsControl           = extwire.ScopeAgentsControl
+	ScopeAgentsPermissionMode    = extwire.ScopeAgentsPermissionMode
+	ScopeAgentsRead              = extwire.ScopeAgentsRead
+	ScopeAssistantAsk            = extwire.ScopeAssistantAsk
+	ScopeCallPrefix              = extwire.ScopeCallPrefix
+	ScopeInboxRead               = extwire.ScopeInboxRead
+	ScopeInboxWrite              = extwire.ScopeInboxWrite
+	ScopeKBRead                  = extwire.ScopeKBRead
+	ScopeKBWrite                 = extwire.ScopeKBWrite
+	ScopeSentRead                = extwire.ScopeSentRead
+	ScopeMachinesRead            = extwire.ScopeMachinesRead
+	ScopeNotify                  = extwire.ScopeNotify
+	ScopeTodosRead               = extwire.ScopeTodosRead
+	ScopeTodosWrite              = extwire.ScopeTodosWrite
+	ScopeLeadersRead             = extwire.ScopeLeadersRead
+	ScopeAssistantDispatchPolicy = extwire.ScopeAssistantDispatchPolicy
+	ScopeModels                  = extwire.ScopeModels
+	ScopeAssistantRead           = extwire.ScopeAssistantRead
+	ScopeAssistantMemoryRead     = extwire.ScopeAssistantMemoryRead
 )
 
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
 	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeNotify, ScopeAssistantAsk, ScopeAssistantRead, ScopeAssistantMemoryRead,
-	ScopeTodosRead, ScopeTodosWrite, ScopeLeadersRead, ScopeModels}
+	ScopeTodosRead, ScopeTodosWrite, ScopeLeadersRead, ScopeAssistantDispatchPolicy, ScopeModels}
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
 // that gets one of every scope instead) has scope s: all but agents.permission_mode, which an extension gets only when
@@ -46,23 +47,24 @@ func EveryScope() []string {
 }
 
 var scopeTitles = map[string]string{
-	ScopeKBRead:               "scope_kb_read",
-	ScopeKBWrite:              "scope_kb_write",
-	ScopeSentRead:             "scope_sent_read",
-	ScopeInboxRead:            "scope_inbox_read",
-	ScopeInboxWrite:           "scope_inbox_write",
-	ScopeAgentsRead:           "scope_agents_read",
-	ScopeAgentsControl:        "scope_agents_control",
-	ScopeAgentsPermissionMode: "scope_agents_permission_mode",
-	ScopeMachinesRead:         "scope_machines_read",
-	ScopeNotify:               "scope_notify",
-	ScopeAssistantAsk:         "scope_assistant_ask",
-	ScopeTodosRead:            "scope_todos_read",
-	ScopeTodosWrite:           "scope_todos_write",
-	ScopeLeadersRead:          "scope_leaders_read",
-	ScopeModels:               "scope_models",
-	ScopeAssistantRead:        "scope_assistant_read",
-	ScopeAssistantMemoryRead:  "scope_assistant_memory_read",
+	ScopeKBRead:                  "scope_kb_read",
+	ScopeKBWrite:                 "scope_kb_write",
+	ScopeSentRead:                "scope_sent_read",
+	ScopeInboxRead:               "scope_inbox_read",
+	ScopeInboxWrite:              "scope_inbox_write",
+	ScopeAgentsRead:              "scope_agents_read",
+	ScopeAgentsControl:           "scope_agents_control",
+	ScopeAgentsPermissionMode:    "scope_agents_permission_mode",
+	ScopeMachinesRead:            "scope_machines_read",
+	ScopeNotify:                  "scope_notify",
+	ScopeAssistantAsk:            "scope_assistant_ask",
+	ScopeTodosRead:               "scope_todos_read",
+	ScopeTodosWrite:              "scope_todos_write",
+	ScopeLeadersRead:             "scope_leaders_read",
+	ScopeAssistantDispatchPolicy: "scope_assistant_dispatch_policy",
+	ScopeModels:                  "scope_models",
+	ScopeAssistantRead:           "scope_assistant_read",
+	ScopeAssistantMemoryRead:     "scope_assistant_memory_read",
 }
 
 // ScopeTitle is how the install screen says scope s; ok false for what is not a scope.

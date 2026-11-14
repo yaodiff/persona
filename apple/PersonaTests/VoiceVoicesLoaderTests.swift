@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The voice pickers' list (#2411, docs/assistant/voice.md 5.7): loading, the failure and its retries (by themselves a
 /// little later, when a picker opens, on Retry), a stale list, the current voice's name, where the settings row shows.

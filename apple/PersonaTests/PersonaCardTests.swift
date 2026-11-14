@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The assistant's cards (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」): a ```persona-card (#886) becomes the components every app
 /// turns it into (`schema/extension/examples/persona-card/`: a card and the View it becomes, null when it stays a code

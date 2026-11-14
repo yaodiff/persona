@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The inbox's banner about new items waiting for triage (#1773): the hub's status as the list brings it, the words
 /// (the hub's reason, else the state's), one source named or several, Set Up only when no model is set up and the

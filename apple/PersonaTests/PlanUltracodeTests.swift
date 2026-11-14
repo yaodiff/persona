@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Claude Code's ultracode on plan cards and to-dos (#12): the card shows each task's and may change it before Start,
 /// Start sends only the tasks whose choice changed (a plain Start sends no `tasks`), a computer whose Claude Code is too

@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The hub's direction tree (#4352): how it decodes, how it is read, and the rows the sidebar, the To-dos page and the
 /// Agents page draw from it. The app groups nothing itself: these check that it keeps the tree's order and words.

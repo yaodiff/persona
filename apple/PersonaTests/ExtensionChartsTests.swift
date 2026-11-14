@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// UI version 6's charts on iOS (#827): what a spark reads to VoiceOver and its color, a candle's direction, and the
 /// chart showcase read with every new field (schema/extension/examples/showcase/chart-v6.json, spark.json).

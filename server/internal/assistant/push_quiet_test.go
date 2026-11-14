@@ -215,7 +215,8 @@ func TestEscalateLevelByWhyOwner(t *testing.T) {
 			if tc.announce {
 				waitFor(t, "the Feishu card", func() bool { return cards() == 1 })
 			} else {
-				time.Sleep(100 * time.Millisecond)
+				waitFor(t, "the held card's announcement", func() bool { return e.announced("ix1") })
+				e.settle()
 				if n := cards(); n != 0 {
 					t.Fatalf("a held escalation posted %d Feishu cards", n)
 				}
@@ -274,14 +275,14 @@ func TestQuietConclusionPostsNoCard(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
 	pushQuietFor(t, s, true)
 	waitsForReview(t, s, f, todo.ID, "查了，对方接口不对外开放，直连做不了。")
-	time.Sleep(6 * testReportDelay)
+	waitFor(t, "the review state", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 	before := len(posts())
 	if before != 0 {
 		t.Fatalf("progress cards with the switch on:\n%s", strings.Join(posts(), "\n---\n"))
 	}
 	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "outcome": "cannot", "reason": "对方接口不对外开放",
 		"link": "https://docs.example.com/api"})
-	time.Sleep(6 * testReportDelay)
+	waitFor(t, "the accepted conclusion", func() bool { a := askOf(s, todo.ID); return a != nil && a.Conclusion && a.NoCard })
 	if after := posts(); len(after) != 0 {
 		t.Fatalf("cards with the switch on:\n%s", strings.Join(after, "\n---\n"))
 	}
@@ -302,7 +303,7 @@ func TestQuietPleaseVerifyPostsNoCard(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
 	waitFor(t, "the ask", func() bool { a := askOf(s, todo.ID); return a != nil && !a.AskedAt.IsZero() })
-	time.Sleep(6 * testReportDelay)
+	waitFor(t, "the cardless ask", func() bool { a := askOf(s, todo.ID); return a != nil && a.NoCard && a.MessageID == "" })
 	if n := countAcceptCards(posts()); n != 0 {
 		t.Fatalf("%d 请验收 cards", n)
 	}
@@ -359,7 +360,7 @@ func TestQuietTaskReportPostsNothing(t *testing.T) {
 	startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "修好了，https://github.com/o/r/pull/901 已合并", 0)
-	time.Sleep(6 * testReportDelay)
+	waitReportQueue(t, s)
 	if n := len(posts()); n != 0 {
 		t.Fatalf("%d progress cards with the switch on", n)
 	}

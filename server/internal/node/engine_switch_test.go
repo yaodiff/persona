@@ -1041,6 +1041,77 @@ func TestEngineSwitchKeepsTheHandoffForTheNextMessage(t *testing.T) {
 	}
 }
 
+// The same switch, and the user answers the dialog without sending anything: the first message the node held for the
+// dialog (firstAfterDialog) goes in with the handoff, and the handoff still on the record is not put in front of the
+// next message as well.
+func TestEngineSwitchHandoffGoesInOnceWithTheHeldFirstMessage(t *testing.T) {
+	withFirstAfterDialog(t, 10*time.Second, 20*time.Millisecond)
+	n, f, home, cwd, _ := codexSwitchNode(t)
+	n.state.setPendingSwitch(sidB, &proto.PendingSwitch{Launcher: "claude", Agent: "claude", At: time.Now()})
+	quitsOn(f, "w1:p1", sidB, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidB))
+	plain, ansi := screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi")
+	var mu sync.Mutex
+	status := ""
+	f.after(func(c herdrCall) {
+		switch {
+		case c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "--resume "+sidA):
+			mu.Lock()
+			status = proto.StatusBlocked // the resume's own dialog holds the keyboard
+			mu.Unlock()
+			f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusBlocked, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+		case c.Method == "agent.prompt": // what is typed reaches the transcript
+			line, _ := json.Marshal(map[string]any{"type": "user", "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "cwd": cwd,
+				"message": map[string]any{"role": "user", "content": str(c.Params["text"])}})
+			appendTranscript(t, home, cwd, sidA, string(line))
+		}
+	})
+	f.handle("agent.get", func(p map[string]any) any {
+		mu.Lock()
+		defer mu.Unlock()
+		if status == "" {
+			return map[string]any{"agent": nil}
+		}
+		return map[string]any{"agent": map[string]any{"agent": "claude", "agent_status": status, "pane_id": "w1:p1",
+			"tab_id": "w1:t1", "workspace_id": "w1"}}
+	})
+	if err := tellTo(t, n, sidB, "and now?"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if st, _ := n.state.get(sidA); st.PendingHandoff == nil || !st.PendingHandoff.Resumed {
+		t.Fatalf("the handoff is not kept: %+v", st.PendingHandoff)
+	}
+	heldPolls(t, f, 5) // the dialog stays a while: nothing typed
+	if got := promptsTo(f); len(got) != 0 {
+		t.Fatalf("typed into the dialog: %q", got)
+	}
+	// The user answers the dialog and sends nothing: the held message goes in, carrying the handoff.
+	f.setScreens("w1:p1", plain, ansi)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+	mu.Lock()
+	status = proto.StatusIdle
+	mu.Unlock()
+	n.dialogWait.Wait()
+	got := promptsTo(f)
+	if len(got) != 1 {
+		t.Fatalf("the held first message was typed %d times: %q", len(got), got)
+	}
+	checkHandoffBlock(t, got[0], "codex", "claude", "", true, "and now?")
+	if p, ok := n.lostFirst.get(sidA); ok {
+		t.Errorf("still marked lost: %s", p.why)
+	}
+	// The next message goes without the handoff: the session has it already.
+	listSessions(t, n)
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "go on"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got := promptsTo(f); len(got) != 2 || got[1] != "go on" {
+		t.Fatalf("typed %q, want the next message without the handoff", got)
+	}
+	if st, _ := n.state.get(sidA); st.PendingHandoff != nil {
+		t.Errorf("the handoff still waits after going in: %+v", st.PendingHandoff)
+	}
+}
+
 // The handoff a held-back first message left is not put in front of a message once the session got one since (typed
 // at the computer, or sent before without its arrival confirmed): it would come twice, or after the conversation went on.
 func TestEngineSwitchDropsAHandoffTheSessionWentOnWithout(t *testing.T) {

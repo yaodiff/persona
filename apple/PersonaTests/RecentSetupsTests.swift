@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// New Agent's recent setups (#2134): every case of spec/fixtures/recents/recent_setups.json (the rules the web and
 /// Android run too), the store, and what a card says and fills in.

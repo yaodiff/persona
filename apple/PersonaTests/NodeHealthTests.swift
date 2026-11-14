@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What This Computer Can Do (#3018): the node's report read as features, the same table as the web's `node-health.test.ts`.
 @MainActor struct NodeHealthTests {

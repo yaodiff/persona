@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import PersonaWire
 
 /// The messaging extension point under the Feishu screens (#2138, docs/extensions/extension-messaging.md): while the hub has a
 /// messaging source, the `lark…` requests of APIClient go to `/api/v1/messaging/<source>/…` and what comes back is

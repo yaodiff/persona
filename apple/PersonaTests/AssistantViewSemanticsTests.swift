@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The card adapter matches the web's semantics (web/src/lib/assistant-views.ts, AssistantCard.tsx): a conflict asks
 /// again at the new version, an already-answered conflict takes the record it returns, and only replies lock the card.

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The hub's minutes of a meeting recording (docs/assistant/meeting-minutes.md「Field contract」, #2710): when and where, who
 /// was there, the points discussed, the decisions, the action items (who, what, by when) and the open questions. Each item

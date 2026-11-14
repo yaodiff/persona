@@ -32,6 +32,9 @@ packages:
   # Vision apps, not the watch or widgets.
   PersonaKit:
     path: Packages/PersonaKit
+  # JSONValue, the JSON date codec and the generated extension wire types (#7895): every app target, the watch and the extensions too.
+  PersonaWire:
+    path: Packages/PersonaWire
   # The shared Rust core: the iOS app and its tests only. No Shared/ source imports it, so watch, widgets, Vision and
   # Persona Link never link the XCFramework.
   PersonaCore:
@@ -80,6 +83,7 @@ targets:
       - path: Shared
       - path: LiveActivity
     dependencies:
+      - package: PersonaWire
       - target: PersonaWatch
       - target: PersonaWidgets
       - target: PersonaNotify
@@ -236,6 +240,7 @@ targets:
       - path: LiveActivity/FleetPersona.swift
       - path: LiveActivity/FleetIslandViews.swift
     dependencies:
+      - package: PersonaWire
       - target: PersonaVisionShare
       - target: PersonaVisionNotify
       - target: PersonaVisionWidgets
@@ -311,6 +316,8 @@ targets:
   # Draws the Fleet Live Activity. The app starts it and reports its tokens; the hub pushes its content.
   PersonaWidgets:
     type: app-extension
+    dependencies:
+      - package: PersonaWire
     platform: iOS
     sources:
       - path: PersonaWidgets
@@ -324,8 +331,6 @@ targets:
       - path: Shared/Design/Palette.swift
       - path: Shared/Design/IslandMetrics.swift
       # Read-only extension system surfaces, independent of the app's renderer and Keychain.
-      - path: Shared/Generated/ExtensionWire.swift
-      - path: Shared/JSONValue.swift
       - path: Shared/HubNaming.swift
       - path: Shared/ExtensionUIContext.swift
       - path: Shared/ExtensionSystemAPI.swift
@@ -376,14 +381,14 @@ targets:
   # Opens pushes that came through the relay (docs/operations/push-relay.md): decrypts the sealed payload before it is shown.
   PersonaNotify:
     type: app-extension
+    dependencies:
+      - package: PersonaWire
     platform: iOS
     sources:
       - path: PersonaNotify
         excludes: ["*.plist", "*.entitlements"]
       - path: Shared/PushCrypto.swift
       - path: Shared/NativeStateMigration.swift
-      - path: Shared/Generated/ExtensionWire.swift
-      - path: Shared/JSONValue.swift
       - path: Shared/ExtensionNotificationActions.swift
     entitlements:
       path: PersonaNotify/PersonaNotify.entitlements
@@ -406,6 +411,8 @@ targets:
   # Share › Persona (#4586): text, links and pictures from another app sent to Persona's main conversation.
   PersonaShare:
     type: app-extension
+    dependencies:
+      - package: PersonaWire
     platform: iOS
     sources:
       - path: PersonaShare
@@ -436,6 +443,8 @@ targets:
   # code, Info.plist and bundle id (the Vision app has the iPhone's bundle id, so its extension does too).
   PersonaVisionShare:
     type: app-extension
+    dependencies:
+      - package: PersonaWire
     platform: visionOS
     sources:
       - path: PersonaShare
@@ -460,14 +469,14 @@ targets:
   # Info.plist and bundle id as the iPhone's (the Vision app has the iPhone's bundle id, so its extension does too).
   PersonaVisionNotify:
     type: app-extension
+    dependencies:
+      - package: PersonaWire
     platform: visionOS
     sources:
       - path: PersonaNotify
         excludes: ["*.plist", "*.entitlements"]
       - path: Shared/PushCrypto.swift
       - path: Shared/NativeStateMigration.swift
-      - path: Shared/Generated/ExtensionWire.swift
-      - path: Shared/JSONValue.swift
       - path: Shared/ExtensionNotificationActions.swift
     entitlements:
       path: PersonaNotify/PersonaVisionNotify.entitlements
@@ -499,6 +508,7 @@ targets:
       # The Record complication's view, for its debug preview (-openWatchItem record-complication).
       - path: PersonaWatchWidgets/MeetingRecordingComplicationView.swift
     dependencies:
+      - package: PersonaWire
       - target: PersonaWatchWidgets
     entitlements:
       path: PersonaWatch/PersonaWatch.entitlements
@@ -534,11 +544,11 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
   PersonaVisionWidgets:
     type: app-extension
+    dependencies:
+      - package: PersonaWire
     platform: visionOS
     sources:
       - path: PersonaVisionWidgets
-      - path: Shared/Generated/ExtensionWire.swift
-      - path: Shared/JSONValue.swift
       - path: Shared/NativeStateMigration.swift
       - path: Shared/HubNaming.swift
       - path: Shared/ExtensionUIContext.swift
@@ -580,11 +590,11 @@ targets:
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
   PersonaWatchWidgets:
     type: app-extension
+    dependencies:
+      - package: PersonaWire
     platform: watchOS
     sources:
       - path: PersonaWatchWidgets
-      - path: Shared/Generated/ExtensionWire.swift
-      - path: Shared/JSONValue.swift
       - path: Shared/NativeStateMigration.swift
       - path: Shared/HubNaming.swift
       - path: Shared/ExtensionUIContext.swift
@@ -637,6 +647,7 @@ targets:
       - path: PersonaTests
         excludes: ["*.json", "*.py"] # Static checks and TokenBaseline.json are read from the source tree, not the bundle
     dependencies:
+      - package: PersonaWire
       - target: Persona
       # The continuity fixture reader and C replay, test-only; it brings PersonaCore with it. The app never links it.
       - package: PersonaCore

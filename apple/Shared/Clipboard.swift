@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Clipboard sharing between the phone and a computer (#3064): the hub relays to the computer's node, which reads and
 // writes its system clipboard. Plain data types, compiled into every target (watchOS 10 included).

@@ -27,6 +27,9 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv(reapHelperEnv); mode != "" {
 		os.Exit(reapHelper(mode))
 	}
+	if mode := os.Getenv(resolverHelperEnv); mode != "" {
+		os.Exit(resolverHelper(mode))
+	}
 	os.Exit(m.Run())
 }
 
@@ -43,6 +46,7 @@ type sealHelperResult struct {
 
 func sealHelper(mode string) int {
 	if mode == "seal" {
+		reliableResolverWarmup()
 		SealInherited()
 	}
 	var res sealHelperResult
@@ -160,6 +164,7 @@ func TestSealInherited(t *testing.T) {
 // TestSealInheritedKeepsOwnActivation: socket activation's variables for this very process stay (the hub takes its
 // sockets after sealing), and what this process holds stays usable.
 func TestSealInheritedKeepsOwnActivation(t *testing.T) {
+	instantResolverWarmup(t)
 	t.Setenv("LISTEN_PID", fmt.Sprint(os.Getpid()))
 	t.Setenv("LISTEN_FDS", "1")
 	r, w, err := os.Pipe()

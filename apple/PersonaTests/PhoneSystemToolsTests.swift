@@ -2,6 +2,7 @@ import Foundation
 import MapKit
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The iPhone system integrations (#2276–#2286): what each tool reads from its arguments, what its approval card says,
 /// and the rules that keep it from acting on a guess (an ambiguous occurrence, an overwritten field, an unallowed shortcut).

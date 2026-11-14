@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The meeting conversation on the phone (#3862 phase 1; contract docs/assistant/meeting-minutes.md「Meeting conversation」,
 /// the phone's side docs/apple/recording.md「The meeting conversation」): what a room meeting's upload carries and what its

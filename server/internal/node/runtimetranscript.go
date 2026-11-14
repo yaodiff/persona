@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // A runtime that runs Claude Code through its SDK (Paseo, docs/integrations/paseo.md) has sessions whose conversation is an
@@ -116,11 +117,12 @@ func (n *Node) runtimeTranscriptCall(ctx context.Context, h *runtimeConn, method
 	switch {
 	case method == "session.watch":
 		// The transcript's lines from the node, the live text from the runtime (it pushes no items for this session).
-		if err := n.watch(p.SessionID, p.SinceSeq); err != nil {
+		connCtx := rpc.ConnContext(ctx)
+		if err := n.watchFor(connCtx, p.SessionID, p.SinceSeq); err != nil {
 			return nil, err, true
 		}
 		if !sub {
-			n.runtimes.watch(h, p.SessionID, 0)
+			n.runtimes.watch(h, p.SessionID, 0, connCtx)
 			if _, err := call("session.watch", map[string]any{"session_id": p.SessionID, "since_seq": 0, "transcript": true}); err != nil {
 				n.logf("runtime %s: watch %s: %v", h.id(), p.SessionID, err)
 			}
@@ -161,8 +163,12 @@ func (n *Node) transcriptMoved(h *runtimeConn, id string) {
 		return
 	}
 	n.unwatch(id)
+	parent := n.runtimes.watchParent(id)
+	if parent == nil {
+		return
+	}
 	if n.runtimeTranscript(id) != "" {
-		if err := n.watch(id, 0); err != nil {
+		if err := n.watchFor(parent, id, 0); err != nil {
 			n.logf("runtime %s: watch %s's transcript: %v", h.id(), id, err)
 		}
 	}

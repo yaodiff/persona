@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Display provenance is independent of the model input role. Raw additive metadata is retained in `Item.source`
 /// so a newer server's unknown fields or kind cannot make an older Apple client drop the transcript.

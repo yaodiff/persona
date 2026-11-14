@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct SessionListTests {
     private func row(_ n: Int, text: String = "") throws -> Session {

@@ -3,6 +3,7 @@ import Foundation
 import AlarmKit
 import SwiftUI
 #endif
+import PersonaWire
 
 /// Alarms and timers through AlarmKit (#2278): they ring like the Clock app's, through silent mode and Focus. Persona
 /// only sees and changes the ones it set itself; the Clock app's own alarms are out of reach.

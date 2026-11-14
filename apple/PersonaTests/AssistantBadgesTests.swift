@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What waits at each assistant, for the switcher's counts and the mark on the sidebar's head
 /// (docs/assistant/managers.md "Counts"): an agent with a pending card or in Needs You once, quiet and muted ones left

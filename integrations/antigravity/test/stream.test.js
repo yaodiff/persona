@@ -109,6 +109,45 @@ function transcripts(directory, compact, complete) {
 const userStep = (index, text) => ({ step_index: index, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', content: text })
 const replyStep = (index, text) => ({ step_index: index, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', content: text })
 
+test('watched native turns push new content after an older quota error without ACP updates', async (t) => {
+  const { node, directory, calls, update } = await fixture(t)
+  const old = [userStep(0, 'First request.'), { step_index: 1, type: 'ERROR_MESSAGE', content: 'Quota exhausted.' }]
+  transcripts(directory, old, old)
+  update({ sessionUpdate: 'tool_call', toolCallId: 'initial', title: 'Read' })
+  await until('old quota is pushed', () => node.last('session.items')?.to_seq === 2)
+  const next = [...old, userStep(2, 'Second request.'), replyStep(3, 'Current progress.')]
+  transcripts(directory, next, next)
+  await until('external turn is pushed', () => node.last('session.items')?.to_seq === 4)
+  assert.equal(node.last('session.items').from_seq, 2)
+  assert.deepEqual(node.last('session.items').items.map((item) => item.text), ['Second request.', 'Current progress.'])
+  assert.equal(calls().some((call) => call.method === 'session/prompt'), false)
+
+  await node.peer.call('session.unwatch', { session_id: SESSION })
+  const before = node.all('session.items').length
+  const final = [...next, replyStep(4, 'Current result.')]
+  transcripts(directory, final, final)
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  assert.equal(node.all('session.items').length, before)
+  await node.peer.call('session.watch', { session_id: SESSION, since_seq: 4 })
+  await until('rewatching catches up', () => node.last('session.items')?.to_seq === 5)
+  assert.equal(node.last('session.items').items.at(-1).text, 'Current result.')
+})
+
+test('a native planner completion at the same index replaces watched content', async (t) => {
+  const { node, directory, update } = await fixture(t)
+  const pending = { ...replyStep(1, ''), thinking: 'Reviewing the change.', created_at: '2026-01-02T12:00:01Z' }
+  const old = [userStep(0, 'Review the change.'), pending]
+  transcripts(directory, old, old)
+  update({ sessionUpdate: 'tool_call', toolCallId: 'initial', title: 'Read' })
+  await until('initial work is pushed', () => node.last('session.items')?.to_seq === 2)
+  const history = node.last('session.items').history
+  const complete = [old[0], { ...pending, content: 'Review complete.' }]
+  transcripts(directory, complete, complete)
+  await until('same-index completion is pushed', () => node.last('session.items')?.items.some((item) => item.text === 'Review complete.'))
+  assert.equal(node.last('session.items').to_seq, 2)
+  assert.notEqual(node.last('session.items').history, history)
+})
+
 test('normal AGY pages recover the complete native reply through the same source as full items', async (t) => {
   const { node, directory } = await fixture(t)
   const complete = '## Report\n' + 'A complete result with Unicode 字段.\n'.repeat(80) + 'End of report.'

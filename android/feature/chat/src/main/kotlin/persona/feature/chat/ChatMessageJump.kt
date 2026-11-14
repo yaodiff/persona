@@ -26,6 +26,10 @@ internal sealed interface MessageJumpStep {
     data object NotFound : MessageJumpStep
 }
 
+private data class MessageJumpSnapshot(
+    val lines: List<ChatLine>, val expanded: Set<String>, val hasOlder: Boolean, val ready: Boolean, val pages: Int,
+)
+
 /** Where [itemId] is in [lines] (as chat search finds a hit), given what is open and what is left to load. */
 internal fun messageJumpStep(lines: List<ChatLine>, itemId: String, expanded: Set<String>, hasOlder: Boolean, pages: Int): MessageJumpStep {
     val target = searchTarget(lines, itemId) ?: return if (hasOlder && pages < MESSAGE_JUMP_PAGE_LIMIT) MessageJumpStep.LoadOlder
@@ -52,24 +56,33 @@ internal fun ChatMessageJump(
         MessageJumps.take(key.machineId, key.sessionId)?.let { item = it; pages = 0; onItem(it) }
     }
     fun done() { item = null; onItem(null) }
-    LaunchedEffect(item, lines, hasOlder, loading, list.restored) {
+    val currentLines by rememberUpdatedState(lines)
+    val currentHasOlder by rememberUpdatedState(hasOlder)
+    val currentLoading by rememberUpdatedState(loading)
+    LaunchedEffect(item, key, repository, list, search) {
         val id = item ?: return@LaunchedEffect
-        // The first landing (the saved place, the newest) goes first; a jump made before it would be overridden.
-        if (!list.restored || loading) return@LaunchedEffect
-        when (val step = messageJumpStep(lines, id, list.position.expanded, hasOlder, pages)) {
-            MessageJumpStep.LoadOlder -> {
-                pages++
-                try { repository.loadOlder(key) } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { onNotice(res.getString(R.string.chat_link_message_gone)); done() }
-            }
-            MessageJumpStep.NotFound -> { onNotice(res.getString(R.string.chat_link_message_gone)); done() }
-            is MessageJumpStep.Expand -> list.setExpanded(step.groups)
-            is MessageJumpStep.Scroll -> {
-                if (lines.none { it.contentKey == step.rowId }) return@LaunchedEffect
-                withFrameNanos { }
-                if (list.scrollToEntry(ChatListEntry(step.rowId), alignTop = true)) {
-                    search.highlight = step.rowId
-                    done()
+        // Loading and lines change during a jump's own page request. Observe them without restarting (and cancelling)
+        // that request; the suspending collector still waits for an unrelated load and prevents overlapping pages.
+        snapshotFlow {
+            MessageJumpSnapshot(currentLines, list.expanded, currentHasOlder,
+                ready = list.restored && !currentLoading, pages = pages)
+        }.collect { snapshot ->
+            if (!snapshot.ready) return@collect
+            when (val step = messageJumpStep(snapshot.lines, id, snapshot.expanded, snapshot.hasOlder, snapshot.pages)) {
+                MessageJumpStep.LoadOlder -> {
+                    pages++
+                    try { repository.loadOlder(key) } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { onNotice(res.getString(R.string.chat_link_message_gone)); done() }
+                }
+                MessageJumpStep.NotFound -> { onNotice(res.getString(R.string.chat_link_message_gone)); done() }
+                is MessageJumpStep.Expand -> list.setExpanded(step.groups)
+                is MessageJumpStep.Scroll -> {
+                    if (snapshot.lines.none { it.contentKey == step.rowId }) return@collect
+                    withFrameNanos { }
+                    if (list.scrollToEntry(ChatListEntry(step.rowId), alignTop = true)) {
+                        search.highlight = step.rowId
+                        done()
+                    }
                 }
             }
         }

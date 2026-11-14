@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Background rounds in the main conversation (docs/apple/ios.md "Background rounds"): rounds another conversation, a
 /// follow-up or a scheduled task started fold into one line, keep the supervision rule for what stays shown, never show

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A hand-off conversation's write-back card (#5932, docs/assistant/inbox.md "Item actions"): the feed item as the hub
 /// sends it, where it stands by the item, and which items get "Wrap up". Mirrors web/src/lib/handoff-card.test.ts.

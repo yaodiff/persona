@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Sessions without a terminal (an agent runtime's, such as Paseo's) rename, close, switch their model and rewind where
 /// their node says so (#6294: `capabilities.close`, `rename`, `model`, `rewind`, `rewind_code`); a row that does not say

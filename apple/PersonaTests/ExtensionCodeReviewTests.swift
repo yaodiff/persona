@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// UI version 5's code review on Apple (docs/extensions/extensions.md "UI version 5: code review", #3136, #827): the
 /// words that changed, whitespace ignored, generated and big files folded at first, viewed marks (the extension's,

@@ -2,6 +2,7 @@ import Foundation
 #if os(iOS)
 import MusicKit
 #endif
+import PersonaWire
 
 /// Music on the iPhone (#2284): Apple Music plays through the system player (MusicKit), which really plays; Spotify and
 /// YouTube are only opened at a search, and the result says opened, not playing.

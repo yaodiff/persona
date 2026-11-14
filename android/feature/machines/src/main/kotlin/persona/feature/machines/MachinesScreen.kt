@@ -78,7 +78,7 @@ internal fun MachinesScreen(
         .associate { it.machineId to it.live(machines.firstOrNull { m -> m.id == it.machineId }) }
     val baseIds = machineListIds(machines, metrics)
     val entries = remember(baseIds, machines, metrics, sessions, state.now) {
-        machineListEntries(baseIds, machines, metrics, sessions, state.now)
+        machineListEntries(baseIds, machines, metrics, sessions, state.now) { model.sessions.supportsFeature(it, "sessions_hierarchy") }
     }
     val ids = entries.map { it.id }
     val listSummary = machineSummary(entries)
@@ -158,7 +158,7 @@ internal fun MachinesScreen(
             val metric = state.history?.metrics?.live(machine) ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
             val system = metric.system ?: machine?.system
             val current = metric.current(state.now)
-            val agents = machineSessions(sessions, machineId)
+            val agents = machineSessions(sessions, machineId, model.sessions.supportsFeature(machineId, "sessions_hierarchy"))
             item("machine") {
                 MachineCard(machine, metric, AgentTally(agents), state.now, state.history?.step ?: state.range.step, deploy = deployLine,
                     onConfirm = if (adds) confirmComputer else null)

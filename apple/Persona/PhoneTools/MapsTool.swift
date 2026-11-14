@@ -1,6 +1,7 @@
 import CoreLocation
 import Foundation
 import MapKit
+import PersonaWire
 
 /// Nearby search and handing a destination to Maps (#2281). Navigation happens in the Maps app: the tool says it opened
 /// Maps, never that Persona navigates.

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 nonisolated extension APIClient {
     private struct AssistantActionResponse: Decodable { var action: ExtensionViewAction }

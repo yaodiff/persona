@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import PersonaWire
 
 nonisolated struct WatchExtensionDestination: Identifiable {
     var link: ExtensionSystemLink

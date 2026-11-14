@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// #6272: the watch's Milk Frog follows the agents, and never reads as calm without knowing.
 struct WatchPetTests {

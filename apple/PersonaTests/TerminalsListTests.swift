@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Terminals page (#4754): every pane of a computer, Agents' and plain ones, and a stopped Agent's left behind; and
 /// a stopped Agent's row is read-only (its terminal opens, nothing is sent).

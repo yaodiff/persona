@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The order of Machines (docs/server/machines.md「App」): what needs a look first, otherwise the hub's order.
 @MainActor struct MachineConcernTests {

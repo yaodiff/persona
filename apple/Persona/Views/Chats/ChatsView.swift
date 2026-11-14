@@ -1,6 +1,7 @@
 import BeautifulUI
 import OSLog
 import SwiftUI
+import PersonaWire
 
 /// Rendered rows omit pinned Agents; worktree navigation and actions still address the complete direct inventory.
 @MainActor enum WorkspaceNavigation {

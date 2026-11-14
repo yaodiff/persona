@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// What a tool that operates a Mac does, in words (#1323, #1343): the assistant's computer_run / computer_state and
 /// an agent's own Cua Driver MCP tools (mcp__cua-driver__click…). 「点 AC → 6 → × → 7 → =」 rather than its JSON.

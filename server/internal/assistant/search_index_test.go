@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/chatsearch"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -99,7 +100,7 @@ func (m *memSearch) SearchAssistantItems(_ context.Context, machines, sessions, 
 		k := searchKey{machines[i], sessions[i]}
 		var hits []db.SearchItemRow
 		for _, r := range m.rows[k] {
-			if searchHolds(r.Folded, words) {
+			if chatsearch.Holds(r.Folded, words) {
 				hits = append(hits, r)
 			}
 		}

@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import PersonaWire
 
 /// Separate from Fleet's appearance files: this snapshot contains credentials and must never be exported or logged.
 nonisolated struct ExtensionSurfaceCredential: Codable, Hashable, Sendable {

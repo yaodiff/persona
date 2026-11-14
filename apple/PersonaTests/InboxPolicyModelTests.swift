@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Inbox rules (docs/assistant/inbox.md "Policies"): what the hub lists decodes; an item's rule is picked sender before
 /// chat before repository; the rule sheet prefills, saves (POST for a new one, PATCH for one it has, neither part

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- What a finished turn cost, under its reply (#5470, the web's chat-replybar). -->
+    <string name="chat_reply_worth">価値 %1$s</string>
+    <string name="chat_reply_tokens">%1$s tokens</string>
+    <string name="chat_reply_approx">約 %1$s</string>
+    <string name="chat_reply_details">リクエストの明細</string>
+    <string name="chat_reply_value">このターンの token 価値: %1$s</string>
+    <string name="chat_reply_by_model">モデル別:</string>
+    <string name="chat_reply_model_cost">· %1$s %2$s</string>
+    <string name="chat_reply_token_line">トークン: 合計 %1$s · 入力 %2$s · 出力 %3$s</string>
+    <string name="chat_reply_cache">キャッシュ内訳: 読み取り %1$s · 書き込み %2$s · ヒット率 %3$s</string>
+    <string name="chat_reply_cache_no_rate">キャッシュ内訳: 読み取り %1$s · 書き込み %2$s</string>
+    <string name="chat_reply_time">時間 %1$s</string>
+    <string name="chat_reply_model">モデル: %1$s</string>
+    <plurals name="chat_reply_models">
+        <item quantity="other">%1$d 個のモデル</item>
+    </plurals>
+    <string name="chat_reply_suggestion">提案: %1$s</string>
+    <string name="chat_reply_low_cache">キャッシュヒット率が低く、このターンでは多くのコンテキストが再課金されています</string>
+    <string name="chat_reply_no_cost">このターンの料金は現在取得できないため、使用量のみ表示しています</string>
+    <string name="chat_reply_persona_cost">この返信は約 %1$s（公開価格での概算）</string>
+    <string name="chat_reply_persona_title">この返信の概算費用</string>
+    <string name="chat_reply_dur_hours">%1$d時間%2$d分</string>
+    <string name="chat_reply_dur_days">%1$d日%2$d時間%3$d分</string>
+</resources>

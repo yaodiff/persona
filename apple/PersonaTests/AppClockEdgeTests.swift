@@ -1,5 +1,6 @@
 import XCTest
 @testable import Persona
+import PersonaWire
 
 #if DEBUG
 /// Edges of the DEBUG screenshot clock (`-showClockAt`): a value that cannot be read pins nothing, one string pins the

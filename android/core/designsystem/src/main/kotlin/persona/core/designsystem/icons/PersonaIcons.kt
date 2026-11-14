@@ -120,6 +120,8 @@ object PersonaIcons {
     val folder: PhIcon get() = PhIcons.Folder
     /** SF Symbol `folder.fill`. */
     val folderFilled: PhIcon get() = PhIcons.Folder
+    /** SF Symbol `arrow.turn.down.right`. */
+    val followOn: PhIcon get() = PhIcons.ArrowBendDownRight
     /** SF Symbol `arrow.branch`. */
     val forkChat: PhIcon get() = PhIcons.GitBranch
     /** SF Symbol `chevron.forward`. */
@@ -218,6 +220,8 @@ object PersonaIcons {
     val notifications: PhIcon get() = PhIcons.BellSimple
     /** SF Symbol `wifi.exclamationmark`. */
     val offline: PhIcon get() = PhIcons.WifiSlash
+    /** SF Symbol `arrow.up.right`. */
+    val open: PhIcon get() = PhIcons.ArrowUpRight
     /** SF Symbol `arrow.up.forward.square`. */
     val openDocument: PhIcon get() = PhIcons.ArrowSquareOut
     /** SF Symbol `arrow.up.forward.app`. */

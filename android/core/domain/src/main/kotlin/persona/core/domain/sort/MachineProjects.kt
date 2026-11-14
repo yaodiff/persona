@@ -16,7 +16,7 @@ data class StateTally(val needsYou: Int = 0, val working: Int = 0, val unread: I
 
 /** The [StateTally] of these agents. */
 fun List<AgentSession>.stateTally(): StateTally {
-    val rows = filterNot { it.isNestedSubtask }
+    val rows = foldRows(this).filterNot { it.isNestedSubtask }
     return StateTally(
         needsYou = rows.count { it.state == AgentState.NeedsYou },
         working = rows.count { it.state == AgentState.Working && !it.waitsInBackground },
@@ -69,7 +69,7 @@ data class MachineProjects(
  * ([AgentSpace.quiet], with the [mutes]) is in [MachineProjects.idle].
  */
 fun machineProjects(rows: List<AgentSession>, machineId: String, pins: AgentPreferences, mutes: AgentPreferences): MachineProjects {
-    val mine = rows.filter { it.session.machineId == machineId && it.isLive && !it.session.assistant && !it.isNestedSubtask }
+    val mine = foldRows(rows).filter { it.session.machineId == machineId && it.isLive && !it.session.assistant && !it.isNestedSubtask }
     val all = agentSpaces(mine)
         .sortedWith(compareBy<AgentSpace> { space -> space.members.minOf { it.countedPriority } }
             .thenByDescending { space -> space.members.mapNotNull { it.sortDate }.maxOrNull() ?: Instant.MIN }

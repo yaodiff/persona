@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// An MCP server's form or link (docs/protocol/protocol.md "MCP elicitation"; the rules are `Elicitation`'s, as on the
 /// web and Android). A form in the subset the app can draw: a row per field, Decline / Submit, and Cancel under them. A

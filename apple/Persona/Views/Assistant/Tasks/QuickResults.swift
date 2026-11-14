@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Things the assistant did on the phone in a second (docs/assistant/unified-entry.md「Dispatch: express intent, do not choose a project」, done in a second): a reminder or an event it added
 // is drawn as its result under the turn's work line, with Undo, instead of hiding in "Tools N"; places a location tool

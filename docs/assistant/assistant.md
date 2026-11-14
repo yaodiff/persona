@@ -1442,9 +1442,40 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
 - Calls remain tool cards with localized Chinese source names (`ToolPresentation`: New chat, Send to chat, Rename chat, Archive chat…).
 - Measurement (2026-11-01, isolated test hub on hub machine: fake HOME, separate port / database, copied launcher pointing to fake Claude config): assistant performed new → list → rename → send → archive → list including archived → unarchive → read, all 8 succeeded. Both new-chat messages included source and hop 1; it answered only "OK", no relay reply. First-turn untitled chats were formerly "assistant" in lists / source context (directory-name title), now "New chat".
 
+## Dispatch policy
+
+The assistant can run under an optional dispatch policy (`internal/assistant/dispatch_policy.go`): an organization
+rule that keeps a conversation class from handing out work or relaying it to the main or a leader conversation. With
+no policy stored, or one past its expiry, nothing changes. The owner reads and writes it as the assistant setting
+`dispatch_policy` (`GET`/`PUT /api/v1/assistant`), and an extension granted the `assistant.dispatch_policy` hub scope
+uses `GET`/`PUT /api/v1/assistant/dispatch-policy`; an extension-written policy must expire within one hour, so a
+stopped or uninstalled extension leaves nothing in force. The full wire shape and validation rules are in
+`docs/protocol/protocol.md` ("Dispatch policy").
+
+- **Classes**, resolved most specific first: the main conversation, a leader conversation, the background
+  supervisor, `scheduled` (a scheduled task's own conversation, matched on the task's run session) or `other`. A
+  scheduled conversation later made the main or a leader keeps that higher class.
+- **Denied actions**: `task_plan` and `agent_start` (handing out work), `start_conversation` (`conversation_new`, so
+  the limit cannot be bypassed by opening another chat), and `conversation_send` to the main conversation
+  (`send_to_main`) or a leader conversation (`send_to_leader`). A send to any other conversation is not limited.
+  A limited conversation also cannot cancel or delete its own scheduled task, which would remove its own class while
+  the turn is still running. The scheduled class itself is anchored in the conversation origin book (`OriginTask`),
+  not only the live schedule, so a run whose task was deleted or whose run session is not yet adopted stays limited.
+- **Where the check runs**: only the model's tool-call entry, `Service.Tool`, and the conversation tools before
+  their rate-limit bookkeeping. The hub's own internal starts (an inbox hand-off) go through `runTool` and are not
+  affected, and no rule that does not name a class limits it.
+- **The owner's words still get through**: a limited conversation may relay to the main conversation when the
+  current turn started with the owner's own message — a user text item with a client message id and no source
+  marking it as a scheduled run, a supervision message, a relay or a system notice — or when the sent text starts
+  with one of the owner's messages verbatim. A transcript that cannot be read fails closed. The exception never
+  applies to a leader target.
+- **What the model sees**: a localized refusal starting with "The current organization policy requires…", followed
+  by the rule's own note when it has one, and a matching sentence in the `task_plan`, `agent_start`,
+  `conversation_new` and `conversation_send` tool descriptions.
+
 ## Chat search (#6282)
 
-The apps find an assistant chat by what was said in it through `GET /api/v1/assistant/search` (`docs/protocol/protocol.md` ("Assistant chat search (#6282)"), the design in `docs/design/proposals/assistant-search.md`). The manager answers it from an index in its own database (`internal/assistant/search_index.go`, `search_routes.go`, `search_text.go`; tables `assistant_search_items` and `assistant_search_cursors`, migration `0511_assistant_search.sql`).
+The apps find an assistant chat by what was said in it through `GET /api/v1/assistant/search` (`docs/protocol/protocol.md` ("Assistant chat search (#6282)"), the design in `docs/design/proposals/assistant-search.md`). The manager answers it from an index in its own database (`internal/assistant/search_index.go`, `search_routes.go`, and the text rules in `chatsearch/text.go`; tables `assistant_search_items` and `assistant_search_cursors`, migration `0511_assistant_search.sql`).
 
 - **What it keeps**: the user's own words and the assistant's replies of the chats "All chats" lists (archived ones too, never the health space), as the chat shows them: the shared rule of `spec/fixtures/chat-search` (its `index`). No thoughts, tools, system events, quoted contexts, hidden tags or messages Persona injected for the model; a card is its fallback text. A reply is kept without Markdown's markup (`searchPlain`, #7072): emphasis, code backticks, link and image syntax, heading, quote and list markers, task boxes, table pipes, rules and code fence lines go, their words stay, so a snippet never shows a marker and words the markup split are found together; the user's words stay as typed. Bold that holds code, spans two lines or has no partner loses its `**` too, and markup around code pairs across it; a `**` that reads as an expression (`2 ** 3`, `a**b`) stays (#7195). Migration 0513 emptied the index built before, as `assistant search-reindex` does; 0514 instead rewinds only the chats whose indexed replies may still hold markup, to just before the first such reply, so they are read again from there while the rest stays found.
 - **Keeping up**: `searchLoop` (started with the service) sweeps when the computers' session lists change (`setSessions` wakes it) or every 30 s. A chat whose `rev` moved is read after its cursor (`session.items` with `after_seq`, unfolded, about 500 items a page); a working chat at most every 5 s. Chats never read are read newest first with a pause between pages, and the cursors let a restart go on from there; until then searches say `partial`. A new `history` token (the transcript replaced or rewritten) drops the chat's rows and reads it again from 0. A read that fails (the computer offline) waits a minute. A chat missing from the list for a day leaves the index (never while the list is empty: the computer may be offline).

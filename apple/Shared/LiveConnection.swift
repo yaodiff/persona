@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import os
+import PersonaWire
 
 /// One message of a terminal stream (docs/protocol/protocol.md「Terminal stream」).
 nonisolated enum TerminalEvent: Sendable {

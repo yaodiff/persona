@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Merge and Add to To-Dos (#6480): the due choices as the hub is asked, the requests and their answers against a hub in memory,
 /// where a chain entry with a to-do link goes, what the to-do suggestion sends, and when a merge is offered.

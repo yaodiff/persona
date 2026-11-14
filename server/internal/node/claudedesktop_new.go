@@ -91,8 +91,11 @@ func desktopSeedEnv(env []string) []string {
 }
 
 // desktopKeepsSessions: the desktop app on this computer keeps Claude Code sessions (its index directory is there), so
-// it can take one. Only macOS's layout is known (claudeDesktopDirs).
+// it can take one. Only where the app opens its links in the background (claudeDesktopOpens: macOS).
 func (n *Node) desktopKeepsSessions() bool {
+	if !claudeDesktopOpens {
+		return false
+	}
 	for _, dir := range claudeDesktopDirs(n.home) {
 		if st, err := os.Stat(filepath.Join(dir, "claude-code-sessions")); err == nil && st.IsDir() {
 			return true

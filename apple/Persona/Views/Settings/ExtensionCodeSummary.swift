@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// UI version 4–5's code-hosting components where a whole page does not draw them (a card, a section; a page draws
 /// them as the code page, `ExtensionCodePage`): what they say, read-only, small; a composer writes and sends as on the

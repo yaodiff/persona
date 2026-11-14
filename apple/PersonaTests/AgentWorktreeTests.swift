@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A new agent's own worktree (#6115): the branch it gets, where it checks out, and what closing or deleting the agent
 /// asks before removing it.

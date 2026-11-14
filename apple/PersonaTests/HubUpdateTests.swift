@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Settings › hub and the line over the Agents list (docs/operations/hub-update.md「In the App」), against a FakeHub.
 @MainActor

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// An upstream refusal and its fallback model (#2528, #4489): what is read (never an older hub's record line), where the
 /// refusal's line goes, what the card above the composer says and offers, and a refused going back in words. The

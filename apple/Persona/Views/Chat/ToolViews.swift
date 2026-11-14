@@ -2,6 +2,7 @@ import BeautifulUI
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// How each Claude Code tool is named and summarized in the chat.
 enum ToolPresentation {

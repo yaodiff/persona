@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// The agent's plan (TodoWrite) as the chat shows it (#5602, the web's `PlanCard` / `PlanPanel` / `PlanPill`, after
 /// Claude Desktop): its line in the work says which step of how many it is on and that step, over a thin bar of how far

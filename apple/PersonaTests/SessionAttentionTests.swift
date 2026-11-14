@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A botmux session's reason for waiting and its Feishu topic (attention_reason, external_url; docs/integrations/engines.md「botmux」).
 @MainActor

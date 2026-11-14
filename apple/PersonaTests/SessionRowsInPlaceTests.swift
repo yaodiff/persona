@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Re-read session rows land where they were (#4683): the same rows again leave the lists equal, so nothing that reads
 /// the sessions redraws, and the fan-out behind `sessionsByMachine` does not run.

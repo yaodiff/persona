@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The chat draws an interrupted receipt only from what the hub worked out (#3834): a handled one is a grey line, a
 /// batch one card on its first receipt, the batch's other receipts nothing of their own.

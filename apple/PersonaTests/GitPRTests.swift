@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The branch's pull request in the Git tab (#7014): what the web's `git-pr.ts` decides (can it merge, the checks in
 /// a few words, a review thread as a comment for the agent), when it is read again, and the requests it sends.

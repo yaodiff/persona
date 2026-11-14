@@ -1,6 +1,7 @@
 import CoreLocation
 import Foundation
 import MapKit
+import PersonaWire
 
 /// `phone_location_current`: one-shot fix plus a reverse-geocoded address; `phone_location_search`: a place's
 /// coordinates from its name or address (for a reminder that goes off there).

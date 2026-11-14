@@ -2,6 +2,7 @@ import Foundation
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// Splits only genuine assistant fences. All other Markdown, including code examples, keeps its normal renderer.
 struct AssistantRichMarkdown: View {

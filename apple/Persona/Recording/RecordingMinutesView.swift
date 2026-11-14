@@ -1,6 +1,7 @@
 #if os(iOS) || os(visionOS)
 import SwiftUI
 import UIKit
+import PersonaWire
 
 /// A recording's minutes as its page shows them (#2710, docs/apple/recording.md「Minutes」): written by the hub from the
 /// transcript once the recording is done and synced, read from `GET /api/v1/kb/recordings/{id}` (`detail.minutes`).

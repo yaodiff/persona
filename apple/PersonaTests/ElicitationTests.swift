@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// MCP forms and links on the iPhone (#2322, docs/protocol/protocol.md "MCP elicitation"): the same rules as
 /// web/src/lib/elicitation.test.ts, the wire samples, the receipts, the fields' order, the hello that asks the hub for

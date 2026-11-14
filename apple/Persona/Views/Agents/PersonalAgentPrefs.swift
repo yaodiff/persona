@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 // The personal-agents list prefs shared with the web (docs/protocol/protocol.md 「Personal Agent list preferences」): pins, the view
 // (Group By / Sort / Display / Source), and custom sections. Kept on the hub (GET/PUT /api/v1/agents/prefs), cached in

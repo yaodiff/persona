@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import PersonaWire
 
 nonisolated struct LarkMessageDisplay: Codable, Equatable, Sendable {
     var accountID: String

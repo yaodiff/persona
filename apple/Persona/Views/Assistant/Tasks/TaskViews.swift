@@ -1,5 +1,6 @@
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // The unified entry's pieces in the assistant's conversation (docs/assistant/unified-entry.md): the plan card, the hand-off card,
 // the lines the hub adds (answered, receipt, routed), the dock above the composer, the questions of the tasks' agents,

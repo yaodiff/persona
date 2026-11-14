@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// 「Mac 上的 Persona 已登录」(docs/protocol/protocol.md「WebSocket `/api/v1/ws`」): the hub says which desktops are connected; a phone may
 /// choose Phone Muted while one is.

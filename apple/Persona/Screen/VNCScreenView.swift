@@ -178,7 +178,13 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         }
         #endif
         if let onPicture, let window, bounds.width > 0 {
-            let whole = convert(display.frame.offsetBy(dx: port.rect.minX, dy: port.rect.minY), to: window.windowScene?.screen.coordinateSpace ?? window)
+            #if os(iOS)
+            let space: any UICoordinateSpace = window.windowScene?.screen.coordinateSpace ?? window
+            #else
+            // visionOS has no screen (and no small window, `VNCPiP.supported`): the window's own points.
+            let space: any UICoordinateSpace = window
+            #endif
+            let whole = convert(display.frame.offsetBy(dx: port.rect.minX, dy: port.rect.minY), to: space)
             if whole != reported {
                 reported = whole
                 onPicture(whole)

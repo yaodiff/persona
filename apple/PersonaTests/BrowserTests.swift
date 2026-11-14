@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The browser on a Mac (the hub's plugin ego, docs/plans/plan-ego-browser.md): what the machine list says, the setup's
 /// steps, the plugin page's words.

@@ -44,6 +44,7 @@ const click = (key: string, values?: Parameters<typeof t>[1]) => act(() => butto
 const expand = (revision = "12") => act(() => document.querySelector<HTMLButtonElement>(`[data-activity-revision="${revision}"] > button`)!.click());
 const show = async (onOpenCard = vi.fn()) => { act(() => root.render(<ActivityDialog currentCards={[currentCard]} onClose={() => root.render(null)} onOpenCard={onOpenCard} />)); await flush(); return onOpenCard; };
 const push = (revision: number, manager = "assistant") => act(() => events.get("workspace_board")?.forEach((listener) => listener({ type: "workspace_board", revision, manager })));
+const hello = (resumed: boolean) => act(() => events.get("hello")?.forEach((listener) => listener({ type: "hello", resumed })));
 
 beforeEach(() => {
   requests = []; override = undefined; capability = true; writable = true; localStorage.removeItem("persona.workspace-board.view"); events.clear(); setRosterDefault("assistant");
@@ -153,6 +154,16 @@ describe("board activity readers", () => {
     expect(listReads()).toHaveLength(2); expect(document.body.textContent).not.toContain(word("newer"));
   });
 
+  it("refreshes an open timeline after a fresh hello, but not a replayed resume", async () => {
+    await show();
+    override = (url) => url.pathname.endsWith("/activity") ? Promise.resolve(json({ ...page(), entries: [{ ...first, revision: "13" }, first], latest_revision: "13", next_cursor: "12" })) : undefined;
+    hello(false); await flush();
+    expect(listReads()).toHaveLength(2);
+    expect(document.querySelector('[data-activity-revision="13"]')).not.toBeNull();
+    hello(true); await flush();
+    expect(listReads()).toHaveLength(2);
+  });
+
   it("aborts pending requests and removes event listeners when the reader closes", async () => {
     override = (url) => url.pathname.endsWith("/activity") ? new Promise(() => {}) : undefined;
     await show(); expect(listReads()).toHaveLength(1);
@@ -161,7 +172,8 @@ describe("board activity readers", () => {
     act(() => root.render(null));
     expect(pending.signal?.aborted).toBe(true);
     expect(events.get("workspace_board")?.size).toBe(0);
-    push(13); expect(listReads()).toHaveLength(1);
+    expect(events.get("hello")?.size ?? 0).toBe(0);
+    push(13); hello(false); expect(listReads()).toHaveLength(1);
   });
 
   it("resumes an expanded detail read cancelled by refreshing the summaries", async () => {

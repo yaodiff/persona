@@ -421,6 +421,8 @@
     <string name="settings_triage_actions_about">模型服务临时出错（503 等）后自动发「继续」，最多 3 次；在等部署、CI 或另一个 Agent 的，到点叫醒它自己去查。这两项会让 Agent 用它自己的模型再跑一轮。推代码、部署、给别人发消息这类事 Hub 只会问你，不会自己做。</string>
     <string name="settings_triage_closeout">要收尾记录</string>
     <string name="settings_triage_closeout_about">Agent 干了活却没交代做完没有、合没合、部署没有、还缺什么就停下时，拦它一次让它补上这份记录；会多花它自己模型的一小轮</string>
+    <string name="settings_triage_closeout_ask">事后问一次进展</string>
+    <string name="settings_triage_closeout_ask_about">没人督办的 Agent 干了活停下来，却没交收尾记录、也看不出做完没有时，Persona 问它一次已做工作的进展；会花它自己模型的一轮</string>
     <string name="settings_triage_reply_reminder">看过没回时提醒</string>
     <string name="settings_triage_reply_reminder_about">Agent 问了你、你看过 30 分钟还没回，就提醒一次；只按规则判断，不花 token。</string>
     <plurals name="settings_notify_long_turn">

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The permission mode at the end of the Agents header's second row (#3719): how each mode is drawn, which agents show
 /// one, what can be picked, and which switches ask first.

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// #6564: a reminder that goes off on arriving at or leaving a place, and the tools that change and delete reminders.
 @MainActor

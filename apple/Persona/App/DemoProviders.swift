@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 // i18n-ignore-file: demo mode stand-in for the hub: its made-up replies and errors, as the hub words them
 
 /// Demo Mode's Settings › Model Providers (#2455): a provider kept in Persona, two from a made-up ~/.zshrc and a wrapper script on

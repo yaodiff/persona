@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct AgentCloseTests {
     private func session(_ state: String, status: String = "idle") throws -> Session {

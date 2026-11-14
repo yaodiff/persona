@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 nonisolated struct ExtensionSurfaceProjection: Sendable {
     var key: ExtensionSurfaceKey

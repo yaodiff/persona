@@ -5,6 +5,7 @@ import persona.core.contracts.contextBody
 import persona.core.contracts.api.*
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.foldedSubtasks
+import persona.core.domain.sort.foldRows
 import kotlinx.serialization.json.*
 import androidx.annotation.StringRes
 import java.time.Instant
@@ -235,10 +236,11 @@ internal fun parseTags(text: String): List<String> = text.split(Regex("\\s+")).f
  * Only live sessions that are not Persona itself can work on a project. A subtask the Agents list folds under its parent
  * is no row of its own while that parent is listed here too, as in the main chat's dock (#4769, `foldedSubtasks`).
  */
-internal fun projectAgents(agents: List<Session>?): List<Session> {
-    val live = agents.orEmpty().filter { !it.assistant && it.isLive }
+internal fun projectAgents(agents: List<Session>?, hierarchy: Boolean = false): List<Session> {
+    val rows = foldRows(agents.orEmpty().map(::AgentSession), hierarchy)
+    val live = rows.map { it.session }.filter { !it.assistant && it.isLive }
     val listed = live.mapTo(HashSet()) { it.key.path }
-    val folded = foldedSubtasks(agents.orEmpty().map(::AgentSession)) { it.id in listed }
+    val folded = foldedSubtasks(rows) { it.id in listed }
     return live.filterNot { it.key.path in folded }
 }
 

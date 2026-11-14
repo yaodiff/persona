@@ -20,7 +20,7 @@ val Session.isSubtask: Boolean get() = (hasCodexIdentity || sourceKind == "runti
  * row of its own, in Needs you and counted (docs/design/DESIGN_SYSTEM.md 3.4, 4.8) until it no longer needs them. One whose
  * parent the list does not draw is a row of its own too ([codexTaskForest]), still not counted.
  */
-val AgentSession.isNestedSubtask: Boolean get() = session.isSubtask && state != AgentState.NeedsYou
+val AgentSession.isNestedSubtask: Boolean get() = !hierarchyKnown && session.foldedUnder.isNullOrBlank() && session.isSubtask && state != AgentState.NeedsYou
 
 data class CodexTaskForest(val roots: List<AgentSession>, val children: Map<String, List<AgentSession>>) {
     /** Search retains an ancestor when a descendant matches, so the matching conversation remains reachable. */

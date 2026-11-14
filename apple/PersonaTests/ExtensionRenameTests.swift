@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Plugins became extensions (#1844, #1859): a hub that says `extensions` is asked under /api/v1/extensions and answers
 /// with the new keys; an older one keeps its /api/v1/plugins and old keys (docs/extensions/extensions.md「Naming and compatibility」).

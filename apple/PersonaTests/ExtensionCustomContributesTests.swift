@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct ExtensionCustomContributesTests {
     private var examples: URL {

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Background workflows on a session (#2935, docs/protocol/protocol.md `workflows`): read leniently, and what an older hub without
 /// them looks like.

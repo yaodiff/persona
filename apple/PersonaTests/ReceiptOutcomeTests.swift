@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A task receipt says what happened to the task, not just that a turn ended (#2362; the web since #975): "done" only
 /// once its to-do is done, "stopped, not done yet" while it is open, and a turn the model service cut off is interrupted.

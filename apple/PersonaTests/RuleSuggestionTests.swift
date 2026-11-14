@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A standing rule the hub suggests under a card (#5802; docs/assistant/unified-entry.md "A rule after the same answer three
 /// times"): read from a plan, a to-do's decision and a question a supervisor passed up, left out by a hub from before,

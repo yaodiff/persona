@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The `brief` item of a morning or evening routine's conversation (docs/protocol/protocol.md "Tasks and the chat feed", #2320):
 /// the fixed part of a run as the hub worked it out when the run started, the same rows as its Lark card. Hubs since the

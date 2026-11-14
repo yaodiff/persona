@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// An image the agent looked at in a turn (docs/protocol/protocol.md「Images viewed this turn」), for the strip before its answer:
 /// one a tool's result carried, or a picture file Read opened whose result carried none (only `path`).

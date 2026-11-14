@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Agents list's node menu (`NodeMenu`, docs/integrations/terminal.md「Node menus」): what it offers and what it sends.
 @MainActor struct NodeMenuTests {

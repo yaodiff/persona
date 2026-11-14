@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 // Settings › Extensions › Extension Market (docs/extensions/extensions.md「Extension marketplace」): the plugins of the markets the hub has, searched and filtered by
 // market; one plugin's page with what it may do, installed or upgraded after its preview (the permissions agreed to

@@ -1,5 +1,6 @@
 import XCTest
 @testable import Persona
+import PersonaWire
 
 /// The marks laid over lists that may not have them yet (InboxMarks, #2201): a list the hub made before it took a
 /// mark must not bring a swiped-away item back.

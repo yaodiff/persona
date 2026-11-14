@@ -84,8 +84,9 @@ final class BeautifulStyleTests: XCTestCase {
 
     @MainActor func testDefaultStyleKeepsTheOriginalComposerAndSends() {
         let app = launch(style: "glass")
-        let send = app.buttons["发送"].firstMatch
-        XCTAssertTrue(send.waitForExistence(timeout: 20))
+        // The composer's mic: its send shows only once something is typed (what this found before was the hidden
+        // dictation bar's, #7684).
+        XCTAssertTrue(app.buttons["shell-composer-mic"].firstMatch.waitForExistence(timeout: 20), "no composer:\n\(app.debugDescription)")
         XCTAssertFalse(app.buttons["提及文件或会话"].exists, "the prompt bar showed in 液态玻璃")
         sendWorks(app, "液态玻璃 发送 \(Int.random(in: 1000...9999))")
     }

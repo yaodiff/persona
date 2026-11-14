@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The clipboard shortcuts' network part (#3064): what they send, and every failure as one sentence.
 struct ClipboardIntentsTests {

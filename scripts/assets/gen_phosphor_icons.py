@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 
 NAMES = """
-address-book app-window archive arrow-bend-up-left arrow-clockwise arrow-counter-clockwise arrow-down arrow-left arrow-square-out
-arrow-u-up-left arrow-u-up-right arrow-up arrows-in-line-vertical arrows-in-simple arrows-out-simple arrows-clockwise at bank battery-charging battery-high bell-ringing bell-simple book-open
+address-book app-window archive arrow-bend-down-right arrow-bend-up-left arrow-clockwise arrow-counter-clockwise arrow-down arrow-left arrow-square-out
+arrow-u-up-left arrow-u-up-right arrow-up arrow-up-right arrows-in-line-vertical arrows-in-simple arrows-out-simple arrows-clockwise at bank battery-charging battery-high bell-ringing bell-simple book-open
 bookmark-simple brain broadcast calendar-blank calendar-check camera car caret-down caret-left caret-right caret-up
 chart-bar chart-line chat-circle chat-circle-dots chat-teardrop-text chats chats-circle check check-circle checks
 circle-dashed circle-notch clock clock-countdown cloud cloud-check cloud-rain code coins command copy couch cpu crop cube

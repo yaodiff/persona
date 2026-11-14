@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// An extension's View drawn with the app's design system (docs/extensions/extensions.md「Declarative UI」「UI 版本 3」): each section a
 /// section of the form (a divider starts another one), each component a row: text, Markdown, a number with what it is,

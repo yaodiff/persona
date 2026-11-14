@@ -622,10 +622,10 @@ func (n *Node) startEngine(ctx context.Context, c *engineCarry, h *pendingHandof
 }
 
 // firstPromptHeldBack: session id's start, from began on, did not type its first message (a dialog of claude's own
-// had the keyboard, the ultracode command may sit in the box: firstPrompt, start).
+// had the keyboard, held for it or not, the ultracode command may sit in the box: firstPrompt, start).
 func (n *Node) firstPromptHeldBack(id string, began time.Time) bool {
 	lost, ok := n.lostFirst.get(id)
-	return ok && !lost.at.Before(began) && (lost.why == lostDialog || lost.why == lostUltracode)
+	return ok && !lost.at.Before(began) && (lost.why == lostDialog || lost.why == lostDialogHeld || lost.why == lostUltracode)
 }
 
 // resumeParked resumes the parked session in the switch's pane (ctx: startEngine's) with prompt as its message. The

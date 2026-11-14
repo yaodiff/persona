@@ -2917,6 +2917,32 @@ _TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
 if _TODO_LIST:
     TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
 
+# MOCK_TODO_CONCERNS=1 (#3582): one concern working, one waiting for its report in Other open, and one closed by its
+# report, for the To-dos list's light / dark captures. "only" keeps just these to-dos so the working one is within
+# Home's six cards, and links it to its Agent's space for the Space page capture. The dedicated agent keeps the rest of
+# the fixture unchanged.
+if os.environ.get("MOCK_TODO_CONCERNS") in ("1", "only"):
+    _concern_sid = "c3d5e7f9-0000-4000-8000-358200000001"
+    SESSIONS.append(sess("macbook", _concern_sid, "Compare backup schedules", "/Users/me/code/persona", "working",
+                         "working", "persona", 7, "1", 1, 4, "Comparing nightly and weekly backup schedules."))
+    _concern_todos = [
+        {"id": "todo_concern_working", "title": "Which backup schedule should we use?", "kind": "concern", "notes": "",
+         "done_at": None, "created_at": ago(hours=2), "updated_at": ago(minutes=4), "origin": "conv_demo", "spaces": [],
+         "agents": [{"machine_id": "macbook", "session_id": _concern_sid, "linked_at": ago(minutes=30), "released_at": None,
+                     "title": "Compare backup schedules", "cwd": "/Users/me/code/persona", "agent": "claude", "start_error": "",
+                     "source": "manual", "via": ""}]},
+        {"id": "todo_concern_open", "title": "When should the monthly report arrive?", "kind": "concern", "notes": "",
+         "done_at": None, "created_at": ago(hours=3), "updated_at": ago(minutes=20), "origin": "conv_demo", "spaces": [], "agents": []},
+        {"id": "todo_concern_closed", "title": "Is the nightly backup covered?", "kind": "concern", "notes": "",
+         "done_at": ago(minutes=15), "created_at": ago(hours=4), "updated_at": ago(minutes=15), "origin": "conv_demo",
+         "done_by": "reported", "done_reason": "The nightly backup is already covered.", "spaces": [], "agents": []},
+    ]
+    if os.environ["MOCK_TODO_CONCERNS"] == "only":
+        _concern_todos[0]["spaces"] = [{"machine_id": "macbook", "space": "persona", "linked_at": ago(minutes=30)}]
+        TODOS_INIT[:] = _concern_todos
+    else:
+        TODOS_INIT.extend(_concern_todos)
+
 
 def _lead_supervision(leader, state=""):
     return {"supervisor": leader, "done_when": [], "state": state, "round": 0, "reviews": [], "updated_at": ago(minutes=30)}
@@ -3398,6 +3424,10 @@ TODO_DECISIONS = [
     todo_decision("dec_size_medium", "todo_weather", "小组件先做哪种尺寸？", "中号，小号放到 1.4", "中号放得下三天预报",
                   supersedes="dec_size_small", at=ago(minutes=20)),
 ] if os.environ.get("MOCK_TODO_DECISIONS") else []
+if os.environ.get("MOCK_TODO_CONCERNS") in ("1", "only"):
+    TODO_DECISIONS.append(todo_decision(
+        "dec_concern_report", "todo_concern_closed", "Is the nightly backup covered?",
+        "The nightly backup is already covered.", source="reported", at=ago(minutes=15)))
 _mark_superseded("todo_weather")
 TODO_DECISIONS_INIT = copy.deepcopy(TODO_DECISIONS)
 
@@ -3421,6 +3451,20 @@ def todo_decisions_route(command, tid, did, query, body):
     earlier_only = {"error": "a decision can only supersede an earlier decision of the same todo", "code": "bad_request",
                     "retryable": False}
     if command == "POST" and did is None:
+        if (body.get("source") or "").strip() == "reported":
+            if t.get("kind") != "concern":
+                return {"error": "source reported is for a concern only", "code": "bad_request", "retryable": False}, 400
+            choice = (body.get("choice") or "").strip()
+            if not choice:
+                return {"error": "report cannot be empty", "code": "bad_request", "retryable": False}, 400
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            TODO_DECISIONS.append(todo_decision("dec_" + uuid.uuid4().hex[:8], tid, t["title"], choice,
+                                                source="reported", at=now))
+            closed = not t.get("done_at")
+            if closed:
+                t["done_at"], t["done_by"], t["done_reason"] = now, "reported", choice
+            _decision_written(t)
+            return {"todo": format_todo(t), "closed": closed}, 200
         question, choice = (body.get("question") or "").strip(), (body.get("choice") or "").strip()
         if not question or not choice:
             return {"error": "question and choice cannot be empty", "code": "bad_request", "retryable": False}, 400
@@ -17592,6 +17636,15 @@ def find_items(sid):
     items = ITEMS.get(sid, [])
     if GAP and sid == SESSIONS[0]["session_id"] and not GAP_STATE["grown"]:
         return items[:-6]  # what the transcript held before the lines whose push gets lost
+    # MOCK_REPLY_USAGE=1 (#5470): the blog agent and the main conversation's last reply carry token usage, so the
+    # footer under that reply can show a catalog price. A copy, so the fixture items stay as they are.
+    if os.environ.get("MOCK_REPLY_USAGE") == "1" and sid in (BLOG, ASK1):
+        items = [dict(x) for x in items]
+        for x in reversed(items):
+            if x.get("role") == "assistant" and x.get("kind") == "text":
+                x["usage"] = [{"model": "claude-opus-5-5", "in": 2, "out": 3400,
+                               "cache_read": 1200000, "cache_write": 9000}]
+                break
     return items
 
 
@@ -18924,7 +18977,7 @@ def search_index_text(item):
     return text if text.strip() else None
 
 
-# A reply's Markdown as the chat shows it (#7072): the manager's searchPlain (server/internal/assistant/search_text.go),
+# A reply's Markdown as the chat shows it (#7072): the manager's searchPlain (server/internal/assistant/chatsearch/text.go),
 # pattern for pattern; spec/fixtures/chat-search checks both.
 _PLAIN_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 _PLAIN_RULE = re.compile(r"^[ \t]{0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
@@ -24179,6 +24232,20 @@ class H(BaseHTTPRequestHandler):
         if self.token_refused(): return
         if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
+        if p == "/api/v1/push/ln-mode":
+            return self.send_json({"enabled": bool(os.environ.get("MOCK_LN"))})
+        if p == "/api/v1/push/intercepts":
+            if not os.environ.get("MOCK_LN"):
+                return self.send_json({"intercepts": []})
+            return self.send_json({"intercepts": [
+                {"at": ago(hours=3), "level": "P1", "reason": "ln_p1_held",
+                 "title": "发布结果等你核对", "body": "网页和手机的构建都完成了",
+                 "related_key": "demo-subject", "manager": "assistant", "also": ["请检查最后的发布说明"]},
+                {"at": ago(hours=4), "level": "P1", "reason": "ln_dedup_12h", "title": "同一任务还有一次补充汇报", "manager": "assistant"},
+                {"at": ago(hours=5), "level": "P2", "reason": "ln_p2_silent", "title": "后台检查已完成",
+                 "body": "没有需要你处理的事项", "manager": "assistant"},
+                {"at": ago(days=1), "level": "P1", "reason": "ln_p1_held", "title": "昨天的记录不应出现"},
+            ]})
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
         if p == "/api/v1/subscriptions/-/graph": return self.send_json(SOURCES_GRAPH)
@@ -25645,6 +25712,8 @@ class H(BaseHTTPRequestHandler):
             if not t: return self.send_json({"error": "待办不存在"}, 404)
             if self.command == "PATCH":
                 body = json.loads(self.last_body or b"{}")
+                if body.get("done") is True and t.get("kind") == "concern" and not t.get("done_at"):
+                    return self.send_json({"error": "a concern closes only with its report", "code": "concern_report_required"}, 409)
                 now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 aff = set(a["machine_id"] for a in t.get("agents", []) if not a.get("released_at"))
                 if "title" in body:

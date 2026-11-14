@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// New Agent's model: the launcher's list as the hub sends it and what a start sends (docs/assistant/model-config.md「Choosing a model for a new Agent」).
 @MainActor struct LauncherModelChoiceTests {

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // The assistant answering agents' questions first (#544; docs/assistant/assistant.md "Assistant answers questions first";
 // docs/protocol/protocol.md `interaction`, `interaction_resolved`, `interaction_reanswered`, POST …/reanswer): a question

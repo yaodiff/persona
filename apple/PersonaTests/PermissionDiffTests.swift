@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What a file tool's permission card shows of the change it asks for (#4621): the same diff the chat draws once the call
 /// runs, else the card's subject as before.

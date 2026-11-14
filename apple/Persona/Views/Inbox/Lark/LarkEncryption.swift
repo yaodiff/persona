@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import PersonaWire
 
 nonisolated struct LarkEncryption: Codable, Hashable, Sendable {
     var version: Int

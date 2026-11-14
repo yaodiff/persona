@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The meeting's one thread (#3862; contract docs/assistant/meeting-minutes.md「One thread」): the room conversation's and
 /// the follow-up's items read apart into what the meeting page shows (`MeetingThread`, a port of

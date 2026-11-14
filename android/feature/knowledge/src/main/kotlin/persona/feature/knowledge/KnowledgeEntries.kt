@@ -1,6 +1,8 @@
 package persona.feature.knowledge
 
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import persona.core.designsystem.LocalHubFeatures
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.EntryProviderScope
@@ -58,8 +60,9 @@ fun EntryProviderScope<NavKey>.knowledgeEntries(
         // The assistant it was opened for, kept for good: switching while it is open leaves it that one's.
         val current = persona.core.designsystem.currentAssistant().id
         val owner = route.manager ?: androidx.compose.runtime.saveable.rememberSaveable { current }
+        val hierarchy = rememberUpdatedState("sessions_hierarchy" in LocalHubFeatures.current)
         val model = viewModel(key = "knowledge/$owner/${route.kind.wire}/${route.id}") {
-            KnowledgeDetailViewModel(route.kind, route.id, connection, mainSender, owner, assistant, sender)
+            KnowledgeDetailViewModel(route.kind, route.id, connection, mainSender, owner, assistant, sender) { hierarchy.value }
         }
         KnowledgeDetailScreen(model, navigator, openLinkInApp, onNewAgent)
     }

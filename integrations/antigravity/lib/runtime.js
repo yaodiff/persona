@@ -48,6 +48,7 @@ export function createAgyRuntime(options = {}) {
   const archived = new Set() // agyId
   const lastPushedSeq = new Map() // personaId -> number
   const lastPushedHistory = new Map()
+  const watchedPolls = new Map()
   const rewinding = new Set()
   const nativeCuts = new Map()
   const cutChecks = new Map()
@@ -134,6 +135,7 @@ export function createAgyRuntime(options = {}) {
       models,
       check,
       rewind,
+      watchChanged,
     },
     {
       runtime: RUNTIME,
@@ -324,7 +326,7 @@ export function createAgyRuntime(options = {}) {
 
   function historyOf(rawId) {
     // Refresh cached items emitted before native failures used the shared API-error format.
-    return `agy:${rawId}:full:api-errors`
+    return `agy:${rawId}:full:api-errors:content-v2`
   }
 
   function cutMatches(cut, transcript) {
@@ -346,8 +348,9 @@ export function createAgyRuntime(options = {}) {
       ? transcript.steps.filter((step, index) => (step.step_index ?? index) < limit)
       : transcript.steps
     const branch = transcript.branch ? `:branch:${transcript.branch}` : ''
+    const revision = transcript.revision ? `:revision:${transcript.revision}` : ''
     const cut = steps.length < transcript.steps.length ? `:cut:${limit}` : ''
-    return { steps, history: historyOf(rawId) + branch + cut }
+    return { steps, history: historyOf(rawId) + branch + revision + cut }
   }
 
   function tailKey(transcript, native) {
@@ -461,20 +464,37 @@ export function createAgyRuntime(options = {}) {
     const pid = toPersonaId(rawId)
     const bDir = brainDirOf(rawId)
     const { steps, history } = transcriptOf(rawId)
-    const { items: allItems, toSeq } = stepsToItems(steps, { brainDir: bDir, full: false })
+    const toSeq = steps.reduce((max, step, index) => {
+      const at = typeof step?.step_index === 'number' ? step.step_index : index
+      return Math.max(max, at + 1)
+    }, 0)
     const prevSeq = lastPushedSeq.get(pid) ?? 0
     const rewritten = lastPushedHistory.has(pid) && lastPushedHistory.get(pid) !== history
     if (rewritten || toSeq > prevSeq) {
+      const { items: allItems } = stepsToItems(steps, { brainDir: bDir, full: false })
       const deltaItems = rewritten ? allItems : allItems.filter((it) => it.seq > prevSeq)
       lastPushedSeq.set(pid, toSeq)
       lastPushedHistory.set(pid, history)
       rt.append(pid, {
         items: deltaItems,
-        fromSeq: rewritten ? 0 : prevSeq + 1,
+        fromSeq: rewritten ? 0 : prevSeq,
         toSeq,
         history,
       })
+      rt.sessionsChanged()
     }
+  }
+
+  function watchChanged(pid, watching, options) {
+    clearInterval(watchedPolls.get(pid))
+    watchedPolls.delete(pid)
+    if (!watching || options?.transcript) return
+    const timer = setInterval(() => {
+      // Owned ACP turns already poll their export. Native terminal turns need the same committed-content feed.
+      if (!activeTurns.has(pid)) syncTranscriptAppend(toAgyId(pid))
+    }, 400)
+    timer.unref?.()
+    watchedPolls.set(pid, timer)
   }
 
   async function listSessions() {

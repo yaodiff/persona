@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // UI version 6's tiles (docs/extensions/extensions.md "UI version 6", #827): a `grid` (columns that fit the width, two
 // on a phone, at most `max_columns`) and a `carousel` (one line that scrolls sideways, snapping to a tile, the next one's

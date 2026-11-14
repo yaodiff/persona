@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Mutating calls stay outside `#expect` / `#require`: the macros capture their
 /// operands as immutable values.

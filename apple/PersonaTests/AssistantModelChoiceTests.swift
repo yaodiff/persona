@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The main chat's conversation-scoped model choice (#6542; hub pick #5033): what the next message runs on, the row
 /// ticked in the sheet, the pick a row keeps, and the wire types it decodes.

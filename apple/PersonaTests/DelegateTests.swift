@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The assistant answering agents' questions first (#544, docs/assistant/assistant.md "Assistant answers questions first"):
 /// a card it is still looking at, the context it filled in when it left a question to the user, and the questions it

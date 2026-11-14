@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Links into Settings from a page of one assistant's things open that assistant's copy (docs/assistant/managers.md
 /// "The current assistant"): an extension page's settings link opens its own assistant's copy of the extension, Messages'

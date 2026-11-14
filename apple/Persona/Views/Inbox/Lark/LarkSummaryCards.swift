@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Cards the Lark gateway summarises itself (`metadata.variant`): forwarded chats, group / contact cards, meetings,
 /// calendar events, votes, tasks, red packets (port of `SummaryCardView`).

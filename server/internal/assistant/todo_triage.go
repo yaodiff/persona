@@ -343,9 +343,9 @@ func triageDueBy(t Todo, loc *time.Location) (time.Time, bool) {
 
 // triageShelvable: a task (an agent was linked, or a conversation handed it out) with no due date ahead. An open concern
 // never is (docs/assistant/todos.md "Concerns", #3582): it waits for the secretary's report, however long, and sits in
-// Working while an agent of it runs, else in Other open (triageTodo keeps it out of Done too). The clients get the same
-// rule with W1 / I1 / A1, and the shared fixtures follow then; so does whether a concern may share a row with a related
-// to-do (triageTodos still merges it like any to-do).
+// Working while an agent of it runs, else in Other open (triageTodo keeps it out of Done too). The web has the same rule
+// and shared fixtures; iOS and Android follow in their own PRs. triageRelatedRoots also keeps an open concern in a row
+// of its own; a closed concern groups like any closed to-do.
 func triageShelvable(t Todo, now time.Time, loc *time.Location) bool {
 	if t.Kind == db.KindConcern {
 		return false
@@ -486,7 +486,8 @@ type triageResult struct {
 }
 
 // triageRelatedRoots is the row each to-do is in (the web's relatedRoots): the root of its related to-dos, open and
-// closed ones kept apart.
+// closed ones kept apart. An open concern never joins another row or has another to-do joined to it; a closed concern
+// groups like any closed to-do.
 func triageRelatedRoots(list []listedTodo) func(string) string {
 	parent := map[string]string{}
 	for _, t := range list {
@@ -503,6 +504,9 @@ func triageRelatedRoots(list []listedTodo) func(string) string {
 	}
 	owner := map[string]string{}
 	for _, t := range list {
+		if t.DoneAt == nil && t.Kind == db.KindConcern {
+			continue
+		}
 		side := cond(t.DoneAt != nil, "c", "o")
 		for _, k := range triageRelatedKeys(t.Todo) {
 			key := side + "|" + k
@@ -548,8 +552,8 @@ func triagePlace(list []listedTodo, look triageLookup, now time.Time, loc *time.
 }
 
 // triageTodos places every to-do and merges related ones into rows (the web's triageTodos): closed and open to-dos never
-// share a row; a row takes its lead's section (a superseded failed start never leads); rows go most recently active
-// first. includeQuiet false leaves quiet tasks out, as the sidebar's badge does.
+// share a row, and an open concern always has a row of its own; a row takes its lead's section (a superseded failed start
+// never leads); rows go most recently active first. includeQuiet false leaves quiet tasks out, as the sidebar's badge does.
 func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.Location, includeQuiet bool) triageResult {
 	if !includeQuiet {
 		list = slices.DeleteFunc(slices.Clone(list), func(t listedTodo) bool { return t.Quiet })

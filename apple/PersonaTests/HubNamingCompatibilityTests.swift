@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import UserNotifications
 @testable import Persona
+import PersonaWire
 
 /// Cross-generation fixtures contain no registered account, device or production credentials.
 @MainActor struct HubNamingCompatibilityTests {

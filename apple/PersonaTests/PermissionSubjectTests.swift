@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What a permission card and the rows that point to it show for its call (#3472): the hub's summary, else the command or
 /// path the tool acts on, never the raw JSON of its input.
