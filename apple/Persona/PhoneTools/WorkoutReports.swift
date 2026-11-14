@@ -6,16 +6,30 @@ import os
 
 /// Consent and the HealthKit cursor are committed together. Failed uploads leave the cursor in place for retry.
 /// A report the hub rejects as invalid is dropped instead: the same data gets the same answer.
+/// A build with HealthKit background delivery (`deliversInBackground`, #2526) also reports right after a workout is saved,
+/// while Persona is closed: an observer query set up at launch wakes the app, which runs the same `refresh`.
 @Observable
 final class WorkoutReports {
     static let shared = WorkoutReports()
-    private static let log = Logger(subsystem: "persona", category: "workout-reports")
+    private nonisolated static let log = Logger(subsystem: "persona", category: "workout-reports") // also from HealthKit's queue
     private let health = HKHealthStore()
     private let file: URL
     private var state: State
     private(set) var busy = false
     private(set) var error: String?
     var enabled: Bool { state.enabledAt != nil }
+    /// HealthKit turned background delivery down although the build has it: reports wait for Persona to open.
+    private(set) var backgroundRefused = false
+    private var observer: HKObserverQuery?
+
+    /// The build is signed with HealthKit background delivery (config.json app.health_background_delivery, Info.plist
+    /// `PersonaHealthBackgroundDelivery`; docs/assistant/health.md).
+    static var deliversInBackground: Bool {
+        (Bundle.main.object(forInfoDictionaryKey: "PersonaHealthBackgroundDelivery") as? String)?.uppercased() == "YES"
+    }
+
+    /// Reports come right after a workout, not when Persona is next opened (what Settings says).
+    var immediate: Bool { Self.deliversInBackground && !backgroundRefused }
 
     nonisolated struct State: Codable {
         var enabledAt: Date?
@@ -23,10 +37,7 @@ final class WorkoutReports {
         var anchor: Data?
         var pending: [Report] = []
     }
-    nonisolated struct HeartRate: Codable {
-        let minute: Int
-        let bpm: Double
-    }
+    typealias HeartRate = WorkoutHeartRate
     nonisolated struct Report: Codable {
         let id: String
         let title: String
@@ -39,6 +50,11 @@ final class WorkoutReports {
         let distance: Double?
         let energy: Double?
         let heart_rate: [HeartRate]
+        // Since #2526's second step; a report queued by an older version has none of them.
+        var elevation_gain: Double? = nil
+        var heart_rate_avg: Double? = nil
+        var heart_rate_max: Double? = nil
+        var splits: [WorkoutSplit]? = nil
     }
 
     init(folder: URL? = nil) {
@@ -66,14 +82,43 @@ final class WorkoutReports {
         do {
             if enabled {
                 guard let hub = model.hub, !hub.isDemo, HKHealthStore.isHealthDataAvailable() else { return }
-                let types: Set<HKObjectType> = [HKObjectType.workoutType(), HKQuantityType(.heartRate)]
-                try await health.requestAuthorization(toShare: [], read: types)
+                try await health.requestAuthorization(toShare: [], read: WorkoutReader.readTypes)
                 try save(State(enabledAt: Date(), group: hub.group))
+                observe()
             } else {
                 try save(State())
+                stopObserving()
             }
             error = nil
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// Called at launch (`application(_:didFinishLaunchingWithOptions:)`, where HealthKit wants it for a background
+    /// wake) and when reports are turned on: in a build with background delivery, a new workout wakes the app and runs
+    /// `refresh`. HealthKit retries a wake whose completion is never called, so it is called whatever `refresh` did.
+    func observe() {
+        guard Self.deliversInBackground, enabled, observer == nil, HKHealthStore.isHealthDataAvailable() else { return }
+        let query = HKObserverQuery(sampleType: HKObjectType.workoutType(), predicate: nil) { @Sendable _, completion, failure in
+            let done = WakeDone(completion)
+            if let failure { Self.log.error("workout observer failed: \(failure.localizedDescription, privacy: .public)") }
+            Task { @MainActor in
+                await WorkoutReports.shared.refresh(model: AppModel.shared)
+                done.call()
+            }
+        }
+        observer = query
+        health.execute(query)
+        health.enableBackgroundDelivery(for: HKObjectType.workoutType(), frequency: .immediate) { @Sendable ok, failure in
+            if !ok { Self.log.error("background delivery refused: \(failure?.localizedDescription ?? "no reason", privacy: .public)") }
+            Task { @MainActor in WorkoutReports.shared.backgroundRefused = !ok }
+        }
+    }
+
+    private func stopObserving() {
+        guard let observer else { return }
+        health.stop(observer)
+        self.observer = nil
+        health.disableBackgroundDelivery(for: HKObjectType.workoutType()) { @Sendable _, _ in }
     }
 
     func refresh(model: AppModel) async {
@@ -84,20 +129,23 @@ final class WorkoutReports {
         do {
             // Upload a previous batch first: a network outage cannot grow an unbounded outbox.
             var skipped = try await upload(api: hub.api)
+            await WorkoutReader.askForNewTypes() // allowed before splits were read: the distances too
             let anchor = try state.anchor.map {
                 try NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0)
             } ?? nil
             let (workouts, nextAnchor) = try await read(since: since, anchor: anchor)
             var next = state
             for workout in workouts where workout.startDate >= since && workout.duration >= 600 && workout.endDate <= Date() && workout.endDate.timeIntervalSince(workout.startDate) <= 7 * 86400 {
-                let rates = try await heartRates(workout)
+                let rates = try await WorkoutReader.heartRates(workout)
+                let rate = WorkoutReader.heartRate(workout)
+                let splits = (try? await WorkoutReader.splits(workout)) ?? [] // no splits rather than no report
                 next.pending.append(Report(
                     id: workout.uuid.uuidString, title: String(localized: "Workout report"),
-                    activity: Self.activityName(workout.workoutActivityType), source: workout.sourceRevision.source.name,
+                    activity: WorkoutReader.activityName(workout.workoutActivityType), source: workout.sourceRevision.source.name,
                     start: workout.startDate, end: workout.endDate, enabled_at: since, duration: workout.duration,
-                    distance: workout.totalDistance?.doubleValue(for: .meter()),
-                    energy: workout.statistics(for: HKQuantityType(.activeEnergyBurned))?.sumQuantity()?.doubleValue(for: .kilocalorie()),
-                    heart_rate: rates))
+                    distance: WorkoutReader.distance(workout), energy: WorkoutReader.energy(workout), heart_rate: rates,
+                    elevation_gain: WorkoutReader.elevationGain(workout), heart_rate_avg: rate?.average,
+                    heart_rate_max: rate?.maximum, splits: splits.isEmpty ? nil : splits))
             }
             next.anchor = try nextAnchor.map { try NSKeyedArchiver.archivedData(withRootObject: $0, requiringSecureCoding: true) }
             try save(next)
@@ -105,20 +153,6 @@ final class WorkoutReports {
             error = skipped == 0 ? nil
                 : String(localized: "Some workouts were skipped because the hub couldn't accept their data. Later workouts are still reported.")
         } catch { self.error = error.localizedDescription }
-    }
-
-    private static func activityName(_ activity: HKWorkoutActivityType) -> String {
-        switch activity {
-        case .running: "Running"
-        case .walking: "Walking"
-        case .cycling: "Cycling"
-        case .swimming: "Swimming"
-        case .hiking: "Hiking"
-        case .yoga: "Yoga"
-        case .traditionalStrengthTraining, .functionalStrengthTraining: "Strength training"
-        case .highIntensityIntervalTraining: "Interval training"
-        default: "Workout (HealthKit activity \(activity.rawValue))"
-        }
     }
 
     /// Sends the outbox in order and returns how many reports the hub rejected. A rejected report is dropped: kept at
@@ -140,6 +174,13 @@ final class WorkoutReports {
         return skipped
     }
 
+    /// HealthKit's completion for one background wake, carried to the main actor that calls it.
+    private nonisolated final class WakeDone: @unchecked Sendable {
+        private let completion: () -> Void
+        init(_ completion: @escaping () -> Void) { self.completion = completion }
+        func call() { completion() }
+    }
+
     private func read(since: Date, anchor: HKQueryAnchor?) async throws -> ([HKWorkout], HKQueryAnchor?) {
         try await withCheckedThrowingContinuation { continuation in
             let predicate = HKQuery.predicateForSamples(withStart: since, end: nil, options: .strictStartDate)
@@ -149,33 +190,6 @@ final class WorkoutReports {
                 else { continuation.resume(returning: (samples as? [HKWorkout] ?? [], next)) }
             }
             health.execute(query)
-        }
-    }
-
-    private func heartRates(_ workout: HKWorkout) async throws -> [HeartRate] {
-        let samples: [HKQuantitySample] = try await withCheckedThrowingContinuation { continuation in
-            let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-                HKQuery.predicateForObjects(from: workout),
-                HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
-            ])
-            let query = HKSampleQuery(sampleType: HKQuantityType(.heartRate), predicate: predicate,
-                                      limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume(returning: samples as? [HKQuantitySample] ?? []) }
-            }
-            health.execute(query)
-        }
-        var buckets: [Int: [Double]] = [:]
-        for sample in samples {
-            let minute = Int(sample.startDate.timeIntervalSince(workout.startDate) / 60)
-            let bpm = sample.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
-            if minute >= 0, minute <= Int(workout.endDate.timeIntervalSince(workout.startDate) / 60), bpm > 0, bpm <= 300 {
-                buckets[minute, default: []].append(bpm)
-            }
-        }
-        return buckets.keys.sorted().map { minute in
-            let values = buckets[minute]!
-            return HeartRate(minute: minute, bpm: values.reduce(0, +) / Double(values.count))
         }
     }
 }

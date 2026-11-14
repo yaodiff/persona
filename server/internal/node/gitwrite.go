@@ -339,7 +339,8 @@ func (n *Node) gitPush(ctx context.Context, cwd string, setUpstream bool) (*gitR
 	return n.settled(ctx, root, &gitResult{Output: clipGitOutput(strings.TrimSpace(out))})
 }
 
-// gitBranches lists the local branches, then the remote ones without a local branch of the same name, newest first.
+// gitBranches lists the local branches, then the remote ones without a local branch of the same name, newest first,
+// and the remote's default branch when git knows it.
 func (n *Node) gitBranches(ctx context.Context, cwd string) (map[string]any, error) {
 	dir, err := n.gitDir(cwd)
 	if err != nil {
@@ -374,7 +375,16 @@ func (n *Node) gitBranches(ctx context.Context, cwd string) (map[string]any, err
 		_, name, _ := strings.Cut(b.Name, "/")
 		return names[name]
 	})
-	return map[string]any{"branches": append(local, remote...)}, nil
+	res := map[string]any{"branches": append(local, remote...)}
+	// The remote's default branch as git knows it (origin/HEAD, set by the clone or `git remote set-head`), by the name a
+	// pull request goes into: the app names it instead of "the default branch" (#7014). Left out when git doesn't know
+	// it, never guessed from the names.
+	if o, err := git(ctx, dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if _, name, ok := strings.Cut(strings.TrimSpace(o), "/"); ok && name != "" {
+			res["default"] = name
+		}
+	}
+	return res, nil
 }
 
 var branchName = lazyre.New(`^[A-Za-z0-9._/-]+$`)

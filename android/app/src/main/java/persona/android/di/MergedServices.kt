@@ -151,6 +151,8 @@ internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRe
         override suspend fun loadOlder(session: SessionKey) = stacks.use(session) { it.repositories.chats.loadOlder(it.names.raw(session)) }
         override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int) =
             stacks.use(session) { it.repositories.chats.expandFold(it.names.raw(session), fromSeq, toSeq) }
+        override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int) =
+            stacks.use(session) { it.repositories.chats.loadRange(it.names.raw(session), fromSeq, throughSeq) }
         override suspend fun loadImage(session: SessionKey, itemId: String) =
             stacks.use(session) { it.repositories.chats.loadImage(it.names.raw(session), itemId) }
         override suspend fun fullText(session: SessionKey, itemId: String) =
@@ -287,6 +289,10 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).panes(GroupKeys.raw(machineId)) }
         override suspend fun newTab(machineId: String, workspaceId: String, kind: String?, cwd: String?) =
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).newTab(GroupKeys.raw(machineId), workspaceId, kind, cwd) }
+        override suspend fun close(machineId: String, pane: String) =
+            stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).close(GroupKeys.raw(machineId), pane) }
+        override suspend fun closeFinished(machineId: String, preview: Boolean, panes: List<String>) =
+            stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).closeFinished(GroupKeys.raw(machineId), preview, panes) }
     }
 
     val files: SessionFiles = routedFiles { stacks.of(it)?.files }

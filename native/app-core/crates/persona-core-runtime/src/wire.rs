@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use persona_core::Item;
 pub use persona_core::continuity::Request;
 
 /// How the core is set up. The continuity slice has no timers; reserved for later independently justified domains.
@@ -24,9 +25,27 @@ pub enum Action {
         chat: String,
         event: ChatEvent,
     },
+    /// A hub payload as the transport received it: an HTTP page or a WebSocket frame, decoded once, in the core
+    /// (docs/plans/plan-rust-core.md, decision 2). `chat` routes it to the open chat; a `Payload::Frame` also
+    /// carries its own `machine_id` and `session_id`, checked against it.
+    WirePayload {
+        chat: String,
+        payload: Payload,
+    },
     /// Continue a chat's immediate fill, without waiting on a timer.
     ContinueFill {
         chat: String,
+    },
+    /// The hub signalled that this chat changed (a rev move or a wake), so settle as if a gap were found, as
+    /// iOS's `settle(.fill)` does.
+    HubChanged {
+        chat: String,
+    },
+    /// A sequence number the host can attach to an action, echoed in the next patch so an applied no-op is
+    /// distinguishable from one still pending (#7448).
+    Ack {
+        chat: String,
+        seq: u64,
     },
 }
 
@@ -50,6 +69,33 @@ pub struct WireBatch {
     pub backlog: bool,
     pub has_more: Option<bool>,
     pub more_after: bool,
+}
+
+/// A hub payload exactly as the transport received it, routed by the client the way `Action::Chat` is routed: the
+/// variant says which request it answers (or that it is a pushed frame), so the core never guesses from the body's
+/// shape. Decoded once, in the core, on the worker (`persona_core::transport`); `dispatch` only queues the bytes.
+/// `body` is the response body or frame as received, a JSON document. As with `WireBatch.items_json`, it is a string
+/// because the protocol's payloads are UTF-8 JSON, which keeps the boundary free of a byte-buffer type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Payload {
+    /// The first page a chat is opened with, not an answer to `Request::FetchLatest` (`Session::received`).
+    Latest { body: String },
+    /// An answer to `Request::FetchAfter` (`Session::after`).
+    Newer { body: String },
+    /// An answer to `Request::FetchLatest` (`Session::reload`).
+    Reloaded { body: String },
+    /// An answer to `Request::FetchOlder` (`Session::older`).
+    Older { body: String },
+    /// An answer to `Request::FetchRange` (`Session::range`). `fold_id` names which opening it answers; `None`
+    /// answers the single opening, as the older callers meant.
+    Range {
+        #[serde(default)]
+        fold_id: Option<String>,
+        body: String,
+    },
+    /// A WebSocket frame. A frame of another type is ignored, and one the decoder refuses is dropped, as iOS's
+    /// `ServerEvent.decode` returns nil for it; neither is an error.
+    Frame { body: String },
 }
 
 /// What happened to one chat.
@@ -79,8 +125,11 @@ pub enum ChatEvent {
         items_json: String,
         has_more: bool,
     },
-    /// A page of the opened fold (`Request::FetchRange`).
+    /// A page of an opened fold (`Request::FetchRange`). `fold_id` names which opening it answers; `None` keeps
+    /// the older single-fold meaning, which answers whichever fold is opening.
     Range {
+        #[serde(default)]
+        fold_id: Option<String>,
         items_json: String,
         more: bool,
     },
@@ -94,7 +143,10 @@ pub enum ChatEvent {
     /// An older page failed or was cancelled.
     OlderFailed,
     /// A fold's page failed or was cancelled.
-    RangeFailed,
+    RangeFailed {
+        #[serde(default)]
+        fold_id: Option<String>,
+    },
 }
 
 /// Out of the core, through the client's `run` callback.
@@ -115,6 +167,14 @@ pub struct ChatPatch {
     pub history: Option<String>,
     pub has_more: Option<bool>,
     pub loaded_once: bool,
+    /// Whether the chat's items are known complete: the last batch left no gap, and it was a backlog or the chat
+    /// was already verified. The core owns this rule so no client re-derives it from the reducer (#7448).
+    #[serde(default)]
+    pub verified: bool,
+    /// The highest `Action::Ack` sequence number applied so far, or `None` before any. A host can use it to tell an
+    /// applied no-op from a pending action.
+    #[serde(default)]
+    pub acked: Option<u64>,
     /// Applied in order to the list the client already has.
     pub ops: Vec<ListOp>,
 }

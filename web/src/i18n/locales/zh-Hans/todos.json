@@ -5,7 +5,6 @@
   "deleted": "已删除待办",
   "delete_failed": "删除失败：{error}",
   "title": "待办",
-  "summary": "没完成 {open} · 已完成 {done}",
   "new_todo": "新建待办",
   "load_failed": "没读到待办",
   "search_placeholder": "搜索待办",

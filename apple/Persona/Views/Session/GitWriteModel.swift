@@ -72,6 +72,11 @@ nonisolated struct GitRefusal: Identifiable, Equatable, Sendable {
         case "git_stash_stale": String(localized: "The stash list changed. Refresh and select the stash again.")
         case "git_stash_unsupported": String(localized: "Safe stash removal is unavailable for this repository.")
         case "git_stash_conflicted": String(localized: "Applied with conflicts in these files: resolve them, then commit. The stash is kept.")
+        case "git_not_pushed": String(localized: "Push the branch first: a pull request needs every commit on GitHub")
+        case "git_no_pr": String(localized: "This branch has no pull request")
+        case "git_not_github": String(localized: "This repository has no GitHub remote")
+        case "no_gh": String(localized: "GitHub CLI (gh) is not installed on that computer")
+        case "not_signed_in": String(localized: "GitHub CLI (gh) is not signed in on that computer: run gh auth login there")
         default: nil
         }
     }
@@ -149,7 +154,7 @@ final class GitWriteModel {
         var stage: (_ machine: String, _ cwd: String, _ paths: [String], _ unstage: Bool) async throws -> GitWriteResult
         var commit: (_ machine: String, _ cwd: String, _ message: String) async throws -> GitWriteResult
         var push: (_ machine: String, _ cwd: String, _ setUpstream: Bool) async throws -> GitWriteResult
-        var branches: (_ machine: String, _ cwd: String) async throws -> [GitBranch]
+        var branches: (_ machine: String, _ cwd: String) async throws -> GitBranchList
         var switchBranch: (_ machine: String, _ cwd: String, _ branch: String, _ create: Bool) async throws -> GitWriteResult
         var stash: (_ machine: String, _ cwd: String, _ op: GitStashOp) async throws -> GitWriteResult
 
@@ -167,7 +172,7 @@ final class GitWriteModel {
         init(stage: @escaping (String, String, [String], Bool) async throws -> GitWriteResult,
              commit: @escaping (String, String, String) async throws -> GitWriteResult,
              push: @escaping (String, String, Bool) async throws -> GitWriteResult,
-             branches: @escaping (String, String) async throws -> [GitBranch] = { _, _ in [] },
+             branches: @escaping (String, String) async throws -> GitBranchList = { _, _ in GitBranchList(branches: []) },
              switchBranch: @escaping (String, String, String, Bool) async throws -> GitWriteResult = { _, _, _, _ in throw CancellationError() },
              stash: @escaping (String, String, GitStashOp) async throws -> GitWriteResult = { _, _, _ in throw CancellationError() }) {
             self.stage = stage

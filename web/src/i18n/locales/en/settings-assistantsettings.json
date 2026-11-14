@@ -75,6 +75,8 @@
   "runs_on_title": "Runs on",
   "runs_on_footer": "Each chat runs in the background in this directory on {machine}, outside herdr. Transcripts and memory stay on that machine; About me, scheduled tasks, and settings live on the hub. Pick the model under Model settings › Main chat.",
   "machine": "Machine",
+  "main_place": "Main chat runs in",
+  "main_runtime": "Main chat runs with",
   "cwd": "Working directory",
   "timezone": "Time zone",
   "saved_new_chats": "Saved. Applies to new chats",

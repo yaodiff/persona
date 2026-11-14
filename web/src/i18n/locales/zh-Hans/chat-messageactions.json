@@ -13,5 +13,6 @@
   "use_as_context": "作为上下文",
   "context_title": "{title} · 消息",
   "fork_chat": "开启一个新对话",
-  "cut_short": "此回复未完成，内容仅供参考。"
+  "cut_short": "此回复未完成，内容仅供参考。",
+  "save_as_prompt": "存为常用提示词…"
 }

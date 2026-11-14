@@ -88,6 +88,19 @@ describe("searchChat", () => {
     expect(searchChat(chat, "grep").hits.map((h) => h.category)).toEqual(["tool_name"]);
   });
 
+  it("keeps the live copy when an expanded fold's cached step has the same ID and seq", () => {
+    const live = item("r#0", 4, "tool_result", { role: "user", tool_use_id: "c1", text: "NewNeedle" });
+    const cached = { ...live, text: "OldNeedle" };
+    const items = [live, cached]; // ChatView's exact corpus order: current live items, then cached fold steps.
+    expect(searchChat(items, "NewNeedle").hits.map((h) => h.itemId)).toEqual([live.id]);
+    expect(searchChat(items, "OldNeedle").hits).toEqual([]);
+
+    const older = item("same#0", 3, "text", { text: "OlderNeedle" });
+    const newer = item("same#0", 4, "text", { text: "NewerNeedle" });
+    expect(searchChat([older, newer], "NewerNeedle").hits.map((h) => h.itemId)).toEqual([newer.id]);
+    expect(searchChat([older, newer], "OlderNeedle").hits).toEqual([]);
+  });
+
   it("marks every match in the snippet", () => {
     const [hit] = searchChat([item("x#0", 1, "text", { text: "ab AB ab" })], "ab").hits;
     expect(hit.ranges).toEqual([[0, 2], [3, 5], [6, 8]]);

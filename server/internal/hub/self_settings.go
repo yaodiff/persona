@@ -63,7 +63,8 @@ func (h *Hub) selfSettings() []selfSetting {
 	return out
 }
 
-func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, sessionID string, args json.RawMessage) (string, error) {
+func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, sessionID string, args json.RawMessage,
+	report func(proto.MCPWaitKind)) (string, error) {
 	var a struct {
 		Action string          `json:"action"`
 		Key    string          `json:"key"`
@@ -113,7 +114,7 @@ func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, 
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: m.cfg.ID, SessionID: sessionID, Kind: proto.IxPermission,
 		ToolName: "persona_settings", Summary: change.summary, ToolInput: shown, Fields: change.fields, SessionTitle: "Persona",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(15 * time.Minute).UTC()}
-	r, err := h.waitInteraction(ctx, ix)
+	r, err := h.waitMCPApproval(ctx, ix, report)
 	if err != nil {
 		return "", err
 	}

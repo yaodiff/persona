@@ -189,7 +189,8 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
 - Android: `scripts/app/android.sh [install|apk|test|lint|shots]` (`docs/android/android.md`).
 - Shared Rust core: `scripts/ci/core.sh` (needs rustup); a change to a wire type regenerates the clients' codecs (`native/app-core/README.md`).
 - HarmonyOS: from `harmony/`, run `node --test tests/*.test.mjs` and `node tests/run-domain.mjs` (Node.js 24+), then `devecocli build --build-mode release` with the API 26 SDK and locked native SSH core. Native device checks and fixture setup: `docs/harmony/harmony.md` ("Verification").
-- Web: `cd web && npm test && npm run build`; deploy with `scripts/deploy/deploy.sh web` (`docs/web/web.md`).
+- Web: `cd web && npm test && npm run build`, the build again after merging the latest `origin/main` (it prints the first screen's room under
+  `FIRST_SCREEN_BUDGET`; changes in flight share it); deploy with `scripts/deploy/deploy.sh web` (`docs/web/web.md`).
 - Docs: `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py`, `python3 scripts/test/test_doc_sections.py`
   (a section name quoted after a doc path names a current heading) and `python3 scripts/test/test_doc_wire.py`
   (every WebSocket type, feature flag, extension point and manifest field has its row). Every change: `python3 scripts/privacy_check.py`.

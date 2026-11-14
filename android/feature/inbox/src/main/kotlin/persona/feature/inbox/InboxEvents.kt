@@ -19,16 +19,24 @@ import java.time.ZoneId
 import java.util.Locale
 
 // Inbox phase 1 (docs/assistant/inbox.md"Events, handling chains, and suggestions", docs/android/android.md"Inbox: events, suggestions, and handling chains"): the pure parts of
-// how an event reads in the list and on its page. An item from an older hub has no event fields and none of this applies:
-// its row and its page are what they were.
+// how an event reads in the list and on its page. Older items have no event sections; chat and mail still open the detail
+// so their originals stay unmounted until an explicit source action.
 
-/** An event's own page: Summary, Recap, the suggestion with its buttons, the Handling chain; "View original" opens the item's source page. */
+/** An item's detail page: event sections when present, with "View original" opening the source above it. */
 @Serializable @SerialName("persona.feature.inbox.InboxEventRoute")
 data class InboxEventRoute(val itemId: String) : NavKey
 
-/** Opening [record] from the list: its event page when the hub sent event fields, else its own page as before. */
-fun inboxRowPage(record: InboxRecord, pages: InboxItemPages): NavKey =
-    if (record.event.present) InboxEventRoute(record.item.id) else pages.open(record)
+/**
+ * Opening [record] from the list: its detail for event fields or a chat/mail original, so merely opening it cannot
+ * acknowledge the source. Other legacy items retain their own pages. Explicit source links still use [pages] directly.
+ */
+fun inboxRowPage(record: InboxRecord, pages: InboxItemPages): NavKey {
+    if (record.event.present) return InboxEventRoute(record.item.id)
+    return when (inboxItemPage(record)) {
+        is LarkRoute, is MailRoute -> InboxEventRoute(record.item.id)
+        else -> pages.open(record)
+    }
+}
 
 /** The words for a processing conversation that is on it (In progress): AI is reviewing, Agent is working, Waiting for reply. */
 @StringRes

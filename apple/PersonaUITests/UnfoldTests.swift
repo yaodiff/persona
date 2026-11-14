@@ -103,6 +103,15 @@ final class UnfoldTests: XCTestCase {
         measure("middle", work)
     }
 
+    /// The work line at the oldest end of the chat (#7237): the list scrolled to its start (`X1123=showOldest`, and
+    /// `MOCK_LONG_HISTORY=oldest` on the mock puts the work line first). Its header must not move when it opens or folds.
+    @MainActor func testWorkLineAtTheOldestEnd() throws {
+        try launch(chat: Self.widget)
+        let work = app.buttons["work-head"].firstMatch
+        measure("oldest", work)
+        measure("oldest", work)
+    }
+
     /// In the open work line: its thought, a tool step, and (BeautifulUI) a run of tool chips, each opened and folded.
     @MainActor func testStepsInAnOpenWorkLine() throws {
         try launch(chat: Self.widget)

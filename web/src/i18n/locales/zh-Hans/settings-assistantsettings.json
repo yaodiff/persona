@@ -73,6 +73,8 @@
   "runs_on_title": "运行在",
   "runs_on_footer": "每段对话都在 {machine} 的这个目录里后台运行，不进 herdr。对话记录和记忆存在这台机器上；「关于我」、定时任务和设置存在 hub 上。用哪个模型，在「模型配置 › 主对话」里选。",
   "machine": "机器",
+  "main_place": "主对话运行于",
+  "main_runtime": "主对话运行工具",
   "cwd": "工作目录",
   "timezone": "时区",
   "saved_new_chats": "已保存，新对话生效",

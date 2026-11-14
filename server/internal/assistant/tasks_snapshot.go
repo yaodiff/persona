@@ -29,8 +29,9 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 	}
 	var all []ranked
 	now := time.Now()
+	lists := machineSessions{} // each machine listed once for all the tasks
 	for _, t := range list {
-		agents := s.taskAgents(ctx, t)
+		agents := s.taskAgentsIn(ctx, t, lists)
 		st := taskState(t, agents)
 		if st == "followup" && time.Since(t.UpdatedAt) > 24*time.Hour {
 			continue

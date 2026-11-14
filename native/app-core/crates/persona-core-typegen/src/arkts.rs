@@ -1,4 +1,6 @@
-//! The ArkTS codec follows the Rust registry directly. Serde-generate has no ArkTS backend; emitting strict, explicit
+//! The ArkTS codec follows the Rust registry directly: every integer is written and read at its own width
+//! (`native/app-core/README.md`, the ArkTS host replay checks the bytes against Rust). Serde-generate has no
+//! ArkTS backend; emitting strict, explicit
 //! unions avoids loose TypeScript objects, dynamic property access and a second hand-maintained wire schema.
 
 use std::collections::BTreeMap;
@@ -17,9 +19,13 @@ pub fn write(root: &Path, registry: &BTreeMap<String, ContainerFormat>) -> io::R
            register(name: string, write: (key: string) => Object): void { this[name] = write; }\n\
            private integer(value: number): void { if (!Number.isSafeInteger(value)) throw new Error('wire integer out of range'); }\n\
            u8(value: number): void { this.integer(value); if (value < 0 || value > 255) throw new Error('u8 out of range'); this.bytes.push(value); }\n\
-           u32(value: number): void { this.integer(value); this.bytes.push(value & 255, (value >>> 8) & 255, (value >>> 16) & 255, (value >>> 24) & 255); }\n\
-           u64(value: number): void { this.integer(value); if (value < 0) throw new Error('u64 out of range'); const high = Math.floor(value / 4294967296); this.u32(value - high * 4294967296); this.u32(high); }\n\
-           i64(value: number): void { this.integer(value); const high = Math.floor(value / 4294967296); this.u32(value - high * 4294967296); this.u32(high); }\n\
+           u16(value: number): void { this.integer(value); if (value < 0 || value > 65535) throw new Error('u16 out of range'); this.bytes.push(value & 255, (value >>> 8) & 255); }\n\
+           u32(value: number): void { this.integer(value); if (value < 0 || value > 4294967295) throw new Error('u32 out of range'); this.bytes.push(value & 255, (value >>> 8) & 255, (value >>> 16) & 255, (value >>> 24) & 255); }\n\
+           u64(value: number): void { this.integer(value); if (value < 0) throw new Error('u64 out of range'); const low = value % 4294967296; this.u32(low < 0 ? low + 4294967296 : low); const high = Math.floor(value / 4294967296); this.u32(high < 0 ? high + 4294967296 : high); }\n\
+           i8(value: number): void { this.integer(value); if (value < -128 || value > 127) throw new Error('i8 out of range'); this.u8(value < 0 ? value + 256 : value); }\n\
+           i16(value: number): void { this.integer(value); if (value < -32768 || value > 32767) throw new Error('i16 out of range'); this.u16(value < 0 ? value + 65536 : value); }\n\
+           i32(value: number): void { this.integer(value); if (value < -2147483648 || value > 2147483647) throw new Error('i32 out of range'); this.u32(value < 0 ? value + 4294967296 : value); }\n\
+           i64(value: number): void { this.integer(value); const low = value % 4294967296; this.u32(low < 0 ? low + 4294967296 : low); const high = Math.floor(value / 4294967296); this.u32(high < 0 ? high + 4294967296 : high); }\n\
            bool(value: boolean): void { this.u8(value ? 1 : 0); }\n\
            string(value: string): void { const bytes = new TextEncoder().encode(value); this.u64(bytes.length); for (const byte of bytes) this.bytes.push(byte); }\n\
            option<T>(value: T | null, write: (value: T) => void): void { if (value === null) { this.u8(0); } else { this.u8(1); write(value); } }\n\
@@ -33,7 +39,11 @@ pub fn write(root: &Path, registry: &BTreeMap<String, ContainerFormat>) -> io::R
            constructor(bytes: Uint8Array) { this.bytes = bytes; }\n\
            register(name: string, read: (key: string) => Object): void { this[name] = read; }\n\
            u8(): number { if (this.offset >= this.bytes.length) throw new Error('truncated wire input'); return this.bytes[this.offset++]; }\n\
+           u16(): number { return this.u8() + this.u8() * 256; }\n\
            u32(): number { return this.u8() + this.u8() * 256 + this.u8() * 65536 + this.u8() * 16777216; }\n\
+           i8(): number { const value = this.u8(); return value < 128 ? value : value - 256; }\n\
+           i16(): number { const value = this.u16(); return value < 32768 ? value : value - 65536; }\n\
+           i32(): number { const value = this.u32(); return value < 2147483648 ? value : value - 4294967296; }\n\
            u64(): number { const value = this.u32() + this.u32() * 4294967296; if (!Number.isSafeInteger(value)) throw new Error('u64 out of range'); return value; }\n\
            i64(): number { const low = this.u32(); let high = this.u32(); if (high >= 2147483648) high -= 4294967296; const value = high * 4294967296 + low; if (!Number.isSafeInteger(value)) throw new Error('i64 out of range'); return value; }\n\
            bool(): boolean { const value = this.u8(); if (value > 1) throw new Error('invalid boolean'); return value === 1; }\n\
@@ -252,9 +262,14 @@ fn write_format(format: &Format, value: &str) -> String {
     match format {
         Format::Unit => String::new(),
         Format::Bool => format!("writer.bool({value});"),
-        Format::I8 | Format::I16 | Format::I32 | Format::I64 => format!("writer.i64({value});"),
+        Format::I8 => format!("writer.i8({value});"),
+        Format::I16 => format!("writer.i16({value});"),
+        Format::I32 => format!("writer.i32({value});"),
+        Format::I64 => format!("writer.i64({value});"),
         Format::U8 => format!("writer.u8({value});"),
-        Format::U16 | Format::U32 | Format::U64 => format!("writer.u64({value});"),
+        Format::U16 => format!("writer.u16({value});"),
+        Format::U32 => format!("writer.u32({value});"),
+        Format::U64 => format!("writer.u64({value});"),
         Format::Str => format!("writer.string({value});"),
         Format::Bytes => format!("writer.u64({value}.length); for (const byte of {value}) writer.u8(byte);"),
         Format::TypeName(name) => format!("writer.{function}({value});", function = function(name)),
@@ -301,9 +316,14 @@ fn read_format(format: &Format) -> String {
     match format {
         Format::Unit => "null".into(),
         Format::Bool => "reader.bool()".into(),
-        Format::I8 | Format::I16 | Format::I32 | Format::I64 => "reader.i64()".into(),
+        Format::I8 => "reader.i8()".into(),
+        Format::I16 => "reader.i16()".into(),
+        Format::I32 => "reader.i32()".into(),
+        Format::I64 => "reader.i64()".into(),
         Format::U8 => "reader.u8()".into(),
-        Format::U16 | Format::U32 | Format::U64 => "reader.u64()".into(),
+        Format::U16 => "reader.u16()".into(),
+        Format::U32 => "reader.u32()".into(),
+        Format::U64 => "reader.u64()".into(),
         Format::Str => "reader.string()".into(),
         Format::Bytes => "Uint8Array.from(reader.seq(() => reader.u8()))".into(),
         Format::TypeName(name) => format!("reader.{function}()", function = function(name)),

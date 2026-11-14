@@ -284,7 +284,7 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 	return fh
 }
 
-func codexTestNode(t *testing.T) *Node {
+func codexTestNode(t testing.TB) *Node {
 	n, _ := testNode(t)
 	n.akeys = map[string]*assistantProc{}
 	n.modes = map[string]sessionModes{}

@@ -415,6 +415,7 @@ The binary gets three more `-X` variables (`cmd/personad`):
 
 - `nodes`: the other programs a node can run, published with personad (`update.NodePrograms`: `persona-node`, the device's own): `{"persona-node": {"linux-amd64": {name, size, sha256, binary_sha256}, …}}`.
   `node_protocol`, `node_protocol_min`, `node_capabilities`: what the release's nodes announce in `node.info` (`docs/protocol/protocol.md` ("Node handshake")), so a manager of another build sends one only when it drives it (`docs/operations/node-update.md` ("Node packages")). Old hubs ignore all three.
+- `links`: independently installed persona-link downloads: `{"linux-amd64": {name, size, sha256, binary_sha256}, …}`. Windows names keep `.exe` before `.gz`, for example `persona-link-windows-amd64.exe.gz`. The publisher verifies these downloads like the others, but hub and manager updates never install or swap them. Old hubs ignore this field.
 - Every release is also kept at `dl/<version>/` (its node builds, `personad-*` and `persona-node-*`, and this manifest as `manifest.json`; also `dl/X.Y.Z/` for the tag `vX.Y.Z`), where managers fetch the node build of their hub's version; `dl/latest.json` and `dl/*.gz` stay the newest release.
 - A downloaded file must match both `sha256` (archive) and `binary_sha256` (decompressed), and the new binary's `version -v` must report the version and build number in the manifest.
   `SHA256SUMS` stays for install.sh.
@@ -571,6 +572,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      Update history and bad versions still go into Postgres.
 4. **Wait for idle** (check every 30 seconds; also do not restart while redeploying a machine): automatic and manual are the same: **restart only when the assistant and every Agent are idle**, with no time-of-day restriction (user, 2026-11-02).
    - Idle = no session working or waiting for the user's answer (both assistant chats and Agents in herdr count). If they never become idle, never install; keep the download ready.
+   - A chat that waits only on the assistant's `ask_user` cards asked without waiting (`wait: false`, or a question that let go of its turn) is idle for this: no turn waits on them and they outlive a restart, so a card that is up for two hours does not hold the update (`hub/selfupdate_install.go` `updateBusy`, #7392; `docs/assistant/assistant.md`, "Asking without holding the turn"). A running turn, a blocked terminal, any other card of that chat, or a card the hub was not shown still holds it.
    - For a manual update, the App shows "what is still busy" (which chats, on which machine), and offers **Update Now** in a second confirmation:
      the confirmation states, "This interrupts anything waiting on the hub (the assistant's current turn, uploads in progress, terminal connections). Agents in herdr aren't affected and reconnect on their own."
      After confirmation, skip waiting for idle; all other steps (verification, rollback) stay the same.

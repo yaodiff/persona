@@ -11,7 +11,7 @@ mod arkts;
 use std::path::{Path, PathBuf};
 
 use persona_core_runtime::wire::{
-    Action, ChatEvent, ChatPatch, ChatSnapshot, Config, Effect, ListOp, Request, WireBatch,
+    Action, ChatEvent, ChatPatch, ChatSnapshot, Config, Effect, ListOp, Payload, Request, WireBatch,
 };
 use serde_generate::{CodeGeneratorConfig, Encoding, SourceInstaller, kotlin, swift};
 use serde_reflection::{Registry, Tracer, TracerConfig};
@@ -27,6 +27,7 @@ fn registry() -> Registry {
     tracer.trace_simple_type::<ChatSnapshot>().expect("ChatSnapshot");
     tracer.trace_simple_type::<Config>().expect("Config");
     tracer.trace_simple_type::<Action>().expect("Action");
+    tracer.trace_simple_type::<Payload>().expect("Payload");
     tracer.trace_simple_type::<Effect>().expect("Effect");
     tracer.trace_simple_type::<ChatPatch>().expect("ChatPatch");
     tracer.registry().expect("every wire type is traced")

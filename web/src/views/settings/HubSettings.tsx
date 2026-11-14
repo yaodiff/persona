@@ -131,7 +131,7 @@ function HubUpdates() {
         <Row label={t("settings-hubsettings.version")} mono>
           <span className="max-w-[320px] truncate" title={status.version}>{status.version}</span>
         </Row>
-        <Row label={t("settings-hubsettings.channel")}>{channelTitle(status.channel)}</Row>
+        <Row label={t("settings-hubsettings.channel")} anchor="hub-channel">{channelTitle(status.channel)}</Row>
         {status.last_check && <Row label={t("settings-hubsettings.last_check")}>{ago(status.last_check)}</Row>}
         <div className="flex justify-end px-4 py-2.5">
           <Button icon="retry" busy={checking} disabled={checking || working} onClick={() => void check()}>
@@ -180,7 +180,7 @@ function HubUpdates() {
       </Group>
 
       {status.can_update && (
-        <Group footer={t("settings-hubsettings.auto_footer")}>
+        <Group footer={t("settings-hubsettings.auto_footer")} anchor="hub-auto-update">
           <Row label={t("settings-hubsettings.auto_update")}>
             <Switch on={status.auto} onChange={(on) => void setAuto(on)} label={t("settings-hubsettings.auto_update")} />
           </Row>

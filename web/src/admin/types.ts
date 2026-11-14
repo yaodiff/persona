@@ -261,6 +261,8 @@ export interface AdminExtension {
   attached?: import("../lib/extensions").ExtensionAttached;
   /** Installed packages the hub runs: the sandbox and what went through the egress proxy (#5696). */
   sandbox?: import("../lib/extensions").ExtensionSandbox;
+  /** An extension whose program runs on computers: the hub's aggregate across its machines. */
+  node_status?: import("../lib/extensions").NodeStatusSummary;
 }
 
 export interface AdminExtensions {

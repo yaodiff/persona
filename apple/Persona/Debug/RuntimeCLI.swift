@@ -25,6 +25,16 @@ enum RuntimeCLI {
         .merging(motionCommands) { core, _ in core }
         .merging(imageViewerCommands) { core, _ in core }
         .merging(agentsPagingCommands) { core, _ in core }
+        .merging(screenRoutesTable) { core, _ in core }
+
+    /// The live screen's routes (#6398), on the phone only.
+    private static var screenRoutesTable: [String: Command] {
+        #if os(iOS) && canImport(PersonaScreenKit)
+        screenRouteCommands
+        #else
+        [:]
+        #endif
+    }
 
     private static let coreCommands: [String: Command] = [
         "ping": { _ in ["pong": true, "pid": Int(ProcessInfo.processInfo.processIdentifier)] },

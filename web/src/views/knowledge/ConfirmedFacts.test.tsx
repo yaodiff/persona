@@ -81,6 +81,19 @@ describe("confirmed facts in Knowledge detail", () => {
     expect(button("Save").disabled).toBe(true);
   });
 
+  // audit item 70: as the dialogs' multi-line fields, ⌘↩ / Ctrl+↩ saves and Enter alone is a new line
+  it.each([{ metaKey: true }, { ctrlKey: true }])("saves on Enter with %o from the facts box, not on Enter alone", async (mod) => {
+    await load();
+    click("Add");
+    input("Prefers mornings.");
+    const press = (init: KeyboardEventInit) => act(() => { text().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init })); });
+    press({});
+    expect(writes()).toHaveLength(0);
+    press(mod);
+    expect(writes()).toHaveLength(1);
+    expect(JSON.parse(writes()[0].init.body as string)).toEqual({ pinned: "Prefers mornings." });
+  });
+
   it.each(KB_KINDS)("creates, edits and clears facts for %s with field-only bodies and authoritative readback", async (kind) => {
     const id = kind === "recordings" ? "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" : "example";
     await load(kind, id);

@@ -10,8 +10,8 @@ import (
 )
 
 // Tests the package's own tests do not cover for A-8 (a direct chat's fallback-new messages joining the conversation's
-// latest event): the model branch is untouched, an event being handled keeps its words, ordinary fallback appends in a
-// group still keep the tier, a fallback name the hub never offered is refused, and the rule floor takes the highest
+// latest event): the model branch is untouched, an event being handled keeps its words, an ordinary group fallback append can raise
+// but never lower the tier, a fallback name the hub never offered is refused, and the rule floor takes the highest
 // rewritten entry and the fallback-new default when an entry carries no tier.
 
 // Only a fallback plan is rewritten: an event the model opens in a direct chat stays its own event.
@@ -67,9 +67,8 @@ func TestInboxGroupDMJoinLeavesHandledEventAlone(t *testing.T) {
 	}
 }
 
-// The rewrite is a direct chat's: a group's ordinary fallback append still takes only the messages, whatever rule tier
-// its thing carries (A-1).
-func TestInboxGroupFallbackAppendKeepsTheGroupTier(t *testing.T) {
+// A group's ordinary fallback append takes the same monotonic rule floor as a direct-chat rewrite (A-12).
+func TestInboxGroupFallbackAppendRaisesTheGroupTier(t *testing.T) {
 	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, ruleTier: TierAction, fallback: connector.GroupFallbackResult{
 		Assign: []connector.GroupAssign{{Message: "m1060", Event: "lark:F1:1051"}, {Message: "m1061", Event: "lark:F1:1051"}}}}
 	h, _ := groupHub(t, g, nil)
@@ -81,8 +80,12 @@ func TestInboxGroupFallbackAppendKeepsTheGroupTier(t *testing.T) {
 	if len(g.appends) != 1 || g.appends[0].Event != it.ID {
 		t.Fatalf("appends %+v", g.appends)
 	}
-	if it.Tier != TierFYI || it.Reason != "示例原理由" || it.TriagedBy != "model" || it.Count != 3 || it.Last != "1061" {
+	if it.Title != "示例 A 方案评审" || it.Summary != "等你定时间" || it.Tier != TierAction || it.Reason != "按规则" ||
+		it.TriagedBy != "model" || it.Count != 3 || it.Last != "1061" {
 		t.Fatalf("ordinary append %+v", it)
+	}
+	if kinds := chainKinds(it); !slices.Contains(kinds, ChainTriaged) {
+		t.Fatalf("the rule-tier rise was not recorded: %v", kinds)
 	}
 	if len(h.inbox.items) != 2 || h.inbox.items["lark:F1:1060"] != nil {
 		t.Fatalf("the ordinary append opened another event: %v", h.inbox.items)

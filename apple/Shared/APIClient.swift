@@ -1334,6 +1334,8 @@ nonisolated struct APIClient: Sendable {
         /// Suggest the next message after replies in open chats (#4696). Off by default; nil from a hub without the
         /// setting, which hides the switch.
         var nextSuggestions: Bool?
+        /// Organize knowledge points by topic (#3783, docs/assistant/knowledge.md "Topics"): on by default, so nil reads as on.
+        var kbTopics: Bool?
         /// The background supervisor's session id once the hub has made it (read-only); nil until then and from an
         /// older hub.
         var backgroundSupervisor: String?
@@ -1378,7 +1380,7 @@ nonisolated struct APIClient: Sendable {
             case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
             case meetingTranscriptionExtension = "meeting_transcription_extension"
             case meetingTranscriptionReady = "meeting_transcription_ready"
-            case nextSuggestions = "next_suggestions"
+            case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
             case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
             case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
@@ -1480,13 +1482,14 @@ nonisolated struct APIClient: Sendable {
         var agentAutoNaming: Bool?
         var agentAutoNamingMax: Int?
         var agentAutoNamingIntervalHours: Int?
+        var kbTopics: Bool?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
             case mainBackgroundFolded = "main_background_folded", mainSupervisesOwnTasks = "main_supervises_own_tasks"
             case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
             case meetingTranscriptionExtension = "meeting_transcription_extension"
-            case nextSuggestions = "next_suggestions"
+            case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
             case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
             case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"

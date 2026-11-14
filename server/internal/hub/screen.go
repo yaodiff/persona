@@ -53,7 +53,11 @@ func (h *Hub) screenVideoConnect(w http.ResponseWriter, r *http.Request, m *Mach
 	if h.extReport().ScreenKeepAwake {
 		dial["keep_awake"] = true // someone is watching: the Mac stays awake until this closes (node/awake.go)
 	}
-	err := m.call(dctx, "screen.dial", dial, nil)
+	link := h.askScreenLink(r, dial) // the video joins the pair's screen session (#6398)
+	var res struct {
+		Link int `json:"link"`
+	}
+	err := m.call(dctx, "screen.dial", dial, &res)
 	cancel()
 	if err != nil {
 		mux.Abort(id, err)
@@ -69,10 +73,13 @@ func (h *Hub) screenVideoConnect(w http.ResponseWriter, r *http.Request, m *Mach
 			case "video_unavailable":
 				writeErr(w, http.StatusServiceUnavailable, err)
 				return
+			case "session_gone":
+				writeErr(w, http.StatusGone, err)
+				return
 			}
 		}
 		callErr(w, err)
 		return
 	}
-	h.bridgeStream(w, r, mux, id)
+	h.bridgeStream(w, r, mux, id, link && res.Link == 1)
 }

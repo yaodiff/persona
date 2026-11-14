@@ -17,10 +17,17 @@ final class LarkAttachmentFlowTests: XCTestCase {
         app.launchPinned()
         let chat = app.staticTexts["设计评审"].firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 20)); chat.tapCenter()
+        expandSource(app)
         if !["corrupt", "legacy"].contains(draft) {
             XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "移除 ")).firstMatch.waitForExistence(timeout: 15))
         }
         return app
+    }
+
+    @MainActor private func expandSource(_ app: XCUIApplication) {
+        let source = app.buttons["inbox.detail.source"]
+        XCTAssertTrue(source.waitForExistence(timeout: 20), "the original-source control did not appear")
+        source.tapCenter()
     }
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
@@ -41,6 +48,7 @@ final class LarkAttachmentFlowTests: XCTestCase {
         app.launchPinned()
         let chat = app.staticTexts["设计评审"].firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 20)); chat.tapCenter()
+        expandSource(app)
     }
 
     @MainActor func testPhotoDraftSurvivesTerminationWithoutFixtureReinjection() throws {
@@ -194,6 +202,7 @@ final class LarkAttachmentFlowTests: XCTestCase {
             thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
         let chat = app.staticTexts["设计评审"].firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 8)); chat.tapCenter()
+        expandSource(app)
         XCTAssertTrue(failed.waitForExistence(timeout: 10))
         failed.tapCenter()
         XCTAssertTrue(app.buttons["重发"].waitForExistence(timeout: 5))
@@ -305,6 +314,7 @@ final class LarkAttachmentFlowTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-demo.on", "NO",                                "-openInboxItem", "lark:f3:300", "-showLarkThreadAttachmentDraft", draft] + Self.fresh
         app.launchPinned()
+        expandSource(app)
         let thread = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "条回复")).firstMatch
         XCTAssertTrue(thread.waitForExistence(timeout: 20), "the chat did not open at its thread")
         thread.tapCenter()

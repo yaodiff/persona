@@ -101,9 +101,10 @@ func (s *Service) spawnedTurnSettled(ctx context.Context, sess proto.Session, fa
 	b.st.Spawned[sid] = c
 	s.saveRelayLocked()
 	b.mu.Unlock()
-	name, hop, err := s.relayFrom(ctx, sid)
+	hop, answer := 0, false
+	name, err := s.relayFrom(ctx, sid)
 	if err == nil {
-		err = s.relayAllowed(sid, c.Parent, hop, time.Now())
+		hop, answer, err = s.relayAllowed(sid, c.Parent, time.Now())
 	}
 	if err != nil {
 		s.logf("spawned conversation %s: %s not told: %v", short(sid), short(c.Parent), err)
@@ -115,7 +116,7 @@ func (s *Service) spawnedTurnSettled(ctx context.Context, sess proto.Session, fa
 	} else {
 		n.Last = clip(oneLine(sess.LastText), 300)
 	}
-	msg := relayMsg{From: sid, FromTitle: name, Tool: spawnNoticeTool, Text: prompts.RenderSpawnNotice(n), Hop: hop, At: time.Now().UTC()}
+	msg := relayMsg{From: sid, FromTitle: name, Tool: spawnNoticeTool, Text: prompts.RenderSpawnNotice(n), Hop: hop, Answer: answer, At: time.Now().UTC()}
 	what := "ended without reporting back"
 	if failed {
 		what = "failed"

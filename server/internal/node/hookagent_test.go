@@ -33,7 +33,7 @@ func (h *cancelHub) toolUseIDs() []string {
 	return append([]string(nil), h.toolIDs...)
 }
 
-func withCancelHub(t *testing.T, n *Node) *cancelHub {
+func withCancelHub(t testing.TB, n *Node) *cancelHub {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	n2hR, n2hW := io.Pipe()

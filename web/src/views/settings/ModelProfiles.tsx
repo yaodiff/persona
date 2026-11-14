@@ -113,7 +113,7 @@ function ModelProfilesForOwner({ manager, owner, context, providers, onChanged }
   const names = namesFromProviders(providers);
   if (!data && !error) return null; // old hubs do not expose profiles
   return <>
-    <Group title={t("settings-modelprofiles.title")}
+    <Group anchor="model-profiles" title={t("settings-modelprofiles.title")}
       footer={data && !data.active ? `${t("settings-modelprofiles.footer")} ${t("settings-modelprofiles.none_active")}` : t("settings-modelprofiles.footer")}>
       {data?.profiles.map((p) => <Row key={p.id} label={p.name} hint={p.description} onClick={() => { setSelected(p.id); clearErrors(); }}>
         {p.active && <Pill>{t("settings-modelprofiles.active")}</Pill>}

@@ -1,13 +1,11 @@
 {
-  "main": "メイン会話",
-  "not_started": "メイン会話はまだ開始されていません",
-  "starting": "メイン会話 · 起動中…",
-  "unknown": "メイン会話 · 実行情報は未報告",
+  "main": "メインチャット",
+  "not_started": "メインチャットはまだ始まっていません",
+  "starting": "メインチャット · 起動中…",
   "running": "実行中",
-  "location_unknown": "実行場所は未報告",
-  "proxy": "{name} 経由（実行場所は未報告）",
+  "proxy": "{name} 経由",
   "container": "コンテナ {name}",
-  "offline": "メイン会話 · オフライン",
-  "stopped": "メイン会話 · 停止中",
+  "offline": "メインチャット · オフライン",
+  "stopped": "メインチャット · 停止中",
   "last_location": "前回の実行場所：{location}"
 }

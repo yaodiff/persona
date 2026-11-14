@@ -171,6 +171,9 @@ type Manager struct {
 	isMemberNow atomic.Bool
 	hello       atomic.Pointer[assistantwire.Hello]
 
+	// cuaSessions is what is known of the Cua Driver session labels the computer tools call under (computer_session.go).
+	cuaSessions cuaSessionBook
+
 	started chan struct{} // closed once Run started everything
 
 	reportMu            sync.Mutex

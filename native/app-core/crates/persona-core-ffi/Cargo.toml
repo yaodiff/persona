@@ -12,10 +12,12 @@ name = "persona_core"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
-test-support = []
+test-support = ["persona-core-runtime/test-support"]
 
 [dependencies]
 persona-core-runtime.workspace = true
+persona-core-domain.workspace = true
+serde_json = { workspace = true }
 jni = { version = "=0.21.1", default-features = false }
 
 [dev-dependencies]

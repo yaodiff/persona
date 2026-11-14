@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Live screen video: decode the mock's fixtures</title>
+<!-- web/e2e/screen-video-decode.mjs opens this page on the Vite dev server: the page's own wire and decoder-setup code
+     (#6558) decode a whole fixture with the browser's VideoDecoder. -->
+<script type="module">
+  import { decode, VideoParser } from "/src/screen/video-wire.ts";
+  import { decoderSetup } from "/src/screen/video-bitstream.ts";
+
+  window.decodeFixture = async (b64) => {
+    const raws = new VideoParser().push(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+    const msgs = raws.map((r) => decode(r.type, r.body));
+    const [hello, format] = msgs;
+    const frames = msgs.filter((m) => m.type === "frame");
+    const setup = decoderSetup(hello.codec, format.parameter_sets);
+    if (!setup) return { error: "no decoder setup from the parameter sets" };
+    const config = { codec: setup.codec, description: setup.description, optimizeForLatency: true,
+                     hardwareAcceleration: hello.codec === "hevc" ? "prefer-hardware" : "no-preference" };
+    if (typeof VideoDecoder === "undefined") return { codec: setup.codec, supported: false, why: "no VideoDecoder" };
+    const { supported } = await VideoDecoder.isConfigSupported(config);
+    if (!supported) return { codec: setup.codec, supported: false, why: "isConfigSupported: false" };
+    let decoded = 0, size = null, error = null;
+    const d = new VideoDecoder({
+      output: (f) => { decoded++; size = [f.displayWidth, f.displayHeight]; f.close(); },
+      error: (e) => { error = String(e); },
+    });
+    d.configure(config);
+    for (const f of frames) {
+      d.decode(new EncodedVideoChunk({ type: f.flags & 1 ? "key" : "delta", timestamp: f.capture_micros, data: f.sample }));
+    }
+    try { await d.flush(); } catch (e) { error = error ?? String(e); }
+    if (d.state !== "closed") d.close();
+    return { codec: setup.codec, supported: true, frames: frames.length, decoded, size, error };
+  };
+  window.decodeReady = true;
+</script>

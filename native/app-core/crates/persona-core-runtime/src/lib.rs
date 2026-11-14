@@ -7,14 +7,16 @@
 
 pub mod wire;
 
-#[cfg(target_os = "android")]
+pub use persona_core::transport;
+
+#[cfg(any(target_os = "android", feature = "test-support"))]
 mod diagnostics;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", feature = "test-support"))]
 use diagnostics::{Diagnostics, scheduler_switches};
 
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", feature = "test-support"))]
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -23,12 +25,18 @@ use std::time::{Duration, Instant};
 
 use persona_core::Item;
 use persona_core::continuity::{Batch, Session, Step};
-use wire::{Action, ChatEvent, ChatPatch, ChatSnapshot, Effect, ListOp, WireBatch};
+use persona_core::transport::{DecodeError, Frame, LatestPage};
+use wire::{Action, ChatEvent, ChatPatch, ChatSnapshot, Effect, ListOp, Payload, WireBatch};
 
 /// The client's side: called on the core's worker thread, so implementations must be thread-safe and quick.
 pub trait Host: Send + Sync + 'static {
     /// Something changed at `version`: pull patches on the next frame.
-    fn changed(&self, version: u64);
+    fn changed(&self, _version: u64) {}
+    /// The chat whose patch changed. Existing hosts keep the version-only callback by default; adapters that need a
+    /// targeted wake override this without changing the bincode or continuity state machine.
+    fn changed_chat(&self, _chat: &str, version: u64) {
+        self.changed(version)
+    }
     /// An encoded `wire::Effect` for the client to run.
     fn run(&self, effect: &[u8]);
 }
@@ -52,9 +60,9 @@ struct Shared {
     queue: Mutex<Queue>,
     idle: Condvar,
     /// Once-lock means ordinary dispatch/drain only read a null pointer; all instrumentation is opt-in.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     diagnostics: std::sync::OnceLock<Arc<Diagnostics>>,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     worker_thread: std::sync::atomic::AtomicU64,
 }
 
@@ -97,7 +105,7 @@ impl Runtime {
 
     /// Queues an encoded `wire::Action`. Never blocks on the worker.
     pub fn dispatch(&self, action: &[u8]) -> bool {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         let sent = if self.shared.diagnostics.get().is_some() {
             let mut sent = Err(std::sync::mpsc::SendError(Message::Stop));
             diagnostics::measure_queue(&self.shared, || {
@@ -119,7 +127,7 @@ impl Runtime {
             queue.pending += 1;
             self.sender.send(Message::Action(action.to_vec()))
         };
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", feature = "test-support")))]
         let sent = {
             let mut queue = lock(&self.shared.queue);
             if queue.stopping {
@@ -138,11 +146,11 @@ impl Runtime {
     /// The chat's encoded `wire::ChatPatch` since the last successful drain. Encoding and removal are committed in
     /// that order: a failed encode leaves the pending operations and wake available for the next drain.
     pub fn drain(&self, chat: &str) -> Vec<u8> {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         let mut patches = diagnostics::timed_lock(&self.shared, &self.shared.patches, true);
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", feature = "test-support")))]
         let mut patches = lock(&self.shared.patches);
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         {
             diagnostics::measure_patch_held(&self.shared, || {
                 let started = Instant::now();
@@ -162,7 +170,7 @@ impl Runtime {
                 encoded
             })
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", feature = "test-support")))]
         {
             let patch = patches.chats.get(chat).cloned().unwrap_or_default();
             let encoded = wire::encode(&patch);
@@ -203,13 +211,13 @@ impl Runtime {
     }
 
     /// Same wait as [flush], with opt-in caller timing outside the original benchmark spans.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     pub fn flush_diagnostic(&self, timeout: Duration) -> bool {
         self.flush(timeout)
     }
     /// Cumulative opt-in timings, off the ordinary dispatch/drain path. Nanosecond values are inclusive spans, so
     /// nested queue and lock diagnostics overlap. Scheduler counters are zero when /proc cannot be read.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     pub fn diagnostics(&self) -> Vec<i64> {
         let counters = self
             .shared
@@ -220,7 +228,8 @@ impl Runtime {
         let worker = self.shared.worker_thread.load(Ordering::Relaxed);
         let (worker_voluntary, worker_involuntary) = scheduler_switches(worker);
         let (caller_voluntary, caller_involuntary) = scheduler_switches(0);
-        vec![
+        #[allow(unused_mut)]
+        let mut values = vec![
             counters.pending_lock.load(Ordering::Relaxed) as i64,
             counters.pending_switches.load(Ordering::Relaxed) as i64,
             counters.pending_lock_calls.load(Ordering::Relaxed) as i64,
@@ -245,10 +254,13 @@ impl Runtime {
             worker_involuntary as i64,
             caller_voluntary as i64,
             caller_involuntary as i64,
-        ]
+        ];
+        #[cfg(feature = "test-support")]
+        values.push(counters.pending_lock_without_proc.load(Ordering::Relaxed) as i64);
+        values
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     pub fn enable_diagnostics(&self) {
         self.shared.diagnostics.get_or_init(|| Arc::new(Diagnostics::default()));
     }
@@ -317,6 +329,8 @@ struct Chat {
     session: Session,
     /// The list as the client last received it, to diff against.
     published: Vec<Arc<Item>>,
+    /// The highest acknowledged input sequence number, for `Action::Ack`.
+    acked: Option<u64>,
 }
 
 struct Worker {
@@ -335,7 +349,7 @@ impl Worker {
     }
 
     fn run(mut self, receiver: Receiver<Message>) {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         self.shared
             .worker_thread
             .store(diagnostics::thread_id(), Ordering::Relaxed);
@@ -362,7 +376,7 @@ impl Worker {
     }
 
     fn reject(&self, reason: String) {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         if let Some(diagnostics) = self.shared.diagnostics.get() {
             let started = Instant::now();
             let encoded = wire::encode(&Effect::Rejected { reason });
@@ -376,9 +390,9 @@ impl Worker {
     }
 
     fn action(&mut self, bytes: &[u8]) {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         let started = Instant::now();
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         if let Some(diagnostics) = self.shared.diagnostics.get() {
             diagnostics::increment(&diagnostics.counters.worker_actions);
         }
@@ -406,6 +420,7 @@ impl Worker {
                     Chat {
                         session,
                         published: Vec::new(),
+                        acked: None,
                     },
                 );
                 self.publish(&chat);
@@ -418,7 +433,7 @@ impl Worker {
             }
             Action::Chat { chat, event } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("event for a chat that is not open: {chat}"));
+                    return self.reject("event for a chat that is not open".into());
                 };
                 let step = match apply(&mut state.session, event) {
                     Ok(step) => step,
@@ -426,15 +441,42 @@ impl Worker {
                 };
                 self.after_step(&chat, step);
             }
+            Action::WirePayload { chat, payload } => {
+                let Some(state) = self.chats.get_mut(&chat) else {
+                    return self.reject("payload for a chat that is not open".into());
+                };
+                let step = match payload_step(&mut state.session, &chat, payload) {
+                    Ok(Some(step)) => step,
+                    Ok(None) => return,
+                    Err(error) => return self.reject(error),
+                };
+                self.after_step(&chat, step);
+            }
             Action::ContinueFill { chat } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("fill for a chat that is not open: {chat}"));
+                    return self.reject("fill for a chat that is not open".into());
                 };
                 let step = state.session.continue_fill();
                 self.after_step(&chat, step);
             }
+            Action::HubChanged { chat } => {
+                let Some(state) = self.chats.get_mut(&chat) else {
+                    return self.reject("hub change for a chat that is not open".into());
+                };
+                let step = state.session.hub_changed();
+                self.after_step(&chat, step);
+            }
+            Action::Ack { chat, seq } => {
+                let Some(state) = self.chats.get_mut(&chat) else {
+                    return self.reject("ack for a chat that is not open".into());
+                };
+                state.acked = Some(state.acked.map_or(seq, |previous| previous.max(seq)));
+                // An acknowledgement must reach the client even when nothing else changed, so publish with a
+                // forced wake rather than relying on the diff.
+                self.publish_ack(&chat);
+            }
         }
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         if let Some(diagnostics) = self.shared.diagnostics.get() {
             diagnostics::add(&diagnostics.counters.worker_decode_apply, started);
         }
@@ -442,7 +484,7 @@ impl Worker {
 
     fn after_step(&mut self, chat: &str, step: Step) {
         for request in step.requests {
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", feature = "test-support"))]
             if let Some(diagnostics) = self.shared.diagnostics.get() {
                 let started = Instant::now();
                 let encoded = wire::encode(&Effect::Fetch {
@@ -479,7 +521,9 @@ impl Worker {
             let state_changed = patch.covered != reducer.covered()
                 || patch.history.as_deref() != reducer.history()
                 || patch.has_more != reducer.has_more()
-                || patch.loaded_once != reducer.loaded_once();
+                || patch.loaded_once != reducer.loaded_once()
+                || patch.verified != state.session.verified()
+                || patch.acked != state.acked;
             if !items_changed && !state_changed && patch.version != 0 {
                 None
             } else {
@@ -488,6 +532,8 @@ impl Worker {
                 patch.history = reducer.history().map(str::to_owned);
                 patch.has_more = reducer.has_more();
                 patch.loaded_once = reducer.loaded_once();
+                patch.verified = state.session.verified();
+                patch.acked = state.acked;
                 patches.version += 1;
                 let version = patches.version;
                 patches.chats.get_mut(chat).expect("patch inserted above").version = version;
@@ -497,16 +543,96 @@ impl Worker {
             }
         };
         if let Some(version) = wake {
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", feature = "test-support"))]
             if let Some(diagnostics) = self.shared.diagnostics.get() {
                 let started = Instant::now();
-                self.host.changed(version);
+                self.host.changed_chat(chat, version);
                 diagnostics::add(&diagnostics.counters.worker_host_changed, started);
                 return;
             }
-            self.host.changed(version);
+            self.host.changed_chat(chat, version);
         }
     }
+}
+
+impl Worker {
+    /// Publishes an acknowledgement, waking the client even though the chat's items did not change.
+    fn publish_ack(&mut self, chat: &str) {
+        let Some(state) = self.chats.get_mut(chat) else { return };
+        let mut patches = lock(&self.shared.patches);
+        let patch = patches.chats.entry(chat.to_owned()).or_default();
+        patch.covered = state.session.reducer().covered();
+        patch.history = state.session.reducer().history().map(str::to_owned);
+        patch.has_more = state.session.reducer().has_more();
+        patch.loaded_once = state.session.reducer().loaded_once();
+        patch.verified = state.session.verified();
+        patch.acked = state.acked;
+        patches.version += 1;
+        let version = patches.version;
+        patches.chats.get_mut(chat).expect("patch inserted above").version = version;
+        drop(patches);
+        self.host.changed(version);
+    }
+}
+
+/// A refused payload, reported without any of its content: a reason code, and key names or positions only
+/// (`transport::DecodeError`). The chat id is not content either, but it is not part of the decoder's errors.
+fn refused(error: DecodeError) -> String {
+    format!("refused payload: {error}")
+}
+
+/// Applies a transport payload to its chat. `Ok(None)` is a frame that is not an `items` frame or one iOS would
+/// drop, so it is not an error and changes nothing.
+fn payload_step(session: &mut Session, chat: &str, payload: Payload) -> Result<Option<Step>, String> {
+    let step = match payload {
+        Payload::Latest { body } => {
+            session.received(transport::decode_latest(body.as_bytes()).map_err(refused)?.into_batch())
+        }
+        Payload::Newer { body } => {
+            session.after(transport::decode_newer(body.as_bytes()).map_err(refused)?.into_batch())
+        }
+        Payload::Reloaded { body } => {
+            let LatestPage {
+                items,
+                has_more,
+                history,
+                to_seq,
+            } = transport::decode_latest(body.as_bytes()).map_err(refused)?;
+            session.reload(items, history, to_seq, has_more)
+        }
+        Payload::Older { body } => {
+            let page = transport::decode_latest(body.as_bytes()).map_err(refused)?;
+            session.older(page.items, page.has_more)
+        }
+        Payload::Range { fold_id, body } => {
+            let (items, more) = transport::decode_range(body.as_bytes()).map_err(refused)?.into_parts();
+            // A transport range page answers the opening it was requested for; with no fold id on the wire payload,
+            // it answers the single opening, matching the older callers.
+            session.range(fold_id.as_deref().unwrap_or(""), items, more)
+        }
+        Payload::Frame { body } => match transport::decode_frame(body.as_bytes()) {
+            Ok(Frame::Other) => return Ok(None),
+            // iOS's `ServerEvent.decode` drops a frame it cannot decode; that is not a failure of the chat.
+            Err(_) => return Ok(None),
+            Ok(Frame::Items(frame)) => {
+                // The frame names its own machine and session but no hub group, so the client's chat id may be
+                // `machine_id/session_id`, iOS's `group|machine_id/session_id` for a non-default group, or either
+                // bare id. Anything else routed the frame wrongly: report it rather than apply another chat's items.
+                let full = format!("{}/{}", frame.machine_id, frame.session_id);
+                let routed = chat == full
+                    || chat
+                        .strip_suffix(full.as_str())
+                        .is_some_and(|prefix| prefix.ends_with('|'))
+                    || frame.machine_id == chat
+                    || frame.session_id == chat;
+                if !routed {
+                    return Err("payload frame is for another chat".into());
+                }
+                session.received(frame.into_batch())
+            }
+        },
+    };
+    Ok(Some(step))
 }
 
 fn items_from(json: &str) -> Result<Vec<Item>, String> {
@@ -543,7 +669,15 @@ fn apply(session: &mut Session, event: ChatEvent) -> Result<Step, String> {
             has_more,
         } => session.reload(items_from(&items_json)?, history, to_seq, has_more),
         ChatEvent::Older { items_json, has_more } => session.older(items_from(&items_json)?, has_more),
-        ChatEvent::Range { items_json, more } => session.range(items_from(&items_json)?, more),
+        ChatEvent::Range {
+            fold_id,
+            items_json,
+            more,
+        } => {
+            // A page without a fold id answers the only opening, for older callers; with one, it answers that fold.
+            let id = fold_id.unwrap_or_default();
+            session.range(&id, items_from(&items_json)?, more)
+        }
         ChatEvent::Reconnected => session.reconnect(),
         ChatEvent::LoadOlder => session.load_older(),
         ChatEvent::OpenFold { fold_id } => session.open_fold(&fold_id),
@@ -555,8 +689,8 @@ fn apply(session: &mut Session, event: ChatEvent) -> Result<Step, String> {
             session.finish_older();
             Step::default()
         }
-        ChatEvent::RangeFailed => {
-            session.cancel_fold();
+        ChatEvent::RangeFailed { fold_id } => {
+            session.cancel_fold(fold_id.as_deref());
             Step::default()
         }
     })

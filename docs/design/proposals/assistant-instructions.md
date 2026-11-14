@@ -137,7 +137,8 @@ makes a regression visible before merge or within a week after, and makes every 
   - a supervision event is reviewed with evidence and closed with `task_review`, not retold to the owner;
   - an event the owner need not see ends with `supervision_finish` and `visibility: "silent"`;
   - an outward send without authorization goes to `ask_user` first;
-  - in the main chat a question that does not block the next step uses `ask_user` with `wait: false`;
+  - a question that does not block the next step uses `ask_user` with `wait: false`, in the main chat and in a leader
+    conversation alike (#7392);
   - work for a direction carries its `supervisor`;
   - a recurring request uses `schedule_routine`, not a chain of follow-ups.
 - **Checks are deterministic where possible**: which tools were called, with which arguments, in which order. A model

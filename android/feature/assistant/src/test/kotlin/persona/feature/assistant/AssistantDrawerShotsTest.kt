@@ -39,6 +39,7 @@ import persona.core.contracts.DirectionTaskState
 import persona.core.contracts.DirectionTree
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
+import persona.core.contracts.api.AssistantSearchHit
 import persona.core.contracts.api.LeaderCounts
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
@@ -474,5 +475,36 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("设为常驻").assertExists()
         rule.onNodeWithText("归档").assertExists()
         rule.onNodeWithText("结束…").assertExists()
+    }
+
+    @Test fun drawsSearchResultsInEveryStyle() {
+        val said = AssistantSearchHit(itemId = "m1", snippet = "前面的话青石巷后面还有一句", ranges = listOf(listOf(4, 7)))
+        val route = Session(machineId = "hub", sessionId = "route", title = "路线", status = "idle",
+            updatedAt = minutesAgo(10), lastText = "最后一句不该盖住命中。")
+        val titled = Session(machineId = "hub", sessionId = "titled", title = "周末去哪儿", status = "idle", updatedAt = minutesAgo(20))
+        val archived = Session(machineId = "hub", sessionId = "old", title = "旧的旅行", status = "idle",
+            archived = true, updatedAt = minutesAgo(40))
+        val found = listOf(FoundChat(main, said), FoundChat(titled, null), FoundChat(route, said), FoundChat(archived, null))
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("青石巷", {}, ConversationGroups(main, emptyList(), emptyList()),
+                        active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {}, onInfo = {},
+                        onNew = {}, onSettings = {}, found = found, searchPartial = true)
+                }
+            }
+        }
+        rule.onAllNodesWithText("青石巷", substring = true).assertCountEquals(3)
+        rule.onNodeWithText("周末去哪儿").assertExists()
+        rule.onNodeWithText("已归档").assertExists()
+        rule.onNodeWithText("较早的对话还在整理，可能有些暂时搜不到。").assertExists()
+        rule.onAllNodesWithText("Persona").assertCountEquals(1)
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            capture("drawer-search-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
     }
 }

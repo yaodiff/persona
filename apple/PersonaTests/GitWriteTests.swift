@@ -170,8 +170,11 @@ struct GitWriteTests {
 
     @Test func branchesDecodeAndARemoteOneSwitchesByItsOwnName() throws {
         let json = #"{"branches":[{"name":"widget-hourly","current":true,"hash":"a1","subject":"x","date":"2026-11-13T10:00:00Z"},{"name":"main","hash":"a2","subject":"y","date":"2026-11-13T09:00:00Z"},{"name":"origin/release/2.4","remote":true,"hash":"a3","subject":"z","date":"2026-11-12T09:00:00Z"}]}"#
-        struct R: Decodable { var branches: [GitBranch] }
-        let b = try JSON.decoder.decode(R.self, from: Data(json.utf8)).branches
+        let list = try JSON.decoder.decode(GitBranchList.self, from: Data(json.utf8))
+        let b = list.branches
+        #expect(list.defaultBranch == nil, "an older node, or git doesn't know it")
+        let named = try JSON.decoder.decode(GitBranchList.self, from: Data(#"{"branches":[],"default":"main"}"#.utf8))
+        #expect(named.defaultBranch == "main")
         #expect(b.map(\.switchName) == ["widget-hourly", "main", "release/2.4"])
         #expect(b[0].current == true && b[1].current == nil && b[2].remote == true)
         #expect(Set(b.map(\.id)).count == 3)

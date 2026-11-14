@@ -85,6 +85,8 @@ describe("a sessions push", () => {
       vi.setSystemTime(new Date("2026-05-01T10:00:00Z"));
       answers["/api/v1/sessions"] = { sessions: sessions.map((s) => (s.session_id === "s4" ? { ...s, status: "offline", state: "offline", updated_at: new Date().toISOString() } : s)) };
       await act(() => refresh());
+      // the offline row is under Recent (not running), open here: a folded group mounts no rows
+      localStorage.setItem("fold:recent", "0");
       act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
       await flush();
       const row = () => [...host.querySelectorAll("a")].find((a) => a.textContent?.includes("任务 4"))?.textContent ?? "";

@@ -24,28 +24,46 @@ pub struct PersonaCoreHost {
     pub release: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
+/// An optional targeted wake callback, registered separately from the stable four-field PersonaCoreHost ABI.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct PersonaCoreChatCallback(pub unsafe extern "C" fn(*mut c_void, *const u8, usize, u64));
+
 /// The header requires `changed` and `run` to be callable from any thread with this context.
-struct CHost(PersonaCoreHost);
+struct CHost {
+    host: PersonaCoreHost,
+    handle: u64,
+}
 unsafe impl Send for CHost {}
 unsafe impl Sync for CHost {}
 
 impl Host for CHost {
     fn changed(&self, version: u64) {
-        if let Some(changed) = self.0.changed {
-            unsafe { changed(self.0.context, version) }
+        if let Some(changed) = self.host.changed {
+            unsafe { changed(self.host.context, version) }
+        }
+    }
+    fn changed_chat(&self, chat: &str, version: u64) {
+        let callback = cores()
+            .as_ref()
+            .and_then(|entries| entries.get(&self.handle).and_then(|entry| entry.changed_chat));
+        if let Some(changed) = callback {
+            unsafe { (changed.0)(self.host.context, chat.as_ptr(), chat.len(), version) }
+        } else {
+            self.changed(version);
         }
     }
     fn run(&self, effect: &[u8]) {
-        if let Some(run) = self.0.run {
-            unsafe { run(self.0.context, effect.as_ptr(), effect.len()) }
+        if let Some(run) = self.host.run {
+            unsafe { run(self.host.context, effect.as_ptr(), effect.len()) }
         }
     }
 }
 
 impl Drop for CHost {
     fn drop(&mut self) {
-        if let Some(release) = self.0.release {
-            unsafe { release(self.0.context) }
+        if let Some(release) = self.host.release {
+            unsafe { release(self.host.context) }
         }
     }
 }
@@ -56,11 +74,16 @@ pub struct PersonaCore {
 }
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
-static CORES: Mutex<Option<HashMap<u64, Arc<Runtime>>>> = Mutex::new(None);
+struct CoreEntry {
+    runtime: Arc<Runtime>,
+    changed_chat: Option<PersonaCoreChatCallback>,
+}
+
+static CORES: Mutex<Option<HashMap<u64, CoreEntry>>> = Mutex::new(None);
 #[cfg(feature = "test-support")]
 static DRAIN_STARTED: Mutex<Option<(u64, std::sync::mpsc::Sender<()>)>> = Mutex::new(None);
 
-fn cores() -> std::sync::MutexGuard<'static, Option<HashMap<u64, Arc<Runtime>>>> {
+fn cores() -> std::sync::MutexGuard<'static, Option<HashMap<u64, CoreEntry>>> {
     CORES.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -68,7 +91,10 @@ fn runtime(core: *const PersonaCore) -> Option<Arc<Runtime>> {
     if core.is_null() {
         return None;
     }
-    cores().as_ref()?.get(&(core.expose_provenance() as u64)).cloned()
+    cores()
+        .as_ref()?
+        .get(&(core.expose_provenance() as u64))
+        .map(|entry| entry.runtime.clone())
 }
 
 #[cfg(feature = "test-support")]
@@ -88,8 +114,8 @@ fn close(core: *mut PersonaCore) {
     let removed = cores()
         .as_mut()
         .and_then(|cores| cores.remove(&(core.expose_provenance() as u64)));
-    if let Some(runtime) = removed {
-        runtime.shutdown();
+    if let Some(entry) = removed {
+        entry.runtime.shutdown();
     }
 }
 
@@ -128,20 +154,29 @@ unsafe fn slice<'a>(pointer: *const u8, length: usize) -> &'a [u8] {
     }
 }
 
-pub(crate) fn create(config: &[u8], host: Arc<dyn Host>) -> Option<*mut PersonaCore> {
+pub(crate) fn next_handle() -> u64 {
+    NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
+}
+
+pub(crate) fn create(config: &[u8], host: Arc<dyn Host>, handle: u64) -> Option<*mut PersonaCore> {
     let _: Config = wire::decode(config).ok()?;
     let runtime = Arc::new_cyclic(|_| {
         let mut runtime = Runtime::new(host);
         runtime.set_explicit_shutdown();
         runtime
     });
-    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     if handle == u64::MAX {
         // Reserve zero for null and never wrap an ID while a client may still hold it.
         NEXT_HANDLE.store(u64::MAX, Ordering::Relaxed);
         return None;
     }
-    cores().get_or_insert_with(HashMap::new).insert(handle, runtime);
+    cores().get_or_insert_with(HashMap::new).insert(
+        handle,
+        CoreEntry {
+            runtime,
+            changed_chat: None,
+        },
+    );
     Some(handle as *mut PersonaCore)
 }
 
@@ -149,12 +184,33 @@ pub(crate) fn create(config: &[u8], host: Arc<dyn Host>) -> Option<*mut PersonaC
 /// `config` is valid for `length` bytes; the host's callbacks follow `persona_core.h`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn persona_core_new(host: PersonaCoreHost, config: *const u8, length: usize) -> *mut PersonaCore {
-    let host = CHost(host);
+    let handle = crate::next_handle();
+    if handle == u64::MAX {
+        NEXT_HANDLE.store(u64::MAX, Ordering::Relaxed);
+        return std::ptr::null_mut();
+    }
+    let host = CHost { host, handle };
     let config = unsafe { slice(config, length) };
-    catch_unwind(AssertUnwindSafe(|| create(config, Arc::new(host))))
+    catch_unwind(AssertUnwindSafe(|| create(config, Arc::new(host), handle)))
         .ok()
         .flatten()
         .unwrap_or(std::ptr::null_mut())
+}
+
+/// # Safety
+/// `core` is live and owned by the caller. `callback` remains valid until the core is closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_set_changed_chat(
+    core: *mut PersonaCore,
+    callback: PersonaCoreChatCallback,
+) -> bool {
+    let handle = core.expose_provenance() as u64;
+    let mut entries = cores();
+    let Some(entry) = entries.as_mut().and_then(|entries| entries.get_mut(&handle)) else {
+        return false;
+    };
+    entry.changed_chat = Some(callback);
+    true
 }
 
 /// # Safety
@@ -228,4 +284,29 @@ pub unsafe extern "C" fn persona_core_free(core: *mut PersonaCore) {
     if !core.is_null() {
         let _ = catch_unwind(AssertUnwindSafe(|| close(core)));
     }
+}
+
+/// Projects the Agents list from a JSON input. The input is a UTF-8 JSON document matching `persona_core::sort::Input`;
+/// the returned bytes are a UTF-8 JSON document matching `persona_core::sort::Projection`. This is a pure function: no
+/// core handle, no dispatch, no drain. The caller frees the result with `persona_core_bytes_free`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_sort(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input = unsafe { slice(input, length) };
+        let Ok(input_str) = std::str::from_utf8(input) else {
+            return PersonaCoreBytes::empty();
+        };
+        let Ok(input) = serde_json::from_str::<persona_core_domain::sort::Input>(input_str) else {
+            return PersonaCoreBytes::empty();
+        };
+        let projection = persona_core_domain::sort::project(&input);
+        let Ok(json) = serde_json::to_string(&projection) else {
+            return PersonaCoreBytes::empty();
+        };
+        PersonaCoreBytes::from_vec(json.into_bytes())
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
 }

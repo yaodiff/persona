@@ -3,6 +3,7 @@ import { setBadge } from "./badge.js";
 import type { BrowserWindow } from "electron";
 import { inHub } from "./urls.js";
 import { notificationRoute } from "./contract.cjs";
+import { DesktopIPCOwner } from "./ipc-owner.js";
 import type { HubAddress } from "./urls.js";
 
 function text(value: unknown, maximum: number): string {
@@ -47,45 +48,56 @@ export class DesktopNotifications {
   }
 }
 
+const ipcOwner = new DesktopIPCOwner();
+
 export function installDesktopIPC(window: BrowserWindow, deps: {
   readonly hub: () => HubAddress | undefined;
   readonly notifications: DesktopNotifications;
   readonly presence: () => { active: boolean; notifies: boolean };
+  readonly openLocalSettings: () => void;
 }): () => void {
   const authorized = (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => {
     const hub = deps.hub();
-    return event.sender === window.webContents && !window.isDestroyed() && event.senderFrame === event.sender.mainFrame && !!hub && inHub(hub, event.sender.getURL());
+    return event.sender === window.webContents && !window.isDestroyed() && event.senderFrame === event.sender.mainFrame && !!hub && inHub(hub, event.senderFrame.url);
   };
-  const names = ["desktop:notification-permission", "desktop:badge", "desktop:notify", "desktop:notifications-clear", "desktop:notification-close", "desktop:presence"];
+  const names = ["desktop:notification-permission", "desktop:badge", "desktop:notify", "desktop:notifications-clear", "desktop:notification-close", "desktop:presence", "desktop:open-local-settings"];
+  const releaseOwnership = ipcOwner.install();
   for (const name of names) ipcMain.removeAllListeners(name);
   for (const name of ["desktop:login-get", "desktop:login-set"]) ipcMain.removeHandler(name);
-  ipcMain.on("desktop:notification-permission", event => {
+  const listen = (name: string, handler: Parameters<typeof ipcMain.on>[1]) => {
+    ipcMain.on(name, handler);
+  };
+  listen("desktop:notification-permission", (event: Electron.IpcMainEvent) => {
     event.returnValue = authorized(event) && Notification.isSupported() ? "granted" : "denied";
   });
-  ipcMain.on("desktop:badge", (event, value: unknown) => {
+  listen("desktop:badge", (event: Electron.IpcMainEvent, value: unknown) => {
     if (!authorized(event)) return;
     if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 1_000_000) return;
     setBadge(window, value);
   });
-  ipcMain.on("desktop:notify", (event, value: unknown) => {
+  listen("desktop:notify", (event: Electron.IpcMainEvent, value: unknown) => {
     event.returnValue = authorized(event) ? deps.notifications.show(value, deps.hub()) : false;
   });
-  ipcMain.on("desktop:notifications-clear", event => {
+  listen("desktop:notifications-clear", (event: Electron.IpcMainEvent) => {
     if (authorized(event)) deps.notifications.closeAll();
   });
-  ipcMain.on("desktop:notification-close", (event, value: unknown) => {
+  listen("desktop:notification-close", (event: Electron.IpcMainEvent, value: unknown) => {
     if (!authorized(event) || typeof value !== "string") return;
     deps.notifications.close(value);
   });
-  ipcMain.on("desktop:presence", event => {
+  listen("desktop:presence", (event: Electron.IpcMainEvent) => {
     event.returnValue = authorized(event) ? deps.presence() : { active: false, notifies: false };
   });
-  ipcMain.handle("desktop:login-get", event => {
+  listen("desktop:open-local-settings", (event: Electron.IpcMainEvent) => {
+    // A request to show the separate local window only. No Link command, hub credential or local data crosses here.
+    if (authorized(event)) deps.openLocalSettings();
+  });
+  ipcMain.handle("desktop:login-get", function loginGet(event) {
     if (!authorized(event)) return { enabled: false };
     const settings = app.getLoginItemSettings();
     return { enabled: settings.openAtLogin, requiresApproval: process.platform === "darwin" && settings.status === "requires-approval" };
   });
-  ipcMain.handle("desktop:login-set", (event, enabled: unknown) => {
+  ipcMain.handle("desktop:login-set", function loginSet(event, enabled: unknown) {
     if (!authorized(event)) return { enabled: false };
     if (typeof enabled !== "boolean") throw new TypeError("Launch at login expects a boolean");
     app.setLoginItemSettings({ openAtLogin: enabled });
@@ -93,6 +105,8 @@ export function installDesktopIPC(window: BrowserWindow, deps: {
     return { enabled: settings.openAtLogin, requiresApproval: process.platform === "darwin" && settings.status === "requires-approval" };
   });
   return () => {
+    releaseOwnership();
+    if (ipcOwner.active) return;
     for (const name of names) ipcMain.removeAllListeners(name);
     for (const name of ["desktop:login-get", "desktop:login-set"]) ipcMain.removeHandler(name);
     deps.notifications.closeAll();

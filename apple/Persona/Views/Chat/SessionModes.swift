@@ -228,7 +228,8 @@ nonisolated enum SessionModes {
         guard let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let raw = Fmt.model(model) else { return nil }
         if let gpt = gptModelName(raw) { return gpt }
-        let lower = raw.lowercased()
+        // A context-window suffix ("[1m]") is not part of the version; the name keeps no 1M marker.
+        let lower = raw.lowercased().replacingOccurrences(of: #"\[[^\]]*\]$"#, with: "", options: .regularExpression)
         for family in ["fable", "opus", "sonnet", "haiku"] {
             guard let r = lower.range(of: family) else { continue }
             // The version follows the family in today's ids; a date (8 digits) and older ids' leading version do not.

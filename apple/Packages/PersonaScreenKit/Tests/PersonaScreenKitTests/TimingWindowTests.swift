@@ -44,6 +44,45 @@ final class TimingWindowTests: XCTestCase {
         XCTAssertNil(w.take(now: 1_000_000)?.networkMs)
     }
 
+    /// For the phone's tier choice (#6396): the target, skipped frames, time blocked writing and frames pending.
+    func testTierSignals() {
+        var w = TimingWindow()
+        w.encoderHolds(1)
+        w.sent(number: 1, at: 100_000, captureMicros: 0, encodeMicros: 4_000, bytes: 1_000, blockedMicros: 2_500)
+        w.encoderHolds(3)
+        w.encoderHolds(2)
+        w.skippedFrame()
+        w.skippedFrame()
+        w.sent(number: 2, at: 200_000, captureMicros: 0, encodeMicros: 4_000, bytes: 1_000, blockedMicros: 10_000)
+        var plain = w
+        let t = w.take(now: 1_100_000, targetKbps: 3_000)
+        XCTAssertEqual(t?.targetKbps, 3_000)
+        XCTAssertEqual(t?.skipped, 2)
+        XCTAssertEqual(t?.blockedMs, 12.5)
+        XCTAssertEqual(t?.pending, 3, "the most at once")
+        XCTAssertNil(plain.take(now: 1_100_000)?.targetKbps, "without a target: the message as before")
+        w.sent(number: 3, at: 1_200_000, captureMicros: 0, encodeMicros: 4_000, bytes: 1_000)
+        let next = w.take(now: 2_100_000, targetKbps: 3_000)
+        XCTAssertEqual(next?.skipped, 0, "counted per second")
+        XCTAssertEqual(next?.pending, 0)
+        XCTAssertEqual(next?.blockedMs, 0)
+    }
+
+    /// A refinement pass (#3954) is bytes that went out, not a screen change, an encode of the stream or a round trip.
+    func testARefinementPassCountsOnlyItsBytes() {
+        var w = TimingWindow()
+        w.sent(number: 1, at: 100_000, captureMicros: 0, encodeMicros: 4_000, bytes: 1_000)
+        w.sent(number: 2, at: 500_000, captureMicros: 0, encodeMicros: 30_000, bytes: 9_000, blockedMicros: 50_000,
+               refinement: true)
+        w.reported(frame: 2, at: 900_000)
+        let t = w.take(now: 1_100_000, targetKbps: 1_000)
+        XCTAssertEqual(t?.fps, 1)
+        XCTAssertEqual(t?.encodeMs, 4)
+        XCTAssertNil(t?.networkMs)
+        XCTAssertEqual(t?.kbps, 80)
+        XCTAssertEqual(t?.blockedMs, 0)
+    }
+
     func testTheWindowStartsOverAtEachTake() {
         var w = TimingWindow()
         w.sent(number: 1, at: 0, captureMicros: 0, encodeMicros: 9_000, bytes: 1_000)

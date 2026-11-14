@@ -70,9 +70,9 @@ class InboxHistoryLinksTest {
         assertEquals(listOf("history"), inbox.calls)
     }
 
-    @Test fun aHistoricalItemWithoutEventsKeepsItsSourcePage() = runTest {
+    @Test fun aHistoricalChatItemWithoutEventsOpensItsCollapsedPage() = runTest {
         val inbox = LookupInbox(record(false))
-        assertEquals(InboxDestination.Open(LarkRoute("room", "history", null)), resolve(InboxItemRoute("history"), inbox))
+        assertEquals(InboxDestination.Open(InboxEventRoute("history")), resolve(InboxItemRoute("history"), inbox))
     }
 
     @Test fun missingAndFailureStayDistinct() = runTest {

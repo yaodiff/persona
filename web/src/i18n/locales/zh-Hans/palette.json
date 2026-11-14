@@ -43,5 +43,9 @@
   "cond_since": "更新时间",
   "since_24h": "24 小时内",
   "since_7d": "7 天内",
-  "since_30d": "30 天内"
+  "since_30d": "30 天内",
+  "saved_searches": "已保存的搜索",
+  "save_search": "保存搜索",
+  "saved_searches_failed": "无法加载搜索工具。",
+  "saved_searches_retry": "重试"
 }

@@ -1,0 +1,258 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "data_rfb",
+      "description": "RFB bytes at offset 42 on channel 1.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "000000160101000000000000002a524642203030332e3838390a"
+      },
+      "expected": {
+        "type": "data",
+        "channel": 1,
+        "offset": 42,
+        "bytes_hex": "524642203030332e3838390a"
+      },
+      "exact": true
+    },
+    {
+      "name": "data_video_far_offset",
+      "description": "A video channel's bytes (channel 3, a later video stream) past 2^40: offsets are 64-bit.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "0000000f010300000100000000050000000112"
+      },
+      "expected": {
+        "type": "data",
+        "channel": 3,
+        "offset": 1099511627781,
+        "bytes_hex": "0000000112"
+      },
+      "exact": true
+    },
+    {
+      "name": "data_empty",
+      "description": "A data message with no bytes is valid and changes nothing.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "0000000a01010000000000000007"
+      },
+      "expected": {
+        "type": "data",
+        "channel": 1,
+        "offset": 7,
+        "bytes_hex": ""
+      },
+      "exact": true
+    },
+    {
+      "name": "ack",
+      "description": "Everything of channel 1 through offset 300000 arrived.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "0000000a020100000000000493e0"
+      },
+      "expected": {
+        "type": "ack",
+        "channel": 1,
+        "offset": 300000
+      },
+      "exact": true
+    },
+    {
+      "name": "use_two_channels",
+      "description": "Carry RFB from 1000 and video channel 2 from 77 on this transport; entries keep their order.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "00000013080100000000000003e802000000000000004d"
+      },
+      "expected": {
+        "type": "use",
+        "entries": [
+          [
+            1,
+            1000
+          ],
+          [
+            2,
+            77
+          ]
+        ]
+      },
+      "exact": true
+    },
+    {
+      "name": "resumed_new_video",
+      "description": "A new video relay's first message: channel 2, at 0.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "0000000a09020000000000000000"
+      },
+      "expected": {
+        "type": "resumed",
+        "entries": [
+          [
+            2,
+            0
+          ]
+        ]
+      },
+      "exact": true
+    },
+    {
+      "name": "resumed_empty",
+      "description": "Resumed with no channels (a use that named none the node has).",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "0000000109"
+      },
+      "expected": {
+        "type": "resumed",
+        "entries": []
+      },
+      "exact": true
+    },
+    {
+      "name": "close_rfb",
+      "description": "RFB ends at offset 3.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "0000000a0a010000000000000003"
+      },
+      "expected": {
+        "type": "close",
+        "channel": 1,
+        "offset": 3
+      },
+      "exact": true
+    },
+    {
+      "name": "reset_video",
+      "description": "Video channel 2 goes on at 4096, a message boundary.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "0000000a0b020000000000001000"
+      },
+      "expected": {
+        "type": "reset",
+        "channel": 2,
+        "offset": 4096
+      },
+      "exact": true
+    },
+    {
+      "name": "ping",
+      "description": "The phone's clock in microseconds.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "000000090600000000075bcd15"
+      },
+      "expected": {
+        "type": "ping",
+        "value": 123456789
+      },
+      "exact": true
+    },
+    {
+      "name": "pong",
+      "description": "The ping's value, 3 packets retransmitted and 1200 sent since the last pong.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "000000110700000000075bcd1500000003000004b0"
+      },
+      "expected": {
+        "type": "pong",
+        "value": 123456789,
+        "retransmitted": 3,
+        "sent": 1200
+      },
+      "exact": true
+    },
+    {
+      "name": "attached",
+      "description": "The token was right: an empty body.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "0000000105"
+      },
+      "expected": {
+        "type": "attached"
+      },
+      "exact": true
+    },
+    {
+      "name": "paths_direct",
+      "description": "The node's direct routes: token, certificate hash, port and two candidates. JSON: compared by fields, not bytes.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "000000a4037b2276657273696f6e223a312c22746f6b656e223a22644739725a5734222c2263657274223a22593256796441222c22706f7274223a34393332312c2263616e64696461746573223a5b7b226b696e64223a226c616e222c2261646472223a223139322e302e322e3130222c22707265666978223a32347d2c7b226b696e64223a227461696c7363616c65222c2261646472223a223130302e36342e302e37227d5d7d"
+      },
+      "expected": {
+        "type": "paths",
+        "paths": {
+          "version": 1,
+          "token": "dG9rZW4",
+          "cert": "Y2VydA",
+          "port": 49321,
+          "candidates": [
+            {
+              "kind": "lan",
+              "addr": "192.0.2.10",
+              "prefix": 24
+            },
+            {
+              "kind": "tailscale",
+              "addr": "100.64.0.7"
+            }
+          ]
+        }
+      },
+      "exact": false
+    },
+    {
+      "name": "paths_firewall",
+      "description": "No direct routes because the computer's firewall would ask: no port or certificate.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "00000049037b2276657273696f6e223a312c22746f6b656e223a22644739725a5734222c2263616e64696461746573223a5b5d2c22756e617661696c61626c65223a226669726577616c6c227d"
+      },
+      "expected": {
+        "type": "paths",
+        "paths": {
+          "version": 1,
+          "token": "dG9rZW4",
+          "candidates": [],
+          "unavailable": "firewall"
+        }
+      },
+      "exact": false
+    },
+    {
+      "name": "attach",
+      "description": "A transport joining a session sends the token first. JSON: compared by fields.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "00000014047b22746f6b656e223a22644739725a5734227d"
+      },
+      "expected": {
+        "type": "attach",
+        "token": "dG9rZW4"
+      },
+      "exact": false
+    },
+    {
+      "name": "unknown_type",
+      "description": "A type this side doesn't know is skipped by its length.",
+      "source": "server/internal/screenlink/wire.go (frame, chanOffset, offsets); apple/Packages/PersonaScreenKit/Sources/PersonaScreenKit/ScreenLinkWire.swift (ScreenLinkMessage); docs/extensions/computer-use.md \"Live screen routes (#6398)\"",
+      "input": {
+        "frame_hex": "00000002c8ab"
+      },
+      "expected": {
+        "type": "unknown",
+        "code": 200
+      },
+      "exact": true
+    }
+  ]
+}

@@ -55,6 +55,8 @@ class KotlinCodecTest {
             history = "history",
             has_more = true,
             loaded_once = true,
+            verified = true,
+            acked = null,
             ops = listOf(ListOp.Insert(
                 index = 0u, id = "item#0", json = "{\"text\":\"中文🦀\"}",
             )),

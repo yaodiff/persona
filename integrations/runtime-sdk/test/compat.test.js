@@ -113,7 +113,7 @@ test('compat context only strips bare live snapshots and MCP aliases keep sessio
     assert.equal((snapshot+'<persona-view-errors>\nThe view v1 failed its check.\n</persona-view-errors>\nhello').replace(SNAPSHOT_RE,''), 'hello')
   }
   const servers = mcpServers('/bin/personad','session',true)
-  assert.deepEqual(servers.map((s)=>s.name),['persona','jarvis'])
+  assert.deepEqual(servers.map((s)=>s.name),['persona']) // agy: one server, its tool budget counts each (#7333)
   for(const server of servers) assert.deepEqual(server.env,[{name:'PERSONA_SESSION_ID',value:'session'},{name:'JARVIS_SESSION_ID',value:'session'},{name:'PERSONA_ASSISTANT',value:'1'},{name:'JARVIS_ASSISTANT',value:'1'}])
   const home = temp(t)
   const bin = join(home,'.jarvis','bin','jarvisd')

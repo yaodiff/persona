@@ -53,7 +53,7 @@ describe("the popover", () => {
     expect(html).toContain("7d");
     expect(html).toContain("70%");
     expect(html).toContain("13:00 重置");
-    expect(html).toContain("2d 3h 后重置");
+    expect(html).toContain("2 天 3 小时后重置");
     expect(html).toContain("用得偏快");
     expect(html).toContain("用得偏慢");
     expect(html.match(/data-pace-tick/g)).toHaveLength(2);

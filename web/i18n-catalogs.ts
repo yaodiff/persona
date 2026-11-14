@@ -1,9 +1,10 @@
 // Language catalogs are resources, not hand-maintained TypeScript entry points. Vite bundles one client catalog
 // and one admin catalog per language from the namespace JSON beside _meta.json; adding a directory needs no code.
 //
-// The client catalog comes in two parts: client-startup holds the namespaces the first screen names
-// (src/i18n/startup-namespaces.json, which the build checks: vite.config.ts), client-rest the others, loaded after the
-// first screen. `client` is the whole of it, for tests.
+// The client catalog comes in two parts: client-startup holds what the first screen reads
+// (src/i18n/startup-namespaces.json: whole namespaces, and single keys of others, src/i18n/startup-keys.ts; the build
+// checks it: vite.config.ts), client-rest everything else, loaded after the first screen. `client` is the whole of
+// it, for tests.
 //
 // The page loads only its own language's catalog (src/i18n/index.ts initI18n). t() still falls back to en, then
 // zh-Hans, for a key the language lacks (docs/protocol/i18n.md), so each catalog module also exports `fallbacks`: the entries
@@ -13,6 +14,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Plugin } from "vite";
 import { flatten } from "./src/i18n/locales/flatten";
+import { startupMatcher } from "./src/i18n/startup-keys";
 
 type Kind = "client" | "client-startup" | "client-rest" | "admin";
 const KINDS: readonly string[] = ["client", "client-startup", "client-rest", "admin"] satisfies Kind[];
@@ -23,27 +25,47 @@ export const FALLBACK_LANGS = ["en", "zh-Hans"] as const;
 
 const PLURAL = /_(zero|one|two|few|many|other)$/;
 
-/** src/i18n/startup-namespaces.json, from a language's _meta.json: the client namespaces in client-startup. */
+/** src/i18n/startup-namespaces.json, from a language's _meta.json: what client-startup holds. */
 export function startupNamespacesFile(metaPath: string): string {
   return join(dirname(metaPath), "..", "..", "startup-namespaces.json");
 }
 
-/** The namespace JSON files of one catalog, sorted, as absolute paths. */
+/** startup-namespaces.json's entries (a namespace, or the start of a key in one: src/i18n/startup-keys.ts). */
+export function startupEntries(metaPath: string): string[] {
+  return JSON.parse(readFileSync(startupNamespacesFile(metaPath), "utf8")) as string[];
+}
+
+const split = (kind: Kind) => kind === "client-startup" || kind === "client-rest";
+
+/**
+ * The namespace JSON files of one catalog, sorted, as absolute paths. A namespace the startup list takes some keys of
+ * has its file in both parts of the client catalog; readCatalog and the dev server's module keep each part's keys.
+ */
 export function catalogFiles(metaPath: string, kind: Kind): string[] {
   const dir = dirname(metaPath);
-  const startup = kind === "client-startup" || kind === "client-rest"
-    ? new Set(JSON.parse(readFileSync(startupNamespacesFile(metaPath), "utf8")) as string[])
-    : undefined;
-  return readdirSync(dir).filter((name) =>
-    name.endsWith(".json") && !name.startsWith("_") && (name.startsWith("admin-") === (kind === "admin")) &&
-    (!startup || startup.has(name.slice(0, -".json".length)) === (kind === "client-startup")),
-  ).sort().map((name) => join(dir, name));
+  const entries = split(kind) ? startupEntries(metaPath) : [];
+  const whole = new Set(entries.filter((e) => !e.includes(".")));
+  const named = new Set(entries.map((e) => e.split(".")[0]));
+  return readdirSync(dir).filter((name) => {
+    if (!name.endsWith(".json") || name.startsWith("_") || name.startsWith("admin-") !== (kind === "admin")) return false;
+    const ns = name.slice(0, -".json".length);
+    return kind === "client-startup" ? named.has(ns) : kind === "client-rest" ? !whole.has(ns) : true;
+  }).sort().map((name) => join(dir, name));
 }
 
 function readCatalog(dir: string, kind: Kind): Catalog {
-  return flatten(Object.fromEntries(catalogFiles(join(dir, "_meta.json"), kind).map((file) =>
+  const meta = join(dir, "_meta.json");
+  const catalog = flatten(Object.fromEntries(catalogFiles(meta, kind).map((file) =>
     [`./${basename(file)}`, JSON.parse(readFileSync(file, "utf8")) as Catalog],
   )));
+  if (!split(kind)) return catalog;
+  const startup = startupMatcher(startupEntries(meta));
+  return Object.fromEntries(Object.entries(catalog).filter(([key]) => startup(key) === (kind === "client-startup")));
+}
+
+/** Every key of the client catalog (`namespace.name`) in the language of `metaPath`: what the build checks against. */
+export function clientKeys(metaPath: string): string[] {
+  return Object.keys(readCatalog(dirname(metaPath), "client"));
 }
 
 /**
@@ -68,7 +90,8 @@ function fallbackLangs(dir: string): string[] {
 }
 
 /** The fallback languages' entries t() may need for the language in `dir`, keyed by language. A key and its plural
- *  forms share a namespace, so each part of the client catalog gets just its share of the whole's. */
+ *  forms land in the same part (a startup entry takes every key that begins with it), so each part of the client
+ *  catalog gets just its share of the whole's. */
 export function catalogFallbacks(dir: string, kind: Kind): Record<string, Catalog> {
   const own = readCatalog(dir, kind);
   return Object.fromEntries(fallbackLangs(dir).map((l) => [l, fallbackEntries(own, readCatalog(join(dirname(dir), l), kind))]));
@@ -86,13 +109,24 @@ export function catalogModule(metaPath: string, kind: Kind, inline = false): str
   if (inline) {
     return [`export default JSON.parse(${JSON.stringify(JSON.stringify(readCatalog(dir, kind)))});`, fallbacks].join("\n");
   }
+  const path = (file: string) => JSON.stringify(file.replace(/\\/g, "/"));
   const namespaces = catalogFiles(metaPath, kind).map((file) => basename(file));
-  const imports = namespaces.map((name, i) => `import ns${i} from ${JSON.stringify(join(dir, name).replace(/\\/g, "/"))};`);
+  const imports = namespaces.map((name, i) => `import ns${i} from ${path(join(dir, name))};`);
   const entries = namespaces.map((name, i) => `${JSON.stringify(`./${name}`)}: ns${i}`);
+  const whole = `flatten({${entries.join(",")}})`;
+  // A part of the client catalog keeps its own keys of the namespaces the startup list splits.
+  const part = split(kind)
+    ? [
+      `import { startupMatcher } from ${path(join(dir, "../../startup-keys.ts"))};`,
+      `import startupEntries from ${path(startupNamespacesFile(metaPath))};`,
+      `const startup = startupMatcher(startupEntries);`,
+      `export default Object.fromEntries(Object.entries(${whole}).filter(([key]) => startup(key) === ${kind === "client-startup"}));`,
+    ]
+    : [`export default ${whole};`];
   return [
     ...imports,
-    `import { flatten } from ${JSON.stringify(join(dir, "../flatten.ts").replace(/\\/g, "/"))};`,
-    `export default flatten({${entries.join(",")}});`,
+    `import { flatten } from ${path(join(dir, "../flatten.ts"))};`,
+    ...part,
     fallbacks,
   ].join("\n");
 }

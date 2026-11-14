@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // The To-dos page's third grouping, 常驻 (#4352): offered only with a leader in the hub's direction tree, one section per
-// direction in the tree's order (empty ones skipped, the secretary's titled 书记官), the page's own rows, the Completed
-// fold kept, closed to-dos only there; the rows keep their menu; a saved choice waits for the first read (loading, not
-// the status grouping) and falls back to status with no leaders or on a hub without the tree.
+// direction in the tree's order (empty ones skipped, the secretary's titled 书记官), the page's own open rows, the to-dos
+// the tree does not list as open (closed in the last day, inactive) under their status sections after the directions, as
+// on Android, and the Completed fold kept for the Done section's; the rows keep their menu; a saved choice waits for the
+// first read (loading, not the status grouping) and falls back to status with no leaders or on a hub without the tree.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -150,6 +151,35 @@ describe("To-dos grouped by 常驻", () => {
     await render();
     expect(host.textContent).toContain(t("todos.empty_title"));
     expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
+  });
+
+  it("puts a to-do closed in the last day and an inactive one under their status sections below the directions, counted as the header says", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const daysAgo = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    // closed an hour ago (Just finished, not open), and a handed-out task with nothing for three days (Shelved): the
+    // hub's tree lists neither, as neither counts as open
+    const fresh = todo("t-fresh", "Fresh", { done_at: hourAgo, updated_at: hourAgo });
+    const quiet = todo("t-quiet", "Quiet", { origin: "conv", created_at: daysAgo, updated_at: daysAgo });
+    const header = t("todos.summary_triage", { open: 4, parked: 0, shelved: 1, done: 1 });
+    for (const listed of [false, true]) {
+      // and a tree whose push has not caught up yet still lists the one just ticked
+      tree.current = listed ? { directions: TREE.directions.map((d) => (d.id === "lead-b" ? { ...d, tasks: [...(d.tasks ?? []), { id: "t-fresh", title: "Fresh", state: "working" }] } : d)) } : TREE;
+      seed({ todos: [...TODOS, fresh, quiet] });
+      await act(async () => root.unmount());
+      root = createRoot(host);
+      await render();
+      expect(sections().some((s) => s.textContent?.includes("Fresh"))).toBe(false);
+      const justDone = host.querySelector<HTMLElement>("[data-testid=todo-section][data-section=just_done]");
+      expect(justDone?.textContent).toContain("Fresh");
+      expect(justDone?.getAttribute("data-todos")).toBe("1");
+      const shelved = host.querySelector<HTMLElement>("[data-testid=todo-section][data-section=shelved]");
+      expect(shelved?.getAttribute("data-todos")).toBe("1");
+      // neither is "an open to-do no direction lists"
+      expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
+      expect(host.querySelector("[data-testid=todos-summary]")?.textContent).toBe(header);
+      expect(host.textContent).toContain(t("todos.done_section", { count: 1 }));
+    }
   });
 
   it("narrows each section by the due-date filter (#3740) and keeps the tree's order under any sort", async () => {

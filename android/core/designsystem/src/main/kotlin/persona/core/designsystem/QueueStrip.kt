@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,8 +65,9 @@ fun queueListCap(rowsHeight: Int, count: Int): Int? =
  * Glass is iOS's strip: folded to the title line by default, which opens and folds it as iOS's disclosure does
  * ([initiallyExpanded] opens it from the start: catalog, screenshots); opened, each message sits in a well and about
  * [QUEUE_VISIBLE_ROWS] show before it scrolls. Its line carries [sendNow], a text button folded or open, for
- * [onSendNow] (iOS Send Now). Brief (a paper card) and the board (a bordered ticket) stay always open, without Send now
- * (the alignment plan's ground rules: no new alignment work outside Glass). In every style a row with a note in [notes]
+ * [onSendNow] (iOS Send Now). [sendNowDescription], when set, is spoken with that button and is not drawn. Brief (a paper
+ * card) and the board (a bordered ticket) stay always open, without Send now (the alignment plan's ground rules: no new
+ * alignment work outside Glass). In every style a row with a note in [notes]
  * (by index) says it in the caption size under its words (iOS's "Arrives when this chat is free" under a message
  * relayed from another conversation); without notes Brief and Board draw as before. Glass also says how many photos a row's
  * message carries ([photos] by index, iOS's "N images" under the words); a row whose [items] words are empty draws just that.
@@ -84,6 +86,7 @@ fun QueueStrip(
     busy: Boolean = false,
     enabled: Boolean = true,
     sendNow: String? = null,
+    sendNowDescription: String? = null,
     onSendNow: () -> Unit = {},
     notes: List<String?> = emptyList(),
     initiallyExpanded: Boolean = false,
@@ -93,7 +96,7 @@ fun QueueStrip(
     onRelayedItem: (Int) -> Unit = {},
 ) {
     if (items.isEmpty() && relayedItems.isEmpty()) return
-    if (PersonaTheme.style == AppStyle.Glass) GlassQueueStrip(title, items, onItem, modifier, busy, enabled, sendNow, onSendNow, notes, initiallyExpanded, photos, relayedItems, relayedSummary, onRelayedItem)
+    if (PersonaTheme.style == AppStyle.Glass) GlassQueueStrip(title, items, onItem, modifier, busy, enabled, sendNow, sendNowDescription, onSendNow, notes, initiallyExpanded, photos, relayedItems, relayedSummary, onRelayedItem)
     else PlainQueueStrip(title, items, onItem, modifier, busy, enabled, notes, relayedItems, relayedSummary, onRelayedItem)
 }
 
@@ -101,7 +104,7 @@ fun QueueStrip(
 @Composable
 private fun GlassQueueStrip(
     title: String, items: List<String>, onItem: (Int) -> Unit, modifier: Modifier, busy: Boolean, enabled: Boolean,
-    sendNow: String?, onSendNow: () -> Unit, notes: List<String?>, initiallyExpanded: Boolean, photos: List<Int>,
+    sendNow: String?, sendNowDescription: String?, onSendNow: () -> Unit, notes: List<String?>, initiallyExpanded: Boolean, photos: List<Int>,
     relayedItems: List<String>, relayedSummary: String?, onRelayedItem: (Int) -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
@@ -125,7 +128,7 @@ private fun GlassQueueStrip(
             JIcon(PhIcons.Tray, null, size = Tokens.Space.l, tint = palette.ink2)
             Text(title, style = line, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (busy) JSpinner(Modifier.size(Tokens.Space.Standard.m), stroke = Tokens.Space.Standard.xxs)
-            else sendNow?.let { SendNowButton(it, line, onSendNow) }
+            else sendNow?.let { SendNowButton(it, sendNowDescription, line, onSendNow) }
             JIcon(if (expanded) PersonaIcons.expand else PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3)
         }
         if (expanded) {
@@ -284,11 +287,16 @@ private fun RelayedBlock(
     }
 }
 
-/** Send Now on Glass's title line: the accent's words, as iOS's plain button, with the platform's touch target around them. */
+/**
+ * Send Now on Glass's title line: the accent's words, as iOS's plain button, with the platform's touch target around
+ * them. [description] is the button's spoken state (what a confirmation used to say) and is not drawn (#7170).
+ */
 @Composable
-private fun SendNowButton(label: String, style: TextStyle, onClick: () -> Unit) {
+private fun SendNowButton(label: String, description: String?, style: TextStyle, onClick: () -> Unit) {
+    val spoken = if (description.isNullOrEmpty()) Modifier else Modifier.semantics { stateDescription = description }
     Box(
-        Modifier.minimumInteractiveComponentSize().clip(PersonaTheme.shapes.controlShape).clickable(role = Role.Button, onClick = onClick)
+        Modifier.minimumInteractiveComponentSize().clip(PersonaTheme.shapes.controlShape)
+            .clickable(role = Role.Button, onClick = onClick).then(spoken)
             .padding(horizontal = Tokens.Space.xs),
         contentAlignment = Alignment.Center,
     ) { Text(label, style = style, color = PersonaTheme.palette.accent, maxLines = 1, softWrap = false) }

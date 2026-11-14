@@ -1,12 +1,14 @@
 package persona.feature.terminal
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -16,6 +18,7 @@ import persona.core.contracts.AgentState
 import persona.core.contracts.api.isPaneAddress
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.navigation.Navigator
 import persona.core.navigation.TerminalRoute
 
@@ -27,6 +30,10 @@ import persona.core.navigation.TerminalRoute
 @Composable
 fun TerminalPanesScreen(model: TerminalPanesViewModel, navigator: Navigator) {
     val state by model.state.collectAsStateWithLifecycle()
+    val confirmation by model.confirmation.collectAsStateWithLifecycle()
+    val closing by model.closing.collectAsStateWithLifecycle()
+    val closingMachine by model.closingMachine.collectAsStateWithLifecycle()
+    var closePane by remember { mutableStateOf<TermPane?>(null) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(model, lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { model.poll() } }
     val feedback = LocalAppFeedback.current
@@ -37,6 +44,10 @@ fun TerminalPanesScreen(model: TerminalPanesViewModel, navigator: Navigator) {
                 is TerminalPanesEvent.Open -> navigator.navigate(TerminalRoute(event.machineId, event.terminal,
                     event.title.ifEmpty { resources.getString(R.string.terminal_panes_untitled) }))
                 is TerminalPanesEvent.NewTabFailed -> feedback?.notice(resources.getString(R.string.terminal_panes_new_tab_failed, event.error))
+                is TerminalPanesEvent.CloseFailed -> feedback?.notice(resources.getString(R.string.terminal_panes_close_failed, event.error))
+                is TerminalPanesEvent.Closed -> feedback?.notice(resources.getQuantityString(R.plurals.terminal_panes_closed, event.count, event.count) +
+                    if (event.kept == 0) "" else " " + resources.getQuantityString(R.plurals.terminal_panes_kept, event.kept, event.kept))
+                TerminalPanesEvent.NoFinished -> feedback?.notice(resources.getString(R.string.terminal_panes_no_finished))
             }
         }
     }
@@ -53,7 +64,14 @@ fun TerminalPanesScreen(model: TerminalPanesViewModel, navigator: Navigator) {
         for (entry in state.machines) {
             val machine = entry.machine
             item("machine-${machine.id}", contentType = "machine") {
-                JSectionHeader(machine.displayName, trailing = if (machine.online) null else stringResource(R.string.terminal_panes_offline))
+                Column {
+                    JSectionHeader(machine.displayName, trailing = if (machine.online) null else stringResource(R.string.terminal_panes_offline))
+                    if (machine.online && hasFinished(entry.listing?.response)) Row(verticalAlignment = Alignment.CenterVertically) {
+                        JTextButton(stringResource(R.string.terminal_panes_close_finished),
+                            { model.previewFinished(machine.id) }, enabled = !closing)
+                        if (closingMachine == machine.id) JSpinner(Modifier.size(Tokens.Space.Standard.l))
+                    }
+                }
             }
             if (!machine.online) continue
             val listing = entry.listing
@@ -86,7 +104,7 @@ fun TerminalPanesScreen(model: TerminalPanesViewModel, navigator: Navigator) {
                     tab.panes.forEachIndexed { index, pane ->
                         item(paneItemKey(machine.id, space, pane), contentType = "pane") {
                             JGroupItem(GroupPosition.of(index, tab.panes.size)) {
-                                PaneRow(pane, untitled) {
+                                PaneRow(pane, untitled, enabled = !closing, onClose = if (pane.canClose) ({ closePane = pane }) else null) {
                                     // A session's terminal is titled by the session; a pane by its place.
                                     navigator.navigate(TerminalRoute(pane.key.machineId, pane.key.sessionId,
                                         if (pane.key.isPaneAddress) paneTrail(space, tab, pane, untitled) else ""))
@@ -97,6 +115,34 @@ fun TerminalPanesScreen(model: TerminalPanesViewModel, navigator: Navigator) {
                 }
             }
         }
+    }
+    closePane?.let { pane ->
+        JDialog(onDismiss = { closePane = null }, title = stringResource(R.string.terminal_panes_close_title, paneLabel(pane, untitled)),
+            text = stringResource(R.string.terminal_panes_close_detail), destructive = true,
+            confirm = stringResource(R.string.terminal_close) to { closePane = null; model.close(pane.key.machineId, pane.pane) })
+    }
+    confirmation?.let { confirmed ->
+        JDialog(onDismiss = model::dismissFinished,
+            title = pluralStringResource(R.plurals.terminal_panes_finish_title, confirmed.preview.closed.size, confirmed.preview.closed.size), destructive = true,
+            confirmEnabled = !closing,
+            confirm = stringResource(R.string.terminal_panes_confirm_close) to model::confirmFinished,
+            content = { FinishedPreview(confirmed, untitled) })
+    }
+}
+
+@Composable
+internal fun FinishedPreview(confirmed: FinishedConfirmation, untitled: String) {
+    Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        Text(stringResource(R.string.terminal_panes_finish_detail), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
+        confirmed.rows.forEach { row ->
+            Column {
+                Text(paneLabel(row, untitled), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+                Text(paneSubtitle(row), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+            }
+        }
+        if (confirmed.preview.kept.isNotEmpty()) Text(pluralStringResource(R.plurals.terminal_panes_kept, confirmed.preview.kept.size, confirmed.preview.kept.size),
+            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
     }
 }
 
@@ -120,15 +166,26 @@ private fun OpenButton(label: String, opening: Boolean, thisOne: Boolean, onClic
 }
 
 @Composable
-private fun PaneRow(pane: TermPane, untitled: String, onOpen: () -> Unit) {
+private fun PaneRow(pane: TermPane, untitled: String, enabled: Boolean, onClose: (() -> Unit)?, onOpen: () -> Unit) {
     val status = pane.state?.let(::statusOf)
-    val subtitle = listOfNotNull(status?.localizedLabel, pane.detail.ifEmpty { null }).joinToString(" · ")
-    JRow(pane.title.ifEmpty { untitled }, subtitle = subtitle.ifEmpty { null }, onClick = onOpen,
+    val subtitle = paneSubtitle(pane)
+    JRow(paneLabel(pane, untitled), subtitle = subtitle.ifEmpty { null }, onClick = onOpen,
+        trailing = onClose?.let { close -> { JIconButton(PersonaIcons.close, stringResource(R.string.terminal_close), close, enabled = enabled) } },
         leading = {
             if (status != null) JStatusDot(status)
             else JIcon(PhIcons.TerminalWindow, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink2, decorative = true)
         })
 }
+
+@Composable
+private fun paneLabel(pane: TermPane, untitled: String): String =
+    if (pane.finished) stringResource(R.string.terminal_panes_finished, pane.title.ifEmpty { untitled }) else pane.title.ifEmpty { untitled }
+
+@Composable
+private fun paneSubtitle(pane: TermPane): String = listOfNotNull(
+    if (pane.finished) stringResource(R.string.terminal_panes_untitled) else pane.state?.let(::statusOf)?.localizedLabel,
+    pane.detail.ifEmpty { null },
+).joinToString(" · ")
 
 @Composable
 private fun Note(text: String, modifier: Modifier = Modifier) {

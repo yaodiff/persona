@@ -51,6 +51,18 @@ nonisolated enum VNCDisplays {
     static func ordered(_ displays: [VNCDisplay]) -> [VNCDisplay] {
         displays.sorted { ($0.frame.minX, $0.frame.minY) < ($1.frame.minX, $1.frame.minY) }
     }
+
+    /// Framebuffer pixels a point of the Mac's screen (#7775: a wheel notch scrolls a point): the framebuffer's width
+    /// over the node's arrangement's (2 where Screen Sharing sends a Retina display at its full size); 1 without an
+    /// arrangement, or one whose shape is not the framebuffer's.
+    static func pixelsPerMacPoint(_ displays: [MachineDisplay], framebuffer: CGSize) -> CGFloat {
+        let sized = displays.filter { !$0.frame.isEmpty }
+        guard let first = sized.first, framebuffer.width > 0, framebuffer.height > 0 else { return 1 }
+        let box = sized.dropFirst().reduce(first.frame) { $0.union($1.frame) }
+        let sx = framebuffer.width / box.width, sy = framebuffer.height / box.height
+        guard abs(sx / sy - 1) <= aspectTolerance else { return 1 }
+        return min(max(sx, 1), 4)
+    }
 }
 
 /// The display the VNC page shows for a Mac, kept per Mac on this device as `VNCMode` is; nil: all of them. A chosen

@@ -153,7 +153,7 @@ final class BubbleFoldUITests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         let scheme = env["PERSONA_SCHEME"] ?? "light"
         let scenario = env["PERSONA_SCENARIO"] ?? (env["PERSONA_MIDLIST"] == "1" ? "mid" : "")
-        launch(agent, scheme: scheme, plain: env["PERSONA_PLAIN"] == "1", extra: scenario == "top" ? ["-showOldest", "YES"] : [])
+        launch(agent, scheme: scheme, plain: env["PERSONA_PLAIN"] == "1", extra: ["-scrollTrace", "YES"] + (scenario == "top" ? ["-showOldest", "YES"] : []))
         XCTAssertTrue(expand.firstMatch.waitForExistence(timeout: 20), "not folded:\n\(app.debugDescription)")
         sleep(3)
         // PERSONA_MIDLIST=1 (the mock's perf chat, forty exchanges): one exchange up, so the message is mid-list and what

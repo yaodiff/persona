@@ -17,16 +17,34 @@ import (
 
 // taskAgents are the sessions of t's active agents, as the clients see them (with state).
 func (s *Service) taskAgents(ctx context.Context, t Todo) []proto.Session {
+	return s.taskAgentsIn(ctx, t, machineSessions{})
+}
+
+// machineSessions are the machines' session lists read so far in one pass over many tasks (taskAgentsIn), by
+// machine: each machine is listed once for all of them, not once per task (#3029). A failed read is kept too.
+type machineSessions map[string]machineList
+
+type machineList struct {
+	list []proto.Session
+	err  error
+}
+
+// taskAgentsIn is taskAgents with the lists already read in this pass; the machines it lists are added to lists.
+func (s *Service) taskAgentsIn(ctx context.Context, t Todo, lists machineSessions) []proto.Session {
 	var out []proto.Session
 	for _, a := range t.Agents {
 		if a.ReleasedAt != nil || a.DismissedAt != nil {
 			continue
 		}
-		list, err := s.sessions(ctx, a.MachineID)
-		if err != nil {
+		l, ok := lists[a.MachineID]
+		if !ok {
+			l.list, l.err = s.sessions(ctx, a.MachineID)
+			lists[a.MachineID] = l
+		}
+		if l.err != nil {
 			continue
 		}
-		for _, c := range list {
+		for _, c := range l.list {
 			if c.SessionID == a.SessionID {
 				out = append(out, c)
 				break

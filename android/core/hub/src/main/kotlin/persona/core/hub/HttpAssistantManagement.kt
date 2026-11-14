@@ -141,6 +141,14 @@ class HttpAssistantManagement private constructor(
         require(session.sessionId.isNotBlank())
         assistant("POST", "conversations", session.sessionId, "unarchive", body = buildJsonObject { })
     }
+    override suspend fun searchChats(query: String, limit: Int): AssistantSearchAnswer? = try {
+        val q = query.trim().take(200)
+        if (q.isEmpty()) AssistantSearchAnswer()
+        else JsonCodec.decodeFromJsonElement(request("GET", listOf("api", "v1", "assistant", "search"),
+            query = mapOf("q" to q, "limit" to limit.coerceIn(1, 50).toString())))
+    } catch (failure: HubFailure) {
+        if (failure.status == 404) null else throw failure
+    }
     override suspend fun archivedConversations(): List<Session> {
         val out = request("GET", listOf("api", "v1", "assistant"), query = mapOf("archived" to "1"))
         val machine = (out["machine_id"] as? JsonPrimitive)?.contentOrNull.orEmpty()

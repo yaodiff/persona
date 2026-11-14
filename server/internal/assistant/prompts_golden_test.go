@@ -88,7 +88,6 @@ func TestGoldenTaskPrompt(t *testing.T) {
 		{"once_late", Task{Title: "看 CI", Prompt: "看看 CI 跑完没有", Repeat: repeatOnce}, 25 * time.Minute, false, true, false},
 		{"once_untitled", Task{Prompt: "提醒我喝水", Repeat: repeatOnce}, time.Minute, false, true, false},
 		{"interval_late", Task{Prompt: "巡检各台电脑上的 Agent，有卡住的告诉我", Repeat: repeatInterval, EveryMinutes: 120}, 3 * time.Hour, false, false, false},
-		{"interval_leader_open", Task{Title: "巡检", Prompt: "巡检", Repeat: repeatInterval, EveryMinutes: 180, cadenceEvery: leaderOpenEveryMinutes}, 0, false, false, false},
 		{"interval_manual", Task{Title: "巡检", Prompt: "巡检", Repeat: repeatInterval, EveryMinutes: 30}, 3 * time.Hour, true, true, false},
 		{"daily_kb", Task{Title: "早报", Prompt: "给我今天的早报", Repeat: repeatDaily}, 2 * time.Hour, false, true, false},
 		{"daily_nokb", Task{Title: "早报", Prompt: "给我今天的早报", Repeat: repeatDaily}, 0, false, false, false},

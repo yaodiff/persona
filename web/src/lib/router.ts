@@ -56,7 +56,10 @@ export type Route =
   | { name: "todos"; id?: string; view?: "calendar"; mode?: "day" | "week" | "month"; date?: string }
   | { name: "extension"; extension: string; ui: string }
   // the source subscription pages (#2041), their first state in ?state=
-  | { name: "subscriptions" };
+  | { name: "subscriptions" }
+  // an address that is no page of the app (mistyped, or left from an older version): said so, with the way to Overview,
+  // instead of Overview drawn under the wrong address (web usability audit item 42); `path` is the address as it came
+  | { name: "not-found"; path: string };
 
 /** A conversation page's `?machine=` and `?manager=` (routePath writes them), each only when there. */
 function conversationQuery(search: string): { mid?: string; manager?: string; at?: string } {
@@ -123,7 +126,7 @@ export function parse(path: string, search = ""): Route {
     }
     return r;
   }
-  return { name: "home" };
+  return { name: "not-found", path: search ? `${path}${search.startsWith("?") ? "" : "?"}${search}` : path };
 }
 
 /** The route a link's address opens in this app (`a.href`: absolute, under the sub-path); null for another origin. */
@@ -211,6 +214,8 @@ export function routePath(r: Route): string {
       return `/extension/${encodeURIComponent(r.extension)}/${encodeURIComponent(r.ui)}`;
     case "subscriptions":
       return "/subscriptions";
+    case "not-found":
+      return r.path;
     default:
       return "/overview";
   }

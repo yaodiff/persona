@@ -1,0 +1,12 @@
+{
+  "page_title": "Page not found",
+  "page_detail": "The address may be mistyped, or this page no longer exists.",
+  "page_back": "Go to Overview",
+  "agent_title": "Conversation not found",
+  "agent_detail": "It may have been deleted, or the link is incomplete.",
+  "agent_back": "Back to personal agents",
+  "todo_gone": "That to-do isn't here anymore. It may have been deleted.",
+  "kb_title": "Entry not found",
+  "kb_detail": "It may have been deleted or renamed.",
+  "kb_gone": "This entry isn't here anymore. It may have been deleted or renamed."
+}

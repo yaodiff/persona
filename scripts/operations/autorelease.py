@@ -186,7 +186,8 @@ def environment(config):
 def kill_group(pid, sig):
     try:
         os.killpg(pid, sig)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
+        # Nothing is left to signal; macOS answers EPERM, not ESRCH, when every member is a zombie.
         pass
 
 

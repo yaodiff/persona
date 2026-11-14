@@ -1,0 +1,20 @@
+{
+  "source": "常用",
+  "title_new": "新建常用提示词",
+  "title_edit": "编辑常用提示词",
+  "title_from_message": "存为常用提示词",
+  "name": "名称",
+  "name_placeholder": "审查改动",
+  "name_hint": "在任何对话里输入“/{name}”并选中它即可使用。",
+  "name_rule": "一个词，只能用文字、数字和“-”“_”“.”，最多 {max} 个字。",
+  "name_taken": "已经有叫“/{name}”的提示词了。",
+  "text": "内容",
+  "text_placeholder": "审查这次改动的安全问题，每个问题写明文件和行号。",
+  "text_hint": "选中后这段内容会放进输入框，你发送之前不会发出去。",
+  "text_rule": "写下要放进输入框的内容，最多 {max} 个字。",
+  "count": "{n} / {max}",
+  "save": "保存",
+  "saved": "已保存“/{name}”。",
+  "changed": "已修改“/{name}”。",
+  "full": "已经存了 {max} 条常用提示词，达到上限。删掉一条才能再添加。"
+}

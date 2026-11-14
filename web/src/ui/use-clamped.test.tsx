@@ -11,11 +11,13 @@ import { useClamped } from "./use-clamped";
 let root: Root;
 let host: HTMLDivElement;
 let tall = 0;
+let reads = 0;
 const observers: (() => void)[] = [];
 const saved = { scroll: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight"), client: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight"), ro: globalThis.ResizeObserver };
 
 beforeEach(() => {
-  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => tall });
+  reads = 0;
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => (reads++, tall) });
   Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 80 });
   globalThis.ResizeObserver = class {
     constructor(private cb: () => void) {}
@@ -41,12 +43,12 @@ afterEach(() => {
   globalThis.ResizeObserver = saved.ro;
 });
 
-function Probe() {
+function Probe({ text = "text", tick = 0, words = false }: { text?: string; tick?: number; words?: boolean }) {
   const [open, setOpen] = useState(false);
-  const { ref, cut } = useClamped<HTMLDivElement>(open);
+  const { ref, cut } = useClamped<HTMLDivElement>(open, "y", words ? text : undefined);
   return (
     <>
-      <div ref={ref}>text</div>
+      <div ref={ref} data-tick={tick}>{text}</div>
       {cut && <button onClick={() => setOpen((o) => !o)}>{open ? "less" : "more"}</button>}
     </>
   );
@@ -75,6 +77,40 @@ describe("useClamped", () => {
     tall = 300;
     resize();
     expect(host.querySelector("button")).not.toBeNull();
+  });
+
+  // audit item 34: it measured after every render, and each read of the size laid the page out first; a long Inbox
+  // paid that on every update of its draft cards
+  it("does not read the size again when it renders with the same words", () => {
+    tall = 80;
+    act(() => root.render(<Probe />));
+    const first = reads;
+    expect(first).toBeGreaterThan(0);
+    for (let tick = 1; tick <= 5; tick++) act(() => root.render(<Probe tick={tick} />));
+    expect(reads).toBe(first);
+  });
+
+  it("measures again when its words change in the same box", async () => {
+    tall = 80;
+    act(() => root.render(<Probe />));
+    expect(host.querySelector("button")).toBeNull();
+    tall = 200; // longer words: the clamped box keeps its height, so only the words say so
+    await act(async () => root.render(<Probe text="a much longer text" />));
+    expect(host.querySelector("button")?.textContent).toBe("more");
+  });
+
+  // a caller with a plain string passes it: the new words are measured in the same layout, before the page paints,
+  // not by the observer afterwards (a frame of a longer text without its "Show all")
+  it("measures words it is given in the same layout as they change", async () => {
+    tall = 80;
+    act(() => root.render(<Probe words />));
+    const first = reads;
+    act(() => root.render(<Probe words tick={1} />));
+    expect(reads).toBe(first);
+    tall = 200;
+    act(() => root.render(<Probe words text="a much longer text" />));
+    expect(host.querySelector("button")?.textContent).toBe("more");
+    await act(async () => { await Promise.resolve(); }); // the observer's own look, which finds the same
   });
 
   it("keeps 收起 while open, whatever the box does", () => {

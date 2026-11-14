@@ -265,6 +265,17 @@ func TestGitBranches(t *testing.T) {
 	if !slices.Equal(names, []string{"main*", "origin/release", "topic"}) {
 		t.Fatalf("branches %v", names)
 	}
+	// the clone's origin/HEAD names the default branch; without it nothing is said (#7014)
+	if out["default"] != "main" {
+		t.Fatalf("default %v", out["default"])
+	}
+	runPullGit(t, f.local, "remote", "set-head", "origin", "-d")
+	if out, err = f.node.gitBranches(context.Background(), f.local); err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := out["default"]; ok {
+		t.Fatalf("a default without origin/HEAD: %v", d)
+	}
 }
 
 // Paths outside what file.read reads are not staged.

@@ -56,6 +56,25 @@ class MessagePictureTest {
         assertFalse(ShareCardBlocks.fenced("| A | B |\n| --- | --- |"))
     }
 
+    /** A card's JSON is drawn as a card, as wide as the picture: it never widens it as code would (#7261). */
+    @Test fun cardsAreNotWideBlocks() {
+        val card = "```persona-view\n{\"fallback\":\"f\",\"sections\":[]}\n```"
+        assertEquals(emptyList<String>(), ShareCardBlocks.wide(card))
+        assertEquals(emptyList<String>(), ShareCardBlocks.wide("~~~Persona-Card extra\n{}\n~~~"))
+        assertEquals(listOf("```swift\nlet a = 1\n```"), ShareCardBlocks.wide(card + "\n```swift\nlet a = 1\n```"))
+        assertTrue(ShareCardBlocks.isCard("```persona-view") && !ShareCardBlocks.isCard("```json"))
+    }
+
+    /** The cut never splits a card: one it would cut through goes whole, so its half JSON never shows (#7261). */
+    @Test fun aLongAnswerIsNeverCutInsideACard() {
+        val words = "w".repeat(SHARE_CARD_MAX_CHARS - 10)
+        val card = "```persona-view\n{\"fallback\":\"Build done.\",\"sections\":[{\"items\":[{\"type\":\"progress\",\"label\":\"Build\",\"ratio\":1}]}]}\n```"
+        assertEquals("$words\n\n…", shareCardText("$words\n\n$card\n\nAfter."))
+        // A card before the cut stays whole.
+        val tail = "t".repeat(SHARE_CARD_MAX_CHARS)
+        assertEquals("$card\n\n" + tail.take(SHARE_CARD_MAX_CHARS - card.length - 2) + "\n\n…", shareCardText("$card\n\n$tail"))
+    }
+
     @Test fun aVeryLongAnswerIsCut() {
         assertEquals("words", shareCardText("\n  words \n"))
         val long = "a".repeat(SHARE_CARD_MAX_CHARS + 10)

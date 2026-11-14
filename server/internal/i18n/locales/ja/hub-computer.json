@@ -8,6 +8,7 @@
   "confirm_script": "「{machine}」でスクリプトを実行：{line}",
   "confirm_steps": "「{machine}」で順に実行：{steps}",
   "list_sep": "、",
+  "session_stopped": "{machine} の操作が画面上で停止されたので、いったん止めました。続けますか？",
   "err_outdated_lcu": "このコンピューターのpersonadは古いため、まだLCUを認識できません。再デプロイしてください",
   "err_unknown_action": "不明な操作です",
   "err_bad_body": "リクエスト本文が無効です：{err}",

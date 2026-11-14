@@ -63,8 +63,12 @@ async function open(panel: Panel, todo = task(), sessions = [first]) {
     openPanel(panel);
     root.render(<StrictMode><SidePanel /></StrictMode>);
   });
-  // the task and Agent panels load with the first one opened (SidePanel's lazy chunk)
-  for (let i = 0; i < 50 && !host.querySelector("aside header"); i++) await settle();
+  // the task and Agent panels load with the first one opened (SidePanel's lazy chunk): React.lazy suspends once on its first
+  // render even when the module is in, as long as the machine is slow. Each poll runs in act so React's retry can flush.
+  await vi.waitFor(async () => {
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(host.querySelector("aside header")).not.toBeNull();
+  }, { timeout: 5000, interval: 20 });
   for (let i = 0; i < 6; i++) await settle();
   expect(host.querySelector("aside header")).not.toBeNull();
 }

@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { closePalette, openPalette, registerContextCommands, setPaletteQuery } from "../lib/palette";
 import { registerShortcut } from "../lib/shortcuts";
-import { Palette, placeWords } from "./Palette";
+import { Palette } from "./Palette";
+import { placeWords } from "./palette/PlaceWords";
 import { initI18n } from "../i18n";
+import { getState } from "../lib/store";
+import type { Session } from "../lib/types";
 import { placeHits } from "../lib/palette";
 import { ShortcutHelp } from "./ShortcutHelp";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
@@ -74,6 +77,13 @@ describe("the palette's command mode", () => {
     expect(html.indexOf("重命名…")).toBeLessThan(html.indexOf("新建 Agent"));
     expect(html).toContain('uppercase">节点</div>');
   });
+  it("draws a heading that holds a name as written: the capitals of a label would rewrite it", () => {
+    // the node palette's "Space · weather" read "SPACE · WEATHER", a title's "Astro" "ASTRO"
+    cleanups.push(registerContextCommands(() => [{ id: "node:close", section: "空间 · weather", sectionAsWritten: true, title: "关闭", run: () => {} }]));
+    const html = render(">");
+    expect(html).toContain('text-ink-3">空间 · weather</div>');
+    expect(html).not.toContain('uppercase">空间 · weather</div>');
+  });
   it("says so when no command matches, and how to get back to the search", () => {
     const html = render(">zzzz");
     expect(html).toContain("没有匹配的命令");
@@ -104,8 +114,10 @@ describe("the palette's 前往 (the Mac's quick open)", () => {
     const html = render("设置");
     expect(html).toContain("前往");
     expect(html).toContain("设置");
-    expect(render("cpu")).toContain("机器");
-    expect(render("todo")).toContain("待办");
+    // Alias matching loads on the first typed query; mounted coverage lives in Palette.runtime-search.test.tsx.
+    const places = ["machines", "todos"].map((key) => ({ key, title: key, words: placeWords(key), icon: "list" as const, to: { name: "home" } as const }));
+    expect(placeHits(places, "cpu").map((hit) => hit.key)).toEqual(["p:machines"]);
+    expect(placeHits(places, "todo").map((hit) => hit.key)).toEqual(["p:todos"]);
   });
 });
 
@@ -120,6 +132,33 @@ describe("a page's words", () => {
       expect(placeHits(places, "内存").map((h) => h.key)).toEqual(["p:machines"]);
     } finally {
       await initI18n("zh-Hans");
+    }
+  });
+});
+
+// A Persona chat's line under its title said "Persona · ~/.persona/assistant", the same folder for every chat and an
+// engineering path besides: it says what was said last, as the chats list does.
+describe("a Persona chat in the search", () => {
+  it("says what was said last, without the assistant's folder", () => {
+    const kept = getState().assistant;
+    Object.assign(getState(), {
+      assistant: {
+        machine_id: "m1",
+        main: "p0",
+        conversations: [
+          { machine_id: "m1", session_id: "p1", title: "今天要处理的事", assistant: true, cwd: "/Users/me/.persona/assistant", last_text: "**发布说明**我来整理，先列出改动。", updated_at: "2026-11-10T09:00:00Z" },
+          { machine_id: "m1", session_id: "p2", title: "群里的发布计划", assistant: true, cwd: "/Users/me/.persona/assistant", updated_at: "2026-11-10T08:00:00Z" },
+        ] as unknown as Session[],
+      },
+    });
+    try {
+      const html = render("");
+      expect(html).not.toContain(".persona/assistant");
+      expect(html).toContain("发布说明我来整理，先列出改动。");
+      // nothing said yet: just whose chat it is
+      expect(html).toMatch(/群里的发布计划<\/span>(?:(?!<\/button>).)*>Persona<\/span>/s);
+    } finally {
+      Object.assign(getState(), { assistant: kept });
     }
   });
 });

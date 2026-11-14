@@ -7,7 +7,7 @@ import XCTest
 /// Transcript in the card (no transcript lines on it, nor Live Transcript); before the first a waiting line while Persona
 /// attends; with the keyboard up only the newest highlight, or the waiting line; a hub without the flag, a meeting started
 /// without it on a hub with it, a room that is unavailable and Persona turned off before the first highlights keep the
-/// Live box; at the largest text the time goes under the words. A made-up meeting stands in for the microphone
+/// Live box; at the largest text the card is as at xxxLarge (#6813). A made-up meeting stands in for the microphone
 /// (`-showMeetingSample room-highlights`, a line in each of fourteen minutes): its lines reach the hub as a real one's do,
 /// and once they are there and the room made its own highlight from them, the test sets the highlights as the room's
 /// tool would (`POST /mock/meeting_highlights` with each highlight's `at`, which the mock resolves to that line's minute).
@@ -217,26 +217,47 @@ final class MeetingHighlightsUITests: XCTestCase {
         try shot(app, "no-highlights", look: "light")
     }
 
-    /// (f) At the largest text size, light and dark, the page scrolls as one: each highlight's time goes under its words,
-    /// and Full Transcript is in the card under them.
-    @MainActor func testLargestTextSizeStacksTheTime() throws {
+    /// (f) At the largest text size (AX5), light and dark, the card is drawn as at xxxLarge, where #6813 caps the interface
+    /// (`docs/design/DESIGN_SYSTEM.md` 6.2: a highlight's time is a chip, one of a card's controls): as at the regular
+    /// sizes, each time sits before its words, beside them and not under them, every highlight and Full Transcript (under
+    /// them, at the trailing side) are on the screen without a scroll, the thread's header is under the card, and there is
+    /// no Live box. The card and each highlight are as tall as at xxxLarge itself (`cap`, the first look).
+    @MainActor func testLargestTextSizeDrawsTheCardAsAtTheCap() throws {
         let hub = try mockHub()
-        for look in ["large", "large-dark"] {
-            if look != "large" { try fresh(hub) }
+        var atTheCap: [CGFloat] = []
+        for look in ["cap", "large", "large-dark"] {
+            if look != "cap" { try fresh(hub) }
             let app = try highlightsPage(hub, look: look)
-            let first = rows(app).firstMatch
-            let time = first.buttons["meeting-highlight-time"]
-            XCTAssertTrue(reveal(time, in: app), "no highlight on the screen:\n\(app.debugDescription)")
-            let words = text(first, String(Self.shown[0].text.prefix(6)))
-            XCTAssertTrue(words.exists, "\(first.debugDescription)")
-            XCTAssertGreaterThanOrEqual(time.frame.minY, words.frame.maxY - 1, "the time isn't under the words")
-            try shot(app, "card", look: look)
+            let window = app.windows.firstMatch.frame
             let card = element(app, "meeting-highlights")
+            var heights = [card.frame.height]
+            for (n, shown) in Self.shown.enumerated() {
+                let row = rows(app).element(boundBy: n)
+                let time = row.buttons["meeting-highlight-time"]
+                let words = text(row, String(shown.text.prefix(6)))
+                XCTAssertTrue(words.exists && window.contains(time.frame) && window.contains(words.frame),
+                              "\(look): highlight \(n) isn't on the screen:\n\(app.debugDescription)")
+                XCTAssertLessThanOrEqual(time.frame.maxX, words.frame.minX + 1, "\(look): highlight \(n)'s time isn't before its words")
+                XCTAssertLessThan(time.frame.minY, words.frame.maxY - 1, "\(look): highlight \(n)'s time is under its words")
+                heights.append(row.frame.height)
+            }
             let transcript = card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch
-            XCTAssertTrue(transcript.exists, "no Full Transcript in the card at the largest text:\n\(card.debugDescription)")
+            XCTAssertTrue(transcript.exists && window.contains(transcript.frame), "\(look): Full Transcript isn't on the screen:\n\(card.debugDescription)")
             let last = rows(app).element(boundBy: Self.shown.count - 1)
-            XCTAssertGreaterThanOrEqual(transcript.frame.minY, last.frame.maxY - 1, "Full Transcript isn't under the highlights")
-            XCTAssertFalse(element(app, "meeting-live").exists, "a Live box at the largest text")
+            XCTAssertGreaterThanOrEqual(transcript.frame.minY, last.frame.maxY - 1, "\(look): Full Transcript isn't under the highlights")
+            XCTAssertGreaterThan(transcript.frame.minX, card.frame.midX, "\(look): Full Transcript isn't at the trailing side")
+            let header = element(app, "meeting-thread-header")
+            XCTAssertGreaterThanOrEqual(header.frame.minY, card.frame.maxY - 1, "\(look): the thread's header isn't under the card")
+            XCTAssertFalse(element(app, "meeting-live").exists, "\(look): a Live box at the largest text")
+            try shot(app, "card", look: look)
+            if look == "cap" {
+                atTheCap = heights
+            } else {
+                for (n, (height, capped)) in zip(heights, atTheCap).enumerated() {
+                    XCTAssertEqual(height, capped, accuracy: 0.5,
+                                   "\(look): \(n == 0 ? "the card" : "highlight \(n - 1)") is \(height) pt tall, \(capped) pt at xxxLarge")
+                }
+            }
             app.terminate()
         }
     }
@@ -385,7 +406,7 @@ final class MeetingHighlightsUITests: XCTestCase {
         // `-openChatsFresh`: the mock makes the room under the same id for the same made-up recording in every test.
         app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-openChatsFresh", "YES",
                                "-showMeetingSample", sample, "-ui.scheme", look.hasSuffix("dark") ? "dark" : "light"]
-            + (look.hasPrefix("large") ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
+            + Self.textSize(look)
         app.launchPinned()
         // The app's icon follows the appearance: switching it, the system says so in an alert over the page.
         _ = waitFor(4) { self.dismissIconNotice(app) }
@@ -398,6 +419,14 @@ final class MeetingHighlightsUITests: XCTestCase {
         }
         XCTAssertTrue(element(app, "meeting-thread-header").waitForExistence(timeout: 20), "no meeting page:\n\(app.debugDescription)")
         return app
+    }
+
+    /// The launch arguments for a look's text size: the system's, with the app's own Text Size at Standard so that only the
+    /// system's counts. `large…` the largest, AX5; `cap` xxxLarge, where #6813 caps the interface; other looks the
+    /// simulator's own.
+    private static func textSize(_ look: String) -> [String] {
+        let size = look.hasPrefix("large") ? "AccessibilityXXXL" : look == "cap" ? "XXXL" : nil
+        return size.map { ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\($0)", "-ui.textSize", "standard"] } ?? []
     }
 
     /// Taps away the system's "You have changed the icon" alert, if it is up; true when it was.
@@ -462,14 +491,6 @@ final class MeetingHighlightsUITests: XCTestCase {
             usleep(100_000)
         } while Date.now < deadline
         return nil
-    }
-
-    /// At the largest text the page scrolls as one and follows its end: up the page (swipes down) until `el` is on the
-    /// screen, then back down.
-    @MainActor private func reveal(_ el: XCUIElement, in app: XCUIApplication) -> Bool {
-        for _ in 0..<12 where !(el.exists && el.isHittable) { app.swipeDown(velocity: .slow) }
-        for _ in 0..<12 where !(el.exists && el.isHittable) { app.swipeUp(velocity: .slow) }
-        return el.exists && el.isHittable
     }
 
     private func waitFor(_ seconds: TimeInterval = 10, _ ok: () -> Bool) -> Bool {

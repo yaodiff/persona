@@ -172,6 +172,11 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if mode == "bypassPermissions" {
 		argv = n.codexBypassArgv(launcher, argv)
 	}
+	if n.codexOnSharedDaemon(argv) {
+		if err := codexDaemonSocketGone(n.codexHome()); err != nil {
+			return nil, err // a new tab would only show codex failing to connect, after a minute's wait
+		}
+	}
 	key := cwd + "\x00" + launcher
 	if err := n.closeAbandonedCodex(ctx, key); err != nil {
 		return nil, err
