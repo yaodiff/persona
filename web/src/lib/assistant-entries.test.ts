@@ -166,3 +166,35 @@ describe("the entries' open-to-do count follows the To-dos page's rule", () => {
     expect(got.running.some((i) => i.kind === "agent")).toBe(true);
   });
 });
+
+// One home per request (docs/design/DESIGN_SYSTEM.md 4.8): an Agent that several to-dos list asks under one of them, so
+// one approval is one Needs you row and is counted once, not once for every to-do that lists the Agent.
+describe("an Agent several to-dos list", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const agent = { machine_id: "box", session_id: "tests", linked_at: at };
+  const todo = (id: string, patch: Partial<Todo> = {}): Todo => ({ id, title: id, origin: "main", created_at: at, updated_at: at, agents: [agent], ...patch }) as Todo;
+  const asking: Session = { machine_id: "box", session_id: "tests", title: "Network tests", cwd: "/w", state: "needs_you", status: "blocked", updated_at: at } as Session;
+  const approval = { id: "perm", machine_id: "box", session_id: "tests", kind: "permission", tool_name: "Bash", created_at: at } as Interaction;
+  const run = (todos: Todo[], session = asking) => assistantEntries({ conversation: "main", main: "main", todos, sessions: [session], interactions: [approval], plans: {}, feed: [], now: Date.parse(at) });
+  const withAsks = (got: ReturnType<typeof assistantEntries>) => got.needsYou.filter((i) => (i.kind === "task" || i.kind === "agent") && i.asks.length).map((i) => i.key);
+
+  it("asks under the to-do the hub ties its session to; the others are in progress", () => {
+    const got = run([todo("cache"), todo("release"), todo("tests")], { ...asking, todo: { id: "release", title: "release" } });
+    expect(withAsks(got)).toEqual(["task:release"]);
+    expect(got.needsYou.map((i) => i.key)).toEqual(["task:release"]);
+    expect(got.running.map((i) => i.key).sort()).toEqual(["task:cache", "task:tests"]);
+  });
+
+  it("asks under the first to-do that lists it when the hub ties it to none of them", () => {
+    const got = run([todo("cache"), todo("tests")]);
+    expect(withAsks(got)).toEqual(["task:cache"]);
+    expect(got.running.map((i) => i.key)).toEqual(["task:tests"]);
+  });
+
+  it("keeps another to-do's own decision in Needs you, without the Agent's card", () => {
+    const decide = todo("tests", { ask: { asked_at: at, outcome: "decide", verdict: "needs_user", question: "Which framework?" } });
+    const got = run([todo("release"), decide], { ...asking, todo: { id: "release", title: "release" } });
+    expect(got.needsYou.map((i) => i.key).sort()).toEqual(["task:release", "task:tests"]);
+    expect(got.needsYou.find((i) => i.key === "task:tests")).toMatchObject({ asks: [] });
+  });
+});

@@ -1,12 +1,13 @@
 // Derived lists the sidebar, the home page and the palette share.
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { credentialOwner } from "./api";
+import { credentialOwner, errorText } from "./api";
 import { CompleteSessions } from "./complete-sessions";
 import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { getState, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LIST_FEATURE } from "./session-list";
+import { runtimeSessions } from "./runtime-list";
 import type { Session } from "./types";
 
 /** The agents the lists show and count: without the child sessions folded under one of them, each parent in its folded
@@ -19,7 +20,10 @@ export function useAgentSessions(): Session[] {
   return useMemo(() => foldRows(bounded ? summaries : Object.values(by).flat()).filter((s) => !s.assistant), [by, summaries, bounded]);
 }
 
-const EMPTY_FULL_LIST = { sessions: [] as Session[], loaded: false, base: {} as Record<string, Session[]> };
+/** The complete list as its readers get it: `error` says why it has not loaded (its read failed; it is read again in a
+ *  few seconds, or now with retryFullAgentSessions), "" while it loads or once it has. */
+export interface FullAgentSessions { sessions: Session[]; loaded: boolean; error: string }
+const EMPTY_FULL_LIST = { sessions: [] as Session[], loaded: false, error: "", base: {} as Record<string, Session[]> };
 const FULL_LIST_RETRY_MS = 5_000;
 // Working agents emit list hints for every display update. Space reads from their completion so hints that keep
 // arriving share one read. The complete list is read once; later reads ask only for what changed (complete-sessions.ts).
@@ -69,13 +73,19 @@ function createFullCache(owner: string) {
       const result = await complete.read(controller.signal);
       // An unchanged delta leaves the published snapshot (and its older base, which only widens the overlay) as it is.
       if (valid() && (result.changed || !fullSnapshot.loaded)) {
-        fullSnapshot = { sessions: foldRows(result.sessions).filter((s) => !s.assistant), loaded: true, base, epoch: fullSnapshot.epoch };
+        fullSnapshot = { sessions: foldRows(result.sessions).filter((s) => !s.assistant), loaded: true, error: "", base, epoch: fullSnapshot.epoch };
         fullChanged();
       }
-    } catch {
+    } catch (e) {
       // An initial failure or quiet disconnected hub still needs a retry. During grace, retain
       // the retry intent but do not download data without a consumer.
       if (valid()) {
+        // with nothing loaded yet the list says why (audit item 4: it stayed blank); a loaded list keeps its rows
+        const error = errorText(e);
+        if (!fullSnapshot.loaded && fullSnapshot.error !== error) {
+          fullSnapshot = { ...fullSnapshot, error };
+          fullChanged();
+        }
         dirty = true;
         if (consumers) retry = setTimeout(() => { retry = undefined; void read(true); }, FULL_LIST_RETRY_MS);
       }
@@ -123,21 +133,37 @@ function createFullCache(owner: string) {
       };
     },
     dispose,
+    /** Retry: read now, the list loading again (its error gone) until the answer. */
+    again() {
+      if (stopped) return;
+      clearTimeout(retry);
+      retry = undefined;
+      if (fullSnapshot.error) {
+        fullSnapshot = { ...fullSnapshot, error: "" };
+        fullChanged();
+      }
+      void read(true);
+    },
   };
+}
+
+/** The complete list's Retry: read it again now (lib/sessions.ts reads a failed one again by itself every few seconds). */
+export function retryFullAgentSessions() {
+  fullCache?.again();
 }
 
 /** Pins, grouping and the per-assistant lists need complete rows, including agents outside the bounded first page.
  * Consumers share a scoped snapshot and request, released shortly after the last one leaves. Folded like
  * useAgentSessions: no child session folded under a listed one, each parent in its folded state. */
-export function useFullAgentSessions(on = true): { sessions: Session[]; loaded: boolean } {
+export function useFullAgentSessions(on = true): FullAgentSessions {
   const full = useCompleteAgentSessions(on);
   return useMemo(() => {
     const sessions = foldRows(full.sessions);
-    return sessions === full.sessions ? full : { sessions, loaded: full.loaded };
+    return sessions === full.sessions ? full : { sessions, loaded: full.loaded, error: full.error };
   }, [full]);
 }
 
-function useCompleteAgentSessions(on: boolean): { sessions: Session[]; loaded: boolean } {
+function useCompleteAgentSessions(on: boolean): FullAgentSessions {
   const by = useStore((s) => s.sessions);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const loaded = useStore((s) => s.loaded);
@@ -153,7 +179,7 @@ function useCompleteAgentSessions(on: boolean): { sessions: Session[]; loaded: b
   return useMemo(() => {
     // `on` false: the caller has no use for the list now and asks the hub for nothing
     if (!on) return EMPTY_FULL_LIST;
-    if (!bounded) return { sessions: foldRows(Object.values(by).flat()).filter((s) => !s.assistant), loaded };
+    if (!bounded) return { sessions: foldRows(Object.values(by).flat()).filter((s) => !s.assistant), loaded, error: "" };
     if (!loaded) return EMPTY_FULL_LIST;
     if (by === full.base) return full;
     // Reflect actions on retained details (rename, mark seen) without copying the complete list into the store.
@@ -165,7 +191,7 @@ function useCompleteAgentSessions(on: boolean): { sessions: Session[]; loaded: b
       const next = current.get(key(s));
       return next && next !== before.get(key(s)) ? next : s;
     });
-    return { sessions, loaded: full.loaded };
+    return { sessions, loaded: full.loaded, error: full.error };
   }, [on, bounded, loaded, full, by]);
 }
 
@@ -200,4 +226,46 @@ export function useCounts() {
     const needs = counts.state.needs_you ?? 0;
     return { needs, working: counts.state.working ?? 0, unread: counts.state.unread ?? 0, badge: needs, interactions, quietCounted: true };
   }, [all, interactions, counts, bounded]);
+}
+
+// A read that follows a failed one counts as failed until one comes back: each attempt clears the list's error while it
+// runs, and an agent's change of the list starts one, so the failure line and its Retry would otherwise turn into
+// "Loading…" under the pointer and back. Retry itself loads again until the answer (retryAgentList), as the complete
+// list's Retry does.
+let listFailed = false;
+runtimeSessions.subscribe(() => {
+  const list = runtimeSessions.getSnapshot();
+  if (list.loaded || (!list.loading && !list.error)) listFailed = false; // read, or reset to nothing read
+  else if (list.error) listFailed = true;
+});
+const listStatus = (): AgentListStatus => {
+  const list = runtimeSessions.getSnapshot();
+  return list.loaded ? "loaded" : list.error || listFailed ? "failed" : "loading";
+};
+const listHasMore = () => runtimeSessions.getSnapshot().hasMore;
+export type AgentListStatus = "loaded" | "loading" | "failed";
+/** `whole`: the rows read are every agent (no page left to read), so they can be counted, e.g. by computer. */
+export type AgentList = { status: AgentListStatus; whole: boolean };
+const PUSHED_LIST: AgentList = { status: "loaded", whole: true };
+
+/** Whether the agents' counts can be told. A hub that pages its Agents list pushes no sessions: the list is read over
+ *  HTTP (`runtimeSessions`), and until that read has come back its counts are unknown, not zero: "loading", or "failed"
+ *  when it failed (read again with the hub's next change of the list, or retryAgentList). Its first pages are not every
+ *  agent (`whole` false) while it has more. A hub that pushes them: "loaded", whole. */
+export function useAgentListStatus(): AgentList {
+  const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const status = useSyncExternalStore(runtimeSessions.subscribe, listStatus, listStatus);
+  const more = useSyncExternalStore(runtimeSessions.subscribe, listHasMore, listHasMore);
+  return useMemo(() => (bounded ? { status, whole: status === "loaded" && !more } : PUSHED_LIST), [bounded, status, more]);
+}
+
+/** Retry after the agents' read failed: reads at once, loading until the answer, the Agents list's first page
+ *  (useAgentListStatus "failed") and the complete list (useFullAgentSessions `error`, which is otherwise read again
+ *  every few seconds), whichever has not loaded. */
+export function retryAgentList() {
+  if (!runtimeSessions.getSnapshot().loaded) {
+    listFailed = false;
+    void runtimeSessions.load().catch(() => {});
+  }
+  if (!fullSnapshot.loaded) retryFullAgentSessions();
 }

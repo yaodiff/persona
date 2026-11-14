@@ -38,6 +38,9 @@ PATTERNS = {
     # P4: a localization lookup with an explicit locale reads the string tables on every call (1-2 ms; #5438).
     # `interfaceText(_:)` is one; its declaration is not a call.
     "localized-lookup": re.compile(r"(?<!func )\binterfaceText\s*\(|\bString\s*\(\s*localized:[^\n]*\blocale\s*:"),
+    # P7: a view's frame in the window changes on every frame its page slides (the shell's strip, a sheet, a drag), so
+    # state written from one is written, and its readers drawn, on each of them (#5438).
+    "window-frame": re.compile(r"\.\s*frame\s*\(\s*in\s*:\s*\.global\s*\)"),
     # P9: a frame-rate timeline that never pauses.
     "unpaused-animation": re.compile(r"\bTimelineView\s*\(\s*\.animation(?:\s*\((?![^()\n]*\bpaused\s*:)[^()\n]*\))?\s*\)"),
 }
@@ -123,10 +126,10 @@ class ApplePerfPatternTests(unittest.TestCase):
     def test_no_file_grows_its_counted_calls(self):
         counts, _ = scan()
         grown, shrunk = compare(counts, load_baseline())
-        self.assertEqual(grown, [], "a per-call localization lookup, an unpaused animation timeline or a "
-                         "UserDefaults.synchronize() was added (docs/apple/performance.md, rules P2, P4, P9): cache the "
-                         "lookup per locale, pause the timeline, drop the call, or mark a verified one "
-                         "`// perf-ok: <reason>`")
+        self.assertEqual(grown, [], "a per-call localization lookup, a read of a window frame, an unpaused animation "
+                         "timeline or a UserDefaults.synchronize() was added (docs/apple/performance.md, rules P2, P4, "
+                         "P7, P9): cache the lookup per locale, measure in the page's own space or keep the frame "
+                         "unobserved, pause the timeline, drop the call, or mark a verified one `// perf-ok: <reason>`")
         self.assertEqual(shrunk, [], "fewer counted calls than the baseline: run "
                          "python3 scripts/test/test_apple_perf_patterns.py --update and commit the baseline")
 
@@ -134,6 +137,10 @@ class ApplePerfPatternTests(unittest.TestCase):
         self.assertEqual(calls("UserDefaults.standard.synchronize()"), [("defaults-synchronize", 1)])
         self.assertEqual(calls("x\nUserDefaults.standard.synchronize()"), [("defaults-synchronize", 2)])
         self.assertEqual(calls('// UserDefaults.standard.synchronize()\n/* interfaceText("Done") */'), [])
+        self.assertEqual(calls(".onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in }"), [("window-frame", 1)])
+        self.assertEqual(calls("let f = g.frame( in: .global )"), [("window-frame", 1)])
+        self.assertEqual(calls("$0.frame(in: .named(space))\n$0.frame(in: .local)"), [])
+        self.assertEqual(calls("$0.frame(in: .global).minY // perf-ok: only y, and the box is unobserved"), [])
         self.assertEqual(calls("TimelineView(.animation) { c in }"), [("unpaused-animation", 1)])
         self.assertEqual(calls("TimelineView(.animation(minimumInterval: 1 / 30)) { c in }"), [("unpaused-animation", 1)])
         self.assertEqual(calls("TimelineView(.animation(minimumInterval: 1 / 60, paused: still)) { c in }"), [])
@@ -151,7 +158,7 @@ class ApplePerfPatternTests(unittest.TestCase):
         self.assertEqual(calls("let r = PHAsset.fetchAssets(with: o)\nlet d = try Data(contentsOf: url)\n"
                                "let i = UIImage(data: d)\nSecItemCopyMatching(q as CFDictionary, &out)\n"
                                "try fm.contentsOfDirectory(at: u, includingPropertiesForKeys: nil)"), [])
-        self.assertEqual(set(PATTERNS), {"defaults-synchronize", "localized-lookup", "unpaused-animation"})
+        self.assertEqual(set(PATTERNS), {"defaults-synchronize", "localized-lookup", "unpaused-animation", "window-frame"})
 
     def test_compare(self):
         self.assertEqual(compare({"a": {"x": 2}}, {"a": {"x": 1}}), (["a: x 1 -> 2"], []))

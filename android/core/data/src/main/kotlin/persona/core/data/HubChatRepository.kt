@@ -358,6 +358,22 @@ class HubChatRepository(
         }
     }
 
+    override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int): List<Item> {
+        require(fromSeq >= 0 && throughSeq >= fromSeq)
+        val out = mutableListOf<Item>()
+        var from = fromSeq
+        repeat(20) {
+            val page = transport.items(session, ItemsQuery(fromSeq = from, throughSeq = throughSeq))
+            out += page.items
+            val last = page.items.lastOrNull()?.seq
+            if (!page.more || last == null || last >= throughSeq) return out.distinctBy { it.id }
+            val next = last + 1
+            if (next <= from) return out.distinctBy { it.id }
+            from = next
+        }
+        return out.distinctBy { it.id }
+    }
+
     override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int): List<Item> {
         require(fromSeq >= 0 && toSeq >= fromSeq)
         val entry = existing(session) ?: return emptyList()
@@ -496,8 +512,11 @@ class HubChatRepository(
             }
             is Action.FetchAfter -> entry.scope.launch {
                 // Match iOS: no settling delay on a real gap. `requests` and the in-flight gate collapse duplicates.
+                // The continuity already opened this read (its gate is closed): run it rather than ask again.
+                var first: List<Action>? = listOf(action)
                 do {
-                    catchUp(entry)
+                    catchUp(entry, first)
+                    first = null
                 } while (entry.lock.withLock { entry.sync.behind })
             }
             is Action.FetchLatest -> entry.scope.launch { latest(entry) }
@@ -529,8 +548,9 @@ class HubChatRepository(
         finally { withContext(NonCancellable) { entry.lock.withLock { entry.sync.finishFill() } } }
     }
 
-    private suspend fun catchUp(entry: Entry) = entry.requests.withLock {
-        var actions = entry.lock.withLock { entry.sync.continueFill() }
+    /** [first]: a read the continuity already issued; without it, [ContinuitySync.continueFill] opens one. */
+    private suspend fun catchUp(entry: Entry, first: List<Action>? = null) = entry.requests.withLock {
+        var actions = first ?: entry.lock.withLock { entry.sync.continueFill() }
         try {
             while (actions.isNotEmpty()) {
                 actions = when (val action = actions.single()) {

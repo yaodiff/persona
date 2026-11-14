@@ -19,7 +19,7 @@ export function TaskTrust({ manager, machineName }: { manager: string; machineNa
 function TaskTrustScope({ manager, context, machineName }: { manager: string; context: string; machineName: (id: string) => string }) {
   const [open, setOpen] = useState(false);
   return <>
-    <Row label={word("title")}>
+    <Row label={word("title")} anchor="task-trust">
       <Button className="pointer-coarse:min-h-11" onClick={() => setOpen((value) => !value)}>{word(open ? "hide" : "manage")}</Button>
     </Row>
     {open && <TaskTrustList manager={manager} context={context} machineName={machineName} />}

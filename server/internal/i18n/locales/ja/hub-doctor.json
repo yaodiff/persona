@@ -37,6 +37,7 @@
   "item_routes_firewall": "ルートとファイアウォール",
   "item_running": "実行中のハブ",
   "item_tls_certificate": "TLS 証明書",
+  "item_web_push": "Web Push",
   "line_ok": "正常｜{item}：{detail}",
   "line_problem": "問題あり｜{item}：{detail}",
   "list_separator": "、",
@@ -95,5 +96,11 @@
   "running_unreachable": "ループバックで接続できません。ハブが実行されていないか、ループバックで待ち受けていない可能性があります。personad hub run を起動し、listen を確認してください",
   "title": "ハブの自己診断（読み取り専用）",
   "tls_listen_invalid": "有効な TLS 待ち受けポートがありません。public.tls_listen を設定してハブを再起動してください",
-  "tls_listen_ok": "{listen}（設定値。TLS の待ち受けは未確認）"
+  "tls_listen_ok": "{listen}（設定値。TLS の待ち受けは未確認）",
+  "web_push_bad_one": "{count} 個のブラウザが以前の鍵で登録されているか、直近の通知を送信できませんでした（下記参照）",
+  "web_push_bad_other": "{count} 個のブラウザが以前の鍵で登録されているか、直近の通知を送信できませんでした（下記参照）",
+  "web_push_ok_one": "{count} 個のブラウザが Persona を閉じていても通知を受け取れます",
+  "web_push_ok_other": "{count} 個のブラウザが Persona を閉じていても通知を受け取れます",
+  "web_push_route": "{service} 経由",
+  "web_push_stale": "{route}。ただし以前の鍵で登録されています。次にそのブラウザで Persona のページを開くと登録し直します"
 }

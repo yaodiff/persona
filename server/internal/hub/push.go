@@ -53,6 +53,8 @@ type Pusher struct {
 	// desktopOpen: the desktop app with this push device id is connected (Hub.desktopOpen); it posts its own
 	// notifications for agents then (the Mac's MacAttentionWatcher).
 	desktopOpen func(device string) bool
+	// web pushes to the browsers that turned Web Push on (webpush.go, #7459).
+	web *webPusher
 	// devicesChanged runs after a device was registered, forgotten or reloaded, or its settings changed (Hub:
 	// fleet.clients, whether a phone would be pushed an MCP form). It may run under the Pusher's locks: it must not block.
 	devicesChanged func()
@@ -78,6 +80,20 @@ type Pusher struct {
 	// prefsEdit holds one change of a device's settings from its read to its write (editPrefs); taken before saveMu
 	// and mu, never by a push.
 	prefsEdit sync.Mutex
+
+	// lnMu guards the low-distraction mode state (lnmode.go): the cached switch, the per-key push times for the
+	// 12-hour rule, the held-push list and the delivered-push counts.
+	lnMu         sync.Mutex
+	lnCached     *bool
+	lnCachedAt   time.Time
+	lnRefreshing bool
+	lnVersion    uint64 // bumped by setLnMode, so a refresh that read before it does not undo it
+	lnLastPush   map[string]time.Time
+	intercepts   []pushIntercept
+	sent         []pushSent
+	lnDirty      bool // the held-push list changed since the last save
+	sentDirty    bool // the delivered-push list changed since the last save
+	lnWriting    bool // the one saver goroutine is running
 }
 
 // deviceStoreTimeout: how long a device row write may take before it gives up (the pool has no statement_timeout).
@@ -85,7 +101,9 @@ const deviceStoreTimeout = 5 * time.Second
 
 func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 	p := &Pusher{dir: dir, store: store, logf: logf, devices: map[string]Device{}, replaced: map[string]string{}, failed: map[string]pushFailure{}, withdrawals: newWithdrawals(), relay: &http.Client{Timeout: 20 * time.Second, Transport: apns.NewTransport()},
-		retryWaits: []time.Duration{time.Second, 4 * time.Second}, now: time.Now, storeTimeout: deviceStoreTimeout}
+		retryWaits: []time.Duration{time.Second, 4 * time.Second}, now: time.Now, storeTimeout: deviceStoreTimeout,
+		// Web Push in memory here; the hub gives it the store when it starts (hub.go): a test's store may have no settings.
+		web: newWebPusher(nil, logf)}
 	if store != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), deviceStoreTimeout)
 		if _, err := store.ReconcilePushDevices(ctx, p.now().UTC(), pushDeviceMaxIdle); err != nil {
@@ -100,6 +118,7 @@ func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 		}
 		cancel()
 	}
+	p.loadLnState() // the grading switch and held pushes survive restarts (hub_settings), whether or not APNs is configured
 	b, err := os.ReadFile(filepath.Join(dir, "apns.json"))
 	if err != nil {
 		logf("push: no %s, pushing through each phone's relay (docs/operations/push-relay.md)", filepath.Join(dir, "apns.json"))
@@ -274,6 +293,15 @@ func (p *Pusher) signedOut(credential string) {
 		p.forget(d)
 		p.logf("device %s signed out: no more pushes", d.Name)
 	}
+	p.web.signedOut(credential)
+}
+
+// webPusher is p's Web Push (nil for a nil Pusher).
+func (p *Pusher) webPusher() *webPusher {
+	if p == nil {
+		return nil
+	}
+	return p.web
 }
 
 // forget drops a device, whatever token it has now (signedOut), with all of its push bookkeeping: a push accepted

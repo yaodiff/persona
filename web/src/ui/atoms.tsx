@@ -1,10 +1,11 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
 import type { AgentState } from "../lib/types";
 import { Icon, type IconName } from "./icons";
 import { StatusMark } from "./StatusMark";
 import { collapseMounted } from "../lib/disclosure";
+import { foldAllSeq, FoldMissed, type FoldRegion } from "../lib/fold-all";
 import { FeedbackGate, offlineNow } from "../lib/feedback";
 import { useCloseOnBack } from "../lib/back-close";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
@@ -160,6 +161,7 @@ export function Button({
   expanded,
   testId,
   size,
+  ref,
   ...aria
 }: {
   children: React.ReactNode;
@@ -184,6 +186,8 @@ export function Button({
   /** "sm": 28 px tall (a row of actions inside a card, as the error notice's). A height in `className` does not win
    *  over the 32 px one here: the classes are joined, not merged, and the stylesheet's order decides. */
   size?: "sm";
+  /** The button, for a page that hands the focus back to it (not the link's: `href` draws an <a>). */
+  ref?: React.Ref<HTMLButtonElement>;
 }) {
   const base = cx("inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150", size === "sm" ? "h-7" : "h-8");
   if (href && !disabled && !busy) {
@@ -213,6 +217,7 @@ export function Button({
   return (
     <button
       {...aria}
+      ref={ref}
       type={type}
       title={title}
       disabled={disabled || busy}
@@ -278,10 +283,17 @@ export function Kbd({ children }: { children: React.ReactNode }) {
  *  the clicked row still while the height runs (`anchoredScroll`, #1124). `clipClassName` goes on the box that clips the
  *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed.
  *  `min-w-0`: the grid's implicit column's `auto` minimum is the item's content-based minimum, so one child that cannot
- *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262). */
-export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing. */ sidebarFold?: boolean }) {
+ *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262).
+ *  A sidebar fold is lazy unless it says otherwise: a folded group holds no rows, so the sidebar costs what is open,
+ *  not every Agent (with 400 Agents its folded groups kept about 8,800 elements, laid out on every page switch). The
+ *  groups in it then miss a "Collapse / Expand all" while it is folded; opened, it has them take the last one
+ *  (`FoldMissed`, lib/fold-all.ts, #7440). */
+export function Collapse({ open, children, className = "", clipClassName = "", lazy: lazyProp, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing; lazy by default. */ sidebarFold?: boolean }) {
+  const lazy = lazyProp ?? sidebarFold;
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
+  const mounted = collapseMounted(lazy, open, closing);
+  const missed = useFoldRegion(lazy && sidebarFold, !mounted);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout
   // would otherwise land inside the transition, which then starts most of the way open.
   const [laidOut, setLaidOut] = useState(open || !lazy);
@@ -322,9 +334,23 @@ export function Collapse({ open, children, className = "", clipClassName = "", l
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className={`min-h-0 min-w-0 ${!sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
+      <div className={`min-h-0 min-w-0 ${!sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${clipClassName}`}>{mounted && (missed ? <FoldMissed.Provider value={missed}>{children}</FoldMissed.Provider> : children)}</div>
     </div>
   );
+}
+
+/** A sidebar fold's place for the "Collapse / Expand all" its groups miss while it holds none (lib/fold-all.ts): from
+ *  when it dropped them (or from what the place around it missed), until they mount again and have read it. None for a
+ *  fold that keeps its children. */
+function useFoldRegion(on: boolean, hidden: boolean): FoldRegion | null {
+  const around = useContext(FoldMissed);
+  const [region] = useState<FoldRegion>(() => ({ since: around.since ?? (hidden ? foldAllSeq() : null) }));
+  useEffect(() => {
+    if (!on) return;
+    if (!hidden) region.since = null;
+    else region.since ??= foldAllSeq();
+  }, [on, hidden, region]);
+  return on ? region : null;
 }
 
 // ── popover menu with a gliding highlight ───────────────
@@ -359,6 +385,7 @@ export function Menu({
   side = "bottom",
   width = 208,
   header,
+  headerAsWritten = false,
   container,
 }: {
   items: MenuItem[];
@@ -370,6 +397,9 @@ export function Menu({
   side?: "top" | "bottom";
   width?: number;
   header?: string;
+  /** The header is or holds a name (a space's, a tab's, a worktree's): drawn as written. A label header is drawn in
+   *  capitals, which would rewrite the name ("weather" as "WEATHER"). */
+  headerAsWritten?: boolean;
   /** Where the menu is put instead of the page's body: a full-screen layer above the menus' own (the image editor),
    *  whose look (its `dark`) the menu then takes. */
   container?: Element | null;
@@ -385,6 +415,8 @@ export function Menu({
   const asking = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const loads = useRef(0);
   const rows = useRef<(HTMLElement | null)[][]>([]);
+  // The highlight last moved by a key, not the pointer: a row it lands on past a cut edge is scrolled into view
+  const keyed = useRef(false);
   // What had the focus as the menu opened (its button, a row's ⋯), read on the first render, before a row can take it.
   const [opener] = useState(() => {
     const el = document.activeElement as HTMLElement | null;
@@ -511,6 +543,7 @@ export function Menu({
     const { levels: ls, subs: open } = live.current;
     const it = ls[depth]?.[index];
     if (!enabled(it)) return;
+    keyed.current = false;
     setActive(depth, index);
     // a submenu opens (and the one beside it closes) a moment after the pointer settles on a row, so a pointer
     // crossing rows on its way to the submenu does not swap it
@@ -549,6 +582,7 @@ export function Menu({
       }
       e.preventDefault();
       e.stopPropagation();
+      keyed.current = true;
       if (intent.type === "close") {
         handBack(); // a row the pointer chose to confirm may have it
         onClose();
@@ -577,20 +611,27 @@ export function Menu({
     rows: (list: (HTMLElement | null)[]) => {
       rows.current[depth] = list;
     },
+    keyed,
     onHover: (i: number) => hover(depth, i),
     onEnter: () => clearTimeout(timer.current),
     onLeave: () => live.current.subs.length <= depth && setActive(depth, -1),
     onChoose: (i: number) => choose(depth, i, false),
     onRename: (it: MenuItem, name: string) => void commitRename(depth, it, name),
     onCancelRename: () => {
+      // The input had the focus: it goes back to what opened the menu, the menu stays open with its Rename row
+      // highlighted, and the next key is the menu's (Enter renames again, the arrows go on from it, Esc closes)
+      const index = live.current.levels[depth]?.findIndex((it) => it.key === live.current.renaming) ?? -1;
+      handBack();
       setRenaming(null);
       setFailure(null);
+      keyed.current = true;
+      if (index >= 0) setActive(depth, index);
     },
   });
 
   return createPortal(
     <>
-      <MenuPanel {...panelProps(0)} place={{ anchor, point, align, side, width }} header={header} />
+      <MenuPanel {...panelProps(0)} place={{ anchor, point, align, side, width }} header={header} headerAsWritten={headerAsWritten} />
       {subs.map((s, i) => (
         <MenuPanel key={`${s.from}-${i}`} {...panelProps(i + 1)} place={{ rect: s.rect, width }} loading={s.loading} loadError={s.error} />
       ))}
@@ -599,13 +640,25 @@ export function Menu({
   );
 }
 
+/** The height of the fade a cut menu draws at an edge with more rows beyond it (`data-menu-more`, h-6). */
+const MENU_FADE = 24;
+
+/** Scrolls `box` (a menu) the least that shows `row` whole, clear of the fade at the edge it was past. */
+function reveal(box: HTMLElement, row: HTMLElement) {
+  if (box.scrollHeight <= box.clientHeight) return;
+  const b = box.getBoundingClientRect();
+  const r = row.getBoundingClientRect();
+  if (r.top < b.top + MENU_FADE) box.scrollTop = Math.max(0, box.scrollTop - (b.top + MENU_FADE - r.top));
+  else if (r.bottom > b.bottom - MENU_FADE) box.scrollTop = Math.min(box.scrollHeight - box.clientHeight, box.scrollTop + r.bottom - (b.bottom - MENU_FADE));
+}
+
 type Place =
   | { anchor: HTMLElement | null; point?: { x: number; y: number }; align: "left" | "right"; side: "top" | "bottom"; width: number; rect?: undefined }
   | { rect: { left: number; right: number; top: number; bottom: number }; width: number };
 
 /** One level of a menu: the rows, the highlight gliding under them, a rename input or a failure where they call for it. */
 function MenuPanel({
-  id, depth, items, active, confirming, renaming, busy, failure, rows: report, place, header, loading, loadError,
+  id, depth, items, active, confirming, renaming, busy, failure, rows: report, keyed, place, header, headerAsWritten, loading, loadError,
   onHover, onEnter, onLeave, onChoose, onRename, onCancelRename,
 }: {
   id: string;
@@ -617,8 +670,11 @@ function MenuPanel({
   busy: string | null;
   failure?: string;
   rows: (list: (HTMLElement | null)[]) => void;
+  /** The highlight last moved by a key (Menu's): then a row past a cut edge scrolls into view. */
+  keyed: { readonly current: boolean };
   place: Place;
   header?: string;
+  headerAsWritten?: boolean;
   loading?: boolean;
   loadError?: string;
   onHover: (i: number) => void;
@@ -632,6 +688,9 @@ function MenuPanel({
   const els = useRef<(HTMLElement | null)[]>([]);
   const [box, setBox] = useState<{ top: number; height: number } | null>(null);
   const [pos, setPos] = useState<React.CSSProperties>({ visibility: "hidden" });
+  // Rows past what shows (a window too short for the whole menu): a fade at that edge says there is more to scroll to,
+  // where a cut falling between two rows looked like the menu's end
+  const [more, setMore] = useState({ up: false, down: false });
   const narrow = useMedia(NARROW_QUERY);
   report(els.current);
   // only lines to read (#4054): a popover that explains something, not a menu to choose from
@@ -645,12 +704,13 @@ function MenuPanel({
       // On a phone it keeps to what the keyboard leaves visible (the frame --kb-top / --kb-h follow).
       const view = narrow ? keyboardFrame(innerHeight, window.visualViewport) : undefined;
       // Measure the natural height: the inline maxHeight left by the previous placement (a keyboard that has since
-      // closed) would otherwise be read back as the menu's height, and the menu placed for a height it no longer has.
+      // closed) would otherwise be read back as the menu's height, and the menu placed for a height it no longer has;
+      // the class's cap (the window's height) too, or a menu taller than the window would seem to fit in it.
       // The scroll offset is put back too: the uncapped layout may clamp it.
       const el = ref.current;
       const { scrollTop } = el;
       const capped = el.style.maxHeight;
-      el.style.maxHeight = "";
+      el.style.maxHeight = "none";
       // ...at the width it will have: rows whose text wraps (`detail`, `wrap`) are taller in a narrower panel, and the
       // first placement has no width yet, so a menu above its anchor came out too short and covered it (#5584)
       el.style.width = `${Math.min(place.width, innerWidth - 16)}px`;
@@ -662,12 +722,13 @@ function MenuPanel({
       else if (place.point) {
         const { x, y } = place.point;
         const right = x + Math.min(place.width, innerWidth - 16) + 8 > innerWidth; // no room on the right: it opens leftwards
-        at = placeMenu({ left: x, right: x, top: y, bottom: y }, h, { width: place.width, align: right ? "right" : "left", side: "bottom", screenW: innerWidth, screenH: innerHeight, view, gap: 0 });
+        at = placeMenu({ left: x, right: x, top: y, bottom: y }, h, { width: place.width, align: right ? "right" : "left", side: "bottom", screenW: innerWidth, screenH: innerHeight, view, gap: 0, beside: !narrow });
       } else if (place.anchor) {
-        at = placeMenu(place.anchor.getBoundingClientRect(), h, { width: place.width, align: place.align, side: place.side, screenW: innerWidth, screenH: innerHeight, view });
+        at = placeMenu(place.anchor.getBoundingClientRect(), h, { width: place.width, align: place.align, side: place.side, screenW: innerWidth, screenH: innerHeight, view, beside: !narrow });
       } else return;
       const { maxHeight, ...rest } = at;
-      setPos(maxHeight === undefined ? rest : { ...rest, maxHeight: `min(70vh, 520px, ${maxHeight}px)` });
+      // as tall as the window (or what the keyboard leaves) allows, 8px inside it, as placeMenu keeps it (the class's cap)
+      setPos(maxHeight === undefined ? rest : { ...rest, maxHeight: `${maxHeight}px` });
     };
     reposition();
     // An open menu keeps to where it belongs when the window or the visual viewport (a phone keyboard) resizes.
@@ -684,7 +745,21 @@ function MenuPanel({
   useLayoutEffect(() => {
     const el = els.current[active];
     setBox(el ? { top: el.offsetTop, height: el.offsetHeight } : null);
+    // the keys moved the highlight to a row the cut hides (or the fade covers): the menu scrolls it into view. Not
+    // for the pointer, whose row is in view already, so the menu never scrolls under it
+    if (el && ref.current && keyed.current) reveal(ref.current, el);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `keyed` is a ref
   }, [active]);
+
+  const measureMore = () => {
+    const el = ref.current;
+    if (!el) return;
+    const up = el.scrollTop > 0;
+    const down = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+    setMore((m) => (m.up === up && m.down === down ? m : { up, down }));
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- measured again once placed, and when its rows change height
+  useLayoutEffect(measureMore, [pos, items.length, renaming, failure, loading, loadError]);
 
   return (
     <div
@@ -692,12 +767,14 @@ function MenuPanel({
       role={reading ? "dialog" : "menu"}
       aria-label={reading ? (header ?? items[0].label) : undefined}
       data-menu={id}
-      className="fixed z-50 max-h-[min(70vh,520px)] overflow-y-auto rounded-[10px] bg-surface p-1 shadow-overlay"
+      className="fixed z-50 max-h-[calc(100dvh-(--spacing(4)))] overflow-y-auto rounded-[10px] bg-surface p-1 shadow-overlay"
       style={{ ...pos, animation: `pop-in 160ms ${EASE} both`, transformOrigin: origin }}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
+      onScroll={measureMore}
     >
-      {header && <div className="px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{header}</div>}
+      {more.up && <div aria-hidden data-menu-more="up" className="pointer-events-none sticky top-0 z-20 -mb-6 h-6 bg-linear-to-b from-surface to-transparent" />}
+      {header && <div className={cx("px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3", !headerAsWritten && "uppercase")}>{header}</div>}
       <div className="relative">
         <span
           aria-hidden
@@ -764,6 +841,7 @@ function MenuPanel({
           {failure}
         </div>
       )}
+      {more.down && <div aria-hidden data-menu-more="down" className="pointer-events-none sticky bottom-0 z-20 -mt-6 h-6 bg-linear-to-t from-surface to-transparent" />}
     </div>
   );
 }

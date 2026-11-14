@@ -150,7 +150,8 @@ object PersonaViewBlocks {
         val (language, code) = block as Block
         val words = cardWords()
         remember(block, words) { parse(language, code, words) }?.let { PersonaViewBlock(it) }
-    }, block = { key, raw, complete -> AssistantBlock(key, raw, complete) }, live = { id -> AssistantLiveCard(id) })
+    }, block = { key, raw, complete -> AssistantBlock(key, raw, complete) }, live = { id -> AssistantLiveCard(id) },
+        picture = { language, raw, complete, index -> AssistantPictureBlock(language, raw, complete, index) })
 
     private data class Block(val language: String, val code: String)
 }

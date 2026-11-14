@@ -383,4 +383,24 @@
     <string name="settings_subscriptions_counts_on">%1$d on</string>
     <string name="settings_subscriptions_counts_failing">%1$d on · %2$d failing</string>
     <string name="settings_subscriptions_counts_none">Available</string>
+    <plurals name="settings_ext_node_running">
+        <item quantity="one">Running on %1$d machine</item>
+        <item quantity="other">Running on %1$d machines</item>
+    </plurals>
+    <plurals name="settings_ext_node_abnormal">
+        <item quantity="one">%1$d machine has an issue</item>
+        <item quantity="other">%1$d machines have an issue</item>
+    </plurals>
+    <plurals name="settings_ext_node_offline">
+        <item quantity="one">%1$d machine offline</item>
+        <item quantity="other">%1$d machines offline</item>
+    </plurals>
+    <plurals name="settings_ext_node_starting">
+        <item quantity="one">Starting on %1$d machine</item>
+        <item quantity="other">Starting on %1$d machines</item>
+    </plurals>
+    <plurals name="settings_ext_node_stopped">
+        <item quantity="one">Stopped on %1$d machine</item>
+        <item quantity="other">Stopped on %1$d machines</item>
+    </plurals>
 </resources>

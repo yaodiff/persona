@@ -4,14 +4,14 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", feature = "test-support"))]
 use std::time::Duration;
 
 use jni::JNIEnv;
 use jni::JavaVM;
 use jni::objects::{GlobalRef, JByteArray, JClass, JMethodID, JObject, JString};
 use jni::signature::{Primitive, ReturnType};
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", feature = "test-support"))]
 use jni::sys::jlongArray;
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong, jvalue};
 use persona_core_runtime::Host;
@@ -22,19 +22,19 @@ struct JHost {
     vm: JavaVM,
     host: GlobalRef,
     changed: JMethodID,
+    changed_chat: Option<JMethodID>,
     run: JMethodID,
 }
 
 impl JHost {
-    /// Calls a `void` method of the host with one argument, on the core's worker thread.
-    fn call(&self, env: &mut JNIEnv, method: JMethodID, argument: jvalue) {
-        // The method ids were looked up on this object's class, with these signatures.
+    /// Calls a `void` method on the worker thread. Arguments must match the method's signature.
+    fn call(&self, env: &mut JNIEnv, method: JMethodID, arguments: &[jvalue]) {
         let _ = unsafe {
             env.call_method_unchecked(
                 self.host.as_obj(),
                 method,
                 ReturnType::Primitive(Primitive::Void),
-                &[argument],
+                arguments,
             )
         };
         if env.exception_check().unwrap_or(false) {
@@ -48,16 +48,40 @@ impl Host for JHost {
         let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
             return;
         };
-        self.call(&mut env, self.changed, jvalue { j: version as jlong });
+        self.call(&mut env, self.changed, &[jvalue { j: version as jlong }]);
+    }
+    fn changed_chat(&self, chat: &str, version: u64) {
+        let Some(method) = self.changed_chat else {
+            self.changed(version);
+            return;
+        };
+        let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
+            return;
+        };
+        let Ok(chat) = env.new_string(chat) else {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            return;
+        };
+        self.call(
+            &mut env,
+            method,
+            &[jvalue { l: chat.as_raw() }, jvalue { j: version as jlong }],
+        );
+        let _ = env.delete_local_ref(chat);
     }
     fn run(&self, effect: &[u8]) {
         let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
             return;
         };
         let Ok(array) = env.byte_array_from_slice(effect) else {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
             return;
         };
-        self.call(&mut env, self.run, jvalue { l: array.as_raw() });
+        self.call(&mut env, self.run, &[jvalue { l: array.as_raw() }]);
         // The worker never returns to Java, so its local references are freed by hand.
         let _ = env.delete_local_ref(array);
     }
@@ -68,6 +92,18 @@ fn core(handle: jlong) -> Option<Arc<persona_core_runtime::Runtime>> {
         return None;
     }
     crate::runtime(handle as usize as *const PersonaCore)
+}
+
+fn optional_changed_chat(env: &mut JNIEnv, class: &jni::objects::JClass) -> Option<JMethodID> {
+    match env.get_method_id(class, "changedChat", "(Ljava/lang/String;J)V") {
+        Ok(method) => Some(method),
+        Err(_) => {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            None
+        }
+    }
 }
 
 fn boolean(value: bool) -> jboolean {
@@ -85,14 +121,20 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_create(
         let config = env.convert_byte_array(&config).ok()?;
         let class = env.get_object_class(&host).ok()?;
         let changed = env.get_method_id(&class, "changed", "(J)V").ok()?;
+        let changed_chat = optional_changed_chat(&mut env, &class);
         let run = env.get_method_id(&class, "run", "([B)V").ok()?;
         let host = JHost {
             vm: env.get_java_vm().ok()?,
             host: env.new_global_ref(&host).ok()?,
             changed,
+            changed_chat,
             run,
         };
-        create(&config, Arc::new(host))
+        let handle = crate::next_handle();
+        if handle == u64::MAX {
+            return None;
+        }
+        create(&config, Arc::new(host), handle)
     }))
     .ok()
     .flatten()
@@ -157,7 +199,26 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_destroy(_env: JNI
     }
 }
 
-#[cfg(target_os = "android")]
+/// Projects the Agents list from a JSON input string. Pure function, no runtime handle needed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectSort<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::sort::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::sort::project(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or_default()
+}
+
+#[cfg(any(target_os = "android", feature = "test-support"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_enableDiagnostics(
     _env: JNIEnv,
@@ -171,7 +232,17 @@ pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_enableDiagno
     }));
 }
 
-#[cfg(target_os = "android")]
+#[cfg(feature = "test-support")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_lease(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jboolean {
+    boolean(core(handle).is_some())
+}
+
+#[cfg(any(target_os = "android", feature = "test-support"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_flushDiagnostic(
     _env: JNIEnv,
@@ -181,10 +252,10 @@ pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_flushDiagnos
 ) -> jboolean {
     let Some(runtime) = core(handle) else { return JNI_FALSE };
     let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
-    catch_unwind(AssertUnwindSafe(|| runtime.flush_diagnostic(timeout))).map_or(JNI_FALSE, boolean)
+    catch_unwind(AssertUnwindSafe(|| runtime.flush(timeout))).map_or(JNI_FALSE, boolean)
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", feature = "test-support"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_diagnostics(
     env: JNIEnv,

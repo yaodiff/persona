@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -36,7 +37,7 @@ import java.io.File
 
 /**
  * The queue strip above the composer (#4339 C6, iOS QueueStrip), light and dark: on Glass folded to its line with Send
- * Now, opened (three rows, then it scrolls) and Send Now's confirmation; Brief and Board always open, as before. PNGs in
+ * Now, opened (three rows, then it scrolls) and Send Now at one press; Brief and Board always open, as before. PNGs in
  * `build/queue-shots/` (or `-Dpersona.shots=<dir>`).
  */
 @RunWith(AndroidJUnit4::class)
@@ -59,6 +60,7 @@ class ChatQueueStripShotsTest {
         override suspend fun isMuted(session: Session) = false
         override suspend fun execute(session: Session, action: ChatAction): ChatActionResult = ChatActionResult.Done
         override suspend fun verify(session: Session, action: ChatAction): ChatActionResult = ChatActionResult.Done
+        override suspend fun sendQueuedNow(session: Session) = Unit
     }
 
     private fun save(name: String, style: AppStyle, dark: Boolean, bitmap: Bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()) {
@@ -90,12 +92,14 @@ class ChatQueueStripShotsTest {
                 rule.waitForIdle()
             }
             save("open", s, d)
-            if (rule.onAllNodesWithText("Send now").fetchSemanticsNodes().isNotEmpty()) {
+            // Glass sends at one press and draws no dialog. Brief and Board have no Send now.
+            val sendsNow = s == AppStyle.Glass
+            rule.onAllNodesWithText("Send now").assertCountEquals(if (sendsNow) 1 else 0)
+            if (sendsNow) {
                 rule.onAllNodesWithText("Send now")[0].performClick()
                 rule.waitForIdle()
-                save("send-now", s, d, rule.onNode(isDialog()).captureToImage().asAndroidBitmap())
-                rule.onAllNodesWithText("Cancel")[0].performClick()
-                rule.waitForIdle()
+                rule.onAllNodes(isDialog()).assertCountEquals(0)
+                save("send-now", s, d)
             }
         }
     }

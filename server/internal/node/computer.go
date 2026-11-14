@@ -206,11 +206,18 @@ func computerReady(c proto.Computer) (bool, string) {
 }
 
 // computerTools are the Cua Driver tools the hub may call: reading, and run_script / run_steps, which act through the
-// daemon's own checks. Not its settings, updates, extensions or clipboard.
+// daemon's own checks; start_session starts the call's own label again after it ended (#7590, the hub's
+// computer_session.go says when). Not its settings, updates, extensions or clipboard.
 var computerTools = map[string]bool{
 	"get_desktop_state": true, "get_accessibility_tree": true, "get_window_state": true, "list_apps": true, "list_windows": true,
-	"run_script": true, "run_steps": true,
+	"run_script": true, "run_steps": true, "start_session": true,
 }
+
+// nodeSessions are the labels the node reads the screen under for itself (cua_gate.go). Cua Driver ends a named
+// session after 5 minutes without a call, and then refuses every call under it ("session has ended") until
+// start_session; no one stops these from the screen (they only read: no cursor, no bar), so one that ended is started
+// again and the call retried once (#7590).
+var nodeSessions = map[string]bool{"persona-gate": true}
 
 // openPath opens an app (startCua); a test's stand-in records what it was asked.
 var openPath = "/usr/bin/open"
@@ -253,6 +260,12 @@ func computerCall(ctx context.Context, params json.RawMessage) (*proto.ComputerR
 	if args == nil { // "args": null: Unmarshal set the map to nil, and writing the session label to it would panic
 		args = map[string]any{}
 	}
+	if p.Tool == "start_session" { // the call's own label, nothing else: no other's, no cursor or capture settings
+		if p.Session == "" {
+			return nil, errors.New("computer.call: start_session needs the call's session label")
+		}
+		args = map[string]any{}
+	}
 	if _, ok := args["session"]; !ok && p.Session != "" {
 		args["session"] = p.Session
 	}
@@ -261,6 +274,22 @@ func computerCall(ctx context.Context, params json.RawMessage) (*proto.ComputerR
 	if out, _ := cuaRun(ctx, bin, "status"); !cuaDaemonRunning(out) {
 		startCua(ctx, bin)
 	}
+	res, err := cuaInvoke(ctx, bin, p.Tool, input)
+	if err != nil && nodeSessions[p.Session] && cuaEnded(err) {
+		start, _ := json.Marshal(map[string]any{"session": p.Session})
+		if _, serr := cuaInvoke(ctx, bin, "start_session", start); serr == nil {
+			res, err = cuaInvoke(ctx, bin, p.Tool, input)
+		}
+	}
+	return res, err
+}
+
+// cuaEnded: Cua Driver refused a call because its session had ended.
+func cuaEnded(err error) bool { return strings.Contains(err.Error(), "session has ended") }
+
+// cuaInvoke runs `cua-driver call tool` with input on stdin: its JSON, or what it said on failure as
+// "cua-driver <tool>: …" (the hub tells Cua Driver's own answers by that), and the screenshot it wrote.
+func cuaInvoke(ctx context.Context, bin, tool string, input []byte) (*proto.ComputerResult, error) {
 	dir, err := os.MkdirTemp("", "persona-computer-")
 	if err != nil {
 		return nil, err
@@ -270,7 +299,7 @@ func computerCall(ctx context.Context, params json.RawMessage) (*proto.ComputerR
 	cctx, cancel := context.WithTimeout(ctx, computerCallTimeout)
 	defer cancel()
 	// The input on stdin: no length limit, and not in the process list for anyone to read.
-	cmd := exec.CommandContext(cctx, bin, "call", "--screenshot-out-file", shot, p.Tool)
+	cmd := exec.CommandContext(cctx, bin, "call", "--screenshot-out-file", shot, tool)
 	cmd.Stdin = bytes.NewReader(input)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
@@ -288,7 +317,7 @@ func computerCall(ctx context.Context, params json.RawMessage) (*proto.ComputerR
 		if cctx.Err() != nil {
 			msg = "超时（" + computerCallTimeout.String() + "）"
 		}
-		return nil, fmt.Errorf("cua-driver %s: %s", p.Tool, firstLine(msg))
+		return nil, fmt.Errorf("cua-driver %s: %s", tool, firstLine(msg))
 	default:
 		res.Text = string(out)
 	}

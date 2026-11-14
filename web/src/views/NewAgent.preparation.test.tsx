@@ -25,6 +25,8 @@ let mounted: boolean;
 let host: HTMLDivElement;
 let closes: number;
 let configured: boolean;
+let configuredProvider: string;
+let launcherRows: import("../lib/types").Launcher[];
 let unauthorized: ReturnType<typeof vi.fn<() => void>>;
 // the hub's workspace catalog (#7259); empty unless a test lists some
 let catalogRows: Record<string, unknown>[] = [];
@@ -88,7 +90,7 @@ beforeEach(async () => {
   resetModelListsForTests();
   vi.useFakeTimers();
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
-  calls = []; pending = []; closes = 0; configured = false; catalogRows = [];
+  calls = []; pending = []; closes = 0; configured = false; configuredProvider = "claude"; launcherRows = [{ name: "claude", agent: "claude" }]; catalogRows = [];
   let preview = 0;
   vi.stubGlobal("URL", class extends URL {
     static createObjectURL = vi.fn(() => `blob:synthetic-preview-${++preview}`);
@@ -110,10 +112,10 @@ beforeEach(async () => {
     const call: Call = { url, body: typeof init.body === "string" ? JSON.parse(init.body) : undefined, headers: new Headers(init.headers), signal: init.signal };
     calls.push(call);
     if (url.includes("/model-config/purposes/")) return configured
-      ? json({ purpose: { id: "agent.new", name: "New agent", effective: { provider: "launcher.claude", model: "synthetic-model", effort: "high" } }, providers: [] })
+      ? json({ purpose: { id: "agent.new", name: "New agent", effective: { provider: `launcher.${configuredProvider}`, model: "synthetic-model", effort: "high" } }, providers: [] })
       : json({ error: "not found" }, 404);
-    if (url.includes("/launchers/") && url.includes("/models")) return json({ agent: "claude", models: [{ id: "synthetic-model", name: "Synthetic model", efforts: ["low", "high"] }] });
-    if (url.endsWith("/launchers")) return json({ launchers: [{ name: "claude", agent: "claude" }] });
+    if (url.includes("/launchers/") && url.includes("/models")) return json({ agent: launcherRows.find((l) => url.includes(`/launchers/${l.name}/`))?.agent_type || "claude", models: [{ id: "synthetic-model", name: "Synthetic model", efforts: ["low", "high"] }] });
+    if (url.endsWith("/launchers")) return json({ launchers: launcherRows });
     if (url.includes("/dirs?")) return json({ path: "/projects", entries: [] });
     if (url.endsWith("/worktree/status")) return json({ path: call.body!.cwd, dirty: 0, unmerged: 0 });
     if (url.endsWith("/worktree/add")) return new Promise<Response>((resolve, reject) => {
@@ -496,4 +498,79 @@ describe("New Agent workspace list (#7259)", () => {
     expect(document.querySelector('[data-testid="new-agent-workspaces"]')).toBeNull();
     expect(document.querySelector('input[placeholder="' + t("newagent.folder_placeholder") + '"]')).not.toBeNull();
   });
+});
+
+describe("known terminal CLI text starts (#1842)", () => {
+  it.each([false, true])("starts a text-only compatible alias inline (follow default: %s)", async (followDefault) => {
+    await click("Close externally");
+    launcherRows = [{ name: "work", agent_type: "traex" }];
+    configured = followDefault;
+    configuredProvider = "work";
+    resetModelListsForTests();
+    await click("Reopen start");
+    await flush();
+    await type("Inspect the project");
+    const request = await prepare();
+    await answer(request);
+    expect(starts()).toHaveLength(1);
+    expect(starts()[0].body).toMatchObject({ launcher: "work", agent_type: "traex", prompt: "Inspect the project" });
+    expect(starts()[0].body).not.toHaveProperty("async");
+    expect(messages()).toHaveLength(0);
+  });
+});
+
+it.each([
+  { kind: "traex", attachment: true, engine: "herdr", source: undefined },
+  { kind: "claude", attachment: false, engine: "herdr", source: undefined },
+  { kind: "agy", attachment: false, engine: "herdr", source: undefined },
+  { kind: "omp", attachment: false, engine: "herdr", source: undefined },
+  { kind: undefined, attachment: false, engine: "herdr", source: undefined },
+  { kind: "traex", attachment: false, engine: "paseo", source: undefined },
+  { kind: "traex", attachment: false, engine: "orca", source: undefined },
+  { kind: "traex", attachment: false, engine: "herdr", source: "future-desktop" },
+])("preserves existing negotiation for $kind/$engine/attachment=$attachment/source=$source", async ({ kind, attachment, engine, source }) => {
+  await click("Close externally");
+  launcherRows = [{ name: "work", agent_type: kind, source }];
+  resetModelListsForTests();
+  await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: [engine], engine_default: engine }));
+  await click("Reopen start"); await flush();
+  await type("Preserved task");
+  if (attachment) await attach("retained.txt");
+  await tick(401);
+  await click(t("newagent.start")); await tick();
+  // Worktree preparation is not requested in this control; the existing start and message paths remain intact.
+  expect(starts()).toHaveLength(1);
+  expect(starts()[0].body).toMatchObject({ async: true, name_hint: "Preserved task" });
+  expect(starts()[0].body).not.toHaveProperty("agent_type");
+  expect(starts()[0].body).not.toHaveProperty("prompt");
+  expect(messages()).toHaveLength(1);
+  if (attachment) expect(messages()[0].body!.text).toContain("/uploads/submitted.txt");
+});
+
+it("preserves Codex inline creation with its advertised optional empty prompt", async () => {
+  await click("Close externally");
+  launcherRows = [{ name: "work", agent_type: "codex", prompt_optional: true }];
+  resetModelListsForTests();
+  await click("Reopen start"); await flush();
+  await type(""); await tick(401);
+  await click(t("newagent.start")); await tick();
+  expect(starts()).toHaveLength(1);
+  expect(starts()[0].body).toMatchObject({ agent_type: "codex" });
+  expect(starts()[0].body).not.toHaveProperty("async");
+  expect(starts()[0].body).not.toHaveProperty("prompt");
+  expect(messages()).toHaveLength(0);
+});
+
+it("keeps an empty compatible CLI start on the existing asynchronous path", async () => {
+  await click("Close externally");
+  launcherRows = [{ name: "work", agent_type: "traex" }];
+  resetModelListsForTests();
+  await click("Reopen start"); await flush();
+  await type(" "); await tick(401);
+  await click(t("newagent.start")); await tick();
+  expect(starts()).toHaveLength(1);
+  expect(starts()[0].body).toMatchObject({ async: true });
+  expect(starts()[0].body).not.toHaveProperty("agent_type");
+  expect(starts()[0].body).not.toHaveProperty("prompt");
+  expect(messages()).toHaveLength(0);
 });

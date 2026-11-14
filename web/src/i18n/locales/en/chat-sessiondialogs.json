@@ -27,7 +27,7 @@
   "change_failed": "Couldn't change: {error}",
   "change_unconfirmed": "The hub didn't confirm the change within 95 seconds. It may have been applied; check the current settings before trying again.",
   "rename": "Rename",
-  "tab_name": "Tab name (herdr tab)",
+  "tab_name": "herdr tab name",
   "session_name": "Session name",
   "rename_hint_assistant": "Only changes this chat's title in Persona.",
   "rename_hint_agent": "The tab name syncs to herdr. The session name uses Claude's /rename, so claude --resume on the computer shows it too.",

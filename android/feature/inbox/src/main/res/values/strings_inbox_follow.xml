@@ -29,5 +29,5 @@
     <string name="inbox_time_tomorrow">tomorrow</string>
     <string name="inbox_time_yesterday">Yesterday</string>
     <string name="inbox_event_assistant_says">Assistant says</string>
-    <string name="inbox_event_processing_chat">Processing chat ›</string>
+    <string name="inbox_event_processing_chat">Conversation ›</string>
 </resources>

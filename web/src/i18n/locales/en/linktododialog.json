@@ -24,5 +24,7 @@
   "create_and_link": "Create and add",
   "new_todo": "New to-do…",
   "space_unlink": "Remove",
-  "session_unlink": "Unlink"
+  "session_unlink": "Unlink",
+  "search": "Search open to-dos",
+  "no_match": "No open to-dos match"
 }

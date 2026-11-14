@@ -1368,9 +1368,9 @@ struct InboxAgentRow: View {
 
 // MARK: - Detail
 
-/// One inbox item opened: the Feishu chat at its first new message, or the mail, or what a plugin draws for its source
-/// (placement inbox_item, `InboxItemSlotContent`); the AI's summary with AI Draft Reply / Hand to AI on top, Done in the
-/// toolbar, whoever draws the body.
+/// One inbox item opened: on iOS a native chat or mail stays behind View original until asked for, so the detail alone
+/// reports nothing read; the other sources keep their existing body (placement inbox_item, `InboxItemSlotContent`). The
+/// AI's summary with AI Draft Reply / Hand to AI is on top, Done in the toolbar, whoever draws the body.
 struct InboxDetailView: View {
     var item: InboxItem
     var accounts: [MailAccount]
@@ -1382,6 +1382,10 @@ struct InboxDetailView: View {
     @State private var ruling: InboxPolicyTarget?
     @State private var todoRequest: InboxTodoRequest?
     @State private var slot: InboxItemSlotModel
+    #if os(iOS)
+    /// The expanded item's key; nil keeps every newly opened or reused detail collapsed.
+    @State private var expandedSourceKey: String?
+    #endif
 
     init(item: InboxItem, accounts: [MailAccount]) {
         self.item = item
@@ -1400,6 +1404,11 @@ struct InboxDetailView: View {
             .sheet(isPresented: $sameMatter) { InboxSameMatterPicker(item: current, tree: nil) }
             .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
             .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
+            #if os(iOS)
+            .onChange(of: item.key) { _, _ in
+                expandedSourceKey = nil
+            }
+            #endif
             #if DEBUG
             // `-showInboxAction draft|handoff`: open that sheet (screenshots).
             .task {
@@ -1444,7 +1453,7 @@ struct InboxDetailView: View {
     }
 
     /// An event (inbox phase 1: recap, a suggestion, the chain) opens as its own page, the source behind 'view original';
-    /// anything else as before: the source with the actions over it.
+    /// anything else keeps the actions over its body, with a native chat or mail collapsed on iOS until its row is tapped.
     @ViewBuilder private var page: some View {
         if current.isEvent {
             InboxEventPage(item: current, accounts: accounts, draft: { drafting = true })
@@ -1465,14 +1474,86 @@ struct InboxDetailView: View {
             InboxConnectorDetailView(item: current)
         } else if let m = current.moment {
             LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(current.manager)) // the post and its comments, as a shared Moments card opens
-        } else if let c = item.larkConversation {
-            LarkChatView(conversation: c, manager: model.linkManager(current.manager))
-        } else if let m = item.mailSummary {
-            MailDetailView(summary: m, accounts: accounts)
+        } else if item.larkConversation != nil || item.mailSummary != nil {
+            #if os(iOS)
+            collapsibleSource
+            #else
+            originalSource
+            #endif
         } else {
             EmptyStateView(symbol: "questionmark", title: item.title, message: item.preview)
         }
     }
+
+    /// The unchanged source, shared by the platforms that open it directly and by iOS once it is explicitly expanded.
+    @ViewBuilder private var originalSource: some View {
+        if let c = item.larkConversation {
+            LarkChatView(conversation: c, manager: model.linkManager(current.manager))
+        } else if let m = item.mailSummary {
+            MailDetailView(summary: m, accounts: accounts)
+        }
+    }
+
+    #if os(iOS)
+    private var showsOriginalSource: Bool {
+        expandedSourceKey == item.key
+    }
+
+    /// Only the expanded branch mentions the source views: `InboxItemSlotContent` can evaluate its plain content eagerly,
+    /// so neither a chat nor a mail reader may be constructed while this row is collapsed.
+    @ViewBuilder private var collapsibleSource: some View {
+        Group {
+            if showsOriginalSource {
+                originalSource
+            } else {
+                // The chat owns its title only while expanded; the collapsed detail must keep naming the item.
+                Spacer()
+                    .navigationTitle(current.title)
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: Theme.Space.flush) { sourceDisclosure }
+    }
+
+    /// The one entry stays above the source in both states; its preview follows the inbox row's metadata and sender line.
+    private var sourceDisclosure: some View {
+        Button(action: toggleOriginalSource) {
+            HStack(spacing: Theme.Space.s) {
+                Text(sourcePreview)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
+                Label(showsOriginalSource ? String(localized: "Collapse") : String(localized: "View original"), systemImage: Theme.Icon.openDocument)
+                    .font(Theme.Font.captionMedium)
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .layoutPriority(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Theme.Space.page)
+            .tapTargetHeight()
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("inbox.detail.source")
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var sourcePreview: String {
+        if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier) { return meta }
+        guard let sender = item.sender, !sender.isEmpty, item.lark?.isGroup != false || !item.isLark else { return item.preview }
+        return String(localized: "\(sender): \(item.preview)", comment: "Who wrote it: what they wrote")
+    }
+
+    private func toggleOriginalSource() {
+        withAnimation(Theme.Motion.standard) {
+            expandedSourceKey = showsOriginalSource ? nil : item.key
+        }
+    }
+    #endif
 }
 
 /// Values a destination needs directly: an outer NavigationStack / NavigationSplitView does not reliably forward them

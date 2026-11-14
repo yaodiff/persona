@@ -232,7 +232,12 @@ struct RootView: View {
         .overlay(alignment: .top) { if overlayToasts { ToastOverlay().padding(.top, toastClearance) } }
         #if os(iOS) || os(visionOS)
         // Settings › Appearance › Light & Dark on this scene's window (and any other open one) as it first shows.
-        .onAppear { model.colorScheme.apply() }
+        .onAppear {
+            model.colorScheme.apply()
+            #if DEBUG || PERF_SIGNPOST
+            PerfTrace.firstFrame()
+            #endif
+        }
         #if os(iOS)
         // The interface's cap on the windows' text size, so sheets and covers are capped too (`WindowTextSize`).
         .onAppear { WindowTextSize.apply(); systemSize = WindowTextSize.system }

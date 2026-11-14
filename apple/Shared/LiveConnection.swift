@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// One message of a terminal stream (docs/protocol/protocol.md「Terminal stream」).
 nonisolated enum TerminalEvent: Sendable {
@@ -694,6 +695,25 @@ final class LiveConnection {
             try? await Task.sleep(for: .seconds(Self.slowAfter))
             guard let self, gen == self.generation, self.state == .connected, self.lastPong < sent else { return }
             self.stalled = true
+        }
+    }
+
+    /// One ping on this connection for the live screen's Connection Stats (#6558): the round trip to the hub, or nil
+    /// without a connection or without a pong within 5 s. The heartbeat's kind of ping; it changes none of its state.
+    func roundTrip() async -> TimeInterval? {
+        guard state == .connected, let t = task else { return nil }
+        let sent = Date.now
+        return await withCheckedContinuation { (c: CheckedContinuation<TimeInterval?, Never>) in
+            let done = OSAllocatedUnfairLock(initialState: false)
+            let finish: @Sendable (TimeInterval?) -> Void = { v in
+                let first = done.withLock { was -> Bool in
+                    defer { was = true }
+                    return !was
+                }
+                if first { c.resume(returning: v) }
+            }
+            t.sendPing { @Sendable error in finish(error == nil ? Date.now.timeIntervalSince(sent) : nil) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { finish(nil) }
         }
     }
 

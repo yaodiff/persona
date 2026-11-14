@@ -11,6 +11,8 @@ struct GitPane: View {
     @Binding var status: GitStatus?
     /// Opens the review of the session's changes at a scope (#151); nil where there is none (no `git_review`, the Mac).
     var review: ((GitReviewScope?) -> Void)? = nil
+    /// Where a pull request's review thread goes as a comment for the agent (#7014); nil when the chat takes no messages.
+    var commentKey: SessionKey? = nil
     @State private var error: String?
     /// A refresh the user asked for failed over a status already shown (#1889): said above it, which stays.
     @State private var refreshError: String?
@@ -25,11 +27,14 @@ struct GitPane: View {
     @State private var revision = 0
     /// The tab's writes (#7013): staging, the commit, the push.
     @State private var writer = GitWriteModel()
-    @State private var committing = false
+    /// The sheet over the tab: the commit, Branches or Stashes (#7015).
+    @State private var sheet: WriteSheet?
     /// The commit message, kept while the sheet is closed or the commit refused.
     @State private var commitMessage = ""
     /// A push waiting for its yes.
     @State private var askingPush: GitPushKind?
+    /// The branch's pull request (#7014).
+    @State private var prModel = GitPRModel()
 
     /// The hub writes for this tab (`git_write`, #7013): iPhone and iPad only, the Mac app is frozen.
     private var canWrite: Bool {
@@ -59,7 +64,14 @@ struct GitPane: View {
                 }
             }
             if let s = status, s.isRepo {
-                Section { header(s) }
+                Section {
+                    header(s)
+                    if canWrite { sheetRows(s) }
+                }
+                if canWrite {
+                    GitPRSection(status: s, pr: prModel, open: { sheet = .pr }, create: { sheet = .prCreate },
+                                 retry: { Task { await readPR(force: true) } })
+                }
                 changes(s)
                 history(s)
             } else if let error {
@@ -75,11 +87,16 @@ struct GitPane: View {
         .listStyle(.insetGrouped)
         .themedPage()
         .safeAreaInset(edge: .bottom) { commitBar }
-        .refreshable { await load() }
+        .refreshable {
+            await load()
+            await readPR(force: true)
+        }
         #if os(macOS)
         .pageToolbar { MacRefreshItem(id: [machineID, cwd]) { await load() } } // no pull to refresh on the Mac
         #endif
         .task(id: cwd) { await load() }
+        // The pull request again only when what was pushed moved (gh asks GitHub each time), as on the web.
+        .task(id: canWrite ? GitPRModel.key(status) : "") { await readPR() }
         #if DEBUG
         // `-showGitReload YES`: a refresh and a Load Earlier Commits two seconds after the first read, as the user's
         // would be, to see what their failures say (#1889, with scripts/mock/mock_hub.py MOCK_GIT_READ_FAIL=1).
@@ -159,7 +176,7 @@ struct GitPane: View {
         } label: {
             HStack(spacing: Theme.Space.xs) {
                 if pullModel.isPulling { ProgressView().controlSize(.mini) }
-                Chip(text: pullModel.isPulling ? String(localized: "Pulling") : s.behind > 0 ? String(localized: "Pull \(s.behind)") : String(localized: "Pull"),
+                Chip(text: pullModel.isPulling ? String(localized: "Pulling") : s.behind > 0 ? String(localized: "Pull \(s.behind)") : String(localized: "git.pull", defaultValue: "Pull"),
                      symbol: pullModel.isPulling ? nil : Theme.Icon.down,
                      look: .tint(s.behind > 0 ? Theme.cautionText : Theme.accent))
                     .monospacedDigit()
@@ -318,7 +335,7 @@ struct GitPane: View {
                 }
                 .accessibilityElement(children: .combine)
                 Spacer(minLength: 0)
-                Button { committing = true } label: { Text("Commit…").lineLimit(1) }
+                Button { sheet = .commit } label: { Text("Commit…").lineLimit(1) }
                     .themedButton(prominent: true)
                     .disabled(staged == 0 || s.branch == nil || writer.busy != nil)
                     .accessibilityIdentifier("git.commit")
@@ -340,12 +357,56 @@ struct GitPane: View {
         }
     }
 
-    /// The commit sheet, Push's question and a refusal's alert (#7013), on the tab.
+    enum WriteSheet: String, Identifiable {
+        case commit, branches, stashes, pr, prCreate
+        var id: String { rawValue }
+    }
+
+    /// Branches and Stashes under the branch card (#7015): each opens its sheet; Stashes says how many there are.
+    @ViewBuilder private func sheetRows(_ s: GitStatus) -> some View {
+        sheetRow(String(localized: "Branches"), symbol: Theme.Icon.gitBranch, value: nil, open: .branches)
+        sheetRow(String(localized: "Stashes"), symbol: Theme.Icon.gitStash, value: s.stashes > 0 ? "\(s.stashes)" : nil, open: .stashes)
+    }
+
+    private func sheetRow(_ title: String, symbol: String, value: String?, open: WriteSheet) -> some View {
+        Button { sheet = open } label: {
+            HStack(spacing: Theme.Space.m) {
+                ThemedIcon(symbol).foregroundStyle(Theme.accent)
+                Text(title).foregroundStyle(Color.primary).lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
+                if let value { Text(value).foregroundStyle(.secondary).monospacedDigit() }
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.label).foregroundStyle(.tertiary)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(writer.busy != nil)
+        .accessibilityIdentifier("git.open." + open.rawValue)
+    }
+
+    /// The commit, Branches and Stashes sheets, Push's question and a refusal's alert (#7013, #7015), on the tab.
     private func writeSheets(_ content: some View) -> some View {
         content
-            .sheet(isPresented: $committing) {
-                if let s = status {
-                    GitNewCommitSheet(status: s, message: $commitMessage, writer: writer) { await commit() }
+            .sheet(item: $sheet) { which in
+                if let s = status, let deps = writeDeps {
+                    switch which {
+                    case .commit:
+                        GitNewCommitSheet(status: s, message: $commitMessage, writer: writer) { await commit() }
+                    case .branches:
+                        GitBranchesSheet(machineID: machineID, cwd: cwd, status: s, writer: writer, deps: deps,
+                                         applied: { applied($0) }, openStashes: { sheet = .stashes })
+                    case .stashes:
+                        GitStashesSheet(machineID: machineID, cwd: cwd, status: s, writer: writer, deps: deps, applied: { applied($0) })
+                    case .pr:
+                        if let api = model.api(group) {
+                            GitPRSheet(machineID: machineID, cwd: cwd, status: s, pr: prModel, deps: GitPRModel.Deps(api: api), commentKey: commentKey)
+                        }
+                    case .prCreate:
+                        if let api = model.api(group) {
+                            GitPRCreateSheet(machineID: machineID, cwd: cwd, status: s, pr: prModel, deps: GitPRModel.Deps(api: api),
+                                             branches: { try await deps.branches(machineID, cwd) }, opened: { sheet = .pr })
+                        }
+                    }
                 }
             }
             .confirmationDialog(Text("Push to the Remote?"), isPresented: Binding(get: { askingPush != nil }, set: { if !$0 { askingPush = nil } }),
@@ -355,7 +416,7 @@ struct GitPane: View {
             } message: { kind in
                 Text(pushQuestion(kind))
             }
-            .gitRefusalAlert(Binding(get: { committing ? nil : writer.refusal }, set: { writer.refusal = $0 }))
+            .gitRefusalAlert(Binding(get: { sheet != nil ? nil : writer.refusal }, set: { writer.refusal = $0 }))
     }
 
     /// What Push says it does, as the web's question: never forced.
@@ -389,7 +450,7 @@ struct GitPane: View {
         applied(r)
         if let c = r?.commit {
             commitMessage = ""
-            committing = false
+            sheet = nil
             Haptics.success()
             model.toast = Toast(String(localized: "Committed \(c.short)"), style: .success)
         }
@@ -423,6 +484,12 @@ struct GitPane: View {
         status = r.status
         error = nil
         return true
+    }
+
+    /// Reads the branch's pull request when what was pushed moved, or always with force.
+    private func readPR(force: Bool = false) async {
+        guard canWrite, let api = model.api(group) else { return }
+        await prModel.read(status, machine: machineID, cwd: cwd, deps: GitPRModel.Deps(api: api), force: force)
     }
 
     private func pull() async {

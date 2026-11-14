@@ -53,6 +53,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/memory/{name}
 -                    DELETE /api/v1/assistant/places/{id}
 -                    DELETE /api/v1/assistant/repositories/{id}
+-                    DELETE /api/v1/assistant/saved-prompts/{id}
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
 -                    DELETE /api/v1/auth/tokens/{id}
@@ -79,6 +80,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom
 -                    DELETE /api/v1/managers/{id}
 -                    DELETE /api/v1/model-profiles/{id}
+-                    DELETE /api/v1/push/web/{device}
 -                    DELETE /api/v1/recordings/{id}
 -                    DELETE /api/v1/recordings/{id}/photos/{n}
 -                    DELETE /api/v1/sessions/{mid}/{sid}
@@ -142,6 +144,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/repositories/{id}
 -                    GET /api/v1/assistant/routines
 -                    GET /api/v1/assistant/runs
+-                    GET /api/v1/assistant/saved-prompts
 -                    GET /api/v1/assistant/search
 -                    GET /api/v1/assistant/skills
 -                    GET /api/v1/assistant/standing-authorizations
@@ -279,11 +282,17 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/personas/{id}/{file...}
 -                    GET /api/v1/phone/write-queue
 -                    GET /api/v1/pins
+notify               GET /api/v1/push/intercepts
+notify               GET /api/v1/push/ln-mode
+notify               GET /api/v1/push/stats/daily
+-                    GET /api/v1/push/web
+-                    GET /api/v1/push/web/{device}
 -                    GET /api/v1/recordings
 -                    GET /api/v1/recordings/{id}/audio
 -                    GET /api/v1/recordings/{id}/live
 -                    GET /api/v1/recordings/{id}/photos
 -                    GET /api/v1/recordings/{id}/photos/{n}
+agents.read          GET /api/v1/saved-agent-searches
 agents.read          GET /api/v1/sessions
 agents.read          GET /api/v1/sessions/archived
 agents.read          GET /api/v1/sessions/{mid}/{sid}/info
@@ -307,6 +316,8 @@ todos.read           GET /api/v1/todos/{id}/decisions
 -                    GET /api/v1/usage
 -                    GET /api/v1/usage/windows
 agents.read          GET /api/v1/workspace-board
+agents.read          GET /api/v1/workspace-board/activity
+agents.read          GET /api/v1/workspace-board/activity/{revision}
 -                    GET /api/v1/workspace-board/settings
 agents.read          GET /api/v1/workspaces
 -                    GET /api/v1/ws
@@ -389,6 +400,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/routines/{id}/run
 -                    POST /api/v1/assistant/rule-suggestions/{id}/always
 -                    POST /api/v1/assistant/rule-suggestions/{id}/not-now
+-                    POST /api/v1/assistant/saved-prompts
 -                    POST /api/v1/assistant/tasks
 -                    POST /api/v1/assistant/tasks/{id}/fresh
 -                    POST /api/v1/assistant/tasks/{id}/run
@@ -521,6 +533,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 notify               POST /api/v1/notify
 -                    POST /api/v1/phone/runtime-cli
 -                    POST /api/v1/phone/write-queue/{id}/cancel
+-                    POST /api/v1/push/web/{device}/test
 -                    POST /api/v1/recordings/{id}/ask
 -                    POST /api/v1/recordings/{id}/followup
 -                    POST /api/v1/recordings/{id}/just-me
@@ -529,9 +542,11 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/recordings/{id}/minutes/todos
 -                    POST /api/v1/recordings/{id}/photos
 -                    POST /api/v1/recordings/{id}/segments
+-                    POST /api/v1/saved-agent-searches
 agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach
+-                    POST /api/v1/sessions/{mid}/{sid}/autoname
 -                    POST /api/v1/sessions/{mid}/{sid}/close
 -                    POST /api/v1/sessions/{mid}/{sid}/fork
 agents.control       POST /api/v1/sessions/{mid}/{sid}/interrupt
@@ -596,6 +611,8 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    PUT /api/v1/assistant/places/{id}
 -                    PUT /api/v1/assistant/repositories/{id}
 -                    PUT /api/v1/assistant/routines
+-                    PUT /api/v1/assistant/saved-prompts/order
+-                    PUT /api/v1/assistant/saved-prompts/{id}
 -                    PUT /api/v1/assistant/tasks/{id}
 -                    PUT /api/v1/bots/feishu
 -                    PUT /api/v1/channels/{id}
@@ -640,6 +657,8 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/model-profiles/{id}
 -                    PUT /api/v1/mutes
 -                    PUT /api/v1/pins
+-                    PUT /api/v1/push/ln-mode
+-                    PUT /api/v1/push/web/{device}
 -                    PUT /api/v1/recordings/{id}
 -                    PUT /api/v1/recordings/{id}/audio
 -                    PUT /api/v1/recordings/{id}/private

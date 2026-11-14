@@ -165,4 +165,19 @@ class TerminalResumeTest {
         assertTrue(stopped.copy(agent = "codex", sourceKind = "codex_history").isStoppedAgent)
         assertFalse(stopped.copy(assistant = true).isStoppedAgent)
     }
+
+    @Test fun stoppedAgentsKeepReadingAndTerminalButTakeNoMessagesOrAnswers() {
+        for (status in listOf("offline", "interrupted")) {
+            val session = stopped(status = status)
+            assertTrue(session.canRead)
+            assertTrue(session.canTerminal)
+            assertFalse(session.canSend)
+            assertFalse(session.canApprove)
+            assertFalse(session.canInterrupt)
+            assertFalse(session.canChangeModes)
+        }
+        assertTrue("older nodes without capabilities keep their behavior", session().canSend)
+        assertTrue(stopped().copy(status = "idle", capabilities = stoppedCaps.copy(send = true)).canSend)
+        assertTrue("assistant conversations can be reopened by messaging", stopped(assistant = true).canSend)
+    }
 }

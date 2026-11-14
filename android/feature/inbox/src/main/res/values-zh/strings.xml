@@ -87,8 +87,10 @@
     <string name="inbox_empty_search_text">没有和「%1$s」匹配的消息或邮件。</string>
     <string name="inbox_empty_title">收件箱是空的</string>
     <string name="inbox_empty_text">hub 配好飞书（飞书网关）或在设置里加了邮箱后，需要你看的消息和邮件会出现在这里。</string>
-    <string name="inbox_empty_filtered_title">都看完了</string>
-    <string name="inbox_empty_filtered_text">这个筛选下没有东西。</string>
+    <string name="inbox_empty_filtered_title">没有符合筛选的未处理内容</string>
+    <string name="inbox_empty_filtered_text">清除筛选后，可以看到整个收件箱。</string>
+    <string name="inbox_empty_caught_up_title">都看完了</string>
+    <string name="inbox_empty_caught_up_text">这个筛选下没有东西。</string>
     <string name="inbox_group_fyi">知悉即可</string>
     <string name="inbox_mark_all_seen">全部看过</string>
     <string name="inbox_clear_all">全部清除</string>
@@ -269,6 +271,7 @@
     <string name="inbox_event_view_source">看原文</string>
     <string name="inbox_done_by_manager">助手处理了</string>
     <string name="inbox_event_related">有关</string>
-    <!-- Source subscriptions (#2041): with the Inbox's other settings -->
+    <!-- Source subscriptions (#2041): with the Inbox's other settings. Inbox Sources (#5308) once the hub says so. -->
     <string name="inbox_subscriptions">订阅来源</string>
+    <string name="inbox_sources">收件箱来源</string>
 </resources>

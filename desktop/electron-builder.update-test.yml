@@ -1,0 +1,34 @@
+# Test-only build for desktop/scripts/update-test.mjs. Never publish or install what this produces.
+#
+# It differs from the unsigned development build in exactly these ways:
+#   - the update feed is a local HTTP directory instead of GitHub Releases. The harness replaces the placeholder
+#     address below at build time (-c.publish.url=http://127.0.0.1:<free port>/), so the feed is baked into
+#     app-update.yml exactly as a release's feed is; nothing at run time can redirect it;
+#   - the entry is update-test/main.mjs, which records updater events for the harness and then loads the real main
+#     process unchanged. That file is listed only here, so a release package does not contain it;
+#   - a separate, per-run app ID and package name. The harness overrides both from one random identity, stable for the
+#     old and new versions in that run. This owns the updater cache, macOS Squirrel job and Windows NSIS uninstall key;
+#     neither another update test nor a real Persona install or unsigned development build shares those identities.
+#     These disposable packages create no shared desktop or Start-menu shortcuts.
+extends: ./electron-builder.unsigned.yml
+appId: com.example.persona.update-test
+productName: Persona Update Test
+extraMetadata:
+  name: persona-desktop-update-test
+  main: update-test/main.mjs
+nsis:
+  createDesktopShortcut: false
+  createStartMenuShortcut: false
+files:
+  - dist/**
+  - update-test/**
+  - package.json
+  - package-lock.json
+publish:
+  provider: generic
+  url: http://127.0.0.1:9/
+linux:
+  category: Utility
+  target:
+    - target: AppImage
+      arch: [x64]

@@ -1,0 +1,12 @@
+{
+  "loaded_only": "此 hub 仅搜索已加载的 Agent。",
+  "searching": "正在搜索全部 Agent…",
+  "loaded_count": "已加载 {count} / {total} 个匹配的 Agent",
+  "more": "加载更多 Agent",
+  "retry": "重试搜索",
+  "search_again": "重新搜索",
+  "invalid_response": "无法读取 Agent 搜索结果，请重试。",
+  "query_too_long": "搜索内容过长，请缩短后重试。",
+  "unsupported": "此 hub 还不能搜索全部 Agent，请更新后使用。",
+  "expired": "搜索结果已过期，请重新搜索以刷新结果。"
+}

@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"os"
 	"path/filepath"
@@ -26,6 +27,9 @@ type fileStat struct {
 	mod     int64    // UnixNano
 	size    int64
 }
+
+// findReadHook, when set by a test, runs between a file's stat and its read.
+var findReadHook func(path string)
 
 func settling(st fileStat) bool { return time.Since(time.Unix(0, st.mod)) < findSettle }
 
@@ -186,14 +190,17 @@ func (c *findCache) text(p string, gen uint64) (*findText, fileStat, bool) {
 	}
 	c.mu.Unlock()
 	c.reads.Add(1)
-	raw, err := os.ReadFile(p)
+	// The text is read through one handle between two stats of it, so it is kept only under the stat of the file
+	// it came from: a stat by path and a read by path could be two files.
+	raw, read, kept, err := readStable(p)
 	if err != nil {
 		return nil, st, false
 	}
+	st = read
 	s := string(raw)
 	t = &findText{stat: st, raw: s, lower: fold(s), gen: gen}
 	t.same = t.lower == t.raw
-	if int64(len(raw)) != st.size || settling(st) {
+	if !kept || settling(st) {
 		return t, st, true // changing while read, or just now: used once, not kept
 	}
 	n := t.cost()
@@ -211,6 +218,37 @@ func (c *findCache) text(p string, gen uint64) (*findText, fileStat, bool) {
 		c.bytes += n
 	}
 	return t, st, true
+}
+
+// readStable reads a file through one handle and returns its text with the handle's stat, and whether the text is
+// that stat's: the handle's stat is the same after the read and the length read is its size.
+func readStable(p string) ([]byte, fileStat, bool, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, fileStat{}, false, err
+	}
+	defer f.Close()
+	stat := func() (fileStat, error) {
+		fi, err := f.Stat()
+		if err != nil {
+			return fileStat{}, err
+		}
+		return fileStat{path: p, mod: fi.ModTime().UnixNano(), size: fi.Size()}, nil
+	}
+	st, err := stat()
+	if err != nil {
+		return nil, fileStat{}, false, err
+	}
+	if findReadHook != nil {
+		findReadHook(p)
+	}
+	var b bytes.Buffer
+	b.Grow(int(st.size) + bytes.MinRead) // the size and room to see the end without growing, as os.ReadFile
+	if _, err := b.ReadFrom(f); err != nil {
+		return nil, st, false, err
+	}
+	after, err := stat()
+	return b.Bytes(), st, err == nil && after == st && int64(b.Len()) == st.size, nil
 }
 
 // textAt is text for a file whose stat was just read (st): the cached text when it is of that stat; otherwise the

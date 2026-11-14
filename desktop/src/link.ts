@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { linkArguments, publicLinkStatus } from "./link-contract.cjs";
 import type { LinkCommand } from "./link-contract.cjs";
 
 /** Only the separately installed connector is accepted, never a renderer-provided executable or arbitrary PATH program. */
-export function personaLinkExecutable(home = process.env.HOME ?? ""): string {
+export function personaLinkExecutable(home = homedir()): string {
   return join(home, ".persona", "bin", process.platform === "win32" ? "persona-link.exe" : "persona-link");
 }
 

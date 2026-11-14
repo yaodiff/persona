@@ -41,7 +41,7 @@ export function ThemeColorPicker() {
   };
   const sub = (c: AccentChoice) => (c === "persona" ? (personaAccent ? persona.name : t("ui-look.persona_none")) : t(`ui-look.${c}_sub`));
   return (
-    <div className="px-4 py-3">
+    <div className="px-4 py-3" data-settings-row="theme-color">
       <div className="text-[13px] text-ink">{t("ui-look.accent")}</div>
       <div className="mt-0.5 text-[11.5px] text-ink-3">{t("ui-look.accent_hint")}</div>
       <div role="radiogroup" aria-label={t("ui-look.accent")} className="mt-3 grid grid-cols-4 gap-x-1 gap-y-3 sm:grid-cols-7">
@@ -67,7 +67,8 @@ export function ThemeColorPicker() {
                   {selected && <Icon name="check" size={14} stroke={2.6} />}
                 </span>
               </span>
-              <span className={cx("max-w-full truncate text-[12px] whitespace-nowrap", selected ? "font-medium text-ink" : "text-ink-2")}>{t(`ui-look.${c}`)}</span>
+              {/* a color's name wraps in a phone's four columns rather than being cut ("システムブルー") */}
+              <span className={cx("max-w-full text-center text-[12px] break-words", selected ? "font-medium text-ink" : "text-ink-2")}>{t(`ui-look.${c}`)}</span>
               <span className="-mt-1 max-w-full truncate text-[11px] whitespace-nowrap text-ink-3">{sub(c)}</span>
             </button>
           );
@@ -82,17 +83,18 @@ export function ThemeColorPicker() {
 export function TextSizeRow() {
   const size = useTextSize();
   return (
-    <Row label={t("ui-look.text_size")} hint={t("ui-look.text_size_hint")}>
+    <Row label={t("ui-look.text_size")} hint={t("ui-look.text_size_hint")} wrapHint anchor="text-size">
       <Segmented<TextSize> label={t("ui-look.text_size")} value={size} options={TEXT_SIZES.map((v) => ({ v, label: t(`ui-look.${v}`) }))} onChange={setTextSize} />
     </Row>
   );
 }
 
-/** "Recent chats in the sidebar": how many Persona chats › Recent lists before Show more (lib/sidebar-recent.ts, #5146). */
+/** "Recent chats in the sidebar": how many Persona chats › Recent lists before Show more (lib/sidebar-recent.ts, #5146).
+ *  On a phone its four choices go under the sentence, so the name is not cut beside them (audit item 17). */
 export function RecentChatsRow() {
   const count = useRecentCount();
   return (
-    <Row label={t("ui-look.recent_chats")} hint={t("ui-look.recent_chats_hint")} wrapHint>
+    <Row label={t("ui-look.recent_chats")} hint={t("ui-look.recent_chats_hint")} wrapHint stackOnNarrow anchor="recent-chats">
       <Segmented label={t("ui-look.recent_chats")} value={String(count)} options={RECENT_COUNTS.map((n) => ({ v: String(n), label: String(n) }))} onChange={(v) => setRecentCount(Number(v))} />
     </Row>
   );

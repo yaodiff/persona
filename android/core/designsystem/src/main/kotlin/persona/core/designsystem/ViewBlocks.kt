@@ -21,6 +21,14 @@ class ViewBlocks(
     },
     /** A live card of the conversation (a feed `view` item), by its id: drawn as the hub's latest version of it. */
     val live: @Composable (id: String) -> Unit = {},
+    /**
+     * A card block drawn into a picture (Share as a picture, #7261): as the chat draws it, with nothing that answers and
+     * nothing that only runs live; one that cannot be drawn is its words, never its JSON. [language] is the fence's,
+     * [index] a ```persona-view's number in the text (-1 for a ```persona-card).
+     */
+    val picture: @Composable (language: String, raw: String, complete: Boolean, index: Int) -> Unit = { language, raw, complete, _ ->
+        if (complete) parse(language, raw)?.let { draw(it) }
+    },
 )
 
 val LocalViewBlocks = staticCompositionLocalOf<ViewBlocks?> { null }

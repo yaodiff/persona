@@ -5,6 +5,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.mockwebserver.MockResponse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,6 +43,26 @@ class HttpSubscriptionsTest {
         val pressed = server.takeRequest()
         assertEquals("/api/v1/subscriptions/-/ui", pressed.path)
         assertTrue(pressed.body.readUtf8().contains(""""action":"run_now""""))
+    }
+
+    /** #5661: these pages are told `context.assistant`, including "" so the key is present; other calls omit it. */
+    @Test fun thePagesAreToldTheAssistantsName() = withHub { server, api ->
+        server.enqueue(MockResponse().setBody("""{"view":{"title":"Sources","sections":[]}}"""))
+        api.renderUi(SUBSCRIPTIONS_UI, "pages", ExtensionUiContext(assistant = ""))
+        assertTrue(server.takeRequest().body.readUtf8().contains("\"assistant\":\"\""))
+        server.enqueue(MockResponse().setBody("""{"view":{"title":"Sources","sections":[]}}"""))
+        api.renderUi(SUBSCRIPTIONS_UI, "pages", ExtensionUiContext(assistant = "Claude"))
+        val named = server.takeRequest().body.readUtf8()
+        assertTrue(named.contains("\"assistant\":\"Claude\""))
+        server.enqueue(MockResponse().setBody("""{"toast":"Queued."}"""))
+        api.uiAction(SUBSCRIPTIONS_UI, "pages", "setup", ExtensionUiContext(assistant = ""), null, null)
+        assertTrue(server.takeRequest().body.readUtf8().contains("\"assistant\":\"\""))
+        server.enqueue(MockResponse().setBody("""{"view":{"title":"Sources","sections":[]}}"""))
+        api.renderUi(SUBSCRIPTIONS_UI, "pages", null)
+        assertFalse(server.takeRequest().body.readUtf8().contains("assistant"))
+        server.enqueue(MockResponse().setBody("""{"view":{"sections":[]}}"""))
+        api.renderUi("example-gateway", "home", ExtensionUiContext(assistant = null))
+        assertFalse(server.takeRequest().body.readUtf8().contains("assistant"))
     }
 
     @Test fun theSummaryCountsWhatIsOnAndFailing() = withHub { server, api ->

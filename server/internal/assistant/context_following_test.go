@@ -112,7 +112,7 @@ func TestSnapshotFollowingRendersEmptyState(t *testing.T) {
 	if len(rows) != 0 || total != 0 {
 		t.Fatalf("empty inbox gave %d rows and total %d", len(rows), total)
 	}
-	out := prompts.RenderSnapshot(prompts.Snapshot{Now: time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC), Zone: "UTC"})
+	out := prompts.RenderSnapshot(prompts.Snapshot{Now: time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC), Zone: "UTC", FollowingEnabled: true})
 	if !strings.Contains(out, "- 在跟的事：没有\n") || strings.Contains(out, "在跟的事（0 件）") {
 		t.Fatalf("the empty following state is missing or has an empty count:\n%s", out)
 	}
@@ -164,7 +164,7 @@ func TestSnapshotFollowingSortsCapsAndUsesOwnerZone(t *testing.T) {
 		t.Errorf("a missing check time did not sort last: %v", rows[4].CheckAt)
 	}
 
-	snap := prompts.Snapshot{Now: early, Zone: loc.String(), Following: rows, FollowingTotal: total}
+	snap := prompts.Snapshot{Now: early, Zone: loc.String(), FollowingEnabled: true, Following: rows, FollowingTotal: total}
 	out := prompts.RenderSnapshot(snap)
 	if !strings.Contains(out, "还有 2 件") {
 		t.Errorf("the rows beyond the bound are not counted:\n%s", out)
@@ -183,7 +183,7 @@ func TestSnapshotFollowingStateNotes(t *testing.T) {
 		snapshotFollowingTestItem("due", NowCheckDue, nil),
 	)
 	rows, total := s.snapshotFollowing(context.Background(), time.UTC)
-	out := prompts.RenderSnapshot(prompts.Snapshot{Now: time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC), Zone: "UTC", Following: rows, FollowingTotal: total})
+	out := prompts.RenderSnapshot(prompts.Snapshot{Now: time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC), Zone: "UTC", FollowingEnabled: true, Following: rows, FollowingTotal: total})
 	ask := snapshotFollowingLine(t, out, "标题 ask")
 	if !strings.Contains(ask, "看过 3 次没动静") {
 		t.Errorf("follow-up ask has no three-check note: %s", ask)
@@ -241,7 +241,7 @@ func TestFitSnapshotFollowingOmitsBeforeFollowups(t *testing.T) {
 		followups[i] = prompts.SnapshotFollowup{At: now, Label: strings.Repeat("定时跟进", 20)}
 	}
 	s := prompts.Snapshot{
-		Now: now, Zone: "UTC", Following: following, FollowingTotal: 7,
+		Now: now, Zone: "UTC", FollowingEnabled: true, Following: following, FollowingTotal: 7,
 		Followups: followups, FollowupsTotal: len(followups),
 	}
 	if got := utf8.RuneCountInString(prompts.RenderSnapshot(s)); got <= snapshotBudget {

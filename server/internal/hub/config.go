@@ -155,6 +155,10 @@ type SharingConfig struct {
 type Config struct {
 	// AutoUpdateNodes explicitly opts into fleet upgrades after Hub updates and node reconnects.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
+	// ScreenLinkOff: the hub never selects the live screen's session subprotocol (#6398, askScreenLink), so every live
+	// screen stays on the plain relay whatever the apps and nodes support: a switch for the hub's operator, read at
+	// start, for when direct routes misbehave and an app release would take too long.
+	ScreenLinkOff bool `json:"screen_link_off,omitempty"`
 	// Name is what people see this hub as (hubName); empty: its machine's host name.
 	Name string `json:"name,omitempty"`
 	// InitialLocale is the user's language until a device says one (locale.go, #5519): the language the installer ran
@@ -179,6 +183,9 @@ type Config struct {
 	Assistant AssistantProfile `json:"assistant"`
 	// Notify tunes when "finished" pushes go out (notify.go); which ones a device gets is its own setting.
 	Notify NotifyConfig `json:"notify,omitempty"`
+	// InterceptReaders lists the extension IDs whose tokens may read GET /api/v1/push/intercepts, on top of the
+	// notify scope. Full credentials always may; an extension token not on this list is refused even with notify.
+	InterceptReaders []string `json:"intercept_readers,omitempty"`
 	// Public is how the hub is reached from outside its LAN: TLS, the addresses it hands out (config_public.go).
 	Public PublicConfig `json:"public,omitempty"`
 

@@ -282,7 +282,8 @@ describe("the leader conversations in the sidebar", () => {
       root = createRoot(host);
       await renderSidebar();
       expect(recentHeading()!.getAttribute("aria-expanded")).toBe("false");
-      expect(recentBox().style.gridTemplateRows).toBe("0fr");
+      // folded from the start, its rows are not drawn at all (a folded group mounts no rows)
+      expect(rowIds()).toEqual(["lead-a", "lead-b"]);
       // unfold again
       act(() => recentHeading()!.click());
       expect(rowIds()).toEqual(["lead-a", "lead-b", ...own.slice(0, 5)]);

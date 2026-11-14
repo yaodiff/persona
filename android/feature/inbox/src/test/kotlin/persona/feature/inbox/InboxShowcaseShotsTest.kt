@@ -54,7 +54,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.util.Locale
 
-/** The shared Chinese showcase as a real list, with its wire fields and clock, in every style and appearance. */
+/** The shared showcase as real list and detail pages, with its wire fields and clock, in every style and appearance. */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "zh-w400dp-h1800dp-xhdpi")
@@ -207,7 +207,7 @@ class InboxShowcaseShotsTest {
             rule.onNodeWithText("订单群 · 张三${separator}好的，我看一下新的", useUnmergedTree = true).assertExists()
             // Only the current-state line carries follow.next; the timeline's waiting step ends after look again.
             rule.onNodeWithText("问更正后的报价行不行", substring = true, useUnmergedTree = true).assertExists()
-            rule.onNodeWithText(if (english) "Processing chat ›" else "处理对话 ›", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText(if (english) "Conversation ›" else "处理对话 ›", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("AI summary", useUnmergedTree = true).assertDoesNotExist()
             rule.onNodeWithText("发了邮件：报价单更正", useUnmergedTree = true).assertExists()
             rule.onNodeWithText(if (english) "Assistant says" else "助手说", useUnmergedTree = true).assertExists()
@@ -215,7 +215,7 @@ class InboxShowcaseShotsTest {
             rule.onNodeWithText("收到 1 条消息 · 张三", useUnmergedTree = true).assertExists()
             saveShot("detail-folded-${if (english) "en" else "zh-Hans"}-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-detail")
 
-            rule.onNodeWithText(if (english) "What happened" else "处理链条").performClick()
+            rule.onNodeWithText(if (english) "Timeline" else "处理链条").performClick()
             rule.waitForIdle()
             rule.onNodeWithText("收到 2 条消息 · 张三", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("开了 Agent：核对报价单", useUnmergedTree = true).assertExists()
@@ -229,6 +229,46 @@ class InboxShowcaseShotsTest {
                 rule.onNodeWithText(expectedState, useUnmergedTree = true).assertExists()
             }
             saveShot("detail-expanded-${if (english) "en" else "zh-Hans"}-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-detail")
+        }
+    }
+
+    @Test fun drawsTheSharedSc2DetailInChineseInEveryStyleAndAppearance() {
+        val (records, liveSessions, clock) = showcase()
+        val inbox = ShowcaseInbox(records, liveSessions)
+        val detail = records.first { it.item.id == "sc-2" }
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var run by mutableIntStateOf(0)
+        rule.setContent {
+            val configuration = localizedConfiguration(LocalConfiguration.current, Locale.SIMPLIFIED_CHINESE, dark)
+            val localizedContext = LocalContext.current.createConfigurationContext(configuration)
+            CompositionLocalProvider(
+                LocalContext provides localizedContext,
+                LocalConfiguration provides configuration,
+                LocalInboxClock provides { clock }, LocalInboxZone provides ZoneOffset.UTC,
+            ) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    key(run) {
+                        Box(Modifier.testTag("showcase-detail-sc-2").width(400.dp).height(1800.dp).background(PersonaTheme.palette.background)) {
+                            InboxEventScreen(inbox, InboxEventRoute(detail.item.id), navigator)
+                        }
+                    }
+                }
+            }
+        }
+        for (appearance in AppStyle.entries) for (night in listOf(false, true)) {
+            rule.runOnIdle { style = appearance; dark = night; run++ }
+            rule.waitForIdle()
+            rule.onNodeWithText("等你确认回复", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText("处理对话 ›", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText("约，中午见。", useUnmergedTree = true).assertExists()
+            val resources = resourcesFor(Locale.SIMPLIFIED_CHINESE, night)
+            rule.onNodeWithText(resources.getString(R.string.inbox_line_say), useUnmergedTree = true).assertDoesNotExist()
+            rule.onNodeWithText(resources.getString(R.string.inbox_line_retry), useUnmergedTree = true).assertDoesNotExist()
+            val summary = rule.onNodeWithText("李四问周五的午饭还约不约", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            val suggestion = rule.onNodeWithText("约，中午见。", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            assertTrue("$appearance dark=$night: summary must precede suggestion", summary.top < suggestion.top)
+            saveShot("detail-sc-2-zh-Hans-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-detail-sc-2")
         }
     }
 }

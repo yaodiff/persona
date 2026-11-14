@@ -100,6 +100,44 @@ final class RenderBudgetTests: XCTestCase {
         XCTAssertLessThanOrEqual(total, limit + Self.slack, "\(page): one `\(what)` push draws \(text); budget \(limit)")
     }
 
+    /// What one switch between Assistant and Agents may draw again (#5438, docs/apple/performance.md P5 and P7): the pages
+    /// stay built, so a switch moves them and swaps the top bars, and no page's own body has a reason to run. Before, a
+    /// switch ran the Agents list's body three or four times (it read the app's tab, the strip's `moving` and the chat on
+    /// screen), the chat page's two or three times (`@Environment(\.dismiss)`), `RootView`'s once (the tab, read in
+    /// `ShellView`'s initial state) and the composer bar's on every frame of the slide (a window frame kept in `@State`).
+    /// Switched by the frame probe's cue, as `PerfAssistantTests/testTabSwitchAssistantAgentsByCue`.
+    func testShellSwitch() {
+        launch(["-app.tab", "assistant", "-tab", "assistant", "-openAssistant", Self.persona, "-dev.openChat", "",
+                "-showFrameProbe", "YES"])
+        let switches = 4
+        func flip() {
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                                 CFNotificationName("com.persona.perf.shell.switch" as CFString), nil, nil, true)
+            sleep(2)
+        }
+        flip(); flip() // Agents is built by its first visit, and both pages have been in front once
+        let before = settled()
+        for _ in 0..<switches { flip() }
+        let after = bodies()
+        let per = after.compactMap { k, v -> (String, Double)? in
+            let d = Double(v - (before[k] ?? 0)) / Double(switches)
+            return d > 0 ? (k, d) : nil
+        }.sorted { $0.1 > $1.1 }
+        let text = "one Assistant ⇄ Agents switch: " + per.map { String(format: "%@ %.1f", $0.0, $0.1) }.joined(separator: ", ")
+        print("PERF " + text)
+        let att = XCTAttachment(string: text)
+        att.name = "budget shell switch"
+        att.lifetime = .keepAlways
+        add(att)
+        let drawn = Dictionary(uniqueKeysWithValues: per)
+        for view in ["RootView", "ChatsView", "AgentsList", "ChatView", "Composer", "AgentsFieldPlace"] {
+            XCTAssertLessThanOrEqual(drawn[view] ?? 0, Self.slack, "\(view) ran on a switch that changes nothing it draws: \(text)")
+        }
+        // The bar follows the keyboard's focus and the draft; a slide is neither. Three leaves room for the two bars'
+        // own changes at the ends of the slide (it was 30 and more).
+        XCTAssertLessThanOrEqual(drawn["ShellComposerBar"] ?? 0, 3 + Self.slack, "the composer bar ran during the slide: \(text)")
+    }
+
     func testAgentsList() {
         launch(["-app.tab", "chats", "-tab", "dev", "-dev.openChat", ""])
         // The bumped agent is a working one, and its row has to be on screen: below the asks (five of them since the

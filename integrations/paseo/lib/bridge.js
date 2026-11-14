@@ -11,10 +11,10 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { createRuntime, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import {
-  CHECK_LABEL, EFFORTS, KEPT, KEPT_LABEL, RUNTIME, SESSION_LABEL, WORKSPACE_ID, agentRoot, agentRow, appAgent, archivedUnderOwnId, claudeId,
-  codexThreadOf, defaultProvider, formModel, interactionOf, launchersOf, linkedWorktree, parentAgentId, paseoCheckouts, paseoMode,
-  projectSpaces, promptKey, providerRoots, responseOf, rewindOf, sessionIdOf, slotNameOf, spaceIdOf, strayRecord, timelineItems,
-  transcriptOf, workspaceRow,
+  AUTO_ACCEPT, AUTO_ACCEPT_ROOTS, CHECK_LABEL, EFFORTS, KEPT, KEPT_LABEL, RUNTIME, SESSION_LABEL, WORKSPACE_ID, agentRoot, agentRow, appAgent,
+  archivedUnderOwnId, autoAcceptOf, claudeId, codexThreadOf, defaultProvider, formModel, interactionOf, launchersOf, linkedWorktree,
+  parentAgentId, paseoCheckouts, paseoMode, projectSpaces, promptKey, providerRoots, responseOf, rewindOf, sessionIdOf, slotNameOf,
+  spaceIdOf, strayRecord, timelineItems, transcriptOf, workspaceRow,
 } from './map.js'
 import { createLineage } from './lineage.js'
 import { personaMcpServers } from './mcp.js'
@@ -1190,6 +1190,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   /**
    * The phone's model, permission mode and effort for a session, in that order (an effort is the new model's): Paseo's
    * set_agent_model / set_agent_mode / set_agent_thinking. Claude Code takes a new model at once, Codex at its next turn.
+   * Where approval is Paseo's Auto Accept (Grok), Allow all and Ask are that switch on and off (set_agent_feature).
    */
   async function modes(params) {
     const agent = agentFor(params.session_id)
@@ -1208,13 +1209,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
     const mode = params.permission_mode
     if (mode) {
-      const modeId = paseoMode(agentRoot(agent, roots), mode)
-      if (!modeId) throw new RpcError('这个 Agent 没有这个权限模式', 'unsupported')
-      if ((agent.availableModes ?? []).length && !agent.availableModes.some((m) => m?.id === modeId)) {
-        throw new RpcError(`Paseo 里这个 Agent 没有「${mode}」模式`, 'bad_request')
+      const root = agentRoot(agent, roots)
+      const modeId = paseoMode(root, mode)
+      const autoAccept = autoAcceptOf(agent) !== undefined || AUTO_ACCEPT_ROOTS.has(root)
+      if (!modeId && autoAccept && (mode === 'bypassPermissions' || mode === 'default')) {
+        const res = await paseo.request('set_agent_feature_request', { agentId: agent.id, featureId: AUTO_ACCEPT, value: mode === 'bypassPermissions' })
+        if (res?.accepted === false) throw new RpcError(`Paseo 没有换模式：${res.error ?? '原因不明'}`, 'rejected')
+      } else {
+        if (!modeId) throw new RpcError('这个 Agent 没有这个权限模式', 'unsupported')
+        if ((agent.availableModes ?? []).length && !agent.availableModes.some((m) => m?.id === modeId)) {
+          throw new RpcError(`Paseo 里这个 Agent 没有「${mode}」模式`, 'bad_request')
+        }
+        const res = await paseo.request('set_agent_mode_request', { agentId: agent.id, modeId })
+        if (res?.accepted === false) throw new RpcError(`Paseo 没有换模式：${res.error ?? '原因不明'}`, 'rejected')
       }
-      const res = await paseo.request('set_agent_mode_request', { agentId: agent.id, modeId })
-      if (res?.accepted === false) throw new RpcError(`Paseo 没有换模式：${res.error ?? '原因不明'}`, 'rejected')
     }
     const effort = params.effort
     if (effort) {
@@ -1636,6 +1644,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (!replacedLauncher && typeof params.model === 'string' && params.model) config.model = params.model
     const modeId = paseoMode(root, params.permission_mode)
     if (modeId) config.modeId = modeId
+    // Allow all where approval is Paseo's Auto Accept (Grok and its other ACP providers, OpenCode): started with it on.
+    else if (params.permission_mode === 'bypassPermissions' && AUTO_ACCEPT_ROOTS.has(root)) config.featureValues = { [AUTO_ACCEPT]: true }
     if (!replacedLauncher && EFFORTS.includes(params.effort)) {
       const opts = thinkingOptions({ provider, model: config.model })
       if (!opts.length || opts.includes(params.effort)) config.thinkingOptionId = params.effort

@@ -34,6 +34,8 @@ func TestWorkspaceBoardRoutesAreRelayed(t *testing.T) {
 	h := newTestHub(t)
 	routes := [][2]string{
 		{"GET", "/api/v1/workspace-board"},
+		{"GET", "/api/v1/workspace-board/activity"},
+		{"GET", "/api/v1/workspace-board/activity/1"},
 		{"POST", "/api/v1/workspace-board"},
 		{"GET", "/api/v1/workspaces"},
 		{"GET", "/api/v1/workspace-board/settings"},

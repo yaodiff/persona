@@ -35,6 +35,12 @@ interface ExtensionManagement : ExtensionUi, ExtensionMarkets {
      */
     val subscriptionsAvailable: Flow<Boolean> get() = kotlinx.coroutines.flow.flowOf(false)
 
+    /**
+     * Whether those pages are Inbox Sources (#5278, `inbox_sources`): the Settings row shows, and the Inbox menu
+     * uses that name, only then. An older hub keeps the Subscriptions entry.
+     */
+    val inboxSourcesAvailable: Flow<Boolean> get() = kotlinx.coroutines.flow.flowOf(false)
+
     /** `GET /api/v1/subscriptions/summary`: each connector's counts, for the entry rows. */
     suspend fun subscriptionSummary(): List<SubscriptionSummaryLine> = emptyList()
 

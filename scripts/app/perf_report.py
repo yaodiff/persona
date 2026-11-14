@@ -12,6 +12,8 @@ PERF_ITERATIONS/--iterations/metadata.expected_iterations count measured runs;
 exactly one additional, explicitly tagged warm-up run is required. Old arrays
 exclude their first sample for diagnostics only and remain legacy_unverified.
 XCTest measurements already exclude XCTest's warm-up; do not drop another value.
+PerfLaunchTests are complete from their XCTApplicationLaunchMetric alone, with no frame
+probe; --final-acceptance remains glide-only, so launch-only reports are diagnostic.
 """
 import argparse
 import json
@@ -28,6 +30,7 @@ import tempfile
 PROBE_KEYS = ("hitch_ms_per_s", "hitches", "p95_ms", "max_ms", "busy_p95_ms")
 TAG_KEYS = ("name", "run_id", "warm_up", "action", "sample_source", "expected_iterations")
 ALIASES = {"fps": "cadence_fps", "hitch_ms_per_s": "custom_hitch_ms_per_s"}
+LAUNCH_TEST_PREFIX = "PerfLaunchTests/"
 
 
 def test_id(value):
@@ -372,6 +375,55 @@ def add_metrics(entry, test, bundle):
         entry["issues"].append(str(error))
 
 
+def launch_measurement(entry, expected_iterations=None):
+    """Summarize XCTApplicationLaunchMetric without inventing frame-probe samples."""
+    issues, values, summary = [], [], None
+    metric = pick(entry, "launch")
+    if metric is None:
+        issues.append("no XCTApplicationLaunchMetric measurements")
+    else:
+        factors = {"ms": 1, "millisecond": 1, "milliseconds": 1,
+                   "s": 1000, "second": 1000, "seconds": 1000}
+        raw_unit = metric.get("unit", "")
+        factor = factors.get(raw_unit.lower()) if isinstance(raw_unit, str) else None
+        if factor is None:
+            issues.append(f"unsupported launch metric unit: {raw_unit}")
+        else:
+            values = metric.get("values", [])
+            if not values or not all(finite(value) and value > 0 for value in values):
+                issues.append("launch metric has no finite positive measurements")
+                values = []
+            elif expected_iterations is None:
+                issues.append("expected_iterations unknown; launch run completeness cannot be verified")
+            else:
+                runs = metric.get("runs", [])
+                if not runs:
+                    issues.append("launch metric has no per-run measurements")
+                for index, run in enumerate(runs, 1):
+                    count = len(run["raw_metric"]["measurements"])
+                    if count != expected_iterations:
+                        issues.append(f"incomplete launch run {index} count: expected {expected_iterations}, got {count}")
+            values = [value * factor for value in values]
+            if not all(finite(value) for value in values):
+                issues.append("launch metric values are not finite after milliseconds conversion")
+                values = []
+    if values:
+        candidate = {"unit": "ms", "values": values, "median": statistics.median(values),
+                     "minimum": min(values), "maximum": max(values), "spread": max(values) - min(values),
+                     "budget_gate": "none; the 400 ms target is for a recent iPhone, not a simulator"}
+        if all(finite(candidate[key]) for key in ("median", "minimum", "maximum", "spread")):
+            summary = candidate
+        else:
+            issues.append("launch metric summary is not finite")
+    probe = {"source": "xcresult_launch_metric", "trust": "xctest_measurements", "raw_samples": [],
+             "log_fallback": [], "issues": issues, "warnings": [], "statistics": {}, "medians": {},
+             "expected_iterations": expected_iterations, "complete": not issues, "acceptance_eligible": False,
+             "warm_up_policy": "XCTest discards its warm-up; no additional value dropped",
+             "raw_count": len(values), "measured_count": len(values), "excluded_warm_up_indices": [],
+             "statistic_sample_indices": list(range(len(values)))}
+    return summary, probe
+
+
 def collect(root, expected_iterations=None, runner=None):
     root = pathlib.Path(root).resolve()
     tests, extraction, raw, issues = {}, [], {}, []
@@ -426,17 +478,24 @@ def collect(root, expected_iterations=None, runner=None):
                     for owner in (previous, ident):
                         tests[owner]["issues"].append(f"run_id shared with another test: {run_id}")
     for ident, entry in tests.items():
-        probe = summarize_probe(ident, raw.get(ident, []), expected_iterations, logs.get(ident, []), ident in raw)
+        if ident.startswith(LAUNCH_TEST_PREFIX):
+            launch, probe = launch_measurement(entry, expected_iterations)
+            entry["measurement_kind"] = "launch"
+            if launch is not None:
+                entry["launch"] = launch
+        else:
+            probe = summarize_probe(ident, raw.get(ident, []), expected_iterations, logs.get(ident, []), ident in raw)
         entry["probe"] = probe
         if entry["result"] != "Passed":
             entry["issues"].append("test did not pass: " + (entry["result"] or "status absent"))
         entry["complete"] = not entry["issues"] and probe["complete"]
         entry["acceptance_eligible"] = entry["complete"] and probe["acceptance_eligible"] and not issues
     complete = bool(tests) and not issues and all(entry["complete"] for entry in tests.values())
-    eligible = complete and all(entry["acceptance_eligible"] for entry in tests.values())
+    glide_entries = [entry for ident, entry in tests.items() if not ident.startswith(LAUNCH_TEST_PREFIX)]
+    eligible = complete and bool(glide_entries) and all(entry["acceptance_eligible"] for entry in glide_entries)
     return safe_json({"schema_version": 2, "input_directory": str(root), "expected_iterations": expected_iterations,
         "extraction": extraction, "issues": issues, "tests": tests, "complete": complete,
-        "acceptance_eligible": eligible, "acceptance_scope": "tagged glide sample integrity only; not presented FPS",
+        "acceptance_eligible": eligible, "acceptance_scope": "tagged glide sample integrity only; launch metrics are diagnostic completeness, not presented FPS or a launch-budget gate",
         "status": "diagnostic_complete" if complete else "incomplete"})
 
 
@@ -464,21 +523,29 @@ def cells_of(entry):
     medians = probe.get("medians", {ALIASES.get(key, key): value for key, value in probe.items()})
     scroll = pick(entry, "scroll", "duration")
     hitch = pick(entry, "hitch", "ratio", exclude=("scroll", "navigation", "transition"))
+    launch = entry.get("launch")
+    launch_range = (f"{fmt(launch['minimum'])}–{fmt(launch['maximum'])}" if launch else "—")
     return [fmt(medians.get(key)) for key in
             ("cadence_fps", "custom_hitch_ms_per_s", "hitches", "p95_ms", "max_ms", "busy_p95_ms")] + [
             fmt(sample_extreme(probe, "cadence_fps")),
             fmt(sample_extreme(probe, "custom_hitch_ms_per_s", maximum=True)),
             fmt(sample_extreme(probe, "max_ms", maximum=True)),
-            fmt(hitch.get("median") if hitch else None), fmt(scroll.get("median") if scroll else None, 2)]
+            fmt(hitch.get("median") if hitch else None), fmt(scroll.get("median") if scroll else None, 2),
+            fmt(launch.get("median") if launch else None), launch_range,
+            fmt(launch.get("spread") if launch else None)]
 
 
 def markdown(report, before=None):
     lines = ["Cadence FPS = CADisplayLink callbacks, not GPU/presented FPS. Custom hitch ms/s = app-probe lateness.",
              "Legacy samples and log fallback are diagnostic only, never a valid 60 FPS acceptance baseline.",
              "Integrity eligibility does not imply smoothness: inspect minimum cadence, worst hitch and worst frame, not only medians.",
-             f"Report: {report['status']}; final-acceptance integrity eligible: {str(report['acceptance_eligible']).lower()}.", ""]
+             f"Report: {report['status']}; final-acceptance integrity eligible: {str(report['acceptance_eligible']).lower()}."]
+    if any(entry.get("measurement_kind") == "launch" for entry in report["tests"].values()):
+        lines.append("Launch ms = XCTApplicationLaunchMetric to the first frame. Simulator numbers have no 400 ms device-budget gate.")
+    lines.append("")
     headings = ["Test", "Result", "Source / trust", "Cadence FPS median", "Custom hitch median ms/s", "Hitches median", "p95 frame ms",
-                "Longest median ms", "Main busy p95 ms", "Cadence min FPS", "Worst hitch ms/s", "Worst frame ms", "XCT hitch ms/s", "Scroll s"]
+                "Longest median ms", "Main busy p95 ms", "Cadence min FPS", "Worst hitch ms/s", "Worst frame ms", "XCT hitch ms/s", "Scroll s",
+                "Launch median ms", "Launch range ms", "Launch spread ms"]
     lines += ["| " + " | ".join(headings) + " |", "|" + "---|" * len(headings)]
     for ident, entry in sorted(report["tests"].items(), key=lambda pair: (pair[1]["suite"], pair[0])):
         cells = cells_of(entry)

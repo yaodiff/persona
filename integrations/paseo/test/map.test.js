@@ -1,11 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  agentRoot, agentRow, archivedUnderOwnId, codexThreadOf, backgroundOf, defaultProvider, interactionOf, launchersOf, linkedWorktree,
+  AUTO_ACCEPT_ROOTS, agentRoot, agentRow, archivedUnderOwnId, autoAcceptOf, codexThreadOf, backgroundOf, defaultProvider, interactionOf,
+  launchersOf, linkedWorktree,
   parentAgentId, paseoMode, promptKey, providerRoots, responseOf, rewindOf, rowStatus, projectSpaces, sessionIdOf, slotNameOf, spaceIdOf,
   strayRecord, timelineItems, toolCall, transcriptOf, workspaceRow, paseoCheckouts,
 } from '../lib/map.js'
-import { agentSnapshot, entry, workspaceDescriptor } from './fake-paseo.js'
+import { agentSnapshot, autoAcceptFeature, entry, workspaceDescriptor } from './fake-paseo.js'
 
 const CLAUDE_SID = 'aaaaaaaa-0000-4000-8000-000000000001'
 
@@ -209,6 +210,17 @@ test("a Codex row: Paseo's full-access is Persona's bypassPermissions, the other
   assert.equal(paseoMode('acp', 'bypassPermissions'), undefined)
 })
 
+test("Allow all is Paseo's Auto Accept where that is the approval (Grok); off, or not listed, says no mode", () => {
+  const roots = providerRoots(CONFIG)
+  assert.ok(AUTO_ACCEPT_ROOTS.has(roots.grok), 'Grok extends acp')
+  const row = (fields) => agentRow(agentSnapshot({ provider: 'grok', cwd: '/w/x', ...fields }), { roots })
+  assert.equal(row({ features: [autoAcceptFeature(true)] }).permission_mode, 'bypassPermissions')
+  assert.equal(row({ features: [autoAcceptFeature(false)] }).permission_mode, undefined, "off: Grok's own settings may still approve everything")
+  assert.equal(row({ status: 'closed' }).permission_mode, undefined, 'not loaded: Paseo lists no switch')
+  assert.deepEqual([autoAcceptOf({ features: [autoAcceptFeature(true)] }), autoAcceptOf({ features: [autoAcceptFeature()] }), autoAcceptOf({ features: [] })],
+    [true, false, undefined])
+})
+
 test("spaces: a project's checkout and its worktrees are one space; a workspace names where an agent is, and is no slot", () => {
   // The placement's projectKey is Paseo's project record id.
   const at = (dir, o = {}) => ({ cwd: dir, isGit: true, currentBranch: o.branch ?? null, remoteUrl: null, worktreeRoot: dir,
@@ -287,6 +299,35 @@ test("tool calls as the apps draw them: Claude Code's names and arguments", () =
   assert.deepEqual(toolCall('x', { type: 'search', query: 'paseo', toolName: 'web_search' }), { name: 'WebSearch', input: { query: 'paseo' } })
   assert.deepEqual(toolCall('mcp__x__y', { type: 'unknown', input: { a: 1 }, output: null }), { name: 'mcp__x__y', input: { a: 1 } })
   assert.deepEqual(toolCall('read', { type: 'read', filePath: '/r', offset: 3 }), { name: 'Read', input: { file_path: '/r', offset: 3 } })
+})
+
+test("Grok's own tools, named in its ACP input (variant), as the apps' tools, and their results as text", () => {
+  const call = (name, input, output, status = 'completed') => ({ type: 'tool_call', callId: 'c1', name, status, error: null, detail: { type: 'unknown', input, output } })
+  const drawn = (item) => {
+    const [use, result] = timelineItems([entry(1, item, 2)], { maxSeq: 2 }).items
+    return [use.tool_name, use.tool_input, result?.text]
+  }
+  assert.deepEqual(drawn(call('other', { variant: 'ListDir', target_directory: '/w/app' },
+    { type: 'ListDir', Content: { content: '- /w/app/\n  - main.go', absolute_root_path: '/w/app' } })), ['LS', { path: '/w/app' }, '- /w/app/\n  - main.go'])
+  assert.equal(drawn(call('List `/w/app`', { variant: 'ListDir', target_directory: '/w/app' }, null))[0], 'LS', 'named after the ACP title: still the variant')
+  assert.deepEqual(drawn(call('other', { variant: 'Monitor', command: 'bash watch.sh', description: 'Watch the deploy', timeout_ms: 600000, persistent: false },
+    { type: 'Monitor', taskId: 't1', timeoutMs: 600000, persistent: false })),
+  ['Monitor', { command: 'bash watch.sh', description: 'Watch the deploy', timeout_ms: 600000, persistent: false }, 'taskId: t1\ntimeoutMs: 600000\npersistent: false'])
+  assert.deepEqual(drawn(call('other', { variant: 'TaskOutput', task_ids: ['t1'], timeout_ms: null },
+    { type: 'TaskOutput', Result: { task_id: 't1', command: '[monitor] Watch the deploy', status: 'failed', exit_code: 1, output: 'FAILED: connection closed' } })),
+  ['TaskOutput', { task_id: 't1' }, 'FAILED: connection closed\n（退出码 1）'])
+  assert.equal(drawn(call('other', { variant: 'TaskOutput', task_ids: ['t2'] }, null, 'canceled'))[2], '（已取消）')
+  assert.deepEqual(drawn(call('other', { variant: 'KillTask', task_id: 't1' },
+    { type: 'KillTask', Result: { task_id: 't1', outcome: 'already_exited', message: 'Task had already completed' } })),
+  ['TaskStop', { task_id: 't1' }, 'Task had already completed'])
+  assert.deepEqual(drawn(call('paseo__list_schedules', { variant: 'UseTool', tool_name: 'paseo__list_schedules', tool_input: { limit: 5 } },
+    { type: 'MCP', tool_name: 'list_schedules', server_name: 'paseo', output: { OkayOutput: 'schedules_count=0' } })),
+  ['mcp__paseo__list_schedules', { limit: 5 }, 'schedules_count=0'])
+  // Any other one under its own name; a result with no text of its own, its fields.
+  assert.deepEqual(drawn(call('other', { variant: 'Sleep', seconds: 5 }, { type: 'Sleep', Result: { slept: 5 } })), ['Sleep', { seconds: 5 }, 'slept: 5'])
+  // Its permission card says the tool and what it is about.
+  const card = interactionOf('s1', { id: 'p1', provider: 'grok', name: 'other', kind: 'tool', title: 'List directory', input: { variant: 'ListDir', target_directory: '/w/app' } })
+  assert.deepEqual([card.tool_name, card.tool_input, card.summary, card.reason], ['LS', { path: '/w/app' }, '/w/app', 'List directory'])
 })
 
 test('a timeline as items: results where they finished, the text being written held back, echoes tagged', () => {

@@ -251,6 +251,11 @@ final class AppModel {
         }
     }
 
+    /// `selectedTab` without watching it, as `sessionsNow`: for values worked out where a view is built, not drawn
+    /// (`ShellView`'s initial state is evaluated in `RootView`'s body, which then followed the tab and built the shell's
+    /// tree again on every switch, #5438).
+    var selectedTabNow: AppTab { _selectedTab }
+
     /// The iPhone's shell while it is on screen (`ShellState`): it takes every new tab as it is set.
     @ObservationIgnored weak var tabRouter: (any TabRouter)?
 
@@ -480,6 +485,10 @@ final class AppModel {
         }
         #if os(iOS)
         HomeWidgetWriter.shared.source = { [weak self] in self?.homeSnapshotSource() }
+        // A tool call asked iOS for a source's permission (#7659): a refused source's tools leave the hub's list.
+        NotificationCenter.default.addObserver(forName: .phoneAccessAnswered, object: nil, queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.registerPhone() }
+        }
         #endif
         #if os(iOS) || os(visionOS)
         if registryUnreadable {
@@ -1760,6 +1769,9 @@ final class AppModel {
 
     private func didConnect(_ group: String) {
         guard let link = link(group) else { return }
+        #if DEBUG || PERF_SIGNPOST
+        PerfTrace.event("Connected")
+        #endif
         registerPhone(link)
         // Phone tool results answered while the socket was down: the hub matches them to their calls by call_id (#4456).
         toolResults.flush(group: group, on: link.live)
@@ -1798,6 +1810,15 @@ final class AppModel {
             // right after the catch-up, so the answer goes on being written instead of blanking for a moment.
             if plan.refetch { chat(key).dropLive() }
             link.live.send(subscribeMessage(key))
+            // After a full refresh the chat also reads what came after its `covered` itself, as the web does (#4315):
+            // the subscription's backlog is the only other way those lines arrive, and it can fail (the node not back
+            // yet after a hub restart answers it with an error frame) or never come. Messages sent from another device
+            // while this socket was down then stayed missing until the next push. Both merge by id and seq, and `fill`
+            // collapses concurrent reads for the chat. A chat with nothing yet gets its latest page from the subscription.
+            if plan.refetch, chat(key).covered > 0 {
+                let store = chat(key)
+                Task { await fill(key, shouldApply: { self.isSubscribed(key) && self.existingChat(key) === store }) }
+            }
         }
         guard plan.refetch else { return }
         // Questions answered on the computer while the socket was down are gone from the hub: drop their cards.
@@ -2432,6 +2453,10 @@ final class AppModel {
                 toast = Toast(text, style: .success)
             }
             over()
+            if r.cancel == true, res.already != true || res.resolution?.cancel == true, let closed = Answered.answerLines(ix, r).first {
+                // Match Android's receipt for closing a question without an answer; keep another answer's "already" receipt.
+                toast = Toast(closed.answer, style: .success)
+            }
             Haptics.success()
         } catch let e as APIError where e.code == "prompt_changed" {
             // Nothing pressed: the terminal's dialog changed. The hub has ended a screen card and sends one for what is
@@ -3430,8 +3455,14 @@ final class AppModel {
 
     private func restoreSnapshot() {
         var allMachines: [Machine] = [], allSessions: [Session] = [], allInteractions: [Interaction] = []
+        #if DEBUG || PERF_SIGNPOST
+        var restoredAny = false
+        #endif
         for g in groupIDs {
             guard let snap = StateCache.load(Self.snapshotName(g), as: DevSnapshot.self, in: stateFolder) else { continue }
+            #if DEBUG || PERF_SIGNPOST
+            restoredAny = true
+            #endif
             allMachines += snap.machines.map { var m = $0; m.group = g; return m }
             allSessions += snap.sessions.map { var s = $0; s.group = g; return s }
             allInteractions += snap.interactions.map { var i = $0; i.group = g; return i }
@@ -3449,6 +3480,9 @@ final class AppModel {
         interactions = Dictionary(allInteractions.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
         assistantConfig = heldAssistant(hub?.group ?? "")
         followedScope = assistantScope // what was just restored was worked out for it
+        #if DEBUG || PERF_SIGNPOST
+        if restoredAny { PerfTrace.event("Snapshot restored") }
+        #endif
     }
 
     /// The snapshot waiting for its turn, written now: the app is going to the background or quitting.

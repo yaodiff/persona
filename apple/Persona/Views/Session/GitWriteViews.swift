@@ -64,14 +64,22 @@ struct GitNewCommitSheet: View {
 }
 
 extension View {
-    /// A refused Git write (#7013): its plain title, then the files it is about and git's own words, and OK.
-    func gitRefusalAlert(_ refusal: Binding<GitRefusal?>) -> some View {
+    /// A refused Git write (#7013): its plain title, then the files it is about and git's own words (`shownDetail`), and OK. With
+    /// stashes, a switch refused for the uncommitted files in its way also offers Stashes, to put them away (#7015):
+    /// it only opens the page.
+    func gitRefusalAlert(_ refusal: Binding<GitRefusal?>, stashes: (() -> Void)? = nil) -> some View {
         alert(refusal.wrappedValue?.title ?? "",
               isPresented: Binding(get: { refusal.wrappedValue != nil }, set: { if !$0 { refusal.wrappedValue = nil } }),
-              presenting: refusal.wrappedValue) { _ in
+              presenting: refusal.wrappedValue) { r in
+            if r.code == "git_conflict", let stashes {
+                Button {
+                    refusal.wrappedValue = nil
+                    stashes()
+                } label: { Text("Stashes").lineLimit(1) }
+            }
             Button { refusal.wrappedValue = nil } label: { Text("OK [Recordings Section de32e2]").lineLimit(1) }
         } message: { r in
-            Text(([r.files.joined(separator: "\n")].filter { !$0.isEmpty } + [r.detail]).joined(separator: "\n\n"))
+            Text(([r.files.joined(separator: "\n"), r.shownDetail ?? ""].filter { !$0.isEmpty }).joined(separator: "\n\n"))
         }
     }
 }

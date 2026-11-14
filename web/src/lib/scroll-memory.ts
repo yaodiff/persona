@@ -33,8 +33,12 @@ export function useScrollMemory(box: RefObject<HTMLElement | null>, key: string)
     const el = box.current;
     if (!el) return;
     at.current = key;
+    // a scroller just mounted is at its top: writing 0 to it would only lay the page out there and then (forced
+    // layout, a long task with a large sidebar beside it), so a fresh visit to a fresh scroller leaves it alone
+    const fresh = decided.current === null;
     if (decided.current?.key !== key) decided.current = { key, target: scrollTarget(key, takeReturn()) };
     const { target } = decided.current;
+    if (target === 0 && fresh) return;
     el.scrollTop = target;
     if (target === 0 || el.scrollTop >= target - 1) return;
     let ro: ResizeObserver | undefined;

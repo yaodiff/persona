@@ -43,7 +43,22 @@ export function setSidebarCollapsed(collapsed: boolean) {
   set({ ...layout, sidebarCollapsed: collapsed });
 }
 
-export const toggleSidebarColumn = () => setSidebarCollapsed(!layout.sidebarCollapsed);
+/** The column's own collapse button, and ⌘⌥B, fold it or open it. App.tsx draws the rail in place of the sidebar (and
+ *  back), so a focus inside the column goes with what is taken away and would fall to the page's start: with `keepFocus`
+ *  (the focus was in the column) the collapse button drawn in its place takes it (takeFocusHandoff). */
+export function toggleSidebarColumn(keepFocus = false) {
+  focusHandoff = keepFocus;
+  setSidebarCollapsed(!layout.sidebarCollapsed);
+}
+let focusHandoff = false;
+/** Whether the collapse button just drawn takes the focus (once: the next call says no). */
+export function takeFocusHandoff(): boolean {
+  const take = focusHandoff;
+  focusHandoff = false;
+  return take;
+}
+/** The focus is in the column (App.tsx marks it `data-sidebar-column`), so folding or opening it would take it away. */
+export const focusInColumn = () => typeof document !== "undefined" && Boolean(document.activeElement?.closest("[data-sidebar-column]"));
 export const toggleMaximized = () => set({ ...layout, maximized: !layout.maximized });
 
 // another tab folding or opening it

@@ -6,6 +6,14 @@ public enum CapturePlan {
     /// The codecs this helper can encode, best first: HEVC Main, else H.264 High (docs/extensions/computer-use.md).
     public static let encodable = ["hevc", "h264"]
 
+    /// What this helper can do beyond protocol version 1, said in `hello.features`. "tiers" (#6396): `start` and `update`
+    /// may carry `scale`, `min_kbps` and `target_kbps`, a size change applies to the running stream, and `encoding` says
+    /// what took effect.
+    public static let features = ["tiers"]
+
+    /// The scales (pixels per point) the helper takes; a request outside is clamped.
+    public static let scales: ClosedRange<Double> = 0.25 ... 4
+
     /// The lowest and highest bitrate the helper will encode at, in kbit/s. The phone's `max_kbps` is clamped into
     /// this range, and adaptation never goes below the floor.
     public static let minKbps = 200
@@ -34,6 +42,20 @@ public enum CapturePlan {
         return width >= height ? (even(maxSize), even(scaledShort)) : (even(scaledShort), even(maxSize))
     }
 
+    /// The encoded size for a display `points` in size and `pixels` in pixels at `scale` pixels per point: never more
+    /// than its pixels, then capped by `maxSize` like `size(width:height:maxSize:)`. No scale (a phone before #6396): the
+    /// display's pixels, as before.
+    public static func size(points: (width: Int, height: Int), pixels: (width: Int, height: Int), scale: Double?,
+                            maxSize: Int) -> (width: Int, height: Int) {
+        guard let scale, scale.isFinite, points.width > 0, points.height > 0 else {
+            return size(width: pixels.width, height: pixels.height, maxSize: maxSize)
+        }
+        let s = min(max(scale, scales.lowerBound), scales.upperBound)
+        let width = min(Int((Double(points.width) * s).rounded()), max(pixels.width, 1))
+        let height = min(Int((Double(points.height) * s).rounded()), max(pixels.height, 1))
+        return size(width: width, height: height, maxSize: maxSize)
+    }
+
     /// The frame rate to capture at: the phone's, kept within 1–60.
     public static func fps(_ requested: Int) -> Int { min(max(requested, 1), 60) }
 
@@ -44,4 +66,7 @@ public enum CapturePlan {
 
     /// The bitrate a stream starts at under the phone's cap.
     public static func initialKbps(cap: Int) -> Int { min(capKbps(cap), startKbps) }
+
+    /// The bitrate band's floor the phone asked for (#6396), kept within `minKbps` and the ceiling `cap`.
+    public static func floorKbps(_ requested: Int, cap: Int) -> Int { min(max(requested, minKbps), capKbps(cap)) }
 }

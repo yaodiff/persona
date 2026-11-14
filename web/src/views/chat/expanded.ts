@@ -12,6 +12,13 @@ export function openExpanded(keys: string[]) {
   const set = new Set(keys);
   openListeners.forEach((l) => l(set));
 }
+
+/** Listens for keys something outside opened (`openExpanded`), told in the same update as the groups' own redraw; returns
+ *  how to stop. An open work summary draws all its steps then (work-budget.ts), so the row asked for is there at once. */
+export function onOpenedOutside(listen: (keys: ReadonlySet<string>) => void): () => void {
+  openListeners.add(listen);
+  return () => void openListeners.delete(listen);
+}
 /** Folded ranges (seq … through_seq) the reader opened, by chat: the groups their steps land in start open, whatever
  *  key they get once the range is unfolded (a plan card taken out of it moves the first step). */
 const foldRanges = new Map<string, [number, number][]>();

@@ -29,7 +29,7 @@ vi.mock("../../ui/model-panel/ModelPanel", () => ({
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast }));
 
-const { AgentModelPill, ModelPill, pillEffort } = await import("./ModelPill");
+const { AgentModelPill, ModelPill, pillEffort, pillShortName } = await import("./ModelPill");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -55,12 +55,14 @@ describe("the pill's states", () => {
     expect(html).toContain("aria-expanded:bg-hover");
   });
 
-  it("takes the composer card's widths: 148 px under 600, a step smaller under 520, the tile and chevron alone under 420", () => {
+  it("takes the composer card's widths: its words' width under 600, a step smaller under 520, the tile and chevron alone under 420", () => {
     const html = markup(<ModelPill current={opus} onOpen={() => {}} />);
     const root = /^<button[^>]*class="([^"]*)"/.exec(html)![1];
     expect(root).toContain("max-w-[min(320px,100%)]");
     expect(root).toContain("min-w-[72px]");
-    expect(root).toContain("@max-[600px]/composer:w-[148px]");
+    // no fixed width while narrow: a fixed 148 px cut "Opus 5.5" to "Opus …" beside free room (audit item 50)
+    expect(root).not.toMatch(/@max-\[600px\]\/composer:w-\[/);
+    expect(root).toContain("shrink");
     expect(root).toContain("@max-[520px]/composer:text-[12px]");
     expect(root).toContain("@max-[420px]/composer:w-[64px]");
     const name = /<span title="Opus 5.5" class="([^"]*)"/.exec(html)![1];
@@ -70,6 +72,27 @@ describe("the pill's states", () => {
     expect(classOf(html, 'data-pill-engine="claude"')).toContain("@max-[420px]/composer:hidden");
     // narrow, the effort may truncate (the engine and effort stay; the name gives way first)
     expect(classOf(html, "data-pill-effort")).toContain("@max-[600px]/composer:truncate");
+  });
+
+  it("narrow, a name drops its bracketed qualifier instead of being cut; the tooltip keeps it all (audit item 50)", () => {
+    expect(pillShortName("Default (recommended)")).toBe("Default");
+    expect(pillShortName("GPT-5 (beta)")).toBe("GPT-5");
+    expect(pillShortName("Opus 5.5")).toBe("Opus 5.5");
+    expect(pillShortName("(beta)")).toBe("(beta)");
+    // a context size names another model: it stays, short, so the 1M model never reads as the standard one
+    expect(pillShortName("Opus 5.5 (1M context)")).toBe("Opus 5.5 1M");
+    expect(pillShortName("Sonnet 4.5 [1m]")).toBe("Sonnet 4.5 1M");
+    expect(pillShortName("Sonnet 4.5（200k 上下文）")).toBe("Sonnet 4.5 200K");
+    expect(pillShortName("Sonnet 4.5 [1m]")).not.toBe(pillShortName("Sonnet 4.5"));
+    const html = markup(<ModelPill current={{ ...opus, model: "Opus 5.5 (1M context)" }} onOpen={() => {}} />);
+    const full = /<span title="Opus 5.5 \(1M context\)" class="([^"]*)">Opus 5.5 \(1M context\)<\/span>/.exec(html)![1];
+    expect(full).toContain("@max-[600px]/composer:hidden");
+    const short = /<span title="Opus 5.5 \(1M context\)" data-pill-short="true" class="([^"]*)">Opus 5.5 1M<\/span>/.exec(html)![1];
+    expect(short).toMatch(/(^| )hidden( |$)/);
+    expect(short).toContain("@max-[600px]/composer:block");
+    expect(short).toContain("@max-[420px]/composer:hidden");
+    // a name with nothing to drop is drawn once
+    expect(markup(<ModelPill current={opus} onOpen={() => {}} />)).not.toContain("data-pill-short");
   });
 
   it("Fast: a filled bolt in the neutral colour, and Fast in the tooltip", () => {

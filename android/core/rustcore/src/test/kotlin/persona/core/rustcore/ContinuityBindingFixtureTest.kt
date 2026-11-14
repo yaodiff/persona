@@ -76,7 +76,7 @@ class ContinuityBindingFixtureTest(private val name: String, private val fixture
                         ),
                     )
                     "http_older" -> chat(ChatEvent.Older(event.itemsJson(), requireNotNull(event.boolean("has_more"))))
-                    "http_range" -> chat(ChatEvent.Range(event.itemsJson(), event.flag("more")))
+                    "http_range" -> chat(ChatEvent.Range(null, event.itemsJson(), event.flag("more")))
                     "reconnect" -> chat(ChatEvent.Reconnected)
                     "load_older" -> chat(ChatEvent.LoadOlder)
                     "open_fold" -> chat(ChatEvent.OpenFold(requireNotNull(event.text("fold_id"))))

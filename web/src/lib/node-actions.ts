@@ -313,11 +313,14 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   );
 
   // ── copy ──
-  const herdrId = node.kind === "pane" ? node.paneId : node.kind === "tab" ? node.tabId : node.kind === "workspace" ? node.workspaceId : undefined;
+  // the engine's own id of the space, tab or pane, named by what it is: a menu never says the engine's name
+  const [engineId, engineIdLabel] = node.kind === "pane" ? [node.paneId, t("lib-node-actions.copy_pane_id")]
+    : node.kind === "tab" ? [node.tabId, t("lib-node-actions.copy_tab_id")]
+    : node.kind === "workspace" ? [node.workspaceId, t("lib-node-actions.copy_workspace_id")] : [undefined, ""];
   group(
     node.kind !== "machine" && copy("node-copy-path", t("lib-node-actions.copy_path"), "c", node.cwd),
     node.kind !== "machine" && node.kind !== "workspace" && copy("node-copy-session", t("lib-node-actions.copy_session_id"), "s", node.sessionId),
-    node.kind !== "machine" && copy("node-copy-id", t("lib-node-actions.copy_herdr_id"), "i", herdrId),
+    node.kind !== "machine" && copy("node-copy-id", engineIdLabel, "i", engineId),
     node.kind !== "machine" && !gitMenu && copy("node-copy-branch", t("lib-node-actions.copy_branch"), "b", node.branch),
     node.kind === "machine" && copy("node-copy-machine", t("lib-node-actions.copy_machine_id"), "i", mid),
   );

@@ -4,5 +4,4 @@
 - Agents：需要你 0 个，完成未看 0 个，工作中 0 个（详情用 agents_list）
 - iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
 - 各设备上的 Persona App 版本（各自最近一次连上 hub 时报的，App 不在前台也是这个版本）：iPhone App 1.4.0 (build 52)（iOS 26.1）；iPad App 1.3.0 (build 40)（iPadOS 26.0）；Apple Watch App 1.4.0 (build 52)（watchOS 11.2）；Mac App 1.4.0 (build 52)（macOS 26.1）；Android App 0.9.1 (build 91)（Android 16）
-- 在跟的事：没有
 - 已安排的跟进：没有

@@ -411,21 +411,24 @@ struct InteractionPanel: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("View plan full screen")
             }
-            Menu {
-                Button { Task { await model.resolve(interaction, .dismissed) } } label: {
-                    Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)
+            if interaction.toolName != "ask_user" {
+                Menu {
+                    Button { Task { await model.resolve(interaction, .dismissed) } } label: {
+                        Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)
+                    }
+                } label: {
+                    ThemedIcon(Theme.Icon.more)
+                        .font(Theme.Font.captionStrong)
+                        .foregroundStyle(.secondary)
+                        .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                        .contentShape(.rect)
                 }
-            } label: {
-                ThemedIcon(Theme.Icon.more)
-                    .font(Theme.Font.captionStrong)
-                    .foregroundStyle(.secondary)
-                    .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
-                    .contentShape(.rect)
+                .labelOnlyMenu() // just the ⋯, next to the fold ⌄
+                .accessibilityIdentifier("interaction-menu")
+                #if os(macOS)
+                .help("More")
+                #endif
             }
-            .labelOnlyMenu() // just the ⋯, next to the fold ⌄
-            #if os(macOS)
-            .help("More")
-            #endif
             ThemedIcon(Theme.Icon.expand)
                 .font(Theme.Font.captionStrong)
                 .foregroundStyle(.secondary)
@@ -470,6 +473,26 @@ struct InteractionPanel: View {
     }
 }
 
+/// Close a supported question without answering. A text action with a finger-sized target, not the card's fold mark.
+struct QuestionSkipButton: View {
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(String(localized: "Skip [Question Card]"))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .scaledFrame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
+                .frame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .font(Theme.Font.captionMedium)
+        .foregroundStyle(Theme.accent)
+        .accessibilityIdentifier("question-skip")
+    }
+}
+
 /// AskUserQuestion, iOS-list style: the question, its options in one grouped box (numbered like the terminal, a
 /// check when picked, Recommended for the suggested one), "Other" as the box's last row. One question, one choice: a tap answers.
 /// Several questions: "header · 1/2" on top, small Previous / Next / Submit below.
@@ -484,6 +507,7 @@ struct QuestionForm: View {
     @State private var other: [String: String] = [:]
     @State private var page = 0
     @State private var sending = false
+    @State private var skipping = false
     @State private var writing = false
     /// Several questions (#2970): the review shown before the answers go.
     @State private var reviewing = false
@@ -495,6 +519,7 @@ struct QuestionForm: View {
     /// Its answer is on the way (#6279): this form sent it a moment ago, or the model says so (the card was drawn again).
     private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
     private var failure: String? { model.answerFailure(interaction.uid) }
+    private var canSkip: Bool { interaction.canCancel == true }
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plainLayout }
@@ -514,7 +539,8 @@ struct QuestionForm: View {
             }
             if showsReviewFooter {
                 ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? "submit" : nil,
-                                   back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil)
+                                   back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil,
+                                   skip: canSkip ? { skip() } : nil)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             } else if showsFooter {
                 footer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
@@ -523,7 +549,7 @@ struct QuestionForm: View {
         .deliberateTap($dragged)
     }
 
-    private var showsFooter: Bool { needsFooter && !(stepped && reviewing) }
+    private var showsFooter: Bool { (needsFooter || canSkip) && !(stepped && reviewing) }
     private var showsReviewFooter: Bool { stepped && reviewing }
 
     private var contentCap: CGFloat? {
@@ -680,20 +706,28 @@ struct QuestionForm: View {
 
     private var footer: some View {
         HStack(spacing: Theme.Space.m) {
+            if canSkip {
+                QuestionSkipButton { skip() }
+                    .disabled(isSending)
+            }
             if page > 0 {
                 Button { withAnimation(Theme.Motion.standard) { page -= 1 } } label: { Text("Previous [Interaction Views 39b1c2]").lineLimit(1) }
                     .themedButton()
             }
             Spacer(minLength: 0)
-            Button { advance() } label: {
-                HStack(spacing: Theme.Space.sm) {
-                    if isSending { ProgressView().controlSize(.small).tint(.white) }
-                    Text(isSending ? String(localized: "Sending…") : isLast ? String(localized: "Submit") : String(localized: "Next [Interaction Views f82c68]")).lineLimit(1)
+            if needsFooter {
+                Button { advance() } label: {
+                    HStack(spacing: Theme.Space.sm) {
+                        if isSending { ProgressView().controlSize(.small).tint(.white) }
+                        Text(isSending ? String(localized: "Sending…") : isLast ? String(localized: "Submit") : String(localized: "Next [Interaction Views f82c68]")).lineLimit(1)
+                    }
+                    .padding(.horizontal, Theme.Space.s)
                 }
-                .padding(.horizontal, Theme.Space.s)
+                .themedButton(prominent: true)
+                .disabled(!canAdvance || isSending)
+            } else if skipping {
+                SendingMark()
             }
-            .themedButton(prominent: true)
-            .disabled(!canAdvance || isSending)
         }
         .controlSize(.regular)
     }
@@ -769,6 +803,19 @@ struct QuestionForm: View {
         for q in questions { answers[q.question] = answer(q) }
         Task {
             await model.resolve(interaction, Resolution(answers: answers))
+            sending = false
+        }
+    }
+
+    /// Close only the question. Its options and typed answers stay here if the request fails.
+    private func skip() {
+        guard canSkip, !isSending else { return }
+        sending = true
+        skipping = true
+        otherFocused = false
+        Task {
+            await model.resolve(interaction, .cancelled)
+            skipping = false
             sending = false
         }
     }
@@ -1767,6 +1814,11 @@ struct BUIQuestionForm: View {
     /// Its answer is on the way (#6279): sent from this form, or the model says so.
     private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
     private var failure: String? { model.answerFailure(interaction.uid) }
+    private var canSkip: Bool { interaction.canCancel == true }
+    private var skipCard: ((ApprovalAnswers) -> Void)? {
+        guard canSkip else { return nil }
+        return { answers in skip(answers) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
@@ -1818,16 +1870,19 @@ struct BUIQuestionForm: View {
                 .frame(height: reviewCap)
                 ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: isSending ? "submit" : nil,
                                    back: { reopen(at: questions.count - 1) }, submit: { send(held) },
-                                   answer: { (row: ScreenReviewRow) in reopen(at: row.index) })
+                                   answer: { (row: ScreenReviewRow) in reopen(at: row.index) },
+                                   skip: canSkip ? { skip(kept) } : nil)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reviewFooterHeight = $0 }
             }
         } else {
             let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
-            ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept, skipLabel: nil,
+            ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept,
+                         skipLabel: canSkip ? String(localized: "Skip [Question Card]") : nil,
                          continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: isSending ? String(localized: "Sending…") : String(localized: "Submit"),
                          customPlaceholder: String(localized: "Other answer…"),
                          sentMessage: isSending ? String(localized: "Sending…") : String(localized: "Sent"),
-                         options: .panel(sending: isSending, maxHeight: cardCap, rejectsDraggedPicks: true)) { answers in
+                         options: .panel(sending: isSending, maxHeight: cardCap, rejectsDraggedPicks: true),
+                         onSkip: skipCard, onSubmit: { answers in
                 Haptics.tap()
                 if QuestionSteps.enabled(questions) { // the review first
                     withAnimation(Theme.Motion.standard) { held = answers; kept = answers }
@@ -1835,7 +1890,7 @@ struct BUIQuestionForm: View {
                     kept = answers // a failed answer builds the card again with them
                     send(answers)
                 }
-            }
+            })
             .id(round)
         }
     }
@@ -1852,6 +1907,17 @@ struct BUIQuestionForm: View {
         sending = true
         Task {
             await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions)))
+            sending = false
+        }
+    }
+
+    /// Keep the card's current answers for a rebuild if closing it fails.
+    private func skip(_ answers: ApprovalAnswers) {
+        guard canSkip, !isSending else { return }
+        kept = answers
+        sending = true
+        Task {
+            await model.resolve(interaction, .cancelled)
             sending = false
         }
     }

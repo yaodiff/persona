@@ -1,0 +1,88 @@
+{
+  "description" : "The helper's last word under the tier's floor (a still screen): Smoother starts from the tier's floor and keeps 60 fps (#7842).",
+  "init" : {
+    "bias" : "auto",
+    "capKbps" : 12000,
+    "display" : {
+      "maxSize" : 2868,
+      "pixels" : [
+        3024,
+        1964
+      ],
+      "points" : [
+        1512,
+        982
+      ]
+    },
+    "link" : {
+      "kind" : "lan",
+      "minRttMs" : null,
+      "srttMs" : null,
+      "via" : "wifi"
+    },
+    "maxFps" : 60,
+    "maxScale" : null,
+    "now" : 0,
+    "remembered" : null
+  },
+  "name" : "bias_on_a_still_screen",
+  "start" : {
+    "fps" : 60,
+    "height" : 1862,
+    "index" : 0,
+    "maxKbps" : 12000,
+    "minKbps" : 6408,
+    "pixelsPerPoint" : 1.8968253968253967,
+    "reason" : "start",
+    "scale" : 2,
+    "targetKbps" : 6408,
+    "width" : 2868
+  },
+  "steps" : [
+    {
+      "helper" : {
+        "kbps" : 150,
+        "skipped" : 0,
+        "targetKbps" : 300
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 1,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : null,
+          "frames" : 0,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 0,
+          "queueP95Ms" : 0,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : {
+        "fps" : 60,
+        "height" : 1862,
+        "index" : 0,
+        "maxKbps" : 12000,
+        "minKbps" : 6408,
+        "pixelsPerPoint" : 1.8968253968253967,
+        "reason" : "choice",
+        "scale" : 2,
+        "targetKbps" : 6408,
+        "width" : 2868
+      },
+      "setBias" : {
+        "bias" : "smoother",
+        "now" : 2
+      }
+    }
+  ]
+}

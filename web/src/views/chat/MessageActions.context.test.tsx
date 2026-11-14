@@ -270,7 +270,7 @@ describe("message context interaction paths", () => {
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
     const menu = document.querySelector('[role="menu"]')!;
     expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim())).toEqual([
-      "转发", "作为上下文", "回退到这里",
+      "转发", "作为上下文", "回退到这里", "存为常用提示词…",
     ]);
     expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(1);
   });

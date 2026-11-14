@@ -167,6 +167,11 @@ describe("what the pill says", () => {
   it("names ids briefly where no list does", () => {
     expect(modelLabel("claude-opus-5-5")).toBe("opus 5.5");
     expect(modelLabel("anthropic/claude-opus-5-5")).toBe("opus 5.5");
+    expect(modelLabel("claude-opus-5-5[1m]")).toBe("opus 5.5 1M");
+    expect(modelLabel("claude-fable-5-2[1m]")).toBe("fable 5.2 1M");
+    expect(modelLabel("claude-sonnet-5-5[1m]")).toBe("sonnet 5.5 1M");
+    expect(modelLabel("claude-opus-5-5-20260101")).toBe("opus 5.5");
+    expect(modelLabel("claude-haiku-5-5")).toBe("haiku 5.5");
     expect(modelLabel("gpt-5.5-codex")).toBe("5.5 Codex");
     expect(modelLabel("vendor/model-x")).toBe("model-x");
     expect(currentModelRow(claudeList.models, "CLAUDE-HAIKU-5-5")?.id).toBe("haiku");

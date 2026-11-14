@@ -251,19 +251,14 @@ struct ChatsView: View {
     /// The top on a phone: its own search field and layout (#2478).
     @State private var header = AgentsHeader()
     private var ownsTop: Bool { widthClass != .regular && unified == nil }
-    /// The field on its way up into the bar's row, animated (`AgentsHeader.up`).
-    private var fieldUp: Bool { header.up }
     /// Laid out for searching (`AgentsHeader.compact`).
     private var headerCompact: Bool { header.compact }
-    /// By how much of the field's way up the shell's bar has faded (`AgentsTopBarFade.gone`).
-    private var barGone: Double { AgentsTopBarFade.gone(bar: header.bar, field: header.listTop + AgentsHeader.room(shell: true)) }
-    private func barMoved(_ y: ClosedRange<CGFloat>) { if header.bar != y { header.bar = y } }
+    /// Where the shell's bar is and how far it has faded for the rising field, read apart from this body (`AgentsTopBarPlace`).
+    private var topBarPlace: AgentsTopBarPlace { AgentsTopBarPlace(header: header) }
     #else
     private var ownsTop: Bool { false }
-    private var fieldUp: Bool { false }
     private var headerCompact: Bool { false }
-    private var barGone: Double { AgentsTopBarFade.standard }
-    private func barMoved(_ y: ClosedRange<CGFloat>) {}
+    private var topBarPlace: EmptyModifier { EmptyModifier() }
     #endif
     @State private var showNew = false
     /// New Session's sheet: RootView's on iOS, which outlives the tree a fold or an unfold builds again (#2836: the sheet
@@ -361,11 +356,7 @@ struct ChatsView: View {
                     AgentsTopBar(shell: shell, menuActions: menuActions) { newSession.wrappedValue = true }
                         .equatable()
                         .searchTraceMark("topbar")
-                        .onGeometryChange(for: ClosedRange<CGFloat>.self) { g in
-                            let f = g.frame(in: .global)
-                            return f.minY...f.maxY
-                        } action: { barMoved($0) }
-                        .modifier(AgentsTopBarFade(progress: fieldUp ? 1 : 0, gone: barGone))
+                        .modifier(topBarPlace)
                         .allowsHitTesting(!searching)
                         .accessibilityHidden(searching)
                         .transition(.opacity)
@@ -393,7 +384,7 @@ struct ChatsView: View {
 
     /// The list column: its own property, so Xcode 26.0 type-checks it apart from the split around it (#5333, #7173).
     /// Erased at its base (#6735): unoptimized, this getter reserves a stack slot for every modifier below, each holding
-    /// the whole column (`AgentsListStackTests`).
+    /// the whole column (`MainPagesStackTests`).
     private var listColumn: some View {
         AnyView(agentsColumn)
             #if os(iOS) || os(visionOS)
@@ -705,7 +696,7 @@ private struct AgentsList: View {
     @Environment(AppModel.self) private var model
     @Environment(\.shell) private var shell
     /// The list's own column: regular beside the iPad's split; on a phone's split (iPhone Duo open) the sidebar column
-    /// reads compact while the page is regular (#1971). `covered` goes by `ownsTop` instead (#3680).
+    /// reads compact while the page is regular (#1971). `pushedOver` goes by `ownsTop` instead (#3680).
     @Environment(\.horizontalSizeClass) private var widthClass
     @Binding var path: NavigationPath
     @Binding var spaceAt: [Int: String]
@@ -801,26 +792,17 @@ private struct AgentsList: View {
     /// Machines whose herdr does not run: a row with Start each (#1916).
     @State private var herdr = HerdrWatch()
 
-    /// A page pushed over it (beside it in the split it is in sight), the other page of the shell or another tab (the
-    /// shell's slide between the pages shows it again). Whether a page is pushed over it goes by the page's layout
-    /// (`ownsTop`), not this column's width class: the split's sidebar column reads compact on a phone (#1971), and on
-    /// iPhone Duo open the list beside a chat opened in code (the one remembered at launch, a card, New Session, a
-    /// worktree line) was held as out of sight: its last lines, order and new agents stopped coming in (#3680).
-    private var covered: Bool {
-        // The Sidebar layout's list is the sidebar, in sight beside whatever it opened (#6332); on a phone, while the
-        // drawer is out.
-        #if os(iOS)
-        if let unified { return split?.drawer == true && !unified.drawer.isOut }
-        #else
-        if unified != nil { return false }
-        #endif
+    /// A page pushed over the list. Whether it is out of sight for another reason (the shell's other page, another tab)
+    /// is `AgentsCoverWatch`'s to read, not this body's (#5438). Goes by the page's layout (`ownsTop`), not this column's
+    /// width class: the split's sidebar column reads compact on a phone (#1971), and on iPhone Duo open the list beside
+    /// a chat opened in code (the one remembered at launch, a card, New Session, a worktree line) was held as out of
+    /// sight: its last lines, order and new agents stopped coming in (#3680).
+    private var pushedOver: Bool {
         #if os(iOS) || os(visionOS)
-        if ownsTop && !path.isEmpty { return true }
-        if model.selectedTab != .chats && shell?.pager.moving != true { return true }
+        ownsTop && !path.isEmpty
         #else
-        if widthClass != .regular && !path.isEmpty { return true }
+        widthClass != .regular && !path.isEmpty
         #endif
-        return false
     }
 
     private var sessions: [Session] { feed.following ? feed.sessions : model.sessionLists.sessions }
@@ -1029,7 +1011,7 @@ private struct AgentsList: View {
         // entry for every opaque intermediate of a modifier chain, each holding everything before it: ~45 modifiers
         // over the List made `observedAgentList` reserve 422 KB, and a Debug build on an iPhone (a 1 MB main-thread
         // stack, the simulator's is 8 MB) overflowed on every launch into Agents. An erased type is the same on every
-        // update, so the list keeps its identity and state. `AgentsListStackTests` measures the page.
+        // update, so the list keeps its identity and state. `MainPagesStackTests` measures the page.
         observedAgentList(
             AnyView(agentList(base: base, filtered: filtered, unpinned: unpinned, pinnedAgents: pinnedAgents,
                               needsYou: needsYou, unreadShown: unreadShown, active: active, quiet: quiet,
@@ -1300,8 +1282,13 @@ private struct AgentsList: View {
         .refreshable { await model.sessionLists.reload(); await model.refresh() }
         // Whether each machine's herdr runs, while the list is in sight (a modifier of its own: in this chain the
         // compiler ran out of time type-checking it).
-        .modifier(HerdrPolling(watch: herdr, key: HerdrWatch.key(machines), covered: covered))
-        .modifier(WorkspaceCatalogPolling(catalog: workspaceCatalog, enabled: grouping == .repo, covered: covered))
+        // Both stop while the list is out of sight; `AgentsCoverWatch` reads that and carries them.
+        .background {
+            AgentsCoverWatch(pushedOver: pushedOver, herdr: herdr, herdrKey: HerdrWatch.key(machines),
+                             catalog: workspaceCatalog, catalogEnabled: grouping == .repo,
+                             covered: { [feed] in feed.hold.set(.outOfSight, $0) },
+                             chatShown: { openedWorkspace = nil })
+        }
         #if DEBUG
         // `-openQuietSpaces YES` (with `-tab dev`): every quiet space opened, for screenshots (`-dev.folded` folds spaces).
         .task(id: quiet.map(\.id)) { if UserDefaults.standard.bool(forKey: "openQuietSpaces") { expandedQuiet.formUnion(quiet.map(\.id)) } }
@@ -1346,7 +1333,6 @@ private struct AgentsList: View {
             }
         }
         let list = AnyView(sheets)
-        .onChange(of: model.visibleSession) { _, key in if key != nil { openedWorkspace = nil } }
         .task(id: listQuery) {
             paginationArmed = false
             if !query.isEmpty { try? await Task.sleep(for: .milliseconds(250)) }
@@ -1381,7 +1367,6 @@ private struct AgentsList: View {
             #endif
             feed.hold.set(.scrolling, phase != .idle)
         }
-        .onChange(of: covered, initial: true) { _, covered in feed.hold.set(.outOfSight, covered) }
         // Another section in front (the page stays in the window behind it, `MacPageStack`).
         .background { PageFrontWatcher { front in feed.hold.set(.behind, !front) } }
         // The row being read, brought back when a change took it off screen (`ReaderAnchor.reveal`). Around a local:
@@ -3763,14 +3748,16 @@ struct QuickFilterBar: View, Equatable {
     #endif
 
     private var chipsBar: some View {
+        // Each candidate measured once (`MeasuredOnce`): the row's graph asks for its size again on every frame the page
+        // slides, and `ViewThatFits` measured all of them, every chip's text, each time (#5438).
         ViewThatFits(in: .horizontal) {
             if AppStyle.current.usesBeautifulUI {
-                HStack(spacing: Theme.Space.xs) { chips }
-                LarkFlowLayout(spacing: Theme.Space.xs, lineSpacing: Theme.Space.sm) { chips }
+                MeasuredOnce { HStack(spacing: Theme.Space.xs) { chips } }
+                MeasuredOnce { LarkFlowLayout(spacing: Theme.Space.xs, lineSpacing: Theme.Space.sm) { chips } }
             } else {
-                HStack(spacing: Theme.Space.s) { plainChips(padding: Theme.Space.m) }
-                HStack(spacing: Theme.Space.sm) { plainChips(padding: Theme.Space.s) }
-                LarkFlowLayout(spacing: Theme.Space.sm, lineSpacing: Theme.Space.s) { plainChips(padding: Theme.Space.s) }
+                MeasuredOnce { HStack(spacing: Theme.Space.s) { plainChips(padding: Theme.Space.m) } }
+                MeasuredOnce { HStack(spacing: Theme.Space.sm) { plainChips(padding: Theme.Space.s) } }
+                MeasuredOnce { LarkFlowLayout(spacing: Theme.Space.sm, lineSpacing: Theme.Space.s) { plainChips(padding: Theme.Space.s) } }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -4005,33 +3992,21 @@ struct StateCounts: View {
     }
 }
 
-/// A heading's name and its agents' state counts: side by side; at the accessibility text sizes the counts on a line of
-/// their own under the name. `StateCounts` never gives up width, and beside them a narrow phone left the name none at all
-/// (#1658). `trailing` (the fold chevron) stays on the name's line.
+/// A heading's name and its agents' state counts: side by side; the counts on a line of their own under the name when
+/// the name would be left under half the width (`BesideOrUnder`). `StateCounts` never gives up width, and beside them a
+/// narrow phone left the name none at all (#1658). `trailing` (the fold chevron) stays on the name's line.
 struct CountsHeading<Name: View, Counts: View, Trailing: View>: View {
     var spacing: CGFloat = Theme.Space.s
     @ViewBuilder var name: Name
     @ViewBuilder var counts: Counts
     @ViewBuilder var trailing: Trailing
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                HStack(spacing: spacing) {
-                    name
-                    Spacer(minLength: Theme.Space.xs)
-                    trailing
-                }
-                counts
-            }
-        } else {
-            HStack(spacing: spacing) {
-                name
-                Spacer(minLength: Theme.Space.xs)
-                counts
-                trailing
-            }
+        BesideOrUnder(gap: spacing * 2 + Theme.Space.xs, tailGap: spacing) {
+            // Each part is one view for the layout, its own pieces side by side as in a row.
+            HStack(spacing: spacing) { name }
+            HStack(spacing: spacing) { counts }
+            HStack(spacing: spacing) { trailing }
         }
     }
 }
@@ -4042,25 +4017,17 @@ extension CountsHeading where Trailing == EmptyView {
     }
 }
 
-/// An agent row's words and its time (with the source under it): the time at the row's end; at the accessibility text
-/// sizes under the words, where beside them it left the title a character or two (#1658). Outside `SlotRow`, whose
+/// An agent row's words and its time (with the source under it): the time at the row's end; under the words when
+/// beside them it would leave the title under 70% of the width (its words stay on one line, so they get the whole row when stacked) (`BesideOrUnder`, #1658). Outside `SlotRow`, whose
 /// equality is its stored values.
 struct TimeBesideOrUnder<Words: View, Time: View>: View {
     @ViewBuilder var words: Words
     @ViewBuilder var time: Time
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                words
-                time
-            }
-        } else {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
-                words
-                time
-            }
+        BesideOrUnder(alignment: .firstTextBaseline, minShare: 0.7) {
+            words
+            time
         }
     }
 }
@@ -4911,6 +4878,53 @@ private struct AgentsTop: ViewModifier {
             // From a view of its own: reading `tabIsActive` here drew the whole list again each time the page came to
             // the front or went behind (the Mac keeps it in the window behind other sections, #390).
             .background { PageFrontWatcher(initial: false) { [searchClose] active in if active { searchClose.refold() } } }
+    }
+}
+
+/// What the Agents list does when it goes out of sight or comes back, read apart from the list (docs/apple/performance.md
+/// P5): the shell's other page in front, another tab, a page pushed over it. `AgentsList`'s body read the app's tab, the
+/// strip's `moving` and the chat on screen for this, each of which changes on a switch between Assistant and Agents, and so
+/// ran three or four times per switch, over every row (#5438). The list holds its feed while covered, the herdr and
+/// worktree polls stop, and a chat coming on screen closes the workspace opened beside the list.
+private struct AgentsCoverWatch: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.shell) private var shell
+    @Environment(\.unifiedSidebar) private var unified
+    @Environment(\.splitDetail) private var split
+    let pushedOver: Bool
+    let herdr: HerdrWatch
+    let herdrKey: [String]
+    let catalog: WorkspaceCatalog
+    let catalogEnabled: Bool
+    let covered: (Bool) -> Void
+    let chatShown: () -> Void
+
+    /// The shell's slide between the pages shows the list again.
+    private var isCovered: Bool {
+        // The Sidebar layout's list is the sidebar, in sight beside whatever it opened (#6332); on a phone, while the
+        // drawer is out.
+        #if os(iOS)
+        if let unified { return split?.drawer == true && !unified.drawer.isOut }
+        #else
+        if unified != nil { return false }
+        #endif
+        if pushedOver { return true }
+        #if os(iOS) || os(visionOS)
+        if model.selectedTab != .chats && shell?.pager.moving != true { return true }
+        #endif
+        return false
+    }
+
+    var body: some View {
+        let isCovered = isCovered
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            // Whether each machine's herdr runs, and the worktrees, while the list is in sight.
+            .modifier(HerdrPolling(watch: herdr, key: herdrKey, covered: isCovered))
+            .modifier(WorkspaceCatalogPolling(catalog: catalog, enabled: catalogEnabled, covered: isCovered))
+            .onChange(of: isCovered, initial: true) { _, now in covered(now) }
+            .onChange(of: model.visibleSession) { _, key in if key != nil { chatShown() } }
     }
 }
 

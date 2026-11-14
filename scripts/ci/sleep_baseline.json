@@ -211,7 +211,6 @@
   "server/internal/manager/manager_test.go": 3,
   "server/internal/managerupdate/controller_test.go": 1,
   "server/internal/mcpserver/mcpserver_test.go": 1,
-  "server/internal/mcpserver/progress_test.go": 4,
   "server/internal/mdns/run_test.go": 2,
   "server/internal/netaddr/watch_test.go": 1,
   "server/internal/netaddr/watch_windows_test.go": 1,

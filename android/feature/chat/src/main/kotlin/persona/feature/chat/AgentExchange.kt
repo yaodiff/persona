@@ -31,7 +31,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import persona.core.contracts.FeedItem
+import persona.core.contracts.SessionKey
+import persona.core.contracts.Todo
 import persona.core.designsystem.AssistantAnswerFrame
+import persona.core.designsystem.JCard
+import persona.core.designsystem.JTag
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.PersonaTheme
@@ -156,6 +160,31 @@ internal fun UserRoutedExchange(item: FeedItem, title: String) {
                 Text(agentWords(item.field("text").orEmpty()), style = PersonaTheme.type.body, color = PersonaTheme.palette.userBubbleText ?: PersonaTheme.palette.ink)
             }
         }
+    }
+}
+
+/** A successor belongs to the routed message, even before it appears in a paged Agent list. */
+internal fun newAgentKey(item: FeedItem, todo: Todo?): SessionKey? {
+    val id = item.field("new_agent")?.takeIf(String::isNotBlank) ?: return null
+    val machine = item.field("new_agent_machine")?.takeIf(String::isNotBlank)
+        ?: todo?.agents?.firstOrNull { it.sessionId == id }?.machineId ?: return null
+    return SessionKey(machine, id)
+}
+
+/** The same New handoff as iOS and web when messaging a task starts a successor Agent. */
+@Composable
+internal fun NewAgentHandoff(item: FeedItem, title: String, todo: Todo?, host: AssistantTaskHost, openTask: (() -> Unit)?) {
+    val key = newAgentKey(item, todo)
+    val session = key?.let { target -> host.sessions.firstOrNull { it.key == target } }
+    val open = key?.let { target -> { host.onOpen(target) } } ?: openTask
+    JCard(Modifier.padding(top = Tokens.Space.s).testTag("new-agent-handoff"), onClick = open, padding = Tokens.Space.m) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            Text(session?.displayTitle ?: title, Modifier.weight(1f), style = PersonaTheme.type.bodyStrong,
+                color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            JTag(stringResource(R.string.chat_new_agent_started))
+        }
+        Text(session?.status()?.localizedLabel ?: stringResource(R.string.chat_tasks_now_starting),
+            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
     }
 }
 

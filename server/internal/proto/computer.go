@@ -58,6 +58,10 @@ type ScreenVideo struct {
 	// Permission: Screen Recording for Persona Screen, granted | missing | unknown. "missing" keeps the phone on RFB
 	// and offers to allow again; only input on that Mac answers macOS's question.
 	Permission string `json:"permission,omitempty"`
+	// Asked: the node has asked macOS for this helper version's grant (once, when an app that plays the video first
+	// signed in to the live screen without it), so Persona Screen is in System Settings' Screen & System Audio
+	// Recording list. While Permission is missing and Asked is false, macOS's alert is about to show on the Mac.
+	Asked bool `json:"asked,omitempty"`
 }
 
 // Browser is a Mac's ego lite, the agent browser the assistant may drive (the built-in plugin ego,

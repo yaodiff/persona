@@ -1,13 +1,15 @@
 import Foundation
 
-/// The knowledge base under the hub's ~/.persona/data (docs/assistant/knowledge.md): projects, chats, people, docs, meetings and
-/// events, each ranked by importance (P0–P3) and relevance to the user, with free tags.
+/// The knowledge base under the hub's ~/.persona/data (docs/assistant/knowledge.md): projects, topics, chats, people, docs,
+/// meetings and events, each ranked by importance (P0–P3) and relevance to the user, with free tags. Topics (#3783, #7251)
+/// are what Persona curated by subject out of the projects and chats: knowledge points under subtopics.
 nonisolated enum KBKind: String, CaseIterable, Identifiable, Sendable {
-    case projects, chats, people, docs, meetings, events, recordings
+    case projects, topics, chats, people, docs, meetings, events, recordings
     var id: String { rawValue }
     var title: String {
         switch self {
         case .projects: String(localized: "Project")
+        case .topics: String(localized: "Topic [Knowledge]")
         case .chats: String(localized: "Session")
         case .people: String(localized: "People")
         case .docs: String(localized: "Document")
@@ -19,6 +21,7 @@ nonisolated enum KBKind: String, CaseIterable, Identifiable, Sendable {
     var symbol: String {
         switch self {
         case .projects: Theme.Icon.space
+        case .topics: Theme.Icon.topic
         case .chats: Theme.Icon.feishuChats
         case .people: Theme.Icon.people
         case .docs: Theme.Icon.document
@@ -51,6 +54,8 @@ nonisolated struct KBEntry: Codable, Identifiable, Hashable, Sendable {
         return extra.hasPrefix("long") ? String(localized: "Long-term") : String(localized: "Short-term")
     }
     var projectDone: Bool { kind == KBKind.projects.rawValue && (extra ?? "").hasSuffix("done") }
+    /// A topic's knowledge points, as the list's `extra` counts them (nil for other kinds).
+    var topicPoints: Int? { kind == KBKind.topics.rawValue ? Int(extra ?? "") : nil }
     /// Marked "not a project" (by hand, or because it only came from notifications).
     var projectIgnored: Bool { kind == KBKind.projects.rawValue && (extra ?? "").hasSuffix("ignored") }
 }
@@ -71,6 +76,27 @@ nonisolated struct KBDetail: Decodable, Sendable {
     var links: [KBEntry]?
     /// A project's Moments posts (the hub's LinkMoments), newest first.
     var moments: [KBMomentRef]?
+    /// A topic's knowledge points (docs/assistant/knowledge.md "Topics").
+    var points: [KBTopicPoint]?
+}
+
+/// One knowledge point of a topic: what it is (`kind`), the text, the reason or cause (`why`), the subtopics it is under
+/// (outermost first, 0–2), the entries it came from and the day it was last confirmed (YYYY-MM-DD).
+nonisolated struct KBTopicPoint: Decodable, Identifiable, Hashable, Sendable {
+    var id: String
+    var path: [String]?
+    var kind: String
+    var text: String
+    var why: String?
+    var sources: [KBTopicSource]?
+    var when: String?
+}
+
+/// An entry a knowledge point came from (a project or a chat), and the day.
+nonisolated struct KBTopicSource: Decodable, Hashable, Sendable {
+    var kind: String
+    var id: String
+    var day: String?
 }
 
 /// A Moments post a project shows: who, when, how many comments, the text clipped, how it bears on the project.

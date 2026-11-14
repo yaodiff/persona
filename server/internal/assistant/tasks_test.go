@@ -1451,6 +1451,9 @@ func TestSideConversationTaskFailedToStartPushes(t *testing.T) {
 	if pushed[0].Title != "「修登录崩溃」没开起来" {
 		t.Fatalf("Title = %q", pushed[0].Title)
 	}
+	if pushed[0].Level == "P0" {
+		t.Fatal("a task failure is P1 (held for the briefing with push tiering on), not P0")
+	}
 	if !strings.Contains(pushed[0].Body, "Failed to authenticate") || !strings.Contains(pushed[0].Body, "打开对话点『重试』，或换一台电脑再派") {
 		t.Fatalf("Body = %q", pushed[0].Body)
 	}

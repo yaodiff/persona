@@ -25,6 +25,7 @@ nonisolated enum Answered {
     }
 
     static func answerLines(_ ix: Interaction, _ r: Resolution) -> [AnswerLine] {
+        if r.cancel == true { return [AnswerLine(label: "", answer: String(localized: "Question closed without an answer"))] }
         if r.dismiss == true { return [AnswerLine(label: "", answer: String(localized: "Handed back to the computer"))] }
         switch ix.kind {
         case .question:

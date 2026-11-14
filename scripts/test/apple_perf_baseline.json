@@ -5,6 +5,45 @@
  "apple/Packages/BeautifulUI/Sources/BeautifulUI/Components/PromptBar.swift": {
   "unpaused-animation": 1
  },
+ "apple/Persona/DesignSystem/Toasts.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Assistant/Tasks/SentViews.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Assistant/Tasks/TaskViews.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Chat/ChatPin.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Chat/ChatView.swift": {
+  "window-frame": 4
+ },
+ "apple/Persona/Views/Chat/InjectedLine.swift": {
+  "window-frame": 2
+ },
+ "apple/Persona/Views/Chat/MessageLift.swift": {
+  "window-frame": 2
+ },
+ "apple/Persona/Views/Chat/MessageMenu.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Chat/MessageViews.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Chats/AgentsHeader.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Chats/ChatsView.swift": {
+  "window-frame": 3
+ },
+ "apple/Persona/Views/Inbox/Lark/LarkConversationsView.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/SplitNavigation.swift": {
+  "window-frame": 3
+ },
  "apple/Shared/ExtensionSystemWidget.swift": {
   "localized-lookup": 5
  },

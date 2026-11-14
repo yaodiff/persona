@@ -57,7 +57,7 @@ public enum HelperDispatch {
         case let .update(u): source.update(u)
         case .keyframe: source.requestKeyframe()
         case let .report(r): source.receive(report: r)
-        case .hello, .format, .frame, .heartbeat, .paused, .resumed, .timing, .unknown:
+        case .hello, .format, .frame, .heartbeat, .paused, .resumed, .timing, .encoding, .unknown:
             break
         }
     }

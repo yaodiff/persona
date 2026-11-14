@@ -60,6 +60,43 @@ func TestAdmissionProcsWorkingSessionsHitCap(t *testing.T) {
 	}
 }
 
+// Non-Linux nodes may not report an OS process count; a fleet snapshot still bounds working sessions (#7823).
+func TestAdmissionProcsWithoutOSTelemetryUsesFleetSnapshot(t *testing.T) {
+	t.Run("working sessions hit the cap", func(t *testing.T) {
+		s, _, d := admissionHub(t)
+		healthyIdle(d)
+		d.machines["busy"] = admissionMachine(8)
+		d.samples["busy"] = admissionSample(1.0, 16*1024*1024*1024, 2*1024*1024*1024, 1)
+		d.samples["busy"].ClaudeProcs = nil
+		statuses := make([]string, 20)
+		for i := range statuses {
+			statuses[i] = proto.StatusWorking
+		}
+		s.fleetKeepPrevious("busy", admissionFleetRows(statuses...))
+
+		_, err := s.admitAgentStart(context.Background(), "busy")
+		if err == nil || !strings.Contains(err.Error(), admissionText(s, "admission_procs", i18n.Args{
+			"count": 20, "limit": 20})) {
+			t.Fatalf("nil OS telemetry must not bypass 20 working sessions, got %v", err)
+		}
+	})
+
+	t.Run("an all-idle snapshot is a real zero", func(t *testing.T) {
+		s, _, d := admissionHub(t)
+		healthyIdle(d)
+		d.machines["busy"] = admissionMachine(8)
+		d.samples["busy"] = admissionSample(1.0, 16*1024*1024*1024, 2*1024*1024*1024, 1)
+		d.samples["busy"].ClaudeProcs = nil
+		s.fleetKeepPrevious("busy", admissionFleetRows(proto.StatusIdle, proto.StatusOffline))
+
+		release, err := s.admitAgentStart(context.Background(), "busy")
+		if err != nil {
+			t.Fatalf("nil OS telemetry with an all-idle snapshot must admit, got %v", err)
+		}
+		release()
+	})
+}
+
 // A reporting machine whose fleet snapshot lists zero working sessions but many idle ones also admits: an empty working
 // count is a real zero, not a missing snapshot.
 func TestAdmissionProcsAllIdleSnapshotIsZero(t *testing.T) {

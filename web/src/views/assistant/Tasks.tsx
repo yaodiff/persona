@@ -94,6 +94,7 @@ import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
 import { requestHome } from "../../lib/child-sessions";
 import { stateName } from "../../lib/state-labels";
+import { EDITABLE } from "../../lib/shortcuts";
 
 // ── what a task is now ──
 
@@ -1388,10 +1389,26 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   }, [conversation]);
   const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
   const entryKeys: AssistantTray[] = ["needs", "running"];
+  const entryButtons = useRef<Partial<Record<AssistantTray, HTMLButtonElement | null>>>({});
+  // Esc closes the open tray from its entry, its header and its rows, and hands the focus back to the entry; it stops
+  // there, never on to the window, where the chat's Esc would stop a working turn. Not while a menu or dialog is open
+  // over it (theirs), and not from a field being typed in or a waiting card in the tray: a card's Esc goes back to the
+  // composer (lib/card-keys.ts) and closing the tray under it would throw away an answer being written.
+  const onTrayKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || !tray || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node)) return;
+    if (document.querySelector("[role=dialog],[role=menu]")) return;
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    if (target && (target.isContentEditable || target.closest(`${EDITABLE}, [data-card-keys]`))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const entry = entryButtons.current[tray];
+    setTray(null);
+    entry?.focus();
+  };
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
-    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar>
+    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar onKeyDownCapture={onTrayKey}>
       {tray && (
         // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
         // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header
@@ -1430,11 +1447,12 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
         {entryKeys.map((key) => {
           const open = tray === key;
-          // An empty Needs you is drawn quiet (grey) but still opens "All caught up".
-          const quiet = key === "needs" && !counts.needs;
+          // An empty entry is drawn quiet (grey), Needs you and In progress alike, and still opens its "nothing here" line.
+          const quiet = !counts[key];
           return (
             <button
               key={key}
+              ref={(el) => void (entryButtons.current[key] = el)}
               type="button"
               data-tray-entry={key}
               aria-expanded={open}

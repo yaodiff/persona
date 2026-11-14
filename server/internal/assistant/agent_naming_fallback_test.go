@@ -25,7 +25,7 @@ func TestAgentNamePromptFallbackDisplayAndRestart(t *testing.T) {
 			}
 			restarted := newServiceOn(t, f, s.store())
 			for _, service := range []*Service{s, restarted} {
-				for _, title := range []string{"◐ Claude Code", "Task: repair PDF export", "Claude Code", "## Task", "◑ Claude Code"} {
+				for _, title := range []string{"◐ Claude Code", "Task: repair PDF export", "Claude Code", "## Task", "◑ Claude Code", "在示例 App 的列表页增加分类筛选…", "你是收件箱评审助手，执行一次只读审查…", "参考已有的示例账户，检查代理设置…", "这个如果合并到发布分支后，需要哪些检查…", "Fix search"} {
 					current := c
 					current.Title = title
 					if got := service.agentDisplayName("server", current); got != "Fix PDF export" {
@@ -49,7 +49,7 @@ func TestAgentNamePromptFallbackDisplayAndRestart(t *testing.T) {
 				name   string
 				mutate func(*proto.Session)
 			}{
-				{"meaningful title", func(c *proto.Session) { c.Title = "Fix search" }},
+				{"meaningful generated title", func(c *proto.Session) { c.Title = "Fix search"; c.TitleSource = proto.TitleSourceAuto }},
 				{"other tool", func(c *proto.Session) { c.Title = "◐ Codex" }},
 				{"changed runtime", func(c *proto.Session) { c.Agent = "codex" }},
 				{"unknown runtime", func(c *proto.Session) { c.Agent = "" }},
@@ -81,7 +81,9 @@ func TestAgentNamePromptFallbackDuringModelResult(t *testing.T) {
 	}{
 		{"tool to template", "◑ Claude Code", "Task: repair PDF export", "claude", proto.TitleSourcePrompt, false, "Fix PDF export"},
 		{"template to tool", "Task: repair PDF export", "◐ Claude Code", "claude", proto.TitleSourcePrompt, false, "Fix PDF export"},
-		{"meaningful title", "◑ Claude Code", "Fix search", "claude", proto.TitleSourcePrompt, false, ""},
+		{"copied short prompt", "◑ Claude Code", "Fix search", "claude", proto.TitleSourcePrompt, false, "Fix PDF export"},
+		{"meaningful generated title", "◑ Claude Code", "Fix search", "claude", proto.TitleSourceAuto, false, ""},
+		{"tool to unlisted instruction", "◑ Claude Code", "在示例 App 的列表页增加分类筛选…", "claude", proto.TitleSourcePrompt, false, "Fix PDF export"},
 		{"other tool", "Task: repair PDF export", "Codex", "claude", proto.TitleSourcePrompt, false, ""},
 		{"changed runtime", "◑ Claude Code", "Task: repair PDF export", "codex", proto.TitleSourcePrompt, false, ""},
 		{"unknown runtime", "◑ Claude Code", "Task: repair PDF export", "", proto.TitleSourcePrompt, false, ""},

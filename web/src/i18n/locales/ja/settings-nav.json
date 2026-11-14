@@ -13,6 +13,7 @@
   "tab_translate": "翻訳",
   "tab_shortcuts": "ショートカット",
   "tab_devices": "デバイス",
+  "tab_hub": "このハブ",
   "hint_general": "外観、ナビゲーション、翻訳",
   "hint_notifications": "通知と通知音のタイミング",
   "hint_shortcuts": "キーボードショートカット",
@@ -36,5 +37,7 @@
   "assistant_footer": "「{name}」の設定だけを表示しています。ほかのアシスタントを変更するには、先に切り替えてください。",
   "hub_footer": "この 2 つのグループは、どのアシスタントを選んでいても同じです。",
   "tab_sources": "受信箱のソース",
-  "hint_sources": "受信箱に新しいものを入れるソース"
+  "hint_sources": "受信箱に新しいものを入れるソース",
+  "tab_prompts": "保存したプロンプト",
+  "hint_prompts": "どのチャットでも / で呼び出せるプロンプト"
 }

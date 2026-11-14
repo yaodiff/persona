@@ -6,6 +6,13 @@ import Testing
 @MainActor
 struct InboxTimelineFixtureTests {
     private static let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    private static let liveStateNames: [String: StateName] = [
+        "needs_you": .needsYou,
+        "working": .working,
+        "unread": .unread,
+        "idle": .seen,
+        "offline": .notRunning,
+    ]
 
     private struct ChainOnly: Decodable { var chain: [InboxItem.ChainEntry] }
 
@@ -25,11 +32,17 @@ struct InboxTimelineFixtureTests {
                 var folded: [String]
                 var expanded: [String]
                 var steps: [Step]
+                var live_state: [LiveState]?
 
                 struct Step: Decodable {
                     var id: String
                     var icon: String
                     var reported: Bool
+                }
+
+                struct LiveState: Decodable {
+                    var id: String
+                    var session_state: String
                 }
             }
         }
@@ -51,6 +64,21 @@ struct InboxTimelineFixtureTests {
                 #expect((entry.kind == "reported") == step.reported, "\(c.name): \(step.id)")
                 #expect(!InboxEventText.symbol(entry).isEmpty, "\(c.name): \(step.id)")
             }
+            if let liveStates = c.expected.live_state {
+                #expect(InboxEventText.liveStateEntries(chain) == Set(liveStates.map(\.id)), "\(c.name)")
+                for liveState in liveStates {
+                    let state = try #require(AgentState(rawValue: liveState.session_state), "\(c.name): \(liveState.id)")
+                    let stateName = try #require(Self.liveStateNames[liveState.session_state], "\(c.name): \(liveState.id)")
+                    #expect(state.label == stateName.text, "\(c.name): \(liveState.id)")
+                }
+            }
+        }
+    }
+
+    @Test func liveAgentStatesUseTheAgentsListNames() throws {
+        for (rawState, stateName) in Self.liveStateNames {
+            let state = try #require(AgentState(rawValue: rawState), "\(rawState)")
+            #expect(state.label == stateName.text, "\(rawState)")
         }
     }
 

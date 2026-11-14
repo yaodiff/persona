@@ -119,4 +119,163 @@ final class GitWriteUITests: XCTestCase {
         XCTAssertFalse(app.buttons["git-push"].exists)
         try shot(app, "0-before")
     }
+
+    // MARK: Branches and stashes (#7015)
+
+    /// The dialog's button by its word, where the system drops identifiers in dialogs; never the row that opened it.
+    @MainActor private func dialogButton(_ app: XCUIApplication, _ id: String, _ word: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier == %@ OR (label == %@ AND NOT (identifier BEGINSWITH 'git.'))", id, word)).firstMatch
+    }
+
+    @MainActor func testSwitchAsksWithChangesAndARefusalOffersStashes() async throws {
+        try await control("reset=1")
+        let app = launch()
+        let open = app.buttons["git.open.branches"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "6-rows")
+        open.tap()
+        let main = app.buttons.matching(NSPredicate(format: "identifier == 'git.branch' AND label BEGINSWITH 'main'")).firstMatch
+        XCTAssertTrue(main.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "7-branches")
+        // four uncommitted changes go along: it asks first, and nothing switches before the yes
+        main.tap()
+        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "4 处未提交的改动会一起带过去")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "8-switch-ask")
+        let before = try await control("")
+        XCTAssertEqual(before["branch"] as? String, "widget-hourly")
+        // the files the other branch has differently: refused, listed, and Stashes is offered
+        try await control("fail=git_conflict&files=WeatherWidget/Provider.swift,Sources/App/main.swift")
+        tapSettled(dialogButton(app, "git.branch.confirm", "切换"))
+        let refused = app.staticTexts["会覆盖未提交的改动：先提交或收起这些文件"]
+        XCTAssertTrue(refused.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Sources/App/main.swift")).firstMatch.exists)
+        try shot(app, "9-switch-refused")
+        let after = try await control("")
+        XCTAssertEqual(after["branch"] as? String, "widget-hourly", "nothing switched")
+        app.alerts.buttons["贮藏"].tap()
+        XCTAssertTrue(app.buttons["git.stash.push"].waitForExistence(timeout: 10), "Stashes opens in its place: " + app.debugDescription)
+    }
+
+    @MainActor func testCreateABranchAfterAsking() async throws {
+        try await control("reset=1")
+        let app = launch()
+        app.buttons["git.open.branches"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10), app.debugDescription)
+        search.tap()
+        search.typeText("fix/rain-color")
+        let create = app.buttons["git.branch.create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "10-create")
+        tapSettled(create)
+        tapSettled(dialogButton(app, "git.branch.confirm", "新建"))
+        XCTAssertTrue(toast(app, "已新建分支 fix/rain-color").waitForExistence(timeout: 10), app.debugDescription)
+        let state = try await control("")
+        XCTAssertEqual(state["branch"] as? String, "fix/rain-color")
+    }
+
+    @MainActor func testStashChangesThenDropOneAfterAsking() async throws {
+        try await control("reset=1")
+        let app = launch()
+        app.buttons["git.open.stashes"].tap()
+        let message = app.textFields["git.stash.message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 10), app.debugDescription)
+        message.tap()
+        message.typeText("先放一放")
+        try shot(app, "11-stashes")
+        tapSettled(app.buttons["git.stash.push"])
+        XCTAssertTrue(toast(app, "已收起改动").waitForExistence(timeout: 10), app.debugDescription)
+        let kept = app.buttons.matching(NSPredicate(format: "identifier == 'git.stash' AND label CONTAINS %@", "先放一放")).firstMatch
+        XCTAssertTrue(kept.waitForExistence(timeout: 10), app.debugDescription)
+        let state = try await control("")
+        XCTAssertEqual(state["files"] as? Int, 0, "new files went too")
+        // the older one: its menu, then Drop asks first
+        let old = app.buttons.matching(NSPredicate(format: "identifier == 'git.stash' AND label CONTAINS %@", "alternate palette")).firstMatch
+        old.tap()
+        let drop = app.buttons["丢弃…"]
+        XCTAssertTrue(drop.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "12-stash-menu")
+        drop.tap()
+        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "会被删除，在这里无法找回")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "13-drop-ask")
+        tapSettled(dialogButton(app, "git.stash.dropConfirm", "丢弃"))
+        XCTAssertTrue(toast(app, "已丢弃").waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertFalse(old.waitForExistence(timeout: 2))
+    }
+
+    // MARK: The pull request (#7014)
+
+    /// Scrolls the sheet's list up until e can be tapped.
+    @MainActor private func reveal(_ app: XCUIApplication, _ e: XCUIElement) {
+        for _ in 0..<4 where !(e.exists && e.isHittable) { app.swipeUp() }
+    }
+
+    @MainActor private func openPR(_ app: XCUIApplication) {
+        let row = app.buttons["git.pr.open"]
+        XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
+        row.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["git.pr.header"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+    }
+
+    @MainActor func testThePullRequestRowAndMergeAfterAsking() async throws {
+        try await control("reset=1&pr=ready")
+        let app = launch()
+        XCTAssertTrue(app.buttons["git.pr.open"].waitForExistence(timeout: 15), app.debugDescription)
+        try shot(app, "14-pr-row")
+        openPR(app)
+        try shot(app, "15-pr-page")
+        let merge = app.buttons["git.pr.merge"]
+        reveal(app, merge)
+        tapSettled(merge)
+        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "现在就在 GitHub 上用")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "16-merge-ask")
+        tapSettled(dialogButton(app, "git.pr.confirm", "合并"))
+        XCTAssertTrue(toast(app, "已合并 #128").waitForExistence(timeout: 10), app.debugDescription)
+    }
+
+    @MainActor func testReviewCommentsGoToTheAgentAndMergeWhenReadyAsks() async throws {
+        try await control("reset=1&pr=review")
+        let app = launch()
+        openPR(app)
+        let hand = app.buttons.matching(identifier: "git.pr.hand").firstMatch
+        reveal(app, hand)
+        XCTAssertTrue(hand.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "17-pr-review")
+        hand.tap()
+        let handed = app.buttons.matching(NSPredicate(format: "identifier == 'git.pr.hand' AND label CONTAINS %@", "已放进消息")).firstMatch
+        XCTAssertTrue(handed.waitForExistence(timeout: 10), app.debugDescription)
+        let when = app.buttons["git.pr.merge"]
+        reveal(app, when)
+        try shot(app, "18-pr-merge-section")
+        tapSettled(when)
+        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "检查和评审都通过后")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 10), app.debugDescription)
+        tapSettled(dialogButton(app, "git.pr.confirm", "通过后自动合并"))
+        XCTAssertTrue(toast(app, "检查和评审通过后会自动合并").waitForExistence(timeout: 10), app.debugDescription)
+    }
+
+    @MainActor func testOpenAPullRequestAfterAsking() async throws {
+        try await control("reset=1&pr=ready")
+        try await control("pr=none")
+        let app = launch()
+        let create = app.buttons["git.pr.create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 15), app.debugDescription)
+        try shot(app, "19-pr-none")
+        create.tap()
+        XCTAssertTrue(app.textFields["git.pr.title"].waitForExistence(timeout: 10), app.debugDescription)
+        // the default branch by its name (origin/HEAD, the mock's main)
+        let into = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "main（默认）", "main（默认）")).firstMatch
+        XCTAssertTrue(into.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "20-pr-create")
+        tapSettled(app.buttons["git.pr.open.go"])
+        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "从 widget-hourly 合进 main 的拉取请求")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "21-pr-create-ask")
+        tapSettled(dialogButton(app, "git.pr.create.confirm", "创建拉取请求"))
+        XCTAssertTrue(toast(app, "已创建拉取请求").waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["git.pr.header"].firstMatch.waitForExistence(timeout: 10), "the page takes the sheet's place")
+    }
 }

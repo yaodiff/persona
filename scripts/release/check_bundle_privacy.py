@@ -36,10 +36,13 @@ and wireguard-go's handshake identifier (its author string), the latter only wit
 The seven known swift-nio-ssh algorithm/certificate names are also classified as a complete original printable field
 or a complete comma-separated list; that fallback excludes URLs, surrounding context and normalized fragments.
 """
+import base64
+import datetime
 import hashlib
 import ipaddress
 import itertools
 import os
+import plistlib
 import re
 import struct
 import subprocess
@@ -333,7 +336,7 @@ def plist_references(data):
 
     Check every indexed object, including unreachable ones, before trusting any range. Unknown types, overlaps,
     bad lengths/references and cycles fall back to raw scanning. Data, scalar payloads, gaps and offset/trailer bytes
-    are never excluded. Decode every string object too: plutil's root traversal misses unreachable UTF-16 strings.
+    are never excluded. Decode every string object too: plist_xml's root traversal misses unreachable UTF-16 strings.
     """
     if data[:8] != b"bplist00" or len(data) < 40:
         return [], []
@@ -417,6 +420,78 @@ def plist_references(data):
     return sorted(ranges), list(strings.values())
 
 
+PLIST_XML_HEAD = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                  '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n')
+
+
+def plist_xml(data):
+    """The text `plutil -convert xml1` prints for a binary plist, read in text mode (a CR line end reads as LF), built
+    with plistlib so the scan is the same where plutil doesn't exist (Linux, #7571). CoreFoundation's layout: keys in
+    UTF-16 order, reals as %.17g, a UID as a CF$UID dictionary, data in base64 lines of 76 columns less 8 per tab (at
+    most 8 tabs). Empty for bytes plistlib can't read and, as plutil prints nothing for them, a cycle, a non-string
+    key or a NUL in a string."""
+    lines = [PLIST_XML_HEAD]
+    try:
+        plist_xml_lines(plistlib.loads(data, fmt=plistlib.FMT_BINARY), 0, lines, set())
+    except (ValueError, TypeError, RecursionError):  # plistlib.InvalidFileException is a ValueError
+        return ""
+    return "".join(lines) + "</plist>\n"
+
+
+def plist_xml_text(text):
+    if "\0" in text:
+        raise ValueError("a NUL in a string")
+    return (text.replace("\r\n", "\n").replace("\r", "\n")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def plist_xml_lines(value, depth, lines, open_containers):
+    pad = "\t" * depth
+    if isinstance(value, plistlib.UID):
+        value = {"CF$UID": value.data}
+    if isinstance(value, (list, dict)):
+        tag = "array" if isinstance(value, list) else "dict"
+        if not value:
+            lines.append("%s<%s/>\n" % (pad, tag))
+            return
+        if id(value) in open_containers:
+            raise ValueError("a cycle")
+        open_containers.add(id(value))
+        lines.append("%s<%s>\n" % (pad, tag))
+        if tag == "array":
+            for item in value:
+                plist_xml_lines(item, depth + 1, lines, open_containers)
+        else:
+            if not all(isinstance(key, str) for key in value):
+                raise TypeError("a non-string key")
+            for key in sorted(value, key=lambda key: key.encode("utf-16-be")):
+                lines.append("%s\t<key>%s</key>\n" % (pad, plist_xml_text(key)))
+                plist_xml_lines(value[key], depth + 1, lines, open_containers)
+        lines.append("%s</%s>\n" % (pad, tag))
+        open_containers.discard(id(value))
+    elif isinstance(value, str):
+        lines.append("%s<string>%s</string>\n" % (pad, plist_xml_text(value)))
+    elif isinstance(value, bool):
+        lines.append("%s<%s/>\n" % (pad, "true" if value else "false"))
+    elif isinstance(value, int):
+        lines.append("%s<integer>%d</integer>\n" % (pad, value))
+    elif isinstance(value, float):
+        real = ("nan" if value != value else "+infinity" if value == float("inf") else
+                "-infinity" if value == float("-inf") else "0.0" if value == 0 else "%.17g" % value)
+        lines.append("%s<real>%s</real>\n" % (pad, real))
+    elif isinstance(value, datetime.datetime):
+        lines.append("%s<date>%04d-%02d-%02dT%02d:%02d:%02dZ</date>\n" % (
+            pad, value.year, value.month, value.day, value.hour, value.minute, value.second))
+    elif isinstance(value, bytes):
+        indent = min(depth, 8)
+        encoded, width = base64.b64encode(value).decode("ascii"), 76 - 8 * indent
+        lines.append("%s<data>\n" % pad)
+        lines.extend("%s%s\n" % ("\t" * indent, encoded[i:i + width]) for i in range(0, len(encoded), width))
+        lines.append("%s</data>\n" % pad)
+    else:
+        raise TypeError("an unsupported plist value")
+
+
 def texts(path: str, data=None, *, private_only=False):
     if data is None:
         with open(path, "rb") as source:
@@ -437,7 +512,7 @@ def texts(path: str, data=None, *, private_only=False):
         cursor = end
     yield from strings
     if binary_plist and not private_only:
-        yield subprocess.run(["plutil", "-convert", "xml1", "-o", "-", path], capture_output=True, text=True).stdout
+        yield plist_xml(data)
 
 
 GZIP_MAGIC = b"\x1f\x8b\x08"

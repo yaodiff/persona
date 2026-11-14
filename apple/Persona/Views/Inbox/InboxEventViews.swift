@@ -619,6 +619,23 @@ struct InboxSuggestionEditor: View {
 
 // MARK: - chain
 
+nonisolated extension InboxEventText {
+    /// The newest entry for each linked Agent session, across the whole chain rather than only its visible rows.
+    internal static func liveStateEntries(_ chain: [InboxItem.ChainEntry]) -> Set<String> {
+        var latest: [SessionKey: String] = [:]
+        for e in chain where e.kind == "agent" || e.kind == "agent_stopped" {
+            guard let key = e.link?.sessionKey else { continue }
+            latest[key] = e.id
+        }
+        return Set(latest.values)
+    }
+
+    /// Plain reported detail has no expansion to reveal it, so it stays readable in full instead of being clipped.
+    internal static func chainLineLimit(_ e: InboxItem.ChainEntry, open: Bool) -> Int? {
+        open || (e.detailIsInLine && e.link == nil && (e.messages ?? []).isEmpty) ? nil : 2
+    }
+}
+
 /// The chain: collapsed to the three newest entries with 'show all (N)'; each row time · source icon · words, and a tap goes
 /// where its link says (the source at that message, a conversation, another item) or opens its detail in place.
 struct InboxChainSection: View {
@@ -638,6 +655,7 @@ struct InboxChainSection: View {
 
     var body: some View {
         let chain = item.chainCut ? whole ?? item.chain ?? [] : item.chain ?? []
+        let liveStateEntries = InboxEventText.liveStateEntries(chain)
         let count = max(chain.count, item.chainCount ?? 0)
         if !chain.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -655,7 +673,7 @@ struct InboxChainSection: View {
                     }
                 }
                 ForEach(InboxEventText.chainRows(chain, expanded: all)) { e in
-                    entry(e)
+                    entry(e, showsLiveState: liveStateEntries.contains(e.id))
                 }
             }
             .accessibilityElement(children: .contain)
@@ -681,12 +699,12 @@ struct InboxChainSection: View {
         if let full = try? await api.inboxItem(item.id).chain, !Task.isCancelled { whole = full }
     }
 
-    @ViewBuilder private func entry(_ e: InboxItem.ChainEntry) -> some View {
+    @ViewBuilder private func entry(_ e: InboxItem.ChainEntry, showsLiveState: Bool) -> some View {
         let target = InboxChainTarget.of(e, sourceShown: sourceShown)
         let open = opened.contains(e.id)
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                tappable(e, target) { line(e, target: target, open: open) }
+                tappable(e, target) { line(e, target: target, open: open, showsLiveState: showsLiveState) }
                 // An entry that goes somewhere and has messages too: they open here with the chevron.
                 if target.navigates && e.expandable {
                     Button { toggle(e) } label: {
@@ -705,7 +723,7 @@ struct InboxChainSection: View {
         .accessibilityValue(e.id)
     }
 
-    private func line(_ e: InboxItem.ChainEntry, target: InboxChainTarget, open: Bool) -> some View {
+    private func line(_ e: InboxItem.ChainEntry, target: InboxChainTarget, open: Bool, showsLiveState: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             Text(LarkTime.short(e.at)).font(Theme.Font.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
             chainIcon(e)
@@ -716,9 +734,9 @@ struct InboxChainSection: View {
             Text(InboxEventText.chainText(e))
                 .font(Theme.Font.secondary)
                 .foregroundStyle(e.kind == "reported" ? .secondary : .primary)
-                .lineLimit(open ? nil : 2)
+                .lineLimit(InboxEventText.chainLineLimit(e, open: open))
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if (e.kind == "agent" || e.kind == "agent_stopped"), let key = e.link?.sessionKey {
+            if showsLiveState, let key = e.link?.sessionKey {
                 InboxChainAgentState(key: key)
             }
             switch target {

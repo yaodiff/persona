@@ -159,6 +159,18 @@ Prompts explain component selection: options for decisions, table for comparison
 
 The admin UI describes client support and previews static examples. Previews do not connect to real chats or send actions; describe actual client support. The hello feature `assistant_views` means APIs and events are available; each client still chooses renderer or fallback according to its actual capabilities.
 
+## Sharing a reply as a picture
+
+What you see is what you share (#7261). Share as Image (iOS `MessageShareCard`, Android `MessageShareCard`) draws a reply's cards as the chat draws them, never their JSON:
+
+- **Split by the chat's fence rules**: the picture splits the message as the chat does (iOS `ShareCardParts` over `AssistantViewBlocks`, Android `ChatMarkdownCards` over `AssistantFences`). A closed ```persona-view among the first three, within the limits and with its `fallback`, is a card; anything else is its fallback, or the placeholder when it has none. A ```persona-card in the words is drawn as always, in words when the app cannot draw it, else the placeholder. An example inside another code block stays code.
+- **Drawn with nothing to use**: the same renderer, in a picture mode (iOS `extensionPicture`, Android `ViewBlocks.picture` without a conversation's card host). Buttons, fields, segmented choices and row controls are drawn as they look, so a decision card shows its choices; nothing on it answers. On iOS, where `ImageRenderer` draws no scroll views and no UIKit controls, progress bars, switches and segmented choices are shapes and the style's icons, and tables and Markdown wrap at the picture's width.
+- **Its fallback where it only draws live**: a card with an HTML page on its first page is its fallback on both. On iOS a card with pictures that load later (an `image`, a `grid` or `carousel`, a row's thumbnail or avatar picture) is its fallback too: the picture is drawn offscreen at once, and Android records the live card, so its pictures show once loaded.
+- **Never cut or widened by its source**: a card's JSON does not count as a wide code block (`ShareCardBlocks`). The 3,000-character cut never splits a card: iOS counts a card as long as its fallback and leaves out a card past the cut whole; Android cuts before a card the cut would split.
+- **Text stays text**: Copy and Share Text keep the message's text as it is.
+
+Tests: `ShareCardPartsTests` (iOS), `MessagePictureTest` and `AssistantCardsTest.whatAPictureDraws` (Android). The web has no share-as-image of a message.
+
 ## Examples and stages
 
 `schema/extension/examples/assistant/` supplies sets for decisions, comparisons, progress (before/after updates), forms, charts, and HTML. Every client reads the same test data; screenshots use only synthetic data.

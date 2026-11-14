@@ -155,7 +155,7 @@ func (h *Hub) callTool(ctx context.Context, machineID, name string, args json.Ra
 		return r
 	}
 	b, _ := json.Marshal(map[string]any{"name": name, "args": args})
-	out, ok, err := h.fleetAppCall(ctx, assistantwire.AppCall{AppID: assistantwire.AppPhone, Method: assistantwire.PhoneCall, Params: b})
+	out, ok, err := h.fleetAppCall(ctx, assistantwire.AssistantID, assistantwire.AppCall{AppID: assistantwire.AppPhone, Method: assistantwire.PhoneCall, Params: b})
 	if !ok || err != nil {
 		return proto.TextResult("unknown tool "+name, true)
 	}

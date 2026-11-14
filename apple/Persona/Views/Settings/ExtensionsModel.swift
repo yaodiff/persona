@@ -37,6 +37,9 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     var upgradeNote: ExtensionUpgradeNote?
     /// An extension with a program on computers: how that program is on each machine it is switched on for.
     var nodes: [ExtensionNodeState]?
+    /// How that program is across all its machines, aggregated by the hub; the status follows it while the hub's own
+    /// process is idle, so a node-only extension does not say "stopped" while it runs on every machine.
+    var nodeStatus: NodeStatusSummary?
     /// Its sign-in (a hub with extension_auth, #4507): the hub's last word on it.
     var auth: ExtensionAuth?
     /// The command-line programs this version runs with.
@@ -53,7 +56,7 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, market, upgrade, nodes, auth, tools, manager, attached, sandbox, downloads
-        case iconURL = "icon_url", downloadsUpdatedAt = "downloads_updated_at"
+        case iconURL = "icon_url", downloadsUpdatedAt = "downloads_updated_at", nodeStatus = "node_status"
         case needsSetup = "needs_setup", autoUpgrade = "auto_upgrade", autoUpgradePaused = "auto_upgrade_paused", upgradeNote = "upgrade_note"
     }
 
@@ -79,6 +82,16 @@ nonisolated struct ExtensionSandbox: Codable, Hashable, Sendable {
     var detail: String?
     var trusted: Bool?
     var egress: [String: JSONValue]
+}
+
+/// The hub's aggregate of an extension's node program across its machines (Go ExtensionNodeStatusView).
+nonisolated struct NodeStatusSummary: Codable, Hashable, Sendable {
+    var total: Int
+    var running: Int
+    var starting: Int
+    var stopped: Int
+    var offline: Int
+    var abnormal: Int
 }
 
 /// An extension's program on one machine (docs/extensions/extensions.md「Programs running on computers」).
@@ -430,7 +443,8 @@ enum ExtensionText {
     /// it is used, so running and idle are both On; whether it runs right now is the detail page's small print
     /// (`runNote`). hub's `status` values are unchanged.
     static func state(_ p: HubExtension) -> String {
-        switch p.status {
+        if let note = nodeStatusNote(p) { return note }
+        return switch p.status {
         case "running", "stopped": String(localized: "On [Herdr Notice 56410f]", comment: "Extension state: on")
         case "starting": String(localized: "Starting [Session Modes 087739]")
         case "needs_setup": String(localized: "Needs Setup")
@@ -438,6 +452,31 @@ enum ExtensionText {
         case "incompatible": String(localized: "Not available on this hub")
         case "error": String(localized: "Something Went Wrong")
         default: String(localized: "Unknown [Connectors Views 93e474]")
+        }
+    }
+
+    /// One line for an extension whose work happens on computers, from the hub's aggregate: "Running on 2 machines",
+    /// with the abnormal or offline count when there is one. Nil without a node summary, so the hub-process wording stands.
+    /// The hub ships nodeStatus only while the aggregate drives status, so each headline count is non-zero.
+    static func nodeStatusNote(_ p: HubExtension) -> String? {
+        guard let s = p.nodeStatus, s.total > 0 else { return nil }
+        let offline = s.offline > 0 ? " · " + String(localized: "\(s.offline) machines offline") : ""
+        switch p.status {
+        case "running":
+            var line = String(localized: "Running on \(s.running) machines", comment: "Node extension: machines running it")
+            if s.abnormal > 0 { line += " · " + String(localized: "\(s.abnormal) machines have an issue") }
+            return line + offline
+        case "error":
+            let main = String(localized: "\(s.abnormal) machines have an issue")
+            return s.offline > 0 ? main + " · " + String(localized: "\(s.offline) machines offline") : main
+        case "starting":
+            return String(localized: "Starting on \(s.starting) machines") + offline
+        case "stopped":
+            // All offline: no machine is merely stopped, so the offline count is the headline rather than "Stopped on 0".
+            if s.stopped == 0 && s.offline > 0 { return String(localized: "\(s.offline) machines offline") }
+            return String(localized: "Stopped on \(s.stopped) machines") + offline
+        default:
+            return nil
         }
     }
 
@@ -461,7 +500,8 @@ enum ExtensionText {
 
     /// Whether an enabled plugin's program runs right now, under its description; nil for any other state.
     static func runNote(_ p: HubExtension) -> String? {
-        switch p.status {
+        if p.nodeStatus != nil { return nil } // the node status line already says where it runs
+        return switch p.status {
         case "running": String(localized: "Running [Extensions Model 9273b8]")
         case "stopped": String(localized: "Not running; starts when needed")
         default: nil

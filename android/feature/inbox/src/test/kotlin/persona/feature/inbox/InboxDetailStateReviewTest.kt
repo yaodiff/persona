@@ -18,6 +18,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.InboxChainEntry
 import persona.core.contracts.InboxEventFields
+import persona.core.contracts.InboxHandling
 import persona.core.contracts.InboxSuggestion
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
@@ -26,9 +27,9 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
 
 /**
- * The detail page's state line: the suggestion card speaks for itself (iOS `.suggestion` is an `EmptyView`, "the card
- * says it"), so the state must not repeat the suggestion above it; and every state has words — a hub without `now`,
- * without a mark and without a suggestion still shows the page's own tier or done words.
+ * The detail page's state line: shared `now` words stay above a suggestion, whose card still says the suggestion once;
+ * an older hub without `now` uses its tier state beside the processing conversation. Every other state has
+ * words — a hub without `now`, without a mark and without a suggestion still shows the page's own tier or done words.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w500dp-h1200dp-xhdpi")
@@ -66,23 +67,39 @@ class InboxDetailStateReviewTest {
         }
     }
 
-    @Test fun aSuggestionIsSaidOnceByItsCardNotAgainAsAStateLine() {
+    @Test fun aSuggestionKeepsItsNowStateAndConversationBeforeTheCard() {
         val reply = InboxSuggestion(version = 1, kind = "reply", text = "Friday works")
-        show(record(now = "confirm_reply", suggestion = reply))
-        // The card: its kind and its body, once each.
+        val suggested = record(now = "confirm_reply", suggestion = reply).let {
+            it.copy(item = it.item.copy(summary = "Summary"),
+                event = it.event.copy(handling = InboxHandling(state = "done", machineId = "m1", sessionId = "s1")))
+        }
+        show(suggested)
+        // The card: its kind and its body, once each, not the state line's own "Suggested reply: Friday works".
         assertEquals(1, rule.onAllNodesWithText("Suggested reply", useUnmergedTree = true).fetchSemanticsNodes().size)
         assertEquals(1, rule.onAllNodesWithText("Friday works", useUnmergedTree = true).fetchSemanticsNodes().size)
-        // And not the state line's own "Suggested reply: Friday works".
         assertEquals(0, rule.onAllNodesWithText("Suggested reply: Friday works", useUnmergedTree = true).fetchSemanticsNodes().size)
-        // The shared state word for the key is not drawn beside it either: the card is the state.
-        assertEquals(0, rule.onAllNodesWithText("Waiting for you to confirm a reply", substring = true, useUnmergedTree = true).fetchSemanticsNodes().size)
+
+        val state = rule.onNodeWithText("Waiting for you to confirm a reply", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val summary = rule.onNodeWithText("Summary", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val suggestion = rule.onNodeWithText("Friday works", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("state < summary < suggestion: $state / $summary / $suggestion",
+            state.top < summary.top && summary.top < suggestion.top)
+        rule.onNodeWithText("Conversation ›").assertExists()
+        rule.onNodeWithText("Say something").assertDoesNotExist()
+        rule.onNodeWithText("Try again").assertDoesNotExist()
     }
 
     @Test fun everyStateHasWords() {
-        // An older hub's suggestion, without now: the kind and the first line.
+        // An older hub's suggestion, without now: tier state and conversation remain; the card says the suggestion once.
         val reply = InboxSuggestion(version = 1, kind = "reply", text = "Friday works")
-        show(record(suggestion = reply))
+        val oldHub = record(suggestion = reply).let {
+            it.copy(event = it.event.copy(handling = InboxHandling(state = "done", machineId = "m1", sessionId = "s1")))
+        }
+        show(oldHub)
+        rule.onNodeWithText("Needs you", useUnmergedTree = true).assertExists()
         assertTrue("suggestion card", rule.onAllNodesWithText("Friday works", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+        rule.onNodeWithText("Suggested reply: Friday works", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithText("Conversation ›").assertExists()
 
         // A tier-only item without now and without a mark: the page's own tier words.
         repository.snapshot.value = InboxSnapshot(records = listOf(record(tier = "fyi", status = "fyi")))

@@ -23,9 +23,14 @@ func TestBadAgentNames(t *testing.T) {
 			t.Errorf("bad name not recognized: %q", name)
 		}
 	}
-	for _, name := range []string{"修复会话标题", "Improve PDF export", "エクスポートを修正", "中文翻译", "Review the design", "Background job retries"} {
+	for _, name := range []string{"修复会话标题", "Improve PDF export", "エクスポートを修正", "中文翻译", "Review the design", "Background job retries", "请求重试机制", "请求限流", "请假审批"} {
 		if badAgentName(name, "/work/example-project") {
 			t.Errorf("meaningful name rejected: %q", name)
+		}
+	}
+	for _, name := range []string{"请求重试机制", "请求限流", "请假审批"} {
+		if !validAgentName(name) {
+			t.Errorf("meaningful model name rejected: %q", name)
 		}
 	}
 	for _, name := range []string{"◐ 修复导出", "# 修复导出", "Claude Code", strings.Repeat("名", 41), "two\nlines", "<title>"} {
@@ -87,7 +92,14 @@ func TestAgentNameDue(t *testing.T) {
 func namingFixture(t *testing.T, answer func(http.ResponseWriter, *http.Request)) (*Service, *fakeHub, *atomic.Int32) {
 	t.Helper()
 	calls := &atomic.Int32{}
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); answer(w, r) }))
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not a naming call
+			http.NotFound(w, r)
+			return
+		}
+		calls.Add(1)
+		answer(w, r)
+	}))
 	t.Cleanup(model.Close)
 	f := newFakeHub().withMachine()
 	f.ownModels = true

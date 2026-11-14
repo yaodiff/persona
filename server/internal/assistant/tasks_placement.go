@@ -282,6 +282,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		params["session_id"] = expectID
 	}
 	s.setPlanThen(ctx, m.ID, params)
+	sentAt := time.Now()
 	err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
 	skipped, refused := s.ultracodeRefusal(ctx, err, params)
 	if refused {
@@ -298,6 +299,21 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if sess, ok := s.adoptTaskStartSession(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs); ok {
 				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
 				return m.ID, sess.SessionID, nil
+			}
+			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
+			// node may not have had the start at all. Wait for the link to come back and look once more; still
+			// nothing, the caller starts it once again (#7511). A link that stayed up is a busy node: no retry.
+			if s.startLinkDown(ctx, m.ID, err) {
+				back := s.waitMachineBack(ctx, m.ID)
+				if back {
+					// A start that may have reached the node is looked for until the node's own start has run out
+					// of time, so a retry never opens a second agent beside one still being built (#6540).
+					if sess, ok := s.adoptTaskStartSessionUntil(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs, startMayHaveArrived(err, sentAt)); ok {
+						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
+						return m.ID, sess.SessionID, nil
+					}
+				}
+				return "", "", startLinkLost{err: err, machine: m.Name, back: back}
 			}
 		}
 		return "", "", err
@@ -329,35 +345,53 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 // #6540's incident). taskStartAdoptPoll is the pause between lists. Vars so tests shorten them instead of sleeping
 // through the production bounds.
 var (
-	taskStartAdoptWait = 30 * time.Second
-	taskStartAdoptPoll = 2 * time.Second
+	taskStartAdoptWait         = 30 * time.Second
+	taskStartAdoptPoll         = 2 * time.Second
+	taskStartFinalAdoptTimeout = time.Minute
 )
 
 // adoptTaskStartSession gives a task start whose answer never came back a second opinion from the target machine's
 // own session list, reusing agent_start's adoption rule (adoptStartedSession): the start's own session id is matched
 // exactly first, then a session absent from the pre-start snapshot, hub-started, a non-assistant agent of the same
 // launcher and directory with a fresh sign of life that no open todo links, newest wins. The start's own context may
-// be spent, so the reconciliation runs on a detached one. A pre-start snapshot that failed (nil knownIDs) or a
-// machine that cannot answer confirms nothing: the caller keeps its failure behavior, and nothing is started
-// elsewhere.
+// be spent, so the reconciliation runs on a detached one. A pre-start snapshot that failed (nil knownIDs) disables
+// only the heuristic: the exact expectID still needs no snapshot. With neither a snapshot nor an exact id nothing can
+// be adopted, but a nonzero until still holds the retry while the original request may be running. A machine that
+// cannot answer confirms nothing: the caller keeps its failure behavior, and nothing is started elsewhere.
 func (s *Service) adoptTaskStartSession(ctx context.Context, m Device, launcher, cwd, expectID string, knownIDs map[string]bool) (proto.Session, bool) {
-	if knownIDs == nil {
+	return s.adoptTaskStartSessionUntil(ctx, m, launcher, cwd, expectID, knownIDs, time.Time{})
+}
+
+// adoptTaskStartSessionUntil is adoptTaskStartSession that keeps looking until until when that is later than
+// taskStartAdoptWait from now. For a start that may have reached its node (nonzero until), one final lookup uses a
+// fresh context after the polling deadline: the last pre-deadline list can just miss the session (#7772).
+func (s *Service) adoptTaskStartSessionUntil(ctx context.Context, m Device, launcher, cwd, expectID string, knownIDs map[string]bool, until time.Time) (proto.Session, bool) {
+	if knownIDs == nil && expectID == "" && until.IsZero() {
 		return proto.Session{}, false
 	}
-	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartAdoptWait)
+	wait := max(taskStartAdoptWait, time.Until(until))
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
 	for {
 		if sess, ok := s.adoptStartedSession(actx, m, launcher, cwd, expectID, knownIDs); ok {
 			return sess, true
 		}
-		if actx.Err() != nil {
+		if actx.Err() == nil {
+			select {
+			case <-time.After(taskStartAdoptPoll):
+				continue
+			case <-actx.Done():
+			}
+		}
+		if until.IsZero() {
 			return proto.Session{}, false
 		}
-		select {
-		case <-actx.Done():
-			return proto.Session{}, false
-		case <-time.After(taskStartAdoptPoll):
-		}
+		// Each list and the pause inside this final reconciliation have their own bounds, so the expired polling
+		// context must not be reused. Without a snapshot or exact id this returns false after the same safe wait.
+		// The final whole-call deadline also covers the todo book load used by heuristic adoption.
+		fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartFinalAdoptTimeout)
+		defer fcancel()
+		return s.adoptStartedSession(fctx, m, launcher, cwd, expectID, knownIDs)
 	}
 }
 

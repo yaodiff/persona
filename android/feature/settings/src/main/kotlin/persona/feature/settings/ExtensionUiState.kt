@@ -15,6 +15,7 @@ import persona.core.contracts.api.ExtensionViewAction
 import persona.core.contracts.api.ExtensionViewItem
 import persona.core.contracts.api.ExtensionViewPush
 import persona.core.contracts.api.ExtensionViewSection
+import persona.core.contracts.api.SUBSCRIPTIONS_UI
 import persona.core.designsystem.ChartMath
 import persona.core.designsystem.JCandle
 import persona.core.designsystem.JChartData
@@ -60,6 +61,39 @@ internal object ExtensionViewText {
         if (segments.size != 2 || segments[1] != "source") return null
         return runCatching { java.net.URLDecoder.decode(segments[0].replace("+", "%2B"), "UTF-8") }.getOrNull()?.takeIf { it.isNotBlank() }
     }
+
+    /** The most of a Set Up with … text taken (#5278): the pages name a source, they never carry its content. */
+    const val ASK_MOST = 8000
+
+    /**
+     * The text of Inbox Sources' Set Up with … (`persona://ask?text=…`, an older name's scheme too), for the
+     * assistant's main conversation. Null for any other link, an empty text, or more than [ASK_MOST] characters.
+     */
+    fun askText(url: String?): String? {
+        val uri = runCatching { java.net.URI(url ?: return null) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() !in persona.core.contracts.ProtocolCompatibility.appSchemes) return null
+        if (uri.host?.lowercase() != "ask") return null
+        val path = uri.rawPath.orEmpty()
+        if (path.isNotEmpty() && path != "/") return null
+        val raw = uri.rawQuery ?: return null
+        val encoded = raw.split('&').firstNotNullOfOrNull { part ->
+            val name = decodeQuery(part.substringBefore('='))
+            if (name == "text") part.substringAfter('=', "") else null
+        } ?: return null
+        val text = decodeQuery(encoded) ?: return null
+        if (text.trim().isEmpty() || text.length > ASK_MOST) return null
+        return text
+    }
+
+    /** [askText] when [extension] is the subscription pages; every other page refuses the link. */
+    fun askFrom(extension: String, url: String?): String? = if (extension == SUBSCRIPTIONS_UI) askText(url) else null
+
+    /** Which `open_url` a button may bring back: https, and on the subscription pages also Set Up with …. */
+    fun opens(extension: String, url: String?): Boolean = isHttps(url) || askFrom(extension, url) != null
+
+    /** A query component, with `+` kept (the pages percent-encode; they do not use form encoding). */
+    private fun decodeQuery(raw: String): String? =
+        runCatching { java.net.URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8") }.getOrNull()
 
     /** A field's value before the user touches it: the extension's, never for a secret; a switch is off; no choices `[]`. */
     fun initial(item: ExtensionViewItem): String = when (item.kind) {
@@ -406,8 +440,8 @@ internal data class ExtensionActionOutcome(
 
 /**
  * One view an extension draws: at [place], with [context] (a launcher's page, a machine's, a card's size). [now] is the
- * clock `refresh_after` counts on; [opens] is which `open_url` a button may bring back (https, and an inbox item's
- * page also its source link).
+ * clock `refresh_after` counts on; [opens] is which `open_url` a button may bring back (https, and the subscription
+ * pages' Set Up with …; an inbox item's page passes its own, which also allows its source link).
  */
 internal class ExtensionViewModel(
     private val api: ExtensionUi,
@@ -415,7 +449,7 @@ internal class ExtensionViewModel(
     val ui: String,
     private val context: ExtensionUiContext? = null,
     private val now: () -> Long = System::currentTimeMillis,
-    private val opens: (String) -> Boolean = ExtensionViewText::isHttps,
+    private val opens: (String) -> Boolean = { url -> ExtensionViewText.opens(extension, url) },
     /** A pushed page's first state (the push's); later drawings send the view's own. */
     private val initialState: String? = null,
 ) {

@@ -2363,6 +2363,88 @@ def save_place(body, pid):
     return {"place": place}, 200
 
 
+# Saved prompts (Settings › Saved Prompts, #7329): the user's own "/" prompts, as the manager keeps them
+# (assistant/saved_prompts.go). None by default, so the "/" list of every other screenshot stays as it was;
+# MOCK_SAVED_PROMPTS=1 has three; MOCK_SAVED_PROMPTS=old is an assistant from before them (its routes answer 404).
+SAVED_PROMPTS = [
+    {"id": "sp1", "name": "review", "text": "Review this diff for security issues. List each finding with its file and line, and say how bad it is.",
+     "created_at": ago(days=4), "updated_at": ago(days=4)},
+    {"id": "sp2", "name": "release-notes", "text": "Write the release notes for the commits since the last tag: what changed for users first, then the fixes.",
+     "created_at": ago(days=2), "updated_at": ago(days=1)},
+    {"id": "sp3", "name": "standup", "text": "Write today's standup from my commits and merged PRs:\n- done\n- next\n- blocked",
+     "created_at": ago(hours=5), "updated_at": ago(hours=5)},
+] if os.environ.get("MOCK_SAVED_PROMPTS") == "1" else []
+
+
+def saved_prompt_name_ok(name):
+    """One word of letters, digits, combining marks and - _ . (the manager's savedPromptNameRune), at most 32."""
+    return 0 < len(name) <= 32 and all(c in "-_." or unicodedata.category(c)[0] == "L" or unicodedata.category(c) in ("Nd", "Mn") for c in name)
+
+
+def push_saved_prompts():
+    for send, _ in list(LIVE):
+        try:
+            send(from_default({"type": "assistant_saved_prompts"}))
+        except Exception:
+            pass
+
+
+def save_saved_prompt(body, pid):
+    """Adds a saved prompt (pid None) or changes prompt pid, as the manager does: (answer, status)."""
+    name = str(body.get("name") or "").strip().removeprefix("/")
+    text = str(body.get("text") or "").replace("\r\n", "\n").strip()
+    if not saved_prompt_name_ok(name):
+        return {"error": "A prompt needs a name of at most 32 letters, digits, “-”, “_” or “.”, with no spaces."}, 400
+    if not text or len(text) > 8000:
+        return {"error": "A prompt needs some text, at most 8000 characters."}, 400
+    if any(x["name"].lower() == name.lower() and x["id"] != pid for x in SAVED_PROMPTS):
+        return {"error": f"There is already a prompt called “/{name}”."}, 409
+    now = ago()
+    if pid:
+        for x in SAVED_PROMPTS:
+            if x["id"] == pid:
+                x.update(name=name, text=text, updated_at=now)
+                push_saved_prompts()
+                return {"prompt": x}, 200
+        return {"error": "That saved prompt is gone."}, 404
+    if len(SAVED_PROMPTS) >= 100:
+        return {"error": "You can save at most 100 prompts."}, 400
+    prompt = {"id": f"sp{uuid.uuid4().hex[:8]}", "name": name, "text": text, "created_at": now, "updated_at": now}
+    SAVED_PROMPTS.append(prompt)
+    push_saved_prompts()
+    return {"prompt": prompt}, 200
+
+
+def saved_prompts_route(h, p, method):
+    """The saved prompts' routes; False when p is not one of them."""
+    base = "/api/v1/assistant/saved-prompts"
+    if p != base and not p.startswith(base + "/"):
+        return False
+    if os.environ.get("MOCK_SAVED_PROMPTS") == "old":
+        h.send_json({"error": "not found"}, 404)
+    elif p == base and method == "GET":
+        h.send_json({"prompts": SAVED_PROMPTS})
+    elif p == base and method == "POST":
+        h.send_json(*save_saved_prompt(json.loads(h.last_body or b"{}"), None))
+    elif p == base + "/order" and method == "PUT":
+        ids = json.loads(h.last_body or b"{}").get("ids") or []
+        if sorted(ids) != sorted(x["id"] for x in SAVED_PROMPTS) or len(set(ids)) != len(ids):
+            h.send_json({"error": "The saved prompts changed on another device. Reload the list and try again."}, 409)
+        else:
+            SAVED_PROMPTS[:] = [next(x for x in SAVED_PROMPTS if x["id"] == i) for i in ids]
+            push_saved_prompts()
+            h.send_json({"prompts": SAVED_PROMPTS})
+    elif method == "PUT":
+        h.send_json(*save_saved_prompt(json.loads(h.last_body or b"{}"), p.rsplit("/", 1)[1]))
+    elif method == "DELETE":
+        pid = p.rsplit("/", 1)[1]
+        SAVED_PROMPTS[:] = [x for x in SAVED_PROMPTS if x["id"] != pid]
+        push_saved_prompts()
+        h.send_json({"ok": True})
+    else:
+        h.send_json({"error": "method not allowed"}, 405)
+    return True
+
 MEMORY = [
     {"name": "MEMORY.md", "content": "- [早报格式](morning-format.md) — 一屏以内，结论先行", "updated_at": ago(days=1)},
     {"name": "morning-format.md", "content": "---\nname: morning-format\ndescription: 早报一屏以内\nmetadata:\n  type: feedback\n---\n\n早报一屏以内，结论先行。",
@@ -2401,8 +2483,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # went (#3780, MOCK_MINUTES_DAYS): 0 means forever; finite windows are never fewer than the recordings'.
                     "recording_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
                     "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "0")),
-                    # Knowledge points by topic (#3783), on by default.
-                    "kb_topics": True}
+                    # Knowledge points by topic (#3783), on by default; MOCK_KB_TOPICS_OFF=1 starts it off (#7251's empty map).
+                    "kb_topics": os.environ.get("MOCK_KB_TOPICS_OFF") != "1"}
 # What PUT /api/v1/assistant takes for the two retentions, as the hub's profile_write.go.
 RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (0, 3650)}
 
@@ -8980,6 +9062,19 @@ if os.environ.get("MOCK_ASK_LONG") in ("actions", "swipe", "review"):
         "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
         "questions": questions})
     INTERACTIONS.extend(copy.deepcopy(ASK_LONG_INTERACTIONS))
+# MOCK_QUESTION_CANCEL=1: the network tests' Agent question and the main ask_user card for
+# MOCK_ASK_LONG=1|actions|swipe|review advertise question-only cancellation; /mock/reset restores both unanswered exactly
+# once and clears their resolved and interaction history entries.
+QUESTION_CANCEL_INTERACTIONS = []
+if os.environ.get("MOCK_QUESTION_CANCEL") == "1":
+    for ix in INTERACTIONS + ASK_LONG_INTERACTIONS:
+        if ix["id"] in ("ix_tests", "ix_ask_long"):
+            ix["can_cancel"] = True
+    ask_long_ids = {saved["id"] for saved in ASK_LONG_INTERACTIONS}
+    QUESTION_CANCEL_INTERACTIONS = [
+        copy.deepcopy(ix) for ix in INTERACTIONS
+        if ix["id"] in ("ix_tests", "ix_ask_long") and ix["id"] not in ask_long_ids
+    ]
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -10654,6 +10749,7 @@ MOCK_PAIR_DROP = float(os.environ.get("MOCK_PAIR_DROP", "0"))
 PAIR_DROPPED = [False]
 PAIR_TRADED = [None]  # when the pairing token was traded (MOCK_PAIR_TOKEN)
 PAIR_DEVICE_TOKENS = set()
+PAIR_DEVICE_ROLES = {}  # exchanged device token -> the role the exchange returned
 
 TOKENS = [  # Settings › Devices (GET/POST/DELETE /api/v1/auth/tokens)
     {"id": "dev_phone", "name": "我的 iPhone", "kind": "phone", "role": "full", "created_at": ago(days=12), "last_seen": ago()},
@@ -16462,15 +16558,16 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
         it("assistant", "text", 60 * 27 - 1, text="看起来是一家小馆子，周五晚上要提前订位。"),
     ]
 
-# MOCK_LONG_HISTORY=1: the weather chat with fifteen earlier exchanges in front, so its work line and thought sit in
+# MOCK_LONG_HISTORY=1 (or "oldest": the work line first): the weather chat with fifteen earlier exchanges in front, so its work line and thought sit in
 # the middle of a long chat and the list can scroll both ways around them (opening and closing them in place).
-if os.environ.get("MOCK_LONG_HISTORY") == "1":
+if os.environ.get("MOCK_LONG_HISTORY") in ("1", "oldest"):
     _hist = []
     for _k in range(15):
         _hist.append(it("user", "text", 600 - _k * 30, text="第 %d 个问题：顺便看一下这一块的写法有没有问题？" % (_k + 1)))
         _hist.append(it("assistant", "text", 599 - _k * 30, text="看过了，第 %d 块没有问题。命名可以再统一一点，"
                                                             "测试也覆盖到了主要的分支，我顺手把两处重复的判断合并了。" % (_k + 1)))
-    _all = _hist + ITEMS[WIDGET]
+    # "oldest": the work line comes first and the exchanges after it, so a tool row sits at the oldest end (#7237)
+    _all = ITEMS[WIDGET] + _hist if os.environ.get("MOCK_LONG_HISTORY") == "oldest" else _hist + ITEMS[WIDGET]
     for _i, _d in enumerate(_all):  # transcript order: the history first
         _d["seq"] = _i + 1
     ITEMS[WIDGET] = _all
@@ -19446,7 +19543,8 @@ def git_branches():
     return {"branches": [{"name": n, "remote": r, "current": n == GIT_W["branch"], "hash": "a1b2c3d",
                           "subject": MOCK_COMMITS[i % len(MOCK_COMMITS)]["subject"], "date": ago(hours=3 * i + 1)}
                          for i, (n, r) in enumerate(GIT_W["branches"])
-                         if not (r and (n.split("/", 1)[1], False) in GIT_W["branches"])]}  # as the node: a remote one with a local one of its name is left out
+                         if not (r and (n.split("/", 1)[1], False) in GIT_W["branches"])],  # as the node: a remote one with a local one of its name is left out
+            "default": "main"}  # origin/HEAD (#7014)
 
 
 def git_write(h, p, body):
@@ -20211,6 +20309,13 @@ if os.environ.get("MOCK_SENT"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import sent_ledger_mock as _sent
 
+# MOCK_WEB_PUSH=1|failed (#7459, scripts/mock/web_push_mock.py): Settings › Notifications › When Persona is closed, the
+# routes of a browser's Web Push; without it they are an older hub's 404.
+_web_push = None
+if os.environ.get("MOCK_WEB_PUSH"):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import web_push_mock as _web_push
+
 
 def sessions_for_delta_app(obj, have):
     """A machine's whole list as an app on the delta protocol gets it (hub/sessions_push.go): the first one whole,
@@ -20248,7 +20353,7 @@ def png(w, h, rgb):
 # …&slow=S: it answers S seconds late (the small window's "Connecting…"); …&down=1: it hangs up on everyone, now and on
 # connecting (0: back).
 FAKE_SCREEN = {"account": "me", "password": "mock-pass", "port": 0, "signins": [], "typed": "",  # typed: keys after signing in
-               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False,
+               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False, "wheel_in": [],
                "events": []}  # clipboard writes (node / rfb) and keys, in the order they came (#3075: ⌘V after the write)
 # MOCK_SCREEN_DISPLAYS=2 (#80): the mock Mac has two 480×300 displays side by side, one picture 960×300 wide, each
 # numbered in its window (display 2 green). Its Screen Sharing sends their rectangles (ExtendedDesktopSize) when asked;
@@ -20390,31 +20495,44 @@ def zrle_rect(px, W, x, y, w, h, z):
     return struct.pack(">I", len(comp)) + comp
 
 
-# MOCK_SCREEN_VIDEO=1|missing (#3954): MacBook's node offers the live screen's video channel (`screen_video`; =missing:
-# Screen Recording isn't granted for Persona Screen), and …/screen/video/connect?pair=… plays
-# scripts/mock/screen_video/fixture.bin (a made-up desktop; make_fixture.sh makes it again) round and round at 30 fps:
+# MOCK_SCREEN_VIDEO=1|missing|denied (#3954): MacBook's node offers the live screen's video channel (`screen_video`;
+# =missing: Screen Recording isn't granted for Persona Screen and macOS hasn't asked yet; =denied: not granted, asked
+# once already, so Persona Screen is in System Settings' list), and …/screen/video/connect?pair=… plays
+# scripts/mock/screen_video/fixture.bin (HEVC) or fixture-h264.bin (a made-up desktop; make_fixture.sh makes them again),
+# picked as the helper picks its codec: the first of the `start`'s codecs there is a fixture for, else H.264 (#6558: a
+# browser without HEVC offers only H.264), round and round at 30 fps:
 # `hello`, `format`, then its frames, numbered on and stamped with this clock. Only for a pair a 5900 connection carried
 # (else 403, as the node's not_signed_in). GET /mock/screen-video says what the phone sent (`start`s, report count) and
 # how many streams are open; …?drop=1 closes them all, ?refuse=1 refuses new ones (503, ?refuse=0 back), ?pause=locked
 # sends `paused` with that reason (no frames and no heartbeats, as the helper), ?resume=1 sends `resumed` and starts over
 # with `hello`, `format` and the keyframe. Once a second while frames go out it sends `timing` as the helper does: capture
 # 0 and encode 4.8 ms (made up: nothing is encoded here), the network as half the real round trip from a frame going out
-# to the phone's report on it.
+# to the phone's report on it. MOCK_SCREEN_VIDEO_TIERS=1: the hello says the helper has quality tiers (`features`,
+# #6396) on a 14-inch MacBook Pro's display (`points`, `pixels`; the fixture plays at its own size whatever the tier);
+# GET /mock/screen-video also lists the `update`s the client sent (#6558: a new data budget, the tier it picked).
 SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
-                "refuse": False}
-_SCREEN_VIDEO_FIXTURE = []
+                "updates": [], "refuse": False, "tiers": os.environ.get("MOCK_SCREEN_VIDEO_TIERS") == "1"}
+_SCREEN_VIDEO_FIXTURE = {}
+_SCREEN_VIDEO_FILES = {"hevc": "fixture.bin", "h264": "fixture-h264.bin"}
 
 
-def screen_video_fixture():
-    """The fixture's messages as (type, body), read once."""
-    if not _SCREEN_VIDEO_FIXTURE:
-        data = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "screen_video", "fixture.bin"), "rb").read()
-        i = 0
+def screen_video_codec(offered):
+    """The codec the helper would pick (CapturePlan.codec): the first offered one with a fixture, else H.264."""
+    return next((c.lower() for c in offered or [] if c.lower() in _SCREEN_VIDEO_FILES), "h264")
+
+
+def screen_video_fixture(codec="hevc"):
+    """The fixture's messages for `codec` as (type, body), read once."""
+    if codec not in _SCREEN_VIDEO_FIXTURE:
+        name = _SCREEN_VIDEO_FILES[codec]
+        data = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "screen_video", name), "rb").read()
+        msgs, i = [], 0
         while i < len(data):
             n = struct.unpack(">I", data[i:i + 4])[0]
-            _SCREEN_VIDEO_FIXTURE.append((data[i + 4], data[i + 5:i + 4 + n]))
+            msgs.append((data[i + 4], data[i + 5:i + 4 + n]))
             i += 4 + n
-    return _SCREEN_VIDEO_FIXTURE
+        _SCREEN_VIDEO_FIXTURE[codec] = msgs
+    return _SCREEN_VIDEO_FIXTURE[codec]
 
 
 def screen_video_control(h, q):
@@ -20426,7 +20544,7 @@ def screen_video_control(h, q):
     if q.get("resume", ["0"])[0] == "1":
         for st in SCREEN_VIDEO["streams"]: st["resume"] = True
     h.send_json({"open": sum(1 for st in SCREEN_VIDEO["streams"] if st["open"]), "starts": SCREEN_VIDEO["starts"],
-                 "reports": SCREEN_VIDEO["reports"], "refuse": SCREEN_VIDEO["refuse"]})
+                 "reports": SCREEN_VIDEO["reports"], "updates": SCREEN_VIDEO["updates"], "refuse": SCREEN_VIDEO["refuse"]})
 
 
 def screen_video_connect(h, mid):
@@ -20435,7 +20553,7 @@ def screen_video_connect(h, mid):
     if not pair: return h.send_json({"error": "a pair is required"}, 400)
     if pair not in SCREEN_VIDEO["pairs"]:
         return h.send_json({"error": "the paired screen-sharing stream has not signed in"}, 403)
-    if SCREEN_VIDEO["refuse"] or SCREEN_VIDEO["mode"] == "missing":
+    if SCREEN_VIDEO["refuse"] or SCREEN_VIDEO["mode"] in ("missing", "denied"):
         return h.send_json({"error": "no live-screen video helper on this node"}, 503)
     key = h.headers.get("Sec-WebSocket-Key", "")
     accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
@@ -20456,9 +20574,11 @@ def screen_video_connect(h, mid):
         ws(0x2, struct.pack(">IB", len(body) + 1, t) + body)
 
     def play():
-        msgs = screen_video_fixture()
-        hello, fmt, frames = msgs[0], msgs[1], msgs[2:]
         if not st["started"].wait(10): st["open"] = False; return
+        msgs = screen_video_fixture(screen_video_codec(st.get("codecs")))
+        hello, fmt, frames = msgs[0], msgs[1], msgs[2:]
+        if SCREEN_VIDEO["tiers"]:  # as the helper says it: the display's points and pixels (a 14-inch MacBook Pro's) for the tiers
+            hello = (hello[0], json.dumps({**json.loads(hello[1]), "features": ["tiers"], "points": [1512, 982], "pixels": [3024, 1964]}).encode())
         number, i, restart = 0, 0, True
         second, count, size = time.monotonic(), 0, 0
         try:
@@ -20511,8 +20631,12 @@ def screen_video_connect(h, mid):
                 n = struct.unpack(">I", buf[:4])[0]
                 t, body, buf = buf[4], buf[5:4 + n], buf[4 + n:]
                 if t == 16:
-                    SCREEN_VIDEO["starts"].append(json.loads(body or b"{}"))
+                    start = json.loads(body or b"{}")
+                    SCREEN_VIDEO["starts"].append(start)
+                    st["codecs"] = start.get("codecs")
                     st["started"].set()
+                elif t == 19:
+                    SCREEN_VIDEO["updates"].append(json.loads(body or b"{}"))
                 elif t == 17:
                     SCREEN_VIDEO["reports"] += 1
                     sent = st["sent"].pop(struct.unpack(">I", body[:4])[0], None) if len(body) >= 4 else None
@@ -21609,7 +21733,8 @@ def computer_of(machine_id, enabled):
         c["displays"] = FAKE_NODE_DISPLAYS  # MOCK_SCREEN_DISPLAYS=2:node
     if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_VIDEO["mode"]:  # MOCK_SCREEN_VIDEO (#3954)
         c["screen_video"] = {"version": 1, "codecs": ["hevc", "h264"],
-                             "permission": "missing" if SCREEN_VIDEO["mode"] == "missing" else "granted"}
+                             "permission": "missing" if SCREEN_VIDEO["mode"] in ("missing", "denied") else "granted"}
+        if SCREEN_VIDEO["mode"] == "denied": c["screen_video"]["asked"] = True
     return c
 
 
@@ -23630,7 +23755,9 @@ MOCK_HELP = [
     "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
     "MOCK_TODO_PROJECTS=1  To-dos filed under the example knowledge-base projects (#7077: the detail's Project, Group By › Project)",
+    "MOCK_SAVED_PROMPTS=1|old  Settings › Saved Prompts and every chat's / list: three saved prompts (1), or an assistant from before them, its routes answering 404 (old) (#7329)",
     "MOCK_KB_CORRECTIONS=1  Knowledge base: the lists links are held in, so links can be removed, and confirmed facts on one person (#6997)",
+    "MOCK_KB_TOPICS_OFF=1  Knowledge points by topic starts off (the assistant's kb_topics), for the off state of the map (#7251)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts, exact lookup and by to-do (todo=, #6662); list-mode sockets send hints instead of full lists (#6362)",
@@ -24060,6 +24187,7 @@ class H(BaseHTTPRequestHandler):
         if managers_route(self, "GET", p): return
         if file_operation_route(self, p): return
         if _sent and _sent.route(self, "GET", p, q): return
+        if _web_push and _web_push.route(self, "GET", p): return
         if providers_route(self, "GET", p, q, b""): return
         if MOCK_MESSAGING and p.startswith("/api/v1/messaging") and lark_messaging.route(self, "GET", p, q, b""): return
         if net_control(p, q): return self.send_json({"ok": True, **NET})
@@ -24098,7 +24226,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(GIT_PULL_STATE)
         if p == "/mock/screen-password":  # MOCK_SCREEN=fake: the Mac's password changed; who signed in how; what was typed
             if "p" in q: FAKE_SCREEN["password"] = q["p"][0]
-            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="", events=[])
+            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="", events=[], wheel_in=[])
             if "clip" in q: fake_screen_clip(q["clip"][0])  # the Mac copied this
             if "bg" in q and q["bg"][0] in FAKE_BG_COLORS and FAKE_BG["kind"]:  # another background (MOCK_SCREEN_BG)
                 FAKE_BG["kind"] = q["bg"][0]
@@ -24114,7 +24242,7 @@ class H(BaseHTTPRequestHandler):
                     except OSError: pass
             return self.send_json({"signins": FAKE_SCREEN["signins"], "typed": FAKE_SCREEN["typed"], "clicks": FAKE_SCREEN["clicks"],
                                    "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"],
-                                   "events": FAKE_SCREEN["events"][-200:]})
+                                   "events": FAKE_SCREEN["events"][-200:], "wheel_in": FAKE_SCREEN["wheel_in"]})
         if p == "/mock/churn":
             CHURN["rounds"] = 0
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
@@ -24325,6 +24453,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"mode": RESOLVE_MODE[0]})
         if p == "/mock/screen-steps": return self.send_json(mock_screen_steps(q))
         if p == "/mock/devices": return self.send_json({"devices": DEVICES})
+        if p == "/mock/desktops": return self.send_json(desktops_state())
         if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
             with FAULT_LOCK:
@@ -24411,7 +24540,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT); DECISION_DISMISSALS.clear()
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS  # the cards back, unanswered
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
@@ -24654,6 +24783,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"runs": [r for r in RUNS if not ref or r["ref_id"] == ref]})
         if p == "/api/v1/assistant/places":
             return self.send_json({"places": PLACES})
+        if saved_prompts_route(self, p, "GET"):
+            return
         if p == "/api/v1/assistant/memory":
             if parse_qs(urlparse(self.path).query).get("space", [""])[0] == "health":
                 return self.send_json({"files": HEALTH_MEMORY, "dir": "/home/me/.persona/health/memory"})
@@ -25124,6 +25255,7 @@ class H(BaseHTTPRequestHandler):
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if _sent and _sent.route(self, self.command, p, {}, self.last_body): return
+        if _web_push and _web_push.route(self, self.command, p, self.last_body): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
@@ -25249,7 +25381,9 @@ class H(BaseHTTPRequestHandler):
                 PAIR_DEVICE_TOKENS.add(device)
                 print("mock: traded for %s" % device, flush=True)
                 kind = req.get("kind") if req.get("kind") in ("phone", "watch") else "other"
-                return self.send_json({"id": "dev_" + device, "token": device, "role": "answer" if kind == "watch" else "full",
+                role = "answer" if kind == "watch" else "full"
+                PAIR_DEVICE_ROLES[device] = role
+                return self.send_json({"id": "dev_" + device, "token": device, "role": role,
                                        "name": req.get("name") or "设备"})
             kind = req.get("kind") if req.get("kind") in ("phone", "watch") else "other"
             t = {"id": "dev_mock_%d" % (len(TOKENS) + 1), "name": req.get("name") or "设备", "kind": kind,
@@ -26076,6 +26210,8 @@ class H(BaseHTTPRequestHandler):
             mute, settled = mute_item(body.get("item_id"), body.get("tag"), other[0] if other else None)
             if not mute: return self.send_json({"error": "这一条没有可静音的" + str(body.get("tag"))}, 400)
             return self.send_json({"mute": mute, "settled": settled})
+        if saved_prompts_route(self, p, self.command):
+            return
         if p == "/api/v1/assistant/places" and self.command == "POST":
             return self.send_json(*save_place(json.loads(self.last_body or b"{}"), None))
         if p.startswith("/api/v1/assistant/places/") and self.command == "PUT":
@@ -26834,7 +26970,12 @@ class H(BaseHTTPRequestHandler):
                 if op == 8: break
                 if op == 9:
                     frame(0xA, payload); continue
-                if op in (0, 1, 2): tcp.sendall(payload)
+                if op in (0, 1, 2):
+                    # A wheel notch (a pointer event with button 4 or 5 down) as it reaches the relay, before the fake
+                    # Screen Sharing reads it between its frames: when the app sent it (#7775).
+                    if port == 5900 and len(payload) == 6 and payload[0] == 5 and payload[1] & 24:
+                        FAKE_SCREEN["wheel_in"].append(time.time())
+                    tcp.sendall(payload)
         except OSError:
             pass
         finally:
@@ -26927,6 +27068,10 @@ class H(BaseHTTPRequestHandler):
         # ?features=managers: the roster event (hub/managers.go); the rest of ?features= keeps its old meaning here
         client = {"send": send, "features": {"managers"} if "managers" in asked else set(), "close": close_going_away}
         ws_token = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        if not ws_token:
+            ws_token = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
+        # A legacy fixture socket has no credential and keeps the mock's full-role default.
+        client["role"] = PAIR_DEVICE_ROLES.get(ws_token, "full")
         if MOCK_PAIR_TOKEN: print("mock: ws open host=%s token=%s" % (self.headers.get("Host"), ws_token[:9]), flush=True)
         if MOCK_PAIR_TOKEN and ws_token == MOCK_PAIR_TOKEN:
             def cut_after_grace():  # the hub cancels the pairing token's sockets once its grace is over
@@ -27050,6 +27195,9 @@ class H(BaseHTTPRequestHandler):
                 if msg.get("type") == "register_phone":
                     with FAULT_LOCK:
                         PHONES[self.connection] = {"send": send, "registration": msg}
+                    continue
+                if msg.get("type") in ("register_desktop", "unregister_desktop"):
+                    desktop_registration(self.connection, msg)
                     continue
                 if msg.get("type") == "tool_result":
                     with FAULT_LOCK:
@@ -27213,6 +27361,7 @@ class H(BaseHTTPRequestHandler):
             CLIENTS.pop(self.connection, None)
             PHONES.pop(self.connection, None)
             FS_WATCHES.pop(self.connection, None)
+        desktop_registration(self.connection, None)
         LIVE[:] = [x for x in LIVE if x[0] is not send]
         self.close_connection = True
 
@@ -27398,6 +27547,7 @@ MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展�
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|cjk|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); cjk: the report as varied in Chinese characters as a real one, ~800 distinct (#5076); a path serves that file's transcript items instead")
+MOCK_HELP.append("MOCK_QUESTION_CANCEL=1  Adds can_cancel to the network tests' Agent question and Persona's main ask_user card for MOCK_ASK_LONG=1|actions|swipe|review; /mock/reset restores both unanswered exactly once and clears their resolved and interaction history entries")
 MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
@@ -29490,6 +29640,44 @@ def plugins_route(handler, p, body):
 
 MOCK_HELP.append("MOCK_OUTSIDE_DIALOG=1  A Claude Code session in a plain terminal on the MacBook waits on a question only the computer "
                  "can answer (#5890): a message to it answers {ok, waits_on_computer}")
+
+
+# Desktop client registration (hub/desktops.go): `register_desktop` on an app's socket, withdrawn by `unregister_desktop`
+# (a hub with the feature desktop_unregister) or by the socket closing. GET /mock/desktops says who is registered now and
+# what happened in order, for the desktop shell's smoke (desktop/scripts/e2e-main.mjs).
+DESKTOPS = {}  # socket -> device_name
+DESKTOP_LOG = []  # {"event": "register" | "unregister" | "close", "device_name"}
+DESKTOP_LOCK = threading.Lock()
+
+
+def desktop_registration(connection, msg):
+    """A socket's register_desktop / unregister_desktop message, or its close (msg None)."""
+    if msg is not None and CLIENTS.get(connection, {}).get("role") != "full":
+        return  # hub/desktops.go: an answer-only watch never becomes desktop presence.
+    with DESKTOP_LOCK:
+        if msg is not None and msg.get("type") == "register_desktop":
+            name = msg.get("device_name") if isinstance(msg.get("device_name"), str) else ""
+            DESKTOPS[connection] = name
+            DESKTOP_LOG.append({"event": "register", "device_name": name})
+        elif connection in DESKTOPS:  # a withdrawal only of a socket that registered
+            DESKTOP_LOG.append({"event": "unregister" if msg is not None else "close", "device_name": DESKTOPS.pop(connection)})
+
+
+def desktops_state():
+    with DESKTOP_LOCK:
+        return {"registered": sorted(DESKTOPS.values()), "log": list(DESKTOP_LOG)}
+
+
+_features_without_desktops = features
+
+
+def features():
+    return _features_without_desktops() + (["desktops", "desktop_unregister"] if os.environ.get("MOCK_DESKTOPS") == "1" else [])
+
+
+MOCK_HELP.append("MOCK_DESKTOPS=1  features list desktops and desktop_unregister, so a desktop client withdraws its registration with "
+                 "unregister_desktop instead of closing its socket (an older hub). Either way GET /mock/desktops says who is registered "
+                 "and the register / unregister / close events in order")
 
 
 _features_without_agent_archives = features

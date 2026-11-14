@@ -429,6 +429,29 @@
       },
       "extractionState" : "manual"
     },
+    "#%lld goes into %@ on GitHub now (%@). %@ is kept, here and on GitHub." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "#%1$lld goes into %2$@ on GitHub now (%3$@). %4$@ is kept, here and on GitHub."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今すぐ GitHub で #%1$lld を「%3$@」で %2$@ にマージします。%4$@ ブランチは残ります（ローカルにも GitHub にも）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "现在就在 GitHub 上用「%3$@」把 #%1$lld 合进 %2$@。%4$@ 分支会保留（本地和 GitHub 上都不删）。"
+          }
+        }
+      }
+    },
     "%@" : {
       "shouldTranslate" : false,
       "localizations" : {
@@ -706,6 +729,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%@ (Default)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (Default)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@（デフォルト）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@（默认）"
+          }
+        }
+      }
     },
     "%@ (Recommended)" : {
       "localizations" : {
@@ -5872,6 +5918,28 @@
       },
       "extractionState" : "manual"
     },
+    "%lld ms round trip" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ms round trip"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "往復 %lld ms"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "往返 %lld ms"
+          }
+        }
+      }
+    },
     "%lld Picked" : {
       "localizations" : {
         "en" : {
@@ -8353,6 +8421,76 @@
         }
       }
     },
+    "%lld machines have an issue" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machine has an issue"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machines have an issue"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンに異常があります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台机器异常"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "%lld machines offline" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machine offline"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machines offline"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台がオフライン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台机器离线"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld machines running high" : {
       "localizations" : {
         "en" : {
@@ -9548,6 +9686,41 @@
       },
       "extractionState" : "manual"
     },
+    "%lld open comments" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld open comment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld open comments"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未解決のコメント%1$lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 条未解决意见"
+          }
+        }
+      }
+    },
     "%lld open · %lld shelved · %lld done" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9613,6 +9786,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "期限切れ%lld件"
+          }
+        }
+      }
+    },
+    "%lld passed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld passed"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld passed"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "成功%1$lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 项通过"
           }
         }
       }
@@ -10000,6 +10208,41 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%lld review comments added to the message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld review comment added to the message"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld review comments added to the message"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レビューコメント%1$lld件をメッセージに追加しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已把 %1$lld 条评审意见放进消息"
+          }
+        }
+      }
     },
     "%lld review drafts" : {
       "localizations" : {
@@ -11081,6 +11324,41 @@
       },
       "extractionState" : "manual"
     },
+    "%lld uncommitted changes go along. If the other branch has any of those files differently, nothing is switched and they are listed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld uncommitted change goes along. If the other branch has that file differently, nothing is switched and the file is listed."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld uncommitted changes go along. If the other branch has any of those files differently, nothing is switched and they are listed."
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットしていない変更%1$lld件も一緒に移ります。切り替え先でファイルが異なる場合は切り替えず、ファイルを表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 处未提交的改动会一起带过去。如果目标分支上这些文件有不一样的，就不切换，并列出文件。"
+          }
+        }
+      }
+    },
     "%lld unread [Assistant Sidebar b212c1]" : {
       "localizations" : {
         "en" : {
@@ -11597,6 +11875,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%lld%% lost" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld%% lost"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "損失 %lld%%"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢包 %lld%%"
+          }
+        }
+      }
     },
     "%lld%% similar" : {
       "localizations" : {
@@ -13767,6 +14067,75 @@
       },
       "extractionState" : "manual"
     },
+    "A draft pull request from %@ into %@ is opened on GitHub; everyone who can see the repository sees it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A draft pull request from %1$@ into %2$@ is opened on GitHub; everyone who can see the repository sees it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub に %1$@ から %2$@ への下書きプルリクエストを作成します。リポジトリを見られる人は全員見られます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会在 GitHub 上创建从 %1$@ 合进 %2$@ 的草稿拉取请求，能看到这个仓库的人都看得到。"
+          }
+        }
+      }
+    },
+    "A draft pull request from %@ into the default branch is opened on GitHub; everyone who can see the repository sees it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A draft pull request from %1$@ into the default branch is opened on GitHub; everyone who can see the repository sees it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub に %1$@ からデフォルトブランチへの下書きプルリクエストを作成します。リポジトリを見られる人は全員見られます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会在 GitHub 上创建从 %1$@ 合进默认分支的草稿拉取请求，能看到这个仓库的人都看得到。"
+          }
+        }
+      }
+    },
+    "A draft: mark it ready for review on GitHub before merging" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A draft: mark it ready for review on GitHub before merging"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下書きです。マージする前に GitHub でレビュー可能にしてください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这是草稿：先在 GitHub 上标为可评审，再合并"
+          }
+        }
+      }
+    },
     "A few steps to go" : {
       "localizations" : {
         "en" : {
@@ -14268,6 +14637,52 @@
       },
       "extractionState" : "manual"
     },
+    "A pull request from %@ into %@ is opened on GitHub; everyone who can see the repository sees it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A pull request from %1$@ into %2$@ is opened on GitHub; everyone who can see the repository sees it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub に %1$@ から %2$@ へのプルリクエストを作成します。リポジトリを見られる人は全員見られます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会在 GitHub 上创建从 %1$@ 合进 %2$@ 的拉取请求，能看到这个仓库的人都看得到。"
+          }
+        }
+      }
+    },
+    "A pull request from %@ into the default branch is opened on GitHub; everyone who can see the repository sees it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A pull request from %1$@ into the default branch is opened on GitHub; everyone who can see the repository sees it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub に %1$@ からデフォルトブランチへのプルリクエストを作成します。リポジトリを見られる人は全員見られます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会在 GitHub 上创建从 %1$@ 合进默认分支的拉取请求，能看到这个仓库的人都看得到。"
+          }
+        }
+      }
+    },
     "A question is waiting for you" : {
       "localizations" : {
         "en" : {
@@ -14428,6 +14843,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "A review comment on pull request #%lld at %@ (that code has changed since): please check whether it still applies and address it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A review comment on pull request #%1$lld at %2$@ (that code has changed since): please check whether it still applies and address it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プルリクエスト #%1$lld の %2$@ へのレビューコメント（その後コードが変わっています）：まだ当てはまるか確認してから対応してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉取请求 #%1$lld 在 %2$@ 的一条评审意见（那段代码之后改过）：请先确认它是否还成立，再处理。"
+          }
+        }
+      }
+    },
+    "A review comment on pull request #%lld at %@: please address it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A review comment on pull request #%1$lld at %2$@: please address it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プルリクエスト #%1$lld の %2$@ へのレビューコメント：対応してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉取请求 #%1$lld 在 %2$@ 的一条评审意见：请处理。"
+          }
+        }
+      }
     },
     "A setting here comes before every rule below. Removing it puts the chat or document back under the rules." : {
       "extractionState" : "manual",
@@ -17228,6 +17689,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Added to the message: it goes with your next message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added to the message: it goes with your next message"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージに追加しました。次のメッセージと一緒に送られます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已放进消息：会随下一条消息发给 Agent"
+          }
+        }
+      }
     },
     "Added to to-dos" : {
       "extractionState" : "manual",
@@ -23020,6 +23504,29 @@
       },
       "extractionState" : "manual"
     },
+    "Applied with conflicts in these files: resolve them, then commit. The stash is kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applied with conflicts in these files: resolve them, then commit. The stash is kept."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用しましたが、これらのファイルで競合しています。解決してからコミットしてください。スタッシュは残してあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已应用，但这些文件有冲突：解决后再提交。贮藏仍保留。"
+          }
+        }
+      }
+    },
     "Applies To" : {
       "localizations" : {
         "en" : {
@@ -23065,6 +23572,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Apply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用"
+          }
+        }
+      }
     },
     "Apply %lld %@" : {
       "comment" : "BeautifulUI looks this up in the app's catalog (#5574)",
@@ -23411,6 +23941,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Approved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approved"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已批准"
+          }
+        }
+      }
     },
     "Apps Allowed for the Assistant" : {
       "localizations" : {
@@ -28240,6 +28793,29 @@
       },
       "extractionState" : "manual"
     },
+    "Branches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Branches"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支"
+          }
+        }
+      }
+    },
     "Briefing" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -28306,6 +28882,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "明るさ：%1$@"
+          }
+        }
+      }
+    },
+    "Bring the changes back and keep this stash" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bring the changes back and keep this stash"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更を戻し、スタッシュは残す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改动拿回来，贮藏留着"
+          }
+        }
+      }
+    },
+    "Bring the changes back and remove this stash" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bring the changes back and remove this stash"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更を戻し、スタッシュは削除する"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改动拿回来，贮藏删掉"
           }
         }
       }
@@ -29225,6 +29847,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Choose the Fastest Route Automatically" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose the Fastest Route Automatically"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最速の経路を自動で選ぶ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动选择最快的线路"
+          }
+        }
+      }
     },
     "CI" : {
       "extractionState" : "manual",
@@ -32785,6 +33429,52 @@
       },
       "extractionState" : "manual"
     },
+    "Changes requested" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changes requested"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更を要求"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要求修改"
+          }
+        }
+      }
+    },
+    "Changes stashed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changes stashed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更をスタッシュしました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收起改动"
+          }
+        }
+      }
+    },
     "Changes take effect from the next run. Current tasks aren't interrupted and past data isn't reprocessed. Permission settings don't change with the model." : {
       "localizations" : {
         "en" : {
@@ -34253,6 +34943,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Checks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checks"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チェック"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查"
+          }
+        }
+      }
     },
     "Checks for itself" : {
       "extractionState" : "manual",
@@ -35764,6 +36477,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. iOS asks for permission the first time Claude uses one, or when you turn it on here; Health asks only here. If you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. iOS asks for permission the first time Claude uses one, or when you turn it on here; Health asks only here. If you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オンにしたデータは、Claudeがphone_*ツールで読み取れます。予定やリマインダーの作成などの書き込みは、先にiPhoneで確認します。Claudeが初めて使うとき、またはここでオンにしたときに、システムの許可を求めます（ヘルスケアはここでのみ）。以前に拒否した場合は設定に移動します。ハブがiPhoneにアクセスできるのは、Personaがフォアグラウンドにある（またはバックグラウンドに移った直後の）ときだけです。iOSではメッセージ、メモ、他社製Appのデータは利用できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开的数据，Claude 可以通过 phone_* 工具读取；新建日程、提醒等写操作会先在手机上问你。Claude 第一次用到某项数据时，或你在这里打开它时，系统会请求权限；健康数据只在这里请求。以前拒绝过的会跳到系统设置。Persona 在前台（或刚切到后台）时，hub 才能调到手机。iOS 不开放短信、备忘录、第三方 App 的数据。"
+          }
+        }
+      }
     },
     "Claude desktop app" : {
       "localizations" : {
@@ -37548,6 +38284,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Closed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Closed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クローズ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭"
+          }
+        }
+      }
     },
     "Closed %lld terminals" : {
       "extractionState" : "manual",
@@ -44435,6 +45194,29 @@
         }
       }
     },
+    "Couldn't Read the Branches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Read the Branches"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチを読み込めませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读不到分支"
+          }
+        }
+      }
+    },
     "Couldn't Read the Dev Servers" : {
       "localizations" : {
         "en" : {
@@ -47149,6 +47931,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't read the pull request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the pull request"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プルリクエストを読み込めませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读不到拉取请求"
+          }
+        }
+      }
+    },
     "Couldn't read the relationships: %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -49143,6 +49948,52 @@
       },
       "extractionState" : "manual"
     },
+    "Create %@?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create %1$@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ を作成しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建 %1$@？"
+          }
+        }
+      }
+    },
+    "Create Branch “%@” from Here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create Branch “%1$@” from Here"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここからブランチ「%1$@」を作成"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从这里新建分支「%1$@」"
+          }
+        }
+      }
+    },
     "Create a custom app on the Lark Open Platform and enable the Bot capability" : {
       "localizations" : {
         "en" : {
@@ -49372,6 +50223,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Created branch %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Created branch %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチ %1$@ を作成しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已新建分支 %1$@"
+          }
+        }
+      }
     },
     "Credentials are stored encrypted on the hub and only given to this channel. You may need to pair once afterward; whoever pairs becomes this channel's owner." : {
       "localizations" : {
@@ -50961,6 +51835,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標準"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认"
+          }
+        }
+      }
     },
     "Default (no background)" : {
       "localizations" : {
@@ -55533,6 +56430,29 @@
       },
       "extractionState" : "manual"
     },
+    "Don't Merge by Itself" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Don't Merge by Itself"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動でマージしない"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不要自动合并"
+          }
+        }
+      }
+    },
     "Don't Read" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -57094,6 +58014,52 @@
         }
       }
     },
+    "Drop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "破棄"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃"
+          }
+        }
+      }
+    },
+    "Drop This Stash?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop This Stash?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このスタッシュを破棄しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃这份贮藏？"
+          }
+        }
+      }
+    },
     "Drop to add to the message" : {
       "localizations" : {
         "en" : {
@@ -57116,6 +58082,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Drop…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "破棄…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃…"
+          }
+        }
+      }
     },
     "Due" : {
       "extractionState" : "manual",
@@ -61617,6 +62606,51 @@
       },
       "extractionState" : "manual"
     },
+    "Faster" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faster"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速め"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较快"
+          }
+        }
+      }
+    },
+    "Faster route" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faster route"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "より速い経路"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找到更快的线路"
+          }
+        }
+      }
+    },
     "FYI" : {
       "localizations" : {
         "en" : {
@@ -63083,6 +64117,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在「%1$@」里查找"
+          }
+        }
+      }
+    },
+    "Find or name a branch" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Find or name a branch"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチを検索、または新しい名前"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查找或输入新分支名"
           }
         }
       }
@@ -65729,6 +66786,52 @@
         }
       }
     },
+    "GitHub CLI (gh) is not installed on that computer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub CLI (gh) is not installed on that computer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのコンピュータに GitHub CLI（gh）がインストールされていません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那台电脑上没装 GitHub CLI（gh）"
+          }
+        }
+      }
+    },
+    "GitHub CLI (gh) is not signed in on that computer: run gh auth login there" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub CLI (gh) is not signed in on that computer: run gh auth login there"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのコンピュータの GitHub CLI（gh）がサインインしていません。そこで gh auth login を実行してください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那台电脑上的 GitHub CLI（gh）没登录：在那台电脑上运行 gh auth login"
+          }
+        }
+      }
+    },
     "GitHub markets: a private repo needs a read-only token (read access to this repo's Contents). A token helps a public repo too: it raises the limit from 60 reads an hour (shared by your whole network) to 5,000. Choose Public repositories with no permissions. It's stored encrypted on the hub, sent only to the market itself, and not shown again once saved. git: markets use the hub machine's SSH credentials and don't need one." : {
       "localizations" : {
         "en" : {
@@ -67107,6 +68210,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Hand All to Agent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hand All to Agent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてエージェントに任せる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部交给 Agent"
+          }
+        }
+      }
     },
     "Hand Back Report" : {
       "localizations" : {
@@ -69199,6 +70325,29 @@
         }
       }
     },
+    "How" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "方法"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "方式"
+          }
+        }
+      }
+    },
     "How It Runs" : {
       "localizations" : {
         "en" : {
@@ -69290,6 +70439,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "How far a computer's screen scrolls when you drag two fingers on it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How far a computer's screen scrolls when you drag two fingers on it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータの画面を2本指でドラッグしたときの、スクロールの速さです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用两指在电脑画面上拖动时，画面滚动的快慢。"
+          }
+        }
+      }
     },
     "How full your subscription windows are, and today's tokens. [Home Widgets]" : {
       "extractionState" : "manual",
@@ -71520,6 +72692,29 @@
         }
       }
     },
+    "In the Message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In the Message"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージに追加済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已放进消息"
+          }
+        }
+      }
+    },
     "In the first-run setup, choose to import data from Chrome (or another browser): your site sign-ins come along. macOS asks for the keychain password several times; enter that Mac's login password each time. You can skip importing" : {
       "localizations" : {
         "en" : {
@@ -71745,6 +72940,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "受信トレイ"
+          }
+        }
+      }
+    },
+    "Include New Files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Include New Files"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいファイルも含める"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包括新文件"
           }
         }
       }
@@ -73420,6 +74638,29 @@
       },
       "extractionState" : "manual"
     },
+    "Into" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Into"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マージ先"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合进"
+          }
+        }
+      }
+    },
     "Invalid arguments; nothing will be saved to Health: %@" : {
       "localizations" : {
         "en" : {
@@ -73833,6 +75074,29 @@
         }
       }
     },
+    "It conflicts with %@: resolve that first" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It conflicts with %1$@: resolve that first"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ と競合しています。先に解決してください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "和 %1$@ 有冲突：先解决冲突"
+          }
+        }
+      }
+    },
     "It didn't go through" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -74242,6 +75506,52 @@
         }
       }
     },
+    "It merges once its checks and reviews pass" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It merges once its checks and reviews pass"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チェックとレビューが通るとマージされます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查和评审通过后会自动合并"
+          }
+        }
+      }
+    },
+    "It no longer merges by itself" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It no longer merges by itself"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動ではマージしなくなりました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不再自动合并"
+          }
+        }
+      }
+    },
     "It now has its own credentials, which you can revoke on their own in the device list." : {
       "localizations" : {
         "en" : {
@@ -74330,6 +75640,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "1日中録音し、ハブが毎晩その日のまとめを作成します。"
+          }
+        }
+      }
+    },
+    "It stays open; nothing merges until you merge it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It stays open; nothing merges until you merge it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オープンのままです。あなたがマージするまでマージされません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它会保持开启；你不合并就不会合并。"
           }
         }
       }
@@ -84207,6 +85540,29 @@
       },
       "extractionState" : "manual"
     },
+    "Merge #%lld?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merge #%1$lld?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "#%1$lld をマージしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合并 #%1$lld？"
+          }
+        }
+      }
+    },
     "Merge %@ into %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -84249,6 +85605,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "把“%1$@”并入优先级 %2$lld"
+          }
+        }
+      }
+    },
+    "Merge Commit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merge Commit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マージコミット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合并提交"
+          }
+        }
+      }
+    },
+    "Merge When Ready" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merge When Ready"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "準備ができたらマージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过后自动合并"
+          }
+        }
+      }
+    },
+    "Merge When Ready?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merge When Ready?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "準備ができたらマージしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过后自动合并？"
           }
         }
       }
@@ -84322,6 +85747,29 @@
       },
       "extractionState" : "manual"
     },
+    "Merged #%lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merged #%1$lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "#%1$lld をマージしました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已合并 #%1$lld"
+          }
+        }
+      }
+    },
     "Merged [Closeout]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -84367,6 +85815,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Merges when ready" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merges when ready"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "準備ができたらマージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过后自动合并"
+          }
+        }
+      }
     },
     "Mermaid diagram" : {
       "localizations" : {
@@ -88972,6 +90443,28 @@
       },
       "extractionState" : "manual"
     },
+    "Network changed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network changed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ネットワークが変わった"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络变了"
+          }
+        }
+      }
+    },
     "Network on, scripts still off" : {
       "localizations" : {
         "en" : {
@@ -89890,6 +91383,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "New Pull Request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Pull Request"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいプルリクエスト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建拉取请求"
+          }
+        }
+      }
     },
     "New Scheduled Task" : {
       "localizations" : {
@@ -92695,6 +94211,29 @@
       },
       "extractionState" : "manual"
     },
+    "No branch matches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No branch matches"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一致するブランチはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的分支"
+          }
+        }
+      }
+    },
     "No changes to show" : {
       "localizations" : {
         "zh-Hans" : {
@@ -94416,6 +95955,29 @@
       },
       "extractionState" : "manual"
     },
+    "No open review comments" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No open review comments"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未解決のレビューコメントはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有未解决的评审意见"
+          }
+        }
+      }
+    },
     "No open to-dos" : {
       "localizations" : {
         "en" : {
@@ -95329,6 +96891,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "サブスクリプションの使用量はまだありません"
+          }
+        }
+      }
+    },
+    "No such branch, or that name can't be used" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No such branch, or that name can't be used"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのブランチはないか、その名前は使えません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有这个分支，或者这个名字不能用"
           }
         }
       }
@@ -97930,6 +99515,29 @@
       },
       "extractionState" : "manual"
     },
+    "Not mergeable yet: its checks or reviews are still needed. It can merge by itself once they pass." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not mergeable yet: its checks or reviews are still needed. It can merge by itself once they pass."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだマージできません。チェックかレビューが必要です。通ったら自動でマージするよう設定できます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还不能合并：检查或评审还没通过。可以设成通过后自动合并。"
+          }
+        }
+      }
+    },
     "Not needed for public markets" : {
       "localizations" : {
         "en" : {
@@ -99868,6 +101476,29 @@
         }
       }
     },
+    "Nothing stashed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing stashed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有收起的改动"
+          }
+        }
+      }
+    },
     "Nothing to clean up" : {
       "localizations" : {
         "en" : {
@@ -100002,6 +101633,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有可发送的内容：剪贴板是空的，或者没有允许粘贴"
+          }
+        }
+      }
+    },
+    "Nothing to stash, or that stash is gone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing to stash, or that stash is gone"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュする変更がないか、そのスタッシュはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有可收起的改动，或者那份贮藏已经没了"
           }
         }
       }
@@ -100974,6 +102628,29 @@
       },
       "extractionState" : "manual"
     },
+    "Off by default. After you enable this, a workout of at least 10 minutes is reported right after it is saved to Health, even while Persona is closed: its measurements go to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off by default. After you enable this, a workout of at least 10 minutes is reported right after it is saved to Health, even while Persona is closed: its measurements go to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "初期設定はオフです。有効にすると、10分以上のワークアウトがヘルスケアに保存された直後に、Persona を開いていなくてもレポートを作成します。測定データは hub に送信されます。有効にする前の運動は取り込みません。オフにしても、送信済みのレポートは完了する場合があります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认关闭。开启后，至少持续 10 分钟的运动一存进「健康」就会生成报告，Persona 没打开也一样：运动数据会发送到你的 hub 生成报告。不导入开启前的运动。关闭后，已提交的报告仍可能完成。"
+          }
+        }
+      }
+    },
     "Off by default. After you enable this, opening Persona checks for new workouts of at least 10 minutes and sends their measurements to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -101571,6 +103248,29 @@
         }
       }
     },
+    "On %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ に切り替えました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已切到 %1$@"
+          }
+        }
+      }
+    },
     "On %@, open Terminal, paste this line and press Return:" : {
       "localizations" : {
         "en" : {
@@ -101639,6 +103339,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "On the same Wi-Fi or Tailscale as your computer, the screen comes straight from it, faster and steadier. Turned off, it always goes through your hub." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On the same Wi-Fi or Tailscale as your computer, the screen comes straight from it, faster and steadier. Turned off, it always goes through your hub."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータと同じ Wi-Fi や Tailscale にいるときは、画面がコンピュータから直接届き、速く安定します。オフにすると、常にハブを経由します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "和电脑在同一 Wi-Fi 或 Tailscale 上时，画面直接从电脑传过来，更快更稳。关掉后始终经 hub 中转。"
+          }
+        }
+      }
     },
     "On This iPhone [Meeting Transcription]" : {
       "extractionState" : "manual",
@@ -102423,6 +104145,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Once its checks and reviews pass, GitHub merges it into %@ (%@) without asking again. %@ is kept, here and on GitHub." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Once its checks and reviews pass, GitHub merges it into %1$@ (%2$@) without asking again. %3$@ is kept, here and on GitHub."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チェックとレビューが通ると、GitHub が「%2$@」で %1$@ にマージします。もう一度は聞きません。%3$@ ブランチは残ります（ローカルにも GitHub にも）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查和评审都通过后，GitHub 会用「%2$@」把它合进 %1$@，不再询问。%3$@ 分支会保留（本地和 GitHub 上都不删）。"
+          }
+        }
+      }
     },
     "Once pasted, it's tested once: a very short request that may cost a little." : {
       "localizations" : {
@@ -104694,6 +106439,29 @@
       },
       "extractionState" : "manual"
     },
+    "Open Pull Request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Pull Request"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プルリクエストを作成"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建拉取请求"
+          }
+        }
+      }
+    },
     "Open QQ Mail on the web" : {
       "localizations" : {
         "en" : {
@@ -105151,6 +106919,29 @@
         }
       }
     },
+    "Open a Pull Request?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open a Pull Request?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プルリクエストを作成しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建拉取请求？"
+          }
+        }
+      }
+    },
     "Open a Talk Window" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -105242,6 +107033,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Open as Draft" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open as Draft"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下書きとして作成"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作为草稿创建"
+          }
+        }
+      }
     },
     "Open directions to %@ in Maps [Place Map]" : {
       "extractionState" : "manual",
@@ -105565,6 +107379,29 @@
       },
       "extractionState" : "manual"
     },
+    "Open on GitHub" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open on GitHub"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub で開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 GitHub 上打开"
+          }
+        }
+      }
+    },
     "Open on This Device" : {
       "localizations" : {
         "en" : {
@@ -105610,6 +107447,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Open review comments · %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open review comments · %1$lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未解決のレビューコメント · %1$lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未解决的评审意见 · %1$lld"
+          }
+        }
+      }
     },
     "Open terminal" : {
       "localizations" : {
@@ -107989,6 +109849,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Passed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "成功"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过"
+          }
+        }
+      }
     },
     "Password" : {
       "localizations" : {
@@ -113169,6 +115052,29 @@
       },
       "extractionState" : "manual"
     },
+    "Pop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pop"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り出す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取回"
+          }
+        }
+      }
+    },
     "Port" : {
       "localizations" : {
         "en" : {
@@ -113762,6 +115668,50 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Previous route dropped" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous route dropped"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前の経路が切れた"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一条线路断了"
+          }
+        }
+      }
+    },
+    "Previous route got worse" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous route got worse"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前の経路が不安定になった"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一条线路变差了"
+          }
+        }
+      }
     },
     "Previous Version" : {
       "localizations" : {
@@ -114637,6 +116587,52 @@
       },
       "extractionState" : "manual"
     },
+    "Pull Request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pull Request"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プルリクエスト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉取请求"
+          }
+        }
+      }
+    },
+    "Pull request opened" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pull request opened"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プルリクエストを作成しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已创建拉取请求"
+          }
+        }
+      }
+    },
     "Pulled range" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -114794,6 +116790,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "推送改动"
+          }
+        }
+      }
+    },
+    "Push the branch first, then open a pull request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Push the branch first, then open a pull request"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先にブランチをプッシュしてからプルリクエストを作成します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先推送分支，再创建拉取请求"
+          }
+        }
+      }
+    },
+    "Push the branch first: a pull request needs every commit on GitHub" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Push the branch first: a pull request needs every commit on GitHub"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先にブランチをプッシュしてください。プルリクエストにはすべてのコミットが GitHub に必要です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先推送分支：拉取请求需要所有提交都在 GitHub 上"
           }
         }
       }
@@ -115188,6 +117230,29 @@
         }
       }
     },
+    "Puts your uncommitted changes away so the folder is clean; bring them back from the list below." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puts your uncommitted changes away so the folder is clean; bring them back from the list below."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットしていない変更をしまって作業フォルダをきれいにします。下の一覧から戻せます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把未提交的改动先收起来，工作区就干净了；之后可以从下面取回。"
+          }
+        }
+      }
+    },
     "QR Code" : {
       "localizations" : {
         "en" : {
@@ -115233,6 +117298,29 @@
           }
         }
       }
+    },
+    "Question closed without an answer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Question closed without an answer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答せずに質問を閉じました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭提问，未回复"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Question [Ask Persona Intent 33a861]" : {
       "localizations" : {
@@ -115923,6 +118011,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Reports contain measurement cards, heart-rate and pace charts when data is available, a comparison with your recent workouts of the same kind, and a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reports contain measurement cards, heart-rate and pace charts when data is available, a comparison with your recent workouts of the same kind, and a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レポートには測定値カード、データがある場合は心拍数とペースのグラフ、最近の同じ種類のワークアウトとの比較、簡潔なまとめが含まれます。ヘルスケアの読み取り権限は iOS の設定で管理できます。結果が空の場合、権限が許可されていない可能性もあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报告包含数据卡片、有数据时的心率图和配速图、与最近同类运动的对比，以及简短总结。健康数据读取权限可在 iOS 设置中管理；没有读取到运动也可能是未授予权限。"
+          }
+        }
+      }
+    },
+    "Route [Screen Stats]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Route"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "経路"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "线路"
+          }
+        }
+      }
     },
     "RTF document" : {
       "localizations" : {
@@ -120177,6 +122311,29 @@
       },
       "extractionState" : "manual"
     },
+    "Remote" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモート"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端"
+          }
+        }
+      }
+    },
     "Remote updates fetched" : {
       "localizations" : {
         "en" : {
@@ -122448,29 +124605,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "実行中のプロセスが報告したバージョン"
-          }
-        }
-      }
-    },
-    "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "レポートには測定値カード、データがある場合は心拍数グラフ、簡潔なまとめが含まれます。ヘルスケアの読み取り権限は iOS の設定で管理できます。結果が空の場合、権限が許可されていない可能性もあります。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "报告包含数据卡片、有数据时的心率图，以及简短总结。健康数据读取权限可在 iOS 设置中管理；没有读取到运动也可能是未授予权限。"
           }
         }
       }
@@ -124962,6 +127096,28 @@
       },
       "extractionState" : "manual"
     },
+    "Round trip to the hub %lld ms" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Round trip to the hub %lld ms"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブまでの往復 %lld ms"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "到 hub 往返 %lld ms"
+          }
+        }
+      }
+    },
     "Rounds that another conversation, a scheduled task or a follow-up started in the main chat or a leader conversation show as one line you can open. Rounds that ask or tell you something stay shown." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -126154,6 +128310,41 @@
       },
       "extractionState" : "manual"
     },
+    "Running on %lld machines" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Running on %1$lld machine"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Running on %1$lld machines"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンで実行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %1$lld 台机器上运行"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Running the tests: 128 of 160 pass so far. [Layout sample]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -126774,6 +128965,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Safe stash removal is unavailable for this repository." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safe stash removal is unavailable for this repository."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このリポジトリではスタッシュを安全に削除できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个仓库不支持安全删除贮藏。"
+          }
+        }
+      }
     },
     "Safely pulls the latest upstream code without merging or overwriting local changes" : {
       "localizations" : {
@@ -128385,6 +130599,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Scroll Speed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scroll Speed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スクロールの速さ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "滚动速度"
+          }
+        }
+      }
     },
     "Scroll up to load earlier output" : {
       "localizations" : {
@@ -136833,6 +139070,29 @@
       },
       "extractionState" : "manual"
     },
+    "Skip [Question Card]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skip"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキップ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳过"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Skipped" : {
       "localizations" : {
         "en" : {
@@ -137061,6 +139321,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Slower" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slower"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遅め"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较慢"
+          }
+        }
+      }
     },
     "Slowest and most careful" : {
       "localizations" : {
@@ -139901,6 +142184,41 @@
       },
       "extractionState" : "manual"
     },
+    "Starting on %lld machines" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Starting on %1$lld machine"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Starting on %1$lld machines"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンで起動中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在 %1$lld 台机器上启动"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Starting tasks [Agent Follow-Up]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -140310,6 +142628,144 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "启动…"
+          }
+        }
+      }
+    },
+    "Stash Changes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stash Changes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更をスタッシュ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起改动"
+          }
+        }
+      }
+    },
+    "Stash applied (it is kept)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stash applied (it is kept)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用しました（スタッシュは残ります）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已应用（贮藏仍保留）"
+          }
+        }
+      }
+    },
+    "Stash dropped" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stash dropped"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "破棄しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已丢弃"
+          }
+        }
+      }
+    },
+    "Stash popped" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stash popped"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り出しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取回"
+          }
+        }
+      }
+    },
+    "Stashed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stashed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュ済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已贮藏"
+          }
+        }
+      }
+    },
+    "Stashes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stashes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "贮藏"
           }
         }
       }
@@ -141552,6 +144008,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "停在「%1$@」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Stopped on %lld machines" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Stopped on %1$lld machine"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Stopped on %1$lld machines"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンで停止中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台机器已停止"
           }
         }
       },
@@ -143550,6 +146041,29 @@
       },
       "extractionState" : "manual"
     },
+    "Switch to %@?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to %1$@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ に切り替えますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到 %1$@？"
+          }
+        }
+      }
+    },
     "Switch to new version" : {
       "localizations" : {
         "en" : {
@@ -145453,6 +147967,29 @@
         }
       }
     },
+    "Tapping a remote branch makes a local branch here that tracks it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tapping a remote branch makes a local branch here that tracks it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートのブランチをタップすると、それを追跡するローカルブランチをここに作ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点远端分支会在这里建一个跟踪它的本地分支。"
+          }
+        }
+      }
+    },
     "Target Language" : {
       "localizations" : {
         "en" : {
@@ -147154,6 +149691,29 @@
       },
       "extractionState" : "manual"
     },
+    "That Mac will show a window: choose Open System Settings, then turn on Persona Screen." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That Mac will show a window: choose Open System Settings, then turn on Persona Screen."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その Mac にウインドウが表示されます。「システム設定を開く」を選んでから、Persona Screen をオンにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那台 Mac 上会弹一个窗口，点「打开系统设置」，然后打开 Persona Screen。"
+          }
+        }
+      }
+    },
     "That commit isn't in this repository" : {
       "localizations" : {
         "en" : {
@@ -147450,6 +150010,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The computer's firewall blocks direct connections" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The computer's firewall blocks direct connections"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータのファイアウォールが直接接続を止めています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑的防火墙挡住了直连"
+          }
+        }
+      }
     },
     "The Fullest [Home Widgets]" : {
       "extractionState" : "manual",
@@ -154573,6 +157155,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "长期授权刚才有变动，请再试一次。"
+          }
+        }
+      }
+    },
+    "The stash list changed. Refresh and select the stash again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The stash list changed. Refresh and select the stash again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュ一覧が変更されました。更新して再度選択してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "贮藏列表变了。刷新后重新选择贮藏。"
           }
         }
       }
@@ -166365,6 +168970,28 @@
         }
       }
     },
+    "Turned off in Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turned off in Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定でオフ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在设置中关闭"
+          }
+        }
+      }
+    },
     "Turns with no output" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -169511,6 +172138,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更新「%1$@」上的 Persona 后能看到更多信息，比如创建时间和谁能打开它。"
+          }
+        }
+      }
+    },
+    "Update Persona on this computer to apply, pop or drop stashes safely." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Persona on this computer to apply, pop or drop stashes safely."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュを安全に適用・取り出し・削除するには、このコンピュータの Persona を更新してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请更新这台电脑上的 Persona，才能安全地应用、取回或丢弃贮藏。"
           }
         }
       }
@@ -176284,6 +178934,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "What the changes are (optional)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What the changes are (optional)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更の説明（任意）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些改动是什么（可不填）"
+          }
+        }
+      }
     },
     "What to Review" : {
       "localizations" : {
@@ -191351,6 +194024,2191 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "「%1$@」を元に戻せません：同じ名前の新しいプロジェクトがあります。"
+          }
+        }
+      }
+    },
+    "“%@” is deleted and can't be brought back from here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%1$@” is deleted and can't be brought back from here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」は削除され、ここからは戻せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」会被删除，在这里无法找回。"
+          }
+        }
+      }
+    },
+    "Topic [Knowledge]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Topic"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主题"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "トピック"
+          }
+        }
+      }
+    },
+    "Concept [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concept"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "概念"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "概念"
+          }
+        }
+      }
+    },
+    "Decision [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Decision"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "决定"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "決定"
+          }
+        }
+      }
+    },
+    "How To [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How to"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "做法"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "やり方"
+          }
+        }
+      }
+    },
+    "Pitfall [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pitfall"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "坑"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "落とし穴"
+          }
+        }
+      }
+    },
+    "Fact [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fact"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "事实"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "事実"
+          }
+        }
+      }
+    },
+    "Open Question [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open question"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待定"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未決"
+          }
+        }
+      }
+    },
+    "Point [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Point"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知识点"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ポイント"
+          }
+        }
+      }
+    },
+    "Cause [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cause"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原因"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原因"
+          }
+        }
+      }
+    },
+    "Why [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Why"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "理由"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "理由"
+          }
+        }
+      }
+    },
+    "From [Knowledge Point]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出典"
+          }
+        }
+      }
+    },
+    "Knowledge Point" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knowledge Point"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知识点"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジポイント"
+          }
+        }
+      }
+    },
+    "Knowledge Points" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knowledge Points"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知识点"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジポイント"
+          }
+        }
+      }
+    },
+    "No knowledge points under this topic yet." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No knowledge points under this topic yet."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个主题下还没有知识点。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このトピックにはまだナレッジポイントがありません。"
+          }
+        }
+      }
+    },
+    "Confirmed %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmed %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 确认"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ に確認"
+          }
+        }
+      }
+    },
+    ", [List Separator]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : ", "
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "、"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "、"
+          }
+        }
+      }
+    },
+    "%lld knowledge points" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld knowledge points"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条知识点"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジポイント %lld 件"
+          }
+        }
+      }
+    },
+    "Knowledge [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knowledge"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知识"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジ"
+          }
+        }
+      }
+    },
+    "by topic [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "by topic"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按主题"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "トピック別"
+          }
+        }
+      }
+    },
+    "Other [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Other"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その他"
+          }
+        }
+      }
+    },
+    "Points directly under “%@”, not in a subtopic" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Points directly under “%1$@”, not in a subtopic"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直接挂在「%1$@」下、没有再细分的知识点"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」の直下にあり、サブトピックに分かれていないポイント"
+          }
+        }
+      }
+    },
+    "Done [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        }
+      }
+    },
+    "Paused [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂停"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一時停止"
+          }
+        }
+      }
+    },
+    "Active [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Active"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进行中"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中"
+          }
+        }
+      }
+    },
+    "Not Rated [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not rated"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未定级"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未評価"
+          }
+        }
+      }
+    },
+    "Projects [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Projects"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロジェクト"
+          }
+        }
+      }
+    },
+    "by status [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "by status"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按状态"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "状態別"
+          }
+        }
+      }
+    },
+    "Summary [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Summary"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "概要"
+          }
+        }
+      }
+    },
+    "Goal [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Goal"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目標"
+          }
+        }
+      }
+    },
+    "My Role [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "My role"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我的角色"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自分の役割"
+          }
+        }
+      }
+    },
+    "Latest [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Latest"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新进展"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新の進捗"
+          }
+        }
+      }
+    },
+    "Main Chat Notes [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Main chat notes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话记录"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットの記録"
+          }
+        }
+      }
+    },
+    "Code Folders [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code folders"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码目录"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コードフォルダ"
+          }
+        }
+      }
+    },
+    "Related Chats [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Related chats"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关联会话"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "関連する会話"
+          }
+        }
+      }
+    },
+    "Related People [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Related people"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关联的人"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "関連する人"
+          }
+        }
+      }
+    },
+    "Knowledge Map" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knowledge Map"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知识导图"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジマップ"
+          }
+        }
+      }
+    },
+    "Map" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Map"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导图"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マップ"
+          }
+        }
+      }
+    },
+    "Topics [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Topics"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知识主题"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "トピック"
+          }
+        }
+      }
+    },
+    "%lld topics couldn't be read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld topics couldn't be read."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 个主题没读到。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 件のトピックを読み込めませんでした。"
+          }
+        }
+      }
+    },
+    "Sources [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sources"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来源"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出典"
+          }
+        }
+      }
+    },
+    "With a Summary [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "With a summary"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有摘要"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "概要あり"
+          }
+        }
+      }
+    },
+    "Knowledge Points Are Off" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knowledge Points Are Off"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知识点整理已关闭"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジポイントの整理はオフです"
+          }
+        }
+      }
+    },
+    "Turn on “Organize knowledge points by topic” in Settings › Knowledge Selection, and Persona starts curating in the background." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn on “Organize knowledge points by topic” in Settings › Knowledge Selection, and Persona starts curating in the background."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在「设置 › 知识选择」里打开「按主题整理知识点」，Persona 就会在后台开始整理。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「設定 › ナレッジの選択」で「ナレッジポイントをトピックごとに整理」をオンにすると、Persona がバックグラウンドで整理を始めます。"
+          }
+        }
+      }
+    },
+    "Open Knowledge Selection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Knowledge Selection"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开知识选择"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジの選択を開く"
+          }
+        }
+      }
+    },
+    "No Topics Yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Topics Yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有主题"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "トピックはまだありません"
+          }
+        }
+      }
+    },
+    "In the background, Persona pulls durable knowledge out of your project timelines and chats and files it by topic. The map fills in as it does." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In the background, Persona pulls durable knowledge out of your project timelines and chats and files it by topic. The map fills in as it does."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 会在后台从项目时间线和会话里整理出以后用得上的知识，按主题归类，整理出来导图就会慢慢填满。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona はバックグラウンドで、プロジェクトのタイムラインと会話から後で役立つ知識を取り出し、トピックごとに整理します。整理が進むにつれてマップが埋まっていきます。"
+          }
+        }
+      }
+    },
+    "No Projects Yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Projects Yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有项目"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロジェクトはまだありません"
+          }
+        }
+      }
+    },
+    "Projects appear as Persona sorts them out of your chats and Agents' work." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Projects appear as Persona sorts them out of your chats and Agents' work."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 从会话和 Agent 的工作里整理出项目后，就会显示在这里。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が会話や Agent の作業からプロジェクトを整理すると、ここに表示されます。"
+          }
+        }
+      }
+    },
+    "Knowledge Persona pulled out of project timelines and chats, filed by topic rather than by project: concepts, decisions, how-tos, pitfalls and facts. Select a topic or a point to see it here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knowledge Persona pulled out of project timelines and chats, filed by topic rather than by project: concepts, decisions, how-tos, pitfalls and facts. Select a topic or a point to see it here."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 从项目时间线和会话里整理出的知识，按主题而不是按项目归类：概念、决定、做法、坑和事实。选一个主题或知识点，在这里查看。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona がプロジェクトのタイムラインと会話から取り出した知識を、プロジェクトではなく主題ごとに整理したものです：概念、決定、やり方、落とし穴、事実。トピックかポイントを選ぶとここに表示されます。"
+          }
+        }
+      }
+    },
+    "Each project's goal, status and the main chat's notes, with its curated summary by section. Select a project to see it here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Each project's goal, status and the main chat's notes, with its curated summary by section. Select a project to see it here."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个项目的目标、状态和主对话的记录，以及后台整理的分节摘要。选一个项目，在这里查看。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各プロジェクトの目標、状態、メインチャットの記録と、セクションごとの概要です。プロジェクトを選ぶとここに表示されます。"
+          }
+        }
+      }
+    },
+    "What This Shows [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What This Shows"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这张图放了什么"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このマップの内容"
+          }
+        }
+      }
+    },
+    "Subtopics [Knowledge Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subtopics"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子主题"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブトピック"
+          }
+        }
+      }
+    },
+    "Open in Knowledge" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open in Knowledge"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在知识库中打开"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジで開く"
+          }
+        }
+      }
+    },
+    "Couldn't read the setting: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the setting: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读不到这项设置：%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定を読み込めませんでした：%1$@"
+          }
+        }
+      }
+    },
+    "Organize Knowledge Points by Topic" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organize Knowledge Points by Topic"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按主题整理知识点"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジポイントをトピックごとに整理"
+          }
+        }
+      }
+    },
+    "Open the Knowledge Map" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open the Knowledge Map"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开知识导图"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジマップを開く"
+          }
+        }
+      }
+    },
+    "In the background, Persona pulls durable knowledge (concepts, decisions, how-tos, pitfalls, facts) out of your project timelines and chats and files it by topic, using the knowledge base's model. Turning it off stops new curation; topics already organized stay." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In the background, Persona pulls durable knowledge (concepts, decisions, how-tos, pitfalls, facts) out of your project timelines and chats and files it by topic, using the knowledge base's model. Turning it off stops new curation; topics already organized stay."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 会在后台从项目时间线和会话里整理出以后用得上的知识（概念、决定、做法、踩过的坑、事实），按主题归类，使用知识库的模型。关掉后不再整理新的，已经整理好的主题会保留。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona はバックグラウンドで、プロジェクトのタイムラインと会話から後で役立つ知識（概念、決定、やり方、落とし穴、事実）を取り出し、トピックごとに整理します。ナレッジベースのモデルを使います。オフにすると新しい整理は止まり、整理済みのトピックは残ります。"
+          }
+        }
+      }
+    },
+    "%lld topics and %lld knowledge points as one map" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld topics and %2$lld knowledge points as one map"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 个主题、%2$lld 条知识点画成一张图"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 件のトピックと %2$lld 件のナレッジポイントを 1 枚のマップに"
+          }
+        }
+      }
+    },
+    "Topics [Knowledge Map Count]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Topics"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主题"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "トピック"
+          }
+        }
+      }
+    },
+    "Ready to merge into %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ready to merge into %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ にマージできます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可以合进 %1$@"
+          }
+        }
+      }
+    },
+    "Rebase" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rebase"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リベース"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "变基"
+          }
+        }
+      }
+    },
+    "Review required" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Review required"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レビューが必要"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要评审"
+          }
+        }
+      }
+    },
+    "Set to merge by itself once its checks and reviews pass" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set to merge by itself once its checks and reviews pass"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チェックとレビューが通ったら自動でマージするよう設定済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已设成检查和评审通过后自动合并"
+          }
+        }
+      }
+    },
+    "Squash" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Squash"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スカッシュ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "压缩合并"
+          }
+        }
+      }
+    },
+    "Stop Merging by Itself?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop Merging by Itself?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動マージをやめますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不再自动合并？"
+          }
+        }
+      }
+    },
+    "The Default Branch" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Default Branch"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトブランチ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认分支"
+          }
+        }
+      }
+    },
+    "The title starts as the last commit's subject." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The title starts as the last commit's subject."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイトルには最後のコミットの件名が入っています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题先填最近一次提交的说明。"
+          }
+        }
+      }
+    },
+    "This Branch Has No Pull Request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Branch Has No Pull Request"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このブランチにはプルリクエストがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个分支没有拉取请求"
+          }
+        }
+      }
+    },
+    "This branch has no pull request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This branch has no pull request"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このブランチにはプルリクエストがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个分支没有拉取请求"
+          }
+        }
+      }
+    },
+    "This branch has no pull request yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This branch has no pull request yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このブランチにはまだプルリクエストがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个分支还没有拉取请求"
+          }
+        }
+      }
+    },
+    "This repository has no GitHub remote" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This repository has no GitHub remote"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このリポジトリには GitHub のリモートがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个仓库没有 GitHub 远端"
+          }
+        }
+      }
+    },
+    "gh isn't installed on this computer: install it and sign in to see the pull request here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "gh isn't installed on this computer: install it and sign in to see the pull request here"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピュータに gh がありません。インストールしてサインインすると、ここにプルリクエストが表示されます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑没装 gh：装好并登录后，这里能看到拉取请求"
+          }
+        }
+      }
+    },
+    "gh isn't signed in on this computer (gh auth login)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "gh isn't signed in on this computer (gh auth login)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピュータの gh がサインインしていません（gh auth login）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑上的 gh 没登录（gh auth login）"
+          }
+        }
+      }
+    },
+    "git.pr.merge" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merge"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合并"
+          }
+        }
+      }
+    },
+    "git.pr.state.open" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オープン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启"
+          }
+        }
+      }
+    },
+    "git.pull" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pull"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉取"
+          }
+        }
+      }
+    },
+    "Clearer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clearer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高画質"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清晰一些"
+          }
+        }
+      }
+    },
+    "Data Saver" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data Saver"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "データ節約"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "省流量"
+          }
+        }
+      }
+    },
+    "Live Screen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Screen"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ画面"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时屏幕"
+          }
+        }
+      }
+    },
+    "On Mobile Data" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On Mobile Data"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モバイルデータ通信中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在使用移动数据"
+          }
+        }
+      }
+    },
+    "Quality on Mobile Data" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quality on Mobile Data"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モバイルデータ通信時の画質"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移动数据下的画质"
+          }
+        }
+      }
+    },
+    "About 0.6 GB an hour" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About 0.6 GB an hour"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1時間あたり約0.6 GB"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "约 0.6 GB / 小时"
+          }
+        }
+      }
+    },
+    "About 0.2–0.3 GB an hour" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About 0.2–0.3 GB an hour"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1時間あたり約0.2〜0.3 GB"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "约 0.2–0.3 GB / 小时"
+          }
+        }
+      }
+    },
+    "The screen is saving data. Make it clearer?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The screen is saving data. Make it clearer?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面はデータを節約しています。高画質にしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面正在省流量，要清晰一些吗？"
+          }
+        }
+      }
+    },
+    "For watching a computer's screen on mobile data or a personal hotspot. On Wi-Fi the picture is always as clear as the connection allows, and with Low Data Mode on it always saves data." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For watching a computer's screen on mobile data or a personal hotspot. On Wi-Fi the picture is always as clear as the connection allows, and with Low Data Mode on it always saves data."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モバイルデータ通信やインターネット共有でコンピュータの画面を見るときに使います。Wi-Fi では回線が許す限り高画質で表示し、低データモードがオンのときは常にデータを節約します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在移动数据或个人热点上看电脑屏幕时用。连着 Wi-Fi 时画面总是按网络撑得住的最清晰来；系统开了「低数据模式」时总是省流量。"
+          }
+        }
+      }
+    },
+    "settings.search.live_screen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "live screen screen route direct connection quality cellular mobile data hotspot scroll scrolling scroll speed two fingers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ画面 画面 経路 直接接続 画質 モバイル通信 インターネット共有 スクロール スクロールの速さ 2本指"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时屏幕 屏幕 线路 直连 画质 蜂窝 移动数据 热点 滚动 滚动速度 双指"
+          }
+        }
+      }
+    },
+    "On a Personal Hotspot" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On a Personal Hotspot"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インターネット共有を使用中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在使用个人热点"
+          }
+        }
+      }
+    },
+    "%lld s ago" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld s ago"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld秒前"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 秒前"
+          }
+        }
+      }
+    },
+    "Picked for this connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Picked for this connection"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回線に合わせて開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按当前网络起步"
+          }
+        }
+      }
+    },
+    "Connection slowed down" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection slowed down"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回線が遅くなりました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络变慢"
+          }
+        }
+      }
+    },
+    "Connection is steady" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection is steady"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回線が安定しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络稳定"
+          }
+        }
+      }
+    },
+    "iPhone is warm or saving power" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone is warm or saving power"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone が高温か省電力中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机发热或在省电"
+          }
+        }
+      }
+    },
+    "iPhone couldn’t keep up" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone couldn’t keep up"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone の処理が追いつきません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机跟不上"
+          }
+        }
+      }
+    },
+    "You changed Quality" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You changed Quality"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画質を変更しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你改了画质"
           }
         }
       }

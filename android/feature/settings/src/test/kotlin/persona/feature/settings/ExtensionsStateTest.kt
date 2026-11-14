@@ -114,6 +114,31 @@ class ExtensionsStateTest {
         assertEquals("3 个 · 2 个要处理", ExtensionText.listSummary(res, listOf(p("running"), p("needs_setup"), p("error"))))
     }
 
+    /** A node-only extension's line is the aggregate across its machines ("Running on 2 machines"), not the idle hub
+     *  process, and the hub-process small print gives way to it. */
+    @Test fun nodeProgramStatusDrivesTheStateLine() {
+        fun p(status: String, s: NodeStatusSummary) = HubExtension("x", "X", "connectors", status, nodeStatus = s)
+        assertEquals("在 2 台机器上运行",
+            ExtensionText.state(res, p("running", NodeStatusSummary(total = 2, running = 2))))
+        assertNull(ExtensionText.runNote(res, p("running", NodeStatusSummary(total = 2, running = 2))))
+        assertEquals("在 1 台机器上运行 · 1 台机器异常",
+            ExtensionText.state(res, p("running", NodeStatusSummary(total = 2, running = 1, abnormal = 1))))
+        assertEquals("1 台机器异常 · 1 台机器离线",
+            ExtensionText.state(res, p("error", NodeStatusSummary(total = 2, abnormal = 1, offline = 1))))
+        assertEquals("正在 1 台机器上启动",
+            ExtensionText.state(res, p("starting", NodeStatusSummary(total = 1, starting = 1))))
+        assertEquals("2 台机器已停止",
+            ExtensionText.state(res, p("stopped", NodeStatusSummary(total = 2, stopped = 2))))
+        assertEquals("1 台机器离线",
+            ExtensionText.state(res, p("stopped", NodeStatusSummary(total = 1, offline = 1))))
+        assertEquals("1 台机器已停止 · 1 台机器离线",
+            ExtensionText.state(res, p("stopped", NodeStatusSummary(total = 2, stopped = 1, offline = 1))))
+        assertEquals("在 2 台机器上运行 · 1 台机器离线",
+            ExtensionText.state(res, p("running", NodeStatusSummary(total = 3, running = 2, offline = 1))))
+        // No summary: the hub process's own status wording stands.
+        assertEquals("启动", ExtensionText.state(res, p("stopped", NodeStatusSummary())))
+    }
+
     @Test fun fieldTitlesPlaceholdersAndSecrets() {
         assertEquals("服务地址", ExtensionText.fieldTitle(res, form[0]))
         assertEquals("host（必填）", ExtensionText.fieldTitle(res, ExtensionField("host", required = true)))

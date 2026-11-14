@@ -109,6 +109,10 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
   # The live screen's video codec and capture decisions (#3954), shared by Persona Link's helper and the iOS app.
   ci_run 'PersonaScreenKit unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaScreenKit" --scratch-path "$SPM/PersonaScreenKit" -Xswiftc -warnings-as-errors
+  # The pixel scroll record (#7775), shared by Persona Input and the iOS app, and Persona Input itself, a package apart
+  # from Persona Screen's.
+  ci_run 'PersonaInputKit unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaInputKit" --scratch-path "$SPM/PersonaInputKit" -Xswiftc -warnings-as-errors
+  ci_run 'Persona Input build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink/Input" --scratch-path "$SPM/PersonaInput" -Xswiftc -warnings-as-errors
   # The independent Link package contains only Persona Screen; PersonaScreenKit's tests cover its capture decisions.
   # There is no menu-bar app or separate Link UI test target to build.
   # Blocking calls on the main actor (docs/apple/performance.md, "Automated checks"). The lint is built in a fixed
@@ -147,6 +151,10 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
     -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-device" \
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  # A phone's main thread has a 1 MB stack, the simulator's 8 MB: view functions with big fixed frames in this Debug
+  # device build fail here (#6735; MainPagesStackTests measures the run-time part in the simulator).
+  ci_run 'Debug view stack frames (device build)' 300 python3 "$CI_ROOT/scripts/ci/apple_stack_frames.py" \
+    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"
 
   IOS_COMMON=("${XCODE[@]}" -scheme Persona -derivedDataPath "$OUTPUT/ios-tests" \
     -parallel-testing-enabled NO -disableAutomaticPackageResolution "${TEST_SIGNING[@]}")

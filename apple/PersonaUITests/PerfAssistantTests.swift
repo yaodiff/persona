@@ -150,6 +150,21 @@ final class PerfAssistantTests: PerfTestCase {
         }
     }
 
+    /// The same switch with nothing of XCTest's inside the measured frames: the app changes pages on a cue
+    /// (`FrameProbe.switchPages`) and the test only sleeps. `testTabSwitchAssistantAgents` taps and waits through the
+    /// accessibility tree, and each of those queries runs on the app's main thread; what this one reports is the app's.
+    @MainActor func testTabSwitchAssistantAgentsByCue() throws {
+        openMain()
+        see(app.buttons["shell-agents"].firstMatch, "the Agents switch")
+        measureTransition(navigation: false) {
+            darwinPost("com.persona.perf.shell.switch")
+            sleep(2)
+            darwinPost("com.persona.perf.shell.switch")
+            sleep(2)
+        }
+        see(app.buttons["assistant-sidebar-button"], "Assistant in front again after an even number of switches", timeout: 10)
+    }
+
     /// The task board sheet from the action bar's Progress tray (#2879), presented and closed.
     @MainActor func testTaskBoardSheet() throws {
         openMain()

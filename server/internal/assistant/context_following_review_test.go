@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -25,6 +26,7 @@ func followingReviewItem(id string, follow *InboxFollow, handling *InboxHandling
 func TestSnapshotFollowingThroughTheSnapshot(t *testing.T) {
 	h := newInboxHub(t)
 	setSettings(t, h.Service, func(v *Settings) { v.Timezone = "Asia/Shanghai" })
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
 	checkAt := time.Date(2026, 11, 14, 3, 30, 0, 0, time.UTC) // 11:30 in Shanghai
 	waiting := followingReviewItem("lark:f1:1", &InboxFollow{Who: "张工", Next: "再问一次进度", CheckAt: &checkAt},
 		&InboxHandling{State: HandlingWaiting}, TierAction)
@@ -64,6 +66,7 @@ func TestSnapshotFollowingThroughTheSnapshot(t *testing.T) {
 func TestSnapshotFollowingLoadsColdInboxAndWritesNothing(t *testing.T) {
 	h := newInboxHub(t)
 	setSettings(t, h.Service, func(v *Settings) { v.Timezone = "Asia/Shanghai" })
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
 	checkAt := time.Date(2026, 11, 14, 3, 30, 0, 0, time.UTC)
 	it := followingReviewItem("lark:f1:1", &InboxFollow{Who: "张工", Next: "再问一次", CheckAt: &checkAt},
 		&InboxHandling{State: HandlingWaiting}, TierAction)
@@ -130,7 +133,7 @@ func TestSnapshotFollowingSectionShape(t *testing.T) {
 		snapshotFollowingTestItem("c", NowCheckDue, nil),
 	)
 	rows, total := s.snapshotFollowing(context.Background(), loc)
-	text := prompts.RenderSnapshot(prompts.Snapshot{Now: at, Zone: loc.String(), Following: rows, FollowingTotal: total})
+	text := prompts.RenderSnapshot(prompts.Snapshot{Now: at, Zone: loc.String(), FollowingEnabled: true, Following: rows, FollowingTotal: total})
 	lines := strings.Split(text, "\n")
 	i := 0
 	for ; i < len(lines); i++ {
@@ -226,7 +229,7 @@ func TestSnapshotFollowingRowWithoutFollow(t *testing.T) {
 	if total != 1 || len(rows) != 1 {
 		t.Fatalf("rows = %+v, total %d", rows, total)
 	}
-	line := snapshotFollowingLine(t, prompts.RenderSnapshot(prompts.Snapshot{Now: time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC), Zone: "UTC", Following: rows, FollowingTotal: total}), "没有 follow")
+	line := snapshotFollowingLine(t, prompts.RenderSnapshot(prompts.Snapshot{Now: time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC), Zone: "UTC", FollowingEnabled: true, Following: rows, FollowingTotal: total}), "没有 follow")
 	for _, want := range []string{"在哪：没写", "等谁：没写", "下一步：没写", "再看：没定时间"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("following line lacks %q: %s", want, line)
@@ -234,11 +237,13 @@ func TestSnapshotFollowingRowWithoutFollow(t *testing.T) {
 	}
 }
 
-// The section never goes missing: once the last followed matter ends, the snapshot says there are none, so a message
-// carrying only changed sections tells the model the rows are gone instead of leaving the old ones standing.
+// While Inbox is enabled and available, the section never goes missing: once the last followed matter ends, the
+// snapshot says there are none, so a message carrying only changed sections tells the model the rows are gone instead
+// of leaving the old ones standing.
 func TestSnapshotFollowingSaysNoneWhenTheLastMatterEnds(t *testing.T) {
 	h := newInboxHub(t)
 	setSettings(t, h.Service, func(v *Settings) { v.Timezone = "Asia/Shanghai" })
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
 	at := time.Date(2026, 11, 14, 3, 30, 0, 0, time.UTC)
 	it := followingReviewItem("lark:f1:1", &InboxFollow{Who: "张工", Next: "再问一次", CheckAt: &at},
 		&InboxHandling{State: HandlingWaiting}, TierAction)

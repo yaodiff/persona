@@ -200,7 +200,7 @@ func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Record
 		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(ctx, dayPushWait)
 			defer cancel()
-			err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}) // kept in the outbox while the hub is away
+			_, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}) // kept in the outbox while the hub is away
 			if err != nil && answered(err) {
 				s.logf("assistant: day recap push: the hub refused it: %v", err)
 				err = nil

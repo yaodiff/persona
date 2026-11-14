@@ -44,7 +44,7 @@
     <string name="terminal_select_empty_body">等终端显示内容后再来选择。</string>
     <string name="terminal_screen_description">终端画面</string>
     <string name="terminal_note_offline">连不上 hub，显示的是上次画面</string>
-    <string name="terminal_note_no_terminal">这个会话没有在电脑上运行。给它发一条消息就会恢复。</string>
+    <string name="terminal_note_no_terminal">这个会话没有在电脑上运行。</string>
     <string name="terminal_no_terminal_title">没有终端</string>
     <string name="terminal_note_no_terminal_resume">这个会话没有在电脑上运行。恢复会话后就能打开它的终端。</string>
     <string name="terminal_resume">恢复会话</string>

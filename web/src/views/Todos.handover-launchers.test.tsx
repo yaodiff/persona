@@ -5,6 +5,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../i18n";
+import { setToken } from "../lib/api";
+import { getState } from "../lib/store";
 import type { Launcher, Machine } from "../lib/types";
 
 vi.hoisted(() => {
@@ -23,9 +26,17 @@ vi.hoisted(() => {
 let launchers: Launcher[] = [];
 // the rest of the hub's answer: a newer hub adds `default` (what Model settings › Agents runs here)
 let extra: Record<string, unknown> = {};
+let deferLists = false;
+const pendingLists: { path: string; resolve: (body: unknown) => void }[] = [];
+const requests: { path: string; init: { method?: string; json?: Record<string, unknown> } }[] = [];
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
-  api: async (path: string) => (path.endsWith("/launchers") ? { launchers, ...extra } : {}),
+  api: async (path: string, init = {}) => {
+    requests.push({ path, init });
+    if (path.endsWith("/launchers")) return deferLists ? new Promise((resolve) => pendingLists.push({ path, resolve })) : { launchers, ...extra };
+    if (path === "/sessions") return { session: { machine_id: "mac", session_id: "synthetic-session", agent: "traex", status: "idle" } };
+    return {};
+  },
 }));
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock("../lib/router", async (orig) => ({ ...(await orig<typeof import("../lib/router")>()), navigate }));
@@ -44,13 +55,16 @@ const machines: Machine[] = [{ id: "mac", name: "Mac", online: true }];
 const todo = { id: "t1", title: "Release checklist", created_at: "2026-11-09T08:00:00Z", updated_at: "2026-11-09T08:00:00Z" };
 const select = () => [...document.querySelectorAll<HTMLSelectElement>("select")].find((s) => [...s.options].some((o) => o.value === "claude"))!;
 
-async function open(onClose = () => {}) {
-  await act(async () => root.render(<HandoverDialog open todo={todo} machines={machines} onClose={onClose} />));
+async function open(onClose = () => {}, targets = machines) {
+  await act(async () => root.render(<HandoverDialog open todo={todo} machines={targets} onClose={onClose} />));
   await flush();
 }
 
 beforeEach(() => {
   extra = {};
+  deferLists = false; pendingLists.length = 0;
+  requests.length = 0;
+  getState().launches = {};
   navigate.mockClear();
   host = document.createElement("div");
   document.body.append(host);
@@ -60,6 +74,8 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   document.body.innerHTML = "";
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("handing a to-do to a new agent", () => {
@@ -138,4 +154,60 @@ describe("handing a to-do to a new agent", () => {
     expect(onClose).toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith("/settings?tab=models#settings-providers");
   });
+});
+
+it.each([false, true])("hands text to a compatible alias inline (follow default: %s)", async (followDefault) => {
+  vi.useFakeTimers();
+  launchers = [{ name: "work", agent_type: "traex" }];
+  extra = followDefault ? { default: { provider: "work" } } : {};
+  await open();
+  const launch = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === t("todos.launch_and_hand"))!;
+  await act(async () => launch.click());
+  await act(async () => vi.advanceTimersByTimeAsync(0));
+  const starts = requests.filter((r) => r.path === "/sessions" && r.init.method === "POST");
+  expect(starts).toHaveLength(1);
+  expect(starts[0].init.json).toMatchObject({ launcher: "work", agent_type: "traex", prompt: expect.stringContaining("Release checklist") });
+  expect(starts[0].init.json).not.toHaveProperty("async");
+  expect(requests.filter((r) => r.path.endsWith("/messages"))).toHaveLength(0);
+});
+
+const launchHandoff = async () => {
+  const launch = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === t("todos.launch_and_hand"))!;
+  await act(async () => launch.click());
+  await act(async () => vi.advanceTimersByTimeAsync(0));
+  return requests.filter((r) => r.path === "/sessions" && r.init.method === "POST");
+};
+
+it.each(["pending", "late old reply"])("never stamps another machine's launcher kind during %s", async (phase) => {
+  vi.useFakeTimers(); deferLists = true;
+  const targets = [{ id: "mac", name: "First", online: true }, { id: "second", name: "Second", online: true }];
+  await open(() => {}, targets);
+  if (phase === "pending") {
+    await act(async () => pendingLists[0].resolve({ launchers: [{ name: "work", agent_type: "traex" }] }));
+  }
+  const computer = document.querySelector<HTMLSelectElement>("select")!;
+  await act(async () => { computer.value = "second"; computer.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(pendingLists).toHaveLength(2);
+  if (phase === "late old reply") {
+    await act(async () => pendingLists[1].resolve({ launchers: [{ name: "work", agent_type: "claude" }] }));
+    await act(async () => pendingLists[0].resolve({ launchers: [{ name: "work", agent_type: "traex" }] }));
+  }
+  const starts = await launchHandoff();
+  expect(starts).toHaveLength(1);
+  expect(starts[0].init.json).toMatchObject({ machine_id: "second", async: true });
+  expect(starts[0].init.json?.agent_type).toBeUndefined();
+  expect(starts[0].init.json).not.toHaveProperty("prompt");
+});
+
+it.each(["unknown", "omp", "paseo", "desktop", "credential"])("preserves handoff negotiation for %s", async (boundary) => {
+  vi.useFakeTimers();
+  launchers = [{ name: "work", agent_type: boundary === "unknown" ? undefined : boundary === "omp" ? "omp" : "traex", ...(boundary === "desktop" ? { source: "future-desktop" } : {}) }];
+  const targets = [{ id: "mac", name: "Mac", online: true, engine: boundary === "paseo" ? "paseo" : "herdr" }];
+  await open(() => {}, targets);
+  if (boundary === "credential") await act(async () => setToken("synthetic-new-owner"));
+  const starts = await launchHandoff();
+  expect(starts).toHaveLength(1);
+  expect(starts[0].init.json).toMatchObject({ async: true });
+  expect(starts[0].init.json?.agent_type).toBeUndefined();
+  expect(starts[0].init.json).not.toHaveProperty("prompt");
 });

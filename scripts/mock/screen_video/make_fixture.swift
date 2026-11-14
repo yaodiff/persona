@@ -1,7 +1,9 @@
-// Makes scripts/mock/screen_video/fixture.bin, the mock hub's live-screen video (#3954): a made-up desktop drawn here
-// (no real screen), encoded the way Persona Screen encodes (HEVC, else H.264; no frame reordering; one keyframe at the
-// start), written as the helper's wire messages: `hello`, `format`, then one `frame` per picture. Built with
-// PersonaScreenKit's own sources by make_fixture.sh, which is how to make it again.
+// Makes scripts/mock/screen_video/fixture.bin and fixture-h264.bin, the mock hub's live-screen video (#3954): a made-up
+// desktop drawn here (no real screen), encoded the way Persona Screen encodes (no frame reordering; one keyframe at the
+// start), written as the helper's wire messages: `hello`, `format`, then one `frame` per picture. The second argument
+// names the codec: `hevc` (the default; H.264 when this Mac has no HEVC encoder) or `h264`, which the mock plays to a
+// client that offers only H.264, as a browser without HEVC does (#6558). Built with PersonaScreenKit's own sources by
+// make_fixture.sh, which is how to make them again.
 import CoreGraphics
 import CoreMedia
 import CoreText
@@ -15,7 +17,8 @@ struct MakeFixture {
 
     static func main() throws {
         let out = URL(fileURLWithPath: CommandLine.arguments[1])
-        let encoded = try encode()
+        let only = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : nil
+        let encoded = try encode(only: only)
         var data = ScreenVideoMessage.hello(HelloMessage(version: ScreenVideoWire.protocolVersion, codec: encoded.codec,
                                                          display: 1, width: width, height: height)).framed()
         data.append(ScreenVideoMessage.format(FormatMessage(parameterSets: encoded.sets)).framed())
@@ -34,8 +37,8 @@ struct MakeFixture {
         var failed: OSStatus = noErr
     }
 
-    static func encode() throws -> (codec: String, sets: [Data], frames: [(key: Bool, bytes: Data)]) {
-        for (codec, type) in [("hevc", kCMVideoCodecType_HEVC), ("h264", kCMVideoCodecType_H264)] {
+    static func encode(only: String?) throws -> (codec: String, sets: [Data], frames: [(key: Bool, bytes: Data)]) {
+        for (codec, type) in [("hevc", kCMVideoCodecType_HEVC), ("h264", kCMVideoCodecType_H264)] where only == nil || only == codec {
             var session: VTCompressionSession?
             let sink = Sink()
             let made = VTCompressionSessionCreate(allocator: nil, width: Int32(width), height: Int32(height), codecType: type,

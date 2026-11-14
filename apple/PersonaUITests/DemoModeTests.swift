@@ -44,6 +44,10 @@ final class DemoModeTests: XCTestCase {
         return e
     }
 
+    @MainActor private func expandSource() {
+        see(app.buttons["inbox.detail.source"].firstMatch, "the original source control", timeout: 15).tapCenter()
+    }
+
     @MainActor private func text(_ s: String) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", s)).firstMatch
     }
@@ -271,6 +275,7 @@ final class DemoModeTests: XCTestCase {
         noErrors("inbox")
         shot("inbox")
         text("周五的发布能赶上吗").tap()
+        expandSource()
         see(text("下午我要和客户确认时间"), "the Feishu chat")
         noErrors("feishu")
         shot("feishu")
@@ -278,6 +283,7 @@ final class DemoModeTests: XCTestCase {
         let mail = text("下周的分享能不能提前到周二")
         for _ in 0..<3 where !(mail.exists && mail.isHittable) { app.swipeUp() }
         mail.tap()
+        expandSource()
         see(text("周四我临时要出差"), "the mail")
         shot("mail")
         back()

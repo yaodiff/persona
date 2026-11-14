@@ -271,6 +271,11 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun archiveConversation(session: SessionKey) = source.archiveConversation(names.raw(session))
         override suspend fun unarchiveConversation(session: SessionKey) = source.unarchiveConversation(names.raw(session))
         override suspend fun archivedConversations() = source.archivedConversations().map(names::session)
+        override suspend fun searchChats(query: String, limit: Int) = source.searchChats(query, limit)?.let { answer ->
+            answer.copy(results = answer.results.map { result ->
+                result.copy(machineId = result.machineId.takeIf { it.isNotBlank() }?.let(names::machineId).orEmpty())
+            })
+        }
         override suspend fun renameConversation(session: SessionKey, title: String) = source.renameConversation(names.raw(session), title)
         override suspend fun makeDirection(session: SessionKey) = source.makeDirection(names.raw(session))
         override suspend fun endDirection(session: SessionKey) = source.endDirection(names.raw(session))

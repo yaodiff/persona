@@ -46,7 +46,9 @@ struct AssistantProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .refreshable { await load() }
+        #if DEBUG || PERF_SIGNPOST
         .screenProbe("assistant-next-suggestions", NextSuggestionsProbe(loaded: nextSuggestionsModel.loaded))
+        #endif
         #if os(iOS)
         // A hub switch need not change assistantSwitches (New Chat can keep it nil), but it still changes this model's scope.
         .onChange(of: NextSuggestionsScope(hub: model.hub?.group, assistant: model.assistantSwitches)) {

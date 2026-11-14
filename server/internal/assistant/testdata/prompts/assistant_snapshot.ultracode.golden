@@ -6,5 +6,4 @@
   - 完成未看：修复测试〔ultracode=off〕（box，session_id=doneoff）
   - 工作中：读代码；实现功能〔ultracode=on：每个实质任务都会跑多 Agent workflow，等结果时别催〕
 - iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
-- 在跟的事：没有
 - 已安排的跟进：没有

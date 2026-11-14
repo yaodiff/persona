@@ -17,6 +17,10 @@ const (
 	CapabilityAgentSessionArchives = "agent_session_archives"
 	// CapabilityAgentNaming: ordinary full-user renames record manual intent before node dispatch.
 	CapabilityAgentNaming = "agent_naming.v1"
+	// CapabilityAgentAutoname: the manager names one Agent session with the model when the user asks
+	// (POST /api/v1/sessions/{mid}/{sid}/autoname; docs/protocol/protocol.md "Naming an Agent on request"). The hub
+	// lists the agent_autoname feature only while every manager that carries Agents names it.
+	CapabilityAgentAutoname = "agent_autoname"
 	// CapabilityAgentSessionArchiveClose: the manager's archive also takes ?close=1, "Archive and close", which closes
 	// the agent on its computer (session.retire) once archived (docs/protocol/protocol.md "Agent session archives").
 	CapabilityAgentSessionArchiveClose = "agent_session_archive_close"
@@ -75,6 +79,9 @@ const (
 	// stream of its own instead of inside the bus message (#6574). The hub sends a large body that way only to a
 	// manager that names it; any other gets MethodHTTP as before.
 	CapabilityHTTPBodyStream = "http_body_stream"
+	// CapabilityMCPWait: the manager accepts enum-only mcp.wait updates through devices.notify for an explicitly
+	// opted-in MCP call. The hub sends them only when this capability and the call's opaque id are both present.
+	CapabilityMCPWait = "mcp_wait_v1"
 )
 
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
@@ -190,6 +197,7 @@ var Routes = []string{
 	"GET /api/v1/sessions/archived",
 	"POST /api/v1/sessions/{mid}/{sid}/archive",
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
+	"POST /api/v1/sessions/{mid}/{sid}/autoname",
 	"POST /api/v1/assistant/conversations/{id}/archive",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
@@ -235,6 +243,11 @@ var Routes = []string{
 	"POST /api/v1/assistant/places",
 	"PUT /api/v1/assistant/places/{id}",
 	"DELETE /api/v1/assistant/places/{id}",
+	"GET /api/v1/assistant/saved-prompts",
+	"POST /api/v1/assistant/saved-prompts",
+	"PUT /api/v1/assistant/saved-prompts/order",
+	"PUT /api/v1/assistant/saved-prompts/{id}",
+	"DELETE /api/v1/assistant/saved-prompts/{id}",
 	"GET /api/v1/assistant/runs",
 	"GET /api/v1/assistant/routines",
 	"PUT /api/v1/assistant/routines",

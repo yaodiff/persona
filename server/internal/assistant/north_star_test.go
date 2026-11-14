@@ -515,6 +515,7 @@ func TestNorthStarRecordsSendsRefusedBeforeTheyRan(t *testing.T) {
 	ctx := context.Background()
 	s, database, _ := northStarDB(t)
 	b := &BusHub{svc: s, helloed: make(chan struct{})}
+	close(b.helloed) // the hub's hello is answered: the request does not wait helloWait for it
 	if _, err := b.request(ctx, assistantwire.MethodSendParams, json.RawMessage(`{"machine_id":"server","session_id":"main-chat","params":{"text":"hi","model":"not a model id!"}}`)); err == nil {
 		t.Fatal("a bad model was taken")
 	}

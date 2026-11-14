@@ -65,8 +65,13 @@ const connect = async () => {
 const button = () => host.querySelector<HTMLButtonElement>('[data-testid="screen-displays"]');
 const screen = () => host.querySelector<HTMLElement>('[data-testid="screen"]')!;
 const rows = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+const menuAppears = () => vi.waitFor(async () => {
+  await act(async () => {});
+  expect(button()).not.toBeNull();
+}, { timeout: 3000 });
 
-// The Displays menu is a chunk of its own: loaded once here, its lazy import resolves within a flush however busy the run.
+// Preload the chunk; each mounted page still commits its own import callback.
+// Positive cases therefore wait for the actual button rather than another fixed flush.
 beforeAll(async () => {
   await import("./DisplayMenu");
 });
@@ -94,6 +99,7 @@ describe("ScreenView on a Mac with two displays", () => {
     await open();
     await framebuffer(960, 300);
     await connect();
+    await menuAppears();
     expect(button()?.getAttribute("aria-label")).toBe(t("screen-displays.displays_current", { current: t("screen-displays.all_displays") }));
     expect(screen().style.width).toBe("");
 
@@ -120,6 +126,7 @@ describe("ScreenView on a Mac with two displays", () => {
     act(() => void rfbs.at(-1)!.dispatchEvent(new CustomEvent("connect", { detail: {} })));
     expect(screen().style.left).toBe("-480px");
     await flush();
+    await menuAppears();
     act(() => button()!.click());
     expect(rows().map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false", "true"]);
     act(() => rows()[0].click());
@@ -132,6 +139,7 @@ describe("ScreenView on a Mac with two displays", () => {
     await open();
     await framebuffer(960, 300);
     await connect();
+    await menuAppears();
     act(() => button()!.click());
     act(() => rows()[2].click());
     await flush();
@@ -162,6 +170,7 @@ describe("ScreenView keeping up with the Mac", () => {
     await open();
     await framebuffer(960, 300);
     await connect();
+    await menuAppears();
     act(() => button()!.click());
     act(() => rows()[2].click());
     await flush();

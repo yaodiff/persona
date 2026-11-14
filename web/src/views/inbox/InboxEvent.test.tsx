@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Inbox events on the page (docs/web/web.md "Inbox"): the "In progress" section and the rows' marks, the detail's summary → recap →
-// suggestion card → handling chain, "Edit" / "Say something", "Original"; and an older hub's items (none of the fields) exactly as before.
+// Inbox events on the page (docs/web/web.md "Inbox"): the "In progress" section and the rows' marks, the detail's summary → suggestion
+// card → recap → handling chain, "Edit" / "Say something", "Original"; and an older hub's items (none of the fields) exactly as before.
 // Driven by the fake hub's fixture (scripts/mock/inbox_events.json).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -164,11 +164,11 @@ describe("收件箱事件：详情", () => {
       }
     }
   });
-  it("draws the reply suggestion, then 摘要 and 总结, then all three chain entries without a toggle", async () => {
+  it("draws 摘要, then the reply suggestion and 总结, then all three chain entries without a toggle", async () => {
     act(() => root.render(<EventBody item={reply} onSource={() => {}} />));
     const text = host.textContent ?? "";
-    expect(text.indexOf("建议回复")).toBeLessThan(text.indexOf(reply.summary!));
-    expect(text.indexOf(reply.summary!)).toBeLessThan(text.indexOf(reply.recap!));
+    expect(text.indexOf(reply.summary!)).toBeLessThan(text.indexOf("建议回复"));
+    expect(text.indexOf("建议回复")).toBeLessThan(text.indexOf(reply.recap!));
     expect(text.indexOf(reply.recap!)).toBeLessThan(text.indexOf("处理链条"));
     expect(host.querySelector("[data-suggestion-text]")?.textContent).toBe(reply.suggestion!.text);
     expect(buttons()).toEqual(expect.arrayContaining(["驳回", "修改", "发送"]));
@@ -176,7 +176,7 @@ describe("收件箱事件：详情", () => {
     expect([...host.querySelectorAll("[data-chain-entry]")].map((e) => e.getAttribute("data-chain-entry"))).toEqual(["received", "triaged", "handling"]);
     expect(host.querySelector("[data-chain-toggle]")).toBeNull();
   });
-  it("puts nowText and its conversation link before the suggestion and background", () => {
+  it("puts nowText and its conversation link before the summary, suggestion and background", () => {
     const item = { ...reply, now: "confirm_reply" } as InboxItem;
     act(() => root.render(<EventBody item={item} onSource={() => {}} />));
     const status = host.querySelector("[data-event-now]")!;
@@ -184,9 +184,42 @@ describe("收件箱事件：详情", () => {
     expect(status.textContent).toContain("等你确认回复");
     expect(status.textContent).toContain("处理对话");
     const text = host.textContent ?? "";
-    expect(text.indexOf("等你确认回复")).toBeLessThan(text.indexOf("建议回复"));
-    expect(text.indexOf("建议回复")).toBeLessThan(text.indexOf(item.summary!));
-    expect(text.indexOf(item.summary!)).toBeLessThan(text.indexOf("处理链条"));
+    expect(text.indexOf("等你确认回复")).toBeLessThan(text.indexOf(item.summary!));
+    expect(text.indexOf(item.summary!)).toBeLessThan(text.indexOf("建议回复"));
+    expect(text.indexOf("建议回复")).toBeLessThan(text.indexOf(item.recap!));
+    expect(text.indexOf(item.recap!)).toBeLessThan(text.indexOf("处理链条"));
+  });
+  it("orders a locally constructed open item as status, summary, suggestion, recap and timeline", () => {
+    const item: InboxItem = {
+      id: "local:suggestion-order",
+      source: "mail",
+      kind: "mail",
+      account: "local",
+      account_name: "Local",
+      title: "Review the proposal",
+      preview: "Please review the proposal",
+      count: 1,
+      now: "confirm_reply",
+      handling: { owner: "manager", state: "looking", machine_id: "local-machine", session_id: "local-session" },
+      summary: "The proposal is ready for review.",
+      suggestion: { version: 1, kind: "reply", text: "Thanks, I will review it." },
+      recap: "The sender asked for feedback yesterday.",
+      chain: [{ id: "local-triaged", kind: "triaged", text: "Sorted for review" }],
+    };
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    const selectors = ["[data-event-now]", "[data-event-summary]", "[data-suggestion]", "[data-event-recap]", "[data-event-chain]"];
+    const ordered = selectors.map((selector) => {
+      const element = host.querySelector(selector);
+      expect(element, selector).not.toBeNull();
+      return element!;
+    });
+    for (let i = 1; i < ordered.length; i++) {
+      expect(ordered[i - 1].compareDocumentPosition(ordered[i]) & Node.DOCUMENT_POSITION_FOLLOWING, `${selectors[i - 1]} before ${selectors[i]}`).not.toBe(0);
+    }
+    expect(ordered[0].getAttribute("data-event-now")).toBe("confirm_reply");
+    expect(ordered[0].textContent).toContain("等你确认回复");
+    expect(buttons()).toContain("处理对话");
+    expect(buttons()).not.toContain("说一句");
   });
   it("uses rowMeta without a time and moves Original into the small line; an older item keeps sourceLine and its time", () => {
     const embedded = { ...showcase.items[0], lark: reply.lark };

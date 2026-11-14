@@ -622,6 +622,889 @@
           "cards": {}
         }
       }
+    },
+    {
+      "name": "sent_with_picture_on_other_device",
+      "description": "A message with a picture sent from another device (one line: the picture, then the words, both tied to its client_msg_id) shows here with its words and its answer, pushed.",
+      "source": {
+        "rule": "Never missing",
+        "issues": [
+          "#4315"
+        ],
+        "code": {
+          "web": "web/src/lib/turns.ts segments",
+          "ios": "ChatStore.picturesAfterTheirText",
+          "android": "buildLineRows"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a",
+        "b"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#1",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "b",
+            "send": {
+              "id": "m1",
+              "text": "Add a bakery stop."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "b",
+            "write": "m1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#1",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "image",
+                "image": {
+                  "mime": "image/png",
+                  "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                },
+                "client_msg_id": "m1"
+              },
+              {
+                "id": "l4#2",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Add a bakery stop.",
+                "client_msg_id": "m1"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Bakery stop added before the hike."
+              }
+            ],
+            "to_seq": 6,
+            "session": {
+              "state": "idle"
+            }
+          }
+        },
+        {
+          "frames": {
+            "b": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#1",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "image",
+                    "image": {
+                      "mime": "image/png",
+                      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                    },
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l4#2",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Add a bakery stop.",
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Bakery stop added before the hike."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ],
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#1",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "image",
+                    "image": {
+                      "mime": "image/png",
+                      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                    },
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l4#2",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Add a bakery stop.",
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Bakery stop added before the hike."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Add a bakery stop.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Bakery stop added before the hike."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Add a bakery stop.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Bakery stop added before the hike."
+            }
+          ],
+          "cards": {}
+        },
+        "b": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Add a bakery stop.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Bakery stop added before the hike."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "sent_with_picture_on_other_device_reopened",
+      "description": "The same message with a picture, read from the hub's page when this device comes back: its words and its answer are there.",
+      "source": {
+        "rule": "Never missing",
+        "issues": [
+          "#4315"
+        ],
+        "code": {
+          "web": "web/src/lib/turns.ts segments",
+          "ios": "ChatStore.picturesAfterTheirText",
+          "android": "buildLineRows"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a",
+        "b"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#1",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "socket": {
+            "device": "a",
+            "drop": true
+          }
+        },
+        {
+          "user": {
+            "device": "b",
+            "send": {
+              "id": "m1",
+              "text": "Add a bakery stop."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "b",
+            "write": "m1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#1",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "image",
+                "image": {
+                  "mime": "image/png",
+                  "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                },
+                "client_msg_id": "m1"
+              },
+              {
+                "id": "l4#2",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Add a bakery stop.",
+                "client_msg_id": "m1"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Bakery stop added before the hike."
+              }
+            ],
+            "to_seq": 6,
+            "session": {
+              "state": "idle"
+            }
+          }
+        },
+        {
+          "frames": {
+            "b": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#1",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "image",
+                    "image": {
+                      "mime": "image/png",
+                      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                    },
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l4#2",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Add a bakery stop.",
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Bakery stop added before the hike."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "open": {
+              "resumed": false
+            }
+          }
+        },
+        {
+          "wait": 3000
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Add a bakery stop.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Bakery stop added before the hike."
+            }
+          ],
+          "cards": {}
+        },
+        "b": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Add a bakery stop.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Bakery stop added before the hike."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "sent_with_picture_mid_turn_on_other_device",
+      "description": "A message with a picture sent from another device while the agent works (Claude writes it as a queued line: the words, then the picture) shows here in that turn, with the turn's answer after it.",
+      "source": {
+        "rule": "Never missing",
+        "issues": [
+          "#4315"
+        ],
+        "code": {
+          "web": "web/src/lib/turns.ts segments",
+          "ios": "ChatBlock.build",
+          "android": "buildBlocks"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a",
+        "b"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#1",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "tool_use",
+              "tool_use_id": "call2",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "ls"
+              }
+            }
+          ],
+          "to_seq": 2,
+          "interactions": [],
+          "session": {
+            "state": "working"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "b",
+            "send": {
+              "id": "m1",
+              "text": "Add a bakery stop."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "b",
+            "write": "m1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l3#0",
+                "seq": 3,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "tool_result",
+                "tool_use_id": "call2",
+                "text": "ok"
+              },
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Add a bakery stop.",
+                "client_msg_id": "m1",
+                "queued": true
+              },
+              {
+                "id": "l4#1",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "image",
+                "image": {
+                  "mime": "image/png",
+                  "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                },
+                "client_msg_id": "m1",
+                "queued": true
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Saturday hike with a bakery stop."
+              }
+            ],
+            "to_seq": 6,
+            "session": {
+              "state": "idle"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l3#0",
+                    "seq": 3,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "tool_result",
+                    "tool_use_id": "call2",
+                    "text": "ok"
+                  },
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Add a bakery stop.",
+                    "client_msg_id": "m1",
+                    "queued": true
+                  },
+                  {
+                    "id": "l4#1",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "image",
+                    "image": {
+                      "mime": "image/png",
+                      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                    },
+                    "client_msg_id": "m1",
+                    "queued": true
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Saturday hike with a bakery stop."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 2
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ],
+            "b": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l3#0",
+                    "seq": 3,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "tool_result",
+                    "tool_use_id": "call2",
+                    "text": "ok"
+                  },
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Add a bakery stop.",
+                    "client_msg_id": "m1",
+                    "queued": true
+                  },
+                  {
+                    "id": "l4#1",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "image",
+                    "image": {
+                      "mime": "image/png",
+                      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                    },
+                    "client_msg_id": "m1",
+                    "queued": true
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Saturday hike with a bakery stop."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 2
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "user",
+                  "text": "Add a bakery stop.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike with a bakery stop."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "user",
+              "text": "Add a bakery stop.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike with a bakery stop."
+            }
+          ],
+          "cards": {}
+        },
+        "b": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "user",
+              "text": "Add a bakery stop.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike with a bakery stop."
+            }
+          ],
+          "cards": {}
+        }
+      }
     }
   ]
 }

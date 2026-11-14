@@ -1,0 +1,20 @@
+{
+  "source": "Saved",
+  "title_new": "New Saved Prompt",
+  "title_edit": "Edit Saved Prompt",
+  "title_from_message": "Save as Prompt",
+  "name": "Name",
+  "name_placeholder": "review",
+  "name_hint": "Type “/{name}” in any chat and pick it to use it.",
+  "name_rule": "One word of letters, digits, “-”, “_” or “.”, at most {max}.",
+  "name_taken": "There is already a prompt called “/{name}”.",
+  "text": "Text",
+  "text_placeholder": "Review this diff for security issues and list each finding with its file and line.",
+  "text_hint": "Picking it puts this in the message box; nothing is sent until you send it.",
+  "text_rule": "Write the text it puts in the message box, at most {max} characters.",
+  "count": "{n} / {max}",
+  "save": "Save",
+  "saved": "Saved “/{name}”.",
+  "changed": "Changed “/{name}”.",
+  "full": "You have {max} saved prompts, the most you can keep. Delete one to add another."
+}

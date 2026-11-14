@@ -32,8 +32,9 @@ import persona.core.navigation.Navigator
 
 /**
  * The state line of the event page after the display package's `now` words joined it (review additions): one row carrying
- * the state, then "Processing chat ›", then "Say something" / "Try again"; and a suggestion card leaves that row out
- * entirely. The pieces themselves (the sheet, the request, the picker) are covered by `InboxSaySomethingTest`.
+ * the state, then "Conversation ›", then "Say something" / "Try again". A suggestion keeps the state and conversation
+ * but not either instruction action. The pieces themselves (the sheet, the request, the picker) are covered by
+ * `InboxSaySomethingTest`.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "zh-w400dp-h900dp-mdpi")
@@ -75,16 +76,16 @@ class InboxStateLineReviewTest {
         assertEquals(SuggestionAction.Instruct, repository.requests.single().action)
     }
 
-    @Test fun aSuggestionCardLeavesOutTheStateRowAndTheSayEntry() {
+    @Test fun aSuggestionKeepsTheSharedStateAndConversationWithoutSayOrRetry() {
         val record = record("current", "Current",
             handling = InboxHandling(state = "looking", machineId = "m1", sessionId = "s1"),
-            suggestion = InboxSuggestion(2, "reply", "先确认时间"))
+            suggestion = InboxSuggestion(2, "reply", "先确认时间"), now = "confirm_reply")
         show(record)
         rule.onNodeWithText("先确认时间", substring = true).assertExists()
+        rule.onNodeWithText("等你确认回复").assertExists()
+        rule.onNodeWithText("处理对话 ›").assertExists()
         rule.onNodeWithText("说一句").assertDoesNotExist()
         rule.onNodeWithText("再试一次").assertDoesNotExist()
-        rule.onNodeWithText("处理对话 ›").assertDoesNotExist()
-        rule.onNodeWithText("需要你").assertDoesNotExist()
     }
 
     @Test fun aDoneItemHasNoStateRowEntry() {

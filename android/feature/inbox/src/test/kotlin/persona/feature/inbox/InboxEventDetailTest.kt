@@ -76,31 +76,36 @@ class InboxEventDetailTest {
         val now = rule.onNodeWithText("Waiting for a reply", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val summary = rule.onNodeWithText("Summary", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val recap = rule.onNodeWithText("Processed it", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        val chain = rule.onNodeWithText("What happened", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val chain = rule.onNodeWithText("Timeline", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         assertTrue(meta.top < now.top && now.top < summary.top && summary.top < recap.top && recap.top < chain.top)
         rule.onNodeWithText("AI summary", useUnmergedTree = true).assertDoesNotExist()
-        rule.onNodeWithText("Processing chat ›").performClick()
+        rule.onNodeWithText("Conversation ›").performClick()
         assertEquals(ChatRoute("m1", "s-handling", source = RouteSource.InboxItem("event")), opened.last())
         rule.onNodeWithText("Received", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText("Reported", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Assistant says", useUnmergedTree = true).assertExists()
-        rule.onNodeWithText("What happened").performClick()
+        rule.onNodeWithText("Timeline").performClick()
         rule.onNodeWithText("Received", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Handling", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Agent", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Working", useUnmergedTree = true).assertExists()
-        rule.onNodeWithText("What happened").performClick()
+        rule.onNodeWithText("Timeline").performClick()
         rule.onNodeWithText("Received", useUnmergedTree = true).assertDoesNotExist()
     }
 
-    @Test fun olderHubsKeepAStateLineForSuggestionsTiersAndDone() {
+    @Test fun stateAndConversationCoverSuggestionsTiersAndDone() {
         val suggested = record(now = null, where = null)
         show(suggested)
         rule.onNodeWithText("Alex: Can we?", useUnmergedTree = true).assertExists()
-        // The suggestion card itself carries the old hub's suggestion; the separate state line does not repeat it.
+        // An older hub still gets its tier state and conversation; the suggestion is not repeated in the state row.
+        rule.onNodeWithText("Needs you", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Friday works", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("Suggested reply: Friday works", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithText("Conversation ›").assertExists()
+
         repository.snapshot.value = InboxSnapshot(records = listOf(record()))
-        rule.onNodeWithText("Waiting for you to confirm a reply", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithText("Waiting for you to confirm a reply", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("Conversation ›").assertExists()
         rule.onNodeWithText("Friday works", useUnmergedTree = true).assertExists()
 
         val tierOnly = suggested.copy(event = suggested.event.copy(suggestion = null, handling = null, status = "fyi"),
@@ -112,9 +117,9 @@ class InboxEventDetailTest {
             event = tierOnly.event.copy(status = null, doneBy = "user"))
         repository.snapshot.value = InboxSnapshot(records = listOf(done))
         rule.onAllNodesWithText("Done", useUnmergedTree = true).assertCountEquals(1)
-        rule.onNodeWithText("Processing chat ›").assertExists()
+        rule.onNodeWithText("Conversation ›").assertExists()
         val doneWithoutConversation = done.copy(event = done.event.copy(chain = emptyList()))
         repository.snapshot.value = InboxSnapshot(records = listOf(doneWithoutConversation))
-        rule.onNodeWithText("Processing chat ›", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithText("Conversation ›", useUnmergedTree = true).assertDoesNotExist()
     }
 }

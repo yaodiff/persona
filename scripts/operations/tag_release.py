@@ -234,6 +234,7 @@ def check_release_manifest(assets):
     for group in ("programs", "nodes"):
         for program, platforms in (manifest.get(group) or {}).items():
             listed += [(program, plat, item) for plat, item in (platforms or {}).items()]
+    listed += [("persona-link", plat, item) for plat, item in (manifest.get("links") or {}).items()]
     here, ran = host_platform(), False
     if not any(program == "personad" for program, _, _ in listed):
         raise ConfigError("latest.json lists no personad")

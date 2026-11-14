@@ -373,4 +373,19 @@
     <string name="settings_subscriptions_counts_on">%1$d 件オン</string>
     <string name="settings_subscriptions_counts_failing">%1$d 件オン · %2$d 件エラー</string>
     <string name="settings_subscriptions_counts_none">購読できます</string>
+    <plurals name="settings_ext_node_running">
+        <item quantity="other">%1$d台のマシンで実行中</item>
+    </plurals>
+    <plurals name="settings_ext_node_abnormal">
+        <item quantity="other">%1$d台のマシンに異常があります</item>
+    </plurals>
+    <plurals name="settings_ext_node_offline">
+        <item quantity="other">%1$d台がオフライン</item>
+    </plurals>
+    <plurals name="settings_ext_node_starting">
+        <item quantity="other">%1$d台のマシンで起動中</item>
+    </plurals>
+    <plurals name="settings_ext_node_stopped">
+        <item quantity="other">%1$d台のマシンで停止中</item>
+    </plurals>
 </resources>

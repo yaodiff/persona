@@ -90,8 +90,8 @@ export function byLanguage(glob: Record<string, () => Promise<CatalogModule>>): 
   return Object.fromEntries(Object.entries(glob).map(([p, load]) => [dirOf(p), load]));
 }
 
-// The web client's catalog, in two parts (web/i18n-catalogs.ts): the namespaces the first screen names
-// (startup-namespaces.json) and the rest. The admin UI's own namespaces (admin-*) are in neither: admin/main.tsx adds them.
+// The web client's catalog, in two parts (web/i18n-catalogs.ts): the keys the first screen reads
+// (startup-namespaces.json: namespaces, and keys of others) and the rest. The admin UI's own namespaces (admin-*) are in neither: admin/main.tsx adds them.
 const startupLoaders = byLanguage(import.meta.glob<CatalogModule>("./locales/*/_meta.json", { query: "?catalog=client-startup" }));
 const restLoaders = byLanguage(import.meta.glob<CatalogModule>("./locales/*/_meta.json", { query: "?catalog=client-rest" }));
 
@@ -245,12 +245,11 @@ export function t(key: string, vars?: Vars): string {
   return text === undefined ? missing(key) : interpolate(text, vars);
 }
 
-/** An unknown key's text: the key. Under test, a key of the rest asked for before the rest is in throws instead: in
- *  the build, its module would have run ahead of the wait for it (startI18n). */
+/** An unknown key's text: the key. Under test, a key asked for before the rest is in throws instead: in the build,
+ *  its module would have run ahead of the wait for it (startI18n), or the startup part would lack it. */
 function missing(key: string): string {
-  const namespace = key.split(".")[0];
-  if (import.meta.env.MODE === "test" && !restIn && !Object.keys(catalogs[lang]).some((k) => k.startsWith(`${namespace}.`))) {
-    throw new Error(`"${key}" was read before the rest of the catalog was in: add "${namespace}" to src/i18n/startup-namespaces.json`);
+  if (import.meta.env.MODE === "test" && !restIn) {
+    throw new Error(`"${key}" was read before the rest of the catalog was in: add it, or its namespace, to src/i18n/startup-namespaces.json`);
   }
   return key;
 }

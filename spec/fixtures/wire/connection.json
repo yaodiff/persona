@@ -125,6 +125,7 @@
         "sessions_quick_filters",
         "machine_rename",
         "desktop_unregister",
+        "mcp_wait_v1",
         "assistant_views",
         "assistant_html_bridge"
       ],
@@ -265,6 +266,7 @@
           "sessions_quick_filters",
           "machine_rename",
           "desktop_unregister",
+          "mcp_wait_v1",
           "assistant_views",
           "assistant_html_bridge"
         ],
@@ -396,6 +398,7 @@
         "sessions_quick_filters",
         "machine_rename",
         "desktop_unregister",
+        "mcp_wait_v1",
         "assistant_views",
         "assistant_html_bridge"
       ],
@@ -525,6 +528,7 @@
           "sessions_quick_filters",
           "machine_rename",
           "desktop_unregister",
+          "mcp_wait_v1",
           "assistant_views",
           "assistant_html_bridge"
         ],

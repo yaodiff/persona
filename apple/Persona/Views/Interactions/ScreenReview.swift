@@ -90,6 +90,8 @@ struct ScreenReviewFooter: View {
     var back: (() -> Void)?
     var submit: () -> Void
     var answer: ((ScreenReviewRow) -> Void)?
+    /// Close a question that advertises cancellation, on the leading side of these actions too.
+    var skip: (() -> Void)? = nil
 
     private var missing: ScreenReviewRow? { rows.first { $0.answer == nil } }
 
@@ -99,6 +101,7 @@ struct ScreenReviewFooter: View {
     private var footer: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: Theme.Space.m) {
+                skipButton()
                 previous(wide: false)
                 Spacer(minLength: 0)
                 if leftOne { withoutThem }
@@ -106,6 +109,7 @@ struct ScreenReviewFooter: View {
             }
             VStack(alignment: .trailing, spacing: 0) {
                 HStack(spacing: Theme.Space.m) {
+                    skipButton()
                     previous(wide: false)
                     Spacer(minLength: 0)
                     main(wide: false)
@@ -114,7 +118,14 @@ struct ScreenReviewFooter: View {
             }
             VStack(spacing: Theme.Space.s) {
                 main(wide: true)
-                previous(wide: true)
+                if skip != nil {
+                    HStack(spacing: Theme.Space.m) {
+                        skipButton(wide: true)
+                        previous(wide: true)
+                    }
+                } else {
+                    previous(wide: true)
+                }
                 if leftOne { withoutThem }
             }
         }
@@ -125,6 +136,13 @@ struct ScreenReviewFooter: View {
     var body: some View { footer }
 
     private var leftOne: Bool { missing != nil && answer != nil }
+
+    @ViewBuilder private func skipButton(wide: Bool = false) -> some View {
+        if let skip {
+            QuestionSkipButton(action: skip)
+                .frame(maxWidth: wide ? .infinity : nil)
+        }
+    }
 
     @ViewBuilder private func previous(wide: Bool) -> some View {
         if let back {

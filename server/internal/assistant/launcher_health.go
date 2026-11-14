@@ -68,11 +68,17 @@ var (
 	// has not stopped by the deadline is rechecked anyway.
 	repairSettle   = 2 * time.Minute
 	repairDeadline = 45 * time.Minute
-	// healthCheckTimeout bounds one check (the node's own is 90 seconds).
-	healthCheckTimeout = 100 * time.Second
 	// healthRecheckThrottle: how long a failing launcher keeps the on-demand probe's answer instead of probing again,
 	// so a burst of starts does not turn into a burst of probes.
 	healthRecheckThrottle = 30 * time.Second
+	// healthCheckTimeout bounds one check (the node's own is 150 seconds).
+	healthCheckTimeout = 170 * time.Second
+	// healthStagger delays each machine's checks a bit more than the one before, so the same probe prompt does not
+	// reach a model gateway once per machine at the same moment: every machine runs the same prompt, and a gateway
+	// that pins a prompt to one upstream account serves a burst of them behind one another (2026-11-13: seven
+	// machines at once queued for 90 seconds and every check timed out). The first machine starts at once, the
+	// others 12, 24, … seconds later; one probe takes a few seconds, so the later ones find its prompt cached.
+	healthStagger = 12 * time.Second
 )
 
 const defaultHealthInterval = 30 * time.Minute

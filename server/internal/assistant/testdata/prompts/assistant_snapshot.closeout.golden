@@ -5,6 +5,5 @@
   - 完成未看：改重试（server，session_id=bbbbbbbb）：没做完：还差线上验证〔它自述未合并〕；发版（server，session_id=cccccccc）：说已部署，但线上不是这次的改动〔它自述已合并、已部署；hub 查到线上还不是这次改动，以 hub 为准〕
   - 做完的（24 小时内）：2 个，agents_list state=done 查
 - iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
-- 在跟的事：没有
 - 已安排的跟进：没有
 - 每天的定时任务：早报（工作日 09:00）

@@ -8,6 +8,7 @@ import { storedValue } from "../../lib/compatibility";
 import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuickPrompts } from "../../lib/extension-declared";
 import { promptCommands, type ComposerCommand as Command } from "../../lib/extension-prompts";
+import { useSavedPromptRows } from "../../lib/saved-prompt-rows";
 import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
 import { WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { ApiError, errorText } from "../../lib/api";
@@ -457,7 +458,9 @@ export const Composer = memo(function Composer({
   }, [expanded]);
 
   const quickPrompts = useQuickPrompts();
-  const allCommands = useMemo(() => [...commands, ...promptCommands(quickPrompts)], [commands, quickPrompts]);
+  // your saved prompts (#7329) after the chat's own commands, read once a box has the focus or a "/"
+  const savedPrompts = useSavedPromptRows(focused || draft.startsWith("/"));
+  const allCommands = useMemo(() => [...commands, ...savedPrompts, ...promptCommands(quickPrompts)], [commands, savedPrompts, quickPrompts]);
   const query = dismissed ? null : parseSlash(draft);
   // A /loop draft gets a line under the box saying what it will do (only where the menu offers /loop: Claude agents).
   const loop = commands.some((c) => c.text === LOOP_TEXT) ? loopHint(draft) : null;

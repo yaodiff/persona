@@ -73,11 +73,12 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 	if !settled {
 		return false
 	}
-	enabled := s.inboxConfig(ctx).Agent.Enabled
+	agentCfg := s.inboxConfig(ctx).Agent
 	b := &s.inbox
 	now := time.Now().UTC()
 	var writes []*inboxWrite
-	wake := map[*inboxWrite]bool{}
+	fresh := map[*InboxItem]bool{}
+	deliver := map[*inboxWrite]bool{}
 	b.mu.Lock()
 	for _, it := range b.items {
 		linked, duplicate := inboxAgentStopDuplicate(it, sess)
@@ -85,6 +86,9 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 			continue
 		}
 		w := beginWrite(it)
+		reuseSlot := inboxConversationRunning(it)
+		latest := inboxLatestAgentLink(it)
+		current := latest != nil && latest.MachineID == sess.MachineID && latest.SessionID == sess.SessionID
 		turnAt := sess.UpdatedAt.UTC()
 		key := "assistant-inbox_chain.agent_stopped"
 		if failed {
@@ -95,17 +99,28 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 			Link: &InboxChainLink{Type: LinkSession, MachineID: sess.MachineID, SessionID: sess.SessionID}})
 
 		a := it.Agent
-		if enabled && a != nil && a.SessionID != "" {
-			if it.Handling != nil && it.Handling.State == HandlingAgent {
-				// Set Looking before tell: otherwise tell would save Agent in Back and a recap-only turn would restore it.
-				b.setHandling(it, HandlingLooking, "", now)
+		if agentCfg.Enabled && a != nil && a.SessionID != "" {
+			note := inboxNote{Name: prompts.NoteAgentStopped, Text: detail, Failed: failed,
+				Machine: sess.MachineID, Session: sess.SessionID}
+			if current {
+				// A stopped current Agent is never a state to restore; an earlier waiting restoration point stays intact.
+				// HandlingAgent or waiting remains visible until admission, so a held stop consumes no looking slot.
+				if a.Back == HandlingAgent {
+					a.Back = ""
+				}
+				b.queueInboxWake(it, note, reuseSlot, now)
+				fresh[it] = a.DeferredAt != nil
+			} else {
+				// An older Agent's result is informational only and neither flushes a held wake nor reserves capacity.
+				b.tell(it, note, false, now)
 			}
-			b.tell(it, inboxNote{Name: prompts.NoteAgentStopped, Text: detail, Failed: failed,
-				Machine: sess.MachineID, Session: sess.SessionID}, true, now)
-			wake[w] = true
+			deliver[w] = true
 		}
-		b.settle(w)
 		writes = append(writes, w)
+	}
+	b.admitFreshInboxWakes(agentCfg, now, fresh)
+	for _, w := range writes {
+		b.settle(w)
 	}
 	b.mu.Unlock()
 
@@ -116,7 +131,7 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 			saved = false
 			continue
 		}
-		if wake[w] {
+		if deliver[w] {
 			s.tellSoon(ctx, w.it)
 		}
 	}

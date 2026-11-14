@@ -80,6 +80,143 @@ nonisolated struct GitWriteResult: Decodable, Sendable {
     var commit: GitCommit?
     /// What git said (a push's summary).
     var output: String?
+    /// The stash list after a stash write (#7015).
+    var stashes: [GitStashEntry]?
+}
+
+/// A branch to switch to (#7015, `git/branches`): local ones, then remote ones without a local branch of the same name.
+nonisolated struct GitBranch: Decodable, Identifiable, Hashable, Sendable {
+    var name: String
+    var remote: Bool?
+    var current: Bool?
+    var upstream: String?
+    var hash: String
+    var subject: String
+    var date: Date?
+    var id: String { (remote == true ? "r:" : "l:") + name }
+
+    /// What a switch asks for: a remote branch's name without its remote ("origin/release" → "release"); the node
+    /// makes a local branch tracking it.
+    var switchName: String {
+        guard remote == true, let slash = name.firstIndex(of: "/") else { return name }
+        return String(name[name.index(after: slash)...])
+    }
+}
+
+/// A check on the branch's pull request (#7014): pass, fail, pending or skipped, and its run's page.
+nonisolated struct GitCheck: Decodable, Hashable, Identifiable, Sendable {
+    var name: String
+    var state: String
+    var url: String?
+    var id: String { name + "\u{0}" + (url ?? "") }
+}
+
+/// One comment of an open review thread.
+nonisolated struct GitPRComment: Decodable, Hashable, Identifiable, Sendable {
+    var author: String
+    var body: String
+    var url: String?
+    var at: Date?
+    var id: String { url ?? "\(author)\u{0}\(at?.timeIntervalSince1970 ?? 0)\u{0}\(body.prefix(40))" }
+}
+
+/// An open (unresolved) review thread: where it is and its comments.
+nonisolated struct GitPRThread: Decodable, Hashable, Identifiable, Sendable {
+    var path: String
+    var line: Int?
+    var outdated: Bool?
+    var comments: [GitPRComment]
+    /// Where it is and its first comment: stable across reads while the thread is open.
+    var id: String { "\(path):\(line ?? 0)\u{0}" + (comments.first?.id ?? "") }
+
+    enum CodingKeys: String, CodingKey { case path, line, outdated, comments }
+
+    init(path: String, line: Int? = nil, outdated: Bool? = nil, comments: [GitPRComment]) {
+        self.path = path
+        self.line = line
+        self.outdated = outdated
+        self.comments = comments
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        line = try c.decodeIfPresent(Int.self, forKey: .line)
+        outdated = try c.decodeIfPresent(Bool.self, forKey: .outdated)
+        comments = try c.decodeIfPresent([GitPRComment].self, forKey: .comments) ?? []
+    }
+}
+
+/// The current branch's pull request (#7014, `git/pr`, through gh on that computer): OPEN, CLOSED or MERGED, whether it
+/// can merge (gh's mergeable and merge state), the review decision, merge-when-ready, checks and open review threads.
+nonisolated struct GitPR: Decodable, Hashable, Sendable {
+    var number: Int
+    var url: String
+    var title: String
+    var state: String
+    var draft: Bool?
+    var base: String
+    var head: String
+    var mergeable: String?
+    var mergeState: String?
+    var review: String?
+    var autoMerge: Bool?
+    var checks: [GitCheck]
+    var checksState: String?
+    var threads: [GitPRThread]
+
+    enum CodingKeys: String, CodingKey {
+        case number, url, title, state, draft, base, head, mergeable, review, checks, threads
+        case mergeState = "merge_state", autoMerge = "auto_merge", checksState = "checks_state"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        number = try c.decode(Int.self, forKey: .number)
+        url = try c.decodeIfPresent(String.self, forKey: .url) ?? ""
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        state = try c.decodeIfPresent(String.self, forKey: .state) ?? "OPEN"
+        draft = try c.decodeIfPresent(Bool.self, forKey: .draft)
+        base = try c.decodeIfPresent(String.self, forKey: .base) ?? ""
+        head = try c.decodeIfPresent(String.self, forKey: .head) ?? ""
+        mergeable = try c.decodeIfPresent(String.self, forKey: .mergeable)
+        mergeState = try c.decodeIfPresent(String.self, forKey: .mergeState)
+        review = try c.decodeIfPresent(String.self, forKey: .review)
+        autoMerge = try c.decodeIfPresent(Bool.self, forKey: .autoMerge)
+        checks = try c.decodeIfPresent([GitCheck].self, forKey: .checks) ?? []
+        checksState = try c.decodeIfPresent(String.self, forKey: .checksState)
+        threads = try c.decodeIfPresent([GitPRThread].self, forKey: .threads) ?? []
+    }
+}
+
+/// What every pull request call answers: the branch and its pull request (nil: it has none).
+nonisolated struct GitPRAnswer: Decodable, Sendable {
+    var branch: String
+    var pr: GitPR?
+}
+
+/// What `git/branches` answers: the branches, and the remote's default branch by its name (`origin/HEAD`), nil when git
+/// doesn't know it or the node is older (#7014).
+nonisolated struct GitBranchList: Decodable, Sendable {
+    var branches: [GitBranch]
+    var defaultBranch: String?
+
+    enum CodingKeys: String, CodingKey { case branches, defaultBranch = "default" }
+}
+
+/// One stash (#7015). `oid` names it whatever the stack does since: a node without it gets no writes.
+nonisolated struct GitStashEntry: Decodable, Identifiable, Hashable, Sendable {
+    var index: Int
+    var oid: String?
+    var message: String
+    var date: Date?
+    var id: String { (oid ?? "legacy") + ":\(index)" }
+
+    /// The node said which stash this is (40 or 64 hex digits), so apply, pop and drop can't reach another one.
+    var hasIdentity: Bool {
+        guard let oid, oid.count == 40 || oid.count == 64 else { return false }
+        return oid.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+    }
 }
 
 nonisolated struct GitPullResult: Codable, Hashable, Sendable {
@@ -190,6 +327,59 @@ extension APIClient {
     /// Pushes the branch to its upstream, never forced; setUpstream makes one on origin for a branch without one.
     func gitPush(machine: String, cwd: String, setUpstream: Bool) async throws -> GitWriteResult {
         try await post(mp(machine) + "/git/push", body: GitPushRequest(cwd: cwd, setUpstream: setUpstream), timeout: 100)
+    }
+    /// The branches to switch to (#7015): local ones, then remote ones without a local one, newest first; and the remote's
+    /// default branch when git knows it (#7014).
+    func gitBranches(machine: String, cwd: String) async throws -> GitBranchList {
+        try await get(mp(machine) + "/git/branches", query: ["cwd": cwd], as: GitBranchList.self)
+    }
+    private struct GitSwitchRequest: Encodable { var cwd, branch: String; var create: Bool }
+    /// Switches to branch, or makes it here with create. Uncommitted files the branch has differently are refused
+    /// (`git_conflict` with the files), never overwritten; the other uncommitted changes go along.
+    func gitSwitch(machine: String, cwd: String, branch: String, create: Bool) async throws -> GitWriteResult {
+        try await post(mp(machine) + "/git/switch", body: GitSwitchRequest(cwd: cwd, branch: branch, create: create), timeout: 100)
+    }
+    private struct GitStashRequest: Encodable {
+        var cwd, op: String
+        var index: Int?
+        var oid, message: String?
+        var untracked: Bool?
+    }
+    /// A stash write (op push, list, apply, pop or drop): apply, pop and drop name the stash by index and oid, so a
+    /// stack that moved is refused (`git_stash_stale`).
+    private struct GitPRCreateRequest: Encodable {
+        var cwd, title, body: String
+        var base: String?
+        var draft: Bool
+    }
+    /// The current branch's pull request, read through gh on that computer as it is signed in (#7014).
+    func gitPR(machine: String, cwd: String) async throws -> GitPRAnswer {
+        try await get(mp(machine) + "/git/pr", query: ["cwd": cwd], as: GitPRAnswer.self)
+    }
+    /// Opens a pull request for the branch (pushed, nothing left to push); base nil: the default branch.
+    func gitPRCreate(machine: String, cwd: String, title: String, body: String, base: String?, draft: Bool) async throws -> GitPRAnswer {
+        try await post(mp(machine) + "/git/pr", body: GitPRCreateRequest(cwd: cwd, title: title, body: body, base: base, draft: draft),
+                       timeout: 100, as: GitPRAnswer.self)
+    }
+    private struct GitPRMergeRequest: Encodable {
+        var cwd: String
+        var number: Int
+        var method: String?
+        var auto: Bool?
+        var autoOff: Bool?
+        enum CodingKeys: String, CodingKey { case cwd, number, method, auto, autoOff = "auto_off" }
+    }
+    /// Merges it now (method), sets it to merge once checks and reviews allow (auto), or takes that back (autoOff). The
+    /// branch is never deleted.
+    func gitPRMerge(machine: String, cwd: String, number: Int, method: String?, auto: Bool, autoOff: Bool) async throws -> GitPRAnswer {
+        try await post(mp(machine) + "/git/pr/merge",
+                       body: GitPRMergeRequest(cwd: cwd, number: number, method: method, auto: auto ? true : nil, autoOff: autoOff ? true : nil),
+                       timeout: 100, as: GitPRAnswer.self)
+    }
+    func gitStash(machine: String, cwd: String, op: String, entry: GitStashEntry? = nil, message: String? = nil,
+                  untracked: Bool? = nil) async throws -> GitWriteResult {
+        try await post(mp(machine) + "/git/stash", body: GitStashRequest(cwd: cwd, op: op, index: entry?.index, oid: entry?.oid,
+                                                                       message: message, untracked: untracked), timeout: 100)
     }
     func gitDiff(machine: String, cwd: String, path: String, staged: Bool) async throws -> GitDiff {
         try await get(mp(machine) + "/git/diff", query: ["cwd": cwd, "path": path, "staged": staged ? "1" : "0"])

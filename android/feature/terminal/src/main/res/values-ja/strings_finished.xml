@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="terminal_stopped">このエージェントは停止しています。「セッションを再開」で、そのコンピュータのターミナルでもう一度動かします。</string>
+    <string name="terminal_panes_finished">終了：%1$s</string>
+    <string name="terminal_panes_close_title">「%1$s」を閉じますか？</string>
+    <string name="terminal_panes_close_detail">中で動いているものは終了します。元に戻せません。</string>
+    <string name="terminal_panes_close_finished">終了したターミナルを閉じる</string>
+    <string name="terminal_panes_no_finished">閉じられる終了したターミナルはありません</string>
+    <plurals name="terminal_panes_finish_title">
+        <item quantity="other">終了したターミナルを%1$d個閉じますか？</item>
+    </plurals>
+    <string name="terminal_panes_finish_detail">停止したエージェントが残したターミナルです。閉じると中のシェルは終了します。エージェントの会話は残り、「再開」で新しいターミナルが開きます。</string>
+    <string name="terminal_panes_confirm_close">ターミナルを閉じる</string>
+    <plurals name="terminal_panes_closed">
+        <item quantity="other">ターミナルを%1$d個閉じました</item>
+    </plurals>
+    <plurals name="terminal_panes_kept">
+        <item quantity="other">%1$d個のターミナルはプログラムが実行中か状態を確認できないため残しました。</item>
+    </plurals>
+    <string name="terminal_panes_close_failed">ターミナルを閉じられませんでした：%1$s</string>
+</resources>

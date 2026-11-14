@@ -49,6 +49,7 @@ func releaseDir(t *testing.T, version string, build func(name string) int64) str
 	write("persona-hub-"+here+".gz", script("persona-hub-"+here+".gz"))
 	write("personad-"+other+".gz", foreign("personad-"+other+".gz"))
 	write("persona-node-"+other+".gz", foreign("persona-node-"+other+".gz"))
+	write("persona-link-windows-amd64.exe.gz", foreign("persona-link-windows-amd64.exe.gz"))
 	return dir
 }
 
@@ -61,7 +62,8 @@ func TestVerifyReleaseAcceptsItsOwnBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Files) != 2 || len(m.Programs["persona-hub"]) != 1 || len(m.Nodes["persona-node"]) != 1 {
+	if len(m.Files) != 2 || len(m.Programs["persona-hub"]) != 1 || len(m.Nodes["persona-node"]) != 1 ||
+		m.Links["windows-amd64"].Name != "persona-link-windows-amd64.exe.gz" {
 		t.Fatalf("the release is not all there: %+v", m)
 	}
 	if err := VerifyRelease(context.Background(), dir, m); err != nil {
@@ -81,6 +83,7 @@ func TestVerifyReleaseRefusesAnotherRunsBinaries(t *testing.T) {
 		{"persona-hub-" + here + ".gz", "says"},
 		{"personad-" + other + ".gz", "is not build 202611110749"},
 		{"persona-node-" + other + ".gz", "is not build 202611110749"},
+		{"persona-link-windows-amd64.exe.gz", "is not build 202611110749"},
 	} {
 		t.Run(tc.stale, func(t *testing.T) {
 			dir := releaseDir(t, "0.2.1", func(name string) int64 {

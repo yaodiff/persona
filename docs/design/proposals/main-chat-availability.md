@@ -155,6 +155,10 @@ needs, such as approving a message before it is sent.
 Why a flag and not a change of meaning: a tool result that says "asked, the answer will come later" is safe only where
 the prompt was written for it. Leaders and scheduled tasks keep today's behavior until their prompts are revisited.
 
+Revisited in #7392: the instructions now tell every conversation, not only the main one, to prefer `wait: false`, and a
+waiting question that a message from elsewhere is queued behind lets go of its turn after two minutes, its card
+unchanged (`docs/assistant/assistant.md`, "Asking without holding the turn").
+
 ## 4. Fewer asks
 
 ### 4a. Suggest a rule after repeated answers

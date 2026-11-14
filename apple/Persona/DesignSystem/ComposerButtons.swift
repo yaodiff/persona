@@ -84,16 +84,35 @@ struct ComposerRoundButton: View {
     var id: String
     /// Shrinks while pressed (Telegram's send); the others keep the plain button's press.
     var pressScales = false
+    /// The quieter grey circle with the ink's symbol (the dictation bar's cancel and stop), under the ink one.
+    var muted = false
+    /// Working on it: a spinner in the symbol's place.
+    var busy = false
     var action: () -> Void
     @Environment(\.buiTheme) private var theme
 
+    private var symbolInk: Color {
+        if muted { return AppStyle.current.usesBeautifulUI ? theme.colors.ink : Theme.Shell.ink }
+        return AppStyle.current.usesBeautifulUI ? theme.colors.canvas : Theme.Shell.inkText
+    }
+
+    private var fill: Color {
+        if muted { return AppStyle.current.usesBeautifulUI ? theme.colors.inset : Theme.Shell.roundMuted }
+        return AppStyle.current.usesBeautifulUI ? theme.colors.ink : Theme.Shell.ink
+    }
+
     var body: some View {
         Button(action: action) {
-            ThemedIcon(symbol)
-                .font(Theme.Font.bodyHeavy)
-                .foregroundStyle(AppStyle.current.usesBeautifulUI ? theme.colors.canvas : Theme.Shell.inkText)
+            ZStack {
+                if busy {
+                    ProgressView().tint(symbolInk)
+                } else {
+                    ThemedIcon(symbol).font(Theme.Font.bodyHeavy)
+                }
+            }
+                .foregroundStyle(symbolInk)
                 .scaledFrame(width: Theme.Size.wellL, height: Theme.Size.wellL)
-                .background(AppStyle.current.usesBeautifulUI ? theme.colors.ink : Theme.Shell.ink, in: .circle)
+                .background(fill, in: .circle)
                 .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                 .contentShape(.circle)
         }

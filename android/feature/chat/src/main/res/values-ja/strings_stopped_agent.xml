@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_stopped_resume">再開</string>
+    <string name="chat_new_agent_started">新規</string>
+</resources>

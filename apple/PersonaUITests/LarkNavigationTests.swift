@@ -16,6 +16,12 @@ final class LarkNavigationTests: XCTestCase {
         return app
     }
 
+    @MainActor private func expandSource(_ app: XCUIApplication) {
+        let source = app.buttons["inbox.detail.source"]
+        XCTAssertTrue(source.waitForExistence(timeout: 20), "the original-source control did not appear")
+        source.tapCenter()
+    }
+
     @MainActor private func assertChat(_ app: XCUIApplication, title: String) {
         let nav = app.navigationBars[title]
         XCTAssertTrue(nav.waitForExistence(timeout: 20))
@@ -72,6 +78,7 @@ final class LarkNavigationTests: XCTestCase {
             for _ in 0..<5 where !row.isHittable { app.swipeUp() }
             XCTAssertTrue(row.waitForExistence(timeout: 10))
             row.tapCenter()
+            expandSource(app)
             assertChat(app, title: title)
             cancelBack(app, title: title)
             shot(app, name: "inbox-shell-\(item.contains("f3") ? "group" : "dm")")

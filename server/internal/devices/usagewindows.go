@@ -217,6 +217,14 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 		resets   int64
 	}
 	seen := map[key]int{}
+	// A component can grow through several samples. Checking only the first-seen sample lets a local sample bridge two
+	// different accounts of one gateway, so carry every component's refs and reject any conflict before joining it.
+	refs := make(map[int][]string, len(live))
+	for i, a := range live {
+		if a.Ref != "" {
+			refs[i] = []string{a.Ref}
+		}
+	}
 	for i, a := range live {
 		for _, w := range a.Windows {
 			if w.ResetsAt == nil || w.Model != "" {
@@ -228,10 +236,24 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 				seen[k] = i
 				continue
 			}
-			if sameSourceOtherAccount(live[i].Ref, live[j].Ref) {
+			left, right := find(i), find(j)
+			if left == right {
 				continue
 			}
-			parent[find(i)] = find(j)
+			conflict := false
+			for _, a := range refs[left] {
+				for _, b := range refs[right] {
+					if sameSourceOtherAccount(a, b) {
+						conflict = true
+					}
+				}
+			}
+			if conflict {
+				continue
+			}
+			parent[left] = right
+			refs[right] = append(refs[right], refs[left]...)
+			delete(refs, left)
 		}
 	}
 	groups := map[int][]proto.UsageAccount{}

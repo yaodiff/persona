@@ -6,11 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const viewport = vi.hoisted(() => ({ phone: false }));
 vi.hoisted(() => {
-  window.matchMedia = ((query: string) => ({ get matches() { return viewport.phone; }, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
+  // a phone matches the narrow queries; a wide screen the wide ones (the list beside an item, from 900 px)
+  window.matchMedia = ((query: string) => ({ get matches() { return /min-width/.test(query) ? !viewport.phone : viewport.phone; }, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 vi.mock("../lib/store", async (original) => ({
   ...(await original<typeof import("../lib/store")>()),
-  useStore: (select: (state: { features: string[]; machines: unknown[]; conn: string; link: { networkUp: boolean; restarting: boolean }; hubName: string; mesh: unknown[] }) => unknown) => select({ features: ["channels", "extension_manager"], machines: [], conn: "online", link: { networkUp: true, restarting: false }, hubName: "", mesh: [] }),
+  useStore: (select: (state: { features: string[]; machines: unknown[]; conn: string; link: { networkUp: boolean; restarting: boolean }; hubName: string; mesh: unknown[] }) => unknown) => select({ features: ["channels", "extension_manager", "connectors"], machines: [], conn: "online", link: { networkUp: true, restarting: false }, hubName: "", mesh: [] }),
 }));
 vi.mock("./settings/ShortcutSettings", () => ({ ShortcutSettings: () => <div data-page="shortcuts" /> }));
 vi.mock("./settings/NotificationSettings", () => ({ NotificationSettings: () => <div data-page="notifications" /> }));
@@ -30,15 +31,19 @@ vi.mock("../lib/pwa", async (original) => ({ ...(await original<typeof import(".
 vi.mock("../lib/api", async (original) => ({ ...(await original<typeof import("../lib/api")>()), api: () => Promise.resolve({ accounts: [] }) }));
 vi.mock("./settings/AgentSettings", () => ({ AgentSettings: ({ agent }: { agent: string }) => <div data-page="agent" data-agent={agent} /> }));
 vi.mock("./settings/Extensions", () => ({
-  Extensions: ({ open, onOpen }: { open: string | null; onOpen: (id: string | null) => void }) => (
-    <div data-page="extensions" data-open={open}>
+  Extensions: ({ open, onOpen, headerBack }: { open: string | null; onOpen: (id: string | null) => void; headerBack?: boolean }) => (
+    <div data-page="extensions" data-open={open} data-header-back={headerBack ? "yes" : "no"}>
       <button type="button" data-item="open" onClick={() => onOpen("example")} />
       <button type="button" data-item="close" onClick={() => onOpen(null)} />
     </div>
   ),
 }));
 vi.mock("./settings/FeishuBot", () => ({ FeishuBot: () => null }));
-vi.mock("./settings/HubConnector", () => ({ ConnectorList: () => <div data-page="connector-list" />, ConnectorDetail: () => <div data-page="connector-detail" /> }));
+vi.mock("./settings/HubConnector", () => ({
+  ConnectorList: ({ onOpen }: { onOpen: (id: string) => void }) => <div data-page="connector-list"><button type="button" data-connector="github" onClick={() => onOpen("github")} /></div>,
+  // its own Back only where it is given one
+  ConnectorDetail: ({ onBack }: { onBack?: () => void }) => <div data-page="connector-detail">{onBack && <button type="button" data-own-back onClick={onBack} />}</div>,
+}));
 vi.mock("./settings/SentSettings", () => ({ SentSettings: () => <div data-page="sent" /> }));
 
 import { initI18n, t } from "../i18n";
@@ -107,6 +112,25 @@ describe("Settings category navigation", () => {
       await initI18n("zh-Hans");
     }
   });
+  // audit item 17: General's hints were cut at one line ("切换后页面会重新载…"), at every width
+  it.each([false, true])("lets General's hints wrap rather than cutting them (phone: %s)", async (phone) => {
+    viewport.phone = phone;
+    await mount("/settings?tab=general");
+    const hints: [string, string][] = [
+      ["language", t("language.hint")],
+      ["text-size", t("ui-look.text_size_hint")],
+      ["reply-motion", t("settings.reply_motion_hint")],
+      ["agent-details", t("context.details_hint")],
+      ["context-as-used", t("context.as_used_hint")],
+      ["install-app", t("settings.install_installed")],
+    ];
+    for (const [anchor, text] of hints) {
+      const hint = [...host.querySelectorAll<HTMLElement>(`[data-settings-row="${anchor}"] div`)].find((d) => d.textContent === text);
+      expect(hint, anchor).toBeTruthy();
+      expect(hint!.classList.contains("truncate"), anchor).toBe(false);
+    }
+  });
+
   it("opens knowledge selection as the current assistant's, with no manager in the address", async () => {
     await mount("/settings?tab=models&manager=remote");
     await act(async () => category(t("settings-nav.tab_knowledge")).click());
@@ -235,7 +259,8 @@ describe("Settings category navigation", () => {
 
   it("preserves legacy extension deep links", async () => {
     await mount("/settings?tab=plugins&plugin=example");
-    expect(host.querySelector('[data-page="extensions"]')?.getAttribute("data-open")).toBe("example");
+    // wide, the list is beside it: the extension is the second column's
+    expect([...host.querySelectorAll('[data-page="extensions"]')].at(-1)?.getAttribute("data-open")).toBe("example");
     expect(category(t("settings-nav.tab_extensions")).getAttribute("aria-current")).toBe("page");
   });
 
@@ -273,10 +298,78 @@ describe("Settings category navigation", () => {
     expect(host.querySelector('[data-page="sent"]')).not.toBeNull();
     expect(host.querySelector('[data-page="connector-detail"]')).toBeNull();
     expect(host.querySelector('[data-settings-group="sent"]')).toBeNull();
-    const back = [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === t("settings-hubconnector.back"))!;
-    await popped(() => back.click());
+    const own = [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === t("settings-hubconnector.back"));
+    // a phone's top bar has the one Back (audit item 64); wider, the page has its own
+    // named for where it goes: Connectors
+    const header = host.querySelector<HTMLButtonElement>(`header button[aria-label="${t("settings.back_to", { name: t("settings-nav.tab_connectors") })}"]`);
+    expect(!!own).toBe(!phone);
+    await popped(() => (phone ? header! : own!).click());
     expect(location.search).toBe("?tab=connectors");
     expect(host.querySelector('[data-settings-group="sent"]')).not.toBeNull();
+  });
+
+  // audit item 64: a connector's page on a phone had the top bar's Back and one of its own under it
+  it("gives a phone's connector page one Back, the top bar's, which returns to Connectors, then to the list", async () => {
+    viewport.phone = true;
+    history.pushState(null, "", "/");
+    await mount("/settings");
+    await act(async () => category(t("settings-nav.tab_connectors")).click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-connector="github"]')!.click());
+    expect(location.search).toBe("?tab=connectors&connector=github");
+    expect(host.querySelector('[data-page="connector-detail"]')).not.toBeNull();
+    expect(host.querySelector("[data-own-back]")).toBeNull();
+    // one way back, named for where it goes: Connectors, then (from Connectors) Settings
+    const back = () => host.querySelector<HTMLButtonElement>("header button:first-child")!;
+    const toConnectors = t("settings.back_to", { name: t("settings-nav.tab_connectors") });
+    expect(back().getAttribute("aria-label")).toBe(toConnectors);
+    expect(host.querySelectorAll(`button[aria-label="${toConnectors}"], button[aria-label="${t("settings.back")}"]`)).toHaveLength(1);
+    await popped(() => back().click());
+    expect(location.search).toBe("?tab=connectors");
+    expect(host.querySelector('[data-page="connector-list"]')).not.toBeNull();
+    expect(back().getAttribute("aria-label")).toBe(t("settings.back"));
+    await popped(() => back().click());
+    expect(location.search).toBe("");
+    expect(host.querySelector("nav")).not.toBeNull();
+  });
+
+  // a Lark bot channel's settings link opens Connectors with the bot's dialog over the list: not an item's page, so the
+  // top bar's Back is the list's, not "Back to Connectors" (which took two presses to leave)
+  it("leaves the top bar going to the Settings list under the Lark bot's dialog on a phone", async () => {
+    viewport.phone = true;
+    history.pushState(null, "", "/");
+    await mount("/settings?tab=connectors&connector=feishu-bot");
+    expect(host.querySelector('[data-page="connector-list"]')).not.toBeNull();
+    const back = host.querySelector<HTMLButtonElement>("header button:first-child")!;
+    expect(back.getAttribute("aria-label")).toBe(t("settings.back"));
+    await act(async () => back.click());
+    expect(location.search).toBe("");
+    expect(host.querySelector("nav")).not.toBeNull();
+  });
+
+  // audit item 64: pages inside an extension's or the market's had the top bar's Back, to the extension list, over their
+  // own, to the catalog or the extension; the top bar's now goes where theirs did, and they draw none
+  it.each([
+    { from: "-market/example-market/example", to: "-market", label: () => t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) },
+    { from: "-markets", to: "-market", label: () => t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) },
+    { from: "-market/example-market/example@work", to: "example@work", label: () => t("settings-extensionview.back") },
+    { from: "example/ui/main", to: "example", label: () => t("settings-extensionview.back") },
+    { from: "-market", to: null, label: () => t("settings.back_to", { name: t("settings-nav.tab_extensions") }) },
+  ])("on a phone, the top bar's Back goes from extension page $from to its parent", async ({ from, to, label }) => {
+    viewport.phone = true;
+    history.pushState(null, "", "/");
+    await mount(`/settings?tab=extensions&extension=${encodeURIComponent(from)}`);
+    const page = () => [...host.querySelectorAll("[data-page=extensions]")].at(-1)!;
+    expect(page().getAttribute("data-header-back")).toBe("yes");
+    const back = host.querySelector<HTMLButtonElement>("header button:first-child")!;
+    expect(back.getAttribute("aria-label")).toBe(label());
+    await act(async () => back.click());
+    expect(page().getAttribute("data-open")).toBe(to);
+    expect(new URLSearchParams(location.search).get("extension")).toBe(to);
+  });
+
+  it("keeps a connector page's own Back on a wide screen", async () => {
+    await mount("/settings?tab=connectors&connector=github");
+    expect(host.querySelector("[data-own-back]")).not.toBeNull();
   });
 
   it.each(["/settings?tab=sent", "/settings/sent", "/settings/sent/"])("redirects %s to the secondary Sent page", async (url) => {
@@ -313,9 +406,11 @@ describe("Settings category navigation", () => {
       { go: browserBack, at: "?tab=extensions", entries: 2 },
       { go: browserBack, at: "", entries: 2 },
     ] },
-    { name: "phone: the header's Back from an extension goes to the Settings list", phone: true, url: "/settings", steps: [
+    // the top bar's Back steps out one level, as the page's own Back it stands in for did (audit item 64)
+    { name: "phone: the header's Back goes from an extension to the extension list, then to the Settings list", phone: true, url: "/settings", steps: [
       { go: () => act(async () => category(t("settings-nav.tab_extensions")).click()), at: "?tab=extensions", entries: 1 },
       { go: () => act(async () => item("open").click()), at: "?tab=extensions&extension=example", entries: 2 },
+      { go: () => popped(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back_to", { name: t("settings-nav.tab_extensions") })}"]`)!.click()), at: "?tab=extensions", entries: 2 },
       { go: () => popped(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back")}"]`)!.click()), at: "", entries: 2 },
     ] },
     { name: "switching categories adds no entries", phone: false, url: "/settings?tab=extensions", steps: [
@@ -335,6 +430,65 @@ describe("Settings category navigation", () => {
       expect([...host.querySelectorAll("[data-page=extensions]")].at(-1)?.getAttribute("data-open") ?? null).toBe(step.at.includes("extension=") ? "example" : null);
     }
     expect(openedFromSub(history.state)).toBe(false); // no way back into the extension from here
+  });
+
+  // audit item 18: the search box finds a setting by its own name, Enter opens the first result, Esc clears
+  it("finds a setting by its row's label, and Enter takes the page there and lights the row", async () => {
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    await mount("/settings?tab=shortcuts");
+    const box = host.querySelector<HTMLInputElement>(`input[aria-label="${t("settings.search_settings")}"]`)!;
+    const type = (value: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, value);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const key = (k: string) => act(async () => { box.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
+    await type(t("language.label"));
+    expect(nav().textContent).toContain(`${t("settings-nav.tab_general")}›${t("language.label")}`);
+    expect(nav().textContent).not.toContain(t("settings.search_no_results"));
+    await key("Enter");
+    expect(location.search).toBe("");
+    expect(host.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe(t("settings-nav.tab_general"));
+    const row = host.querySelector<HTMLElement>('[data-settings-row="language"]')!;
+    expect(row.textContent).toContain(t("language.label"));
+    expect(scrolled).toContain(row);
+    expect(row.style.boxShadow).toContain("var(--accent)");
+    expect(box.value).toBe("");
+    // Esc clears what was typed and keeps the page
+    await type(t("ui-look.text_size"));
+    expect(box.value).toBe(t("ui-look.text_size"));
+    await key("Escape");
+    expect(box.value).toBe("");
+    expect(host.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe(t("settings-nav.tab_general"));
+    // the Enter that confirms an input method's text is not ours: Safari sends it with isComposing false and keyCode 229
+    await type(t("settings-nav.tab_notifications"));
+    const confirming = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(confirming, "keyCode", { value: 229 });
+    await act(async () => { box.dispatchEvent(confirming); });
+    await act(async () => { box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true })); });
+    expect(location.search).toBe("");
+    expect(box.value).toBe(t("settings-nav.tab_notifications"));
+    // Enter on a category's name opens the category
+    await key("Enter");
+    expect(location.search).toBe("?tab=notifications");
+  });
+
+  // a setting inside a named part of a page ("Claude Code › Thinking effort") opens that page at that part
+  it("finds an agent's own setting by its name, and its result opens that agent's section", async () => {
+    Element.prototype.scrollIntoView = function () {};
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    await mount("/settings?tab=general");
+    const box = host.querySelector<HTMLInputElement>(`input[aria-label="${t("settings.search_settings")}"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, t("lib-agent-settings.setting_effortLevel"));
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(nav().textContent).toContain(`${t("settings-nav.tab_agents")}›Claude Code › ${t("lib-agent-settings.setting_effortLevel")}`);
+    expect(nav().textContent).toContain(`${t("settings-nav.tab_models")}›${t("settings-nav.tab_model_config")} › ${t("settings-modelconfiguration.effort")}`);
+    await act(async () => [...nav().querySelectorAll("button")].find((b) => b.textContent?.includes("Claude Code"))!.click());
+    expect(location.search).toBe("?tab=agents");
+    expect(location.hash).toBe("#settings-claude");
   });
 
   it("returns to the phone list from a shared detail URL without navigating away", async () => {

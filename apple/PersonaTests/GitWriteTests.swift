@@ -165,4 +165,93 @@ struct GitWriteTests {
         _ = await task.value
         #expect(model.busy == nil && calls == 1)
     }
+
+    // MARK: Branches and stashes (#7015)
+
+    @Test func branchesDecodeAndARemoteOneSwitchesByItsOwnName() throws {
+        let json = #"{"branches":[{"name":"widget-hourly","current":true,"hash":"a1","subject":"x","date":"2026-11-13T10:00:00Z"},{"name":"main","hash":"a2","subject":"y","date":"2026-11-13T09:00:00Z"},{"name":"origin/release/2.4","remote":true,"hash":"a3","subject":"z","date":"2026-11-12T09:00:00Z"}]}"#
+        let list = try JSON.decoder.decode(GitBranchList.self, from: Data(json.utf8))
+        let b = list.branches
+        #expect(list.defaultBranch == nil, "an older node, or git doesn't know it")
+        let named = try JSON.decoder.decode(GitBranchList.self, from: Data(#"{"branches":[],"default":"main"}"#.utf8))
+        #expect(named.defaultBranch == "main")
+        #expect(b.map(\.switchName) == ["widget-hourly", "main", "release/2.4"])
+        #expect(b[0].current == true && b[1].current == nil && b[2].remote == true)
+        #expect(Set(b.map(\.id)).count == 3)
+    }
+
+    @Test func aStashIsNamedByItsOidOnly() {
+        #expect(GitStashEntry(index: 0, oid: String(repeating: "a", count: 40), message: "m").hasIdentity)
+        #expect(GitStashEntry(index: 0, oid: String(repeating: "0f", count: 32), message: "m").hasIdentity)
+        #expect(!GitStashEntry(index: 0, oid: nil, message: "m").hasIdentity)
+        #expect(!GitStashEntry(index: 0, oid: "abc", message: "m").hasIdentity)
+        #expect(!GitStashEntry(index: 0, oid: String(repeating: "A", count: 40), message: "m").hasIdentity)
+    }
+
+    @Test func switchesOrCreatesABranch() async throws {
+        let hub = FakeHub()
+        var bodies: [[String: Any]] = []
+        hub.on("POST", "/api/v1/machines/mac/git/switch") { req in
+            bodies.append(try JSONSerialization.jsonObject(with: req.body!) as! [String: Any])
+            return Data(#"{"status":\#(Self.status())}"#.utf8)
+        }
+        let model = GitWriteModel(), deps = GitWriteModel.Deps(api: hub.client)
+        let r = await model.switchTo("main", create: false, machine: "mac", cwd: "/w", deps: deps)
+        _ = await model.switchTo("fix/rain", create: true, machine: "mac", cwd: "/w", deps: deps)
+        #expect(r?.status.branch == "main")
+        #expect(bodies.map { $0["branch"] as? String } == ["main", "fix/rain"])
+        #expect(bodies.map { $0["create"] as? Bool } == [false, true])
+        #expect(bodies.allSatisfy { $0["cwd"] as? String == "/w" })
+    }
+
+    @Test func stashWritesSendWhatTheWebSends() async throws {
+        let hub = FakeHub()
+        var bodies: [[String: Any]] = []
+        let oid = String(repeating: "a", count: 40)
+        hub.on("POST", "/api/v1/machines/mac/git/stash") { req in
+            bodies.append(try JSONSerialization.jsonObject(with: req.body!) as! [String: Any])
+            return Data(#"{"status":\#(Self.status()),"stashes":[{"index":0,"oid":"\#(oid)","message":"On main: m","date":"2026-11-13T10:00:00Z"}]}"#.utf8)
+        }
+        let model = GitWriteModel(), deps = GitWriteModel.Deps(api: hub.client)
+        let e = GitStashEntry(index: 1, oid: oid, message: "On main: m")
+        let pushed = await model.stash(.push(message: "  try the palette ", untracked: true), machine: "mac", cwd: "/w", deps: deps)
+        _ = await model.stash(.push(message: " ", untracked: false), machine: "mac", cwd: "/w", deps: deps)
+        _ = await model.stash(.list, machine: "mac", cwd: "/w", deps: deps)
+        _ = await model.stash(.apply(e), machine: "mac", cwd: "/w", deps: deps)
+        _ = await model.stash(.pop(e), machine: "mac", cwd: "/w", deps: deps)
+        _ = await model.stash(.drop(e), machine: "mac", cwd: "/w", deps: deps)
+        #expect(pushed?.stashes?.first?.hasIdentity == true)
+        #expect(bodies.map { $0["op"] as? String } == ["push", "push", "list", "apply", "pop", "drop"])
+        #expect(bodies[0]["message"] as? String == "try the palette" && bodies[0]["untracked"] as? Bool == true)
+        #expect(bodies[1]["message"] == nil && bodies[1]["untracked"] as? Bool == false) // no message: git's own
+        #expect(bodies[2]["index"] == nil && bodies[2]["oid"] == nil)
+        for b in bodies[3...] { #expect(b["index"] as? Int == 1 && b["oid"] as? String == oid) }
+    }
+
+    @Test func aStashWithoutItsOidIsNeverWritten() async {
+        let hub = FakeHub()
+        let model = GitWriteModel()
+        let r = await model.stash(.drop(GitStashEntry(index: 0, oid: nil, message: "old")), machine: "mac", cwd: "/w", deps: .init(api: hub.client))
+        #expect(r == nil && model.refusal == nil)
+        #expect(hub.sent("POST", "/api/v1/machines/mac/git/stash").isEmpty)
+    }
+
+    @Test func aSwitchRefusedForFilesInTheWayKeepsItsCodeAndFiles() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/machines/mac/git/switch") { _ in
+            throw APIError(status: 409, message: "error: Your local changes to the following files would be overwritten by checkout",
+                           fields: ["code": "git_conflict"],
+                           details: .object(["code": .string("git_conflict"), "files": .array([.string("a.swift"), .string("b.swift")])]))
+        }
+        let model = GitWriteModel()
+        _ = await model.switchTo("main", create: false, machine: "mac", cwd: "/w", deps: .init(api: hub.client))
+        let refusal = try #require(model.refusal)
+        #expect(refusal.code == "git_conflict" && refusal.files == ["a.swift", "b.swift"])
+        #expect(refusal.shownDetail == nil, "the files say it; git's words go to the log")
+        #expect(GitRefusal(title: "t", detail: "hook output", code: "git_hook_failed").shownDetail == "hook output")
+        #expect(GitRefusal(title: "t", detail: "git's words", code: "git_conflict").shownDetail == "git's words", "no files: git's words stay")
+        #expect(refusal.title == "会覆盖未提交的改动：先提交或收起这些文件")
+        #expect(GitRefusal.title("git_stash_stale") == "贮藏列表变了。刷新后重新选择贮藏。")
+        #expect(GitRefusal.title("git_stash_conflicted") == "已应用，但这些文件有冲突：解决后再提交。贮藏仍保留。")
+    }
 }

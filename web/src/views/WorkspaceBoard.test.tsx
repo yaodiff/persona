@@ -20,6 +20,7 @@ vi.mock("../i18n", async (load) => {
   return { ...real, t: (key: string, vars?: Parameters<typeof real.t>[1]) => { if (key === "workspaceboard.card_menu") live.cardRenders++; return real.t(key, vars); } };
 });
 import { refresh, reset } from "../lib/store";
+import { setRosterDefault } from "../lib/manager-choice";
 import { resetWorkspaceBoardSettingForTest } from "../lib/workspace-board-setting";
 import type { BoardCard } from "../lib/workspace-board";
 import type { Machine, Session } from "../lib/types";
@@ -58,6 +59,7 @@ const type = (text: string) => act(() => {
 
 describe("the workflow board with many cards and Agents", () => {
   beforeEach(() => {
+    setRosterDefault("assistant");
     live.sessions = []; live.reads = 0; live.cardRenders = 0;
     resetWorkspaceBoardSettingForTest();
     vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(answers[new URL(url, "http://x").pathname] ?? {}), { headers: { "Content-Type": "application/json" } }))));

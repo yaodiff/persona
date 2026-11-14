@@ -21,6 +21,11 @@ final class LarkNativeEncryptionFlowTests: XCTestCase {
         }
         let chat = inbox ? app.staticTexts["设计评审"].firstMatch : app.buttons["feishu-chat-f2"]
         XCTAssertTrue(chat.waitForExistence(timeout: 20)); chat.tapCenter()
+        if inbox {
+            let source = app.buttons["inbox.detail.source"].firstMatch
+            XCTAssertTrue(source.waitForExistence(timeout: 15), "the original source control did not appear")
+            source.tapCenter()
+        }
         XCTAssertTrue(app.textFields["lark.box"].waitForExistence(timeout: 15))
         return app
     }

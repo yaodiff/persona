@@ -22,7 +22,7 @@ import { WorkspaceChoices } from "./NewAgentWorkspaces";
 import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import {
-  effortChoices, fitEffort, followedBinding, launcherAgent, machineLaunchers, pickerLauncher, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
+  effortChoices, fitEffort, followedBinding, inlineTextStart, launcherAgent, machineLaunchers, pickerLauncher, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
 } from "../lib/launcher-models";
 import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
 import { readModels } from "../lib/session-models";
@@ -581,8 +581,11 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
       const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
       rememberSetup({ ...setup, at: setupTime() });
+      const inline = !workspace && !desktopStart && launchersOf === mid && agent === "traex"
+        ? inlineTextStart(launchers.find((l) => l.name === listLauncher), opensIn ?? hostDefault, snapshot.text, snapshot.attachments.length)
+        : undefined;
       const id = launchAgent({ machineId: mid, cwd: dir, workspaceId: workspace?.workspaceId, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: snapshot.text, attachments: sent,
-        ...(codex ? { agentType: "codex", inlinePrompt: true } : {}) });
+        ...(codex ? { agentType: "codex", inlinePrompt: true } : inline) });
       if (onStarted) whenStarted(id, onStarted);
       const ids = new Set(snapshot.attachments.map((a) => a.id));
       releaseAttachments(attachmentsRef.current.filter((a) => ids.has(a.id)));

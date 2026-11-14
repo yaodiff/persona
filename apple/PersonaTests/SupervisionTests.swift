@@ -371,15 +371,17 @@ struct ChatSupervisionTests {
         #expect(!Supervision.visible([input(4, text: "Next real request"), late], results: [use.toolUseID!: late], live: false))
     }
 
-    @Test func foldAndClientPromotionRoundTripWithTheirDistinctKeys() throws {
+    /// The item's own mark is under the hub's item key too (`proto.Item.SupervisionUser`, restored by #7160), so a page,
+    /// a cache restore and the core's replay all read the same field.
+    @Test func foldAndClientPromotionRoundTripUnderTheHubsKey() throws {
         let json = #"{"id":"fold:t2#0","seq":2,"role":"assistant","kind":"fold","fold":{"items":4,"tools":2,"thoughts":0,"through_seq":5,"through_id":"r5#0","supervision_user":true}}"#
         var folded = try JSON.decoder.decode(Item.self, from: Data(json.utf8))
         #expect(folded.fold?.supervisionUser == true && visible([input(1), folded]))
         folded.supervisionUser = true
         let data = try JSON.encoder.encode(folded)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
-        #expect(value["supervisionUser"] == .bool(true))
-        #expect(value["supervision_user"] == nil)
+        #expect(value["supervision_user"] == .bool(true))
+        #expect(value["supervisionUser"] == nil)
         #expect(value["fold"]?["supervision_user"] == .bool(true))
         #expect(try JSON.decoder.decode(Item.self, from: data) == folded)
         folded.fold?.supervisionUser = nil

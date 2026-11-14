@@ -170,7 +170,8 @@ type pushDevice struct {
 	Push      pushRoute `json:"push"`
 }
 
-// pushRoutes: GET /api/v1/devices/push, every device the hub pushes to and its way (`hub doctor`).
+// pushRoutes: GET /api/v1/devices/push, every device the hub pushes to and its way, and every browser with Web Push
+// (`hub doctor`).
 func (h *Hub) pushRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/devices/push", func(w http.ResponseWriter, r *http.Request) {
 		devices := []pushDevice{}
@@ -184,7 +185,7 @@ func (h *Hub) pushRoutes(api *http.ServeMux) {
 				devices = append(devices, pushDevice{DeviceID: d.DeviceID, Name: d.Name, Kind: d.Kind, UpdatedAt: d.UpdatedAt, Push: h.push.routeOf(d)})
 			}
 		}
-		writeJSON(w, map[string]any{"direct": direct, "devices": devices})
+		writeJSON(w, map[string]any{"direct": direct, "devices": devices, "web": h.webPushList()})
 	})
 }
 

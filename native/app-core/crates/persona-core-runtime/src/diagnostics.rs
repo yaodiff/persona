@@ -33,6 +33,7 @@ pub(crate) struct Counters {
     pub worker_host_run: AtomicU64,
     pub worker_host_changed: AtomicU64,
     pub worker_actions: AtomicU64,
+    pub pending_lock_without_proc: AtomicU64,
 }
 
 /// Time the real lock acquisition once, including the scheduler counter reads' own overhead.
@@ -71,8 +72,13 @@ pub(crate) fn timed_lock<'a, T>(shared: &Shared, mutex: &'a Mutex<T>, patch: boo
         counters
             .patch_lock_without_proc
             .fetch_add(low_overhead_ns, Ordering::Relaxed);
-    } else if contended {
-        increment(&counters.pending_contended);
+    } else {
+        counters
+            .pending_lock_without_proc
+            .fetch_add(low_overhead_ns, Ordering::Relaxed);
+        if contended {
+            increment(&counters.pending_contended);
+        }
     }
     guard
 }

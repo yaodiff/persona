@@ -260,7 +260,7 @@ subshell exports, several Codex forms, and `--settings` env (`withSettingsEnv`).
 ## Testing availability (`node/launchercheck.go`)
 
 “Test availability” on the detail page actually sends a request requiring a one-word answer on every online computer with this launcher (for Persona-managed launchers, on the hub machine, chosen by the manager)
-(`claude -p … --output-format json --max-turns 1`, `codex exec` for Codex). It runs in an empty directory, with a 90-second timeout and no hooks (`disableAllHooks` in `--settings`, still merged with managed-launcher env and the alias's own `--settings`: on some computers, Persona hooks stalled it until timeout, #3412). It displays ✓ / ✗, elapsed time, the answering model,
+(`claude -p … --output-format json --max-turns 1`, `codex exec` for Codex). It runs in an empty directory, with a 150-second timeout and no hooks (`disableAllHooks` in `--settings`, still merged with managed-launcher env and the alias's own `--settings`: on some computers, Persona hooks stalled it until timeout, #3412). It displays ✓ / ✗, elapsed time, the answering model,
 and the redacted failure reason. This costs a few tokens. `POST /api/v1/launchers/{name}/check?machine=`.
 hub also uses this to check every launcher on every computer periodically, avoiding broken ones when dispatching work and automatically fixing what it can; see `docs/server/launcher-health.md`.
 
