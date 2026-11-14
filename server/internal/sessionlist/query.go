@@ -34,7 +34,14 @@ func (i *Index) Query(options Options) (Page, error) {
 				return Page{}, err
 			}
 		}
-		r = i.queryResult(o)
+		if o.Search != "" {
+			r, err = i.searchResult(o)
+			if err != nil {
+				return Page{}, err
+			}
+		} else {
+			r = i.queryResult(o)
+		}
 		if len(r.events) > o.Limit {
 			id = randomToken()
 			if len(i.snapshots) == maxSnapshots {
@@ -46,6 +53,9 @@ func (i *Index) Query(options Options) (Page, error) {
 	}
 	end := min(offset+o.Limit, len(r.events))
 	p := Page{Sessions: make([]any, 0, end-offset), Remove: make([]string, 0), Revision: r.counts.Revision, Total: r.counts.Total, HasMore: end < len(r.events)}
+	if o.Search != "" {
+		p.SearchHits = make(map[string]SearchHit, end-offset)
+	}
 	for _, e := range r.events[offset:end] {
 		if e.value == nil {
 			p.Remove = append(p.Remove, e.id)
@@ -56,6 +66,14 @@ func (i *Index) Query(options Options) (Page, error) {
 			value = e.value.item.Summary
 		}
 		p.Sessions = append(p.Sessions, clone(value))
+		if o.Search != "" {
+			hit := r.searchHits[e.id]
+			if hit.Evidence != nil {
+				copy := *hit.Evidence
+				hit.Evidence = &copy
+			}
+			p.SearchHits[e.id] = hit
+		}
 	}
 	if p.HasMore {
 		p.NextCursor = i.cursorToken(id, end)
@@ -67,6 +85,9 @@ func (i *Index) Query(options Options) (Page, error) {
 // membership, validating Since if supplied; with Cursor it reports that frozen
 // view's membership and revision rather than a newer revision.
 func (i *Index) Counts(options Options) (Counts, error) {
+	if options.Search != "" {
+		return Counts{}, failure("invalid_query", "search does not support counts")
+	}
 	o, err := validate(options)
 	if err != nil {
 		return Counts{}, err

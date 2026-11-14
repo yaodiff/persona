@@ -240,7 +240,7 @@
   },
   {
     "name": "notify_user",
-    "description": "Send the user a push notification right now (works when the app is closed). Tapping it opens this conversation. Use for results of scheduled runs and anything time-sensitive; don't notify for ordinary replies (they get one automatically).",
+    "description": "Send the user a push notification right now (works when the app is closed). Tapping it opens this conversation. Use for results of scheduled runs and anything time-sensitive; don't notify for ordinary replies (they get one automatically). In the hub's low-distraction mode, a notice from a conversation other than the main one is held for the briefing instead of alerting unless it is P0; the tool answer then says it was moved to the briefing, so treat the user as not alerted.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -253,6 +253,18 @@
         },
         "body": {
           "type": "string"
+        },
+        "push_level": {
+          "type": "string",
+          "enum": [
+            "P0",
+            "P1"
+          ],
+          "description": "How urgent this is. P1 (default): worth knowing; in the hub's low-distraction mode it is held for the briefing instead of alerting, and from a non-main conversation it is held even without an explicit level. P0: something the user must do or decide themselves (an action only they can take, a decision only they can make), so it alerts even in low-distraction mode and from any conversation. Use P1 for results, progress and conclusions."
+        },
+        "related_key": {
+          "type": "string",
+          "description": "Optional: what this is about, such as a PR link or a to-do id. In low-distraction mode the same key interrupts at most once in 12 hours, and held notices about it are listed together."
         }
       }
     }
@@ -953,6 +965,38 @@
     }
   },
   {
+    "name": "agent_autoname_receipt",
+    "description": "Read-only: inspect the current assistant's existing agent_autoname confirmation cards and one coding agent's current naming snapshot. This does not prove that a particular earlier model call started, completed or succeeded: the model's tool-call id is not a manager-side correlation. The naming snapshot may predate the call or come from another caller, and background naming failures are not attributed to it. Do not retry a request from this result; unknown or ambiguous means the evidence cannot settle the outcome. Use only the exact machine and full session id from agents_list. The caller is verified from the actual assistant conversation; no other assistant's cards can be read. Optional since/before are an RFC3339 window of at most 24 hours, and must be supplied together. Confirmation history is read with bounded pages; incomplete pages are reported. This tool never calls the naming model, writes settings, approves or resolves a card, renames an agent, or publishes a session list. Not for Persona conversations, ordinary coding Agents, or extensions.",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "machine",
+        "session_id"
+      ],
+      "properties": {
+        "machine": {
+          "type": "string",
+          "description": "the machine's exact id, as agents_list shows it"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "the agent's exact full session id, never a prefix"
+        },
+        "since": {
+          "type": "string",
+          "format": "date-time",
+          "description": "inclusive RFC3339 start of the original confirmation window; requires before"
+        },
+        "before": {
+          "type": "string",
+          "format": "date-time",
+          "description": "exclusive RFC3339 end of the original confirmation window [since,before); at most 24 hours after since"
+        }
+      }
+    }
+  },
+  {
     "name": "interaction_answer",
     "description": "Answer another agent's question for the user, in their place, when they said what to answer or told you to decide. Only a question can be answered this way: a tool permission, a plan and a terminal dialog are theirs to decide in the app, and the assistant's own question is never answered by itself. Every question must be answered by its own wording, with the option labels it offers; free text is not accepted (the user answers that in the app, or you use agent_send). A multi-select takes an array of labels. A card a 督办 message handed you before the user (a task you supervise) is yours to answer when it is the agent's own call: give reason, and the answer is kept as the task's decision; what the user must decide goes to them with ask_escalate.",
     "input_schema": {
@@ -1002,7 +1046,7 @@
   },
   {
     "name": "ask_escalate",
-    "description": "Hand the cards a task's agents wait on to the user, when a 督办 message gave them to you first and the user must decide: a tool permission or a plan (no conversation approves those), or a question that is irreversible, seen by other people, changes the goal or goes against a decision already made on the task. Every card of the task the user has not been told of goes to them at once, as one reminder, with your reason and recommendation on it; their answers go straight to the agents and are kept as the task's decisions. Only the task's supervisor and the main conversation can. A leader's escalation is told to the main conversation too, so don't ask the user the same thing again yourself.",
+    "description": "Hand the cards a task's agents wait on to the user, when a 督办 message gave them to you first and the user must decide: a tool permission or a plan (no conversation approves those), or a question that is irreversible, seen by other people, changes the goal or goes against a decision already made on the task. Every card of the task the user has not been told of goes to them at once, as one reminder (in the user's low-distraction mode it pushes only when why_owner or p0 says it is theirs alone), with your reason and recommendation on it; their answers go straight to the agents and are kept as the task's decisions. Only the task's supervisor and the main conversation can. A leader's escalation is told to the main conversation too, so don't ask the user the same thing again yourself.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1021,6 +1065,21 @@
         "recommend": {
           "type": "string",
           "description": "the option you recommend, in a line (an option's label when there is one)"
+        },
+        "why_owner": {
+          "type": "string",
+          "enum": [
+            "irreversible",
+            "visible_to_others",
+            "priority",
+            "acceptance",
+            "only_owner_knows"
+          ],
+          "description": "why only the user can decide it. In the user's low-distraction mode only irreversible, visible_to_others and only_owner_knows push to their phone; the rest wait in their Needs you list and briefing"
+        },
+        "p0": {
+          "type": "boolean",
+          "description": "true: the user must do or decide this themselves now, so it pushes even in low-distraction mode whatever why_owner says"
         }
       }
     }

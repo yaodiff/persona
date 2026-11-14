@@ -48,7 +48,7 @@ Do not enable before approval, or signing fails.
 
 1. Apply for the CarPlay voice-conversation entitlement on Apple's developer site (the CarPlay application page). After approval, enable it for Persona's App ID.
 2. Regenerate the release provisioning profile (`docs/operations/release.md`).
-3. Set `"app": {"carplay_voice": true}` in config.json, then run `python3 scripts/persona_config.py xcconfig`. It generates `apple/PersonaCarPlay.entitlements` (git-ignored) and makes Persona sign with it.
+3. Set `"app": {"carplay_voice": true}` in config.json, then run `python3 scripts/persona_config.py xcconfig`. It generates `apple/PersonaOptIn.entitlements` (git-ignored, shared with the other opt-in entitlements) and makes Persona sign with it.
 
 When disabled, Persona does not appear in CarPlay; everything else is unchanged.
 

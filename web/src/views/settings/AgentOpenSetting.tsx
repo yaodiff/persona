@@ -25,7 +25,7 @@ export function AgentOpenRow() {
     { v: "page", label: t("settings-agentopen.page") },
   ];
   return (
-    <Row label={t("settings-agentopen.label")} hint={t("settings-agentopen.hint")} wrapHint stackOnNarrow>
+    <Row label={t("settings-agentopen.label")} hint={t("settings-agentopen.hint")} wrapHint stackOnNarrow anchor="agent-open">
       <Segmented<AgentOpen> label={t("settings-agentopen.label")} value={mode} options={options} onChange={choose} />
     </Row>
   );

@@ -350,19 +350,32 @@ export interface FormProblems {
   advanced: string;
 }
 
+/** The Connect step's fields that can keep it from going on. */
+export type ConnectField = "display_name" | "name" | "base_url" | "api_key";
+
+/** What is wrong with each of the Connect step's fields, in the order formProblems says them ("" when fine): Next shows
+ *  each by its own field (audit item 19), not as one line under the step. */
+export function connectProblems(f: ProviderForm, isNew: boolean, hadKey = false, autoName = false): Record<ConnectField, string> {
+  const requiresUrlAndKey = f.kind === "api" || !f.agent || f.agent === "claude";
+  return {
+    display_name: displayNameProblem(f.display_name),
+    name: (!f.name.trim() && !autoName && t("lib-providers.name_required")) || (isNew && launcherNameProblem(f.name)) || "",
+    base_url: ((requiresUrlAndKey || f.base_url.trim() !== "") && gatewayProblem(f.base_url)) || "",
+    api_key: (requiresUrlAndKey && !f.api_key.trim() && (isNew || !hadKey) && t("lib-providers.key_required")) || "",
+  };
+}
+
+/** The first of the Connect step's fields with something wrong, the one Next takes the focus to; null: none. */
+export function firstConnectProblem(problems: Record<ConnectField, string>): ConnectField | null {
+  return (["display_name", "name", "base_url", "api_key"] as const).find((k) => problems[k]) ?? null;
+}
+
 /** `autoName`: the hub makes up a new provider's startup ID when none is typed (`launcher_auto_name`, #5029); an older
  *  hub needs one. */
 export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false, autoName = false): FormProblems {
-  const requiresUrlAndKey = f.kind === "api" || !f.agent || f.agent === "claude";
-  const reach =
-    ((requiresUrlAndKey || f.base_url.trim() !== "") && gatewayProblem(f.base_url)) ||
-    (requiresUrlAndKey && !f.api_key.trim() && (isNew || !hadKey) && t("lib-providers.key_required")) ||
-    "";
-  const connect =
-    displayNameProblem(f.display_name) ||
-    (!f.name.trim() && !autoName && t("lib-providers.name_required")) ||
-    (isNew && launcherNameProblem(f.name)) ||
-    reach;
+  const fields = connectProblems(f, isNew, hadKey, autoName);
+  const reach = fields.base_url || fields.api_key;
+  const connect = fields.display_name || fields.name || reach;
 
   const chat = f.kind === "api" && f.api === "chat";
   let models = "";

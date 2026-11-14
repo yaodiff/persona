@@ -93,6 +93,7 @@ class InboxDataOwner @Inject constructor(
             val realInbox = RealInboxRepository(connection, data.inboxReplies, sessions, interactions, data.coroutineScope,
                 snapshots = snapshots, hubPreferences = preferences, hubConnection = runtime,
                 subscriptionsShownFlow = socket.serverFeatures.map { "source_subscriptions" in it }.distinctUntilChanged(),
+                inboxSourcesShownFlow = socket.serverFeatures.map { "inbox_sources" in it }.distinctUntilChanged(),
                 mainConversationSender = data.messages.inGroup(names, data.coroutineScope), actions = actions,
                 lookupReply = { target, clientId ->
                     try {

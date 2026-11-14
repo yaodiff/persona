@@ -66,5 +66,16 @@ final class TierLadderTests: XCTestCase {
             "1920x1080@30 1244-4977",
             "1920x1080@15 200-2488",
         ], "2×, 1.5× and 1× are the same size on a 1× display")
+        XCTAssertEqual(tiers.map(\.pixelsPerPoint), [1, 1, 1], "and every one is the picture's one pixel per point (#7842)")
+        XCTAssertEqual(tiers.map(\.scale), [2, 1.5, 1], "what the helper is asked for stays the step")
+    }
+
+    func testTheScaleIsThePicturesOwn() {
+        let retina = TierLadder.make(points: (1512, 982), pixels: (3024, 1964), maxSize: 2868, bias: .auto, capKbps: 12_000,
+                                     maxFps: 60)
+        XCTAssertEqual(retina[0].pixelsPerPoint, 2868.0 / 1512, accuracy: 1e-9, "2× under the phone's long-edge cap")
+        XCTAssertEqual(retina[1].pixelsPerPoint, 1.5, accuracy: 1e-9)
+        let desktop = TierLadder.make(points: (1512, 982), pixels: (3024, 1964), maxSize: 0, bias: .auto, capKbps: 12_000, maxFps: 60)
+        XCTAssertEqual(desktop[0].pixelsPerPoint, 2, accuracy: 1e-9, "no cap: the step")
     }
 }

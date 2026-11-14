@@ -1,6 +1,7 @@
 // A sidebar group: its heading stays in view while its rows scroll, a section folds under it, and its count says what
 // it counts. Kept apart from the sidebar's own parts so that a list outside the sidebar can draw the same sections.
-import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { t } from "../i18n";
 import { stateCount } from "../lib/state-labels";
 import { Collapse, cx, sidebarFoldMotion } from "../ui/atoms";
@@ -8,31 +9,96 @@ import { contextMenuProps } from "../ui/context-menu";
 import { Icon } from "../ui/icons";
 import type { MenuAt } from "../ui/menu-model";
 
-const GroupHeadingOffset = createContext({ offset: 0, depth: 0 });
+/** `pinned`: a nested group tells its parent that its heading is pinned (1) or no longer (-1). */
+const GroupHeadingOffset = createContext<{ offset: number; depth: number; pinned?: (by: 1 | -1) => void }>({ offset: 0, depth: 0 });
+
+// Every heading's height comes from one observer, after the browser's own layout: a heading's layout effect that read
+// it (getBoundingClientRect) made the browser lay out the whole list there and then, on every list drawn and every
+// group opened. flushSync applies the heights before that frame is painted, as the layout effect did.
+const headingReports = new Map<Element, (height: number) => void>();
+let headingSizes: ResizeObserver | null = null;
+function watchHeading(el: Element, report: (height: number) => void): () => void {
+  headingSizes ??= new ResizeObserver((entries) => flushSync(() => {
+    for (const e of entries) headingReports.get(e.target)?.(e.borderBoxSize?.[0]?.blockSize ?? e.target.getBoundingClientRect().height);
+  }));
+  headingReports.set(el, report);
+  headingSizes.observe(el);
+  return () => { headingReports.delete(el); headingSizes?.unobserve(el); };
+}
+
+// A heading pinned over its group's rows draws an edge under it (`data-edge`, styles.css), so a row half under it reads
+// as scrolled beneath, not as text run into the heading (the web usability audit of 2026-11-14, audit item 51). Two
+// marks per group, raised by where its heading sticks, say whether it is pinned: the one at the group's top has gone
+// above the list's top edge and the one at its end, raised by the heading's height too, has not (the group's end has
+// not started pushing the heading out). One IntersectionObserver per scroller watches them all: no layout read and no
+// React state on scroll. Its view reaches far below the list, so a mark is only ever in it or above it: a jump from
+// below the list to above it (a long scroll in one frame) is still reported.
+const PIN_VIEW = "0px 0px 1000000px 0px";
+const pinReports = new Map<Element, (above: boolean) => void>();
+const pinWatchers = new WeakMap<Element, IntersectionObserver>();
+function watchPin(mark: Element, scroller: Element, report: (above: boolean) => void): () => void {
+  let watcher = pinWatchers.get(scroller);
+  if (!watcher) {
+    watcher = new IntersectionObserver((entries) => {
+      for (const e of entries) pinReports.get(e.target)?.(!e.isIntersecting && !!e.rootBounds && e.boundingClientRect.top < e.rootBounds.top);
+    }, { root: scroller, rootMargin: PIN_VIEW });
+    pinWatchers.set(scroller, watcher);
+  }
+  pinReports.set(mark, report);
+  watcher.observe(mark);
+  const w = watcher;
+  return () => { pinReports.delete(mark); w.unobserve(mark); };
+}
+
+/** A 1 px mark `above` px plus the pinned Persona row above its place: at the group's top it leaves the list's view as
+ *  the heading starts to stick; at the group's end (`above` with the heading's own height) as the end starts pushing
+ *  the heading out under the ones above. */
+function PinMark({ mark, above }: { mark: React.RefObject<HTMLSpanElement | null>; above: number }) {
+  return <span aria-hidden className="relative block h-0"><span ref={mark} className="pointer-events-none absolute left-0 h-px w-px" style={{ top: `calc(-1 * (var(--sidebar-sticky-top, 0px) + ${above}px))` }} /></span>;
+}
 
 /** Real headings stay interactive while pinned; each nested group reserves its parent's measured height. */
 export function SidebarGroup({ heading, children, className }: { heading: React.ReactNode; children: React.ReactNode; className?: string }) {
-  const { offset: above, depth } = useContext(GroupHeadingOffset);
+  const { offset: above, depth, pinned: toParent } = useContext(GroupHeadingOffset);
   const ref = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
+  const start = useRef<HTMLSpanElement>(null);
+  const end = useRef<HTMLSpanElement>(null);
+  // the edge goes under the innermost pinned heading only: a nested heading pinned below this one takes it
+  const pin = useRef({ start: false, end: false, pinned: false, inner: 0 });
+  const edge = useCallback(() => { ref.current?.toggleAttribute("data-edge", pin.current.pinned && pin.current.inner === 0); }, []);
+  const innerPinned = useCallback((by: 1 | -1) => { pin.current.inner += by; edge(); }, [edge]);
+  useEffect(() => {
+    const scroller = start.current?.closest("[data-row-scroller]");
+    if (!start.current || !end.current || !scroller || typeof IntersectionObserver === "undefined") return;
+    const p = pin.current;
+    const update = () => {
+      const pinned = p.start && !p.end;
+      if (pinned === p.pinned) return;
+      p.pinned = pinned;
+      toParent?.(pinned ? 1 : -1);
+      edge();
+    };
+    const stops = [watchPin(start.current, scroller, (a) => { p.start = a; update(); }), watchPin(end.current, scroller, (a) => { p.end = a; update(); })];
+    return () => { for (const stop of stops) stop(); p.start = p.end = false; update(); };
+  }, [toParent, edge]);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const scroller = el.closest<HTMLElement>("[data-sidebar-rows]");
     const controls = el.querySelector("[data-sidebar-agents-controls]");
-    const measure = () => {
-      const height = el.getBoundingClientRect().height;
+    const stop = watchHeading(el, (height) => {
       setHeight(height);
       if (controls) scroller?.style.setProperty("--sidebar-controls-height", `${height}px`);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => { observer.disconnect(); if (controls) scroller?.style.removeProperty("--sidebar-controls-height"); };
+    });
+    return () => { stop(); if (controls) scroller?.style.removeProperty("--sidebar-controls-height"); };
   }, []);
+  const nested = useMemo(() => ({ offset: above + height, depth: depth + 1, pinned: innerPinned }), [above, height, depth, innerPinned]);
   return <div className={className} data-sidebar-group>
+    <PinMark mark={start} above={above} />
     <div ref={ref} data-sidebar-group-heading className="sidebar-group-heading" style={{ top: `calc(var(--sidebar-sticky-top, 0px) + ${above}px)`, zIndex: 24 - depth }}>{heading}</div>
-    <GroupHeadingOffset.Provider value={{ offset: above + height, depth: depth + 1 }}>{children}</GroupHeadingOffset.Provider>
+    <GroupHeadingOffset.Provider value={nested}>{children}</GroupHeadingOffset.Provider>
+    <PinMark mark={end} above={above + height} />
   </div>;
 }
 

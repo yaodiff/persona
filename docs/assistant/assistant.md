@@ -1355,6 +1355,10 @@ Requested: "Generate titles after starting new chats; standardize as ‘MMDD | T
   not node's first-message title (headless transcripts lack Claude ai-title), no `MMDD | Type | Topic` (discard pending-title on first-turn completion without model call),
   App rename returns 400 "Main chat has no title to rename" (`conversation_rename` already rejects). Top bars show the avatar: iOS / Mac / Android avatar name (default "Persona"), web "Persona".
 - App drawer rows draw `MMDD | Type | ` in secondary color, topic primary, truncating topic end in narrow space (`ConversationTitle`); other titles unchanged.
+- **A title that is a context tag** (web, 2026-11-14): a chat whose title is still its first message's `<persona-context …>` tag (one started from picked context
+  before it was named) shows what was typed after the tag, else the tag's `title` with its entities decoded, else **New chat**, in the sidebar, the
+  header, All chats, ⌘K and Rename (`conversationTitle`, `web/src/views/assistant/conversations.ts`); before, the raw tag showed. A leader's header says its
+  direction's name, as its sidebar row does ("Leader conversations" in `docs/assistant/unified-entry.md`), not its `MMDD | Type | ` title.
 
 ## Guest conversations (2026-11-06, #5195)
 

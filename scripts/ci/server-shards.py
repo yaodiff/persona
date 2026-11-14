@@ -9,7 +9,7 @@ import threading
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/test"))
-import go_partitions  # noqa: E402  (internal/node's partitions, shared with the release build)
+import go_partitions  # noqa: E402  (internal/node's and internal/assistant's partitions, shared with the release build)
 SHARDS = ("node", "managers", "other")
 
 
@@ -27,21 +27,23 @@ def select_packages(packages, shard):
     return [package for package in packages if shard_for(package) == shard]
 
 
-def commands(packages, shard, database_file, node_patterns=()):
-    """The go test processes a shard runs at once: one for its packages, and in the node shard one more per
-    internal/node partition (go_partitions; the same split as the release build). Each keeps -p and -timeout."""
+def commands(packages, shard, database_file, partitions=None):
+    """The go test processes a shard runs at once: one for its other packages, and one more per partition of each
+    partitioned package it has (go_partitions: internal/node in the node shard, internal/assistant in the managers
+    shard; the same split as the release build). partitions maps such a package to its -run patterns. Each process
+    keeps -p and -timeout."""
     workers = {"node": 1, "managers": 3, "other": 2}[shard]
     prefix = [sys.executable, str(ROOT / "scripts/test/server_test_env.py"), "--database-file", database_file,
               "--", "go", "test", "-json", "-p", str(workers), "-count=1", "-timeout=10m"]
-    if shard != "node":
+    rest, parts = go_partitions.split(packages)
+    if not parts:
         return [prefix + packages]
-    rest = [package for package in packages if not go_partitions.is_partitioned(package)]
-    if len(rest) == len(packages):
-        return [prefix + packages]
-    if not node_patterns:
-        raise ValueError("internal/node needs its partitions")
-    return ([prefix + rest] if rest else []) + [prefix + ["-run", pattern, go_partitions.PACKAGE]
-                                                 for pattern in node_patterns]
+    partitions = partitions or {}
+    for package in parts:
+        if not partitions.get(package):
+            raise ValueError(f"{package} needs its partitions")
+    return ([prefix + rest] if rest else []) + [prefix + ["-run", pattern, package]
+                                                 for package in parts for pattern in partitions[package]]
 
 
 class Results:
@@ -55,7 +57,7 @@ class Results:
         self.slow, self.failed, self.output, self.package_output = [], [], {}, {}
 
     def take(self, event, process=0):
-        """Record one event of a go test process (the node shard runs one package in several); return the text to
+        """Record one event of a go test process (a shard runs a partitioned package in several); return the text to
         print, if it has any."""
         package, test, action = event.get("Package", ""), event.get("Test"), event.get("Action")
         if action == "output":
@@ -121,8 +123,9 @@ def main():
     packages = select_packages(listed.splitlines(), args.shard)
     if not packages:
         parser.error(f"No packages in server shard {args.shard}")
-    node_patterns = go_partitions.list_patterns(ROOT / "server") if args.shard == "node" else ()
-    runs = commands(packages, args.shard, args.database_file, node_patterns)
+    partitions = {package: go_partitions.list_patterns(ROOT / "server", package)
+                  for package in go_partitions.split(packages)[1]}
+    runs = commands(packages, args.shard, args.database_file, partitions)
     results, lock = Results(), threading.Lock()
 
     def follow(index, process):

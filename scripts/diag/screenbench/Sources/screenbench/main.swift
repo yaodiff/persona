@@ -141,8 +141,9 @@ func round3(_ v: Double) -> Double { (v * 1000).rounded() / 1000 }
 
 let options = Options(Array(CommandLine.arguments.dropFirst()))
 let screen = Screen(points: options.points, pixels: options.pixels)
+// The codec's ladder, as the phone's and the browser's: its bands follow `TierLadder.bitsFactor`.
 let ladder = TierLadder.make(points: options.points, pixels: options.pixels, maxSize: options.maxSize, bias: options.bias,
-                             capKbps: options.cap, maxFps: options.maxFps)
+                             capKbps: options.cap, maxFps: options.maxFps, codec: options.codec)
 print("screenbench: \(options.codec), display \(options.points.width)x\(options.points.height) pt / "
     + "\(options.pixels.width)x\(options.pixels.height) px, phone cap \(options.maxSize) px \(options.cap) kbit/s, \(options.bias) ladder")
 print("| tier | size | scene | end | target kbit/s | sent kbit/s | keyframe KB | SSIM mean / min | full-size SSIM | refined SSIM / full-size (KB a pass) |")

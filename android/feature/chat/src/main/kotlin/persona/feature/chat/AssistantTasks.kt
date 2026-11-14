@@ -260,6 +260,8 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
         "view" -> item.ref?.let { id -> persona.core.designsystem.LocalViewBlocks.current?.live?.invoke(id) }
         "notice" -> NoticeLine(item)
     }
+    if (item.kind == "routed" && !item.sentByPersona && !item.field("new_agent").isNullOrBlank())
+        NewAgentHandoff(item, title, todos.firstOrNull { it.id == item.ref }, host, openTodo)
 }
 
 /**

@@ -96,5 +96,21 @@
   "unsupported_body": "このハブのバージョンが古いか、ボードの保存が有効になっていません。",
   "open_hub_settings": "ハブの設定を開く",
   "setting_failed": "ワークフローボードのスイッチを読み込めませんでした：{error}",
-  "setting_unsupported": "このハブのバージョンにはまだこのスイッチがありません。ハブを更新すると、ここでボードのオン・オフを切り替えられます。"
+  "setting_unsupported": "このハブのバージョンにはまだこのスイッチがありません。ハブを更新すると、ここでボードのオン・オフを切り替えられます。",
+  "select_cards": "カードを選択",
+  "select_card": "{card} を選択",
+  "selection_done": "選択を終了",
+  "selected_count": "{count} 件を選択中",
+  "select_all_visible": "表示中をすべて選択",
+  "clear_selection": "選択を解除",
+  "selection_actions": "選択したワークスペース",
+  "bulk_move_to": "選択項目の移動先",
+  "bulk_move": "移動",
+  "bulk_move_placeholder": "列を選択",
+  "bulk_archive": "アーカイブ",
+  "bulk_updated": "ワークスペースを更新しました",
+  "bulk_undo": "直前の変更を元に戻す",
+  "selection_hint": "表示中のワークスペースのみ選択します。エージェントは動作を続けます。",
+  "bulk_saving": "ワークスペースを更新中…",
+  "activity": "変更履歴"
 }

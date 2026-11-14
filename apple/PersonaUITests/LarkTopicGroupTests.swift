@@ -261,11 +261,18 @@ final class LarkTopicGroupTests: XCTestCase {
         return reads
     }
 
+    @MainActor private func expandSource() {
+        let source = app.buttons["inbox.detail.source"]
+        XCTAssertTrue(source.waitForExistence(timeout: 20), "the original-source control did not appear:\n\(app.debugDescription)")
+        source.tap()
+    }
+
     @MainActor private func open(scheme: String) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-openInboxItem", "lark:f4:405", "-ui.scheme", scheme]
         app.launchPinned()
+        expandSource()
         XCTAssertTrue(topics.firstMatch.waitForExistence(timeout: 20), "the topic group did not open:\n\(app.debugDescription)")
         sleep(1)
     }

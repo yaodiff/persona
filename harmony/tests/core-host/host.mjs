@@ -32,7 +32,7 @@ export const wire = await import(wireUrl.href);
 
 // The helper's frames: a u32 little-endian length, a tag byte, then the fields.
 const MAX_FRAME = 16 * 1024 * 1024;
-export const Command = {config: 1, create: 2, dispatch: 3, flush: 4, drain: 5, close: 6, reencode: 7, samples: 8, transport: 9};
+export const Command = {config: 1, create: 2, dispatch: 3, flush: 4, drain: 5, close: 6, reencode: 7, samples: 8, transport: 9, sort: 10};
 export const Record = {ok: 1, error: 2, changed: 3, effect: 4, sample: 5, end: 6};
 export const PayloadKind = {latest: 1, newer: 2, reloaded: 3, older: 4, range: 5, frame: 6};
 const WireType = {Action: 1, ChatEvent: 2, ChatPatch: 3, ChatSnapshot: 4, Config: 5, Effect: 6, ListOp: 7, Request: 8, WireBatch: 9, Payload: 10};
@@ -267,6 +267,10 @@ export class HostCore {
   }
   async transport(kind, body) {
     const value = await this.#call(Command.transport, Buffer.of(kind), Buffer.from(body, 'utf8'));
+    return JSON.parse(Buffer.from(value).toString('utf8'));
+  }
+  async sort(input) {
+    const value = await this.#call(Command.sort, Buffer.from(JSON.stringify(input), 'utf8'));
     return JSON.parse(Buffer.from(value).toString('utf8'));
   }
 

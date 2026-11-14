@@ -387,9 +387,20 @@ nonisolated final class RFBClient: @unchecked Sendable {
         let generator = try await reader.bytes(2)
         let length = try await reader.u16()
         let prime = try await reader.bytes(length), serverKey = try await reader.bytes(length)
-        let c = try await sign()
-        let r = try RFBAuth.ard(generator: generator, prime: prime, serverKey: serverKey, account: c.account, password: c.password)
-        try await transport.send(r.sealed + r.publicKey)
+        // The key exchange needs no account or password: worked out while the form waits for them, so Connect sends at
+        // once (#7809: a 4096-bit prime took a Debug build 48 s after Connect).
+        let exchange = Task.detached(priority: .userInitiated) {
+            try RFBAuth.exchange(generator: generator, prime: prime, serverKey: serverKey)
+        }
+        let c: Credentials
+        do {
+            c = try await sign()
+        } catch {
+            exchange.cancel()
+            throw error
+        }
+        let k = try await exchange.value
+        try await transport.send(try RFBAuth.seal(account: c.account, password: c.password, key: k.key) + k.publicKey)
     }
 
     private func veNCrypt() async throws {

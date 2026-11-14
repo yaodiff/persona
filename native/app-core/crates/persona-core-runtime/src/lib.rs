@@ -31,7 +31,12 @@ use wire::{Action, ChatEvent, ChatPatch, ChatSnapshot, Effect, ListOp, Payload, 
 /// The client's side: called on the core's worker thread, so implementations must be thread-safe and quick.
 pub trait Host: Send + Sync + 'static {
     /// Something changed at `version`: pull patches on the next frame.
-    fn changed(&self, version: u64);
+    fn changed(&self, _version: u64) {}
+    /// The chat whose patch changed. Existing hosts keep the version-only callback by default; adapters that need a
+    /// targeted wake override this without changing the bincode or continuity state machine.
+    fn changed_chat(&self, _chat: &str, version: u64) {
+        self.changed(version)
+    }
     /// An encoded `wire::Effect` for the client to run.
     fn run(&self, effect: &[u8]);
 }
@@ -541,11 +546,11 @@ impl Worker {
             #[cfg(any(target_os = "android", feature = "test-support"))]
             if let Some(diagnostics) = self.shared.diagnostics.get() {
                 let started = Instant::now();
-                self.host.changed(version);
+                self.host.changed_chat(chat, version);
                 diagnostics::add(&diagnostics.counters.worker_host_changed, started);
                 return;
             }
-            self.host.changed(version);
+            self.host.changed_chat(chat, version);
         }
     }
 }

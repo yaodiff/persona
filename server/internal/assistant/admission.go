@@ -294,14 +294,12 @@ func (s *Service) machineViolationWith(machineID string, lim admissionLimits, cl
 		return admissionMessage("assistant-tasks.admission_memory", i18n.Args{
 			"available": humanBytes(facts.available), "limit": humanBytes(lim.minMemory)})
 	}
-	if facts.claudeProcs != nil {
-		// The line bounds agents actually working a turn, not OS processes: a session that finished, parks or stays
-		// idle keeps its claude process alive for hours, and counting those fills the machine while nothing runs. The
-		// fleet's last session snapshot says how many sessions are working; only when it has no snapshot for this
-		// machine (the fleet bus is off or the machine never reported a list) does the node's process count stand in.
-		if working, has := s.workingSessions(machineID); has {
-			facts.claudeProcs = &working
-		}
+	// The line bounds agents actually working a turn, not OS processes: a session that finished, parks or stays idle
+	// keeps its claude process alive for hours, and counting those fills the machine while nothing runs. The fleet's
+	// last session snapshot says how many sessions are working; only when it has no snapshot for this machine (the
+	// fleet bus is off or the machine never reported a list) does the node's process count stand in.
+	if working, has := s.workingSessions(machineID); has {
+		facts.claudeProcs = &working
 	}
 	if facts.claudeProcs != nil && *facts.claudeProcs+claims >= lim.maxProcs {
 		return admissionMessage("assistant-tasks.admission_procs", i18n.Args{

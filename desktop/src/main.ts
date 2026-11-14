@@ -74,6 +74,20 @@ function secureHubWindow(window: BrowserWindow): void {
   contents.session.setPermissionCheckHandler((_contents, permission) => permission === "notifications");
 }
 
+// A different hub needs a new window and its own persistent session, not navigation of the old window.
+async function replaceMainWindow(next: HubAddress, close: (window: BrowserWindow) => void): Promise<void> {
+  const previous = mainWindow;
+  if (!previous || previous.isDestroyed()) return;
+  // Sub-path containment is not equality: /old/ is inside a new / hub, but still needs its own origin-isolated session.
+  if (inHub(next, previous.webContents.getURL()) && (() => { try { return parseHubAddress(previous.webContents.getURL()).url.href === next.url.href; } catch { return false; } })()) return;
+  // Setting hub first lets closeToTray destroy this window without putting the old hub back on screen.
+  hub = next;
+  const closed = new Promise<void>(done => previous.once("closed", done));
+  close(previous);
+  await closed;
+  mainWindow = undefined;
+}
+
 async function showMain(): Promise<void> {
   if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); return; }
   const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
@@ -117,8 +131,14 @@ async function showMain(): Promise<void> {
   secureHubWindow(current);
   closeToTray(current, () => quitting);
   const removeIPC = installDesktopIPC(current, {
-    hub: () => hub,
+    // The partition is immutable, so derive authorization from this window's actual origin, never a later global hub.
+    hub: () => {
+      const url = current.webContents.getURL();
+      if (hub && inHub(hub, url)) return hub;
+      try { return parseHubAddress(url); } catch { return undefined; }
+    },
     presence: () => desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported()),
+    openLocalSettings: () => { void showSetup(); },
     notifications: new DesktopNotifications(route => {
       current.show();
       current.focus();
@@ -174,6 +194,7 @@ async function showSetup(): Promise<void> {
       try {
         const next = parseHubAddress(raw);
         await store().update({ hub: next.url.href });
+        await replaceMainWindow(next, window => window.destroy());
         hub = next;
         setup.close();
         await showMain();

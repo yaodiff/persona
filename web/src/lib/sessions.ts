@@ -7,6 +7,7 @@ import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { getState, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LIST_FEATURE } from "./session-list";
+import { runtimeSessions } from "./runtime-list";
 import type { Session } from "./types";
 
 /** The agents the lists show and count: without the child sessions folded under one of them, each parent in its folded
@@ -225,4 +226,46 @@ export function useCounts() {
     const needs = counts.state.needs_you ?? 0;
     return { needs, working: counts.state.working ?? 0, unread: counts.state.unread ?? 0, badge: needs, interactions, quietCounted: true };
   }, [all, interactions, counts, bounded]);
+}
+
+// A read that follows a failed one counts as failed until one comes back: each attempt clears the list's error while it
+// runs, and an agent's change of the list starts one, so the failure line and its Retry would otherwise turn into
+// "Loading…" under the pointer and back. Retry itself loads again until the answer (retryAgentList), as the complete
+// list's Retry does.
+let listFailed = false;
+runtimeSessions.subscribe(() => {
+  const list = runtimeSessions.getSnapshot();
+  if (list.loaded || (!list.loading && !list.error)) listFailed = false; // read, or reset to nothing read
+  else if (list.error) listFailed = true;
+});
+const listStatus = (): AgentListStatus => {
+  const list = runtimeSessions.getSnapshot();
+  return list.loaded ? "loaded" : list.error || listFailed ? "failed" : "loading";
+};
+const listHasMore = () => runtimeSessions.getSnapshot().hasMore;
+export type AgentListStatus = "loaded" | "loading" | "failed";
+/** `whole`: the rows read are every agent (no page left to read), so they can be counted, e.g. by computer. */
+export type AgentList = { status: AgentListStatus; whole: boolean };
+const PUSHED_LIST: AgentList = { status: "loaded", whole: true };
+
+/** Whether the agents' counts can be told. A hub that pages its Agents list pushes no sessions: the list is read over
+ *  HTTP (`runtimeSessions`), and until that read has come back its counts are unknown, not zero: "loading", or "failed"
+ *  when it failed (read again with the hub's next change of the list, or retryAgentList). Its first pages are not every
+ *  agent (`whole` false) while it has more. A hub that pushes them: "loaded", whole. */
+export function useAgentListStatus(): AgentList {
+  const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const status = useSyncExternalStore(runtimeSessions.subscribe, listStatus, listStatus);
+  const more = useSyncExternalStore(runtimeSessions.subscribe, listHasMore, listHasMore);
+  return useMemo(() => (bounded ? { status, whole: status === "loaded" && !more } : PUSHED_LIST), [bounded, status, more]);
+}
+
+/** Retry after the agents' read failed: reads at once, loading until the answer, the Agents list's first page
+ *  (useAgentListStatus "failed") and the complete list (useFullAgentSessions `error`, which is otherwise read again
+ *  every few seconds), whichever has not loaded. */
+export function retryAgentList() {
+  if (!runtimeSessions.getSnapshot().loaded) {
+    listFailed = false;
+    void runtimeSessions.load().catch(() => {});
+  }
+  if (!fullSnapshot.loaded) retryFullAgentSessions();
 }

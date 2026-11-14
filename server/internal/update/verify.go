@@ -37,7 +37,7 @@ func VerifyRelease(ctx context.Context, dir string, m *Manifest) error {
 	for plat, f := range m.Files {
 		all = append(all, entry{"personad", plat, f})
 	}
-	for _, group := range []map[string]map[string]File{m.Programs, m.Nodes} {
+	for _, group := range []map[string]map[string]File{m.Programs, m.Nodes, {"persona-link": m.Links}} {
 		for prog, plats := range group {
 			for plat, f := range plats {
 				all = append(all, entry{prog, plat, f})

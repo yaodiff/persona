@@ -96,5 +96,21 @@
   "unsupported_body": "This hub's version is too old, or board storage isn't enabled.",
   "open_hub_settings": "Open hub settings",
   "setting_failed": "Couldn't read the workflow board switch: {error}",
-  "setting_unsupported": "This hub's version doesn't have this switch yet. Update the hub to turn the board on or off here."
+  "setting_unsupported": "This hub's version doesn't have this switch yet. Update the hub to turn the board on or off here.",
+  "select_cards": "Select cards",
+  "select_card": "Select {card}",
+  "selection_done": "Done selecting",
+  "selected_count": "{count} selected",
+  "select_all_visible": "Select all visible",
+  "clear_selection": "Clear selection",
+  "selection_actions": "Selected workspaces",
+  "bulk_move_to": "Move selected to",
+  "bulk_move": "Move",
+  "bulk_move_placeholder": "Choose a column",
+  "bulk_archive": "Archive",
+  "bulk_updated": "Workspaces updated",
+  "bulk_undo": "Undo last change",
+  "selection_hint": "Only visible workspaces are selected. Agents keep running.",
+  "bulk_saving": "Updating workspaces…",
+  "activity": "Activity"
 }

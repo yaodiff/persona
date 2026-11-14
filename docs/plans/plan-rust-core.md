@@ -420,6 +420,27 @@ Phase 2 lands in several PRs.
     JNI and ArkTS host replays cover the new fields.
   - Not done: no production client uses these contracts yet; the adapters (#7366, #7448) consume them next.
 
+Phase 3 lands in several PRs.
+
+- **Agents list sort, recents and state decoding (#7579).**
+  - `persona_core::sort` projects the Agents list from a JSON input: rank, grouping (state / machine / space),
+    quick filters (all, needsYou, unread, working, backgroundWaiting), search with caller-supplied `now` for
+    `since:` windows, pin/mute/quiet separation, heldInList (#2213) and fold/expand rules.
+  - `persona_core::state` decodes client and hub session states: client-state precedence, hub `done` with a
+    2-second seen tolerance, waiting detection from loop info / background tasks / subagents / workflows.
+  - `persona_core::recents` implements the conversation and setup LRU with dedup, skip-current and limits.
+  - 43 sort cases (32 projection + 2 session_state + 11 hub_state) + 21 recents cases (11 conversations +
+    10 setups) = 64 exact fixture cases, all passing in `cargo test`. The exact manifest assertion catches
+    added, dropped or renamed cases; a mutation test catches a reversed date comparison.
+  - Multi-hub grouping uses `group|machine_id` (`MachineRef.path`); BackgroundWaiting quick filter shows only
+    rank-4; `since:` uses the caller's `now`, never a system clock.
+  - Host boundaries: C FFI `persona_core_project_sort`, JNI `Java_..._projectSort`, NAPI `core_project_sort`
+    (all pure JSON functions, no runtime handle). ArkTS host replay covers all 30 agents_list projection cases
+    through the real Rust core. The core lane's ArkTS host tests include `sort.test.mjs`.
+  - Stripped x86_64 host library: 1,423,872 B (up from 741,032 B; the sort/recents/state modules add ~683 KB).
+  - Not done: no production client calls these functions yet; Swift codec generation is typegen-only; device-side
+    NAPI linking and ArkTS runtime behavior remain blocked: no physical device.
+
 ### Migration rules (each domain)
 
 1. **Fixtures first.** The domain's fixtures cover the rules the current iOS implementation follows today. Compare

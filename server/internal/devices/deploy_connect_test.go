@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -167,6 +168,35 @@ func TestLinkedMachineBackOnAnotherBuildGetsTheHubsNode(t *testing.T) {
 	}
 	if record.Target != "hub-build" {
 		t.Fatalf("record=%+v", record)
+	}
+}
+
+// A node this manager cannot drive still uses the update protocol to become compatible (#7774).
+func TestIncompatibleLinkedMachineGetsUpdateOnConnect(t *testing.T) {
+	hubNodeBinary(t, "linux", "amd64")
+	d := newTestDevices(t)
+	d.cfg.HubVersion = "hub-build"
+	d.cfg.AutoUpdateNodes = true
+	n := &buildNode{info: proto.NodeInfo{
+		Hostname: "box", OS: "linux", Arch: "amd64", Version: "old-build",
+		Protocol: nodeproto.Version + 2, ProtocolMin: nodeproto.Version + 1,
+		Capabilities: nodeproto.Announced, NodeUpdate: true,
+	}}
+	m := newMachine(d, MachineConfig{ID: "box", Name: "box", Kind: kindLink})
+	m.dialNode = n.dial
+	d.addEntry(m)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); m.run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	eventually(t, 5*time.Second, "the incompatible node connected", m.reachable)
+	if got := m.snapshot().NodeIncompatible; got != incompatibleNodeNew {
+		t.Fatalf("the fixture must exercise the incompatible branch, got %q", got)
+	}
+	eventually(t, 5*time.Second, "the update sent over the link", func() bool { return n.updateCalls() == 1 })
+	eventually(t, 5*time.Second, "the hub's node transferred", func() bool { return n.seen("node.update.chunk") > 0 })
+	if got := n.updateCalls(); got != 1 {
+		t.Fatalf("one reconnect must begin one update, got %d", got)
 	}
 }
 

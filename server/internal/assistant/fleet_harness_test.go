@@ -43,6 +43,7 @@ type fleetDevs struct {
 type fleetNode struct {
 	name, home, trust string
 	sessions          []proto.Session
+	lists             int // how many times its whole list was read (Sessions)
 	connected         time.Time
 	// away: its node is not connected (Summary and List say not reachable); its sessions stay as last listed.
 	away bool
@@ -159,6 +160,7 @@ func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	if n == nil {
 		return nil, false
 	}
+	n.lists++
 	return append([]proto.Session(nil), n.sessions...), true
 }
 

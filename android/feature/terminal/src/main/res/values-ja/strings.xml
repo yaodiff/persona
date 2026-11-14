@@ -44,7 +44,7 @@
     <string name="terminal_select_empty_body">ターミナルに内容が表示されてから選択してください。</string>
     <string name="terminal_screen_description">ターミナル画面</string>
     <string name="terminal_note_offline">ハブに接続できません。前回の画面を表示しています</string>
-    <string name="terminal_note_no_terminal">このセッションはコンピュータで実行されていません。メッセージを送ると再開します。</string>
+    <string name="terminal_note_no_terminal">このセッションはコンピュータで実行されていません。</string>
     <string name="terminal_no_terminal_title">ターミナルがありません</string>
     <string name="terminal_note_no_terminal_resume">このセッションはコンピュータで実行されていません。再開するとターミナルを開けます。</string>
     <string name="terminal_resume">セッションを再開</string>

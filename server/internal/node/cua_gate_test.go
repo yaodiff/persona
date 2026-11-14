@@ -11,21 +11,30 @@ import (
 	"github.com/nwverse/persona/server/internal/protectedapps"
 )
 
-// fakeCuaLook says what the gate's look at the Mac finds (cua_gate.go), on a Mac, and counts the looks.
+// fakeCuaLook says what the gate's look at the Mac finds (cua_gate.go), on a Mac, and counts the looks: list_apps
+// answers apps, list_windows what windows says now, and get_window_state traces element tokens: a snapshot in
+// mine is System Settings' window's, any other another window's.
 func fakeCuaLook(t *testing.T, apps string, windows func() string) *int {
 	t.Helper()
 	looks := 0
-	oldApps, oldWindows, oldOS := cuaLookApps, cuaLookWindows, cuaGateOS
+	oldRead, oldOS := cuaRead, cuaGateOS
 	cuaGateOS = "darwin"
-	cuaLookApps = func(context.Context) []protectedapps.App {
+	cuaRead = func(_ context.Context, tool string, args map[string]any) (json.RawMessage, bool) {
 		looks++
-		return protectedapps.Apps(json.RawMessage(apps))
+		switch tool {
+		case "list_apps":
+			return json.RawMessage(apps), true
+		case "list_windows":
+			return json.RawMessage(windows()), true
+		case "get_window_state":
+			if args["since"] == "s00000070" {
+				return json.RawMessage(`{"since_status": "no_change"}`), true
+			}
+			return json.RawMessage(`{"since_status": "other_window"}`), true
+		}
+		return nil, false
 	}
-	cuaLookWindows = func(context.Context) ([]protectedapps.Window, bool) {
-		looks++
-		return protectedapps.Windows(json.RawMessage(windows()))
-	}
-	t.Cleanup(func() { cuaLookApps, cuaLookWindows, cuaGateOS = oldApps, oldWindows, oldOS })
+	t.Cleanup(func() { cuaRead, cuaGateOS = oldRead, oldOS })
 	return &looks
 }
 
@@ -74,9 +83,11 @@ func TestCuaCalls(t *testing.T) {
 	}
 }
 
-// An Agent's own Cua Driver gets #4336's rules (#4349): a call naming System Settings or a prompt, aimed at one by
-// pid, or made while one is on the screen, is refused; so is a script whose apps cannot be read, or a call whose
-// arguments could not be read; reads pass without a look; elsewhere than a Mac everything passes.
+// An Agent's own Cua Driver gets #4336's rules (#4349, #7560): a call naming System Settings or a prompt, aimed at one
+// by pid or with one of its element tokens, or made while a prompt is on the screen, is refused; System Settings open
+// on the screen stops only what could reach it. So is a script whose apps cannot be read, or a call whose arguments
+// could not be read; reads pass without a look; elsewhere than a Mac everything passes. The rules themselves are
+// protectedapps' (check_test.go); this is the gate's use of them.
 func TestCuaVerdict(t *testing.T) {
 	ctx := context.Background()
 	onScreen := `{"windows": []}`
@@ -117,8 +128,21 @@ func TestCuaVerdict(t *testing.T) {
 	}
 
 	onScreen = `{"windows": [{"app_name": "UserNotificationCenter", "pid": 99, "is_on_screen": true}]}`
-	if v := verdict("press_key", `{"app": "Calculator", "key": "return"}`); !strings.Contains(v, "UserNotificationCenter is open on its screen") {
+	if v := verdict("press_key", `{"app": "Calculator", "key": "return"}`); !strings.Contains(v, "prompt (UserNotificationCenter) is on its screen") {
 		t.Errorf("a prompt on the screen stops any action: %q", v)
+	}
+	onScreen = `{"windows": [{"app_name": "Réglages Système", "pid": 70, "window_id": 7, "is_on_screen": true, "z_index": 3,
+		"bounds": {"x": 0, "y": 0, "width": 500, "height": 400}}]}`
+	for _, args := range []string{`{"app": "Calculator", "key": "return"}`, `{"pid": 63, "key": "return"}`, `{"element_token": "s00000063:4", "key": "return"}`} {
+		if v := verdict("press_key", args); v != "" {
+			t.Errorf("System Settings open behind: Calculator still goes (%s): %q", args, v)
+		}
+	}
+	if v := verdict("click", `{"element_token": "s00000070:4"}`); !strings.Contains(v, themselves) {
+		t.Errorf("one of System Settings' own tokens: %q", v)
+	}
+	if v := verdict("click", `{"scope": "desktop", "x": 200, "y": 150}`); !strings.Contains(v, "Réglages Système is on top where this would click") {
+		t.Errorf("a point on System Settings: %q", v)
 	}
 	onScreen = `{"windows": [{"app_name": "Réglages Système", "pid": 70, "is_on_screen": false}]}`
 	if v := verdict("press_key", `{"app": "Calculator", "key": "return"}`); v != "" {

@@ -110,7 +110,9 @@ func residentSigner(program string) nodeupdate.Signer {
 
 // runResident is `personad node --attach`: it serves local/SSH relays and optional tailcat connections.
 // Deployment and update requests drain idle work before exec retains the Unix listener and run lock.
-// supervised describes an external supervisor other than systemd or launchd (nodeupdate.Options).
+// supervised describes an external supervisor other than systemd or launchd (nodeupdate.Options): a container's entry
+// script, or persona-link's scheduled-task supervisor on Windows, where there is no exec and the supervisor starts the
+// new program instead.
 func runResident(ctx context.Context, b Build, supervised bool) error {
 	stop := ctx
 	ctx, cancel := context.WithCancel(ctx)
@@ -142,7 +144,7 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 			return err
 		}
 		if files == nil {
-			return syscall.Exec(updater.Executable(), os.Args, os.Environ())
+			return nodeupdate.Restart(updater.Executable())
 		}
 		defer files.Close()
 		return files.Exec(updater.Executable(), os.Args, os.Environ())
@@ -182,11 +184,15 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 			if err := reload.Prepare(ctx); err != nil {
 				return
 			}
-			files, err := transport.PrepareExec()
-			if err != nil {
-				reload.Resume()
-				logger.Printf("resident reload: cannot retain the attach listener; keeping the current node")
-				continue
+			// Windows hands nothing over: its supervisor starts the new program as a new process (nodeupdate.Restart).
+			var files *node.ResidentFiles
+			if node.ResidentHandoverSupported {
+				var err error
+				if files, err = transport.PrepareExec(); err != nil {
+					reload.Resume()
+					logger.Printf("resident reload: cannot retain the attach listener; keeping the current node")
+					continue
+				}
 			}
 			if ctx.Err() != nil {
 				files.Close()
@@ -225,6 +231,10 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 		defer files.Close()
 		if stop.Err() != nil {
 			return nil // an explicit stop wins over a deployment
+		}
+		if files == nil {
+			logger.Printf("restarting on %s", updater.Executable())
+			return nodeupdate.Restart(updater.Executable())
 		}
 		logger.Printf("restarting on %s with the retained attach listener", updater.Executable())
 		return files.Exec(updater.Executable(), os.Args, os.Environ())

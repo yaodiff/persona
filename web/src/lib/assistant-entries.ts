@@ -69,6 +69,12 @@ const WAITS_ON_YOU: ReadonlySet<TodoStatus> = new Set(["needs_you", "interrupted
 
 const sessionKey = (mid: string, sid: string) => `${mid}/${sid}`;
 
+/** A task's status when some of its Agents ask under another task (`own`: its status from its own Agents alone): it
+ *  does not wait on the user for them, so a Needs you that only those bring is the task at work instead. */
+function withNeeds(all: TodoStatus, own: TodoStatus): TodoStatus {
+  return all === "needs_you" && own !== "needs_you" ? (own === "not_started" ? "working" : own) : all;
+}
+
 /** A task's status, failed too when only its plan says the start failed (a hub from before #1077). */
 export function entryStatus(todo: Todo, lookup: SessionLookup, plans: Record<string, TaskPlan>): TodoStatus {
   const st = todoStatus(todo, lookup);
@@ -117,13 +123,35 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const open: { item: RunningItem; rank: number; at: string }[] = [];
   const shelved: { item: RunningItem; at: string }[] = [];
   const folded = new Set<string>();
-  for (const card of taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain)) {
+  const slots = taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain);
+  const activeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at));
+  // One home per request (docs/design/DESIGN_SYSTEM.md 4.8): an Agent several of these tasks list asks under one of them,
+  // the task the hub ties its session to (`todo`), else the first that lists it. The others neither repeat its cards nor
+  // wait on the user for them; they are in progress.
+  const listing = new Map<string, string[]>();
+  for (const card of slots) {
+    const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
+    if (!todo) continue;
+    for (const a of activeAgents(todo)) {
+      const k = sessionKey(a.machine_id, a.session_id);
+      const ids = listing.get(k) ?? [];
+      if (!ids.includes(todo.id)) listing.set(k, [...ids, todo.id]);
+    }
+  }
+  const homeOf = (mid: string, sid: string): string | undefined => {
+    const ids = listing.get(sessionKey(mid, sid));
+    const tied = lookup(mid, sid)?.todo?.id;
+    return tied && ids?.includes(tied) ? tied : ids?.[0];
+  };
+  for (const card of slots) {
     const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
     // a plan task with no to-do yet is its plan's row (below); a to-do the hub no longer sends is finished
     if (!todo) continue;
-    const status = entryStatus(todo, lookup, plans);
-    const active = todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at);
-    const asks = active.flatMap((a) => asksOf.get(sessionKey(a.machine_id, a.session_id)) ?? []);
+    const active = activeAgents(todo);
+    const own = active.filter((a) => homeOf(a.machine_id, a.session_id) === todo.id);
+    // what the task waits on the user for is its own Agents' (an Agent another task holds asks there)
+    const status = own.length < active.length ? withNeeds(entryStatus(todo, lookup, plans), todoStatus({ ...todo, agents: own }, lookup)) : entryStatus(todo, lookup, plans);
+    const asks = own.flatMap((a) => asksOf.get(sessionKey(a.machine_id, a.session_id)) ?? []);
     const key = `task:${todo.id}`;
     const bucket = cardBucket(card, todo, plans, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
     const countsOpen = bucket === "open";

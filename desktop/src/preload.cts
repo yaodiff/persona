@@ -27,6 +27,7 @@ const api = Object.freeze({
   },
   setLaunchAtLogin(enabled: boolean) { return ipcRenderer.invoke("desktop:login-set", enabled); },
   getLaunchAtLogin() { return ipcRenderer.invoke("desktop:login-get"); },
+  openLocalSettings() { ipcRenderer.send("desktop:open-local-settings"); },
 } satisfies DesktopBridge);
 
 contextBridge.exposeInMainWorld("personaDesktop", api);

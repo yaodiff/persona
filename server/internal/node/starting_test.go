@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
-	"strings"
-	"testing"
 )
 
 // Right after a message starts a session, claude has not written its transcript yet: the phone's backlog request
@@ -55,6 +57,48 @@ func TestStartAsyncAnswersBeforeAFastFailure(t *testing.T) {
 		if r.err == nil {
 			t.Fatalf("start %s should fail without a terminal host", id)
 		}
+	}
+}
+
+func TestStartAsyncAllowsExpiredFailedID(t *testing.T) {
+	n, _ := testNode(t)
+	n.modes = map[string]sessionModes{}
+	const id = "11111111-2222-3333-4444-555555555555"
+	if _, err := n.startAsync(id, "", "", "", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	first := n.starts.get(id)
+	if first == nil {
+		t.Fatal("the first start has no record")
+	}
+	<-first.done
+	if first.err == nil {
+		t.Fatal("the first start should fail without a terminal host")
+	}
+	if _, err := n.startAsync(id, "", "", "", "", "", "", ""); err == nil || !strings.Contains(err.Error(), "already starting") {
+		t.Fatalf("an unexpired failed ID must still refuse a duplicate: %v", err)
+	}
+
+	n.starts.mu.Lock()
+	first.ended = time.Now().Add(-startFailedFor - time.Second)
+	n.starts.mu.Unlock()
+	if got := n.starts.listed(nil); len(got) != 0 {
+		t.Fatalf("the expired failure should no longer be listed: %+v", got)
+	}
+	s, err := n.startAsync(id, "", "", "", "", "", "", "")
+	if err != nil {
+		t.Fatalf("the expired failed ID must be retryable: %v", err)
+	}
+	if s == nil || !s.Starting {
+		t.Fatalf("the retry must answer as a new starting session: %+v", s)
+	}
+	second := n.starts.get(id)
+	if second == nil || second == first {
+		t.Fatal("the retry must have a distinct start record")
+	}
+	<-second.done
+	if second.err == nil {
+		t.Fatal("the retry's worker should run and fail again without a terminal host")
 	}
 }
 

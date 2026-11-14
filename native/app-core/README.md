@@ -25,7 +25,19 @@ cargo test --locked                                # unit tests and the shared f
 cargo run --locked -p persona-core-typegen          # regenerate the clients' codecs after changing a wire type
 cargo run --locked -p persona-core-typegen -- --check
 cargo build --locked --release -p persona-core-ffi # libpersona_core.{a,so,dylib}
+python3 -I scripts/ohos-napi-defs.py --check        # napi-derive definitions and index.d.ts
+python3 -I scripts/test_ohos_napi_defs.py           # declaration parser and drift-check regressions
 ```
+
+`scripts/ohos-napi-defs.py` runs a host `cargo check` with the `ohos` feature and `NAPI_TYPE_DEF_TMP_FOLDER` set.
+`napi-derive-ohos` 1.2.0 writes one JSON record per exported function there; this generator maps those records to
+`harmony/entry/src/main/cpp/types/libpersona_core/index.d.ts` in its stable function order. `Buffer` is exposed as
+`Uint8Array`, and every wake/effect callback must have no leading error argument and return `void`; `changedChat`
+keeps separate chat and version arguments. The declaration's `CoreHost` facade and method references stay unchanged.
+`--check` compares the complete generated file; without it, the same deterministic output is written for inspection.
+No NAPI library is linked or loaded. For testing the converter alone, `--records <JSON-lines file>` replaces Cargo,
+and `--print-records` prints the validated raw records. Keep the complete generic `ThreadsafeFunction` types on the
+`#[napi]` functions: napi-derive does not expand Rust type aliases into their TypeScript callback signatures.
 
 `scripts/ci/core.sh` runs all of these, plus formatting and clippy. Android's `:core:rustcore` tests build a host copy of
 the library and replay the same fixtures through the real JNI binding:

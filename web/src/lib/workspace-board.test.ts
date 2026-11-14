@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import { BoardModel, boardUnsupported, boundCard, cardSessions, columnCards, directory, sameDirectory, selectedColumn, optimisticBoard, type BoardCard, type BoardState, type Workspace } from "./workspace-board";

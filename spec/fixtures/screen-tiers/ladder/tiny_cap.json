@@ -6,6 +6,7 @@
       "height" : 600,
       "maxKbps" : 200,
       "minKbps" : 200,
+      "pixelsPerPoint" : 1,
       "scale" : 1,
       "width" : 800
     }

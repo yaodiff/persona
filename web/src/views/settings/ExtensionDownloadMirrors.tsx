@@ -99,7 +99,7 @@ function MirrorEditor({ manager, owner, isStorageGenerationCurrent }: { manager:
   const dirty = !!saved && !!value && (value.registry_mirror !== saved.registry_mirror || value.catalog_mirror !== saved.catalog_mirror);
   const disabled = loading || saving || !saved || !!readError;
 
-  return <Group title={t("settings-hubsettings.mirrors")} footer={t("settings-hubsettings.mirror_security")}>
+  return <Group anchor="mirrors" title={t("settings-hubsettings.mirrors")} footer={t("settings-hubsettings.mirror_security")}>
     <p className="px-4 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings-hubsettings.mirror_scope")}</p>
     {loading && <Loading />}
     {readError && <div className="flex items-center gap-3 px-4 py-3">

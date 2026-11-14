@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initI18n, t } from "../../i18n";
 import { setToken } from "../../lib/api";
-import type { KBDetailResponse } from "../../lib/kb";
+import { kindTitle, type KBDetailResponse } from "../../lib/kb";
 import { resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";
 import { EntryDetail } from "./KBDetail";
 
@@ -17,10 +17,11 @@ let host: HTMLDivElement;
 let root: Root;
 const entry = (tags: string[]): KBDetailResponse => ({ detail: { kind: "people", id: "example", path: "", meta: { name: "Example entry", tags }, summary: "# Example entry" } });
 
+const back = vi.fn();
 // The page's owner bumps reloadKey after a save, as Knowledge does.
 function Page() {
   const [reloadKey, setReloadKey] = useState(0);
-  return <EntryDetail kind="people" id="example" reloadKey={reloadKey} onToggleSidebar={() => {}} onBack={() => {}} onOpen={() => {}} onSaved={() => setReloadKey((k) => k + 1)} />;
+  return <EntryDetail kind="people" id="example" reloadKey={reloadKey} onToggleSidebar={() => {}} onBack={back} onOpen={() => {}} onSaved={() => setReloadKey((k) => k + 1)} />;
 }
 const render = () => act(() => root.render(<Page />));
 const json = (r: Request, value: unknown, status = 200) => act(async () => r.resolve(new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } })));
@@ -38,6 +39,7 @@ beforeEach(async () => {
   setToken("synthetic-owner-a");
   setRosterDefault("assistant");
   requests = [];
+  back.mockReset();
   vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => new Promise<Response>((resolve) => requests.push({ url, init, resolve }))));
   host = document.createElement("div");
   document.body.append(host);
@@ -97,4 +99,37 @@ it("shows nothing extra after a successful read following the save", async () =>
   expect(host.textContent).toContain("#new");
   expect(host.textContent).not.toContain(unavailable());
   expect(retry()).toBeUndefined();
+});
+
+it("says an entry the hub doesn't have isn't there, in the shared empty state with the way back (web usability audit item 42)", async () => {
+  render();
+  await json(reads()[0], { code: "not_found", error: "not found" }, 404);
+  const status = host.querySelector("[role=status]");
+  expect(status?.textContent).toContain(t("not-found.kb_title"));
+  expect(status?.textContent).toContain(t("not-found.kb_detail"));
+  expect(host.textContent).not.toContain("404");
+  expect(host.textContent).not.toContain(t("not-found.kb_gone"));
+  // not the entry's page: no title made of its id, no buttons that can't be used, nothing to retry
+  expect(host.querySelector("h1")).toBeNull();
+  expect(button("Tag")).toBeUndefined();
+  expect(button(t("knowledge-kbdetail.ask"))).toBeUndefined();
+  expect(host.querySelector("button:disabled")).toBeNull();
+  expect(retry()).toBeUndefined();
+  // the header names the list it would be in
+  expect(host.querySelector("header")?.textContent).toContain(kindTitle("people"));
+  const toList = [...status!.querySelectorAll("button")].find((b) => b.textContent?.trim() === t("knowledge-kbdetail.back"));
+  act(() => toList!.click());
+  expect(back).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the detail and says so when a read after a save finds the entry gone", async () => {
+  render();
+  await json(reads()[0], entry(["old"]));
+  act(() => button("Tag")!.click());
+  await act(async () => button("Save")!.click());
+  await json(writes()[0], { id: "example" });
+  await json(reads()[1], { code: "not_found", error: "not found" }, 404);
+  expect(host.textContent).toContain("Example entry");
+  expect(host.textContent).toContain(t("not-found.kb_gone"));
+  expect(host.querySelector("[role=status]")?.textContent ?? "").not.toContain(t("not-found.kb_title"));
 });

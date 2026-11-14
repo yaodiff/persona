@@ -9,6 +9,7 @@
         "capture" : 1000000,
         "firstByte" : null,
         "fps" : 30,
+        "keyframe" : false,
         "refinement" : false
       }
     },
@@ -19,6 +20,7 @@
         "capture" : 1100000,
         "firstByte" : null,
         "fps" : 30,
+        "keyframe" : false,
         "refinement" : false
       }
     },
@@ -29,6 +31,7 @@
         "capture" : 1200000,
         "firstByte" : null,
         "fps" : 30,
+        "keyframe" : false,
         "refinement" : false
       }
     },
@@ -39,6 +42,7 @@
         "capture" : 1300000,
         "firstByte" : null,
         "fps" : 30,
+        "keyframe" : false,
         "refinement" : false
       }
     },
@@ -49,6 +53,7 @@
         "capture" : 1400000,
         "firstByte" : null,
         "fps" : 30,
+        "keyframe" : false,
         "refinement" : false
       }
     },
@@ -59,6 +64,7 @@
         "capture" : 1500000,
         "firstByte" : null,
         "fps" : 30,
+        "keyframe" : false,
         "refinement" : false
       }
     },
@@ -69,6 +75,7 @@
         "capture" : 1600000,
         "firstByte" : null,
         "fps" : 30,
+        "keyframe" : false,
         "refinement" : false
       }
     },
@@ -79,6 +86,7 @@
         "capture" : 1700000,
         "firstByte" : null,
         "fps" : 30,
+        "keyframe" : false,
         "refinement" : false
       }
     },

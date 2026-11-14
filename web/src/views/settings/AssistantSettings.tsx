@@ -297,6 +297,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
 
       <Group title={t("settings-assistantsettings.proactive_title")} footer={t("settings-assistantsettings.proactive_footer")}>
         <Row
+          anchor="routines"
           label={t("settings-assistantsettings.routines")}
           hint={tasks === null ? undefined : next ? t("settings-assistantsettings.next_task", { when: momentLabel(next.at, new Date()), title: next.title }) : t("settings-assistantsettings.nothing_scheduled")}
           onClick={() => navigate({ name: "routines" })}
@@ -306,7 +307,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       </Group>
 
       <Group title={t("settings-assistantsettings.notifications_title")} footer={t("settings-assistantsettings.notifications_footer")}>
-        <Row label={t("settings-assistantsettings.quiet_tasks")}>
+        <Row label={t("settings-assistantsettings.quiet_tasks")} anchor="quiet-tasks">
           <Switch on={info?.main_tasks_quiet ?? true} onChange={(on) => void setQuiet(on)} disabled={!info || quietBusy} label={t("settings-assistantsettings.quiet_tasks")} />
         </Row>
       </Group>
@@ -327,10 +328,10 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       )}
 
       <Group title={t("settings-assistantsettings.start_title")} footer={t("settings-assistantsettings.start_footer")}>
-        <Row label={t("settings-assistantsettings.start_requested")}>
+        <Row label={t("settings-assistantsettings.start_requested")} anchor="start-requested">
           <Switch on={info?.start_requested_tasks ?? true} onChange={(on) => void setStartRequested(on)} disabled={!info || startBusy} label={t("settings-assistantsettings.start_requested")} />
         </Row>
-        <Row label={t("settings-assistantsettings.workspace_preference")} hint={t("settings-assistantsettings.workspace_hint")} wrapHint stackOnNarrow>
+        <Row label={t("settings-assistantsettings.workspace_preference")} hint={t("settings-assistantsettings.workspace_hint")} wrapHint stackOnNarrow anchor="workspace-preference">
           <select aria-label={t("settings-assistantsettings.workspace_preference")} value={info?.task_workspace_preference ?? "prefer-existing"}
             disabled={!info || info.manager !== manager || workspaceBusy}
             className="w-full min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-[13px] text-ink shadow-inset-field sm:w-auto [@media(pointer:coarse)]:min-h-11"
@@ -393,7 +394,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       </Group>
 
       <Group title={t("settings-assistantsettings.default_permissions")} footer={t("settings-assistantsettings.default_permissions_hint")}>
-        <Row label={t("settings-assistantsettings.default_permissions")}>
+        <Row label={t("settings-assistantsettings.default_permissions")} anchor="default-permissions">
           <select aria-label={t("settings-assistantsettings.default_permissions")} value={info?.default_permission_mode ?? ""} disabled={!info || info.manager !== manager || permissionBusy}
             className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-[13px] text-ink shadow-inset-field"
             onChange={(e) => void setPermission(e.target.value)}>
@@ -435,7 +436,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Group>
       )}
 
-      <Group title={t("settings-assistantsettings.knows_title")} footer={t("settings-assistantsettings.knows_footer")}>
+      <Group anchor="knows" title={t("settings-assistantsettings.knows_title")} footer={t("settings-assistantsettings.knows_footer")}>
         {info && <AboutMe notesSaves={notesSaves} info={info} onSaved={(notes) => setInfo((i) => (i ? { ...i, notes, notes_effective: notes.trim() } : i))} />}
         <div className="flex items-center gap-2 px-4 pt-3 pb-1.5">
           <span className="flex-1 text-[13px] font-medium text-ink">{t("settings-assistantsettings.memory")}</span>
@@ -471,10 +472,11 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       <SkillsGroup manager={manager} />
 
       <Group
+        anchor="runs-on"
         title={t("settings-assistantsettings.runs_on_title")}
         footer={machineName ? t("settings-assistantsettings.runs_on_footer", { machine: machineName }) : t("settings-assistantsettings.runs_on_none")}
       >
-        <Row label={t("settings-assistantsettings.machine")}>
+        <Row label={t("settings-assistantsettings.machine")} anchor="runs-on-machine">
           <span className="max-w-[220px] truncate">{machineName || t("settings-assistantsettings.machine_none")}</span>
         </Row>
         {runtime.place && (
@@ -487,7 +489,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
             <span data-main-runtime-tool className="max-w-[220px] truncate">{runtime.runtime}</span>
           </Row>
         )}
-        <Row label={t("settings-assistantsettings.cwd")} mono>
+        <Row label={t("settings-assistantsettings.cwd")} mono anchor="runs-on-cwd">
           <span className="max-w-[300px] truncate" title={info?.cwd}>{info?.cwd || "~/.persona/assistant"}</span>
         </Row>
         {info?.timezone && <Row label={t("settings-assistantsettings.timezone")}>{info.timezone}</Row>}

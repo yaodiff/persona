@@ -51,6 +51,8 @@ import persona.android.data.Hub
 import persona.android.navigation.*
 import persona.core.contracts.*
 import persona.core.contracts.api.ConnectionState
+import persona.core.contracts.api.MainConversationSender
+import persona.core.contracts.api.MessageSender
 import dev.chrisbanes.haze.HazeState
 import persona.core.designsystem.*
 import persona.core.designsystem.dense
@@ -648,6 +650,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         }
         // A chat's terminal cover reads its machine's own hub group, as the terminal page does (`routed`).
         fun chatTerminal(route: ChatRoute) = session.terminal?.let { shell.groupTerminal(SessionKey(route.machineId, route.sessionId)) ?: it }
+        val askSubscriptions = rememberSubscriptionAsk(session.sender, shell.feedback)
         val provider = entryProvider<NavKey> {
             assistantEntries(navigator) {
                 // Persona's conversation offers the next card an Agent waits on you with, as an Agent's chat does (#4339 C18).
@@ -717,7 +720,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 entry<KnowledgeRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
                 entry<KnowledgeDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
             }
-            settingsDetailEntries(navigator, services)
+            settingsDetailEntries(navigator, services, askSubscriptions)
             session.voice?.let { voiceEntries(navigator, it, session.identity, onModelConfiguration = { purpose -> navigator.navigate(ModelPurposeRoute(purpose)) }) } ?: run { entry<VoiceRoute> { UnavailablePage(stringResource(R.string.app_demo_no_voice), navigator) } }
             tools?.run { register(navigator) }
         }
@@ -814,7 +817,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                       entry<PhoneToolsRoute> { session.phone?.let { PhoneToolsScreen(it, settingsNavigator) }
                           ?: UnavailablePage(stringResource(R.string.app_unavailable_phone_tools), settingsNavigator) }
                       assistantEntries(settingsNavigator)
-                      settingsDetailEntries(settingsNavigator, services)
+                      settingsDetailEntries(settingsNavigator, services, askSubscriptions)
                   }
                   // In a regular window the list of settings stays beside the page it opens, as on an open iPhone Duo
                   // (its divider is not kept: the sheet starts from the usual split each time). Elsewhere one page.
@@ -975,6 +978,34 @@ private fun InboxItemUi(route: InboxItemUiRoute, inbox: InboxRepository, slots: 
             fallback == null -> InboxItemExtensionScreen(inbox, route, navigator, body.title, body.loading, body.refreshing, body.refresh, body.items)
             record == null -> UnavailablePage(missing, navigator)
             else -> Box(Modifier.fillMaxSize())
+        }
+    }
+}
+
+/**
+ * Set Up with … on Inbox Sources (#5308): the same hand-off as Ask Persona. The page has already closed itself.
+ * Without a main-conversation sender the Persona tab still opens, so the page is not left up doing nothing.
+ */
+@Composable
+private fun rememberSubscriptionAsk(sender: MessageSender, feedback: AppFeedback): (Navigator, String) -> Unit {
+    val scope = rememberCoroutineScope()
+    val failed = stringResource(persona.feature.chat.R.string.chat_handoff_failed)
+    return remember(sender, scope, feedback, failed) {
+        { nav, text ->
+            val main = sender as? MainConversationSender
+            if (main == null) {
+                nav.selectTab(AppTab.Persona)
+            } else scope.launch {
+                try {
+                    handToPersona(main, text, java.util.UUID.randomUUID().toString(),
+                        onQueued = { nav.selectTab(AppTab.Persona) },
+                        onBound = { key -> nav.navigate(ChatRoute(key.machineId, key.sessionId, kind = ConversationKind.Assistant)) })
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (feedback.failure(e) != true) feedback.notice(failed)
+                }
+            }
         }
     }
 }

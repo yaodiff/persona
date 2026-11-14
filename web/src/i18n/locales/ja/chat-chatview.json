@@ -9,6 +9,7 @@
   "interrupt_failed": "中断できませんでした：{error}",
   "new_chat": "新しいチャット",
   "session": "セッション",
+  "not_found_title": "会話が見つかりません",
   "continue_text": "続けて",
   "start_failed": "起動できませんでした：{error}",
   "start_failed_title": "起動できませんでした",

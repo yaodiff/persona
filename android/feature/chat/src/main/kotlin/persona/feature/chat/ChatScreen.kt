@@ -44,6 +44,9 @@ import persona.core.domain.sort.canChangeEffortOnly
 import persona.core.domain.sort.canChangeModes
 import persona.core.domain.sort.canInterrupt
 import persona.core.domain.sort.canSend
+import persona.core.domain.sort.isStoppedAgent
+import persona.core.domain.sort.TerminalResume
+import persona.core.domain.sort.terminalResume
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.canTypeClaudeCommands
 import persona.core.domain.sort.shownCloseout
@@ -242,6 +245,7 @@ private fun ChatPage(
     }
     fun deliveryAction(message: OutboxMessage, action: DeliveryAction) {
         if (readOnly) return
+        if (!message.state.allows(action, canSend)) return
         scope.launch {
             try {
                 if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage, ::removed))
@@ -793,7 +797,7 @@ private fun ChatPage(
             try { repository.loadOlder(key) } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) }
         })
-    ChatSearchNavigation(search, chatList, lines)
+    ChatSearchNavigation(search, chatList, lines, foldErrors.keys)
     ChatMessageJump(key, repository, chatList, lines, snapshot.hasOlder, snapshot.loading || snapshot.loadingOlder, search,
         onItem = { jumpItem = it }, onNotice = { notice = it })
     LaunchedEffect(list, chrome.covered, search.visible, search.pending, search.returning, chatList.restored, chatList.programmaticScroll, overlay, chromeOverlay, fullText, linkVisible, statusSheet, terminalHelp, taskPageVisible, lifecycle, snapshot.verified) {
@@ -1003,6 +1007,8 @@ private fun ChatPage(
                             if (!historyOnly && !readOnly && session != null) ModelFallbackCard(session, chrome.actions)
                             if (historyOnly) footer?.invoke()
                             else if (readOnly) Text(stringResource(R.string.chat_screen_subagent_read_only), Modifier.padding(Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                            else if (session?.isStoppedAgent == true && machine?.online != false) ChatStoppedNote(agentTerminal,
+                                resumeInTerminal?.takeIf { terminalResume(session, machine) == TerminalResume.Available })
                             else {
                                 // What waits in the agent's queue sits right above the composer, while the composer shows (Persona's further down).
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
@@ -1141,7 +1147,8 @@ private fun ChatPage(
                                     // Glass: iOS's bubble, its mark and small menu in place of the status line, which still says why
                                     // one did not go (#4339 C9); a delivery to check keeps the status line.
                                     if (glass && drawsAsPendingBubble(deliveryState)) {
-                                        OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy, onAction)
+                                        OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy,
+                                            canSend = canSend, onAction = onAction)
                                         if (receipt?.processing == true) Text(stringResource(persona.core.designsystem.R.string.designsystem_message_processing),
                                             Modifier.align(Alignment.End), style = PersonaTheme.type.caption,
                                             color = PersonaTheme.palette.ink2, maxLines = 1)
@@ -1151,11 +1158,11 @@ private fun ChatPage(
                                         UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
                                         OutboxStatus(message.copy(state = deliveryState,
                                             error = delivery?.refusal?.code ?: message.error),
-                                            busy = busy, onAction = onAction, receipt = receipt, onDetails = { statusSheet = true })
+                                            busy = busy, onAction = onAction, receipt = receipt, canSend = canSend, onDetails = { statusSheet = true })
                                     }
                                     if (!readOnly && failed) {
                                         // Edit puts the words back in the box and drops the refused bubble (nothing reached the computer).
-                                        ComposerRefusalActions(message, composerService, delivery, terminal,
+                                        ComposerRefusalActions(message, composerService, delivery, terminal, canSend = canSend,
                                             edit = { deliveryAction(message, DeliveryAction.Edit) }, notice = { notice = it })
                                     }
                                 }
@@ -1256,7 +1263,7 @@ private fun ChatPage(
                 }
             }
             if (search.visible) ChatSearchScreen(search, searchableItems, projection.turns.size, snapshot.hasOlder,
-                repository, key, onClose = { search.close(chatList) })
+                repository, key, snapshot.history, onClose = { search.close(chatList) })
             if (terminalHelp) TerminalHelpDialog { terminalHelp = false }
             if (activitySheet) session?.takeIf(ChatActivity::shown)?.let { s ->
                 ChatActivitySheet(s, onStop = if (readOnly || !canSend) null else ({ send(ChatActivity.STOP_LOOP) }),

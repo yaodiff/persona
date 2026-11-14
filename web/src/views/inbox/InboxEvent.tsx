@@ -131,12 +131,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
             {t("inbox-inboxevent.manager_done")}
           </p>
         )}
-        {!done && item.suggestion && item.summary && (
-          <p className="text-[13.5px] leading-relaxed font-medium text-ink" data-event-summary>
-            <Spark />
-            {item.summary}
-          </p>
-        )}
+        {!done && item.suggestion && item.summary && <EventSummary text={item.summary} marked />}
         {!done && item.suggestion && <SuggestionCard key={`${item.id}@${item.suggestion.version}`} item={item} suggestion={item.suggestion} />}
         {!done && item.suggestion && item.recap && (
           <section className="flex flex-col gap-2">
@@ -148,12 +143,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
         )}
         {(done || !item.suggestion) && (item.summary || item.recap) && (
           <section className="flex flex-col gap-2">
-            {item.summary && (
-              <p className="text-[13.5px] leading-relaxed font-medium text-ink">
-                <Spark />
-                {item.summary}
-              </p>
-            )}
+            {item.summary && <EventSummary text={item.summary} />}
             {item.recap && (
               <div>
                 <p className="text-submeta font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
@@ -173,6 +163,16 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
 }
 
 /** The active state, its processing conversation, and a way to instruct an open item without a suggestion. */
+/** The ✦ summary, before the suggestion (`marked`, #7473) or with the recap: one paragraph style for both. */
+function EventSummary({ text, marked = false }: { text: string; marked?: boolean }) {
+  return (
+    <p className="text-[13.5px] leading-relaxed font-medium text-ink" data-event-summary={marked || undefined}>
+      <Spark />
+      {text}
+    </p>
+  );
+}
+
 function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   const conversation = useConversation();
   const [sayOpen, setSayOpen] = useState(false);

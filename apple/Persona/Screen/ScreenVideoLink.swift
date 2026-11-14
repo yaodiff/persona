@@ -307,6 +307,8 @@ import UIKit
                 Task { @MainActor in self?.helperTiming(t) }
             case let .tier(c):
                 Task { @MainActor in self?.tierChanged(c) }
+            case let .encoding(e):
+                Task { @MainActor in self?.encodingChanged(e) }
             case let .ended(why):
                 Task { @MainActor in self?.ended(why) }
             }
@@ -357,6 +359,13 @@ import UIKit
         tier = c
         tierAt = .now
         if let ready { Self.settled[settledKey(ready)] = c.index }
+    }
+
+    /// The encoder's size after a change in place (#6396): the overlay shows what runs, not what `hello` said.
+    private func encodingChanged(_ e: EncodingMessage) {
+        guard stream != nil else { return }
+        let s = CGSize(width: e.width, height: e.height)
+        if s != size { size = s }
     }
 
     private func settledKey(_ r: Ready) -> String { "\(r.group)/\(r.machine)/\(route?.to.kind.rawValue ?? "relay")" }
@@ -540,6 +549,36 @@ nonisolated struct ScreenVideoTally {
         let s = values.sorted(), mid = s.count / 2
         let m = s.count % 2 == 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2
         return (m * 10).rounded() / 10
+    }
+}
+
+/// The tier as Connection Stats shows it (#6396): the Quality choice, the scale and frame rate, and why it last changed
+/// in plain words with how long ago.
+enum ScreenTierText {
+    /// The scale is the picture's own (#7842): "1×" for every tier of a display at one pixel per point, "1.9×" for 2×
+    /// under the phone's long-edge cap.
+    static func value(_ quality: ScreenQuality, _ tier: TierLadder.Tier) -> String {
+        let tenths = (tier.pixelsPerPoint * 10).rounded() / 10
+        let scale = tenths == tenths.rounded() ? String(Int(tenths)) : String(format: "%.1f", tenths)
+        return "\(quality.label) · \(scale)× · \(tier.fps) fps"
+    }
+
+    static func reason(_ r: TierReason, at: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(at)))
+        let ago = seconds < 60 ? String(localized: "\(seconds) s ago") : String(localized: "\(seconds / 60) min ago")
+        return "\(words(r)) · \(ago)"
+    }
+
+    static func words(_ r: TierReason) -> String {
+        switch r {
+        case .start: String(localized: "Picked for this connection")
+        case .linkSlowed: String(localized: "Connection slowed down")
+        case .linkSteady: String(localized: "Connection is steady")
+        case .networkChanged: String(localized: "Network changed")
+        case .phoneWarm: String(localized: "iPhone is warm or saving power")
+        case .phoneBehind: String(localized: "iPhone couldn’t keep up")
+        case .choice: String(localized: "You changed Quality")
+        }
     }
 }
 

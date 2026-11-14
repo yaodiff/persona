@@ -95,6 +95,18 @@ describe("settings sidebar groups", () => {
     expect([...ASSISTANT_TABS]).toEqual(NAV_GROUPS[0].tabs);
   });
 
+  // audit item 66: the hub's own page was a hard-coded lowercase "hub", and Models and Knowledge selection shared a mark
+  it.each(["en", "zh-Hans", "ja"])("names every category from the catalog in %s, each with a mark of its own", async (lang) => {
+    vi.resetModules();
+    const { initI18n, t } = await import("../../i18n");
+    await initI18n(lang);
+    const { TAB_INFO, TABS } = await import("./nav");
+    expect(TAB_INFO.hub.label).toBe(t("settings-nav.tab_hub"));
+    expect(TAB_INFO.hub.label).not.toBe("hub");
+    expect(TAB_INFO.hub.label).not.toBe(t("settings-nav.group_hub"));
+    expect(new Set(TABS.map((k) => TAB_INFO[k].icon)).size).toBe(TABS.length);
+  });
+
   it("names the assistant's profile and the assistant list apart: no row is called like a group (#3365)", () => {
     expect(TAB_INFO.persona.label).toBe("助手资料");
     expect(TAB_INFO.managers.label).toBe("助手");
@@ -132,6 +144,35 @@ describe("settings search", () => {
       expect(result.tabs).not.toContain("sent");
       expect(result.groups).toContainEqual(expect.objectContaining({ tab: "connectors", anchor: "sent" }));
     }
+  });
+  // audit item 18: only the categories and group headings were found, none of the settings on the pages
+  it.each(["en", "zh-Hans", "ja"])("finds the settings on a page by their own labels in %s", async (lang) => {
+    vi.resetModules();
+    const { initI18n, t } = await import("../../i18n");
+    await initI18n(lang);
+    const { searchSettings } = await import("./search");
+    const finds = (q: string, tab: string, anchor: string) => expect(searchSettings(q).groups).toContainEqual(expect.objectContaining({ tab, anchor }));
+    finds(t("language.label"), "general", "language");
+    finds(t("ui-look.text_size"), "general", "text-size");
+    finds(t("ui-look.accent"), "general", "theme-color");
+    finds(t("settings.theme_dark"), "general", "theme");
+    finds(t("settings.reply_motion"), "general", "reply-motion");
+    finds(t("settings.disconnect_browser"), "general", "disconnect");
+    finds(t("disconnect.sign_out"), "general", "disconnect");
+    finds(t("settings.add_provider"), "models", "settings-providers");
+    finds("API Key", "models", "settings-providers");
+    finds(t("settings-notifications.sound"), "notifications", "notify-sound");
+    finds(t("settings.revoke"), "devices", "devices");
+    finds(t("workspace-board.setting_label"), "hub", "workflow-board");
+  });
+  it("finds the words people search for in Chinese", () => {
+    const anchors = (q: string) => searchSettings(q).groups.map((g) => g.anchor);
+    expect(anchors("主题")).toContain("theme-color");
+    expect(anchors("深色")).toContain("theme");
+    expect(anchors("语言")).toContain("language");
+    expect(anchors("字号")).toContain("text-size");
+    expect(anchors("退出")).toContain("disconnect");
+    expect(anchors("撤销")).toContain("devices");
   });
   it("returns nothing for an unknown query", () => {
     expect(searchSettings("zzz-no-such-setting")).toEqual({ tabs: [], groups: [] });

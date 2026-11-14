@@ -26,6 +26,12 @@ var danglingMarks = lazyre.New("\\*{2,}|_{2,}|~{2,}|`+")
 // block, emphasis and code without their marks, a link as its text. Marks a clip left unpaired are dropped too.
 func PlainMarkdown(md string) string { return plain(md, true, false) }
 
+// SearchMarkdown keeps visible words inside HTML folds (such as details) as
+// well as ordinary Markdown. Unlike PushText it does not reinterpret flattened
+// tables. Scripts, styles, attributes and comments are not searchable prose.
+// PlainMarkdown's existing preview/title behavior remains unchanged.
+func SearchMarkdown(md string) string { return plain(md, true, true) }
+
 // PushText is PlainMarkdown for a finished turn's push, whose text node already flattened to one line (snippet): a
 // table run into one line says its cells ("item · status · build · passed"), and an answer folded in an HTML block
 // (<details>) says its words, not nothing (#4462). Only the push reads text this way: a plan's title (PlanTitle) and

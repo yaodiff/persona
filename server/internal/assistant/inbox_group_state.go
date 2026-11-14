@@ -31,7 +31,8 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 		return rest, nil
 	}
 
-	twinEnabled := s.inboxConfig(ctx).Agent.Enabled
+	agentCfg := s.inboxConfig(ctx).Agent
+	twinEnabled := agentCfg.Enabled
 	loc := s.location(ctx)
 	now := time.Now()
 	b := &s.inbox
@@ -39,6 +40,7 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 	defer b.mu.Unlock()
 	defer b.settleRound()
 	var changed []*InboxItem
+	fresh := map[*InboxItem]bool{}
 	for _, t := range states {
 		it := b.items[t.ID]
 		if it == nil || !it.open() || it.Group == nil || it.Group.Connector != src.ID ||
@@ -50,6 +52,7 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 			continue
 		}
 		hasConversation := it.Agent != nil && it.Agent.SessionID != ""
+		reuseSlot := inboxConversationRunning(it)
 		own := ownSend(it, t.Last)
 		if replied && own {
 			continue // A confirmed reply Persona sent keeps the event waiting for the other side.
@@ -75,7 +78,6 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 				it.Suggestion = nil // the owner's source reply supersedes a suggestion still waiting for confirmation
 				clearDraft(it)
 				wasAgent := it.Handling != nil && it.Handling.State == HandlingAgent
-				restoreWaiting := wasAgent && it.Agent != nil && it.Agent.Back == HandlingWaiting
 				interrupted := HandlingWaiting
 				if wasAgent {
 					interrupted = HandlingAgent
@@ -86,16 +88,8 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 					if at.IsZero() {
 						at = now
 					}
-					agentStartedAt := it.Agent.StartedAt
-					b.tell(it, inboxNote{Name: prompts.NoteSelfReplied, Text: at.In(loc).Format("2006-01-02 15:04")}, true, now)
-					if restoreWaiting {
-						it.Agent.Back = HandlingWaiting
-					}
-					if wasAgent {
-						it.Agent.StartedAt = agentStartedAt
-					} else {
-						b.setHandling(it, HandlingLooking, "", now)
-					}
+					b.queueInboxWake(it, inboxNote{Name: prompts.NoteSelfReplied, Text: at.In(loc).Format("2006-01-02 15:04")}, reuseSlot, now)
+					fresh[it] = it.Agent.DeferredAt != nil
 				}
 			} else {
 				it.done(now, connector.DoneReplied)
@@ -114,8 +108,8 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 				// Waiting for the other side or an Agent needs no new look merely because the owner read the source.
 			case hasConversation:
 				if twinEnabled {
-					b.tell(it, inboxNote{Name: prompts.NoteSelfRead}, true, now)
-					b.setHandling(it, HandlingLooking, "", now)
+					b.queueInboxWake(it, inboxNote{Name: prompts.NoteSelfRead}, reuseSlot, now)
+					fresh[it] = it.Agent.DeferredAt != nil
 				}
 			case it.Tier == TierFYI || it.Tier == TierNoise:
 				b.file(it, now, connector.DoneRead)
@@ -126,6 +120,7 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 			changed = append(changed, it)
 		}
 	}
+	b.admitFreshInboxWakes(agentCfg, now, fresh)
 	return rest, changed
 }
 

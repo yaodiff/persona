@@ -67,6 +67,21 @@ for phone confirmation before the model call, including when the title was hand-
 card unanswered changes nothing. The result is the same title or coded refusal in a text JSON object. The assistant
 tool is not a client dependency: iOS and other clients use the HTTP endpoint above (`agent_naming_tool.go`).
 
+The assistant-only read tool `agent_autoname_receipt` reads the calling conversation's existing `agent_autoname`
+permission records and one exact target's current naming snapshot, through the owning manager's existing stores
+(`agent_naming_receipt.go`). It takes an exact machine and full session id, with an optional bounded RFC3339 window
+`[since,before)` (at most 24 hours, 50 records per page, at most two pages). It never decorates the target's list, invokes a model,
+writes settings, answers a card, renames or publishes. A single card plus complete coverage returns only its id,
+status, `allow` and `resolved_at`; multiple cards return `ambiguous`; missing records, read errors or partial
+coverage return `unknown`. Its own four-field query is not confused with the original two-field autoname input:
+only the card's exact target is compared, independent of JSON field order or layout. The first history read and all
+subsequent pages use the exclusive upper bound and the `(created_at,id)` cursor, including equal timestamps at the
+window's lower bound. The snapshot separately reports `requested`, `title`, `named_at` and `observed_at`.
+Neither is the original model call's outcome: call ids are not propagated, an existing requested name may predate
+the request or belong to another caller, and `last_failure` can belong to background naming. Nothing in the result
+says it is safe to retry. Ordinary coding Agents, extensions, work machines and other assistant callers cannot read
+this conversation's cards. The tool is for evidence only and is not part of the iOS HTTP contract.
+
 Cost controls: list events coalesce into one worker, dispatching at most one candidate per 30-second pass.
 Queue-local one-shot wakes drain existing matches even without another list event, then stop; they do not
 install a timer on any node. A successful check that keeps the name advances its interval baseline without

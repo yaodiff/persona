@@ -4,9 +4,12 @@ import PersonaScreenKit
 /// A simulated live-screen stream for the quality tiers (#6396): the helper's `RateController` and an encoder model on
 /// one end, a shaped link in between, the phone's `ReceiverSignals` and `TierPolicy` on the other, all the real types.
 /// The link carries a scheduled bandwidth with a one-way delay and jitter; the encoder spends 90% of its target on a
-/// moving screen (each frame changes, the worst case for the link), sends a keyframe after a size change, and drops
-/// frames while it is over half a second of budget in debt, the debt paid off with time, as VideoToolbox's low-latency
-/// rate control does (screenbench). Policy changes and reports reach the other end after the one-way delay.
+/// moving screen (each frame changes, the worst case for the link) or what lighter content needs (`content`), sends a
+/// keyframe after a size change and, like the helper, every `keyframeEvery` seconds, and drops frames while it is over
+/// half a second of budget in debt, the debt paid off with time, as VideoToolbox's low-latency rate control does
+/// (screenbench). Frames arrive in the order they were sent, as on the stream's one connection; the phone reads what
+/// arrived as it arrives, or every `readEvery` seconds (several frames to a read).
+/// Policy changes and reports reach the other end after the one-way delay.
 struct LinkSimulation {
     struct Link {
         /// kbit/s the link carries at time t (seconds).
@@ -56,6 +59,16 @@ struct LinkSimulation {
     var seed: UInt64 = 1
     /// Prints the helper's state once a second (debugging a scenario).
     var trace = false
+    /// What the screen needs, in bits per pixel per frame: each frame is that or 90% of the target, whichever is less
+    /// (scrolling text on a 1080p screen, #7842: about 0.011). nil: 90% of the target, a screen that changes everywhere.
+    var content: Double?
+    /// A keyframe this often, in seconds, as well as after a size change (the helper: every 10 s); nil, only then.
+    var keyframeEvery: Double?
+    /// A keyframe's bits per pixel (screen text, #7842: about 1).
+    var keyframeBits = 0.33
+    /// The phone takes what arrived every this many seconds, all of it at once (a busy phone, a link that delivers in
+    /// bursts, #7842); nil: each frame as it arrives.
+    var readEvery: Double?
 
     static func label(_ t: TierLadder.Tier) -> String {
         let s = t.scale == t.scale.rounded() ? String(Int(t.scale)) : String(t.scale)
@@ -83,8 +96,9 @@ struct LinkSimulation {
         var reports: [(at: Double, report: ReceiverReport)] = []
         var updates: [(at: Double, change: TierPolicy.Change)] = []
         // Frames on their way to the phone, handed to its signals when they arrive.
-        var inbound: [(at: Double, first: Double, capture: Double, bytes: Int)] = []
-        var linkFree = 0.0, debt = 0.0, keyframe = true, debtAt = 0.0
+        var inbound: [(at: Double, first: Double, capture: Double, bytes: Int, keyframe: Bool)] = []
+        var linkFree = 0.0, debt = 0.0, keyframe = true, debtAt = 0.0, keyframeAt = 0.0
+        var lastArrival = 0.0 // one ordered stream: no frame arrives before the one sent ahead of it
         var number: UInt32 = 0
         var sentBytes = 0, skipped = 0
         var nextTick = 0.25, nextTiming = 1.0
@@ -120,7 +134,8 @@ struct LinkSimulation {
             while let f = inbound.first, f.at <= t {
                 inbound.removeFirst()
                 signals.frame(captureMicros: micros(f.capture), arrivalMicros: micros(f.at) + offset,
-                              firstByteMicros: micros(f.first) + offset, bytes: f.bytes, refinement: false, fps: running.fps)
+                              firstByteMicros: micros(f.first) + offset, bytes: f.bytes, refinement: false,
+                              keyframe: f.keyframe, fps: running.fps)
                 signals.decoded(ms: 4, at: micros(f.at) + offset)
                 signals.shown(replaced: false, at: micros(f.at) + offset)
             }
@@ -139,9 +154,13 @@ struct LinkSimulation {
             debt = max(0, debt - Double(rate.kbps) * 1000 * (t - debtAt))
             debtAt = t
             guard rate.admit(now: micros(t)) else { skipped += 1; continue }
+            if let every = keyframeEvery, t - keyframeAt >= every { keyframe = true }
             let budget = Double(rate.kbps) * 1000 * interval
-            let bits = keyframe ? Double(running.width * running.height) * 0.33 : 0.9 * budget
+            let pixels = Double(running.width * running.height)
+            let bits = keyframe ? pixels * keyframeBits : min(0.9 * budget, content.map { $0 * pixels } ?? .infinity)
             if !keyframe, debt > Double(rate.kbps) * 1000 * 0.5 { continue } // the encoder drops it
+            let isKeyframe = keyframe
+            if keyframe { keyframeAt = t }
             keyframe = false
             debt += bits
             number &+= 1
@@ -150,11 +169,15 @@ struct LinkSimulation {
             let start = max(t + 0.006, linkFree) // ~6 ms to encode
             let capacity = max(link.kbps(start), 1) * 1000
             linkFree = start + bits / capacity
-            let arrival = linkFree + (oneWay + jitter()) / 1000
-            let firstByte = start + (oneWay + jitter()) / 1000
+            var arrival = max(linkFree + (oneWay + jitter()) / 1000, lastArrival)
+            var firstByte = min(start + (oneWay + jitter()) / 1000, arrival)
+            if let every = readEvery { // read at the next read after it came, as are its first bytes
+                (arrival, firstByte) = ((arrival / every).rounded(.up) * every, (firstByte / every).rounded(.up) * every)
+            }
+            lastArrival = arrival
             result.latencies.append((arrival, (arrival - t - oneWay / 1000 - 0.006) * 1000))
             result.frames.append((arrival, Self.label(running)))
-            inbound.append((arrival, firstByte, t, bytes))
+            inbound.append((arrival, firstByte, t, bytes, isKeyframe))
             let report = ReceiverReport(lastFrame: number, captureMicros: micros(t), arrivalMicros: micros(arrival) + offset,
                                         bytesSinceLast: UInt32(bytes), flags: [])
             reports.append((arrival + (oneWay + jitter()) / 1000, report))

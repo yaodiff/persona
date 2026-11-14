@@ -377,7 +377,8 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
 }
 
 function RenameDialog({ s, onClose, onDone }: { s: Conversation; onClose: () => void; onDone: (title: string) => void }) {
-  const [title, setTitle] = useState(conversationTitle(s) === t("assistant-conversations.untitled") ? "" : s.title);
+  // starts from the title as the list shows it (a chat titled by its context tag: the tag's title, not the tag)
+  const [title, setTitle] = useState(() => { const shown = conversationTitle(s); return shown === t("assistant-conversations.untitled") ? "" : shown; });
   const [busy, setBusy] = useState(false);
   const trimmed = title.trim();
   const save = async () => {

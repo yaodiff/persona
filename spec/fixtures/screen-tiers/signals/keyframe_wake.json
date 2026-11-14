@@ -1,0 +1,190 @@
+{
+  "description" : "A keyframe and the frames queued behind it are left out of queueP95Ms, not out of the rest.",
+  "name" : "keyframe_wake",
+  "steps" : [
+    {
+      "frame" : {
+        "arrival" : 6020000,
+        "bytes" : 6000,
+        "capture" : 1000000,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6053333,
+        "bytes" : 6000,
+        "capture" : 1033333,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6086666,
+        "bytes" : 6000,
+        "capture" : 1066666,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6119999,
+        "bytes" : 6000,
+        "capture" : 1099999,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6153332,
+        "bytes" : 6000,
+        "capture" : 1133332,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6186665,
+        "bytes" : 6000,
+        "capture" : 1166665,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6219998,
+        "bytes" : 6000,
+        "capture" : 1199998,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6253331,
+        "bytes" : 6000,
+        "capture" : 1233331,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6386664,
+        "bytes" : 200000,
+        "capture" : 1266664,
+        "firstByte" : 6306664,
+        "fps" : 30,
+        "keyframe" : true,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6394997,
+        "bytes" : 6000,
+        "capture" : 1299997,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6395330,
+        "bytes" : 6000,
+        "capture" : 1333330,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6386663,
+        "bytes" : 6000,
+        "capture" : 1366663,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6419996,
+        "bytes" : 6000,
+        "capture" : 1399996,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6453329,
+        "bytes" : 6000,
+        "capture" : 1433329,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6486662,
+        "bytes" : 6000,
+        "capture" : 1466662,
+        "firstByte" : null,
+        "fps" : 30,
+        "keyframe" : false,
+        "refinement" : false
+      }
+    },
+    {
+      "expected" : {
+        "burstKbps" : [
+          20000
+        ],
+        "decodeP95Ms" : null,
+        "deliveredKbps" : 4765.7619433337195,
+        "frames" : 15,
+        "lateShare" : 0.13333333333333333,
+        "queueFalling" : false,
+        "queueP50Ms" : 0,
+        "queueP95Ms" : 0,
+        "queueRising" : false,
+        "replacedShare" : null
+      },
+      "take" : {
+        "now" : 6486662
+      }
+    }
+  ]
+}

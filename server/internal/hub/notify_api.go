@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -37,6 +38,9 @@ type notifyRequest struct {
 	ID string `json:"id,omitempty"`
 	// Silent: no sound (`personad notify --silent`, docs/integrations/script-cli.md).
 	Silent bool `json:"silent,omitempty"`
+	// PushLevel is the ln-mode urgency: "P0" (must interrupt), "P1" (default; held for briefings in ln mode) or
+	// "P2" (silent in ln mode). It is separate from Level, the APNs interruption level.
+	PushLevel string `json:"push_level,omitempty"`
 
 	// Extension notification: only accepted when the caller is an extension token (roleExtension, with the notify scope).
 	UI      string              `json:"ui,omitempty"`
@@ -90,6 +94,13 @@ func (r *notifyRequest) validate() error {
 	case levelActive, levelTimeSensitive:
 	default:
 		return errors.New("level must be active or time-sensitive")
+	}
+	switch r.PushLevel {
+	case "":
+		r.PushLevel = assistantwire.LevelP1
+	case assistantwire.LevelP0, assistantwire.LevelP1, assistantwire.LevelP2:
+	default:
+		return errors.New("push_level must be P0, P1 or P2")
 	}
 
 	r.UI = strings.TrimSpace(r.UI)
@@ -239,7 +250,11 @@ func (h *Hub) deliverNotify(in notifyRequest, machine, extID, manager string) (m
 	// Something that needs you: devices that turned off "Needs you" (prefs.input) get none of these either.
 	wants := pushWants{Kind: "input"}.fn()
 	build := func(i18n.Lang) map[string]any { return payload }
-	pushSelected, pushReachable := h.push.sendFrom(manager, build, collapse, wants, quietNone, nil)
+	policy := pushPolicy{level: in.PushLevel, title: in.Title, body: in.Body}
+	if in.ID != "" { // the caller's own id, apart from every other manager's and extension's same id
+		policy.relatedKey = "notify:" + manager + "/" + extID + "/" + in.ID
+	}
+	pushSelected, pushReachable, _ := h.push.sendFromPolicy(manager, policy, build, collapse, wants, quietNone, nil, nil)
 	ws := build
 	if id != "" {
 		// The WebSocket event carries the id itself (not the push), so an Android phone replaces the earlier alert too.

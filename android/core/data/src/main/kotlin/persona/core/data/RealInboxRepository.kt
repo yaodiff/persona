@@ -61,11 +61,14 @@ class RealInboxRepository(
     private val refreshWindowMillis: Long = 1_000,
     /** Whether the hub shows source subscriptions (#2041). */
     private val subscriptionsShownFlow: Flow<Boolean> = flowOf(false),
+    /** Whether those pages are Inbox Sources (#5278, `inbox_sources`). */
+    private val inboxSourcesShownFlow: Flow<Boolean> = flowOf(false),
     // Last, so existing callers that pass it as a trailing lambda keep compiling.
     private val download: suspend (InboxAssistantTransport, LarkPart.File) -> String,
 ) : persona.feature.inbox.InboxRepository {
     override val supportsThreadOutbox: Boolean get() = sendThread != null
     override val subscriptionsShown: Flow<Boolean> get() = subscriptionsShownFlow
+    override val inboxSourcesShown: Flow<Boolean> get() = inboxSourcesShownFlow
     override val personaOutbox = mainConversationSender?.outbox ?: MutableStateFlow(emptyList())
     override val connectionState: Flow<ConnectionState> = hubConnection?.state ?: connection.current.map {
         if (it == null) ConnectionState.Connecting else ConnectionState.Online

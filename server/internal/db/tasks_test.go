@@ -293,4 +293,32 @@ func TestTaskPlansMadeSince(t *testing.T) {
 			t.Fatalf("row = %+v", r)
 		}
 	}
+
+	// The queue uses the update window plus durable queue records: the first plan was created before base but updated
+	// inside it. A stale serialized queue survives a long outage; a stale plan without one stays excluded. The open plan
+	// is still excluded, and MadeSince above retains its independent creation-window result.
+	for _, suffix := range []string{"stale_queued", "stale_plain"} {
+		tasks := json.RawMessage(`[{"title": "Stale"}]`)
+		if suffix == "stale_queued" {
+			tasks = json.RawMessage(`[{"title": "Stale", "queue": {}}]`)
+		}
+		p := TaskPlanRow{ID: prefix + "_" + suffix, Conversation: prefix, State: "started", CreatedAt: base.Add(-2 * time.Hour),
+			UpdatedAt: base.Add(-2 * time.Hour), Tasks: tasks}
+		if err := d.CreateTaskPlan(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err = d.TaskPlansQueued(ctx, base.Add(30*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	for _, r := range rows {
+		if r.Conversation == prefix {
+			got = append(got, strings.TrimPrefix(r.ID, prefix+"_")+":"+r.State)
+		}
+	}
+	if strings.Join(got, ",") != "stale_queued:started,0:started,1:started,3:dismissed,4:started" {
+		t.Fatalf("queue candidates = %v", got)
+	}
 }

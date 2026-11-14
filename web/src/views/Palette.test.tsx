@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { closePalette, openPalette, registerContextCommands, setPaletteQuery } from "../lib/palette";
 import { registerShortcut } from "../lib/shortcuts";
-import { Palette, placeWords } from "./Palette";
+import { Palette } from "./Palette";
+import { placeWords } from "./palette/PlaceWords";
 import { initI18n } from "../i18n";
 import { getState } from "../lib/store";
 import type { Session } from "../lib/types";
@@ -113,8 +114,10 @@ describe("the palette's 前往 (the Mac's quick open)", () => {
     const html = render("设置");
     expect(html).toContain("前往");
     expect(html).toContain("设置");
-    expect(render("cpu")).toContain("机器");
-    expect(render("todo")).toContain("待办");
+    // Alias matching loads on the first typed query; mounted coverage lives in Palette.runtime-search.test.tsx.
+    const places = ["machines", "todos"].map((key) => ({ key, title: key, words: placeWords(key), icon: "list" as const, to: { name: "home" } as const }));
+    expect(placeHits(places, "cpu").map((hit) => hit.key)).toEqual(["p:machines"]);
+    expect(placeHits(places, "todo").map((hit) => hit.key)).toEqual(["p:todos"]);
   });
 });
 

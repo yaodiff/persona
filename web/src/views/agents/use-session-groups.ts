@@ -6,7 +6,7 @@ import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { filterQuery, type ListCounts, type ListFilters } from "../../lib/session-list";
 import { catalogGroups, countGroups, validCatalog, type GroupDimension, type SessionCatalog, type SessionGroup, type TodoNames } from "../../lib/session-groups";
-import { onHubEvent } from "../../lib/store";
+import { onShownHint } from "../../lib/shown-hints";
 import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
 
 /** How soon a catalog whose computers were still answering is read again: a second after the first answer, then
@@ -47,7 +47,7 @@ function useHinted<T>(path: string | null, valid: (v: unknown) => v is T, event:
       }, (e) => { if (live && request === sequence) setRead((was) => ({ path, value: was?.path === path ? was.value : undefined, error: errorText(e) })); });
     };
     load();
-    const off = onHubEvent(event, () => {
+    const off = onShownHint(event, () => {
       retries = 0;
       const wait = started + SESSION_LIST_METRICS.groupsRefresh - Date.now();
       if (wait <= 0) load();

@@ -4,6 +4,7 @@ import persona.core.contracts.api.InboxBulkAction
 import persona.core.designsystem.text
 import androidx.compose.ui.platform.LocalResources
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.inbox.InboxGroups
 import androidx.compose.foundation.background
@@ -41,6 +42,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val shownConnection = rememberSettledConnection(connection)
     val savedPreferences by repository.preferences.collectAsStateWithLifecycle(InboxPreferences())
     val subscriptionsShown by repository.subscriptionsShown.collectAsStateWithLifecycle(false)
+    val inboxSourcesShown by repository.inboxSourcesShown.collectAsStateWithLifecycle(false)
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     val res = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -265,9 +267,12 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 JAction(res.getString(R.string.inbox_mutes_title), PhIcons.Prohibit, separatorBefore = true) { showMutes = true },
                 JAction(res.getString(R.string.inbox_rules_title), PhIcons.Target) { showRules = true },
             ) + listOfNotNull(
-                // source subscriptions (#2041): every subscription, with the Inbox's other settings
-                if (subscriptionsShown) JAction(res.getString(R.string.inbox_subscriptions), PhIcons.ArrowsClockwise) {
-                    navigator.navigate(ExtensionUiRoute(SUBSCRIPTIONS_UI, "pages", res.getString(R.string.inbox_subscriptions)))
+                // source subscriptions (#2041); Inbox Sources once the hub says so (#5278)
+                if (subscriptionsShown) {
+                    val label = res.getString(if (inboxSourcesShown) R.string.inbox_sources else R.string.inbox_subscriptions)
+                    JAction(label, PhIcons.ArrowsClockwise) {
+                        navigator.navigate(ExtensionUiRoute(SUBSCRIPTIONS_UI, "pages", label))
+                    }
                 } else null,
             ),
             note = if (scopeText == null) stringResource(R.string.inbox_bulk_note_all) else stringResource(R.string.inbox_bulk_note_scope, scopeText))
@@ -428,7 +433,19 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     query.isNotBlank() -> JEmptyState(stringResource(R.string.inbox_empty_search_title), stringResource(R.string.inbox_empty_search_text, query.trim()), icon = PhIcons.MagnifyingGlass)
                     snapshot.records.isEmpty() && snapshot.interactions.isEmpty() -> JEmptyState(stringResource(R.string.inbox_empty_title),
                         stringResource(R.string.inbox_empty_text), icon = PhIcons.Tray)
-                    else -> JEmptyState(stringResource(R.string.inbox_empty_filtered_title), stringResource(R.string.inbox_empty_filtered_text), icon = PhIcons.CheckCircle)
+                    // A source or kind that hides every open item is not "all caught up": the Inbox outside it may still
+                    // hold some. The filter mark and Clear filters are the way back (#7550). A bay with nothing, and no
+                    // such filter, keeps the check.
+                    source.isNotEmpty() || kind.isNotEmpty() -> JEmptyState(
+                        stringResource(R.string.inbox_empty_filtered_title), stringResource(R.string.inbox_empty_filtered_text),
+                        icon = PersonaIcons.filter,
+                        action = {
+                            JButton(stringResource(R.string.inbox_filter_clear), {
+                                filter(currentFilters.copy(source = "", kind = "", query = ""))
+                            }, kind = JButtonKind.Secondary)
+                        },
+                    )
+                    else -> JEmptyState(stringResource(R.string.inbox_empty_caught_up_title), stringResource(R.string.inbox_empty_caught_up_text), icon = PhIcons.CheckCircle)
                 }
             }
             // Rows of a group (#2576: in a selection a tap picks, a long-press starts one).

@@ -909,6 +909,12 @@ struct AssistantSidebar: View {
         // Paint the entire column with it too, including the title, actions and unused space.
         .background(Theme.pageBackground)
         #endif
+        #if os(iOS)
+        // A column (the iPad's split, the open iPhone Duo) keeps out of the keyboard only while its own search field is
+        // typed in, so the chats found stay above it. Another field's keyboard, above all a sheet's over the page, shrank
+        // the column behind the sheet: its list lost all but a row or two and got them back as the keyboard went (#7629).
+        .ignoresSafeArea(.keyboard, edges: drawer == nil && !searching ? Edge.Set.bottom : [])
+        #endif
         // Which conversations the tasks started: read again as the sidebar comes out, when a conversation came or went, and
         // for another manager's page.
         .task(id: out ? "\(all.count)|\(model.assistantManagerID ?? "")" : "") { if out { await taskChats.refresh(model.api) } }

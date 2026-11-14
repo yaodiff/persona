@@ -26,8 +26,9 @@ type Hub interface {
 	DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error)
 	// AppCall is app.call {app_id, method, params}: a call to an app the hub runs (App*).
 	AppCall(ctx context.Context, p AppCall) (json.RawMessage, error)
-	// NotifyRequest is notify.request {notification} → {ok}: a push for the user (nil error is ok).
-	NotifyRequest(ctx context.Context, p NotifyRequest) error
+	// NotifyRequest is notify.request {notification} → {ok, held?, reason?}: a push for the user. Held/reason say ln
+	// mode kept it for the briefing instead of alerting the phone.
+	NotifyRequest(ctx context.Context, p NotifyRequest) (NotifyResult, error)
 	// Broadcast is ws.broadcast {message}: a live update the apps get as it is (assistant_schedule, assistant_feed,
 	// task_plan). One way: nothing comes back.
 	Broadcast(ctx context.Context, b Broadcast)
@@ -52,6 +53,7 @@ type (
 	AppCall             = assistantwire.AppCall
 	ModelBinding        = assistantwire.ModelBinding
 	NotifyRequest       = assistantwire.NotifyRequest
+	NotifyResult        = assistantwire.NotifyResult
 	Notification        = assistantwire.Notification
 	Broadcast           = assistantwire.Broadcast
 	Snapshot            = assistantwire.Snapshot

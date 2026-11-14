@@ -356,8 +356,10 @@ name = "persona-core-ffi"
 version = "0.1.0"
 dependencies = [
  "jni",
+ "persona-core",
  "persona-core-ffi",
  "persona-core-runtime",
+ "serde_json",
 ]
 
 [[package]]
@@ -367,6 +369,7 @@ dependencies = [
  "napi-build-ohos",
  "napi-derive-ohos",
  "napi-ohos",
+ "persona-core",
  "persona-core-runtime",
  "serde_json",
 ]

@@ -13,7 +13,9 @@ export function closeToTray(window: BrowserWindow, quitting: () => boolean): voi
     window.hide();
   });
   if (process.platform === "darwin") {
-    app.on("activate", () => window.show());
+    const activate = () => window.show();
+    app.on("activate", activate);
+    window.once("closed", () => app.removeListener("activate", activate));
   }
 }
 

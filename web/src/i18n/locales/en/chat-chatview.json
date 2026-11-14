@@ -9,6 +9,7 @@
   "interrupt_failed": "Couldn't interrupt: {error}",
   "new_chat": "New chat",
   "session": "Session",
+  "not_found_title": "Conversation not found",
   "continue_text": "Continue",
   "start_failed": "Couldn't start: {error}",
   "start_failed_title": "Couldn't start",

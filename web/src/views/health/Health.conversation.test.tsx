@@ -22,7 +22,7 @@ vi.mock("./reports", async (orig) => ({
   startHealthConversation: () => (hub.started++, new Promise(() => {})),
 }));
 vi.mock("../chat/ChatView", () => ({
-  ChatView: ({ mid, sid, headerActions }: { mid: string; sid: string; headerActions?: React.ReactNode }) => <div><p data-chat>{`${mid}/${sid}`}</p>{headerActions}</div>,
+  ChatView: ({ mid, sid, headerActions, placeholder }: { mid: string; sid: string; headerActions?: React.ReactNode; placeholder?: string }) => <div><p data-chat data-placeholder={placeholder}>{`${mid}/${sid}`}</p>{headerActions}</div>,
 }));
 
 import { Health } from "./Health";
@@ -75,6 +75,13 @@ describe("a health conversation", () => {
     await act(async () => retry.click());
     await flush();
     expect(host.querySelector("[data-chat]")?.textContent).toBe("mac/h1");
+  });
+
+  it("asks health questions in its box, as the space's home does, not the main chat's words", async () => {
+    hub.answers.push(listed);
+    act(() => root.render(<Health sid="h1" onToggleSidebar={() => {}} />));
+    await flush();
+    expect(host.querySelector("[data-chat]")?.getAttribute("data-placeholder")).toBe(t("health.ask_placeholder"));
   });
 
   it("reads the list again on the next hello", async () => {

@@ -20,6 +20,7 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -28,7 +29,7 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun ChatSearchScreen(
     state: ChatSearchState, items: List<Item>, rounds: Int, hasOlder: Boolean,
-    repository: ChatRepository, session: SessionKey, onClose: () -> Unit,
+    repository: ChatRepository, session: SessionKey, history: String? = null, onClose: () -> Unit,
 ) {
     val palette = PersonaTheme.palette
     val scope = rememberCoroutineScope()
@@ -38,11 +39,37 @@ internal fun ChatSearchScreen(
     var notice by remember { mutableStateOf<String?>(null) }
     var searching by remember { mutableStateOf(false) }
     val res = androidx.compose.ui.platform.LocalResources.current
-    val results by produceState(ChatSearchResults(), state.query, items) {
+    val foldKey = "${session.machineId}\u0000${session.sessionId}\u0000${history.orEmpty()}"
+    val foldSig = items.mapNotNull { item -> item.fold?.let { "${item.id}:${it.throughSeq}" } }.joinToString(",")
+    LaunchedEffect(foldKey, foldSig) {
+        if (state.foldCacheKey != foldKey) state.resetFolds(foldKey)
+        val wanted = items.filter { it.kind == "fold" && it.fold != null && state.needsFold(it) }
+        if (wanted.isEmpty()) {
+            state.foldsLoading = false
+            return@LaunchedEffect
+        }
+        state.foldsLoading = true
+        try {
+            val outcome = fetchFoldsForSearch(
+                wanted,
+                load = { fold -> loadFoldForSearch(repository, session, fold) },
+                onFold = { fold, loaded -> state.acceptFold(fold, loaded) },
+                stopped = { !isActive },
+                budget = state.foldBudgetLeft().coerceAtLeast(1),
+            )
+            if (isActive && (outcome.failed > 0 || outcome.capped)) state.foldsPartial = true
+        } finally { if (isActive) state.foldsLoading = false }
+    }
+    val loaded = remember(items) { items.mapTo(HashSet()) { it.id } }
+    val searched = remember(items, state.foldItems) {
+        val extra = state.foldItems.filter { it.id !in loaded }
+        if (extra.isEmpty()) items else items + extra
+    }
+    val results by produceState(ChatSearchResults(), state.query, searched) {
         searching = true
         value = ChatSearchResults()
         delay(200)
-        value = withContext(Dispatchers.Default) { searchChat(res, items, state.query) }
+        value = withContext(Dispatchers.Default) { searchChat(res, searched, state.query) }
         searching = false
     }
     val loadFailed = stringResource(R.string.chat_search_load_failed)
@@ -59,6 +86,10 @@ internal fun ChatSearchScreen(
                         style = PersonaTheme.type.caption, color = palette.ink2)
                     if (results.truncated) Text(stringResource(R.string.chat_search_truncated),
                         Modifier.padding(horizontal = pagePadding), color = palette.ink2, style = PersonaTheme.type.caption)
+                    if (state.foldsLoading) Text(stringResource(R.string.chat_search_folds_loading),
+                        Modifier.padding(horizontal = pagePadding), style = PersonaTheme.type.caption, color = palette.ink2)
+                    else if (state.foldsPartial) Text(stringResource(R.string.chat_search_folds_partial),
+                        Modifier.padding(horizontal = pagePadding), style = PersonaTheme.type.caption, color = palette.ink2)
                     if (searching) JLinearProgress(null)
                 }
             },

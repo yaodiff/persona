@@ -73,6 +73,10 @@ let root: Root;
 const flush = async () => {
   for (let i = 0; i < 10; i++) await act(async () => { await Promise.resolve(); });
 };
+// a long group's rows mount in steps while the page is idle (audit item 34): let those steps run
+const allRows = async () => {
+  for (let i = 0; i < 10; i++) await act(async () => { await new Promise((done) => setTimeout(done, 60)); });
+};
 const button = (text: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === text);
 const groups = (section: string) => [...host.querySelectorAll<HTMLElement>(`[data-section="${section}"] [data-group]`)].map((g) => g.dataset.group!.split("|")[2]);
 const head = (section: string, key: string) => host.querySelector<HTMLElement>(`[data-group="|${section}|${key}"]`)!;
@@ -240,10 +244,12 @@ describe("Done's day counts from the hub (#2969)", () => {
     await click(toggle("done", "just").closest("section")?.querySelector('button[aria-haspopup="menu"]'));
     await click([...document.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.includes("7 天前")));
     expect(historyAsks()).toHaveLength(1);
+    await allRows();
     expect(head("done", "week").querySelectorAll("[data-item]").length).toBe(100);
     await click(button("加载更早的"));
     const ask = historyAsks().at(-1)!;
     expect(ask.get("before_id")).toBeTruthy(); // where the first page ended
+    await allRows();
     expect(head("done", "week").querySelectorAll("[data-item]").length).toBe(151);
     expect(button("加载更早的")).toBeUndefined();
   });

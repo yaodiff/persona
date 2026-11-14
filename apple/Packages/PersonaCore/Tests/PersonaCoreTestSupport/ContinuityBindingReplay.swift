@@ -110,6 +110,6 @@ public struct ContinuityBindingReplay: Sendable {
     }
 }
 
-private final class EffectRecorder: Sendable {
+final class EffectRecorder: @unchecked Sendable {
     let effects = Mutex<[Effect]>([])
 }

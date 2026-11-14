@@ -323,7 +323,7 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	}
 	onlineAt := time.Now()
 	rewatch := map[string]int{}
-	updates := false // listed: a queued update and a build check follow (below)
+	updates := false // a queued update and a build check follow a list, or an incompatible node's update-only connection
 	for id := range m.watched {
 		rewatch[id] = m.lastSeq[id]
 	}
@@ -395,6 +395,7 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 		}
 	} else {
 		rewatch = nil
+		updates = true // node.update.* stays available so this node can become compatible again
 	}
 	m.firstTried() // configured and listed: the calls that waited for it go now
 	if updates {

@@ -17,7 +17,8 @@ vi.hoisted(() => {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const NOW = Date.now();
+// Fixed local noon keeps the 26-hour-old fixture on yesterday, even when this suite runs after midnight.
+const NOW = new Date(2026, 0, 15, 12).getTime();
 const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
 const todo = (id: string, title: string, patch: Partial<Todo> = {}): Todo => ({ id, title, created_at: minutesAgo(600), updated_at: minutesAgo(5), ...patch });
 const session: Session = { machine_id: "mac", session_id: "s1", title: "菜谱网站加搜索", cwd: "/Users/me/code/recipes", status: "running" };
@@ -29,6 +30,8 @@ let closed: number;
 const before = { todos: getState().todos, sessions: getState().sessions };
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   closed = 0;
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json({ items: [{ id: "blog", name: "个人博客" }] }))));
   host = document.createElement("div");
@@ -41,6 +44,7 @@ afterEach(() => {
   host.remove();
   Object.assign(getState(), before);
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const open = (todos: Todo[]) => {

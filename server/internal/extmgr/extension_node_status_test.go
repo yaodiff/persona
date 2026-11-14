@@ -210,7 +210,7 @@ func TestLiveHubProcessKeepsItsStatusWithoutNodeSummary(t *testing.T) {
 	h.syncExtensionNodes(ctx, box)
 
 	// A live, startup RPC process: the hub has a process of its own that reports running once initialized.
-	socket := filepath.Join(t.TempDir(), "live.sock")
+	socket := filepath.Join(shortTempDir(t), "live.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)

@@ -12,6 +12,14 @@ final class PersonaCoreContinuityTests: XCTestCase {
         print("iOS C binding: \(result.cases) cases, \(result.steps) steps, \(result.patches) patches")
     }
 
+    func testNativeAndCoreShadowReplayMatchesFoldAndReloadRules() throws {
+        let cases = try ContinuityCase.all(in: ContinuityCase.repositoryDirectory)
+        for `case` in cases {
+            try NativeChatStoreContinuityReplay.replayShadow(`case`)
+        }
+        XCTAssertEqual(cases.count, 38)
+    }
+
     func testEveryContinuityFixtureAgainstNativeChatStore() throws {
         let result = try NativeChatStoreContinuityReplay.replayAll()
         XCTAssertEqual(result.cases, 38)

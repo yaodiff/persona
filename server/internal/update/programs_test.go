@@ -99,6 +99,37 @@ func TestBuildManifestNodes(t *testing.T) {
 	}
 }
 
+// The independent connector is indexed separately from the programs a hub swaps. Windows Link downloads keep .exe
+// before .gz, while their manifest key stays <os>-<arch>; neither one becomes a hub platform.
+func TestBuildManifestLinks(t *testing.T) {
+	dir := t.TempDir()
+	writeGz(t, filepath.Join(dir, "personad-linux-amd64.gz"), []byte("personad"))
+	writeGz(t, filepath.Join(dir, "persona-link-linux-amd64.gz"), []byte("Linux connector"))
+	writeGz(t, filepath.Join(dir, "persona-link-windows-amd64.exe.gz"), []byte("Windows amd64 connector"))
+	writeGz(t, filepath.Join(dir, "persona-link-windows-arm64.exe.gz"), []byte("Windows arm64 connector"))
+	m, err := BuildManifest(dir, Manifest{Version: "v1", Build: 202611030000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Files) != 1 || len(m.Programs) != 0 || len(m.Nodes) != 0 {
+		t.Fatalf("connector leaked into an update group: %+v", m)
+	}
+	for _, platform := range []string{"linux-amd64", "windows-amd64", "windows-arm64"} {
+		suffix := ""
+		if platform != "linux-amd64" {
+			suffix = ".exe"
+		}
+		if got := m.Links[platform].Name; got != "persona-link-"+platform+suffix+".gz" || m.Links[platform].BinarySHA256 == "" {
+			t.Errorf("%s: %+v", platform, m.Links)
+		}
+	}
+	b, _ := json.Marshal(m)
+	back, err := ParseManifest(b)
+	if err != nil || len(back.Links) != 3 {
+		t.Fatalf("round trip: %+v %v", back, err)
+	}
+}
+
 // A program swapped with the hub goes back with it: the old build when there was one, removed when it is new.
 func TestSwapProgramAndRestoreAll(t *testing.T) {
 	dir := t.TempDir()

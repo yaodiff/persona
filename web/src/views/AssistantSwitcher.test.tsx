@@ -223,7 +223,7 @@ describe("the sidebar's assistant switcher", () => {
     expect(radios[0].textContent).toContain("助手");
     expect(radios[0].textContent).not.toContain("默认");
     expect(radios[0].querySelector("[data-menu-badge]")).toBeNull();
-    expect(rows().slice(1).map((r) => r.textContent)).toEqual(["新建助手", "管理助手…", "跟随系统", "浅色", "深色", "设置", "断开这个浏览器"]);
+    expect(rows().slice(1).map((r) => r.textContent)).toEqual(["新建助手", "管理助手…", "跟随系统", "浅色", "深色", "设置", "断开这个浏览器…"]);
     await choose("设置");
     expect(navigate).toHaveBeenCalledWith({ name: "settings" });
   });
@@ -314,7 +314,7 @@ describe("the sidebar's assistant switcher", () => {
     await open();
     expect(document.body.querySelector<HTMLElement>("[role=menu]")!.style.width).toBe("220px");
     expect(menuHeader()).toBe("外观");
-    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开这个浏览器"]);
+    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开这个浏览器…"]);
   });
 
   it("uses the same product form when the fresh roster has only an installing assistant", async () => {
@@ -371,7 +371,7 @@ describe("the sidebar's assistant switcher", () => {
     await open();
     expect(document.body.querySelector<HTMLElement>("[role=menu]")!.style.width).toBe("220px");
     expect(menuHeader()).toBe("外观");
-    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开这个浏览器"]);
+    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开这个浏览器…"]);
     expect(rows().some((r) => r.textContent === "新建助手")).toBe(false);
   });
 

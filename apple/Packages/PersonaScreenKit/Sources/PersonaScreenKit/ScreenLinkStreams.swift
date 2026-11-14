@@ -137,7 +137,8 @@ public final class ScreenLinkVideoStream: ScreenLinkByteStream, @unchecked Senda
 }
 
 /// When to dial each direct candidate (#6398): at once when it is new or the phone's networks changed, then after a
-/// failure 30 s, doubling to 5 min. A candidate the phone can't reach (no eligible interface) is never dialed.
+/// failure 30 s, doubling to 5 min, and from 30 s again once it attached. A candidate the phone can't reach (no
+/// eligible interface) is never dialed.
 public struct ProbePlan: Sendable {
     public static let firstRetry = 30.0
     public static let longestRetry = 300.0
@@ -163,11 +164,53 @@ public struct ProbePlan: Sendable {
     }
 
     /// A connection attached: the next failure waits from the first again.
-    public mutating func attached(_ id: String) { wait[id] = nil }
+    public mutating func attached(_ id: String) {
+        wait[id] = nil
+        retryAt[id] = nil
+    }
+
+    /// When the next candidate waiting after a failure is due, if one is (#7791): the prober wakes then and dials
+    /// again. Only times after `now`: one already due is dialed by the probe running now, or, with no interface for
+    /// it, at the next network change.
+    public func nextRetry(after now: Double) -> Double? {
+        retryAt.filter { !open.contains($0.key) && $0.value > now }.values.min()
+    }
 
     /// The phone's networks changed: every candidate may be tried again at once.
     public mutating func networkChanged() { retryAt = [:]; wait = [:] }
 
     /// A candidate the node no longer offers, or whose connection closed without failing.
     public mutating func forget(_ id: String) { open.remove(id) }
+}
+
+/// One pending wake-up (#7791): `arm` replaces it with a call of `fire` after that many seconds (nil: none), `cancel`
+/// drops it. The prober arms it for the probe plan's next retry; `sleep` is a test's clock.
+public final class RetryWake: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<Void, Never>?
+    private let sleep: @Sendable (Double) async -> Void
+
+    public init(sleep: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }) {
+        self.sleep = sleep
+    }
+
+    public func arm(in seconds: Double?, _ fire: @escaping @Sendable () async -> Void) {
+        lock.withLock {
+            task?.cancel()
+            task = seconds.map { s in
+                Task { [sleep] in
+                    await sleep(max(0, s))
+                    guard !Task.isCancelled else { return }
+                    await fire()
+                }
+            }
+        }
+    }
+
+    public func cancel() {
+        lock.withLock {
+            task?.cancel()
+            task = nil
+        }
+    }
 }

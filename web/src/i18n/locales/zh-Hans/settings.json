@@ -1,6 +1,7 @@
 {
   "retry": "重试",
   "back": "返回设置",
+  "back_to": "返回{name}",
   "sidebar": "侧边栏",
   "title": "设置",
   "about_persona": "关于 Persona",
@@ -25,7 +26,7 @@
   "linked_hubs_hint": "这些 hub 上的电脑也列在这里，经这台 hub 访问",
   "computers": "电脑",
   "computers_online": "{online} / {total} 在线",
-  "disconnect_browser": "断开这个浏览器",
+  "disconnect_browser": "断开这个浏览器…",
   "install_installed": "已经在独立窗口里打开",
   "install_prompt": "装到桌面或主屏幕，在独立窗口里打开",
   "install_ios": "在 Safari 的分享菜单里选「添加到主屏幕」",
@@ -152,5 +153,7 @@
   "search_settings": "搜索设置",
   "search_in_page": "页面内",
   "search_no_results": "没有匹配的设置",
-  "search_placeholder_settings": "搜索设置"
+  "search_placeholder_settings": "搜索设置",
+  "search_key_words": "API Key、密钥",
+  "device_tokens": "设备 token"
 }

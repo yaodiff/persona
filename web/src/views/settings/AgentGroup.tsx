@@ -19,7 +19,7 @@ export function AgentGroup() {
       {board.enabled === null && board.error ? (
         <RowFailed text={t("workspaceboard.setting_failed", { error: errorText(board.error) })} retry={t("workspaceboard.retry")} onRetry={() => void board.retry()} />
       ) : (
-        <Row label={t("workspace-board.setting_label")} hint={missing ? t("workspaceboard.setting_unsupported") : readonly ? t("workspace-board.setting_readonly") : t("workspace-board.setting_hint")} wrapHint={missing}>
+        <Row anchor="workflow-board" label={t("workspace-board.setting_label")} hint={missing ? t("workspaceboard.setting_unsupported") : readonly ? t("workspace-board.setting_readonly") : t("workspace-board.setting_hint")} wrapHint={missing}>
           {board.enabled === null ? <Spinner /> : missing ? undefined : <Switch on={board.enabled} onChange={toggle} disabled={readonly} label={t("workspace-board.setting_label")} />}
         </Row>
       )}

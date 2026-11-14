@@ -3,7 +3,7 @@ import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
-import { onHubEvent } from "../../lib/store";
+import { onShownHint } from "../../lib/shown-hints";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
 import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
@@ -203,7 +203,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       }, (e) => { if (live && request === sequence) setFacetError(errorText(e)); });
     };
     read();
-    const off = onHubEvent(event, read);
+    const off = onShownHint(event, read);
     return () => { live = false; controller.abort(); off(); };
   }, [countsPath, event, facetScoped, facetsFromList, facetQuery, facetAttempt]);
   useEffect(() => {
@@ -230,7 +230,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       }, (e) => { if (request === sequence) setScopeError(errorText(e)); });
     };
     read();
-    const off = onHubEvent(event, read);
+    const off = onShownHint(event, read);
     return () => { sequence++; abort.abort(); off(); };
   }, [scopeQuery, scopeFromFacets, countsPath, event]);
   useEffect(() => {
@@ -238,7 +238,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     if (filtered && sections) return;
     if (filtered) void list.setFilters(filters).catch(() => {});
     else if (!list.getSnapshot().loaded) void list.load().catch(() => {});
-    const off = filtered ? onHubEvent(event, () => list.invalidate()) : () => {};
+    const off = filtered ? onShownHint(event, () => list.invalidate()) : () => {};
     return () => { off(); if (filtered) list.reset(); };
   }, [list, filters, filtered, sections, event]);
 

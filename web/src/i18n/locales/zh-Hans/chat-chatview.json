@@ -9,6 +9,7 @@
   "interrupt_failed": "中断失败：{error}",
   "new_chat": "新对话",
   "session": "会话",
+  "not_found_title": "找不到这条对话",
   "continue_text": "继续",
   "start_failed": "启动失败：{error}",
   "start_failed_title": "启动失败",

@@ -339,12 +339,13 @@ identifiers are in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting page 
   Live box, a time opening the transcript with its minute lit and selected and Back, only the newest highlight without
   Full Transcript while the keyboard is up and every one back once it is down, a hub without the flag (where a start
   snapshots none, so the meeting starts with the live view alone), a meeting started without it on a hub with it after
-  its room made a highlight, the time under the words at the largest text, the waiting line before the slow room's first
+  its room made a highlight, the card at the largest text drawn as at xxxLarge, the interface's cap (#6813), each time
+  beside its words, the waiting line before the slow room's first
   highlight and the highlight in its place after, the Live box under the problem of a room that is unavailable, the
   waiting line alone without Full Transcript while the keyboard is up and the Live box once Persona is turned off before
   any highlights; on every card no Live Transcript and none of the lines only the transcript has; shots
   `highlights-<look>-card|waiting|waiting-keyboard|role-off|transcript-lit|keyboard|room-unavailable|no-highlights|started-without`
-  in light, dark and `large`;
+  in light, dark and `large` (`card` also at `cap`, xxxLarge);
   every call to the mock must answer 2xx, so they need the mock with the phase); `MeetingLiveViewUITests` turns the
   highlights off to keep covering phase 2. Unit tests
   `MeetingHighlightsTests` (the flag and its snapshot, the decoding, the merge, the cap and the order, the parts, the
