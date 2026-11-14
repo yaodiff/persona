@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// Steering a Claude's queue (#6088): which agents get Send Now and Move Up / Down, and the order a move asks for.
 @MainActor

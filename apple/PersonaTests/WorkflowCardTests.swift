@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A workflow run's card (#3436, the web's `WorkflowCallCard` of #3434): its phase blocks (done / started, "+" while more
 /// may start, open while running, folded once back), at most 12 rows a block, its progress in parts, what an older hub

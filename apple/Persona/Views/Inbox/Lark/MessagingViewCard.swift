@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// A message's card from a messaging source (#2138): the extension turned the vendor's card into a declarative View
 /// (`docs/extensions/extension-messaging.md`「Conversations and messages」, `view.schema.json`), drawn here in the chat's card frame: text, rows, numbers,

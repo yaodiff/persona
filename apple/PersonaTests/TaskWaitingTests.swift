@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A task whose agent ended its turn but waits on its own background work or on the hub's wake-up is Waiting, not
 /// Follow-up (#3274); only one nothing brings back is Follow-up. The same rule as the hub's taskState and the web's.

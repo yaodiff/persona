@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Wire types mirroring docs/protocol/protocol.md. Explicit CodingKeys everywhere: key strategies would also rewrite
 // arbitrary JSON keys inside tool inputs and answer dictionaries.
@@ -1924,11 +1925,83 @@ nonisolated struct ImagePayload: Codable, Hashable, Sendable {
 }
 
 nonisolated enum ItemKind: String, Codable, Sendable {
-    case text, thinking, toolUse = "tool_use", toolResult = "tool_result", notice, image, recap, fold, unknown
+    case text, thinking, toolUse = "tool_use", toolResult = "tool_result", notice, image, recap, fold
+    /// Codex's duration row. Counted in the turn's usage, never drawn (#5426).
+    case turnDuration = "turn_duration"
+    case unknown
 
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = ItemKind(rawValue: raw) ?? .unknown
+    }
+}
+
+/// One model's request on an item (`usage` / `fold.usage`, docs/protocol/protocol.md "Token usage on items").
+/// An entry with an `id` is a subagent or workflow report and is counted once. Counts are tokens; prices are elsewhere.
+nonisolated struct TokenUsage: Codable, Hashable, Sendable {
+    var id: String?
+    var model: String?
+    var input: Int64
+    var output: Int64
+    var cacheRead: Int64
+    var cacheWrite: Int64
+    var cacheWrite1h: Int64
+    var fast: Bool
+
+    /// A report (a subagent or a workflow), counted once per model and speed.
+    var report: Bool { !(id ?? "").isEmpty }
+
+    enum CodingKeys: String, CodingKey {
+        case id, model, fast
+        case input = "in", output = "out"
+        case cacheRead = "cache_read", cacheWrite = "cache_write", cacheWrite1h = "cache_write_1h"
+    }
+
+    init(id: String? = nil, model: String? = nil, input: Int64 = 0, output: Int64 = 0, cacheRead: Int64 = 0,
+         cacheWrite: Int64 = 0, cacheWrite1h: Int64 = 0, fast: Bool = false) {
+        self.id = id
+        self.model = model
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
+        self.cacheWrite1h = cacheWrite1h
+        self.fast = fast
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        input = try c.decodeIfPresent(Int64.self, forKey: .input) ?? 0
+        output = try c.decodeIfPresent(Int64.self, forKey: .output) ?? 0
+        cacheRead = try c.decodeIfPresent(Int64.self, forKey: .cacheRead) ?? 0
+        cacheWrite = try c.decodeIfPresent(Int64.self, forKey: .cacheWrite) ?? 0
+        cacheWrite1h = try c.decodeIfPresent(Int64.self, forKey: .cacheWrite1h) ?? 0
+        fast = try c.decodeIfPresent(Bool.self, forKey: .fast) ?? false
+    }
+}
+
+/// A built-in catalog price, USD per million tokens (`POST /api/v1/launchers/catalog`). A missing kind has no price.
+nonisolated struct ModelPrice: Codable, Hashable, Sendable {
+    var input: Double?
+    var output: Double?
+    var cacheRead: Double?
+    var cacheWrite: Double?
+    var cacheWrite1h: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case input, output
+        case cacheRead = "cache_read", cacheWrite = "cache_write", cacheWrite1h = "cache_write_1h"
+    }
+
+    init(input: Double? = nil, output: Double? = nil, cacheRead: Double? = nil, cacheWrite: Double? = nil,
+         cacheWrite1h: Double? = nil) {
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
+        self.cacheWrite1h = cacheWrite1h
     }
 }
 
@@ -1949,9 +2022,11 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     var tasks: [FoldTasks]? = nil
     /// The hub proved this supervision round is user-visible, even while its visibility tools are folded away.
     var supervisionUser: Bool? = nil
+    /// What the folded items used (#5426). Omitted when none of them carried usage, and from older nodes.
+    var usage: [TokenUsage]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case items, tools, thoughts, until, images, tasks
+        case items, tools, thoughts, until, images, tasks, usage
         case supervisionUser = "supervision_user"
         case throughSeq = "through_seq", throughID = "through_id"
     }
@@ -2152,9 +2227,11 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var outcome: ToolOutcome? = nil
     /// kind == .notice: an upstream refusal, drawn as a line of its own after the exchange (#4489, `RefusalNotice`).
     var modelRefusal: ModelRefusal? = nil
+    /// What the model requests this item stands for used (#5426). Older hubs omit it.
+    var usage: [TokenUsage]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage
         case modelRefusal = "model_refusal"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id", supervisionUser = "supervision_user"

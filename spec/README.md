@@ -31,6 +31,7 @@ spec/
     tool-names/       tool names, subjects and arguments in words, checked by Android (iOS later)
     chat-search/      what search in chat and the assistant's chat index find of each item, checked by web (Go and Android later)
     screen-link/      the live screen's session wire, checked by the node (Go) and the iPhone (PersonaScreenKit)
+    screen-udp/       the live screen's video over UDP: sealing, packets, Reed-Solomon blocks, checked by the node (Go) and the iPhone
     screen-input/     the live screen's pixel scroll record, checked by the node (Go) and PersonaInputKit (helper and iPhone)
     tokens/           设计 token 的校验夹具（如该领域提供）
   tokens/             设计 token 的来源文件，见 D7

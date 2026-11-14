@@ -1,0 +1,18 @@
+{
+  "held_entry": "被拦推送",
+  "held_entry_label": "被拦推送，今天 {count} 条",
+  "held_entry_hint": "低打扰模式开启时被拦下的 P1 / P2 推送",
+  "held_title": "今天被拦下的推送",
+  "held_explanation": "P1 等你看，P2 静默并默认折叠。",
+  "held_p1": "P1 · 等你看",
+  "held_p1_count": "P1 · 等你看（{count}）",
+  "held_p2": "P2 · 静默",
+  "held_p2_count": "P2 · 静默（{count}）",
+  "held_empty": "今天没有被拦下的推送。",
+  "held_untitled": "没有摘要",
+  "held_reason_p1": "留给简报",
+  "held_reason_p2": "静默记录",
+  "held_reason_dedup": "同一件事在过去 12 小时内已经推过",
+  "held_loading": "正在读取被拦推送…",
+  "held_load_failed": "没能读到被拦推送。检查连接后重试。"
+}

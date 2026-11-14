@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import PersonaWire
 
 /// The assistant's cards in a reply (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」): a ```persona-view block holds a View or one
 /// component, a ```persona-card block (#886, the older way) one card that becomes components by the rules every app

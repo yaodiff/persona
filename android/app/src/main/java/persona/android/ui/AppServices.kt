@@ -157,6 +157,7 @@ class AppServices @Inject constructor(
                         catch (error: Exception) { feedback.failure(error, true); throw error }
                 }
                 // Its to-dos show from the last read until the hub answers (#4533), as the group's chat bindings' do.
+                // A new hub gets a new store, so todosReady starts false and a card does not call a task gone mid-switch.
                 val tasksStore = persona.core.domain.tasks.TasksStore(persona.core.hub.HttpTasksApi(socket), runtime, data.coroutineScope,
                     ListSnapshotStore(File(data.noBackupDirectory, "lists")).todoCache())
                 // Files, chat actions and machine metrics go to the group of the machine they name (one group: this hub).

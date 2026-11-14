@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Wire types of the Lark gateway's document, drive, wiki and docs-notification routes (src/shared/contracts/documents.ts,
 // drive-space.ts, wiki.ts, docs-notifications.ts, document-*.ts), plus the pure logic the screens share.

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agents_row_children_running">Subagents running: %1$d</string>
+</resources>

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Replays spec/fixtures/inbox/time.json, the follow-up moment contract shared with the web app and Android.
 struct InboxFollowTimeFixtureTests {

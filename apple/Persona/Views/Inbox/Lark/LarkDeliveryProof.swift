@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 extension APIClient {
     /// A receipt can predate the loaded history window. Read that exact message instead of pinning an old

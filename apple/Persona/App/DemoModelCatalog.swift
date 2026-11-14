@@ -1,5 +1,6 @@
 // i18n-ignore-file: demo mode's made-up hub data (model settings)
 import Foundation
+import PersonaWire
 
 /// Made-up model settings for Demo Mode; they never reach a provider or a computer.
 enum DemoModelCatalog {

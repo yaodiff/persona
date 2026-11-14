@@ -42,6 +42,11 @@ func newLineReaderSize(r io.Reader, size, maximum int) *lineReader {
 // Bytes is the line Scan found, valid until the next Scan.
 func (s *lineReader) Bytes() []byte { return s.token }
 
+// buffered is the input already read after the current token, valid until the next Scan. Ping activity uses it to
+// classify complete later lines, and traffic that identifies itself as an event, request or result, before a reply
+// wakes its caller.
+func (s *lineReader) buffered() []byte { return s.buf[s.start:s.end] }
+
 // Err is what ended the input, nil for io.EOF.
 func (s *lineReader) Err() error {
 	if s.err == io.EOF {

@@ -4,6 +4,7 @@ import ImageIO
 import Testing
 import UniformTypeIdentifiers
 @testable import Persona
+import PersonaWire
 
 /// New from Photo (#2405, docs/apple/persona.md "Uploading an image"): offered only by hubs with `look_uploads`, the crop
 /// sent square and upright, the hub's refusals shown as it words them, the new avatar chosen here, and deleting one.

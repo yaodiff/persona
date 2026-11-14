@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Correcting an entry by hand (#6997): confirmed facts and removing a link, the same writes and the same rule for which
 /// links can go as the web's (`web/src/lib/kb-relationships.ts`, cases from `Relationships.test.tsx`).

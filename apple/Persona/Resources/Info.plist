@@ -85,6 +85,8 @@
 	<string>$(PERSONA_APP_GROUP)</string>
 	<key>PersonaGettingStartedURL</key>
 	<string>$(PERSONA_GETTING_STARTED_URL)</string>
+	<key>PersonaHealthBackgroundDelivery</key>
+	<string>$(PERSONA_HEALTH_BACKGROUND_DELIVERY)</string>
 	<key>PersonaHomeKit</key>
 	<string>$(PERSONA_HOMEKIT)</string>
 	<key>PersonaPushKeychainGroup</key>

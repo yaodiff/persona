@@ -687,7 +687,7 @@ html:not(.js) .sw::after,.ext.in .sw::after{transform:translateX(16px)}
       <h3>自己搭一个</h3>
       <ol class="steps">
         <li><b>在一台常开的机器上装 hub</b><span>Linux 或 Mac 都行，贴这一行。Mac 上要先装 Docker Desktop 或 OrbStack。</span>
-          <div class="cmd"><span class="line"><span class="pr">$ </span><span id="cmd-text">curl -fsSL https://personaside.com/install.sh | sh -s -- --hub</span></span>
+          <div class="cmd"><span class="line"><span class="pr">$ </span><span id="cmd-text">curl -fsSL https://github.com/nwverse/persona/releases/latest/download/install.sh | sh -s -- --hub</span></span>
             <button class="copy" id="copy" type="button" aria-label="复制安装命令"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg></button>
           </div></li>
         <li><b>手机扫码配对</b><span>装完终端里会打出一个二维码，用 iPhone 相机扫一下就连上了。二维码 10 分钟内有效、只能用一次；过期了，在 hub 那台机器上运行 <code>personad hub pair</code> 再出一个，或者把上面这行再贴一遍。</span></li>

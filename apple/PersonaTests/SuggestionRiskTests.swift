@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// `suggestion_risky` is advisory wire data: a bad value must not drop the session, and native snapshots keep it.
 @MainActor struct SuggestionRiskTests {

@@ -6,6 +6,7 @@ import AppKit
 #else
 import UIKit
 #endif
+import PersonaWire
 
 /// The API's theme entries reuse the generated manifest type, adding only the owning extension and the server's validation result.
 nonisolated struct ExtensionThemeOffer: Codable, Hashable, Sendable, Identifiable {

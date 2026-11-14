@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import BeautifulUI
 @testable import Persona
+import PersonaWire
 
 /// A question card stays where it is, waiting, while its answer is on its way, and keeps its picks and an error with Retry
 /// when the answer fails (#6279).

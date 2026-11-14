@@ -232,6 +232,142 @@ func TestServeReturnsOnEOF(t *testing.T) {
 	}
 }
 
+func TestPingActivityTracksAnUnfinishedFrame(t *testing.T) {
+	const partial = `{"event":"file.chunk","params":"still being written`
+	p := New("h", io.Discard)
+	if got := p.PingActivity(); !got.IsZero() {
+		t.Fatalf("PingActivity before Serve = %v, want zero", got)
+	}
+	if err := p.Serve(context.Background(), strings.NewReader(partial)); !errors.Is(err, io.EOF) {
+		t.Fatalf("Serve = %v, want EOF", err)
+	}
+	if got := p.PingActivity(); got.IsZero() {
+		t.Fatal("PingActivity stayed zero although a partial frame was read")
+	}
+}
+
+// Even an error response whose caller has already gone away is not new evidence of a working node. Other traffic
+// before it remains activity; another late deadline does not move that timestamp forward.
+func TestPingActivityIgnoresLateDeadlineResponses(t *testing.T) {
+	r, w := io.Pipe()
+	p := New("h", io.Discard)
+	events := make(chan string, 1)
+	p.OnEvent = func(event string, _ json.RawMessage) { events <- event }
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- p.Serve(context.Background(), r) }()
+	t.Cleanup(func() {
+		_ = w.Close()
+		_ = r.Close()
+		p.Close(io.EOF)
+		select {
+		case <-serveDone:
+		case <-time.After(time.Second):
+			t.Error("Serve did not stop")
+		}
+	})
+	write := func(line string) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() {
+			_, err := io.WriteString(w, line+"\n")
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("write: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("write did not reach Serve")
+		}
+	}
+	waitDeadline := func(previous uint64) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for p.deadlineRead.Load() <= previous {
+			if time.Now().After(deadline) {
+				t.Fatal("deadline response was not processed")
+			}
+			<-time.After(time.Millisecond)
+		}
+	}
+	write(`{"id":"h1","error":{"message":"context deadline exceeded"}}`)
+	waitDeadline(0)
+	if got := p.PingActivity(); !got.IsZero() {
+		t.Fatalf("late deadline created activity %v", got)
+	}
+	write(`{"event":"work"}`)
+	select {
+	case <-events:
+	case <-time.After(time.Second):
+		t.Fatal("event was not processed")
+	}
+	active := p.PingActivity()
+	if active.IsZero() {
+		t.Fatal("ordinary event did not count as activity")
+	}
+	previous := p.deadlineRead.Load()
+	write(`{"id":"h2","error":{"message":"context deadline exceeded"}}`)
+	waitDeadline(previous)
+	if got := p.PingActivity(); !got.Equal(active) {
+		t.Fatalf("another late deadline moved activity from %v to %v", active, got)
+	}
+}
+
+func TestPingActivityClassifiesReadAheadBeforeReply(t *testing.T) {
+	const deadline = `{"id":"h1","error":{"message":"context deadline exceeded"}}`
+	for _, tc := range []struct {
+		name   string
+		tail   string
+		active bool
+	}{
+		{name: "complete ordinary event", tail: `{"event":"file.chunk","params":{"data":"x"}}` + "\n", active: true},
+		{name: "partial ordinary event", tail: `{"event":"file.chunk","params":"still arriving`, active: true},
+		{name: "complete second deadline", tail: `{"id":"h2","error":{"message":"context deadline exceeded"}}` + "\n", active: false},
+		{name: "partial second deadline", tail: `{"id":"h2","error":{"message":"context dead`, active: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, w := io.Pipe()
+			p := New("h", io.Discard)
+			reply := make(chan message, 1)
+			p.pending["h1"], p.methods["h1"] = reply, "ping"
+			serveDone := make(chan error, 1)
+			go func() { serveDone <- p.Serve(context.Background(), r) }()
+			t.Cleanup(func() {
+				_ = w.Close()
+				_ = r.Close()
+				p.Close(io.EOF)
+				select {
+				case <-serveDone:
+				case <-time.After(time.Second):
+					t.Error("Serve did not stop")
+				}
+			})
+			writeDone := make(chan error, 1)
+			go func() {
+				_, err := io.WriteString(w, deadline+"\n"+tc.tail)
+				writeDone <- err
+			}()
+			select {
+			case <-reply:
+			case <-time.After(time.Second):
+				t.Fatal("deadline reply was not delivered")
+			}
+			if got := p.PingActivity(); got.IsZero() == tc.active {
+				t.Fatalf("PingActivity = %v, active = %v", got, tc.active)
+			}
+			select {
+			case err := <-writeDone:
+				if err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("combined write did not finish")
+			}
+		})
+	}
+}
+
 func TestCallContextCancelled(t *testing.T) {
 	// The far side never answers, so the caller has to fall back to its context.
 	p := New("h", io.Discard)

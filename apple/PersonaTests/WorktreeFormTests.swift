@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// New Worktree…'s form (`WorktreeForm`, docs/integrations/terminal.md「New worktree…」), the same cases as the web's worktree.test.ts.
 struct WorktreeFormTests {

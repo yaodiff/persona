@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The readiness pages ask the hub again on their own while a step can finish on another computer (#1893): installing
 /// Claude Code, signing in to it, waking a computer, a self-check still running.

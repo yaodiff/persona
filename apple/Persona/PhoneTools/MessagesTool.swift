@@ -3,6 +3,7 @@ import Foundation
 import MessageUI
 import UIKit
 #endif
+import PersonaWire
 
 /// `phone_messages_compose`: a text message prefilled in the system compose sheet (#2279). The user sends it there, or
 /// cancels; Persona never sends a message itself and cannot read any.

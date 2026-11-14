@@ -334,4 +334,22 @@ class HttpChatActionsTest {
             assertEquals(503, (runCatching { actions.interactionHistory(Session(machineId = "m", sessionId = "s")) }.exceptionOrNull() as HubFailure).status)
         }
     }
+
+    @Test fun catalogPricesPostsIdsAndKeepsAModelThatHasNone() = runBlocking {
+        MockWebServer().use { server ->
+            val actions = actions(server)
+            server.enqueue(MockResponse().setBody("""{"models":[{"id":"claude-opus-5-5","name":"Opus","price":{"input":4,"output":20,"cache_read":0.2}},{"id":"claude-haiku-5-5","name":"Haiku"}]}"""))
+            val prices = actions.catalogPrices(listOf("claude-opus-5-5", "claude-haiku-5-5"))
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/launchers/catalog", request.path)
+            assertEquals(listOf("claude-opus-5-5", "claude-haiku-5-5"),
+                JsonCodec.parseToJsonElement(request.body.readUtf8()).jsonObject["ids"]!!.jsonArray.map { it.jsonPrimitive.content })
+            assertEquals(4.0, prices["claude-opus-5-5"]!!.input)
+            assertEquals(0.2, prices["claude-opus-5-5"]!!.cacheRead)
+            assertTrue(prices.containsKey("claude-haiku-5-5"))
+            assertNull(prices["claude-haiku-5-5"])
+            assertFalse(prices.containsKey("left-out"))
+        }
+    }
 }

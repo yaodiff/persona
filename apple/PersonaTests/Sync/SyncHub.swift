@@ -1,5 +1,6 @@
 import Foundation
 @testable import Persona
+import PersonaWire
 
 // The hub of a sync scenario (spec/fixtures/sync/README.md, #1112): the case's state over time, the reads a device makes
 // answered from it, its writes held until the case's `reply`, and the receipts later retries get.

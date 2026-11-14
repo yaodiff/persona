@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The pages list the current assistant's things alone (docs/assistant/managers.md "Pages"): whose a thing is by its
 /// `manager` (none, or one the roster doesn't have installed: the default's), the kept pick counting before the roster

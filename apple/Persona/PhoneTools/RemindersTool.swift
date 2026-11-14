@@ -1,6 +1,7 @@
 import CoreLocation
 import EventKit
 import Foundation
+import PersonaWire
 
 /// Reminder tools: list, create, change, complete and delete; a reminder can go off on arriving at or leaving a place
 /// (iOS watches the place itself). Writes ask the user first.

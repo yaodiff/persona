@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import PersonaWire
 
 /// No callbacks, WebViews, app renderer, navigation or credentials enter this read-only renderer.
 struct ExtensionSurfaceView: View {

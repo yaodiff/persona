@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The live view on the phone (#3862 phase 2; contract docs/assistant/meeting-minutes.md「Phase 2: live view」, the phone's
 /// side docs/apple/recording.md「Live view (phase 2)」): the flag snapshot, 15-second segments for the meetings Persona

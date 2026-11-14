@@ -55,6 +55,12 @@ type Direct struct {
 	stop        chan struct{}
 	blockedAt   time.Time
 	blockedWas  bool
+
+	// The video over UDP (#7873): a socket on each candidate address, and the flows phones opened.
+	udpConns []*net.UDPConn
+	udpPort  int
+	udpLast  int // the port the sockets had last, taken again when they open again
+	flows    map[[8]byte]*udpFlow
 }
 
 // NewDirect makes the node's direct listener with a certificate on a key made now, in memory only: each node process
@@ -68,7 +74,7 @@ func NewDirect(logf func(string, ...any)) (*Direct, error) {
 		logf = func(string, ...any) {}
 	}
 	return &Direct{logf: logf, interfaces: SystemInterfaces, pick: Candidates, blocked: firewallBlocks, recheck: 5 * time.Second, firewallEvery: time.Minute,
-		attachWait: DefaultLimits.AttachWait, cert: cert, pin: pin, sessions: map[[32]byte]*Session{}}, nil
+		attachWait: DefaultLimits.AttachWait, cert: cert, pin: pin, sessions: map[[32]byte]*Session{}, flows: map[[8]byte]*udpFlow{}}, nil
 }
 
 // selfSigned is a P-256 certificate naming no host or address (whoever reaches the port can read it), and its pin:
@@ -132,6 +138,9 @@ func (d *Direct) pathsLocked(token string) Paths {
 	p := Paths{Version: 1, Token: token, Candidates: append([]Candidate{}, d.cands...), Unavailable: d.unavailable}
 	if len(d.cands) > 0 {
 		p.Cert, p.Port = d.pin, d.port
+		if d.udpPort != 0 {
+			p.UDP = 1
+		}
 	}
 	return p
 }
@@ -212,7 +221,8 @@ func (d *Direct) refreshLocked() {
 		go d.accept(l)
 	}
 	d.port = port
-	d.logf("screenlink: listening for direct routes on %d addresses", len(d.cands))
+	d.bindUDPLocked()
+	d.logf("screenlink: listening for direct routes on %d addresses (udp on %d)", len(d.cands), len(d.udpConns))
 }
 
 func (d *Direct) closeListenersLocked() {
@@ -220,6 +230,23 @@ func (d *Direct) closeListenersLocked() {
 		_ = l.Close()
 	}
 	d.listeners = nil
+	d.closeUDPLocked()
+}
+
+// dropFlows forgets the flows match picks (a session or a route that ended).
+func (d *Direct) dropFlows(match func(*udpFlow) bool) {
+	d.mu.Lock()
+	var gone []*udpFlow
+	for id, f := range d.flows {
+		if match(f) {
+			delete(d.flows, id)
+			gone = append(gone, f)
+		}
+	}
+	d.mu.Unlock()
+	for _, f := range gone {
+		f.close()
+	}
 }
 
 func (d *Direct) accept(l net.Listener) {

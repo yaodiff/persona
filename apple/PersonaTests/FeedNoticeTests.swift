@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The hub's `notice` feed line (docs/protocol/protocol.md「Tasks and the chat feed」, #4305): no ref, a body with the text the hub wrote in
 /// the user's language, drawn as one small centered line where it happened. A kind this client does not know stays

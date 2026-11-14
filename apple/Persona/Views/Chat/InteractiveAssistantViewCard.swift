@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// A stable card location is supplied by the owning assistant conversation, never inferred from model JSON.
 nonisolated struct AssistantCardLocation: Hashable, Sendable {

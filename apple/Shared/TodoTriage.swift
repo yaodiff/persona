@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // The To-dos page's sections (#3206, docs/assistant/todo-status-sop.md): each to-do's place comes from real signals only —
 // its agents' sessions (alive, running, asking), its PR / delivery state, the latest task_review verdict and when it last

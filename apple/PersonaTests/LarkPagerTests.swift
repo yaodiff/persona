@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A Lark chat's paging and read reporting (`LarkPager`), without the chat.
 @MainActor struct LarkPagerTests {

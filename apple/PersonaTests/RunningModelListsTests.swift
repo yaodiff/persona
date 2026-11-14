@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A running Claude Code session's model menus offer the launcher's list (#3754), New Agent's rows for that launcher,
 /// instead of the fixed Default / Opus / Sonnet / Haiku: Fable and the versions a gateway serves too.

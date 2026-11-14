@@ -2,6 +2,7 @@ import Foundation
 #if os(iOS) || os(visionOS)
 import Observation
 #endif
+import PersonaWire
 
 // A recorded day's recap as the phone reads it from the hub (docs/assistant/day-recap.md): the payload in the contract's
 // shape, what a day's page shows of it, and the model that follows it. The payload and the page's values are pure and

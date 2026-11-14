@@ -63,10 +63,11 @@ The phone and web side never need the terminal; installing Claude Code on a comp
 2. Copy this command, paste it into the terminal and press Return:
 
    ```sh
-   curl -fsSL https://personaside.com/install.sh | sh -s -- --hub
+   curl -fsSL https://github.com/nwverse/persona/releases/latest/download/install.sh | sh -s -- --hub
    ```
 
-   It's the same command the Persona website shows ([personaside.com](https://personaside.com/#start); the site is in Chinese for now).
+   It installs the newest GitHub Release, and the hub it sets up updates itself from GitHub Releases. The Persona website
+   ([personaside.com](https://personaside.com/#start); in Chinese for now) shows the same command.
 
 3. It installs step by step: download and verify the program, set up the database, make it start at boot, run a check. It prints one line per finished step.
    Partway through it may ask once whether to use administrator rights, so the hub can run even when nobody is logged in; answer "yes" and type this computer's login password.

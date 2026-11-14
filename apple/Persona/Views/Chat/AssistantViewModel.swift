@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// A retry keeps the exact choice, client message id and version the user saw. Reply text is never sent by the client.
 nonisolated struct AssistantViewSubmission: Hashable, Sendable {

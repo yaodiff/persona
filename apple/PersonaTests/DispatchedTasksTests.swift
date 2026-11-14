@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct DispatchedTasksTests {
     private func task(_ title: String, id: String? = nil, error: String? = nil) -> PlanTask {
@@ -84,6 +85,60 @@ struct DispatchedTasksTests {
         let lines = ChatLines.mergeFeed([], [task, routed])
         #expect(lines.count == 2)
         #expect(DispatchedTasks.entries(for: routed, plans: [:], titleOf: { _ in nil }, fallback: "Task") == nil)
+    }
+
+    private func agent(_ session: String, at: Date, error: String? = nil) -> TodoItem.Agent {
+        TodoItem.Agent(machineID: "computer", sessionID: session, title: "Layout \(session)", cwd: nil, agent: nil,
+                       startError: error, releasedAt: nil, linkedAt: at, source: nil, via: nil)
+    }
+
+    @Test func oneAgentIsOneCardThatOpensThatAgent() {
+        let at = Date(timeIntervalSince1970: 1_700_000_000)
+        let todo = TodoItem(id: "t", title: "Task", agents: [agent("agent", at: at)])
+        let cards = DispatchedTasks.cards(of: .init(id: "todo:t", todoID: "t", title: "Task", wake: "created", conversation: "main"), todo: todo)
+        #expect(cards.count == 1)
+        #expect(cards[0].id == "computer/agent")
+        #expect(cards[0].machineID == "computer")
+        #expect(cards[0].sessionID == "agent")
+        #expect(cards[0].agentTitle == "Layout agent")
+        #expect(cards[0].wake == "created")
+        #expect(cards[0].todoID == "t")
+    }
+
+    @Test func agentsLinkedTogetherAreEachACardAndALaterOneIsNot() {
+        let first = Date(timeIntervalSince1970: 1_700_000_000)
+        let todo = TodoItem(id: "t", title: "Task", agents: [
+            agent("a", at: first),
+            agent("b", at: first.addingTimeInterval(60)),
+            agent("later", at: first.addingTimeInterval(180)),
+        ])
+        let cards = DispatchedTasks.cards(of: .init(id: "todo:t", todoID: "t", title: "Task"), todo: todo)
+        #expect(cards.map(\.sessionID) == ["a", "b"])
+    }
+
+    @Test func anAgentThatDidNotStartLeavesTheTaskCard() {
+        let todo = TodoItem(id: "t", title: "Task", agents: [agent("a", at: .now, error: "offline")])
+        let entry = DispatchedTasks.Entry(id: "todo:t", todoID: "t", title: "Task", error: "offline")
+        #expect(DispatchedTasks.cards(of: entry, todo: todo) == [entry])
+        #expect(DispatchedTasks.cards(of: entry, todo: nil) == [entry])
+    }
+
+    @Test func theTitleIsTheSessionsThenTheAgentsThenTheTasks() {
+        #expect(DispatchedTasks.cardTitle(sessionTitle: "Claude Code", agentTitle: "Layout", taskTitle: "Task") == "Claude Code")
+        #expect(DispatchedTasks.cardTitle(sessionTitle: "  ", agentTitle: " Layout ", taskTitle: "Task") == "Layout")
+        #expect(DispatchedTasks.cardTitle(sessionTitle: nil, agentTitle: " ", taskTitle: "Task") == "Task")
+    }
+
+    @Test func aPlanTasksStayNewWhenTheirTaskItemSaysOtherwise() throws {
+        let p = plan([task("Planned", id: "one")])
+        let entries = try #require(DispatchedTasks.entries(for: feed(.plan), plans: [p.id: p],
+                                                          titleOf: { _ in "Planned" }, fallback: "Task"))
+        #expect(entries.allSatisfy { $0.wake == nil })
+        let active = feed(.task, ref: "one", body: .object(["wake": .string("active")]))
+        #expect(DispatchedTasks.entries(for: active, plans: [p.id: p], titleOf: { _ in nil }, fallback: "Task") == [])
+        let alone = try #require(DispatchedTasks.entries(for: feed(.task, ref: "other", body: .object(["wake": .string("resumed")])),
+                                                         plans: [:], titleOf: { _ in "Other" }, fallback: "Task"))
+        #expect(alone.first?.wake == "resumed")
     }
 
     @Test func decisionsAndDismissedPlansKeepTheirNormalCards() {

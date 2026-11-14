@@ -1,0 +1,621 @@
+{
+  "version": 1,
+  "exporter": {
+    "label": "EXPORTER-persona-screen-udp-1",
+    "material_hex": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d64",
+    "node_to_phone": {
+      "iv_hex": "e3eaf1f8ff060d141b222930",
+      "key_hex": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc"
+    },
+    "phone_to_node": {
+      "iv_hex": "171e252c333a41484f565d64",
+      "key_hex": "373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910"
+    }
+  },
+  "packets": [
+    {
+      "name": "hello_first",
+      "description": "The phone's first hello: no challenge to answer yet, padded to 32 bytes.",
+      "direction": "phone_to_node",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 0,
+      "body_hex": "010000000000000000000000000000000000000000000000000000000000000000",
+      "sealed_hex": "010a1b2c3d4e5f607100000000000000000f1008053ddfc90e80a23c41139728d4a7979c5fe8af7062edee255fc5199e6565a391412573bc41588354bbb8b8572f7f",
+      "expected": {
+        "echo": 0,
+        "kind": "hello_phone"
+      }
+    },
+    {
+      "name": "hello_challenge",
+      "description": "The node's answer to a hello from an address not proved yet: a challenge.",
+      "direction": "node_to_phone",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 0,
+      "body_hex": "010123456789abcdf000",
+      "sealed_hex": "010a1b2c3d4e5f60710000000000000000aaa7e897b28587ae85e33861e3ae3e2147654050a0ee94ef6fd1",
+      "expected": {
+        "challenge": 81985529216486900,
+        "kind": "hello_node",
+        "validated": 0
+      }
+    },
+    {
+      "name": "hello_proof",
+      "description": "The phone's hello answering the challenge.",
+      "direction": "phone_to_node",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 1,
+      "body_hex": "010123456789abcdf0000000000000000000000000000000000000000000000000",
+      "sealed_hex": "010a1b2c3d4e5f60710000000000000001ea218b9fb1a4451f04e5b293b2b5041a984afd128f43cddc91aea84b7b69667774d72e90194583d805f0a126bb34ab5fe9",
+      "expected": {
+        "echo": 81985529216486900,
+        "kind": "hello_phone"
+      }
+    },
+    {
+      "name": "hello_confirmed",
+      "description": "The node confirms the address.",
+      "direction": "node_to_phone",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 1,
+      "body_hex": "01000000000000000001",
+      "sealed_hex": "010a1b2c3d4e5f6071000000000000000118190413596ac61434076272d4a710bae968537c28620b7a65be",
+      "expected": {
+        "challenge": 0,
+        "kind": "hello_node",
+        "validated": 1
+      }
+    },
+    {
+      "name": "use_video",
+      "description": "The phone moves video channel 2 onto the flow from offset 0.",
+      "direction": "phone_to_node",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 2,
+      "body_hex": "06020000000000000000",
+      "sealed_hex": "010a1b2c3d4e5f6071000000000000000234b1fa6d026fb9dc23e7393c6e8fa7a7d4d64c93c8546940ea70",
+      "expected": {
+        "entries": [
+          [
+            2,
+            0
+          ]
+        ],
+        "kind": "use"
+      }
+    },
+    {
+      "name": "resumed_video",
+      "description": "The node's answer: it has 120 of the phone's bytes on channel 2.",
+      "direction": "node_to_phone",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 2,
+      "body_hex": "07020000000000000078",
+      "sealed_hex": "010a1b2c3d4e5f60710000000000000002453414ed1464ec6e5bf6fd68338e448e5de86dac9b133f3559a8",
+      "expected": {
+        "entries": [
+          [
+            2,
+            120
+          ]
+        ],
+        "kind": "resumed"
+      }
+    },
+    {
+      "name": "data_frame",
+      "description": "A fragment of a frame (droppable): data shard 1 of 3 in block 0, with 2 parity shards.",
+      "direction": "node_to_phone",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 3,
+      "body_hex": "0202000000000000100000000bb800000001030201000102030405060708090a0b0c0d0e0f",
+      "sealed_hex": "010a1b2c3d4e5f6071000000000000000327bf0caf173b4cb6824eec6fcad7146a599bdb963cdb0a5b5ea6801d3b4a607c9d2c10b437bba78d1b00a41eed179a929f6f31fd25",
+      "expected": {
+        "block": 0,
+        "channel": 2,
+        "data": 3,
+        "flags": 1,
+        "fragment_hex": "000102030405060708090a0b0c0d0e0f",
+        "index": 1,
+        "kind": "data",
+        "length": 3000,
+        "offset": 4096,
+        "parity": 2
+      }
+    },
+    {
+      "name": "data_parity",
+      "description": "A parity shard (index 3 = the first after 3 data shards) of a message that must arrive.",
+      "direction": "node_to_phone",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 4,
+      "body_hex": "0202000000000000100000000bb800000003030200f0e1d2c3",
+      "sealed_hex": "010a1b2c3d4e5f607100000000000000043d3bbee4a3bce24b30140674f7fa22f67ea99aabe4ae201e8ce8ddfd3af39ee2c64ab9f73ef601ff68",
+      "expected": {
+        "block": 0,
+        "channel": 2,
+        "data": 3,
+        "flags": 0,
+        "fragment_hex": "f0e1d2c3",
+        "index": 3,
+        "kind": "data",
+        "length": 3000,
+        "offset": 4096,
+        "parity": 2
+      }
+    },
+    {
+      "name": "ack",
+      "description": "The phone has every message through offset 7096.",
+      "direction": "phone_to_node",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 3,
+      "body_hex": "03020000000000001bb8",
+      "sealed_hex": "010a1b2c3d4e5f6071000000000000000338db4114560efe9dbb05e4fd25d20ac7ba4131972834dbc28cef",
+      "expected": {
+        "channel": 2,
+        "kind": "ack",
+        "offset": 7096
+      }
+    },
+    {
+      "name": "nack",
+      "description": "The phone asks for two data shards again.",
+      "direction": "phone_to_node",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 4,
+      "body_hex": "040200000000000010000000000000000000000023280001007f",
+      "sealed_hex": "010a1b2c3d4e5f60710000000000000004ffedecc047d4a92e760db9e6b8cf5c7c21e13f0a4d36beeea62d6ac0fa70d94388eca3650b14ba6aec6d",
+      "expected": {
+        "channel": 2,
+        "entries": [
+          [
+            4096,
+            0,
+            0
+          ],
+          [
+            9000,
+            1,
+            127
+          ]
+        ],
+        "kind": "nack"
+      }
+    },
+    {
+      "name": "want",
+      "description": "The phone asks for the messages starting from 7096 up to 9000 (lost whole).",
+      "direction": "phone_to_node",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 5,
+      "body_hex": "0b020000000000001bb80000000000002328",
+      "sealed_hex": "010a1b2c3d4e5f6071000000000000000579dbfe09e3aa6dc182636aed796e018adf001b5c8f88aae83b28e478030ffcd6eaf1",
+      "expected": {
+        "channel": 2,
+        "from": 7096,
+        "kind": "want",
+        "to": 9000
+      }
+    },
+    {
+      "name": "skip",
+      "description": "The phone gives the message at 7096 up.",
+      "direction": "phone_to_node",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 6,
+      "body_hex": "05020000000000001bb8",
+      "sealed_hex": "010a1b2c3d4e5f60710000000000000006db3b8ed84beaa8b263d0cc137e68f365c3657fcd611b6769d4bf",
+      "expected": {
+        "channel": 2,
+        "kind": "skip",
+        "offset": 7096
+      }
+    },
+    {
+      "name": "reset",
+      "description": "The node: the stream goes on at 12000.",
+      "direction": "node_to_phone",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 5,
+      "body_hex": "08020000000000002ee0",
+      "sealed_hex": "010a1b2c3d4e5f607100000000000000051b6eb880c747f5915342ce53b7d603d3e214711286a22ba0373f",
+      "expected": {
+        "channel": 2,
+        "kind": "reset",
+        "offset": 12000
+      }
+    },
+    {
+      "name": "ping",
+      "description": "The phone's ping: its clock, 15 % parity asked for, pacing at 150 Mbit/s.",
+      "direction": "phone_to_node",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 7,
+      "body_hex": "0900000000000f424005dc000249f0",
+      "sealed_hex": "010a1b2c3d4e5f6071000000000000000790f9879db8929008e00954596ba56ef65fc32d57f8d9d2531a55c0ff7601a0",
+      "expected": {
+        "kind": "ping",
+        "pace_kbps": 150000,
+        "parity": 1500,
+        "phone_us": 1000000
+      }
+    },
+    {
+      "name": "pong",
+      "description": "The node's pong: the ping's value, then bytes sent so far as data, parity and again.",
+      "direction": "node_to_phone",
+      "flow_hex": "0a1b2c3d4e5f6071",
+      "packet_number": 6,
+      "body_hex": "0a00000000000f424000000000004c4b4000000000000b71b000000000000004b0",
+      "sealed_hex": "010a1b2c3d4e5f60710000000000000006b9eda1d82dfd227fc7dd93e42a906ef02a280da252c2fd40a8cefc1e11f28d499c4b782e7fc59bba3997ea2464950b647c",
+      "expected": {
+        "data_bytes": 5000000,
+        "echo": 1000000,
+        "kind": "pong",
+        "parity_bytes": 750000,
+        "resent_bytes": 1200
+      }
+    }
+  ],
+  "layout": [
+    {
+      "name": "length_5",
+      "message_length": 5,
+      "blocks": [
+        {
+          "data": 1,
+          "first": 0,
+          "shard_length": 5
+        }
+      ],
+      "parity": {
+        "0": [
+          0
+        ],
+        "1500": [
+          2
+        ],
+        "4000": [
+          2
+        ],
+        "500": [
+          2
+        ],
+        "9000": [
+          2
+        ]
+      }
+    },
+    {
+      "name": "length_300",
+      "message_length": 300,
+      "blocks": [
+        {
+          "data": 1,
+          "first": 0,
+          "shard_length": 300
+        }
+      ],
+      "parity": {
+        "0": [
+          0
+        ],
+        "1500": [
+          2
+        ],
+        "4000": [
+          2
+        ],
+        "500": [
+          2
+        ],
+        "9000": [
+          2
+        ]
+      }
+    },
+    {
+      "name": "length_1146",
+      "message_length": 1146,
+      "blocks": [
+        {
+          "data": 1,
+          "first": 0,
+          "shard_length": 1146
+        }
+      ],
+      "parity": {
+        "0": [
+          0
+        ],
+        "1500": [
+          2
+        ],
+        "4000": [
+          2
+        ],
+        "500": [
+          2
+        ],
+        "9000": [
+          2
+        ]
+      }
+    },
+    {
+      "name": "length_1147",
+      "message_length": 1147,
+      "blocks": [
+        {
+          "data": 2,
+          "first": 0,
+          "shard_length": 1146
+        }
+      ],
+      "parity": {
+        "0": [
+          0
+        ],
+        "1500": [
+          2
+        ],
+        "4000": [
+          2
+        ],
+        "500": [
+          2
+        ],
+        "9000": [
+          2
+        ]
+      }
+    },
+    {
+      "name": "length_3000",
+      "message_length": 3000,
+      "blocks": [
+        {
+          "data": 3,
+          "first": 0,
+          "shard_length": 1146
+        }
+      ],
+      "parity": {
+        "0": [
+          0
+        ],
+        "1500": [
+          2
+        ],
+        "4000": [
+          3
+        ],
+        "500": [
+          2
+        ],
+        "9000": [
+          3
+        ]
+      }
+    },
+    {
+      "name": "length_146688",
+      "message_length": 146688,
+      "blocks": [
+        {
+          "data": 128,
+          "first": 0,
+          "shard_length": 1146
+        }
+      ],
+      "parity": {
+        "0": [
+          0
+        ],
+        "1500": [
+          21
+        ],
+        "4000": [
+          53
+        ],
+        "500": [
+          8
+        ],
+        "9000": [
+          53
+        ]
+      }
+    },
+    {
+      "name": "length_146689",
+      "message_length": 146689,
+      "blocks": [
+        {
+          "data": 128,
+          "first": 0,
+          "shard_length": 1146
+        },
+        {
+          "data": 1,
+          "first": 128,
+          "shard_length": 1
+        }
+      ],
+      "parity": {
+        "0": [
+          0,
+          0
+        ],
+        "1500": [
+          21,
+          2
+        ],
+        "4000": [
+          53,
+          2
+        ],
+        "500": [
+          8,
+          2
+        ],
+        "9000": [
+          53,
+          2
+        ]
+      }
+    },
+    {
+      "name": "length_400000",
+      "message_length": 400000,
+      "blocks": [
+        {
+          "data": 128,
+          "first": 0,
+          "shard_length": 1146
+        },
+        {
+          "data": 128,
+          "first": 128,
+          "shard_length": 1146
+        },
+        {
+          "data": 94,
+          "first": 256,
+          "shard_length": 1146
+        }
+      ],
+      "parity": {
+        "0": [
+          0,
+          0,
+          0
+        ],
+        "1500": [
+          21,
+          21,
+          16
+        ],
+        "4000": [
+          53,
+          53,
+          39
+        ],
+        "500": [
+          8,
+          8,
+          6
+        ],
+        "9000": [
+          53,
+          53,
+          39
+        ]
+      }
+    }
+  ],
+  "reed_solomon": [
+    {
+      "name": "k1_m1",
+      "data_hex": [
+        "01080f161d242b3239"
+      ],
+      "parity_hex": [
+        "01080f161d242b3239"
+      ],
+      "lost": [
+        0
+      ]
+    },
+    {
+      "name": "k3_m2",
+      "data_hex": [
+        "01080f161d242b323940474e555c636a",
+        "20272e353c434a51585f666d747b8289",
+        "3f464d545b626970777e858c939aa1a8"
+      ],
+      "parity_hex": [
+        "db285f394ed155334c148b0e9a1dc144",
+        "9ae3a49c2dabeed6901682ef0bc0b1dc"
+      ],
+      "lost": [
+        0,
+        1
+      ]
+    },
+    {
+      "name": "k5_m3",
+      "data_hex": [
+        "01080f161d242b323940474e555c636a71787f868d949ba2",
+        "20272e353c434a51585f666d747b828990979ea5acb3bac1",
+        "3f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0",
+        "5e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff",
+        "7d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e"
+      ],
+      "parity_hex": [
+        "35906ffe20218702868246fd09467509c809f6994722849e",
+        "661fd3ca07645bb9dcd95b708fd0ed8fdc945875b8d5ea84",
+        "0b5c35b5e6d6f5887527a1e072c79ac957482132611536dc"
+      ],
+      "lost": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "name": "k10_m4",
+      "data_hex": [
+        "01080f161d242b32",
+        "20272e353c434a51",
+        "3f464d545b626970",
+        "5e656c737a81888f",
+        "7d848b9299a0a7ae",
+        "9ca3aab1b8bfc6cd",
+        "bbc2c9d0d7dee5ec",
+        "dae1e8eff6fd040b",
+        "f900070e151c232a",
+        "181f262d343b4249"
+      ],
+      "parity_hex": [
+        "d65309429c5a9f8f",
+        "680ee8ea7da17ed4",
+        "6c4254e9c748c7e9",
+        "df758583160066ff"
+      ],
+      "lost": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  ],
+  "link": [
+    {
+      "name": "udp_open",
+      "frame_hex": "000000010c",
+      "expected": {
+        "type": "udp_open"
+      }
+    },
+    {
+      "name": "udp_ready",
+      "frame_hex": "000000240d7b22706f7274223a35303132332c22666c6f77223a224368737350553566594845227d",
+      "expected": {
+        "flow": "ChssPU5fYHE",
+        "port": 50123,
+        "type": "udp_ready"
+      }
+    },
+    {
+      "name": "udp_ready_unavailable",
+      "frame_hex": "000000180d7b22756e617661696c61626c65223a2272656c6179227d",
+      "expected": {
+        "type": "udp_ready",
+        "unavailable": "relay"
+      }
+    }
+  ]
+}

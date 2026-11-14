@@ -26,8 +26,12 @@ const agentStopped = "agent_stopped"
 const stoppedReason = "Agent 已停止：对话和终端可以看，它不再收消息；要它接着做，在终端页点「恢复」"
 
 // desktopSession: Claude's desktop app names transcript id (a session of its sidebar, archived or not, or one it went
-// on from): the app's session, which a message continues as before (claudedesktop_open.go), not a stopped agent.
+// on from): the app's session, which a message continues as before (claudedesktop_open.go), not a stopped agent. Only
+// where the app takes it (claudeDesktopOpens): elsewhere a send is handled as it was before the index was read.
 func (n *Node) desktopSession(id string) bool {
+	if !claudeDesktopOpens {
+		return false
+	}
 	x := readClaudeDesktopIndex(n.home)
 	_, named := x.visible[id]
 	return named || len(x.earlier[id]) > 0

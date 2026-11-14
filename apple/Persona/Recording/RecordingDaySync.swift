@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import os
+import PersonaWire
 
 // All-day recording's "phone to hub" (docs/assistant/day-recap.md「Phone to hub」): each day the watch records becomes
 // one hub recording of kind `day` (more parts when a day outgrows one), created with a `PUT`, grown by appends by

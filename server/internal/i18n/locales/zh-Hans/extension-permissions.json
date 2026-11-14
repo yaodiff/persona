@@ -74,6 +74,7 @@
   "scope_todos_read": "看待办",
   "scope_todos_write": "新建和修改待办、把对话挂到待办上（不能删待办）",
   "scope_leaders_read": "查看主管对话（方向）和它们的上报",
+  "scope_assistant_dispatch_policy": "读取和修改助手派活策略（哪些对话可以派活）",
   "scope_models": "用你在「设置 › 模型配置」里为它选的模型（不经手密钥）",
   "scope_call": "调用扩展「{id}」的接口",
   "slot_nav_page": "主导航上的入口",

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // A standing rule the hub suggests after the owner gave the same answer three times (#4929, #5802;
 // docs/assistant/unified-entry.md "A rule after the same answer three times"). It rides on an open plan

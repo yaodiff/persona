@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct LarkMessageDisplayTests {
     private func message() throws -> LarkMessage {

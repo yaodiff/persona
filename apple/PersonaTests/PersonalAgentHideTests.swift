@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Remove from List on the personal agents page (#138, docs/protocol/protocol.md "Removing a personal Agent from the
 /// list"): the row goes at once and stays gone while the list is pulled again, a refusal brings it back, Restore puts it

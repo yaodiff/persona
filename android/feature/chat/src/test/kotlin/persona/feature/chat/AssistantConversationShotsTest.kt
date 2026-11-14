@@ -91,9 +91,9 @@ class AssistantConversationShotsTest {
         var simplified by mutableStateOf(false)
         var dark by mutableStateOf(false)
         var expanded by mutableStateOf(emptySet<String>())
-        // what a tap on the dispatched line opens over the conversation (#3700)
+        // a tap on the hand-off card opens that Agent's page (#5110)
         val sheet = mutableStateOf<TaskSheet?>(null)
-        var dispatchedLabel = ""
+        var opened: SessionKey? = null
         var checkedLabel = ""
         rule.mainClock.autoAdvance = false
         try {
@@ -103,12 +103,12 @@ class AssistantConversationShotsTest {
                     // Glass draws Persona's work line as the Agent chat's, as iOS does (#4339 C13)
                     checkedLabel = if (style == AppStyle.Glass) context.resources.getString(R.string.chat_work_tools, 2)
                         else context.resources.getQuantityString(R.plurals.chat_assistant_checked, 2, 2)
-                    dispatchedLabel = androidx.compose.ui.res.stringResource(R.string.chat_assistant_dispatched_one, "Tidy the conversation")
                     val loader = remember { ImageLoader.Builder(context).build() }
                     DisposableEffect(loader) { onDispose { loader.shutdown() } }
                     val todos by store.todos.collectAsState()
-                    val host = AssistantTaskHost(store, "main", listOf(Session("computer", "agent", state = "working", activity = "Verifying layout")),
-                        { it }, {}, { throw it }, {}, sheet = sheet)
+                    val host = AssistantTaskHost(store, "main", listOf(Session("computer", "agent", state = "working", activity = "Verifying layout",
+                        activityAt = "2026-11-15T00:20:00Z")),
+                        { it }, { opened = it }, { throw it }, {}, sheet = sheet)
                     val original = ChatTimeline().lines(transcript, false, expanded).lines
                     val presentation = AssistantConversation.project(original, transcript)
                     val lines = if (simplified) AssistantTaskCards.lines(presentation.foreground, feed, mapOf(plan.id to plan), todos)
@@ -145,10 +145,12 @@ class AssistantConversationShotsTest {
                 rule.onNodeWithText(checkedLabel).assertIsDisplayed()
                 rule.onNodeWithText("layout", substring = true).assertDoesNotExist()
                 rule.onAllNodesWithTag("assistant-dispatch-hint").assertCountEquals(1)
-                // the line names the one dispatched task and opens that task's detail, not the In progress tray
-                rule.onNodeWithText(dispatchedLabel).assertIsDisplayed()
-                rule.onNodeWithTag("assistant-dispatch-hint").performClick()
-                rule.runOnIdle { assertEquals(TaskSheet.Task("task"), sheet.value); sheet.value = null }
+                rule.onAllNodesWithTag("handoff-card").assertCountEquals(1)
+                // the card names the Agent and opens that Agent's page, not the task sheet
+                rule.onNodeWithText("Layout agent").assertIsDisplayed()
+                rule.onNodeWithText("Dispatched:", substring = true).assertDoesNotExist()
+                rule.onNodeWithTag("handoff-card").performClick()
+                rule.runOnIdle { assertEquals(SessionKey("computer", "agent"), opened); opened = null; assertNull(sheet.value) }
                 colors += capture(style, appearance, "after", language)
                 rule.onNodeWithText(checkedLabel).performClick(); settle()
                 rule.onNodeWithText("layout", substring = true).assertExists()

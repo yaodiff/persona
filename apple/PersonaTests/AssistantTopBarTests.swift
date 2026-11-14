@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 struct AssistantTopBarTests {
     /// The chat chip's launcher submenus (#1644): the IDs typed before come marked, and "Other Model…" is offered for

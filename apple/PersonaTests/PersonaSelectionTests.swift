@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Package selection and retired drawing compatibility, run against both native apps.
 @MainActor struct PersonaSelectionTests {

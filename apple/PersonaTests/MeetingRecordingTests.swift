@@ -2,6 +2,7 @@ import AppIntents
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// One-tap meeting recordings (docs/apple/recording.md「Meeting recordings」): which calendar event names one, what its
 /// Live Activity shows, its intents' rules, and what a meeting adds to a recording.

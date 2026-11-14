@@ -2,6 +2,7 @@ import Foundation
 import os
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct RecordingTranscriptionTests {
     @Test func uploadCarriesTextAndTimestampsOnly() throws {

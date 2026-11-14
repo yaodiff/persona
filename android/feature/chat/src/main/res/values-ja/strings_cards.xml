@@ -6,12 +6,17 @@
     <plurals name="chat_assistant_checked">
         <item quantity="other">%1$d か所を確認</item>
     </plurals>
-    <plurals name="chat_assistant_dispatched">
-        <item quantity="other">%1$d 件を依頼</item>
-    </plurals>
-    <string name="chat_assistant_dispatched_one">依頼しました：%1$s</string>
-    <string name="chat_assistant_dispatch_open">開く</string>
-    <string name="chat_assistant_dispatch_open_line">· %1$s</string>
+    <string name="chat_handoff_wake_active">すでに稼働中</string>
+    <string name="chat_handoff_wake_resumed">再開済み</string>
+    <string name="chat_handoff_last_active">%1$sにアクティブ</string>
+    <string name="chat_handoff_active_now">たった今アクティブ</string>
+    <string name="chat_handoff_not_active">まだ動きがありません</string>
+    <string name="chat_handoff_not_started">開始できませんでした</string>
+    <string name="chat_handoff_gone">このタスクはもうありません</string>
+    <string name="chat_handoff_closed">エージェントの起動前に終了しました</string>
+    <string name="chat_handoff_minutes_ago">%1$d分前</string>
+    <string name="chat_handoff_hours_ago">%1$d時間前</string>
+    <string name="chat_handoff_days_ago">%1$d日前</string>
     <!-- #4314: a background round of the main conversation folded into one line. -->
     <string name="chat_background_round">%1$s · バックグラウンドからの報告</string>
     <string name="chat_background_round_live">%1$s · バックグラウンドで作業中…</string>

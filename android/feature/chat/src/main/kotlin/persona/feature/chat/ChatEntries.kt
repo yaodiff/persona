@@ -183,12 +183,17 @@ fun ChatDestination(
 ) {
     val context = LocalContext.current.applicationContext
     val services = remember(context) { EntryPointAccessors.fromApplication(context, ChatServices::class.java) }
-    val session = SessionKey(route.machineId, route.sessionId)
-    val wiring by remember(services, session) { services.chatWiring().bindingsFor(session) }.collectAsStateWithLifecycle()
+    val requested = SessionKey(route.machineId, route.sessionId)
+    val wiring by remember(services, requested) { services.chatWiring().bindingsFor(requested) }.collectAsStateWithLifecycle()
     if (wiring == null) { androidx.compose.material3.CircularProgressIndicator(); return }
     val metadata by services.sessions().sessions.collectAsStateWithLifecycle()
+    val routingState = wiring?.connection?.state?.collectAsStateWithLifecycle()?.value
+    val home = rememberChildSessionHome(requested, metadata, wiring?.actions, wiring?.connection?.lastHello?.features.orEmpty(),
+        routingState == ConnectionState.Online)
+    val session = home.key
+    val shownMetadata = metadata + home.rows
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
-    val managerId = metadata.firstOrNull { it.key == session }?.manager ?: managerChoice.shown
+    val managerId = shownMetadata.firstOrNull { it.key == session }?.manager ?: managerChoice.shown
     val assistantManagement = remember(wiring?.assistantManagement, managerId) {
         wiring?.assistantManagement?.forManager(managerId)
     }
@@ -196,8 +201,8 @@ fun ChatDestination(
     // snapshot follows the selected manager, the same one this assistant surface belongs to.
     val assistantSnapshot by services.assistantRepository().assistant.collectAsStateWithLifecycle()
     val style = renderStyle ?: if (route.kind == persona.core.navigation.ConversationKind.Assistant ||
-        metadata.any { it.key == session && it.assistant }) ChatRenderStyle.Assistant else ChatRenderStyle.Agent
-    val sharingManager = metadata.firstOrNull { it.key == session }?.manager?.takeIf { it.isNotBlank() }
+        shownMetadata.any { it.key == session && it.assistant }) ChatRenderStyle.Assistant else ChatRenderStyle.Agent
+    val sharingManager = shownMetadata.firstOrNull { it.key == session }?.manager?.takeIf { it.isNotBlank() }
     val sharing = remember(wiring?.agentShares, sharingManager, session) {
         wiring?.agentShares?.let { provider -> sharingManager?.let { owner -> { provider.forSession(session, owner) } } }
     }?.takeIf { style == ChatRenderStyle.Agent }
@@ -214,6 +219,8 @@ fun ChatDestination(
             onTerminal = onTerminal ?: { navigator.navigate(TerminalRoute(it.machineId, it.sessionId)) },
             onResumeInTerminal = { navigator.navigate(TerminalRoute(it.machineId, it.sessionId, resume = true)) },
             chrome = ChatChromeBindings(actions = wiring?.actions.takeUnless { historyReadOnly }, connection = wiring?.connection,
+                childSessionId = home.childSessionId,
+                lookupRows = home.rows,
                 worktrees = wiring?.worktrees.takeUnless { historyReadOnly },
                 onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
                 onOpenAssistant = { navigator.navigate(conversationRoute(it, assistant = true)) },

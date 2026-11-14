@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Original stream JSON, not a second wire protocol. Numeric tokens and property presence survive
 /// staged reduction; generated DTOs are only a detached projection for the native renderer.

@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Observation
+import PersonaWire
 
 /// The browser shares the inbox's routes and chat UI, with one account-bound list snapshot.
 @MainActor @Observable

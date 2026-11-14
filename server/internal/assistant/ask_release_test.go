@@ -3,6 +3,8 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -254,11 +256,15 @@ func TestALetGoQuestionsCardOutlivesItsTurnOnTheQueue(t *testing.T) {
 		return false
 	}
 	waitFor(t, "the hub told the card is resumable", shownResumable)
+	underWay := pushesUnderWay()
 	a.s.NodeDetached("mac")
 	if _, up := a.s.pendingIx(ix.ID); !up {
 		t.Fatal("the node's connection ending took the card down")
 	}
-	waitFor(t, "the detached node to settle with one card push", func() bool { return len(a.f.pushed()) == 1 })
+	// NodeDetached returns once its own work is done, but a push it decided on goes out on a goroutine (deliver): every
+	// push still on its way has to land before the count says anything. This relies on NodeDetached deciding its pushes
+	// before it returns; a push handed to another long-lived goroutine (over a channel, say) would not be counted here.
+	waitFor(t, "the pushes under way to land", func() bool { return underWay() == 0 })
 	if n := len(a.f.pushed()); n != 1 {
 		t.Fatalf("%d pushes, want the card's one", n)
 	}
@@ -293,6 +299,52 @@ func TestALetGoQuestionsCardOutlivesItsTurnOnTheQueue(t *testing.T) {
 		return false
 	})
 	waitFor(t, "the question gone once its answer went", func() bool { return len(next.pendingQuestions()) == 0 })
+}
+
+// pushesUnderWay, called just before a call, counts the pushes the call set off that have not reached the hub yet:
+// the goroutines deliver starts to hand one over, notifyInteraction's while it asks Persona Link first, and the ones
+// the calling goroutine started since (a push sent off on one of the call's own). A goroutine is listed from its go
+// statement until it returns, and a "created by" line names the function with the go statement (one with a go statement
+// is never inlined), so once the call has returned and this is 0, every push it set off is in the hub's pushes. The
+// functions are named through method expressions, so renaming one cannot leave this counting nothing.
+func pushesUnderWay() func() int {
+	var pushers []string
+	for _, by := range []any{(*Service).deliver, (*Service).notifyInteraction} {
+		pushers = append(pushers, "\ncreated by "+runtime.FuncForPC(reflect.ValueOf(by).Pointer()).Name()+" in goroutine ")
+	}
+	gs := goroutineStacks()
+	before := map[string]bool{}
+	for _, g := range gs {
+		before[goroutineID(g)] = true
+	}
+	startedHere := " in goroutine " + goroutineID(gs[0]) + "\n" // the calling goroutine is the first
+	return func() int {
+		n := 0
+		for _, g := range goroutineStacks() {
+			pusher := strings.Contains(g, pushers[0]) || strings.Contains(g, pushers[1])
+			if pusher || !before[goroutineID(g)] && strings.Contains(g, startedHere) {
+				n++
+			}
+		}
+		return n
+	}
+}
+
+// goroutineStacks is every goroutine's stack (runtime.Stack), the calling goroutine's first.
+func goroutineStacks() []string {
+	buf := make([]byte, 1<<16)
+	for {
+		if n := runtime.Stack(buf, true); n < len(buf) {
+			return strings.Split(string(buf[:n]), "\n\n")
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// goroutineID is the id a goroutine's stack starts with ("goroutine 7 [running]:").
+func goroutineID(stack string) string {
+	id, _, _ := strings.Cut(strings.TrimPrefix(stack, "goroutine "), " ")
+	return id
 }
 
 // askLaterSpokeOrKept: a record of question id is kept among the questions asked without waiting (ask_later.go).

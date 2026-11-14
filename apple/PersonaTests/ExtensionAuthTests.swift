@@ -2,6 +2,7 @@ import Foundation
 import PersonaKit
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Extensions that install command-line programs and sign in (#4507, docs/extensions/extensions.md「Command-line programs」「登录（auth）」):
 /// the sign-in decodes from the hub's views and its `extension_auth` push (a state this app does not know reads as not

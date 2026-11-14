@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// The in-app tunnels the app runs, one per paired hub that has one (docs/operations/network.md「Connecting to hub through an in-app tunnel」): the
 /// core's tunnel up, and a loopback forward to the hub's address inside the tunnel's network. A tunnel that is up

@@ -1,5 +1,6 @@
 import Charts
 import SwiftUI
+import PersonaWire
 
 /// One element of a Feishu interactive card as the Lark gateway projects it (`CardNode`): a tag, text, style,
 /// children and the per-tag extras (image, options, items, persons…). Kept as raw JSON.

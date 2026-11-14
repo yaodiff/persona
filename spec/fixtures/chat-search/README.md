@@ -13,7 +13,7 @@ nothing it never shows.
   what search in chat matches, in order: `[group, text]`, the groups being `text` (messages), `quoted`, `thinking`,
   `tool_name`, `tool_input`, `tool_output` and `event`. `index` is what the assistant's chat index keeps of the item
   (the user's words and the assistant's replies only), or `null` when it keeps nothing.
-- Snippets are cut from these texts only, so no hidden tag can show in one, nor a Markdown marker of a reply (the index keeps a reply as the chat shows it: `searchPlain` in `server/internal/assistant/search_text.go`, `search_plain` in the mock).
+- Snippets are cut from these texts only, so no hidden tag can show in one, nor a Markdown marker of a reply (the index keeps a reply as the chat shows it: `searchPlain` in `server/internal/assistant/chatsearch/text.go`, `search_plain` in the mock).
 - A card is its fallback text, as `AssistantCardText` in `sdk/go/wire` makes it; the cases only use cards that have one
   (without one, the hub writes a placeholder and the web app nothing).
 - Read by the web app (`web/src/lib/chat-search.test.ts`), the managers' index (#6282) and Android (`ChatSearchTest`, #6285).

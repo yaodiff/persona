@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Claude Code's /config options (a whitelist of ~/.claude/settings.json keys) on each machine.
 /// Which agent's settings a page edits: Claude Code's settings.json or Codex's config.toml (the node keeps a whitelist

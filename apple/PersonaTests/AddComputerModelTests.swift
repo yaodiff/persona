@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Machines › Add Computer (#4196, docs/protocol/protocol.md「Computer pairing codes」「电脑的信任」): the add request, a new code for one that waits,
 /// every refusal's words, the computer joining and being confirmed or rejected, machines decoding trust / error_code,

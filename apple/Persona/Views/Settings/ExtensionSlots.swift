@@ -1,6 +1,7 @@
 import BeautifulUI
 import Observation
 import SwiftUI
+import PersonaWire
 
 // The UI slots (docs/extensions/extensions.md「UI slots」): where plugins put their declarative UI beyond their own settings.
 //

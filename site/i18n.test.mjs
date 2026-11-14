@@ -11,7 +11,7 @@ const PAIRS = [
   ["terms/index.html", "en/terms/index.html"],
   ["404.html", "en/404.html"],
 ];
-const INSTALL = "curl -fsSL https://personaside.com/install.sh | sh -s -- --hub";
+const INSTALL = "curl -fsSL https://github.com/nwverse/persona/releases/latest/download/install.sh | sh -s -- --hub";
 
 async function page(path) {
   return readFile(new URL(`./public/${path}`, import.meta.url), "utf8");

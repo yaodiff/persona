@@ -17636,6 +17636,15 @@ def find_items(sid):
     items = ITEMS.get(sid, [])
     if GAP and sid == SESSIONS[0]["session_id"] and not GAP_STATE["grown"]:
         return items[:-6]  # what the transcript held before the lines whose push gets lost
+    # MOCK_REPLY_USAGE=1 (#5470): the blog agent and the main conversation's last reply carry token usage, so the
+    # footer under that reply can show a catalog price. A copy, so the fixture items stay as they are.
+    if os.environ.get("MOCK_REPLY_USAGE") == "1" and sid in (BLOG, ASK1):
+        items = [dict(x) for x in items]
+        for x in reversed(items):
+            if x.get("role") == "assistant" and x.get("kind") == "text":
+                x["usage"] = [{"model": "claude-opus-5-5", "in": 2, "out": 3400,
+                               "cache_read": 1200000, "cache_write": 9000}]
+                break
     return items
 
 
@@ -18968,7 +18977,7 @@ def search_index_text(item):
     return text if text.strip() else None
 
 
-# A reply's Markdown as the chat shows it (#7072): the manager's searchPlain (server/internal/assistant/search_text.go),
+# A reply's Markdown as the chat shows it (#7072): the manager's searchPlain (server/internal/assistant/chatsearch/text.go),
 # pattern for pattern; spec/fixtures/chat-search checks both.
 _PLAIN_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 _PLAIN_RULE = re.compile(r"^[ \t]{0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
@@ -24223,6 +24232,20 @@ class H(BaseHTTPRequestHandler):
         if self.token_refused(): return
         if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
+        if p == "/api/v1/push/ln-mode":
+            return self.send_json({"enabled": bool(os.environ.get("MOCK_LN"))})
+        if p == "/api/v1/push/intercepts":
+            if not os.environ.get("MOCK_LN"):
+                return self.send_json({"intercepts": []})
+            return self.send_json({"intercepts": [
+                {"at": ago(hours=3), "level": "P1", "reason": "ln_p1_held",
+                 "title": "发布结果等你核对", "body": "网页和手机的构建都完成了",
+                 "related_key": "demo-subject", "manager": "assistant", "also": ["请检查最后的发布说明"]},
+                {"at": ago(hours=4), "level": "P1", "reason": "ln_dedup_12h", "title": "同一任务还有一次补充汇报", "manager": "assistant"},
+                {"at": ago(hours=5), "level": "P2", "reason": "ln_p2_silent", "title": "后台检查已完成",
+                 "body": "没有需要你处理的事项", "manager": "assistant"},
+                {"at": ago(days=1), "level": "P1", "reason": "ln_p1_held", "title": "昨天的记录不应出现"},
+            ]})
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
         if p == "/api/v1/subscriptions/-/graph": return self.send_json(SOURCES_GRAPH)

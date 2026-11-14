@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// What Share as Image draws for a message with cards (#7261, `ShareCardParts`): the chat's cards as cards, a card the
 /// picture cannot draw as its fallback, and never a card's JSON. Made-up cards, the shared examples every client reads.

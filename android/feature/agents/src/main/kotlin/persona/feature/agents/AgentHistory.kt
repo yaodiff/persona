@@ -25,13 +25,14 @@ internal fun scopedAgentList(
         AgentRange.All -> { row -> row.session.runsInAll && allRunning.draws(row, preferences.pins) }
         AgentRange.History -> null
     }
-    val tree = codexTaskForest(rows, ownRows, runs)
+    val tree = codexTaskForest(foldRows(rows, settings.hierarchy), ownRows, runs)
     return scopedRootAgentList(tree.roots, machines, preferences, tree.searchSettings(settings), todos, directions)
         .let { it.copy(children = tree.children.plusChildren(it.children)) }
 }
 
 /** "All" lists these with the running ones (Codex threads of the past too), every other session with the history. */
-private val persona.core.contracts.Session.runsInAll: Boolean get() = isLive || isCodexTask
+private val persona.core.contracts.Session.runsInAll: Boolean get() = isLive || isCodexTask ||
+    (children != null && foldedState != persona.core.contracts.AgentState.Offline)
 
 /** [rows] are a forest's roots ([scopedAgentList]), so no list here hangs subtasks again. */
 private fun scopedRootAgentList(
@@ -66,7 +67,7 @@ private fun AgentListSettings.admitsHistory(s: persona.core.contracts.Session): 
  * without building the list again (it runs on every push).
  */
 internal fun botmuxCount(rows: List<AgentSession>, preferences: AgentsPreferencesSnapshot, settings: AgentListSettings): Int =
-    rows.count { row ->
+    foldRows(rows).count { row ->
         val s = row.session
         s.isBotmux && when (preferences.range) {
             AgentRange.Running -> settings.admits(s)

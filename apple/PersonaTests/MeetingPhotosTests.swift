@@ -7,6 +7,7 @@ import UIKit
 import UniformTypeIdentifiers
 import Vision
 @testable import Persona
+import PersonaWire
 
 /// Photos in a room meeting (#3862 phase 3; contract docs/assistant/meeting-minutes.md "Phase 3: photos"): the phone's
 /// pipeline (downscale, JPEG, text recognition), the upload under the photo's own id and its retries, the words for each

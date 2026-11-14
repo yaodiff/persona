@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The checklist after pairing and Settings' steps-left row (#4195, docs/assistant/onboarding.md 4.5), the expired-code message, and the
 /// first screen's getting-started link.

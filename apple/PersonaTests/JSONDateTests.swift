@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// `JSON.parseDate` reads the hub's usual timestamp straight from its bytes (#4681): the same `Date` as the
 /// ISO8601DateFormatter path it replaced, which still decides every other shape.

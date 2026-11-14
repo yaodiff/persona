@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Settings' Live Screen row (#6398, #6396, #7775): there only when the page can change something for a computer here,
 /// so someone using only the assistant never sees it. Scroll Speed applies to every computer that shows its live screen.

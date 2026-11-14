@@ -39,10 +39,10 @@ ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 APPLE = os.path.join(ROOT, "apple")
 LANGS = ["en", "zh-Hans", "ja"]
 SOURCE = "en"
-# The app targets' sources and PersonaKit's, whose text is looked up in the app's main bundle (#5575, #5758); not the
+# The app targets' sources and PersonaKit's and PersonaWire's, whose text is looked up in the app's main bundle (#5575, #5758); not the
 # tests, the test apps or the other SwiftPM packages (BeautifulUI's keys: `beautifului_problems`).
 SOURCE_DIRS = ["Persona", "Shared", "Vision", "PersonaWatch", "PersonaWidgets", "LiveActivity", "PersonaNotify", "PersonaShare",
-               "Packages/PersonaKit/Sources"]
+               "Packages/PersonaKit/Sources", "Packages/PersonaWire/Sources"]
 CATALOGS = [
     "Shared/Localization/Localizable.xcstrings",
     "Persona/Intents/AppShortcuts.xcstrings",

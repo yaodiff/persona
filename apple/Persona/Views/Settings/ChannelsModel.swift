@@ -1,6 +1,7 @@
 import Observation
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // Settings › Channels (docs/extensions/channels.md): every way of talking to Persona — the apps, the Feishu bot, WeChat, /agent in
 // Feishu, voice, the chat app bots plugins contribute — as GET /api/v1/channels lists them; one channel's page (its

@@ -249,7 +249,9 @@ export function stepsToItems(steps, opts = {}) {
 }
 
 const transcriptCache = new Map()
+const transcriptRevisions = new Map()
 const MAX_CACHED_TRANSCRIPTS = 16
+const MAX_TRANSCRIPT_REVISIONS = 256
 const MAX_TRANSCRIPT_CACHE_BYTES = 64 * 1024 * 1024
 let transcriptCacheBytes = 0
 
@@ -267,6 +269,11 @@ export function readTranscript(brainDir, full = false) {
     const version = [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':')
     // Fast same-size native rewrites can share a filesystem timestamp tick.
     const settled = Math.max(Number(info.mtimeMs), Number(info.ctimeMs)) <= Date.now() - 1000
+    const remembered = transcriptRevisions.get(target)
+    if (remembered) {
+      transcriptRevisions.delete(target)
+      transcriptRevisions.set(target, remembered)
+    }
     const cached = transcriptCache.get(target)
     if (cached) {
       transcriptCache.delete(target)
@@ -280,6 +287,7 @@ export function readTranscript(brainDir, full = false) {
     const raw = readFileSync(target, 'utf8')
     const out = []
     let branch = ''
+    let revision = ''
     for (const line of raw.split('\n')) {
       const trimmed = line.trim()
       if (!trimmed) continue
@@ -291,13 +299,28 @@ export function readTranscript(brainDir, full = false) {
           // Native exports append replacement steps after a rewind. A status update keeps the step's identity.
           if (index < previous.step_index || step.type !== previous.type || step.created_at !== previous.created_at) {
             branch = createHash('sha256').update(trimmed).digest('hex').slice(0, 20)
+            revision = ''
+          } else if (JSON.stringify(previous) !== JSON.stringify(step)) {
+            // A planner step can gain its completed response while keeping its index and branch.
+            revision = createHash('sha256').update(JSON.stringify(step)).digest('hex').slice(0, 20)
           }
           while (out.length && out.at(-1).step_index >= index) out.pop()
         }
         out.push(step)
       } catch {}
     }
-    const transcript = { steps: out, branch }
+    const nativeRevision = revision
+    const hash = createHash('sha256').update(raw).digest('hex')
+    if (remembered && remembered.branch === branch) {
+      const appended = raw.length >= remembered.length &&
+        createHash('sha256').update(raw.slice(0, remembered.length)).digest('hex') === remembered.hash
+      if (!appended) revision = hash.slice(0, 20)
+      else if (nativeRevision === remembered.nativeRevision) revision = remembered.revision
+    }
+    // Keep small revision records independently of the parsed-body LRU, including fresh native rewrites.
+    transcriptRevisions.set(target, { length: raw.length, hash, branch, nativeRevision, revision })
+    while (transcriptRevisions.size > MAX_TRANSCRIPT_REVISIONS) transcriptRevisions.delete(transcriptRevisions.keys().next().value)
+    const transcript = { steps: out, branch, revision }
     const size = Number(info.size)
     if (settled && size <= MAX_TRANSCRIPT_CACHE_BYTES) {
       while (transcriptCache.size >= MAX_CACHED_TRANSCRIPTS || transcriptCacheBytes + size > MAX_TRANSCRIPT_CACHE_BYTES) {

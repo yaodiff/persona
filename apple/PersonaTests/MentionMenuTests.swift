@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// The composer's @ list (#2319): the token before the caret, what a pick leaves in the draft, and the rows in the
 /// web's order (web/src/lib/mentions.test.ts covers the same rules).

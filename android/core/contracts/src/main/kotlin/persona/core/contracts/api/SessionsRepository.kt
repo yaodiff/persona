@@ -37,6 +37,8 @@ interface SessionsRepository {
     /** Confirmed first-message handoffs, keyed by the exact waiting session that received the message. */
     val startedThreads: StateFlow<Map<SessionKey, Session>> get() = noStartedThreads
     val listStatus: StateFlow<SessionListStatus> get() = legacySessionListStatus
+    /** Capabilities of the hub owning this machine; merged lists must not borrow the selected hub's. */
+    fun supportsFeature(machineId: String, feature: String): Boolean = false
     suspend fun refresh()
     suspend fun setListFilter(filter: SessionListFilter) {}
     /** Hub-group scope, separate from the server's machine-local group filter; null includes all hubs. */

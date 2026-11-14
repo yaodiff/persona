@@ -1,5 +1,6 @@
 import Contacts
 import Foundation
+import PersonaWire
 
 /// `phone_contacts_search`: find people in the address book by name, company
 /// or phone number.

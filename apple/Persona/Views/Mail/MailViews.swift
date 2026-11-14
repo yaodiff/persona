@@ -1,6 +1,7 @@
 import AuthenticationServices
 import SwiftUI
 import WebKit
+import PersonaWire
 
 extension APIClient {
     struct AccountsResponse: Decodable { var accounts: [MailAccount] }

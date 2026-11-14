@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// By App (#3756): the agents in a section per app they run in, as the hub sends them.
 struct AppGroupsTests {

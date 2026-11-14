@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct WatchMessageTests {
     private func item(_ json: String) throws -> Item { try JSON.decoder.decode(Item.self, from: Data(json.utf8)) }

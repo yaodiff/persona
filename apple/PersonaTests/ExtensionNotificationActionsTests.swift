@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UserNotifications
 @testable import Persona
+import PersonaWire
 
 @MainActor struct ExtensionNotificationActionsTests {
     @Test func aCategoryKeepsTextInputAndDestructiveForegroundOptions() throws {

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// One Record entry on the iPhone (#5243, docs/apple/recording.md「Meeting recordings」) and the watch (#5493): Record
 /// always records a meeting, the calendar only names it, and Note is a secondary choice: before the start on the

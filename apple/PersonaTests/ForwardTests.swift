@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Forwarding a message (#3807, docs/protocol/protocol.md "Forwarded messages"): the block as spec/fixtures/forward
 /// writes and reads it, what of a message it carries, where it may go, and the targets remembered.

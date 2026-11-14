@@ -74,6 +74,7 @@
   "scope_todos_read": "View to-dos",
   "scope_todos_write": "Create and edit to-dos and link chats to them (no deletion)",
   "scope_leaders_read": "View leader conversations (directions) and what they report",
+  "scope_assistant_dispatch_policy": "Read and change the assistant dispatch policy (which conversations may hand out work)",
   "scope_models": "Use the model you pick for it in Settings › Model configuration (never the key)",
   "scope_call": "Call the API of extension “{id}”",
   "slot_nav_page": "Entry in the main navigation",

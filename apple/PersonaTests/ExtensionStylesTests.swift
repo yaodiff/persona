@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// UI version 6's styles on iOS (docs/extensions/extensions.md "UI version 6", #827): every icon name of the schema's
 /// set drawn as one of the app's own symbols, every named color as one of its hues, a badge's tone before its color,

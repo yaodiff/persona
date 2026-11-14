@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Instructions outside a suggestion card reuse its request, stale-answer and error handling with suggestion version zero.
 @MainActor

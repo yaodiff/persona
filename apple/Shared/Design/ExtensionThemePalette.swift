@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// An extension theme's role colors, in StyleSpec only while that theme is chosen; roles it leaves out fall back to the original tokens.
 nonisolated struct ExtensionThemePalette: Hashable, Sendable {

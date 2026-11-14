@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Handle Notification shortcut (#3848): what an item is, how it is deduped, what waits on the phone and every
 /// outcome as one sentence.

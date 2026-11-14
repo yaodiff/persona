@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Errors and crashes for the hub's error reports (#5621, docs/protocol/protocol.md "Error reports"): the queue on disk, the
 /// feature gate, batching and what each answer does to the batch.

@@ -878,6 +878,9 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 	if strings.TrimSpace(a.Text) == "" {
 		return "", errors.New("text is empty")
 	}
+	if err := s.dispatchNewConversationGuard(ctx, self); err != nil {
+		return "", err
+	}
 	from, err := s.relayFrom(ctx, self)
 	if err != nil {
 		return "", err
@@ -925,6 +928,11 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 	}
 	if c.SessionID == self {
 		return "", errors.New("that is this conversation: you can't send a message to yourself")
+	}
+	// The dispatch policy runs after the target is known and before relayAllowed, whose rate-limit bookkeeping a
+	// refused send must not consume.
+	if err := s.dispatchSendGuard(ctx, self, c.MachineID, c.SessionID, a.Text); err != nil {
+		return "", err
 	}
 	from, err := s.relayFrom(ctx, self)
 	if err != nil {

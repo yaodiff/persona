@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The assistant's ask_user in the chat (issue 677): it reads as Question with its question, not the tool's raw name
 /// beside an empty chip, and once answered it keeps what was asked and what the user picked.

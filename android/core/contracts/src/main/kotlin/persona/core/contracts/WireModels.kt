@@ -64,6 +64,8 @@ data class Fold(
     @SerialName("supervision_user") val supervisionUser: Boolean? = null,
     /** The images this run of work looked at (docs/protocol/protocol.md, "Images viewed this turn"); older hubs omit it. */
     val images: List<FoldImage> = emptyList(),
+    /** What the folded items used (#5426). Omitted when none of them carried usage, and from older nodes. */
+    val usage: List<TokenUsage> = emptyList(),
 )
 
 /**

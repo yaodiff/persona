@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The bounded list contract. Tokens are opaque and page cursors never stand in for delta checkpoints.
 nonisolated struct SessionListQuery: Hashable, Sendable {

@@ -3,6 +3,7 @@ import os
 #if canImport(WatchConnectivity)
 import WatchConnectivity
 #endif
+import PersonaWire
 
 /// Each group's credential the watch uses, and the groups' names (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」).
 nonisolated struct WatchConfigs: Codable, Sendable, Equatable {

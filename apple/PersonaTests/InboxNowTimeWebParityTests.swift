@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Edges of the follow-up moment (`InboxNow.time`, R7 in the four-way comparison) that the fixture cases do not reach,
 /// checked against the web app's `followTime` in `web/src/lib/inbox-now.ts` case by case: a tomorrow across New Year,

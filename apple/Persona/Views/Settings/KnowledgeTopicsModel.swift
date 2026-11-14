@@ -53,7 +53,7 @@ import SwiftUI
     }
 }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 /// The switch and the way to the map, at the top of Knowledge Selection.
 struct KnowledgeTopicsSection: View {
     var model: KnowledgeTopicsModel

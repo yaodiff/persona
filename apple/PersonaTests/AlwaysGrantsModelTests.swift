@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor @Suite struct AlwaysGrantsModelTests {
     private let list = "/api/v1/assistant/conversations/c1/always"

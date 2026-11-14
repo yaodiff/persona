@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// One "thing" in the unified inbox (docs/assistant/inbox.md): the new messages in a Feishu chat or a mail thread, with the
 /// hub's AI triage and whether it has been dealt with. Mirrors hub/inbox.go `InboxItem`.

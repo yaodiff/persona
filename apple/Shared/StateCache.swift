@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The app's last known state on disk (Caches/state/<name>.json): every page paints from it at once — offline, on a
 /// cold start, when switching tabs — and the network only refreshes it in the background.

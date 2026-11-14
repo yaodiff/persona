@@ -2,6 +2,7 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
+import PersonaWire
 
 // Native rendering of `documents/read?format=json` (ProseMirror-style nodes, see the Lark gateway's
 // src/server/lark/domains/documents-content.ts for what each docx block becomes). Used when the owner forbids

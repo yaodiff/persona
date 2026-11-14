@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Personal agents: the hub's /api/v1/agents/* (server/internal/agents), the gateway's agent-bridge for now. A session
 // id is "<source>:<sessionKey>"; bridge keys contain "/" and ":", so ids are fully percent-encoded in paths.

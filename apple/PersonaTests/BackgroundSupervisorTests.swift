@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The hub's built-in background supervisor on the Apple apps (#5083, docs/assistant/unified-entry.md "Background
 /// supervisor"): its conversation is listed with the scheduled tasks' ones and is told apart by the assistant settings'

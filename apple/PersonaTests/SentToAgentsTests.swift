@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What Persona sent to its tasks' agents (#1542): only a `routed` item marked `from: assistant` is Persona's; a task's
 /// card takes in the hand-off written right after it (same task, same conversation), never a later message or the

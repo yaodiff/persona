@@ -117,4 +117,18 @@ class CloseoutContractTest {
         val on = JsonCodec.parseToJsonElement(JsonCodec.encodeToString(TriageSwitches.serializer(), read.copy(closeout = true))).jsonObject
         assertTrue(on.getValue("closeout").jsonPrimitive.boolean)
     }
+
+    @Test fun theCloseoutAskSwitchStaysOnTheWireAndAnOldPayloadDoesNotGainIt() {
+        val older = JsonCodec.decodeFromString<TriageSwitches>("""{"enabled":true}""")
+        assertNull(older.closeoutAsk)
+        val olderSaved = JsonCodec.parseToJsonElement(JsonCodec.encodeToString(TriageSwitches.serializer(), older.copy(wake = true))).jsonObject
+        assertFalse("closeout_ask" in olderSaved)
+
+        for (value in listOf(false, true)) {
+            val read = JsonCodec.decodeFromString<TriageSwitches>("""{"enabled":true,"closeout_ask":$value}""")
+            assertEquals(value, read.closeoutAsk)
+            val saved = JsonCodec.parseToJsonElement(JsonCodec.encodeToString(TriageSwitches.serializer(), read.copy(closeoutAsk = !value))).jsonObject
+            assertEquals(!value, saved.getValue("closeout_ask").jsonPrimitive.boolean)
+        }
+    }
 }

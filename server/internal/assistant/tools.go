@@ -66,6 +66,15 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	switch call.Name {
 	case "persona_settings":
 		return s.toolPersonaSettings(ctx, call, args) // settings_tool.go
+	case "task_plan", "agent_start", "conversation_new":
+		// The optional dispatch policy is checked first: it can refuse a model's call where the task-agent refusal
+		// below still lets a scheduled conversation through. The hub's own starts (an inbox hand-off) come through
+		// runTool and never reach Tool, so they are not limited here.
+		if err := s.dispatchToolGuard(ctx, call.MachineID, call.SessionID, call.Name); err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+	}
+	switch call.Name {
 	case "task_plan", "agent_start":
 		// A task's agent does the work itself (supervise_leader.go); the hub's own starts (an inbox hand-off) are not
 		// a model's call and come through runTool.
@@ -230,14 +239,24 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolConversationNew(ctx, self, args)
 	case "conversation_send":
 		return s.toolConversationSend(ctx, self, args)
-	case "schedule_followup":
-		return s.toolScheduleFollowup(ctx, machine, self, args)
 	case "list_followups":
 		space, _ := s.knownSpace(ctx, self)
 		return s.describeSchedule(ctx, space), nil
-	case "schedule_routine":
-		return s.toolScheduleRoutine(ctx, self, args)
+	case "schedule_routine", "schedule_followup":
+		// A conversation the policy limits may not change the schedule: new or changed tasks could alter its own
+		// class or open another run.
+		if err := s.dispatchScheduleGuard(ctx, machine, self); err != nil {
+			return "", err
+		}
+		if name == "schedule_routine" {
+			return s.toolScheduleRoutine(ctx, self, args)
+		}
+		return s.toolScheduleFollowup(ctx, machine, self, args)
 	case "delete_routine", "cancel_followup":
+		// A conversation the policy limits may not delete its own scheduled task either (dispatch_policy.go).
+		if err := s.dispatchScheduleGuard(ctx, machine, self); err != nil {
+			return "", err
+		}
 		var a struct{ ID string }
 		_ = json.Unmarshal(args, &a)
 		space, _ := s.knownSpace(ctx, self)

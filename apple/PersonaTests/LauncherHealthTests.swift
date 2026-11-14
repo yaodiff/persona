@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// New Agent's launchers with their health on the computer (#1643, docs/server/launcher-health.md): decoded when the hub
 /// sends it and not needed when it does not, grayed out with why when blocked, never left out, and not picked by default.

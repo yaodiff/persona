@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // UI version 6's controls in rows (docs/extensions/extensions.md "UI version 6", "Controls", #827): a switch or a
 // stepper at the row's end, a slider on a line of its own under it. What a change does is the model's

@@ -78,7 +78,7 @@ github:nwverse/persona-extensions
 - **先看看**：装上 [TestFlight 公开测试版](https://testflight.apple.com/join/vsjfy3hE)，在配对页点「没有 hub？先体验一下」，不用服务器也不用账号。
 - **自己部署**：用[官网](https://personaside.com/#start)上的一行命令装好 hub，再扫个码。看 [开始使用](docs/operations/getting-started.md)。
 - **HarmonyOS 7 直板与折叠手机**：[从源码构建原生 ArkUI 客户端](harmony/README.md)（API 26）。
-- **从源码构建**：[配置](docs/operations/config.md) · [部署](docs/server/server.md) · [参与开发](CLAUDE.md)
+- **从源码构建**：[配置](docs/operations/config.md) · [部署](docs/server/server.md) · [参与开发](CONTRIBUTING.md) · [Agent 指南](CLAUDE.md)
 
 ## 文档
 

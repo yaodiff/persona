@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UserNotifications
 @testable import Persona
+import PersonaWire
 
 /// Talk about this meeting (#3862 phase 6; contract docs/assistant/meeting-minutes.md「Phase 6: talk about this meeting」,
 /// the phone's side docs/apple/recording.md「Talk about this meeting (phase 6)」): which recordings' pages offer it, that a

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Resume in Terminal (#5521): what the chat's ⋯ offers for an Agent that isn't running, the same rule as the web's
 /// `terminalResume` (web/src/lib/agent-resume.test.ts has the same cases). Offered for a stopped Agent, Claude Code or a

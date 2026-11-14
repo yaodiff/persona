@@ -13,6 +13,20 @@ import org.junit.Test
 
 /** "Needs you now" on the Persona home (the old app's ShellNeedsYou, iOS's). */
 class NeedsYouTest {
+    @Test fun foldedChildRequestsHaveOneParentRowAndUseItsMuteAndTitle() {
+        val parent = Session("m", "p", title = "Plan the release")
+        val cards = listOf(request("one", "child", title = "Review").copy(foldedUnder = "p"),
+            request("two", "other", title = "Test").copy(foldedUnder = "p"), request("own", "p"))
+        val result = needsYou(cards, listOf(parent), AgentPreferences(), emptyList())
+        assertEquals(1, result.total)
+        val line = result.lines.single() as NeedsYouLine.Agent
+        assertEquals(parent.key, line.session)
+        assertEquals(parent.title, line.who)
+        assertEquals("one", line.requestId)
+        assertEquals("child", cards.first().sessionId)
+        assertTrue(needsYou(cards, listOf(parent), AgentPreferences(sessions = listOf("m/p")), emptyList()).isEmpty)
+    }
+
     private fun request(id: String, session: String, kind: String = "plan", title: String? = null, cwd: String? = null) =
         Interaction(id, machineId = "m", sessionId = session, sessionTitle = title, cwd = cwd, kind = kind)
 

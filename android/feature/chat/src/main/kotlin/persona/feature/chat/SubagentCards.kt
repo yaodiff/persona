@@ -63,6 +63,7 @@ internal class SubagentFolds {
     private val open = mutableStateMapOf<String, Boolean>()
     fun isOpen(call: String) = open[call] == true
     fun toggle(call: String) { open[call] = !isOpen(call) }
+    fun open(call: String) { open[call] = true }
 }
 
 internal val LocalSubagentFolds = staticCompositionLocalOf<SubagentFolds?> { null }
@@ -102,19 +103,20 @@ internal object SubagentCardText {
  * [live]: its exchange is the running one; [assistant]: a Persona conversation.
  */
 @Composable
-internal fun SubagentCard(call: ToolCall, live: Boolean, assistant: Boolean, modifier: Modifier = Modifier) {
+internal fun SubagentCard(call: ToolCall, live: Boolean, assistant: Boolean, modifier: Modifier = Modifier,
+    statusOverride: SubagentStatus? = null, metaOverride: SubagentCardText.Meta? = null) {
     val links = LocalChatSubagents.current
     val agent = call.use.item.toolUseId?.let { links?.agents?.get(it) }
     val res = LocalResources.current
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    val status = Subagents.status(call, agent, live)
+    val status = statusOverride ?: Subagents.status(call, agent, live)
     val running = status == SubagentStatus.Running
     val folds = LocalSubagentFolds.current
     var openHere by rememberSaveable(call.id) { mutableStateOf(false) }
     val open = folds?.isOpen(call.id) ?: openHere
     val title = Subagents.title(call, agent) ?: stringResource(R.string.chat_subagent_untitled)
-    val meta = SubagentCardText.meta(res, agent, Subagents.took(call, agent, status), assistant)
+    val meta = metaOverride ?: SubagentCardText.meta(res, agent, Subagents.took(call, agent, status), assistant)
     val started = Subagents.started(call, agent)
     val now by rememberNow(1_000, enabled = running && started != null)
     val runningFor = if (running && started != null)

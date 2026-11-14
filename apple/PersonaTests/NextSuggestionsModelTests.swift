@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 private actor AssistantPUTGate {
     enum Failure: Error { case requestDidNotStart, noPendingRequest }

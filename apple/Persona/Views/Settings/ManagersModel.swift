@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 // Settings › Managers (docs/assistant/managers.md, the web's ManagersSettings, Android's ManagersScreen): the hub's managers, each
 // a whole assistant: where each runs, online or when it last synced, the default; renaming, making one the default,

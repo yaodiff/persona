@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Shared declarative UI context; system extensions need only Shared, not the app's view models or keychain.
 nonisolated extension ExtensionUIContext {

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// One piece of a message drawn into its picture (Share as Image, #7261): words as Markdown, or a card the assistant drew.
 nonisolated enum ShareCardPart: Equatable, Sendable {

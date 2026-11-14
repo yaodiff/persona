@@ -37,6 +37,9 @@ const (
 	TypeResumed  byte = 9  // the same from the node: the phone resends its bytes from there
 	TypeClose    byte = 10 // u8 channel, u64 its end: no byte after it
 	TypeReset    byte = 11 // u8 channel, u64 offset: the video channel goes on at this message boundary; drop a partial message
+	// The video over UDP (#7873), on a direct route's TLS connection only.
+	TypeUDPOpen  byte = 12 // empty: open a UDP flow beside this connection
+	TypeUDPReady byte = 13 // JSON UDPReady
 )
 
 // Channels of a session: RFB is Screen Sharing's stream, resumed byte for byte and never dropped. Each video stream
@@ -62,6 +65,15 @@ type Paths struct {
 	Port        int         `json:"port,omitempty"`
 	Candidates  []Candidate `json:"candidates"`
 	Unavailable string      `json:"unavailable,omitempty"`
+	// UDP is the version of the video over UDP (#7873) the node offers on its direct routes; 0: none.
+	UDP int `json:"udp,omitempty"`
+}
+
+// UDPReady answers udp_open: the UDP port (on the address this connection reached) and the flow's id, or why not.
+type UDPReady struct {
+	Port        int    `json:"port,omitempty"`
+	Flow        string `json:"flow,omitempty"` // 8 bytes, base64url without padding
+	Unavailable string `json:"unavailable,omitempty"`
 }
 
 // Candidate is one address a direct route may reach the node at.

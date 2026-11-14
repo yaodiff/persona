@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UserNotifications
 @testable import Persona
+import PersonaWire
 
 @MainActor struct ExtensionNotificationRoutingTests {
     private func event(_ action: String = "reply", hub: String? = "hub-b", text: String? = "收到") throws -> ExtensionNotificationEvent {

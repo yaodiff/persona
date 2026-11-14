@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A time zone the user picked by hand stays (#1855): the apps write their own zone to the hub only while the hub does not
 /// say it was picked; a hub that never says (or one from before picking) follows the devices, as before.

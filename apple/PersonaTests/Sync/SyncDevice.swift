@@ -1,5 +1,6 @@
 import Foundation
 @testable import Persona
+import PersonaWire
 
 // One device of a sync scenario: the real AppModel, reached through the demo config's socket and requests (as Demo
 // Mode is), and what its chat page would draw, projected onto the README's view.

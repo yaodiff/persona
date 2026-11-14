@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 struct ExtensionReviewBar: View {
     var review: ExtensionReview

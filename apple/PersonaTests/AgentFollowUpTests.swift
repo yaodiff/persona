@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Assistant Profile › Agent Follow-Up (#7005): the hub's values shown, one sparse PUT per change naming the assistant
 /// that answered, the hub's answer kept and a refusal put back; the menus' words and choices. Made-up values.

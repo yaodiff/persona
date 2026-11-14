@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Drawing the code page's blocks (ExtensionCodePage.swift): one lazy stack, each block a row; the tabs over the page,
 // a single file's lines, the phone's directory pages.

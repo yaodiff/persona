@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // UI version 6's new fields (docs/extensions/extensions.md "UI version 6", #827): a date, a time or both with the
 // system's picker, held to `earliest`…`latest`; several choices in a menu of toggles that stays open while picking.

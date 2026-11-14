@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Health (docs/assistant/health.md) against a FakeHub: the space's conversations come from `GET /api/v1/assistant?space=health`,
 /// its memory from `?space=health`, a new one is started with `"space":"health"`; pushes go over the list, and the

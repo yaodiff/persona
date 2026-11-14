@@ -1,4 +1,5 @@
 import Observation
+import PersonaWire
 
 /// Only source text and its resolved language require a new byte/line index.
 nonisolated struct CodeSnippetInput: Hashable, Sendable {

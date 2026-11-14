@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The messaging source's answers reshaped into the Feishu screens' models (#2138, LarkMessagingBridge): what the
 /// extension sends must decode, with the shapes the screens read.

@@ -3,6 +3,7 @@ import HealthKit
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// The registry is main-actor isolated (the app target defaults to MainActor),
 /// so every test that touches a tool runs on the main actor.

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct LarkUnreadTests {
     private func chat(_ id: String, unread: Int = 0, marked: Bool = false) -> LarkConversation {

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The inbox with several managers (#1850): two managers' items with one id are two items (`InboxItem.key`), a bulk
 /// filing where one manager fails keeps the others' filed and puts back only the failed one's (the toast says how many

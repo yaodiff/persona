@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct NewChatDestinationTests {
     private func workspace(source: String) -> HostWorkspace {

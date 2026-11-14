@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The app's side of the in-app tunnel (docs/operations/network.md「Connecting to hub through an in-app tunnel」): only a hub with an extension that
 /// contributes a tunnel, switched on, has one; its name titles the tunnel and its settings say where it goes.

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Persona in a recorded meeting (#2981; contract docs/assistant/meeting-minutes.md「Attending a meeting」, the phone's side
 /// docs/apple/recording.md「Persona in meetings」): what an upload carries, the live log's rules, sending it, asking by a

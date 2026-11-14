@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Claude Code's newer tools and other servers' MCP tools read as words in the chat, never as their raw names and a
 /// JSON dump (#2986): verbs and subjects for the current tool set, "<Server> · <Tool>" for MCP tools, a subject picked

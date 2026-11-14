@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The same component renderer serves extension pages and assistant cards; only their control transport differs.
 @MainActor

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The To-dos page's status sections (docs/assistant/todo-status-sop.md, #3206): the same cases as
 /// web/src/lib/todo-triage.test.ts, so the clients cannot drift.

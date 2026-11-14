@@ -28,15 +28,30 @@ import (
 // its row names the parent's current transcript in parent_agent_id while both are listed (linkSideSessions), and stays a
 // session of its own. An entry without that id, or whose parent is archived or not in the index, links nothing.
 
-// claudeDesktopDirs are the desktop apps' data directories under home (a variable: tests use their own). Only macOS's
-// layout is known.
-var claudeDesktopDirs = func(home string) []string {
-	if runtime.GOOS != "darwin" {
+// claudeDesktopDirs are the desktop apps' data directories under home (a variable: tests use their own).
+var claudeDesktopDirs = func(home string) []string { return desktopDataDirs(runtime.GOOS, home) }
+
+// desktopDataDirs are the desktop apps' data directories under home on goos: macOS's Application Support, Windows'
+// local app data (measured 2026-11-15: the Store build, Claude 3.6556, keeps its index in %LOCALAPPDATA%\Claude-3p, not
+// in its package's folder). Another system's layout is not known: none.
+func desktopDataDirs(goos, home string) []string {
+	var base string
+	switch goos {
+	case "darwin":
+		base = filepath.Join(home, "Library", "Application Support")
+	case "windows":
+		base = filepath.Join(home, "AppData", "Local")
+	default:
 		return nil
 	}
-	base := filepath.Join(home, "Library", "Application Support")
 	return []string{filepath.Join(base, "Claude"), filepath.Join(base, "Claude-3p")}
 }
+
+// claudeDesktopOpens: the desktop app here opens a session at its link in the background (/usr/bin/open -g), so a
+// message to a session nothing runs and a new session can go to the app (claudedesktop_open.go, claudedesktop_new.go).
+// Only macOS: on Windows the index is read for the list alone, and such a send is handled as before. A variable: tests
+// model the Mac's app on any system.
+var claudeDesktopOpens = runtime.GOOS == "darwin"
 
 type claudeDesktopEntry struct {
 	transcript string   // cliSessionId

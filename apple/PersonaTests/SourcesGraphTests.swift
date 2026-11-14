@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Inbox Sources' relationship view (#5741): the graph as the manager answers it, grouped by extension, filtered, and the
 /// picked source's details; the pages' row that opens it, which only they may use.

@@ -31,6 +31,8 @@ const prefix = "inherited-report: "
 type Report struct {
 	// FDs are its descriptors past stderr and what each is: socket, pipe, file or other.
 	FDs map[int]string `json:"fds"`
+	// SystemSockets are its AF_SYSTEM kernel control sockets (macOS).
+	SystemSockets []int `json:"system_sockets,omitempty"`
 	// ListenEnv are its LISTEN_* variables, as NAME=value.
 	ListenEnv []string `json:"listen_env"`
 }
@@ -66,6 +68,9 @@ func Describe() Report {
 		switch uint32(st.Mode) & syscall.S_IFMT {
 		case syscall.S_IFSOCK:
 			r.FDs[fd] = "socket"
+			if isSystemSocket(fd) {
+				r.SystemSockets = append(r.SystemSockets, fd)
+			}
 		case syscall.S_IFIFO:
 			r.FDs[fd] = "pipe"
 		case syscall.S_IFREG:
@@ -74,6 +79,7 @@ func Describe() Report {
 			r.FDs[fd] = "other"
 		}
 	}
+	slices.Sort(r.SystemSockets)
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "LISTEN_") {
 			r.ListenEnv = append(r.ListenEnv, kv)

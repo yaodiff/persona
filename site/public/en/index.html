@@ -689,7 +689,7 @@ html:not(.js) .sw::after,.ext.in .sw::after{transform:translateX(16px)}
       <h3>Set up your own</h3>
       <ol class="steps">
         <li><b>Install the hub on an always-on machine</b><span>Linux and Mac both work; paste this one line. On a Mac, install Docker Desktop or OrbStack first.</span>
-          <div class="cmd"><span class="line"><span class="pr">$ </span><span id="cmd-text">curl -fsSL https://personaside.com/install.sh | sh -s -- --hub</span></span>
+          <div class="cmd"><span class="line"><span class="pr">$ </span><span id="cmd-text">curl -fsSL https://github.com/nwverse/persona/releases/latest/download/install.sh | sh -s -- --hub</span></span>
             <button class="copy" id="copy" type="button" aria-label="Copy install command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg></button>
           </div></li>
         <li><b>Pair your phone with a QR code</b><span>When installation finishes, the terminal shows a QR code. Scan it with your iPhone camera to connect. The code is valid for 10 minutes and can be used only once. If it expires, run <code>personad hub pair</code> on the hub machine for a new one, or paste the command above again.</span></li>

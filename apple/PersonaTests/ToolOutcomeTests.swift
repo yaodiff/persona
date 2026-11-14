@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A tool result's `outcome` (docs/protocol/protocol.md "Tool outcomes", #4303): read whole, in part or not at all
 /// without dropping the item, and only a call whose run failed is drawn as a failure.

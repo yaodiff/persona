@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// A small tag after a chat's name: External, Bot, Public, Meeting…
 struct LarkNameTag: View {

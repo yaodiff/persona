@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The main conversation's Compact Context / New Main Chat (#1762): what the chat shows for a compaction, the divider's words, and
 /// the session's `compaction` from the hub.

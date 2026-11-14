@@ -3,6 +3,7 @@ import Observation
 #if canImport(UIKit)
 import UIKit
 #endif
+import PersonaWire
 
 /// The hub's side of a recording (docs/protocol/protocol.md「Recording sync」, #3235): what `PUT /api/v1/recordings/{id}` takes.
 /// Text only: the audio never leaves the device.

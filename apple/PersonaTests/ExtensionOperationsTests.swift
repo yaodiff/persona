@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Installs, upgrades and removals in steps (docs/protocol/protocol.md「Extension install, upgrade and uninstall progress」, #3307): what the hub
 /// pushes decodes (unknown states and steps kept), a hub with `extension_operations` previews in the background, waits

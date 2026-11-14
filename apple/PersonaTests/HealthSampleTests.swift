@@ -2,6 +2,7 @@ import Foundation
 import HealthKit
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// `phone_health_write_sample` saves exactly what its confirmation showed: one sample, read and checked from the
 /// arguments before anything is asked (HealthTool.swift `HealthSample`).

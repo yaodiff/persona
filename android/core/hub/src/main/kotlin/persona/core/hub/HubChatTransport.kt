@@ -28,10 +28,12 @@ class HubChatTransport internal constructor(
     private val newOpId: () -> String = { UUID.randomUUID().toString() },
     /** How long an answer cut off by the connection keeps being retried with the same op id. */
     private val resolveRetryMillis: Long = RESOLVE_RETRY_MILLIS,
+    private val hierarchy: () -> Boolean = { false },
 ) : ChatTransport {
     constructor(connection: OkHttpHubConnection) : this(
         { path, method, body, headers -> connection.request(path, method, body, headers) },
         { timeout -> withTimeoutOrNull(timeout) { connection.state.first { it == ConnectionState.Online } } != null },
+        hierarchy = { "sessions_hierarchy" in connection.serverFeatures.value },
     )
 
     /** Fixed origins are only available to tests in this module. */
@@ -67,6 +69,10 @@ class HubChatTransport internal constructor(
             addQueryParameter("summary", if (complete) "0" else "1")
             addQueryParameter("limit", if (complete) "200" else "50")
             if (counts) addQueryParameter("counts", "1")
+            if (hierarchy()) {
+                if (filter.parentSessionId != null) addQueryParameter("parent_session_id", filter.parentSessionId)
+                else if (filter.roots && !filter.requiresCompleteMembership) addQueryParameter("roots", "1")
+            }
             filter.state?.let { addQueryParameter("state", it) }
             filter.machineId?.let { addQueryParameter("machine_id", it) }
             filter.project?.let { addQueryParameter("project", it) }

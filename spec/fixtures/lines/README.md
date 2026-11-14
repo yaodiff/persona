@@ -191,7 +191,7 @@ parts += ['struct RebuildTests {\n' + between('apple/PersonaTests/RebuildTests.s
 parts += ['enum ToolPresentation { static func symbol(_ name: String) -> String { "" } }\n']
 (tmp / 'Extracted.swift').write_text('\n'.join(parts))
 subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '6', '-module-cache-path', str(tmp / 'module-cache'), '-default-isolation', 'MainActor', '-enable-bare-slash-regex', '-disable-sandbox',
-    'apple/Shared/JSONValue.swift', 'apple/Shared/TextMemo.swift', 'apple/Shared/ChatStore.swift',
+    'apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift', 'apple/Shared/TextMemo.swift', 'apple/Shared/ChatStore.swift',
     str(tmp / 'Extracted.swift'), str(tmp / 'Runner.swift'), '-o', str(tmp / 'check')],
     check=True, timeout=120)
 

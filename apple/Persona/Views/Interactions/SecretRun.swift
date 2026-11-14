@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // The password card's model (`SecretRun`, `Interaction.isSecretRun`: apple/Shared/InteractionText.swift). The Agent never
 // sees the password; it gets back the exit codes and the redacted output.

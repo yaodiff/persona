@@ -8,6 +8,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.InteractionCenter
+import persona.core.contracts.GroupKeys
 import persona.core.contracts.api.PairingService
 import persona.core.contracts.api.SessionsRepository
 import persona.platform.notify.FleetFeed
@@ -50,7 +51,11 @@ class SurfacesRuntime @Inject constructor(
                 }
         }
         scope.launch {
-            combine(sessions.sessions, fleet.paired) { list, paired -> if (paired) RecentAgents.pick(list) else emptyList() }
+            combine(sessions.sessions, fleet.paired) { list, paired ->
+                if (paired) list.groupBy { GroupKeys.namespaceOf(it.machineId) }.values.flatMap { rows ->
+                    RecentAgents.pick(rows, sessions.supportsFeature(rows.first().machineId, "sessions_hierarchy"))
+                }.let { RecentAgents.pick(it, hierarchy = true) } else emptyList()
+            }
                 .distinctUntilChanged { old, new -> old.map(::label) == new.map(::label) }
                 .collect { ShortcutPublisher.publishRecent(context, it) }
         }

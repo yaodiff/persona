@@ -275,6 +275,38 @@ func TestTheOldWayServesTheRest(t *testing.T) {
 	}
 }
 
+// Where the app does not open its links in the background (Windows: claudeDesktopOpens false), its index is read for
+// the list alone: a send to a session of its sidebar opens nothing and is handled as before the index was read (a
+// stopped agent's refusal), and the app's launcher is not offered.
+func TestWithoutABackgroundOpenTheIndexIsForTheListAlone(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	first, _ := useDesktopDirs(t)
+	claudeDesktopOpens = false
+	fakeClaudeOnPath(t)
+	shellLaunchers(t)
+	bgTranscript(t, home, home, sidA, "plan")
+	writeDesktopEntry(t, first, desktopLocal, sidA, false, nil, "")
+	if readClaudeDesktopIndex(home).about[sidA].local == "" {
+		t.Fatal("the index was not read")
+	}
+	links := recordDesktopLinks(t, nil, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	f.reset()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := waitSend(t, sendWithin(ctx, n, sidA, "go on"))
+	if len(links) != 0 {
+		t.Fatalf("%d links opened", len(links))
+	}
+	if code, _ := refusalOf(t, err); code != agentStopped {
+		t.Fatalf("send: %v", err)
+	}
+	if _, added := n.withDesktopLauncher(nil); added {
+		t.Fatal("the app's launcher offered")
+	}
+}
+
 // The index keeps an unarchived session's local id, only in the app's own form (it goes into a link).
 func TestTheIndexKeepsTheAppsOwnID(t *testing.T) {
 	first, third := useDesktopDirs(t)

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // An extension's sign-in as the hub shows it (docs/extensions/extensions.md「Sign-in」, #4507), here for the push that carries
 // it (`extension_auth`, LiveConnection); the page and the store are the app's (Persona/Views/Settings/ExtensionAuth.swift).

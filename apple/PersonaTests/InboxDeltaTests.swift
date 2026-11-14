@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A delta of the inbox list (docs/protocol/protocol.md "Inbox delta", #4740) applied to the list held gives the whole
 /// list the hub has now, in its order.

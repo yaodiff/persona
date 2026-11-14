@@ -340,7 +340,7 @@ class PersonaOnlyTests(unittest.TestCase):
         launch = source("PersonaUITests/UITestStyle.swift")
         self.assertEqual(len(re.findall(r"\bfunc launchPersona\(\)", launch)), 1)
         self.assertNotRegex(launch, r"func launchPersona\(\)\s*\{\s*launchPersona\(\)")
-        wire = source("Shared/Generated/ExtensionWire.swift")
+        wire = source("Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift")
         look = re.search(r"enum ExtensionBuiltinLook\s*\{([^}]+)\}", wire).group(1)
         names = re.findall(r"static let (\w+)\s*=", look)
         self.assertEqual(len(names), len(set(names)))

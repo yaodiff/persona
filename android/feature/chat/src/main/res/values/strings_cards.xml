@@ -7,13 +7,18 @@
         <item quantity="one">Checked %1$d place</item>
         <item quantity="other">Checked %1$d places</item>
     </plurals>
-    <plurals name="chat_assistant_dispatched">
-        <item quantity="one">Dispatched %1$d task</item>
-        <item quantity="other">Dispatched %1$d tasks</item>
-    </plurals>
-    <string name="chat_assistant_dispatched_one">Dispatched: %1$s</string>
-    <string name="chat_assistant_dispatch_open">Open</string>
-    <string name="chat_assistant_dispatch_open_line">· %1$s</string>
+    <!-- A hand-off card (#5110): how the Agent came to the task, and when it last moved. New reuses chat_new_agent_started. -->
+    <string name="chat_handoff_wake_active">Already active</string>
+    <string name="chat_handoff_wake_resumed">Resumed</string>
+    <string name="chat_handoff_last_active">last active %1$s</string>
+    <string name="chat_handoff_active_now">last active just now</string>
+    <string name="chat_handoff_not_active">no activity yet</string>
+    <string name="chat_handoff_not_started">Didn\'t start</string>
+    <string name="chat_handoff_gone">This task no longer exists</string>
+    <string name="chat_handoff_closed">Closed before an Agent started</string>
+    <string name="chat_handoff_minutes_ago">%1$d min. ago</string>
+    <string name="chat_handoff_hours_ago">%1$d hr ago</string>
+    <string name="chat_handoff_days_ago">%1$d d ago</string>
     <!-- #4314: a background round of the main conversation folded into one line. -->
     <string name="chat_background_round">%1$s · Reported from the background</string>
     <string name="chat_background_round_live">%1$s · Working in the background…</string>

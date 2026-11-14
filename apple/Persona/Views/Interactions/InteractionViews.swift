@@ -1,6 +1,7 @@
 import BeautifulUI
 import MarkdownUI
 import SwiftUI
+import PersonaWire
 
 extension InteractionKind {
     var title: String {

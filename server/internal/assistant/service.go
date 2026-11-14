@@ -275,6 +275,7 @@ func New(o Options) *Service {
 	s.northStarRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
+	s.dispatchPolicyRoutes() // dispatch_policy_routes.go
 	s.directionTreeRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()

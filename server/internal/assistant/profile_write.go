@@ -50,6 +50,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("task_workspace_preference must be prefer-existing or prefer-new"))
 		return
 	}
+	if in.DispatchPolicy != nil && len(in.DispatchPolicy.Rules) > 0 {
+		if err := in.DispatchPolicy.validate(true, time.Now().UTC()); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	before := s.settings(ctx)
 	machine := before.MachineID
 	if in.MachineID != "" {
@@ -241,6 +247,14 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode
+		}
+		if in.DispatchPolicy != nil {
+			// A non-empty policy was validated above before any other change; empty rules clear it.
+			if len(in.DispatchPolicy.Rules) == 0 {
+				v.DispatchPolicy = nil
+			} else {
+				v.DispatchPolicy = in.DispatchPolicy
+			}
 		}
 		return nil
 	}); err != nil {

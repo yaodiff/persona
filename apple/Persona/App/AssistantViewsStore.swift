@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// A conversation belongs to its paired hub group, not to every hub with the same opaque conversation id.
 nonisolated struct AssistantViewScope: Hashable, Sendable {

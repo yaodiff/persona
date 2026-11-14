@@ -387,7 +387,7 @@ func (n *Node) readyForFirstPrompt(ctx context.Context, pane, prompt string, dra
 }
 
 // promptedSince: the session's transcript has a message to the agent from since on (a second earlier, for the
-// transcript's own clock rounding).
+// transcript's own clock rounding), as written now: a held first message that just went in counts (metaNow).
 func (n *Node) promptedSince(id string, since time.Time) bool {
 	p := n.transcriptPath(id)
 	if p == "" {
@@ -397,7 +397,7 @@ func (n *Node) promptedSince(id string, since time.Time) bool {
 	if err != nil {
 		return false
 	}
-	at := n.meta(p, st).lastPromptAt
+	at := n.metaNow(p, st).lastPromptAt
 	return !at.IsZero() && !at.Before(since.Add(-time.Second))
 }
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Repository browsing keeps one compact line per Agent, without reply previews.
 nonisolated enum WorkspaceList {

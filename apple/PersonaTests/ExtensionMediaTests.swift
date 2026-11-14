@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// UI version 6's pictures on iOS (#827, docs/extensions/extensions.md "Pictures through the hub"): the device's
 /// credentials go only to the hub's image route signed for this page's extension, a picture loads through the page,

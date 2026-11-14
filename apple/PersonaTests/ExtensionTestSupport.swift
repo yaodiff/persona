@@ -1,5 +1,6 @@
 import Foundation
 @testable import Persona
+import PersonaWire
 
 /// A component's own fields, to look at in the tests.
 extension ExtensionComponent {

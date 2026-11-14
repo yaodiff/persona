@@ -231,7 +231,7 @@ internal class AgentsViewModel(
         val sessions = ops.project(source)
         val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes,
             grouping = resolvedGrouping(localPrefs.grouping, todosSupported))
-        val rows = sessions.map { it.listSession(prefs) }
+        val rows = sessions.map { it.listSession(prefs).copy(hierarchyKnown = repository.supportsFeature(it.machineId, "sessions_hierarchy")) }
         // A partial machine snapshot must not hide sessions in machine grouping.
         val knownMachines = machines + sessions.map { it.machineId }.distinct().filter { id -> machines.none { it.id == id } }
             .map { Machine(it) } // named by the list as not updated yet (AgentsScreen.kt)
@@ -481,7 +481,9 @@ internal class AgentsViewModel(
         settings: AgentListSettings, ops: AgentOperationsSnapshot): Map<String?, Int> {
         // One group (no suffixed ids anywhere): no group chips, nothing to count.
         if (machines.none { GroupKeys.namespaceOf(it.id) != null } && all.none { GroupKeys.namespaceOf(it.machineId) != null }) return emptyMap()
-        val rows = ops.project(all).map { it.listSession(prefs) }
+        val rows = ops.project(all).map { session ->
+            session.listSession(prefs).copy(hierarchyKnown = repository.supportsFeature(session.machineId, "sessions_hierarchy"))
+        }
         return scopedAgentList(rows, machines, prefs, settings.copy(machineFilter = "", kept = emptySet()))
             .groups.flatMap { it.rows }.filterNot { it.isNestedSubtask }.distinctBy { it.id }
             .groupingBy { GroupKeys.namespaceOf(it.session.machineId) }.eachCount()

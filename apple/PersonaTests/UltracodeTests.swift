@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Claude Code's ultracode switch on iOS / Mac / watch (#1307; server #3427, docs/protocol/protocol.md "Claude Code
 /// ultracode"): what the session says (older hubs included), what goes to the hub, where the switch shows, how it is

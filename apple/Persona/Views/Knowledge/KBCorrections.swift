@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // What the user corrects on an entry by hand (docs/assistant/knowledge.md "Corrections, locks and unlinking"), as the
 // web's entry page does (`ConfirmedFacts.tsx`, `Relationships.tsx`, `lib/kb-relationships.ts`): the confirmed facts

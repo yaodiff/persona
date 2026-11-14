@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// Reads the phone's steps, sleep and weight for the health trends (#3272). The values come from the same HealthKit
 /// queries `phone_health_summary` answers with (`HealthTool.daily`); a metric that fails or has no data is left out,

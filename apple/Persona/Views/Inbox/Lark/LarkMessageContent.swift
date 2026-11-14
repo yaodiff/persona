@@ -1,6 +1,7 @@
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// What a message renderer needs from the chat around it.
 struct LarkRenderContext {

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct EngineSelectionTests {
     private func machine(_ extra: String = "") throws -> Machine {

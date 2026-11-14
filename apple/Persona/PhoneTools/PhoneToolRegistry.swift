@@ -6,6 +6,7 @@ import Foundation
 import HealthKit
 import Photos
 import UserNotifications
+import PersonaWire
 
 // MARK: - Authorization
 

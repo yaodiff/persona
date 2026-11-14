@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Pages of long sessions come with the agent's work folded (`Item.fold`, docs/protocol/protocol.md「Folded work」): the work
 /// line counts what a fold stands for, a fold replaces the steps it covers, and opening it puts the steps back.

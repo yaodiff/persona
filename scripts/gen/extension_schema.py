@@ -5,7 +5,7 @@
     python3 scripts/gen/extension_schema.py --check   exit 1 when a generated file differs from the schema's
 
 The schemas are the one truth of the extension manifest, the process protocol and views; this turns them into Go
-(sdk/go/wire), TypeScript (sdk/ts/src/wire.ts and the web's copy), Swift (apple/Shared/Generated) and Kotlin
+(sdk/go/wire), TypeScript (sdk/ts/src/wire.ts and the web's copy), Swift (apple/Packages/PersonaWire) and Kotlin
 (android/core/contracts). Only the subset described in schema/extension/README.md is understood; anything else stops
 the generator rather than being guessed at. Standard library only.
 """
@@ -33,7 +33,7 @@ GO_OUT = ROOT / "sdk/go/wire/wire_gen.go"
 TS_SDK_OUT = ROOT / "sdk/ts/src/wire.ts"
 TS_OUTS = [TS_SDK_OUT, ROOT / "web/src/lib/extension-wire.ts"]
 SIDES = ("plugin",)
-SWIFT_OUT = ROOT / "apple/Shared/Generated/ExtensionWire.swift"
+SWIFT_OUT = ROOT / "apple/Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift"
 KOTLIN_OUT = ROOT / "android/core/contracts/src/main/kotlin/persona/core/contracts/generated/ExtensionWire.kt"
 # The schemas themselves, next to the Go types: go:embed cannot reach outside the module, and wire.Validate (what the
 # hub and extensions' tests check views and handshakes with) reads them.
@@ -756,21 +756,21 @@ def gen_swift(defs: dict[str, Def]) -> str:
     def struct(d: Def) -> list[str]:
         name = swift_name(d.name)
         lines = comment("/// ", d.doc)
-        lines.append(f"nonisolated struct {name}: Codable, Hashable, Sendable {{")
+        lines.append(f"public nonisolated struct {name}: Codable, Hashable, Sendable {{")
         for f in d.fields:
             lines += comment("    /// ", f.doc)
             typ = stype(f.type) + ("" if f.required else "?")
-            lines.append(f"    var {swift_ident(lower_camel(f.name))}: {typ}")
+            lines.append(f"    public var {swift_ident(lower_camel(f.name))}: {typ}")
         if d.extra:
             lines += ["    /// Extra keys stay at this object's level on the wire; declared fields always win.",
-                      "    var additionalProperties: [String: JSONValue]"]
+                      "    public var additionalProperties: [String: JSONValue]"]
         if d.fields:
             lines.append("")
             params = ", ".join(f"{swift_ident(lower_camel(f.name))}: {stype(f.type)}"
                                + (f" = {zero(f.type)}" if f.required else "? = nil") for f in d.fields)
             if d.extra:
                 params += ", additionalProperties: [String: JSONValue] = [:]"
-            lines.append(f"    init({params}) {{")
+            lines.append(f"    public init({params}) {{")
             for f in d.fields:
                 n = lower_camel(f.name)
                 lines.append(f"        self.{n} = {swift_ident(n)}")
@@ -780,7 +780,7 @@ def gen_swift(defs: dict[str, Def]) -> str:
             for f in d.fields:
                 n = lower_camel(f.name)
                 lines.append(f"        case {swift_ident(n)}" + (f' = "{f.name}"' if n != f.name else ""))
-            lines += ["    }", "", "    init(from decoder: Decoder) throws {"]
+            lines += ["    }", "", "    public init(from decoder: Decoder) throws {"]
             if d.extra:
                 lines.append("        let raw = try decoder.singleValueContainer().decode([String: JSONValue].self)")
             else:
@@ -808,7 +808,7 @@ def gen_swift(defs: dict[str, Def]) -> str:
                           "        additionalProperties = raw.filter { !known.contains($0.key) }"]
             lines.append("    }")
             if d.extra:
-                lines += ["", "    func encode(to encoder: Encoder) throws {",
+                lines += ["", "    public func encode(to encoder: Encoder) throws {",
                           f"        let known: Set<String> = [{keys}]",
                           "        var fields = additionalProperties.filter { !known.contains($0.key) }"]
                 for f in d.fields:
@@ -821,51 +821,51 @@ def gen_swift(defs: dict[str, Def]) -> str:
                 lines += ["        var container = encoder.singleValueContainer()",
                           "        try container.encode(fields)", "    }"]
         elif d.extra:
-            lines += ["", "    init(additionalProperties: [String: JSONValue] = [:]) {",
+            lines += ["", "    public init(additionalProperties: [String: JSONValue] = [:]) {",
                       "        self.additionalProperties = additionalProperties", "    }", "",
-                      "    init(from decoder: Decoder) throws {",
+                      "    public init(from decoder: Decoder) throws {",
                       "        additionalProperties = try decoder.singleValueContainer().decode([String: JSONValue].self)", "    }", "",
-                      "    func encode(to encoder: Encoder) throws {",
+                      "    public func encode(to encoder: Encoder) throws {",
                       "        var container = encoder.singleValueContainer()",
                       "        try container.encode(additionalProperties)", "    }"]
         else:
-            lines += ["    init() {}", "", "    init(from decoder: Decoder) throws {}", "",
-                      "    func encode(to encoder: Encoder) throws {}"]
+            lines += ["    public init() {}", "", "    public init(from decoder: Decoder) throws {}", "",
+                      "    public func encode(to encoder: Encoder) throws {}"]
         lines += ["}", ""]
         return lines
 
     for d in defs.values():
         if d.kind == "enum":
             out += comment("/// ", d.doc or f"Values of {d.name}.")
-            out.append(f"nonisolated enum {swift_name(d.name)} {{")
+            out.append(f"public nonisolated enum {swift_name(d.name)} {{")
             for v in d.values:
-                out.append(f'    static let {swift_ident(lower_camel(v))} = "{v}"')
-            out.append(f"    static let all = [{', '.join(json.dumps(v) for v in d.values)}]")
+                out.append(f'    public static let {swift_ident(lower_camel(v))} = "{v}"')
+            out.append(f"    public static let all = [{', '.join(json.dumps(v) for v in d.values)}]")
             out += ["}", ""]
         elif d.kind == "any":
-            out += comment("/// ", d.doc) + [f"typealias {swift_name(d.name)} = JSONValue", ""]
+            out += comment("/// ", d.doc) + [f"public typealias {swift_name(d.name)} = JSONValue", ""]
         elif d.kind == "struct":
             out += struct(d)
         elif d.kind == "union":
             name, disc = swift_name(d.name), d.discriminator
             out += comment("/// ", d.doc)
-            out.append(f"nonisolated enum {name}: Codable, Hashable, Sendable {{")
+            out.append(f"public nonisolated enum {name}: Codable, Hashable, Sendable {{")
             for v in d.variants:
                 out.append(f"    case {swift_ident(lower_camel(defs[v].tag))}({swift_name(v)})")
             out += [f"    /// {unknown_doc(d)}",
                     f"    case unknown({disc}: String)", "",
-                    f"    static let {lower_camel(plural(disc))} = "
+                    f"    public static let {lower_camel(plural(disc))} = "
                     f"[{', '.join(json.dumps(defs[v].tag) for v in d.variants)}]", ""]
             if any(defs[v].since for v in d.variants):
                 out += [f"    /// The UI version that brought each {disc}.",
-                        "    static let since: [String: Int] = ["
+                        "    public static let since: [String: Int] = ["
                         + ", ".join(f"{json.dumps(defs[v].tag)}: {defs[v].since}" for v in d.variants) + "]", ""]
             out += ["    private enum TagKey: String, CodingKey {", f"        case tag = \"{disc}\"", "    }", "",
-                    f"    var {swift_ident(disc)}: String {{", "        switch self {"]
+                    f"    public var {swift_ident(disc)}: String {{", "        switch self {"]
             for v in d.variants:
                 out.append(f"        case .{swift_ident(lower_camel(defs[v].tag))}: {json.dumps(defs[v].tag)}")
             out += [f"        case .unknown(let t): t", "        }", "    }", "",
-                    "    init(from decoder: Decoder) throws {",
+                    "    public init(from decoder: Decoder) throws {",
                     "        let t = (try? decoder.container(keyedBy: TagKey.self).decode(String.self, forKey: .tag)) "
                     "?? \"\"",
                     "        switch t {"]
@@ -873,7 +873,7 @@ def gen_swift(defs: dict[str, Def]) -> str:
                 out.append(f"        case {json.dumps(defs[v].tag)}: self = (try? {swift_name(v)}(from: decoder))"
                            f".map {{ .{swift_ident(lower_camel(defs[v].tag))}($0) }} ?? .unknown({disc}: t)")
             out += [f"        default: self = .unknown({disc}: t)", "        }", "    }", "",
-                    "    func encode(to encoder: Encoder) throws {", "        switch self {"]
+                    "    public func encode(to encoder: Encoder) throws {", "        switch self {"]
             for v in d.variants:
                 out.append(f"        case .{swift_ident(lower_camel(defs[v].tag))}(let v): try v.encode(to: encoder)")
             out += ["        case .unknown: break", "        }",
@@ -1144,7 +1144,7 @@ def outputs(defs: dict[str, Def]) -> dict[Path, str]:
     schema_docs = {f: json.loads((SCHEMA_DIR / f).read_text())
                    for f in ("stream.schema.json", "view.schema.json", "protocol.schema.json")}
     schema_json = json.dumps(schema_docs, ensure_ascii=True, separators=(",", ":"))
-    swift_schemas = '\nnonisolated enum ExtensionWireSchemas {\n    static let json = ###"' + schema_json + '"###\n}\n'
+    swift_schemas = '\npublic nonisolated enum ExtensionWireSchemas {\n    public static let json = ###"' + schema_json + '"###\n}\n'
     out = {GO_OUT: gofmt(gen_go(defs, calls)), SWIFT_OUT: gen_swift(apps) + swift_schemas, KOTLIN_OUT: gen_kotlin(apps)}
     for p in TS_OUTS:
         out[p] = ts if p == TS_SDK_OUT else ts_apps

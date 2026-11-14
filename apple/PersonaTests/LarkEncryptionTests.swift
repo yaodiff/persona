@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct LarkEncryptionTests {
     private func message(_ state: String = "decrypted") throws -> LarkMessage {

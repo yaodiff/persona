@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- What a finished turn cost, under its reply (#5470, the web's chat-replybar). -->
+    <string name="chat_reply_worth">Worth %1$s</string>
+    <string name="chat_reply_tokens">%1$s tokens</string>
+    <string name="chat_reply_approx">≈ %1$s</string>
+    <string name="chat_reply_details">Request details</string>
+    <string name="chat_reply_value">Token value this turn: %1$s</string>
+    <string name="chat_reply_by_model">By model:</string>
+    <string name="chat_reply_model_cost">· %1$s %2$s</string>
+    <string name="chat_reply_token_line">Tokens: %1$s total · input %2$s · output %3$s</string>
+    <string name="chat_reply_cache">Cache breakdown: read %1$s · write %2$s · hit rate %3$s</string>
+    <string name="chat_reply_cache_no_rate">Cache breakdown: read %1$s · write %2$s</string>
+    <string name="chat_reply_time">Time %1$s</string>
+    <string name="chat_reply_model">Model: %1$s</string>
+    <plurals name="chat_reply_models">
+        <item quantity="one">%1$d model</item>
+        <item quantity="other">%1$d models</item>
+    </plurals>
+    <string name="chat_reply_suggestion">Suggestion: %1$s</string>
+    <string name="chat_reply_low_cache">Cache hit rate is low; more context was billed again this turn</string>
+    <string name="chat_reply_no_cost">Cost unavailable for this turn; showing usage only</string>
+    <string name="chat_reply_persona_cost">About %1$s for this reply, estimated at list prices</string>
+    <string name="chat_reply_persona_title">Estimated cost of this reply</string>
+    <string name="chat_reply_dur_hours">%1$dh %2$dm</string>
+    <string name="chat_reply_dur_days">%1$dd %2$dh %3$dm</string>
+</resources>

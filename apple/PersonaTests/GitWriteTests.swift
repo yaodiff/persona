@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Git tab's writes (#7013): the requests the web's Git panel sends, what a tick box shows, when Push shows and
 /// what it asks for, one write at a time, and a refusal said in plain words with the node's own.

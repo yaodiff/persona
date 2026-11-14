@@ -343,6 +343,9 @@ internal fun ChatLineContent(
                 // only the block goes; a reply that said nothing else is not drawn at all
                 if (!hideCloseout || !onlyCloseout(textUpdates[it.id]?.text ?: it.text, cut = it.fullSize != null)) {
                     MessageContent(it, false, textUpdates[it.id], boxed = true, hideCloseout = hideCloseout)
+                    val usage = LocalReplyUsage.current[it.id]
+                    // A reply still streaming has no total yet (the web hides the bar while the turn is live).
+                    if (usage != null && textUpdates[it.id]?.streaming != true) ReplyUsageFooter(it, usage)
                 }
             }
             "thinking" -> if (!style.hidesThoughts()) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)
@@ -438,6 +441,10 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
         }
         is WorkItem.Tool -> {
             val call = step.call
+            persona.core.domain.lines.ChildSessionCards.session(call)?.let {
+                ChildSessionCard(it, assistant = style == ChatRenderStyle.Assistant)
+                return
+            }
             // A Workflow call whose run the session lists draws the run's card (#3435); otherwise the row it always was.
             if (call.name == "Workflow") LocalChatWorkflows.current?.let { workflows ->
                 call.use.item.toolUseId?.let(workflows.runs::get)?.let { run ->

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The watch reads live cards as text, retaining their creation positions and only newer view versions.
 nonisolated struct WatchAssistantFeed {

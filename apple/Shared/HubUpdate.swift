@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The hub's version and its updating itself (docs/operations/hub-update.md, GET /api/v1/hub/update and the `hub_update` event).
 nonisolated struct HubUpdateStatus: Codable, Equatable, Sendable {

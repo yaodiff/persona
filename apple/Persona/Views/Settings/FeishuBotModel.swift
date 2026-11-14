@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// GET / PUT /api/v1/bots/feishu (docs/extensions/bots.md): the Feishu bot the user talks to Persona through.
 nonisolated struct FeishuBotStatus: Codable, Hashable, Sendable {

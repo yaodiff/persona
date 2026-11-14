@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The subscription windows' pure part (docs/server/usage-windows.md), the same cases as the web's lib/usage-windows.test.ts.
 struct UsageWindowsTests {

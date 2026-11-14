@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 // Settings › Sent as You (#5278, docs/extensions/connectors.md "Sent as the user"): what Persona wrote in the user's name through the
 // connectors, newest first, from GET /api/v1/connectors/sent. The words and rules follow the web page (web/src/lib/sent.ts,

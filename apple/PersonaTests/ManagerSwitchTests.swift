@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The current assistant (docs/assistant/managers.md "Clients"): the assistant's routes name the manager picked in the
 /// sidebar's switcher, except one conversation's and the health space's, and an item's client names only its own manager,

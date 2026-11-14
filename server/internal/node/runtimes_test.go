@@ -34,6 +34,7 @@ type runtimeHub struct {
 	asked    []proto.Interaction
 	resolve  func(proto.Interaction) proto.Resolution
 	nodePeer *rpc.Peer
+	cancel   context.CancelFunc
 	// answer takes the other hub calls (mcp.tools, assistant.context…); handled false: an unexpected call.
 	answer func(method string, params json.RawMessage) (res any, err error, handled bool)
 }
@@ -90,7 +91,7 @@ func runtimeNodeTapped(t *testing.T, shared *RuntimeHost, tap io.Writer) (*Node,
 	n.peer.OnRequest = n.handle
 	peer := n.peer // served below: a test may give the node another connection later
 	hub := rpc.New("h", h2nW)
-	end := &runtimeHub{nodePeer: hub, resolve: func(proto.Interaction) proto.Resolution { return proto.Resolution{Dismiss: true} }}
+	end := &runtimeHub{nodePeer: hub, cancel: cancel, resolve: func(proto.Interaction) proto.Resolution { return proto.Resolution{Dismiss: true} }}
 	hub.OnEvent = func(event string, params json.RawMessage) {
 		end.mu.Lock()
 		defer end.mu.Unlock()
