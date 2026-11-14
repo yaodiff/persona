@@ -7,6 +7,8 @@ data class ChatPatch(
     val history: String?,
     val has_more: Boolean?,
     val loaded_once: Boolean,
+    val verified: Boolean,
+    val acked: ULong?,
     val ops: kotlin.collections.List<persona.core.rustcore.wire.ListOp>
 ) {
 
@@ -18,6 +20,8 @@ data class ChatPatch(
         TraitHelpers.serialize_option_str(this.history, serializer)
         TraitHelpers.serialize_option_bool(this.has_more, serializer)
         serializer.serialize_bool(this.loaded_once)
+        serializer.serialize_bool(this.verified)
+        TraitHelpers.serialize_option_u64(this.acked, serializer)
         TraitHelpers.serialize_vector_ListOp(this.ops, serializer)
         serializer.decrease_container_depth()
     }
@@ -38,9 +42,11 @@ data class ChatPatch(
             val history = TraitHelpers.deserialize_option_str(deserializer)
             val has_more = TraitHelpers.deserialize_option_bool(deserializer)
             val loaded_once = deserializer.deserialize_bool()
+            val verified = deserializer.deserialize_bool()
+            val acked = TraitHelpers.deserialize_option_u64(deserializer)
             val ops = TraitHelpers.deserialize_vector_ListOp(deserializer)
             deserializer.decrease_container_depth()
-            return ChatPatch(version, covered, history, has_more, loaded_once, ops)
+            return ChatPatch(version, covered, history, has_more, loaded_once, verified, acked, ops)
         }
 
         @Throws(com.novi.serde.DeserializationError::class)

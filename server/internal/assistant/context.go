@@ -190,7 +190,10 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	if e, err := s.kbGet(ctx); err == nil {
 		snap.KB = e.Prompt(6, 8)
 	}
-	snap.Following, snap.FollowingTotal = s.snapshotFollowing(ctx, loc)
+	snap.FollowingEnabled = s.inboxConfig(ctx).Agent.Enabled && s.inboxReady(ctx) == nil
+	if snap.FollowingEnabled {
+		snap.Following, snap.FollowingTotal = s.snapshotFollowing(ctx, loc)
+	}
 	snap.Followups, snap.FollowupsTotal, snap.Routines, snap.RoutinesTotal, snap.Missed, snap.MissedTotal = s.snapshotSchedule(ctx, loc, now)
 	wg.Wait()
 

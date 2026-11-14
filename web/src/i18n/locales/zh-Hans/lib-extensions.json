@@ -82,5 +82,15 @@
   "machine_missing": "{name}（找不到这台机器）",
   "launcher_missing": "{name}（找不到这个启动器）",
   "launchers_loading": "正在读启动器…",
-  "from_provider": "来自 {provider}"
+  "from_provider": "来自 {provider}",
+  "node_running_one": "在 {count} 台机器上运行",
+  "node_running_other": "在 {count} 台机器上运行",
+  "node_abnormal_count_one": "{count} 台机器异常",
+  "node_abnormal_count_other": "{count} 台机器异常",
+  "node_offline_count_one": "{count} 台机器离线",
+  "node_offline_count_other": "{count} 台机器离线",
+  "node_starting_one": "正在 {count} 台机器上启动",
+  "node_starting_other": "正在 {count} 台机器上启动",
+  "node_stopped_one": "{count} 台机器已停止",
+  "node_stopped_other": "{count} 台机器已停止"
 }

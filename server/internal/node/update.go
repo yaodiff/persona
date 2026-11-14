@@ -43,7 +43,7 @@ func (n *Node) handleUpdate(ctx context.Context, method string, params json.RawM
 			return nil, err
 		}
 		return n.updater.Commit(ctx, p.ID, func() error {
-			if updateWouldCut(AssistantsBusy(), n.sessionList(ctx, true)) {
+			if updateWouldCut(AssistantsBusy(), n.sessionList(ctx, true), n.starts.listed(nil)) {
 				return &rpc.Error{Code: proto.CodeNodeUpdateBusy, Message: "node_update_busy: Agent 仍在工作或等待操作，请稍后重试"}
 			}
 			return nil
@@ -68,8 +68,18 @@ func (n *Node) handleUpdate(ctx context.Context, method string, params json.RawM
 // updateWouldCut: the restart after a commit would interrupt work (nodeproto.NodeUpdateIdle). It execs in place once
 // ResidentReload.Prepare has stopped the idle headless conversations, so only a busy one (assistantsBusy) or a launch
 // still starting counts. Terminal Agents, their background tasks and subagents are other processes and go on.
-func updateWouldCut(assistantsBusy bool, sessions []proto.Session) bool {
-	return assistantsBusy || slices.ContainsFunc(sessions, func(s proto.Session) bool { return s.Starting })
+func updateWouldCut(assistantsBusy bool, sessions []proto.Session, starting ...[]proto.Session) bool {
+	if assistantsBusy || slices.ContainsFunc(sessions, func(s proto.Session) bool { return s.Starting }) {
+		return true
+	}
+	// A host-visible agent is filtered out of startLog.listed's rows, but its start is still active until readiness
+	// and the first prompt finish. Check those records separately so an update cannot cut that launch off (#7362).
+	for _, list := range starting {
+		if slices.ContainsFunc(list, func(s proto.Session) bool { return s.Starting }) {
+			return true
+		}
+	}
+	return false
 }
 
 // RPC writes each response in one Write. Observe the successful transport write,

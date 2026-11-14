@@ -56,12 +56,12 @@ describe("更多 in the sidebar", () => {
     const more = moreButton()!;
     expect(more.textContent).toContain("2");
     expect(more.getAttribute("aria-expanded")).toBe("false");
-    // the pages are still there, under the folded More (inert until it opens)
-    const kb = [...host.querySelectorAll("a")].find((a) => a.textContent?.includes("知识库"))!;
-    expect(kb.closest("[inert]")).not.toBeNull();
+    // the folded More holds its pages without drawing them (a folded group mounts no rows); opened, they are there
+    const kb = () => [...host.querySelectorAll("a")].find((a) => a.textContent?.includes("知识库"));
+    expect(kb()).toBeUndefined();
     act(() => more.click());
     expect(more.getAttribute("aria-expanded")).toBe("true");
-    expect(kb.closest("[inert]")).toBeNull();
+    expect(kb()!.closest("[inert]")).toBeNull();
     // Settings stays in the list
     expect(pageLinks()).toContain("设置");
   });

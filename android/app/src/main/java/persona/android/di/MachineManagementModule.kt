@@ -192,6 +192,7 @@ object MachineManagementModule {
             }
         // Source subscriptions (#2041): entry rows once the hub says they deliver.
         override val subscriptionsAvailable: Flow<Boolean> = features.map { "source_subscriptions" in it }.distinctUntilChanged()
+        override val inboxSourcesAvailable: Flow<Boolean> = features.map { "inbox_sources" in it }.distinctUntilChanged()
         override suspend fun subscriptionSummary() = api().subscriptionSummary()
         // A hub without the `extensions` feature (before #1844, or no hello yet) answers under /api/v1/plugins only;
         // a newer one under both.

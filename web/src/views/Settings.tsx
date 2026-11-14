@@ -11,6 +11,7 @@ import { splitDevices } from "../lib/devices";
 import { ago } from "../lib/format";
 import { install, useInstall, type InstallState } from "../lib/pwa";
 import { useStore } from "../lib/store";
+import { composing } from "../lib/send-history";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Menu, Spinner, toast, useMenu } from "../ui/atoms";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
@@ -24,6 +25,7 @@ import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-termina
 import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
 import { KnowledgeSelection } from "./settings/KnowledgeSelection";
+import { SavedPrompts } from "./settings/SavedPrompts";
 import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
@@ -38,6 +40,7 @@ import { TranslationSettings } from "./settings/TranslationSettings";
 import { Extensions } from "./settings/Extensions";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
 import { NotificationSettings } from "./settings/NotificationSettings";
+import { DesktopSettings } from "./settings/DesktopSettings";
 import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
@@ -145,19 +148,6 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const phone = useMedia(SHEET_QUERY);
   // list pages (channels / connectors / extensions) keep their list beside the open item from this width
   const twoCol = useMedia("(min-width: 900px)");
-  // Keep the connection pill (App.tsx) below the page header, including at larger text sizes.
-  const header = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const el = header.current;
-    const box = el?.closest("main");
-    if (!el || !box || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => box.style.setProperty("--page-header", `${el.offsetHeight}px`));
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      box.style.removeProperty("--page-header");
-    };
-  }, []);
   // The category (null: none named, the phone's list) and the purpose (model configuration) or extension ("Extensions") it has open.
   const [at, setAt] = useState(readSettingsLocation);
   // Back from a category opened from the list: the URL went back, the page follows it.
@@ -246,7 +236,14 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     history.replaceState(null, "", href({ name: "settings" }));
     setAt({ tab: null, sub: null, section: null });
   };
-  // Settings search: filters the sidebar categories, and jumps to a group inside a page (scroll + brief highlight).
+  // On a phone the top bar's Back steps out of an item's page (a connector, a channel, an extension) to where the page's
+  // own Back went, so that page draws none (audit item 64): its category's page, or, from a page inside an extension's
+  // or the market's, that page; from a category it goes to the list. The Lark bot's settings are a dialog over the
+  // Connectors list, not a page, so its address leaves the top bar going to the list.
+  const itemOpen = phone && !!sub && itemIsPage(tab) && !(tab === "connectors" && sub === "feishu-bot");
+  const up = itemOpen && sub ? itemParent(tab, sub) : null;
+  // Settings search: filters the sidebar categories, and jumps to a group or a setting's row inside a page (scroll +
+  // brief highlight).
   const [query, setQuery] = useState("");
   const search = searchSettings(query);
   // Inbox Sources' relationship view (#5741) takes the wide page while it is shown; the list keeps its width.
@@ -254,22 +251,45 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const [scrollAnchor, setScrollAnchor] = useState<string | null>(null);
   useEffect(() => {
     if (!scrollAnchor) return;
-    const el = scroller.current?.querySelector<HTMLElement>(`[data-settings-group="${scrollAnchor}"]`) ?? document.getElementById(scrollAnchor);
-    if (!el) {
-      setScrollAnchor(null);
-      return;
-    }
-    el.scrollIntoView({ block: "start" });
-    const card = el.querySelector<HTMLElement>(":scope > div") ?? el;
-    const prev = card.style.boxShadow;
-    card.style.boxShadow = "inset 0 0 0 2px var(--accent)";
-    const timer = setTimeout(() => {
-      card.style.boxShadow = prev;
-      setScrollAnchor(null);
-    }, 1200);
-    return () => {
+    const box = scroller.current;
+    const find = () => box?.querySelector<HTMLElement>(`[data-settings-group="${scrollAnchor}"], [data-settings-row="${scrollAnchor}"]`) ?? document.getElementById(scrollAnchor);
+    let card: HTMLElement | null = null;
+    let prev = "";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let observer: MutationObserver | undefined;
+    // a group's card is lit, a row itself; a row is brought to the middle, a group to the top
+    const show = (el: HTMLElement) => {
       clearTimeout(timer);
-      card.style.boxShadow = prev;
+      const row = el.hasAttribute("data-settings-row");
+      el.scrollIntoView({ block: row ? "center" : "start" });
+      card = row ? el : el.querySelector<HTMLElement>(":scope > div") ?? el;
+      prev = card.style.boxShadow;
+      card.style.boxShadow = "inset 0 0 0 2px var(--accent)";
+      timer = setTimeout(() => {
+        if (card) card.style.boxShadow = prev;
+        setScrollAnchor(null);
+      }, 1200);
+    };
+    const found = find();
+    if (found) show(found);
+    else if (box && typeof MutationObserver !== "undefined") {
+      // a page that reads what it shows first (Devices, hub) draws the group or row a moment later
+      observer = new MutationObserver(() => {
+        const el = find();
+        if (!el) return;
+        observer?.disconnect();
+        show(el);
+      });
+      observer.observe(box, { childList: true, subtree: true });
+      timer = setTimeout(() => {
+        observer?.disconnect();
+        setScrollAnchor(null);
+      }, 3000);
+    } else setScrollAnchor(null);
+    return () => {
+      observer?.disconnect();
+      clearTimeout(timer);
+      if (card) card.style.boxShadow = prev;
     };
   }, [scrollAnchor, tab]);
   const goGroup = (g: SearchGroup) => {
@@ -280,10 +300,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   };
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <header ref={header} className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
+      <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
         {phone && at.tab ? (
           <>
-            <IconButton icon="chevronLeft" label={t("settings.back")} onClick={toList} />
+            <IconButton icon="chevronLeft" label={up ? up.label : t("settings.back")} onClick={up ? () => pick(tab, up.sub) : toList} />
             <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{TAB_INFO[tab].label}</h1>
           </>
         ) : (
@@ -313,6 +333,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               )}
               {tab === "notifications" && <NotificationSettings />}
               {tab === "knowledge" && <KnowledgeSelection />}
+              {tab === "prompts" && <SavedPrompts />}
               {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} onGraph={setSourcesGraph} />}
               {tab === "models" && <>
                 <section id="settings-providers" className="scroll-mt-4">
@@ -327,14 +348,14 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "agents" && <AgentSections section={at.section} />}
               {tab === "channels" && (sub ? (twoCol ? (
                 <div className="flex gap-6">
-                  <div className="w-[300px] shrink-0"><ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
+                  <div className="w-[300px] shrink-0"><ChannelList openBeside={sub} onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
                   <div className="min-w-0 flex-1"><ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={(url) => {
                     const target = settingsTarget(url);
                     if (target && TABS.includes(target.tab as Tab)) pick(target.tab as Tab, target.sub);
                   }} /></div>
                 </div>
               ) : (
-                <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={(url) => {
+                <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} headerBack={phone} onSettings={(url) => {
                   const target = settingsTarget(url);
                   if (target && TABS.includes(target.tab as Tab)) pick(target.tab as Tab, target.sub);
                 }} />
@@ -343,19 +364,19 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               ))}
               {tab === "connectors" && (sub && sub !== SENT_SUB && sub !== "feishu-bot" && twoCol ? (
                 <div className="flex gap-6">
-                  <div className="w-[300px] shrink-0"><Connectors open={null} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} /></div>
+                  <div className="w-[300px] shrink-0"><Connectors open={null} openBeside={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} /></div>
                   <div className="min-w-0 flex-1"><Connectors open={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} /></div>
                 </div>
               ) : (
-                <Connectors open={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} />
+                <Connectors open={sub} headerBack={phone} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} />
               ))}
               {tab === "extensions" && (extensionsRoute(sub).kind === "extension" && twoCol ? (
                 <div className="flex gap-6">
-                  <div className="w-[300px] shrink-0"><Extensions open={null} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
+                  <div className="w-[300px] shrink-0"><Extensions open={null} openBeside={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
                   <div className="min-w-0 flex-1"><Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
                 </div>
               ) : (
-                <Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} />
+                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} />
               ))}
               {tab === "shortcuts" && <ShortcutSettings />}
               {tab === "devices" && <Devices />}
@@ -370,6 +391,19 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       </div>
     </div>
   );
+}
+
+/** Where the phone's top bar's Back goes from an item's page `sub` of `tab`, and its label: what the page's own Back did.
+ *  An extension's own page (one it draws) goes back to the extension, and a market's extension or the list of markets to
+ *  the catalog, unless the market's extension was opened as another assistant's upgrade (MarketItem's Back); any other
+ *  item's page goes to its category's page. */
+function itemParent(tab: Tab, sub: string): { sub: string | null; label: string } {
+  if (tab === "extensions") {
+    const r = extensionsRoute(sub);
+    if (r.kind === "page" || (r.kind === "item" && r.manager)) return { sub: routeSub({ kind: "extension", id: r.id, manager: r.manager }), label: t("settings-extensionview.back") };
+    if (r.kind === "item" || r.kind === "markets") return { sub: routeSub({ kind: "catalog" }), label: t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) };
+  }
+  return { sub: null, label: t("settings.back_to", { name: TAB_INFO[tab].label }) };
 }
 
 const AGENT_LABEL: Record<AgentTab, string> = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", omp: "omp" };
@@ -450,7 +484,26 @@ function SettingsNav({ tab, query, onQuery, search, shown, onPick, onGroup, cont
         <div className="text-[14px] font-semibold text-ink">{t("settings.title")}</div>
         <label className="mt-2 flex h-8 items-center gap-2 rounded-control bg-surface px-2.5 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="shrink-0 text-ink-3" />
-          <input value={query} onChange={(e) => onQuery(e.target.value)} placeholder={t("settings.search_placeholder_settings")} aria-label={t("settings.search_settings")} className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3" />
+          <input
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            // Esc clears what was typed; Enter opens the first result (not while an input method is composing, nor the Enter
+            // that confirms its text, which Safari sends with isComposing already false)
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && query) {
+                e.preventDefault();
+                e.stopPropagation();
+                onQuery("");
+              } else if (e.key === "Enter" && query && !composing(e.nativeEvent)) {
+                e.preventDefault();
+                if (tabs.length) onPick(tabs[0]);
+                else if (groups.length) onGroup(groups[0]);
+              }
+            }}
+            placeholder={t("settings.search_placeholder_settings")}
+            aria-label={t("settings.search_settings")}
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
+          />
           {query && <IconButton icon="x" label={t("settings.clear")} size={22} iconSize={12} onClick={() => onQuery("")} />}
         </label>
       </div>
@@ -459,7 +512,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, onPick, onGroup, cont
           <>
             {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
             {groups.length > 0 && <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-ink-3">{t("settings.search_in_page")}</div>}
-            {groups.map((g) => <GroupResult key={`${g.tab}/${g.anchor}`} g={g} onGroup={onGroup} />)}
+            {groups.map((g) => <GroupResult key={`${g.tab}/${g.anchor}/${g.group}`} g={g} onGroup={onGroup} />)}
             {none && <p className="px-3 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings.search_no_results")}</p>}
           </>
         ) : (
@@ -503,10 +556,11 @@ function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean;
   );
 }
 
+// a result wraps rather than cutting the setting's name ("Agents › Claude Code › Thinking effort" is longer than the sidebar)
 function GroupResult({ g, onGroup }: { g: SearchGroup; onGroup: (g: SearchGroup) => void }) {
   return (
     <button type="button" onClick={() => onGroup(g)} className="flex w-full items-center gap-1.5 rounded-[7px] px-3 py-1.5 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-hover hover:text-ink">
-      <span className="min-w-0 truncate">
+      <span className="min-w-0 break-words">
         <span className="font-medium text-ink">{TAB_INFO[g.tab].label}</span>
         <span className="mx-1 text-ink-3">›</span>
         <span>{g.group}</span>
@@ -551,7 +605,7 @@ function General({ onModel }: { onModel: () => void }) {
   return (
     <>
       <Group title={t("settings.appearance")} anchor="appearance">
-        <div className="flex gap-2 p-3">
+        <div className="flex gap-2 p-3" data-settings-row="theme">
           {themes.map((th) => (
             <button
               key={th.k}
@@ -572,12 +626,13 @@ function General({ onModel }: { onModel: () => void }) {
         <ExtensionThemePicker />
         <TextSizeRow />
         <LanguageRow />
-        <Row label={t("settings.reply_motion")} hint={t("settings.reply_motion_hint")}>
+        <Row label={t("settings.reply_motion")} hint={t("settings.reply_motion_hint")} wrapHint anchor="reply-motion">
           <Switch on={replyMotion} onChange={setReplyMotionEnabled} label={t("settings.reply_motion")} />
         </Row>
         <RecentChatsRow />
       </Group>
 
+      <DesktopSettings />
       <SidebarPagesGroup />
 
       <section id="settings-translation" className="scroll-mt-4">
@@ -619,13 +674,13 @@ function AgentPreferences() {
     <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
       <AgentOpenRow />
       <TerminalModeRow />
-      {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")}>
+      {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")} wrapHint>
         <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />
       </Row>}
-      <Row label={t("context.details")} hint={t("context.details_hint")}>
+      <Row label={t("context.details")} hint={t("context.details_hint")} wrapHint anchor="agent-details">
         <Switch on={agentDetails} onChange={setAgentDetails} label={t("context.details")} />
       </Row>
-      <Row label={t("context.as_used")} hint={t("context.as_used_hint")}>
+      <Row label={t("context.as_used")} hint={t("context.as_used_hint")} wrapHint anchor="context-as-used">
         <Switch on={contextAsUsed} onChange={setContextAsUsed} label={t("context.as_used")} />
       </Row>
     </Group>
@@ -647,12 +702,12 @@ function About() {
   const disconnect = useDisconnect();
   return (
     <Group title={t("settings.this_browser")} footer={t("settings.this_browser_footer")} anchor="this-browser">
-      <Row label={t("settings.hub_address")} mono>
+      <Row label={t("settings.hub_address")} mono anchor="hub-address">
         {location.host}
       </Row>
       {hubName && <Row label={t("settings.hub")}>{hubName}</Row>}
       {others.length > 0 && (
-        <Row label={t("settings.linked_hubs")} hint={t("settings.linked_hubs_hint")}>
+        <Row label={t("settings.linked_hubs")} hint={t("settings.linked_hubs_hint")} wrapHint>
           {others.map((h) => (
             <span key={h.hub_id} className="flex items-center gap-1.5">
               <span className={cx("size-1.5 rounded-full", h.online === false ? "bg-ink-3" : "bg-green")} />
@@ -661,9 +716,9 @@ function About() {
           ))}
         </Row>
       )}
-      <Row label={t("settings.computers")}>{t("settings.computers_online", { online: machines.filter((m) => m.online).length, total: machines.length })}</Row>
+      <Row label={t("settings.computers")} anchor="computers">{t("settings.computers_online", { online: machines.filter((m) => m.online).length, total: machines.length })}</Row>
       <InstallRow />
-      <div className="flex justify-end px-4 py-2.5">
+      <div className="flex justify-end px-4 py-2.5" data-settings-row="disconnect">
         <Button tone="quiet" icon="logout" onClick={disconnect.start} busy={disconnect.busy} className="text-red enabled:hover:text-red">
           {t("settings.disconnect_browser")}
         </Button>
@@ -686,7 +741,7 @@ const INSTALL_HINT: Record<InstallState, string> = {
 function InstallRow() {
   const state = useInstall();
   return (
-    <Row label={t("settings.install_app")} hint={INSTALL_HINT[state]}>
+    <Row label={t("settings.install_app")} hint={INSTALL_HINT[state]} wrapHint anchor="install-app">
       {state === "installed" && <Pill tone="green">{t("settings.installed")}</Pill>}
       {state === "prompt" && (
         <Button icon="download" onClick={() => void install()}>
@@ -1325,6 +1380,7 @@ function Devices() {
       </div>}
       {data && (
         <Group
+          anchor="devices"
           title={t("settings.devices_title", { count: active.length })}
           footer={t("settings.devices_footer")}
           right={

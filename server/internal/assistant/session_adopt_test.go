@@ -67,6 +67,25 @@ func TestAdoptExactSessionIDMatchesWithoutHeuristicConditions(t *testing.T) {
 	}
 }
 
+// A nil snapshot means the pre-start list failed, not that exact-id reconciliation is impossible. It must disable
+// only the heuristic: the assigned id still matches, while a different fresh session is never guessed (#7772).
+func TestAdoptExactSessionIDWithoutPreStartSnapshot(t *testing.T) {
+	s, f := newTaskService(t)
+	shortAgentStartTimeout(t)
+	dev := Device{ID: "box"}
+	exact := adoptSession("exact-1", func(*proto.Session) {})
+	other := adoptSession("other", func(*proto.Session) {})
+	f.setSessions("box", other, exact)
+
+	got, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", "exact-1", nil)
+	if !ok || got.SessionID != "exact-1" {
+		t.Fatalf("got %+v ok=%v, want exact-id adoption without a pre-start snapshot", got, ok)
+	}
+	if _, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", "missing", nil); ok {
+		t.Fatal("a missing pre-start snapshot enabled heuristic adoption")
+	}
+}
+
 // Two workspace-none tasks run in the same directory and have no workspace claim to separate them: with an old node
 // (no session_id honored), task A's fallback must never take the session task B's open todo already links. Once the
 // node lists A's own id, the exact match adopts it even though B's session sits right beside it.
@@ -162,9 +181,17 @@ func validSessionIDShape(id string) bool {
 type failTodoLoadStore struct {
 	*profileTaskStore
 	todoStore
+	block <-chan struct{}
 }
 
-func (*failTodoLoadStore) ListTodos(context.Context) ([]db.TodoRow, error) {
+func (st *failTodoLoadStore) ListTodos(ctx context.Context) ([]db.TodoRow, error) {
+	if st.block != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-st.block:
+		}
+	}
 	return nil, errors.New("the todo book is unavailable")
 }
 
@@ -189,6 +216,36 @@ func TestAdoptFailsClosedWhenTheTodoBookCannotLoad(t *testing.T) {
 	}
 	if _, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", "missing-id", known); ok {
 		t.Fatal("the fallback after a missing exact id adopted with an unreadable todo book")
+	}
+}
+
+// The post-budget reconciliation also reads the todo book for heuristic adoption. Its whole-call deadline must bound
+// that database read, not only the session lists; otherwise a stuck store can block the task forever (#7772).
+func TestTaskStartFinalAdoptionBoundsTheTodoLoad(t *testing.T) {
+	release := make(chan struct{})
+	st := &failTodoLoadStore{profileTaskStore: &profileTaskStore{
+		memStore: &memStore{vals: map[string][]byte{}}, plans: map[string]db.TaskPlanRow{},
+	}}
+	f := newFakeHub()
+	f.sessions["box"] = nil
+	f.settings = &Settings{Timezone: "Asia/Shanghai"}
+	s := newServiceOn(t, f, st)
+	// Block only the final reconciliation's read, not service initialization.
+	st.block = release
+	oldWait, oldPoll, oldFinal := taskStartAdoptWait, taskStartAdoptPoll, taskStartFinalAdoptTimeout
+	taskStartAdoptWait, taskStartAdoptPoll, taskStartFinalAdoptTimeout = 20*time.Millisecond, 5*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() {
+		taskStartAdoptWait, taskStartAdoptPoll, taskStartFinalAdoptTimeout = oldWait, oldPoll, oldFinal
+	})
+
+	watchdog := time.AfterFunc(time.Second, func() { close(release) })
+	_, ok := s.adoptTaskStartSessionUntil(context.Background(), Device{ID: "box"}, "claude-code", "/code/app", "", map[string]bool{}, time.Now().Add(20*time.Millisecond))
+	bounded := watchdog.Stop()
+	if ok {
+		t.Fatal("a start with an unreadable todo book was adopted")
+	}
+	if !bounded {
+		t.Fatal("the final reconciliation needed the test watchdog: its todo load had no whole-call deadline")
 	}
 }
 

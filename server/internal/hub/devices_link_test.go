@@ -273,7 +273,7 @@ func TestSelfSettingsBlocksClaudeDirsThroughTheManager(t *testing.T) {
 		t.Helper()
 		done := make(chan string, 1)
 		go func() {
-			out, err := h.toolPersonaSettings(ctx, assistantwire.AssistantID, m, "s1", json.RawMessage(args))
+			out, err := h.toolPersonaSettings(ctx, assistantwire.AssistantID, m, "s1", json.RawMessage(args), nil)
 			if err != nil {
 				out = "error: " + err.Error()
 			}

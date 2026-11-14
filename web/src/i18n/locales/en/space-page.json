@@ -20,5 +20,8 @@
   "recent": "Recent (not running)",
   "gone_title": "Space not found",
   "gone_detail": "\"{name}\" has no agents on {machine}. It may have been closed or renamed.",
-  "back_to_machine_button": "Back to machine"
+  "back_to_machine_button": "Back to machine",
+  "agents_failed_title": "Couldn't load this space's agents",
+  "agents_failed_detail": "Trying again in a moment.",
+  "retry": "Retry"
 }

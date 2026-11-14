@@ -13,7 +13,7 @@ public enum ScreenVideoWire {
     /// A declared length over this closes the stream (design: "At most 4 MB").
     public static let maxMessageBytes = 4 * 1024 * 1024
 
-    /// Message types. Helper → phone: 1–7. Phone → helper: 16–19.
+    /// Message types. Helper → phone: 1–8. Phone → helper: 16–19.
     public enum Kind: UInt8 {
         case hello = 1
         case format = 2
@@ -22,6 +22,7 @@ public enum ScreenVideoWire {
         case paused = 5
         case resumed = 6
         case timing = 7
+        case encoding = 8
         case start = 16
         case report = 17
         case keyframe = 18
@@ -64,6 +65,10 @@ public struct ScreenVideoParser {
     private var buffer: [UInt8] = []
 
     public init() {}
+
+    /// Bytes of a message that hasn't come whole yet: a frame spread over several reads (the phone times large ones,
+    /// `ReceiverSignals.frame(firstByteMicros:)`).
+    public var pendingBytes: Int { buffer.count }
 
     /// Appends `bytes` and returns every message that is now complete. Call it with each chunk read from the socket.
     public mutating func push(_ bytes: Data) throws -> [ScreenVideoWire.RawMessage] {

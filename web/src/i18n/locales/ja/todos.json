@@ -5,7 +5,6 @@
   "deleted": "ToDoを削除しました",
   "delete_failed": "削除できませんでした：{error}",
   "title": "ToDo",
-  "summary": "未完了{open} · 完了{done}",
   "new_todo": "新規ToDo",
   "load_failed": "ToDoを読み込めませんでした",
   "search_placeholder": "ToDoを検索",

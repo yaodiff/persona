@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -134,5 +135,41 @@ func TestHubOnlySlotKeepsRemoteAgentsIndependent(t *testing.T) {
 	m.cfg.Kind = "local"
 	if len(h.updateBusy()) != 1 {
 		t.Fatal("local agent was not protected")
+	}
+}
+
+// A conversation waiting only on the assistant's ask_user cards asked without waiting does not hold the update: no turn
+// waits on them and they outlive a restart (#7392). A waiting question's card, another card next to it, a card the
+// hub was not shown, or a running turn still do.
+func TestUpdateDoesNotWaitForQuestionsAskedWithoutWaiting(t *testing.T) {
+	p := newPublisher(t, "v2-202611021700", 202611021700)
+	h, m, _, _ := updatingHub(t, p, "release")
+	conv := func(pending int, status string) proto.Session {
+		return proto.Session{SessionID: "conv1", Title: "Release chat", Assistant: true, Status: status, State: proto.StateNeedsYou,
+			PendingInteractions: pending}
+	}
+	question := func(id string, unwaited bool) proto.Interaction {
+		return proto.Interaction{ID: id, MachineID: "box", SessionID: "conv1", Kind: proto.IxQuestion, ToolName: "ask_user",
+			Resumable: unwaited, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(2 * time.Hour)}
+	}
+	for _, c := range []struct {
+		name  string
+		sess  proto.Session
+		cards []proto.Interaction
+		busy  bool
+	}{
+		{"asked without waiting", conv(1, proto.StatusIdle), []proto.Interaction{question("ix_later1", true)}, false},
+		{"two asked without waiting", conv(2, proto.StatusIdle), []proto.Interaction{question("ix_later1", true), question("ix_later2", true)}, false},
+		{"a waiting question", conv(1, proto.StatusIdle), []proto.Interaction{question("ix_wait1", false)}, true},
+		{"another card next to it", conv(2, proto.StatusIdle), []proto.Interaction{question("ix_later1", true), question("ix_wait1", false)}, true},
+		{"a card the hub was not shown", conv(2, proto.StatusIdle), []proto.Interaction{question("ix_later1", true)}, true},
+		{"its turn running", conv(1, proto.StatusWorking), []proto.Interaction{question("ix_later1", true)}, true},
+		{"its terminal blocked", conv(1, proto.StatusBlocked), []proto.Interaction{question("ix_later1", true)}, true},
+	} {
+		setSessions(m, c.sess)
+		h.takeFleetInteractions(c.cards)
+		if busy := h.updateBusy(); (len(busy) == 1) != c.busy || len(busy) > 1 {
+			t.Errorf("%s: busy %+v, want busy %v", c.name, busy, c.busy)
+		}
 	}
 }

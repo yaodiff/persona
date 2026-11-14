@@ -271,7 +271,7 @@ func TestHerdrStartIntoAGivenWorkspaceReturnsOnABlockedClaude(t *testing.T) {
 		call("session.snapshot", nil),
 	})
 	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(startID, proto.StatusIdle, "w2:p5", "w2:t5", "w2", home, "")}, nil))
-	if l := listSessions(t, n); len(l) != 1 || l[0].Status != proto.StatusBlocked || l[0].AttentionReason != lostDialog {
+	if l := listSessions(t, n); len(l) != 1 || l[0].Status != proto.StatusBlocked || l[0].AttentionReason != lostDialogHeld {
 		t.Errorf("listed %+v", l)
 	}
 }

@@ -3992,33 +3992,21 @@ struct StateCounts: View {
     }
 }
 
-/// A heading's name and its agents' state counts: side by side; at the accessibility text sizes the counts on a line of
-/// their own under the name. `StateCounts` never gives up width, and beside them a narrow phone left the name none at all
-/// (#1658). `trailing` (the fold chevron) stays on the name's line.
+/// A heading's name and its agents' state counts: side by side; the counts on a line of their own under the name when
+/// the name would be left under half the width (`BesideOrUnder`). `StateCounts` never gives up width, and beside them a
+/// narrow phone left the name none at all (#1658). `trailing` (the fold chevron) stays on the name's line.
 struct CountsHeading<Name: View, Counts: View, Trailing: View>: View {
     var spacing: CGFloat = Theme.Space.s
     @ViewBuilder var name: Name
     @ViewBuilder var counts: Counts
     @ViewBuilder var trailing: Trailing
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                HStack(spacing: spacing) {
-                    name
-                    Spacer(minLength: Theme.Space.xs)
-                    trailing
-                }
-                counts
-            }
-        } else {
-            HStack(spacing: spacing) {
-                name
-                Spacer(minLength: Theme.Space.xs)
-                counts
-                trailing
-            }
+        BesideOrUnder(gap: spacing * 2 + Theme.Space.xs, tailGap: spacing) {
+            // Each part is one view for the layout, its own pieces side by side as in a row.
+            HStack(spacing: spacing) { name }
+            HStack(spacing: spacing) { counts }
+            HStack(spacing: spacing) { trailing }
         }
     }
 }
@@ -4029,25 +4017,17 @@ extension CountsHeading where Trailing == EmptyView {
     }
 }
 
-/// An agent row's words and its time (with the source under it): the time at the row's end; at the accessibility text
-/// sizes under the words, where beside them it left the title a character or two (#1658). Outside `SlotRow`, whose
+/// An agent row's words and its time (with the source under it): the time at the row's end; under the words when
+/// beside them it would leave the title under 70% of the width (its words stay on one line, so they get the whole row when stacked) (`BesideOrUnder`, #1658). Outside `SlotRow`, whose
 /// equality is its stored values.
 struct TimeBesideOrUnder<Words: View, Time: View>: View {
     @ViewBuilder var words: Words
     @ViewBuilder var time: Time
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                words
-                time
-            }
-        } else {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
-                words
-                time
-            }
+        BesideOrUnder(alignment: .firstTextBaseline, minShare: 0.7) {
+            words
+            time
         }
     }
 }

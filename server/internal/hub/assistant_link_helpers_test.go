@@ -20,9 +20,17 @@ func (l assistantLink) AppCall(ctx context.Context, p assistantwire.AppCall) (js
 }
 
 // NotifyRequest delivers a push the manager decided on (fleet_link.go deliverPush): every device whose settings
-// take it.
-func (l assistantLink) NotifyRequest(_ context.Context, p assistantwire.NotifyRequest) error {
-	return l.h.deliverPush(p.Notification)
+// take it. The held/reason answer says whether ln mode kept it for the briefing.
+func (l assistantLink) NotifyRequest(_ context.Context, p assistantwire.NotifyRequest) (assistantwire.NotifyResult, error) {
+	heldReason, err := l.h.deliverPushFrom(assistantwire.AssistantID, p.Notification)
+	if err != nil {
+		return assistantwire.NotifyResult{}, err
+	}
+	res := assistantwire.NotifyResult{OK: true}
+	if heldReason != "" {
+		res.Held, res.Reason = true, heldReason
+	}
+	return res, nil
 }
 
 // Broadcast sends the assistant's live update to the apps as it is (ws.broadcast).

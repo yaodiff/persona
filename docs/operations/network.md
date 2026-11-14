@@ -453,6 +453,7 @@ TUN proxy automatic routes may send public-connection responses into the proxy, 
 | Public-key mismatch only away from home | A LAN address the hub advertised (`public_url` or `advertise_lan`) is another device on that network. Android treats such a private address as unreachable and keeps trying the others; to stop handing it out, set `public_url` to a name and `public.advertise_lan` to `false` |
 | `hub pair` cannot connect locally | Hub running, HTTP supports IPv4 loopback, command configuration matches running instance |
 | TLS inaccessible after enabling `security.proxy_protocol` | `proxy protocol: refused …` logs: upstream not sending headers, or direct bypass ([PROXY protocol](#proxy-protocol)) |
+| A browser's Web Push test fails, or its last notification didn't go out (#7459) | The hub machine must reach the browsers' push services over https (`fcm.googleapis.com`, `*.push.services.mozilla.com`, `*.push.apple.com`, `*.notify.windows.com`); a firewall or proxy that blocks outbound https stops Web Push. `personad hub doctor` lists each browser and its last failure ([web.md](../web/web.md) "Web Push") |
 
 <a id="命令行验证"></a>
 

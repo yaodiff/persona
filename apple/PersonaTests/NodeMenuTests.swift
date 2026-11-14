@@ -44,11 +44,11 @@ import Testing
         #expect(NodeMenu.gitBody(.pull, pane: "w1:p1") == ["op": "pull", "pane": "w1:p1"])
         #expect(NodeMenu.gitBody(.push, workspaceID: "w1", kind: "herdr") == ["op": "push", "workspace_id": "w1", "kind": "herdr"])
         #expect(NodeMenu.gitBody(.fetch, workspaceID: "w1", kind: nil) == ["op": "fetch", "workspace_id": "w1"])
-        #expect(NodeMenu.GitOp.pull.done("已经是最新") == "取回：已经是最新")
+        #expect(NodeMenu.GitOp.pull.done("已经是最新") == "拉取：已经是最新")
         #expect(NodeMenu.GitOp.fetch.done(nil) == "获取：完成")
         // what came of it in the app's language (#1888); an older node's own words when there is no outcome
         #expect(NodeMenu.GitOp.push.done(NodeMenu.GitOp.outcome("pushed")) == "推送：已推送")
-        #expect(NodeMenu.GitOp.pull.done(NodeMenu.GitOp.outcome("up_to_date")) == "取回：已经是最新代码")
+        #expect(NodeMenu.GitOp.pull.done(NodeMenu.GitOp.outcome("up_to_date")) == "拉取：已经是最新代码")
         #expect(NodeMenu.GitOp.outcome("something_new") == nil)
         #expect(NodeMenu.GitOp.outcome(nil) == nil)
         #expect(NodeMenu.GitOp.allCases.map(\.rawValue) == ["pull", "push", "fetch"])

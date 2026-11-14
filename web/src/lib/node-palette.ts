@@ -1,7 +1,8 @@
 // The command palette's view of the node the user is on (#2329, lib/palette.ts registerContextCommands): in `>` command
-// mode its menu items are listed as commands, under "Workspace · <the pane's title>" and "Workspace · <its workspace>"
-// like Moshi's. They are the same items the node's context menu has (lib/node-actions.ts): a rename asks for the name in
-// a small dialog, a close asks once more, a failure is a toast. Registered when this module is first imported.
+// mode its menu items are listed as commands, under "Pane · <the pane's title>" (or "Tab · …") and "Space · <its space>",
+// in the words the menus use and with the names as written (Moshi's "Workspace · …" was English in every language and
+// drawn in capitals). They are the same items the node's context menu has (lib/node-actions.ts): a rename asks for the
+// name in a small dialog, a close asks once more, a failure is a toast. Registered when this module is first imported.
 import { t } from "../i18n";
 import { errorText } from "./api";
 import { defaultNodeDeps, nodeActions, sessionNode, termPaneNode, termSpaceNode, termTabNode, type MenuNode } from "./node-actions";
@@ -68,6 +69,14 @@ interface Where {
   node: MenuNode;
 }
 
+/** The heading over a node's commands: what it is, in the menus' words, and its name. Drawn as written (the name keeps
+ *  its case). */
+function sectionOf(node: MenuNode, name: string): Where {
+  const section =
+    node.kind === "workspace" ? t("lib-node-palette.section_space", { name }) : node.kind === "tab" ? t("lib-node-palette.section_tab", { name }) : t("lib-node-palette.section_pane", { name });
+  return { section, node };
+}
+
 function findPane(spaces: readonly TermSpace[], id: string) {
   for (const sp of spaces)
     for (const tab of sp.tabs) {
@@ -92,18 +101,15 @@ export function nodesFor(ctx: PaletteContext): Where[] {
     if (!found) return [];
     const { sp, tab, pane } = found;
     const one = tab.panes.length === 1;
-    return [
-      { section: `Workspace · ${pane.title}`, node: one ? termTabNode(mid, sp, tab, online) : termPaneNode(mid, sp, tab, pane, online) },
-      { section: `Workspace · ${sp.label}`, node: termSpaceNode(mid, sp, online) },
-    ];
+    return [sectionOf(one ? termTabNode(mid, sp, tab, online) : termPaneNode(mid, sp, tab, pane, online), pane.title), sectionOf(termSpaceNode(mid, sp, online), sp.label)];
   }
   if (ctx.pane) {
     const s = state.sessions[ctx.pane.mid]?.find((x) => x.session_id === ctx.pane!.sid);
     if (!s || s.assistant) return [];
     const online = machine(s.machine_id)?.online !== false;
-    const out: Where[] = [{ section: `Workspace · ${sessionTitle(s)}`, node: sessionNode(s, online) }];
+    const out: Where[] = [sectionOf(sessionNode(s, online), sessionTitle(s))];
     if (s.space_id && s.space_name)
-      out.push({ section: `Workspace · ${s.space_name}`, node: { kind: "workspace", mid: s.machine_id, online, host: s.space_kind, label: s.space_name, workspaceId: s.workspace_id ?? s.space_id, paneId: s.pane_id, cwd: s.cwd, canWorktree: canWorktreeIn(s.machine_id, s.space_kind, s.workspace_id ?? s.space_id) } });
+      out.push(sectionOf({ kind: "workspace", mid: s.machine_id, online, host: s.space_kind, label: s.space_name, workspaceId: s.workspace_id ?? s.space_id, paneId: s.pane_id, cwd: s.cwd, canWorktree: canWorktreeIn(s.machine_id, s.space_kind, s.workspace_id ?? s.space_id) }, s.space_name));
     return out;
   }
   return [];
@@ -135,7 +141,7 @@ export function itemsToCommands(section: string, node: MenuNode, items: MenuItem
   const where = node.tabId ?? node.paneId ?? node.workspaceId ?? node.mid;
   const out: PaletteCommand[] = [];
   const add = (item: MenuItem, title: string, key: string, run: () => void) =>
-    out.push({ id: `node:${node.kind}:${where}:${key}`, section, title, icon: item.icon, danger: item.danger, keywords: `${section} ${item.label}`, run });
+    out.push({ id: `node:${node.kind}:${where}:${key}`, section, sectionAsWritten: true, title, icon: item.icon, danger: item.danger, keywords: `${section} ${item.label}`, run });
   const name = (item: MenuItem) => item.label.replace(/…$/, "");
   for (const item of items) {
     const kids = typeof item.children === "function" ? childrenOf(`${node.mid}/${where}/${item.key}`, item.children) : item.children;

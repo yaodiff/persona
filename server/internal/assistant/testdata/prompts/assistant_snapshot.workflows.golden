@@ -7,5 +7,4 @@
 - 从对话开的任务（task_plan；问已有结果看这里，不够用 agent_read 读它的对话；要它新查、新做或改方向才用 agent_send）：
   - 各端对齐审计（todo_3）：在做，mac-a session_id=d4a7f6ff：审计在后台跑，等结果；后台 workflow 在跑（在等它的结果，没做完）：「parity-audit」阶段 Verify（2/2），169/185 个 agent 完成，已跑 14 分钟
 - iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
-- 在跟的事：没有
 - 已安排的跟进：没有

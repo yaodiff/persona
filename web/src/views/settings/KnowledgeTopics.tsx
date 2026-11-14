@@ -41,7 +41,7 @@ export function KnowledgeTopicsSwitch({ manager }: { manager: string }) {
   };
   return (
     <Group title={t("settings-knowledge.topics_title")} anchor="knowledge-topics" footer={t("settings-knowledgetopics.footer")}>
-      <Row label={t("settings-knowledge.topics_switch")} hint={error ? t("settings-knowledgetopics.load_failed", { error }) : undefined}>
+      <Row label={t("settings-knowledge.topics_switch")} anchor="knowledge-topics-switch" hint={error ? t("settings-knowledgetopics.load_failed", { error }) : undefined}>
         <Switch on={on ?? true} onChange={(v) => void change(v)} disabled={on === null || busy} label={t("settings-knowledge.topics_switch")} />
       </Row>
       <button type="button" onClick={() => navigate({ name: "kb", kind: "map" })} className="flex w-full items-center justify-between px-4 py-3 text-left text-[13px] text-ink hover:bg-hover">

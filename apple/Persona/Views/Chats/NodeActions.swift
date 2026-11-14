@@ -176,7 +176,7 @@ nonisolated enum NodeMenu {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .pull: String(localized: "Pull")
+            case .pull: String(localized: "git.pull", defaultValue: "Pull")
             case .push: String(localized: "Push")
             case .fetch: String(localized: "Fetch")
             }

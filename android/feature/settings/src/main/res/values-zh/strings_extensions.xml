@@ -373,4 +373,19 @@
     <string name="settings_subscriptions_counts_on">%1$d 个开着</string>
     <string name="settings_subscriptions_counts_failing">%1$d 个开着 · %2$d 个出错</string>
     <string name="settings_subscriptions_counts_none">可以订阅</string>
+    <plurals name="settings_ext_node_running">
+        <item quantity="other">在 %1$d 台机器上运行</item>
+    </plurals>
+    <plurals name="settings_ext_node_abnormal">
+        <item quantity="other">%1$d 台机器异常</item>
+    </plurals>
+    <plurals name="settings_ext_node_offline">
+        <item quantity="other">%1$d 台机器离线</item>
+    </plurals>
+    <plurals name="settings_ext_node_starting">
+        <item quantity="other">正在 %1$d 台机器上启动</item>
+    </plurals>
+    <plurals name="settings_ext_node_stopped">
+        <item quantity="other">%1$d 台机器已停止</item>
+    </plurals>
 </resources>

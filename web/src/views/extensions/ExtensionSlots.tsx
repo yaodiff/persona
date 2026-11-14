@@ -64,12 +64,15 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
   );
 }
 
-/** The cards on "Overview" (overview_card), one row under the agents' summary: one card full width, more two a row. */
+/** The cards on "Overview" (overview_card), one row under the agents' summary: one card full width, more two a row;
+ *  on a page wide enough for two columns of rows, a lone card takes one of them. */
 export function OverviewCards() {
   const cards = useExtensionSlot("overview_card");
   if (!cards.length) return null;
   return (
-    <section aria-label={t("extensions-extensionslots.extensions")} className={cx("grid grid-cols-1 gap-3", cards.length > 1 && "md:grid-cols-2")}>
+    // a card is never wider than one of the overview's two columns of rows below it (Home's GRID.rows, from 60rem of
+    // the page): alone at 1920 px it stretched its chart to 1540 px of sparse bars, and to 1300 px at 1680
+    <section aria-label={t("extensions-extensionslots.extensions")} className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", cards.length > 1 && "md:grid-cols-2")}>
       {cards.map((c, i) => (
         <OverviewCard key={`${c.extension}/${c.id}`} place={c} i={i} />
       ))}

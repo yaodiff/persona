@@ -278,9 +278,13 @@ func (u *updater) healthURL() string {
 }
 
 // updateBusy is what a restart would interrupt: any conversation working or waiting for the user (the assistant's
-// and every agent's), and a machine being redeployed.
+// and every agent's), and a machine being redeployed. A conversation whose only cards are the assistant's ask_user
+// asked without waiting is not (#7392): no turn waits on them, and they outlive a restart (the manager claims them
+// back from its record, docs/assistant/assistant.md "Asking without holding the turn"), so such a card, up for as long
+// as 2 hours, does not hold the update back.
 func (h *Hub) updateBusy() []busyItem {
 	var out []busyItem
+	unwaited := h.unwaitedCards()
 	for _, m := range h.machinesNow() {
 		if m.snapshot().Deploying {
 			out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), Title: su(h.userLang(), "busy_redeploying")})
@@ -299,12 +303,37 @@ func (h *Hub) updateBusy() []busyItem {
 			}
 			// On a turn, not working on in the background (#2228): a server an agent left running would hold the
 			// update back for as long as it runs, and the restart does not stop it.
-			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou {
+			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou && !waitsOnlyUnwaited(s, unwaited[[2]string{m.cfg.ID, s.SessionID}]) {
 				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(*s)})
 			}
 		}
 	}
 	return out
+}
+
+// unwaitedCards counts each session's pending cards (by machine and session): all of them, and those that are the
+// assistant's ask_user asked without waiting (proto.Interaction.AskedWithoutWaiting).
+func (h *Hub) unwaitedCards() map[[2]string][2]int {
+	out := map[[2]string][2]int{}
+	for _, ix := range h.pendingInteractions() {
+		k := [2]string{ix.MachineID, ix.SessionID}
+		n := out[k]
+		n[0]++
+		if ix.AskedWithoutWaiting() {
+			n[1]++
+		}
+		out[k] = n
+	}
+	return out
+}
+
+// waitsOnlyUnwaited: s needs the user only for cards no turn waits on: its turn is not running, nothing blocks its
+// terminal, and every card it counts is one asked without waiting (cards, all and unwaited, from unwaitedCards). A
+// card the manager counts that the hub was not shown keeps it busy.
+func waitsOnlyUnwaited(s *proto.Session, cards [2]int) bool {
+	all, unwaited := cards[0], cards[1]
+	return s.Status != proto.StatusWorking && s.Status != proto.StatusBlocked && unwaited > 0 && unwaited == all &&
+		s.PendingInteractions <= unwaited
 }
 
 // agentTitle is an agent's title for the update's busy list.

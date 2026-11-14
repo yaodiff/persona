@@ -10,5 +10,4 @@
   - 修竖屏（todo_2）：在做，mac-a session_id=e1f2a3b4：先复现；它最近向你汇报（2 分钟前）：进度，第 4/5 步：崩溃复现了，在改
   - 没有计划（todo_3）：在做，mac-a session_id=c1：在看
 - iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
-- 在跟的事：没有
 - 已安排的跟进：没有

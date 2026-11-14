@@ -29,24 +29,39 @@ export const hasSearchOperators = (query: string): boolean => conditionCount(que
 export { buildAgentFacets } from "./agent-chatlist-filter";
 export const conditionValue = (value: string): boolean => value !== "" && !/\s/.test(value);
 
+// The parser's operator aliases (agent-chatlist-filter.ts), shared by the menu's reads, toggles and drops.
+const CONDITION_KEYS: Record<string, string[]> = {
+  machine: ["machine", "host"],
+  project: ["project", "repo", "cwd", "path"],
+  harness: ["harness", "agent", "launcher"],
+  state: ["state", "status"],
+  since: ["since", "after", "updated"],
+};
+const conditionKeys = (key: string) => CONDITION_KEYS[key] ?? [key];
+
 /** The values the query holds for an operator, as typed (`machine:box` → "box" for "machine"). */
 export function conditionValues(query: string, key: string): string[] {
-  const prefix = `${key}:`;
-  return words(query).filter((w) => w.toLowerCase().startsWith(prefix) && w.length > prefix.length).map((w) => w.slice(prefix.length));
+  const prefixes = conditionKeys(key).map((k) => `${k}:`);
+  return words(query).filter((w) => prefixes.some((p) => w.toLowerCase().startsWith(p) && w.length > p.length)).map((w) => {
+    const value = w.slice(w.indexOf(":") + 1);
+    return key === "is" && value.toLowerCase() === "pin" ? "pinned" : value;
+  });
 }
 
 /** The query with `key:value` added, or taken out where it was; `only`: the one value its operator has (`since:`). */
 export function toggleCondition(query: string, key: string, value: string, only = false): string {
-  const token = `${key}:${value}`.toLowerCase();
-  const had = words(query).some((w) => w.toLowerCase() === token);
-  const kept = words(query).filter((w) => w.toLowerCase() !== token && !(only && w.toLowerCase().startsWith(`${key}:`)));
+  const tokens = conditionKeys(key).map((k) => `${k}:${value}`.toLowerCase());
+  if (key === "is" && value === "pinned") tokens.push("is:pin");
+  const had = words(query).some((w) => tokens.includes(w.toLowerCase()));
+  const kept = words(query).filter((w) => !tokens.includes(w.toLowerCase()) &&
+    !(only && conditionKeys(key).some((k) => w.toLowerCase().startsWith(`${k}:`))));
   return [...kept, ...(had ? [] : [`${key}:${value}`])].join(" ");
 }
 
 /** The query without an operator's values, or without every operator (the words stay). */
 export function dropConditions(query: string, key?: string): string {
   if (!key) return parseSearchQuery(query).terms.join(" ");
-  return words(query).filter((w) => !w.toLowerCase().startsWith(`${key}:`)).join(" ");
+  return words(query).filter((w) => !conditionKeys(key).some((k) => w.toLowerCase().startsWith(`${k}:`))).join(" ");
 }
 
 /** How ⌘K ranks an Agent session (#6589). */

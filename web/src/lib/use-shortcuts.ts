@@ -5,9 +5,9 @@ import { useEffect, useRef } from "react";
 import { toast } from "../ui/atoms";
 import { AGENT_GROUPINGS } from "./agent-groups";
 import { adjacentTab, machineAt, panelToggle, terminalChat, type PaneRef } from "./shortcut-nav";
-import { toggleHelp } from "./shortcut-help";
-import { toggleMaximized, toggleSidebarColumn } from "./layout";
-import { togglePalette } from "./palette";
+import { closeHelp, toggleHelp } from "./shortcut-help";
+import { focusInColumn, toggleMaximized, toggleSidebarColumn } from "./layout";
+import { closePalette, getPalette, togglePalette, type PaletteMode } from "./palette";
 import { closePanel, getPanel, openPanel, type Panel } from "./panel";
 import { inWorkView, navigate, withWorkView, type Route } from "./router";
 import { canShowTerminal, readView, rememberView, resolveView } from "./session-view";
@@ -26,6 +26,18 @@ export interface ShortcutContext {
   toggleDrawer: () => void;
   /** Closes the drawer (a no-op when it is shut), as a tap on one of its rows does. */
   closeDrawer?: () => void;
+}
+
+/** ⌘K / ⌘⇧P and ⌘/: the palette and the shortcut help take each other's place, never one over the other (with two
+ *  modals stacked Esc and Tab serve only the top one, and the one under it waits behind for its own Esc). Closing one and
+ *  opening the other in one render gives the focus back where the first was opened from (ui/overlay.ts useModalFocus). */
+export function paletteKey(mode: PaletteMode) {
+  closeHelp();
+  togglePalette(mode);
+}
+export function helpKey() {
+  if (getPalette().open) closePalette();
+  toggleHelp();
 }
 
 /** The panel ⌘B closed last, to bring back. */
@@ -58,9 +70,9 @@ export function useShortcuts(ctx: ShortcutContext) {
 
   useEffect(() => {
     const off = [
-      registerShortcut("jump", () => togglePalette("jump")),
-      registerShortcut("commands", () => togglePalette("command")),
-      registerShortcut("help", () => toggleHelp()),
+      registerShortcut("jump", () => paletteKey("jump")),
+      registerShortcut("commands", () => paletteKey("command")),
+      registerShortcut("help", helpKey),
       registerShortcut("settings", () => navigate({ name: "settings" })),
       // what a click on the sidebar's Persona row does: the main conversation (#5581)
       registerShortcut("persona", () => {
@@ -75,7 +87,7 @@ export function useShortcuts(ctx: ShortcutContext) {
       }),
       registerShortcut("left-sidebar", () => {
         if (at.current.narrow) at.current.toggleDrawer();
-        else toggleSidebarColumn();
+        else toggleSidebarColumn(focusInColumn());
       }),
       registerShortcut("maximize", () => (at.current.narrow ? false : void toggleMaximized())),
       registerShortcut("terminal-chat", () => {

@@ -240,7 +240,8 @@ describe("the user's bubble and the answer", () => {
     expect(html).toContain("max-h-[10lh] overflow-y-auto");
     expect(html).toContain(">展开<");
     expect(html).toContain("opacity-60");
-    expect(html).toContain(">发送中…<");
+    // Sending is the chat's status line under the last message (ChatView), not a second line under the bubble
+    expect(html).not.toContain(">发送中…<");
   });
 
   it("leaves 12% on its left like a merged bubble, so it never runs the whole width (#1996)", () => {

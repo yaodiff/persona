@@ -41,8 +41,8 @@ import { screenPath, showsScreen } from "../../lib/computer";
 import { openPanel } from "../../lib/panel";
 import { href, onLinkClick } from "../../lib/router";
 import { getState, refresh, useStore } from "../../lib/store";
-import { foldRows } from "../../lib/folded-rows";
-import type { Launcher, Session } from "../../lib/types";
+import { useFullAgentSessions } from "../../lib/sessions";
+import type { Launcher } from "../../lib/types";
 import { Button, cx, EASE, IconButton, Loading, toast } from "../../ui/atoms";
 import { AgentRow } from "./AgentRow";
 import { Icon } from "../../ui/icons";
@@ -106,8 +106,6 @@ function RenameMachine({ m, onDone }: { m: DetailMachine; onDone: () => void }) 
 
 type MachineLauncher = Pick<Launcher, "name" | "display_name" | "model" | "agent" | "agent_type">;
 
-const NO_SESSIONS: Session[] = [];
-
 function initialRange(): MetricRange {
   const r = new URLSearchParams(location.search).get("range");
   return RANGE_KEYS.includes(r as MetricRange) ? (r as MetricRange) : "1h";
@@ -116,8 +114,10 @@ function initialRange(): MetricRange {
 export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleSidebar: () => void }) {
   const machines = useStore((s) => s.machines) as DetailMachine[];
   const loaded = useStore((s) => s.loaded);
-  // a child session folds into its parent (#5120): never an agent of the computer of its own
-  const sessions = useStore((s) => foldRows(s.sessions[mid] ?? NO_SESSIONS));
+  // Its agents, read as the Agents list reads them: a hub that pages that list pushes no sessions, so the store has none
+  // of this computer's. A child session folds into its parent (#5120): never an agent of the computer of its own.
+  const full = useFullAgentSessions();
+  const sessions = useMemo(() => full.sessions.filter((s) => s.machine_id === mid), [full.sessions, mid]);
   const m = machines.find((x) => x.id === mid);
   const online = m?.online ?? false;
   const expectedDisconnect = m ? machineDeployment(m).expectedDisconnect : false;
@@ -331,9 +331,12 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
 
       {/* agents */}
       <section>
-        <Heading title="Agent" count={online ? agentCount : undefined} />
+        {/* until its agents are read, how many there are is unknown: no count, and no "No agents running" */}
+        <Heading title="Agent" count={online && full.loaded ? agentCount : undefined} />
         {groups.length === 0 ? (
-          <p className="rounded-card bg-surface px-4 py-3 text-[12.5px] text-ink-3 shadow-card">{online ? t("machines-machinedetail.no_agents") : t("machines-machinedetail.agents_offline")}</p>
+          <p className="rounded-card bg-surface px-4 py-3 text-[12.5px] text-ink-3 shadow-card" data-agents={online ? (full.loaded ? "yes" : full.error ? "failed" : "loading") : undefined}>
+            {!online ? t("machines-machinedetail.agents_offline") : full.loaded ? t("machines-machinedetail.no_agents") : full.error ? t("machines-machinedetail.agents_failed_detail") : t("machines-machinedetail.agents_loading")}
+          </p>
         ) : (
           <div className="flex flex-col gap-2.5">
             {groups.map((g, gi) => (

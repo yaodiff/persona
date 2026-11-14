@@ -61,6 +61,9 @@ func launcherHealthHub(t *testing.T) (*Service, *fakeHub) {
 // with no database the model settings stay as it is, so tasks name the launcher).
 func launcherHealthHubOn(t *testing.T, mk func(*testing.T, *fakeHub) *Service) (*Service, *fakeHub) {
 	t.Helper()
+	wasStagger := healthStagger
+	healthStagger = 40 * time.Millisecond // the real one would add half a minute to every round here
+	t.Cleanup(func() { healthStagger = wasStagger })
 	f := newFakeHub().withMachine()
 	f.sessions["l4"], f.sessions["box"] = nil, nil
 	f.devices = []Device{
@@ -280,6 +283,54 @@ func TestPickerKeepsTheConfiguredDefaultWithItsReason(t *testing.T) {
 	// The same machine's main-chat list has no such default, so the failed launcher is hidden there.
 	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers?purpose=assistant"); slices.Contains(names, "work") {
 		t.Fatalf("the main chat's list offers the launcher that failed: %v", names)
+	}
+}
+
+// The machines are checked spaces apart (healthStagger): every one runs the same probe prompt, and a model gateway
+// that pins it to one upstream account serves a burst of them behind one another until each times out.
+func TestLauncherHealthStaggersMachines(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	healthStagger = 150 * time.Millisecond
+	s.healthRound(context.Background(), true)
+	if len(f.checkedAt) != 3 {
+		t.Fatalf("checked %v", f.checked)
+	}
+	for i := 1; i < len(f.checkedAt); i++ {
+		if gap := f.checkedAt[i].Sub(f.checkedAt[i-1]); gap < 120*time.Millisecond { // a little under for waking from the timer
+			t.Fatalf("checks %d and %d only %v apart; the machines are not staggered (%v)", i-1, i, gap, f.checked)
+		}
+	}
+}
+
+// A check that times out is asked once more at once: a gateway can leave one request silent while the account
+// answers the next. Only a second timeout in a row is recorded; other errors are recorded without a second check.
+func TestLauncherHealthRetriesATimeoutOnce(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	f.checks["server/work"] = proto.LauncherCheck{Error: "90 秒内没有回答；signal: killed"} // answers the next time
+	f.checks["box/work"] = proto.LauncherCheck{Error: "90 秒内没有回答"}                   // silent twice
+	f.onCheck = func(f *fakeHub) {
+		if n := len(f.checked); n > 0 && f.checked[n-1] == "server/work" && slices.Contains(f.checked[:n-1], "server/work") {
+			delete(f.checks, "server/work")
+		}
+	}
+	s.healthRound(context.Background(), true)
+	count := func(key string) int {
+		n := 0
+		for _, c := range f.checked {
+			if c == key {
+				n++
+			}
+		}
+		return n
+	}
+	if r := healthState(s, "server", "work"); r.State != healthOK || r.Fails != 0 || count("server/work") != 2 {
+		t.Fatalf("server: %+v after %d checks (%v)", r, count("server/work"), f.checked)
+	}
+	if r := healthState(s, "box", "work"); r.State != healthFailing || r.Kind != errKindTimeout || r.Fails != 1 || count("box/work") != 2 {
+		t.Fatalf("box: %+v after %d checks (%v)", r, count("box/work"), f.checked)
+	}
+	if r := healthState(s, "l4", "work"); r.Kind != errKindModelRoute || count("l4/work") != 1 {
+		t.Fatalf("l4: %+v after %d checks (%v)", r, count("l4/work"), f.checked)
 	}
 }
 

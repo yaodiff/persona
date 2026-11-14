@@ -43,6 +43,44 @@ func TestWorkoutValidation(t *testing.T) {
 	}
 }
 
+// Splits, elevation and the heart rate's average and maximum (#2526) are checked like the other measurements; an
+// older phone's report, without them, stays valid.
+func TestWorkoutValidationSplitsElevationAndHeartRate(t *testing.T) {
+	f := func(x float64) *float64 { return &x }
+	v := sampleWorkout()
+	v.ElevationGain, v.HeartRateAvg, v.HeartRateMax = f(42), f(141), f(178)
+	v.Splits = []WorkoutSplit{{1, 330}, {2, 318.5}, {3, 341}}
+	if err := v.validate(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*WorkoutReport){
+		"negative elevation":  func(v *WorkoutReport) { v.ElevationGain = f(-1) },
+		"elevation too high":  func(v *WorkoutReport) { v.ElevationGain = f(20001) },
+		"zero average":        func(v *WorkoutReport) { v.HeartRateAvg = f(0) },
+		"maximum over 300":    func(v *WorkoutReport) { v.HeartRateMax = f(301) },
+		"average over max":    func(v *WorkoutReport) { v.HeartRateAvg = f(180) },
+		"splits skip a km":    func(v *WorkoutReport) { v.Splits = []WorkoutSplit{{1, 330}, {3, 330}} },
+		"splits from zero":    func(v *WorkoutReport) { v.Splits = []WorkoutSplit{{0, 330}} },
+		"empty split":         func(v *WorkoutReport) { v.Splits = []WorkoutSplit{{1, 0}} },
+		"split not finite":    func(v *WorkoutReport) { v.Splits = []WorkoutSplit{{1, math.Inf(1)}} },
+		"splits past the end": func(v *WorkoutReport) { v.Splits = []WorkoutSplit{{1, 1800}, {2, 1802}} },
+		"too many splits": func(v *WorkoutReport) {
+			v.Splits = make([]WorkoutSplit, workoutMaxSplits+1)
+			for i := range v.Splits {
+				v.Splits[i] = WorkoutSplit{i + 1, 1}
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := v
+			change(&bad)
+			if bad.validate(time.Now()) == nil {
+				t.Fatal("accepted invalid workout")
+			}
+		})
+	}
+}
+
 // A phone clock running ahead of the hub's must not turn a finished workout into a permanent rejection.
 func TestWorkoutValidationToleratesClockDrift(t *testing.T) {
 	v := sampleWorkout()

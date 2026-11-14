@@ -50,7 +50,8 @@ func bigSnapshot(now time.Time) prompts.Snapshot {
 		Plans:     []prompts.SnapshotPlan{{At: now, Titles: []string{"a", "b"}, Tasks: 2}},
 		Asked:     []prompts.SnapshotAsked{{TodoID: "todo_3", Question: "先发哪个？", At: now}},
 		Followups: followups, FollowupsTotal: 11,
-		Following: []prompts.SnapshotFollowing{{Title: "跟进的报价", Where: "项目群", Who: "评审", Next: "再问一次", CheckAt: now}}, FollowingTotal: 1,
+		FollowingEnabled: true,
+		Following:        []prompts.SnapshotFollowing{{Title: "跟进的报价", Where: "项目群", Who: "评审", Next: "再问一次", CheckAt: now}}, FollowingTotal: 1,
 		Routines: []prompts.SnapshotRoutine{{Label: "早报", Rule: "每天 09:00"}}, RoutinesTotal: 1,
 		Missed: []prompts.SnapshotMiss{{At: now, Label: "清单", Why: line[:60*3]}}, MissedTotal: 1,
 	}

@@ -89,6 +89,9 @@ type ExtensionView struct {
 	UpgradeNote       *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
 	// Nodes: its program on each computer it is switched on for (extension_nodes.go), for a plugin with one.
 	Nodes []ExtensionNodeView `json:"nodes,omitempty"`
+	// NodeStatus summarizes Nodes across machines; when the hub runs no process of its own for the plugin, its
+	// Status is aggregated from this instead of saying "stopped" while the program runs on every machine.
+	NodeStatus *ExtensionNodeStatusView `json:"node_status,omitempty"`
 	// Sandbox: an installed extension's sandbox and its connections through the egress proxy (extension_sandbox.go).
 	Sandbox *SandboxView `json:"sandbox,omitempty"`
 	// Auth is its sign-in (manifest.auth, extension_auth.go); Tools the command-line programs this version runs with
@@ -402,6 +405,19 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 	}
 	if m.NodeProgram() != nil {
 		v.Nodes = ps.nodes.views(p.Record.ID)
+		// A plugin whose work happens on computers: while the hub runs no process of its own for it (it has none, or
+		// its on-call process is idle), its top-level status says what the program does across the machines it is
+		// switched on for, not the hub process's idle "stopped" or the declaration-only "running". A live hub process,
+		// and the disabled / needs_setup / incompatible states, keep the hub's say; node_status is present only while
+		// the aggregate drives the status, so clients never pair a hub-process status with machine counts.
+		if aggregated, summary, hasNodes := nodeStatus(v.Nodes); hasNodes {
+			hubProcessIdle := hp == nil || hp.proc == nil
+			if v.Status == host.StateStopped || (hubProcessIdle && v.Status == host.StateRunning) {
+				v.Status = aggregated
+				v.Error = ""
+				v.NodeStatus = &summary
+			}
+		}
 	}
 	if v.Auth = ps.authView(p, l); v.Auth != nil && ps.h != nil {
 		if line := authWarning(ps.h.contextLang(ctx), v.Auth); line != "" {

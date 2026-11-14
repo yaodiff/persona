@@ -95,11 +95,11 @@ class InboxEventsTest {
         assertEquals("改过的", confirmText(s("reply"), "改过的 "))
     }
 
-    @Test fun anEventOpensItsPageAndAnOlderItemItsSourceAsBefore() {
+    @Test fun eventAndNonEventChatRowsOpenTheCollapsedItemPage() {
         val pages = InboxItemPages()
         assertEquals(InboxEventRoute("lark:oc_demo1:100"), inboxRowPage(record("lark:oc_demo1:100"), pages))
         val old = record("lark:oc_demo1:100").copy(event = persona.core.contracts.InboxEventFields.None)
-        assertEquals(LarkRoute("oc_demo1", "lark:oc_demo1:100", 100), inboxRowPage(old, pages))
+        assertEquals(InboxEventRoute("lark:oc_demo1:100"), inboxRowPage(old, pages))
         assertEquals(true, isInboxItemSelected(InboxEventRoute("x"), "x", null))
     }
 

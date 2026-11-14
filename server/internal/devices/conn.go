@@ -33,6 +33,9 @@ type nodeConn struct {
 	served     chan error
 	cancel     context.CancelFunc
 	restarting atomic.Bool // the resident announced exec before ending this connection
+	// trigger is why this connection was made, for its "connected" line: the first, a reconnect (after how long and
+	// why the last one ended) or a planned switch of path.
+	trigger string
 }
 
 func (c *nodeConn) close() {
@@ -44,6 +47,7 @@ func (c *nodeConn) close() {
 // run keeps the machine connected through its best path until ctx ends.
 func (m *Machine) run(ctx context.Context) {
 	var conn *nodeConn
+	var dropped lastDrop // how the last connection ended, for the next one's "connected" line
 	for ctx.Err() == nil {
 		if conn == nil {
 			if why := m.d.parkReason(m); why != "" {
@@ -78,14 +82,22 @@ func (m *Machine) run(ctx context.Context) {
 				continue
 			}
 			conn = c
+			conn.trigger = dropped.trigger(time.Now())
 		}
 		start := time.Now()
 		err := m.serve(ctx, conn)
 		next := m.takeNext()
 		planned := next != nil
-		m.d.pathEnded(conn.path, true, err, time.Since(start), planned || conn.restarting.Load())
+		lasted := time.Since(start)
+		m.d.logf("[%s] connection ended: via=%s lasted=%s planned=%t restarting=%t reason=%q", m.cfg.ID, conn.via,
+			lasted.Round(time.Second), planned, conn.restarting.Load(), dropReason(err))
+		m.d.pathEnded(conn.path, true, err, lasted, planned || conn.restarting.Load())
 		conn.close()
 		m.detach(err, planned)
+		dropped = lastDrop{at: time.Now(), reason: dropReason(err), via: conn.via}
+		if next != nil {
+			next.trigger = fmt.Sprintf("switch from %s", conn.via)
+		}
 		conn = next
 	}
 	if conn != nil {
@@ -240,6 +252,7 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 	peer.Cancels = map[string]bool{proto.MethodModelHTTP: true, proto.MethodModelRun: true, "file.copy": true, "file.zip": true}
 	// Every event goes on to the hub, the forwarded ports' bytes among them (the hub is their end, ports.go there).
 	c := &nodeConn{path: p, via: via, pipe: l, peer: peer, served: make(chan error, 1), cancel: cancel}
+	peer.OnClose = func(err error, inflight []string) { m.logCutOff(via, err, inflight) }
 	peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		if method == "state.load" {
 			var barrier struct {
@@ -310,7 +323,7 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	}
 	onlineAt := time.Now()
 	rewatch := map[string]int{}
-	updates := false // listed: a queued update and a build check follow (below)
+	updates := false // a queued update and a build check follow a list, or an incompatible node's update-only connection
 	for id := range m.watched {
 		rewatch[id] = m.lastSeq[id]
 	}
@@ -335,7 +348,11 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	if c.via == viaHub {
 		where = "hub " + m.d.hubNameOf(p.hub)
 	}
-	m.d.logf("[%s] connected over %s: %s %s/%s herdr %s claude %s", m.cfg.ID, where, info.Hostname, info.OS, info.Arch, info.HerdrVersion, info.ClaudeVersion)
+	trigger := c.trigger
+	if trigger == "" {
+		trigger = "first"
+	}
+	m.d.logf("[%s] connected over %s: %s %s/%s herdr %s claude %s (trigger: %s)", m.cfg.ID, where, info.Hostname, info.OS, info.Arch, info.HerdrVersion, info.ClaudeVersion, trigger)
 	m.tellLinks(true, "")
 	compat := compatOf(info)
 	if compat.Incompatible != "" {
@@ -378,6 +395,7 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 		}
 	} else {
 		rewatch = nil
+		updates = true // node.update.* stays available so this node can become compatible again
 	}
 	m.firstTried() // configured and listed: the calls that waited for it go now
 	if updates {
@@ -775,4 +793,27 @@ func (m *Machine) retryClaudeVersion(ctx context.Context, peer *rpc.Peer) {
 		}
 		return
 	}
+}
+
+// lastDrop is how a machine's last connection ended; zero before its first.
+type lastDrop struct {
+	at     time.Time
+	reason string
+	via    string
+}
+
+// trigger says why a connection made at now was made: the first, or a reconnect after the last one ended.
+func (d lastDrop) trigger(now time.Time) string {
+	if d.at.IsZero() {
+		return "first"
+	}
+	return fmt.Sprintf("reconnect after %s down; the %s connection ended: %s", now.Sub(d.at).Round(time.Second), d.via, d.reason)
+}
+
+// dropReason is why a connection ended, on one line.
+func dropReason(err error) string {
+	if err == nil {
+		return "ended"
+	}
+	return oneLineErr(err)
 }

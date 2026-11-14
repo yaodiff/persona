@@ -2,9 +2,12 @@ package devices
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // pathInfos is a machine's paths for the admin page and the machine list.
@@ -34,21 +37,74 @@ func (d *Devices) pathInfos(m *Machine) []pathInfo {
 	return out
 }
 
-// measureNodes measures the round trip to every computer this hub drives, over the path in use.
+// measureNodes measures the round trip to every computer this hub drives, over the path in use. A connection that
+// leaves pingMissLimit pings in a row unanswered is closed so the machine reconnects (#7510): a half-open link (an
+// ssh proxy that still answers keepalives while the node behind it is gone) otherwise holds every call sent on it
+// until its own wait runs out, a task's start for minutes.
 func (d *Devices) measureNodes(ctx context.Context) {
 	for _, m := range d.machinesNow() {
 		p := m.activePath()
 		if p == nil || !m.isOnline() {
 			continue
 		}
-		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		m.mu.Lock()
+		peer := m.peer
+		m.mu.Unlock()
+		cctx, cancel := context.WithTimeout(ctx, pingWait)
 		start := time.Now()
 		err := m.call(cctx, "ping", map[string]any{}, nil)
 		cancel()
 		if err == nil {
 			d.pathRTT(p, max(1, int(time.Since(start).Milliseconds())))
 		}
+		if ctx.Err() == nil {
+			m.pingAnswered(peer, err)
+		}
 	}
+}
+
+// pingWait bounds one ping of measureNodes; pingMissLimit is how many in a row may go unanswered before the
+// connection is closed. Vars so tests shorten them.
+var (
+	pingWait      = 5 * time.Second
+	pingMissLimit = 2
+)
+
+// pingAnswered counts a ping sent on peer: one written that ran out of time without an answer is a miss, anything
+// else (an answer, an error the node answered with) clears the count; a connection already gone (closed, offline), a
+// ping that could not be written in time, and one during a resident node's handover count neither way. pingMissLimit misses in a row on the same connection close it.
+func (m *Machine) pingAnswered(peer *rpc.Peer, err error) {
+	if peer == nil {
+		return
+	}
+	var re *rpc.Error
+	gone := errors.Is(err, rpc.ErrClosed) || errors.Is(err, rpc.ErrSuspended) || errors.Is(err, errOffline) || errors.Is(err, context.Canceled)
+	missed := errors.Is(err, context.DeadlineExceeded) || errors.As(err, &re) && re.Code == "" && re.Message == context.DeadlineExceeded.Error()
+	// Not a sign of a dead link: a ping that never got on the wire (a long write ahead of it on a slow but working
+	// link), or one made while a resident node hands over to its next process (calls wait for the new connection).
+	if gone && !missed || errors.Is(err, rpc.ErrNotWritten) || m.expectedReload() {
+		return
+	}
+	m.mu.Lock()
+	if m.pingPeer != peer {
+		m.pingPeer, m.pingMisses = peer, 0
+	}
+	if missed {
+		m.pingMisses++
+	} else {
+		m.pingMisses = 0
+	}
+	misses, current := m.pingMisses, m.peer == peer
+	if misses >= pingMissLimit {
+		m.pingMisses = 0
+	}
+	m.mu.Unlock()
+	if misses < pingMissLimit || !current {
+		return
+	}
+	m.d.logf("[%s] no answer to %d pings in a row over %s: closing the connection to reconnect", m.cfg.ID, misses, m.transportNow())
+	peer.Close(fmt.Errorf("no answer to %d pings in a row (a half-open link?)", misses))
+	m.wake()
 }
 
 // decorate fills in what the apps see of how a machine is reached: the hub it is reached through, its own id, the

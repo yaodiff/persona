@@ -43,5 +43,9 @@
   "cond_since": "Updated",
   "since_24h": "Last 24 hours",
   "since_7d": "Last 7 days",
-  "since_30d": "Last 30 days"
+  "since_30d": "Last 30 days",
+  "saved_searches": "Saved searches",
+  "save_search": "Save search",
+  "saved_searches_failed": "Could not load search tools.",
+  "saved_searches_retry": "Retry"
 }

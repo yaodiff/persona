@@ -8,7 +8,7 @@ import { agentName, sessionAgent } from "../../lib/agent-kind";
 import { errorText } from "../../lib/api";
 import { ago, baseName, sessionTitle } from "../../lib/format";
 import { machineWithHub } from "../../lib/mesh";
-import { href, onLinkClick, type Route } from "../../lib/router";
+import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { useStore } from "../../lib/store";
 import type { Machine, Session } from "../../lib/types";
 import { SessionMark } from "../../ui/AgentMark";
@@ -78,6 +78,9 @@ export function AgentArchives({ onToggleSidebar }: { onToggleSidebar: () => void
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("assistant-history.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
+        {/* a page under the Agents list: back to it, as a request's page and the settings' pages go back to theirs; the
+            list keeps its grouping and filter (stored in this browser) */}
+        <IconButton icon="chevronLeft" label={t("agents-archives.back")} onClick={() => navigate({ name: "agent-list" })} />
         <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">
           {t("agents-archives.title")}
           {rows && rows.length > 0 && <span className="ml-2 text-[12px] font-normal text-ink-3 tabular-nums">{rows.length}</span>}

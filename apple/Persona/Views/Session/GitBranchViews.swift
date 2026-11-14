@@ -158,7 +158,7 @@ struct GitBranchesSheet: View {
 
     private func load() async {
         failure = nil
-        do { branches = try await deps.branches(machineID, cwd) } catch {
+        do { branches = try await deps.branches(machineID, cwd).branches } catch {
             if !error.isCancellation { failure = GitRefusal(error).detail }
         }
     }

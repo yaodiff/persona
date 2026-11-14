@@ -50,11 +50,11 @@ internal fun outboxMark(state: DeliveryState): OutboxMark? = when (state) {
 internal fun drawsAsPendingBubble(state: DeliveryState): Boolean = state == DeliveryState.Sent || outboxMark(state) != null
 
 /** The mark's menu, in iOS's order: Retry now and Don't send while it waits, Resend and Delete once it failed. */
-internal fun outboxMarkActions(mark: OutboxMark): List<DeliveryAction> = when (mark) {
+internal fun outboxMarkActions(mark: OutboxMark, canSend: Boolean = true): List<DeliveryAction> = when (mark) {
     OutboxMark.Sending -> emptyList()
     OutboxMark.Waiting -> listOf(DeliveryAction.RetryNow, DeliveryAction.Cancel)
     OutboxMark.Failed -> listOf(DeliveryAction.Retry, DeliveryAction.Delete)
-}
+}.filter { it.available(canSend) }
 
 /**
  * An unsent message on Glass, as iOS's `PendingBubble`: its [OutboxMark] before the bubble, a tap on it opens the small menu
@@ -63,29 +63,29 @@ internal fun outboxMarkActions(mark: OutboxMark): List<DeliveryAction> = when (m
  * null: a read-only chat, the mark has no menu.
  */
 @Composable
-internal fun OutboxBubble(text: String, id: String, state: DeliveryState, busy: Boolean, onAction: ((DeliveryAction) -> Unit)?) {
+internal fun OutboxBubble(text: String, id: String, state: DeliveryState, busy: Boolean, canSend: Boolean = true, onAction: ((DeliveryAction) -> Unit)?) {
     val mark = outboxMark(state)
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         UserBubble(text, id, state, faded = mark == OutboxMark.Waiting || mark == OutboxMark.Failed,
-            leading = mark?.let { { OutboxMarkButton(it, busy, onAction) } })
+            leading = mark?.let { { OutboxMarkButton(it, busy, canSend, onAction) } })
         if (mark == OutboxMark.Waiting) Text(PendingStatus.Waiting.localizedLabel, style = PersonaTheme.type.caption,
             color = PersonaTheme.palette.ink2, maxLines = 1)
     }
 }
 
 @Composable
-private fun OutboxMarkButton(mark: OutboxMark, busy: Boolean, onAction: ((DeliveryAction) -> Unit)?) {
+private fun OutboxMarkButton(mark: OutboxMark, busy: Boolean, canSend: Boolean, onAction: ((DeliveryAction) -> Unit)?) {
     val palette = PersonaTheme.palette
     val res = LocalResources.current
     var open by remember { mutableStateOf(false) }
-    val actions = if (onAction == null || busy) emptyList() else outboxMarkActions(mark)
+    val actions = if (onAction == null || busy) emptyList() else outboxMarkActions(mark, canSend)
     fun label(action: DeliveryAction) = res.getString(when (action) {
         DeliveryAction.RetryNow -> R.string.chat_outbox_retry_now
         DeliveryAction.Cancel -> R.string.chat_outbox_dont_send
         DeliveryAction.Retry -> R.string.chat_outbox_resend
         else -> R.string.chat_delivery_delete
     })
-    val spoken = when (mark) {
+    val spoken = if (!canSend && mark != OutboxMark.Sending) PendingStatus.Refused.localizedLabel else when (mark) {
         OutboxMark.Sending -> PendingStatus.Sending.localizedLabel
         OutboxMark.Waiting -> stringResource(R.string.chat_outbox_waiting_spoken)
         OutboxMark.Failed -> stringResource(R.string.chat_outbox_failed_spoken)

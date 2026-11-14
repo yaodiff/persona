@@ -18,7 +18,8 @@ func TestNodeConfigurationAnnouncesHubFeatures(t *testing.T) {
 	if err := json.Unmarshal(reply.Configure["hub_features"], &features); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(features, h.features()) || !slices.Contains(features, nodeproto.PersonaContracts) {
+	if !slices.Equal(features, h.features()) || !slices.Contains(features, nodeproto.PersonaContracts) ||
+		!slices.Contains(features, nodeproto.MCPWait) {
 		t.Fatalf("node configuration must announce the same capabilities as hello: %v", features)
 	}
 }

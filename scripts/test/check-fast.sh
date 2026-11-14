@@ -787,13 +787,14 @@ else
     # Suites whose names do not match the file they test: test_privacy_check.py and test_check_deno_adapter_sh.py copy
     # scripts/hooks into their temp repositories and run the hooks there (the latter also scripts/gen/deno_adapter.sh);
     # check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py copies privacy_check.py into its temp
-    # repositories, where merge-pr.sh runs it.
+    # repositories, where merge-pr.sh runs it, and checks that pr_watch_merge.py's merge lock excludes merge-pr.sh's.
     case "$f" in
       scripts/hooks/*)
         script_test_add scripts/test/test_privacy_check.py; script_test_add scripts/test/test_check_deno_adapter_sh.py ;;
       scripts/gen/deno_adapter.sh) script_test_add scripts/test/test_check_deno_adapter_sh.py ;;
       scripts/privacy_check.py)
         script_test_add scripts/release/test_check_bundle_privacy.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
+      scripts/operations/pr_watch_merge.py) script_test_add scripts/test/test_merge_pr_sh.py ;;
     esac
     case "$f" in deploy/docker/*|docs/operations/docker.md|Dockerfile) script_test_add scripts/test/test_docker_entrypoint.py ;; esac
   done <<< "$CHANGED"

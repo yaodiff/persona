@@ -15,6 +15,7 @@ import { LiveClockContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { inOpenedFold, openFoldRange, useExpanded, useLiveOverride } from "./expanded";
 import { useReveal } from "./search-reveal";
+import { stepWeight, useStepBudget, withinBudget } from "./work-budget";
 import { nodeItemIds } from "../../lib/chat-search";
 import { Answer } from "./SegmentView";
 import { NoticeRow, Thumb } from "./Steps";
@@ -81,7 +82,9 @@ function LiveThinking({ mid, sid }: { mid: string; sid: string }) {
   return useThinkingNow(mid, sid);
 }
 
-export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p: WorkProps }) {
+/** `limit`: inside an open group whose budget (work-budget.ts) does not reach all of this one, how many of its steps it
+ *  draws for now. */
+export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroupNode; p: WorkProps; limit?: number }) {
   // an outer group whose folded steps the reader just opened: open under whatever key it has once they are in
   const style = p.lineStyle ?? "agents";
   const turnLive = Boolean(p.turnLive ?? g.live) && g.live && !p.nested;
@@ -101,9 +104,15 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
     setOpen(next);
     if (next) for (const f of foldsOf(g)) if (f.fold) openFoldRange(p.scope, f.seq, f.fold.through_seq);
   };
-  // a search hit inside it (search-reveal.ts): it opens, and "Back to where you were" closes it again
+  // a long trace is drawn a screenful at a time (work-budget.ts): the outermost group keeps the budget, nested ones draw
+  // what it leaves them; a jump to a call in it (jump.ts) draws it whole
+  const budget = useStepBudget(p.nested ? undefined : key, open && !p.nested, stepWeight(g) - 1, g.live);
+  const drawn = p.nested ? limit : budget.drawn;
+  // a search hit inside it (search-reveal.ts): it opens, with every step drawn so the hit's row is there to land on,
+  // and "Back to where you were" closes it again
   const ids = useMemo(() => nodeItemIds(g.children), [g.children]);
   useReveal(p.scope, ids, () => {
+    budget.showAll();
     if (open || !opens) return;
     toggle();
     return () => setOpen(false);
@@ -160,7 +169,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
       )}
       <Collapse open={open} lazy>
         <div className="mt-1 flex min-w-0 flex-col gap-2 border-l-2 border-tool-rail py-[2px] pl-3" data-work-detail>
-          <WorkNodes nodes={g.children} p={inside} live={rowsLive} />
+          <WorkNodes nodes={g.children} p={inside} live={rowsLive} limit={drawn} />
           {/* once, in the innermost live group: a live timeline's last run is live too */}
           {g.live && !g.children.some((c) => c.kind === "group" && c.live) && <LiveThinking mid={p.mid} sid={p.sid} />}
         </div>
@@ -171,10 +180,12 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
 
 /** Nodes in order; tool calls next to each other sit together without a gap, like cindy's tool segments; each subagent
  *  is a card of its own, in the order it was launched (#5030). `fade`: the agent's words among them that just
- *  came in fade in (fresh-words.ts); not inside a group. */
-export function WorkNodes({ nodes, p, live, fade }: { nodes: WorkNode[]; p: WorkProps; live?: boolean; fade?: boolean }) {
+ *  came in fade in (fresh-words.ts); not inside a group. `limit`: only the first that many steps for now (an open
+ *  group's budget, work-budget.ts); absent, all of them. */
+export function WorkNodes({ nodes, p, live, fade, limit }: { nodes: WorkNode[]; p: WorkProps; live?: boolean; fade?: boolean; limit?: number }) {
+  const { shown, limits } = withinBudget(nodes, limit);
   const runs: (WorkNode | ToolStep[])[] = [];
-  for (const n of nodes) {
+  for (const n of shown) {
     const last = runs[runs.length - 1];
     if (n.kind === "step" && drawnAsRow(n.step, p)) {
       if (Array.isArray(last)) last.push(n.step);
@@ -191,7 +202,7 @@ export function WorkNodes({ nodes, p, live, fade }: { nodes: WorkNode[]; p: Work
             ))}
           </div>
         ) : run.kind === "group" ? (
-          <WorkGroup key={run.id} g={run} p={p} />
+          <WorkGroup key={run.id} g={run} p={p} limit={limits?.get(run)} />
         ) : (
           <StepView key={run.step.id} step={run.step} p={p} live={live} fade={fade} />
         ),

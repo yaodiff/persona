@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -438,5 +439,147 @@ func TestProbePanesKeepsEveryPanesProbes(t *testing.T) {
 	}
 	if hits[0].Load() != 1 {
 		t.Fatalf("the first server was asked %d times", hits[0].Load())
+	}
+}
+
+// countingProcHost reports pids as a pane's foreground processes and counts the asks.
+type countingProcHost struct {
+	bareHost
+	mu    sync.Mutex
+	pids  []int
+	asked int
+}
+
+func (h *countingProcHost) PaneProcesses(context.Context, host.PaneRef) ([]int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.asked++
+	return h.pids, nil
+}
+
+func (h *countingProcHost) set(pids ...int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pids = pids
+}
+
+func (h *countingProcHost) asks() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.asked
+}
+
+// startProc runs name args until the test ends (or it is stopped); its pid.
+func startProc(t *testing.T, name string, args ...string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	return cmd
+}
+
+// A pane's foreground processes are asked for once while its first process stays the same, not on every scan (#5515:
+// one herdr call per pane per scan, ~10 calls/s with 40 agents at work). A new first process, a shell first (the
+// agent not started yet) or a pane no longer live is asked for (or forgotten) as before.
+func TestScanPortsAsksForAPanesProcessesOnce(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("ports are scanned on Linux and macOS")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "<title>Kept</title>")
+	}))
+	defer srv.Close()
+	port := portOf(t, srv.URL)
+	lead := startProc(t, "sleep", "300") // the agent: not a shell, alive for the test
+	h := &countingProcHost{bareHost: bareHost{kind: host.Herdr}}
+	h.set(lead.Process.Pid, os.Getpid())
+	n := &Node{hosts: host.NewRegistry(h), agents: map[string]host.Agent{"s1": {Agent: "claude", PaneID: "w1:p1"}},
+		logger: log.New(os.Stderr, "", 0)}
+	ctx := context.Background()
+	hasPort := func() bool {
+		return slices.ContainsFunc(n.portsOf("w1:p1"), func(p proto.Port) bool { return p.Port == port })
+	}
+	for range 5 {
+		n.scanPorts(ctx)
+		if !hasPort() {
+			t.Fatalf("port %d not found in %+v", port, n.portsOf("w1:p1"))
+		}
+	}
+	if got := h.asks(); got != 1 {
+		t.Fatalf("5 scans asked the host %d times, want 1", got)
+	}
+
+	// The agent exits (a new one starts in the pane): asked again, and then kept again.
+	_ = lead.Process.Kill()
+	_ = lead.Wait()
+	next := startProc(t, "sleep", "300")
+	h.set(next.Process.Pid, os.Getpid())
+	n.scanPorts(ctx)
+	n.scanPorts(ctx)
+	if got := h.asks(); got != 2 {
+		t.Fatalf("after the first process changed: %d asks, want 2", got)
+	}
+	if !hasPort() {
+		t.Fatal("the server is no longer found after the new first process")
+	}
+
+	// A shell first is not kept: claude starting under it would be taken for one of the pane's servers.
+	sh := startProc(t, "sh", "-c", "sleep 300; :")
+	h.set(sh.Process.Pid, os.Getpid())
+	n.ports.roots = nil
+	n.scanPorts(ctx)
+	n.scanPorts(ctx)
+	if got := h.asks(); got != 4 {
+		t.Fatalf("with a shell first: %d asks, want 4 (asked on every scan)", got)
+	}
+
+	// A pane no longer live is forgotten.
+	n.mu.Lock()
+	n.agents = map[string]host.Agent{}
+	n.mu.Unlock()
+	n.scanPorts(ctx)
+	if len(n.ports.roots) != 0 {
+		t.Fatalf("roots kept for a gone pane: %+v", n.ports.roots)
+	}
+}
+
+// A pane's other foreground processes are reused only while each is unchanged: one that exited, or whose pid now
+// belongs to another process, is dropped rather than walked as a root (its children and its terminal could be another
+// pane's), while the first process keeps the pane's roots without asking the host again.
+func TestScanPortsDropsAChangedCachedProcess(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("ports are scanned on Linux and macOS")
+	}
+	lead := startProc(t, "sleep", "300")
+	other := startProc(t, "sleep", "300")
+	h := &countingProcHost{bareHost: bareHost{kind: host.Herdr}}
+	h.set(lead.Process.Pid, other.Process.Pid, os.Getpid())
+	n := &Node{hosts: host.NewRegistry(h), agents: map[string]host.Agent{"s1": {Agent: "claude", PaneID: "w1:p1"}},
+		logger: log.New(os.Stderr, "", 0)}
+	ctx := context.Background()
+	n.scanPorts(ctx)
+	if got := n.ports.roots["w1:p1"].pids; len(got) != 3 {
+		t.Fatalf("kept %v, want all 3 pids", got)
+	}
+
+	// The second exits: dropped.
+	_ = other.Process.Kill()
+	_ = other.Wait()
+	n.scanPorts(ctx)
+	if got, want := n.ports.roots["w1:p1"].pids, []int{lead.Process.Pid, os.Getpid()}; !slices.Equal(got, want) {
+		t.Fatalf("after the second exited: kept %v, want %v", got, want)
+	}
+
+	// The test process's pid stood for another process when it was cached (a reused pid): dropped.
+	r := n.ports.roots["w1:p1"]
+	r.seen[1].cmd = "not-" + r.seen[1].cmd
+	n.scanPorts(ctx)
+	if got, want := n.ports.roots["w1:p1"].pids, []int{lead.Process.Pid}; !slices.Equal(got, want) {
+		t.Fatalf("after a reused pid: kept %v, want %v", got, want)
+	}
+	if got := h.asks(); got != 1 {
+		t.Fatalf("the host was asked %d times, want 1 (the first process never changed)", got)
 	}
 }

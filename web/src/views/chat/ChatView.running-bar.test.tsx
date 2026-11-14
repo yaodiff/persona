@@ -116,3 +116,49 @@ describe("the Persona conversation says its foreground turn exactly once (#6230)
     expect(dockBar()).not.toBeNull();
   });
 });
+
+// A Persona conversation opened from the generic agent session route (/s/<mid>/<sid>) mounts ChatView without the
+// `assistant` prop; only session.assistant marks it. The foreground turn still says its state once (#6230, follow-up:
+// supervisor and other non-main Persona chats showed the line twice on that route).
+describe("a Persona conversation on the generic session route says its foreground turn exactly once (#6230)", () => {
+  it("hides the dock bar across the whole working turn without the assistant prop, keeping one in-stream indicator", async () => {
+    captured.session = { machine_id: "hub", session_id: "c1", title: "Supervisor", cwd: "/code", status: "working", state: "working", state_since: "2026-11-13T01:00:01Z", assistant: true } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(liveWorkLine()).not.toBeNull();
+    expect(dockBar()).toBeNull();
+
+    // the same transcript reload that let the bar leak in before the phase-based gate must not bring it back here either
+    act(() => { transcript.loading = true; });
+    await flush();
+    expect(dockBar()).toBeNull();
+    expect(inStreamIndicator()).not.toBeNull();
+    act(() => { transcript.loading = false; });
+    await flush();
+    expect(dockBar()).toBeNull();
+    expect(liveWorkLine()).not.toBeNull();
+
+    // streaming the answer: still one place, never the dock bar
+    act(() => { transcript.streaming = "The answer so far"; });
+    await flush();
+    expect(dockBar()).toBeNull();
+    expect(inStreamIndicator()).not.toBeNull();
+    act(() => { transcript.streaming = ""; });
+  });
+
+  it("brings the dock bar back for background-only work on the generic route", async () => {
+    // state stays "working" but only a background wait remains, so the turn is drawn finished (backgroundOnly): the
+    // stream shows only quiet fold rows and the dock bar is allowed again, keeping background work announced once.
+    captured.session = { machine_id: "hub", session_id: "c1", title: "Supervisor", cwd: "/code", status: "working", state: "working", state_since: "2026-11-13T01:00:01Z", assistant: true, background_waiting: true } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(dockBar()).not.toBeNull();
+  });
+
+  it("keeps the dock bar for a plain Agent session on the generic route even when a session object carries no prop", async () => {
+    captured.session = { machine_id: "hub", session_id: "c1", title: "Agent", cwd: "/code", status: "working", state: "working", state_since: "2026-11-13T01:00:01Z", assistant: false } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(dockBar()).not.toBeNull();
+  });
+});

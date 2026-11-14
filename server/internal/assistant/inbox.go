@@ -243,6 +243,7 @@ func (it *InboxItem) listed() InboxItem {
 	if it.Agent != nil { // the copy is encoded after the lock is released
 		a := *it.Agent
 		a.Pending, a.Wake, a.SentOf, a.Lost = nil, false, "", nil
+		a.DeferredAt, a.WakeSlot = nil, false
 		c.Agent = &a
 	}
 	if it.Mail != nil {

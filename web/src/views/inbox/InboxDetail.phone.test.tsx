@@ -60,6 +60,20 @@ describe("收件箱详情在手机宽度", () => {
     expect(time?.className).toContain("shrink-0");
   });
 
+  // audit item 60: the words took all the free width (flex-1), so the time sat at the line's far end as " · 08:29";
+  // now they take their own width and the time follows them, with Original / Handling pushed to the end on its own
+  it("puts the time right after where it came from, not at the far end", () => {
+    act(() => root.render(<InboxDetail item={item()} loaded />));
+    const meta = host.querySelector("[data-detail-meta]")!;
+    const [words, time] = [...meta.children];
+    expect(words.className).toContain("truncate");
+    expect(words.className).not.toContain("flex-1");
+    expect(time.textContent).toMatch(/^ · \d\d:\d\d$/);
+    expect(time.previousElementSibling).toBe(words);
+    act(() => root.render(<InboxDetail item={item({ lark: undefined, chain: [{ id: "c1", kind: "received", text: "看一下" }] } as Partial<InboxItem>)} loaded />));
+    expect(host.querySelector("[data-detail-meta] button")?.className).toContain("ml-auto");
+  });
+
   it("truncates the where line and keeps Original on one line", () => {
     act(() => root.render(<InboxDetail item={item({ lark: undefined, where: "一个很长的会话名称", now: "needs_you" })} loaded />));
     const meta = host.querySelector("[data-detail-meta]")!;

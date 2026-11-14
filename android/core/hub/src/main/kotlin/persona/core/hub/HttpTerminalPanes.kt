@@ -2,6 +2,7 @@ package persona.core.hub
 
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.NewPaneTab
+import persona.core.contracts.api.FinishedPanes
 import persona.core.contracts.api.PanesResponse
 import persona.core.contracts.api.TerminalPanes
 import kotlinx.coroutines.flow.Flow
@@ -16,7 +17,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 
 /**
- * The terminal browser's two calls on one hub (docs/integrations/terminal.md "Standalone terminal"), with that hub's plain machine ids.
+ * The terminal browser's calls on one hub (docs/integrations/terminal.md "Standalone terminal"), with that hub's plain machine ids.
  * [request] is the pairing's connection: it waits for the route, adds the token and turns refusals into [HubFailure].
  */
 class HttpTerminalPanes internal constructor(
@@ -35,6 +36,23 @@ class HttpTerminalPanes internal constructor(
         // The hub gives the node 30 s to open the tab (without taking the computer's focus).
         return request(panesPath(machineId), "POST", payload, 35).use { JsonCodec.decodeFromString(body(it)) }
     }
+
+    override suspend fun close(machineId: String, pane: String) {
+        post(machineId, "close", buildJsonObject { put("pane", pane) }).use { body(it) }
+    }
+
+    override suspend fun closeFinished(machineId: String, preview: Boolean, panes: List<String>): FinishedPanes {
+        require(preview || panes.isNotEmpty())
+        val payload = buildJsonObject {
+            if (preview) put("preview", true) else put("panes", panes.joinToString(","))
+        }
+        // The hub allows 60 s to recheck every candidate's foreground program, as on iOS.
+        return post(machineId, "close_finished", payload, timeout = 70).use { JsonCodec.decodeFromString(body(it)) }
+    }
+
+    private suspend fun post(machineId: String, action: String, payload: JsonObject, timeout: Long = 35): Response =
+        request("${panesPath(machineId)}/$action", "POST",
+            payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()), timeout)
 
     private fun body(response: Response): String {
         if (!response.isSuccessful) throw HubFailure.from(response)

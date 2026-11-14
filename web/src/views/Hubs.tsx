@@ -50,6 +50,7 @@ export function HubList() {
   return (
     <>
       <Group
+        anchor="hubs"
         title={t("hubs.group_title")}
         right={
           <Button tone="quiet" icon="plus" onClick={() => setAdding(true)} className="-mb-1 h-7 px-2">

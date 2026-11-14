@@ -26,6 +26,13 @@ interface ChatRepository {
     suspend fun loadOlder(session: SessionKey)
     suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int): List<Item>
 
+    /**
+     * Items in `[fromSeq, throughSeq]` for search in chat, without opening the fold in the transcript
+     * (`GET …/items?from_seq=&through_seq=`, the same pages [expandFold] reads). Empty where a repository
+     * cannot read a range on its own.
+     */
+    suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int): List<Item> = emptyList()
+
     /** Implementations fetch authenticated bytes; presentation owns decoding and caching. */
     suspend fun loadImage(session: SessionKey, itemId: String): ByteArray =
         throw UnsupportedOperationException("Image unavailable")

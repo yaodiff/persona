@@ -5,7 +5,10 @@ indirect public enum Action: Hashable, Sendable {
     case openChat(chat: String, snapshot: PersonaCoreWire.ChatSnapshot)
     case closeChat(chat: String)
     case chat(chat: String, event: PersonaCoreWire.ChatEvent)
+    case wirePayload(chat: String, payload: PersonaCoreWire.Payload)
     case continueFill(chat: String)
+    case hubChanged(chat: String)
+    case ack(chat: String, seq: UInt64)
 
     public func serialize<S: Serializer>(serializer: S) throws {
         try serializer.increase_container_depth()
@@ -21,9 +24,20 @@ indirect public enum Action: Hashable, Sendable {
             try serializer.serialize_variant_index(value: 2)
             try serializer.serialize_str(value: chat)
             try event.serialize(serializer: serializer)
-        case .continueFill(let chat):
+        case .wirePayload(let chat, let payload):
             try serializer.serialize_variant_index(value: 3)
             try serializer.serialize_str(value: chat)
+            try payload.serialize(serializer: serializer)
+        case .continueFill(let chat):
+            try serializer.serialize_variant_index(value: 4)
+            try serializer.serialize_str(value: chat)
+        case .hubChanged(let chat):
+            try serializer.serialize_variant_index(value: 5)
+            try serializer.serialize_str(value: chat)
+        case .ack(let chat, let seq):
+            try serializer.serialize_variant_index(value: 6)
+            try serializer.serialize_str(value: chat)
+            try serializer.serialize_u64(value: seq)
         }
         try serializer.decrease_container_depth()
     }
@@ -54,8 +68,22 @@ indirect public enum Action: Hashable, Sendable {
             return .chat(chat: chat, event: event)
         case 3:
             let chat = try deserializer.deserialize_str()
+            let payload = try PersonaCoreWire.Payload.deserialize(deserializer: deserializer)
+            try deserializer.decrease_container_depth()
+            return .wirePayload(chat: chat, payload: payload)
+        case 4:
+            let chat = try deserializer.deserialize_str()
             try deserializer.decrease_container_depth()
             return .continueFill(chat: chat)
+        case 5:
+            let chat = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .hubChanged(chat: chat)
+        case 6:
+            let chat = try deserializer.deserialize_str()
+            let seq = try deserializer.deserialize_u64()
+            try deserializer.decrease_container_depth()
+            return .ack(chat: chat, seq: seq)
         default: throw DeserializationError.invalidInput(issue: "Unknown variant index for Action: \(index)")
         }
     }
@@ -76,13 +104,13 @@ indirect public enum ChatEvent: Hashable, Sendable {
     case after(batch: PersonaCoreWire.WireBatch)
     case reloaded(items_json: String, history: String?, to_seq: Int64?, has_more: Bool)
     case older(items_json: String, has_more: Bool)
-    case range(items_json: String, more: Bool)
+    case range(fold_id: String?, items_json: String, more: Bool)
     case reconnected
     case loadOlder
     case openFold(fold_id: String)
     case fillFailed
     case olderFailed
-    case rangeFailed
+    case rangeFailed(fold_id: String?)
 
     public func serialize<S: Serializer>(serializer: S) throws {
         try serializer.increase_container_depth()
@@ -106,8 +134,9 @@ indirect public enum ChatEvent: Hashable, Sendable {
             try serializer.serialize_variant_index(value: 4)
             try serializer.serialize_str(value: items_json)
             try serializer.serialize_bool(value: has_more)
-        case .range(let items_json, let more):
+        case .range(let fold_id, let items_json, let more):
             try serializer.serialize_variant_index(value: 5)
+            try serialize_option_str(value: fold_id, serializer: serializer)
             try serializer.serialize_str(value: items_json)
             try serializer.serialize_bool(value: more)
         case .reconnected:
@@ -121,8 +150,9 @@ indirect public enum ChatEvent: Hashable, Sendable {
             try serializer.serialize_variant_index(value: 9)
         case .olderFailed:
             try serializer.serialize_variant_index(value: 10)
-        case .rangeFailed:
+        case .rangeFailed(let fold_id):
             try serializer.serialize_variant_index(value: 11)
+            try serialize_option_str(value: fold_id, serializer: serializer)
         }
         try serializer.decrease_container_depth()
     }
@@ -162,10 +192,11 @@ indirect public enum ChatEvent: Hashable, Sendable {
             try deserializer.decrease_container_depth()
             return .older(items_json: items_json, has_more: has_more)
         case 5:
+            let fold_id = try deserialize_option_str(deserializer: deserializer)
             let items_json = try deserializer.deserialize_str()
             let more = try deserializer.deserialize_bool()
             try deserializer.decrease_container_depth()
-            return .range(items_json: items_json, more: more)
+            return .range(fold_id: fold_id, items_json: items_json, more: more)
         case 6:
             try deserializer.decrease_container_depth()
             return .reconnected
@@ -183,8 +214,9 @@ indirect public enum ChatEvent: Hashable, Sendable {
             try deserializer.decrease_container_depth()
             return .olderFailed
         case 11:
+            let fold_id = try deserialize_option_str(deserializer: deserializer)
             try deserializer.decrease_container_depth()
-            return .rangeFailed
+            return .rangeFailed(fold_id: fold_id)
         default: throw DeserializationError.invalidInput(issue: "Unknown variant index for ChatEvent: \(index)")
         }
     }
@@ -205,14 +237,18 @@ public struct ChatPatch: Hashable, Sendable {
     @Indirect public var history: String?
     @Indirect public var hasMore: Bool?
     @Indirect public var loadedOnce: Bool
+    @Indirect public var verified: Bool
+    @Indirect public var acked: UInt64?
     @Indirect public var ops: [PersonaCoreWire.ListOp]
 
-    public init(version: UInt64, covered: Int64, history: String?, hasMore: Bool?, loadedOnce: Bool, ops: [PersonaCoreWire.ListOp]) {
+    public init(version: UInt64, covered: Int64, history: String?, hasMore: Bool?, loadedOnce: Bool, verified: Bool, acked: UInt64?, ops: [PersonaCoreWire.ListOp]) {
         self.version = version
         self.covered = covered
         self.history = history
         self.hasMore = hasMore
         self.loadedOnce = loadedOnce
+        self.verified = verified
+        self.acked = acked
         self.ops = ops
     }
 
@@ -223,6 +259,8 @@ public struct ChatPatch: Hashable, Sendable {
         try serialize_option_str(value: self.history, serializer: serializer)
         try serialize_option_bool(value: self.hasMore, serializer: serializer)
         try serializer.serialize_bool(value: self.loadedOnce)
+        try serializer.serialize_bool(value: self.verified)
+        try serialize_option_u64(value: self.acked, serializer: serializer)
         try serialize_vector_ListOp(value: self.ops, serializer: serializer)
         try serializer.decrease_container_depth()
     }
@@ -240,9 +278,11 @@ public struct ChatPatch: Hashable, Sendable {
         let history = try deserialize_option_str(deserializer: deserializer)
         let hasMore = try deserialize_option_bool(deserializer: deserializer)
         let loadedOnce = try deserializer.deserialize_bool()
+        let verified = try deserializer.deserialize_bool()
+        let acked = try deserialize_option_u64(deserializer: deserializer)
         let ops = try deserialize_vector_ListOp(deserializer: deserializer)
         try deserializer.decrease_container_depth()
-        return ChatPatch.init(version: version, covered: covered, history: history, hasMore: hasMore, loadedOnce: loadedOnce, ops: ops)
+        return ChatPatch.init(version: version, covered: covered, history: history, hasMore: hasMore, loadedOnce: loadedOnce, verified: verified, acked: acked, ops: ops)
     }
 
     public static func bincodeDeserialize(input: [UInt8]) throws -> ChatPatch {
@@ -455,12 +495,95 @@ indirect public enum ListOp: Hashable, Sendable {
     }
 }
 
+indirect public enum Payload: Hashable, Sendable {
+    case latest(body: String)
+    case newer(body: String)
+    case reloaded(body: String)
+    case older(body: String)
+    case range(fold_id: String?, body: String)
+    case frame(body: String)
+
+    public func serialize<S: Serializer>(serializer: S) throws {
+        try serializer.increase_container_depth()
+        switch self {
+        case .latest(let body):
+            try serializer.serialize_variant_index(value: 0)
+            try serializer.serialize_str(value: body)
+        case .newer(let body):
+            try serializer.serialize_variant_index(value: 1)
+            try serializer.serialize_str(value: body)
+        case .reloaded(let body):
+            try serializer.serialize_variant_index(value: 2)
+            try serializer.serialize_str(value: body)
+        case .older(let body):
+            try serializer.serialize_variant_index(value: 3)
+            try serializer.serialize_str(value: body)
+        case .range(let fold_id, let body):
+            try serializer.serialize_variant_index(value: 4)
+            try serialize_option_str(value: fold_id, serializer: serializer)
+            try serializer.serialize_str(value: body)
+        case .frame(let body):
+            try serializer.serialize_variant_index(value: 5)
+            try serializer.serialize_str(value: body)
+        }
+        try serializer.decrease_container_depth()
+    }
+
+    public func bincodeSerialize() throws -> [UInt8] {
+        let serializer = BincodeSerializer.init();
+        try self.serialize(serializer: serializer)
+        return serializer.get_bytes()
+    }
+
+    public static func deserialize<D: Deserializer>(deserializer: D) throws -> Payload {
+        let index = try deserializer.deserialize_variant_index()
+        try deserializer.increase_container_depth()
+        switch index {
+        case 0:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .latest(body: body)
+        case 1:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .newer(body: body)
+        case 2:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .reloaded(body: body)
+        case 3:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .older(body: body)
+        case 4:
+            let fold_id = try deserialize_option_str(deserializer: deserializer)
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .range(fold_id: fold_id, body: body)
+        case 5:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .frame(body: body)
+        default: throw DeserializationError.invalidInput(issue: "Unknown variant index for Payload: \(index)")
+        }
+    }
+
+    public static func bincodeDeserialize(input: [UInt8]) throws -> Payload {
+        let deserializer = BincodeDeserializer.init(input: input);
+        let obj = try deserialize(deserializer: deserializer)
+        if deserializer.get_buffer_offset() < input.count {
+            throw DeserializationError.invalidInput(issue: "Some input bytes were not read")
+        }
+        return obj
+    }
+}
+
 indirect public enum Request: Hashable, Sendable {
     case fetchAfter(after_seq: Int64)
     case fetchLatest(fold_work: Bool)
     case subscribe(since_seq: Int64?, fold_work: Bool)
     case fetchOlder(before_seq: Int64, fold_work: Bool)
-    case fetchRange(from_seq: Int64, through_seq: Int64)
+    case fetchRange(fold_id: String?, from_seq: Int64, through_seq: Int64)
 
     public func serialize<S: Serializer>(serializer: S) throws {
         try serializer.increase_container_depth()
@@ -479,8 +602,9 @@ indirect public enum Request: Hashable, Sendable {
             try serializer.serialize_variant_index(value: 3)
             try serializer.serialize_i64(value: before_seq)
             try serializer.serialize_bool(value: fold_work)
-        case .fetchRange(let from_seq, let through_seq):
+        case .fetchRange(let fold_id, let from_seq, let through_seq):
             try serializer.serialize_variant_index(value: 4)
+            try serialize_option_str(value: fold_id, serializer: serializer)
             try serializer.serialize_i64(value: from_seq)
             try serializer.serialize_i64(value: through_seq)
         }
@@ -516,10 +640,11 @@ indirect public enum Request: Hashable, Sendable {
             try deserializer.decrease_container_depth()
             return .fetchOlder(before_seq: before_seq, fold_work: fold_work)
         case 4:
+            let fold_id = try deserialize_option_str(deserializer: deserializer)
             let from_seq = try deserializer.deserialize_i64()
             let through_seq = try deserializer.deserialize_i64()
             try deserializer.decrease_container_depth()
-            return .fetchRange(from_seq: from_seq, through_seq: through_seq)
+            return .fetchRange(fold_id: fold_id, from_seq: from_seq, through_seq: through_seq)
         default: throw DeserializationError.invalidInput(issue: "Unknown variant index for Request: \(index)")
         }
     }
@@ -643,6 +768,24 @@ func deserialize_option_str<D: Deserializer>(deserializer: D) throws -> String? 
     let tag = try deserializer.deserialize_option_tag()
     if tag {
         return try deserializer.deserialize_str()
+    } else {
+        return nil
+    }
+}
+
+func serialize_option_u64<S: Serializer>(value: UInt64?, serializer: S) throws {
+    if let value = value {
+        try serializer.serialize_option_tag(value: true)
+        try serializer.serialize_u64(value: value)
+    } else {
+        try serializer.serialize_option_tag(value: false)
+    }
+}
+
+func deserialize_option_u64<D: Deserializer>(deserializer: D) throws -> UInt64? {
+    let tag = try deserializer.deserialize_option_tag()
+    if tag {
+        return try deserializer.deserialize_u64()
     } else {
         return nil
     }

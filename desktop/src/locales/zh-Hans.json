@@ -25,5 +25,13 @@
   "not_running": "未运行",
   "generic_error": "出了点问题，请重试。",
   "hub_invalid": "请检查 Hub 地址后重试。",
-  "link_footer": "Link 和常驻 node 会在这个应用之外继续运行。只在你希望 Hub 能连接到的电脑上安装它们。"
+  "link_footer": "Link 和常驻 node 会在这个应用之外继续运行。只在你希望 Hub 能连接到的电脑上安装它们。",
+  "tray_open": "打开 Persona",
+  "tray_quit": "退出 Persona",
+  "update_check": "检查更新",
+  "update_checking": "正在检查更新…",
+  "update_downloading": "正在下载 {version} 版…",
+  "update_restart": "重新启动以更新到 {version}",
+  "update_current": "Persona 已是最新版本",
+  "update_failed": "暂时无法检查更新，Persona 稍后会再试。"
 }

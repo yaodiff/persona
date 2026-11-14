@@ -71,6 +71,35 @@ struct RFBClientTests {
         #expect(fb.pixel(3, 3) == [1, 2, 3, 255])
     }
 
+    /// macOS 26's Screen Sharing sends a 4096-bit prime (generator 5): both sides of the exchange agree, this side's
+    /// public key is Python's, and the whole sign-in's arithmetic stays quick even in a Debug build (#7809: 48 s
+    /// before, on 32-bit limbs in arrays).
+    @Test func ardWithAFourKiloBitPrime() throws {
+        let prime = hex(Self.prime4096), five = hex("0005")
+        let mine = try RFBAuth.exchange(generator: five, prime: prime, serverKey: hex(Self.theirPublic4096), privateKey: hex(Self.mine4096))
+        #expect(mine.publicKey == hex(Self.myPublic4096), "as Python's pow(5, x, p)")
+        let theirs = try RFBAuth.exchange(generator: five, prime: prime, serverKey: mine.publicKey, privateKey: hex(Self.theirs4096))
+        #expect(theirs.publicKey == hex(Self.theirPublic4096))
+        #expect(mine.key == theirs.key, "one shared secret")
+        let p = RFBBigUInt(bytes: prime)
+        var pMinus1 = prime
+        pMinus1[pMinus1.count - 1] -= 1 // odd: no borrow
+        #expect(RFBBigUInt.modPow(RFBBigUInt(bytes: five), RFBBigUInt(bytes: pMinus1), p).bytes(count: 512) == [UInt8](repeating: 0, count: 511) + [1],
+                "Fermat: 5^(p-1) = 1 mod p")
+
+        let started = ContinuousClock.now
+        _ = try RFBAuth.ard(generator: five, prime: prime, serverKey: hex(Self.theirPublic4096), account: "me", password: "pw")
+        let took = ContinuousClock.now - started
+        #expect(took < .seconds(10), "a sign-in's arithmetic took \(took) (about 1 s in a Debug build on an Apple silicon Mac)")
+    }
+
+    // A 4096-bit prime, two private exponents and their public keys (generator 5), from Python.
+    private static let prime4096 = "a5ced960618438a1ae09e10c09a5c28c67cee1b50a05378902506c29358322f8cd18848b9698e428fd7369d724f44efd81885c450e0bcd476911e203adc76e480781b25f1dbdca9c53bfbd52d5e67d0de0e76110f0ea61f05029b63036e6522f2354e9df6c20335cdabc9040fa85b820563663d90a211bb3031c62cb18c1e9038bb053fcb0e51e1c39e48a34087b01c91c9684e9e0b5209bc58bf40400e6893691043e3a635ad701655380f5633c6c0b9fba540f94088eb2120de946460cf782ca4466fd0e339e475761822140ff88e4d8d06629ada65e1886488cb4543f3e598b61d745f3a696dc17703c3f82765b7ceb216ca2262819c4c9f535407b34f9a164282ab61a9951949f0336e1896a7e35a9214bc642953d6cb6de50f9b0b9e32be9e6ec55250e25bcd9c09fce0805861d4e6df10ed8e1e32ec39c7269093ea7420ce1f9603c871f7fd86c3514d76fda762fe253e357f24886aa8bee7466e18abcc13f4d5b3ff7438d879274a44745fd5dddb658883fa198faef14e2c3583d338891a76e70115b591424129d869fdce0bcb242f6436e0ac654241ef0ddd4cd22f6044742d54ef1bd5b42414c155b964b6405ad02bb585add7113738c06df82385c68017c93b2744ec65d95803a2f4cf939bd110650e6c83b26992387c18d63b48b72830e7983b938a183209a4d71d6529cfd5d21b969e401ce549d8a2b03fd3027"
+    private static let mine4096 = "1adcfeebe82c33cab10a72bf32152fe63f04a3ad4eefb40eaac6c20bbbfbb0987e55d6dda0e5081f90cbe8e006dbc080b7c478c3c0bf247664eb9b3c3e4e6462f3490e29be113172da4d8f2eb46f9f8a3148b2abe79e82dc67beeec6ff4a6a7a58337e2c84abb4d7237226a81375a1c7235972b04e4cc7b0fd908476608afd5b4c846a1389831ad55bcc8a4ce9b631bbd7735bb5332a3d26a04b63cbab83767a47c980693370ebeb1d42bb2ee9d3fcabacc6aeb9c7e340f55be4c877fa9137b3fad5b8a1cd2cb18646a1ed6a6e8d9fec23ad473ca0b727a9bdbe2412e99051b0ce9bb166bfb9afebfa49fc52128cf7dbd2b0e12df551c204820c4c2aefa5fea49e0c6a1ba5f470c3ef0d23cd146df51d40021878439a6851b9256951611c2c0132ec0edc363979b18a4d0582ae0dfb883b3932c06e920a778db0ae4219ef6833b74c5c27e5a44d76cc68c2ec53fd5903914e23f08a44773b2c446ba5eba7ec2ca3d0cb6181b1b5f02575055a0f36d1306c06c01a879f53600acffd875a781edfb72a13efa1650d2965a9e64760a43afeaea166ece3eef6627e66206d920f0babdc4f83ee7268ffe57679e6dc71b9ef0dde1434647fd2b26ff6bef26e87307792390d28a165a9a9c8ed85960b8e7735c1b34c38f95d9fb7c6facadb12da44cde4138f99e2b24e75140a59f5572bc9f654825be3699bc272751a45497316c68add"
+    private static let theirs4096 = "2e4c808bd701af6d64cbddc8c31d2f335ccc8816a7aea4e4eb2d9b74c7bc37bcf556fa2c240fdbb70720b221e2400c3f976149ba8e059d02d71b21d4f245873365b6303b77d8ce03792637ee30bf6f46e3a5f9d93eec056d46cd043639e61147961e80dce8793bbf6e531ba4922038873b3edfa4047ae5e9c4d07593e31148d9c7c9684432d6b7fab2f6dcc1980bdbcbad05d695d1d3704d56d4a34c81ed8ce99cba9c8f4e88247bb2ab2fa8f07485628766d2d1b6a323bd6b65238985407f47d2883dc33f623717dc1ceeaa8612cf3c6414abd965e6575259a9ad34b47f56ea19ffb73ead7b66184a50933d543bb5843f05174e15ea6f352248d24d3b12a13f68ecfb88b940c142d40a362ccca3ba97f06358af3fd3be80e4ae2c3d7cc827cab24d0d7f1176c7513ba90bbc3f4acfb5acc431e42d0d49c5ac8761f1e08e6d8c821a0d0ee134b3c5445081a06d3a8b8540c0700aa60fe1a3442879a9e8df235d9d18e978ed7215559b8a1b47464270aa6b4845de8df7824607be6d4ca592dfc11b7ae60b40edb8270fc8932301121f5efc7cb88a01ba4c060cdfbbcd8ea7f324fab250806bc1c217c6dea13fe8b665a909841568e9edcb26e52dedfae0ff150b1b85698923f4fd3c1706a01c6b66459e1481c5d0c23f71906e912bbd6c7992778dc9f0721c492a2c8cefb1fab944d55a14854d6164ef0add4fc386fec7ec8123"
+    private static let myPublic4096 = "3db496fa0b5afba34538733a65e8f6290fddbd171d61a99d9756afac5b29a066090a10364db9ce2abc053e3fb2998609fae8dd9f5db6f6cd76cd66aa260e9ba3fee660ac985db43f6565b51a44bc728bf6d85bf7bc590f10bcaff5b414a0a7d35868d0502568b32492f292724aad3de8bfa327146c6579e0ea850a1e63eed6efc82ca32f5b6d0f2b8b5a2fc5e3f7d600370c00d2242009d89d62d55dc18b5c7a103f2cdf082536742d2fc4efd84ab6df4c9a36856dee72dda3a24c9c95bd88fc9affddf2a725754381085fa08ff96dc8c0a4bd266ca72402a558d65f46468952450a9c4b138f272e749a15017efc896135d93b97552824d8e42e245ff7c8a9143fe1fe14f45feafaa4c3e5714c19ca2947e28aae97681ab7af24ea7cb675973e3d1b5fe03af915f3a451f5e6605269c0d381cd3283a49b3b6dd4e4e9d73205a3cfceab82680ac410d90569c28160f4a266ae715cc79c7ef987ae9859f431fbf0c08032b9402719ac707b3b46f045cbcbc9ab408ff60725204c7fd7b0532ca877a841ee9bbb4b05ee7aba142cbe1a88537f7aeb9f81bf0d36e53094ce251cdbc7a5c9b74d637f57cbe060c9f28fa5706babde0e2eaef52f5dbcf6074d032d62aa5ff9ac209f63bf4795166412969890407c474c46459f66695b7b27a0b36d6f0d8b22616b0c018ed9565d137b76cd9b6f5f788bcec5021f7dcedc3fa9102bc827"
+    private static let theirPublic4096 = "483cc0303a2b4441f4ebb08dafbdd621f2fe56941a2684fc724716c4511c56ee8ee662f59086c546dd3c9786585a4df8754e112a6e2f421c05cce996183cfc2eb531e6c9072937984a3de5059c4f1aa9a83cccb45d641285451c4f8054c419f1a353a66525491811e0273956862e9a1f0c54b222f7d0aef8205496034e9cf28f8fdf12d801aede36b47f03b470b395882e9a75ce914bcf4f333ff2c47a866994b925c8a41d51c1ec2ea3f93aa627127d391c5ba81d59da7db0c70d46e45253d47c20f586785357be762904aa872316961f36a98ef971ed6c387217d0822aa7dfb473fe890b45e7530f4079e1317acd247824a4f3eab8d8fffbb16550f1f87246742e2f15130c2230ea2ddc898954e80159db27598cecd315e1c9610616059248cadf2e74d7238fcbfd24f0ddfb8fe1bf4ec26480f19bd2727dbc511f4f2cee1f8154d3d80aeccc817f51f46cba828ed34782ac6a0aeb28b8186242945db46a4b0162b42376b0bea3325bc82e949bf39899fa7b881251ccb3bf4500519d567486a537e6c9ffae07019dee9981091746b4c45a7ddb4481f3a2e11c59baf7caa40aca4b233db0e12079d7282e600aca9ad735fff9ce5a73b0e49779db8ba114cc51a5c6e3517cd1ddb950ba2e85ed30c43a797274ccd61a19abf9d2226193107d27885ee21a8b77e32e1af0bb06a2338696646864414c06006fc8ced76e3e9b21ac"
+
     /// A server's prime that is empty, even or too long (#2373) is refused rather than trapping or spinning in modPow.
     @Test func ardRefusesABadPrime() {
         for prime in [[], hex("d0ebe5c2"), [UInt8](repeating: 0xff, count: RFBAuth.maxPrimeBytes + 1)] {
@@ -186,6 +215,27 @@ struct RFBClientTests {
         #expect(session.pointer == CGPoint(x: 99, y: 49))
         try await Task.sleep(for: .milliseconds(200))
         #expect(!t.sent.contains { $0.first == 5 }, "no PointerEvent sent for the resize")
+    }
+
+    /// #7775: the wheel sends every notch it is given, each pressed and let go where it was asked (it once dropped any
+    /// past 20 in a call; VNCWheel now sends a few each display frame).
+    @MainActor @Test func sessionScrollsEveryNotch() async throws {
+        func u16(_ v: Int) -> [UInt8] { [UInt8(v >> 8), UInt8(v & 0xff)] }
+        var server: [UInt8] = u16(300) + u16(200); server += [UInt8](repeating: 0, count: 16); server += RFBAuth.be32(0)
+        let t = ScriptedTransport([Array("RFB 003.889\n".utf8), [1, 1], RFBAuth.be32(0), server], holds: true)
+        let session = RFBSession(ref: MachineRef(id: "mac"))
+        defer { session.close() }
+        session.run(RFBClient(transport: t) { nil })
+        for _ in 0..<300 where session.phase != .live { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(session.phase == .live)
+        session.scroll(notches: -30, at: CGPoint(x: 10, y: 20))
+        session.scroll(notches: 2, at: CGPoint(x: 10, y: 20))
+        func pointer() -> [[UInt8]] { t.sent.filter { $0.first == 5 } }
+        for _ in 0..<300 where pointer().count < 64 { try await Task.sleep(for: .milliseconds(10)) }
+        var down: [UInt8] = []
+        for _ in 0..<30 { down += [16, 0] }
+        #expect(pointer().map { $0[1] } == down + [8, 0, 8, 0], "30 down and 2 up, each pressed and let go")
+        #expect(pointer().allSatisfy { Array($0[2...]) == [0, 10, 0, 20] })
     }
 
     /// ExtendedDesktopSize (-308, #80): asked for; the server's screens come with the first update, in framebuffer pixels,

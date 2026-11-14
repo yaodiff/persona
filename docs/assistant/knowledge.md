@@ -752,12 +752,13 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
 - **Pinned facts and hand edits**: `pinned` on a topic is read-only input to the merge, which drops points contradicting it. By hand (`kb_update`, `PUT /api/v1/kb/topics/<id>`) a topic's
   name, `note` (its one line), aliases, tags and pinned facts change and lock as for other kinds; its summary cannot be replaced (it is written from the points).
 - **Failures** wait like a project rewrite's (`retryWait`, in memory) per source and per topic. Both steps use the model use `kb.topics`.
-- **Switch**: `assistant.kb_topics`, on by default (Settings › Knowledge on the web, and Persona's settings tool after the user confirms). Off, neither step calls the model; the topics
+- **Switch**: `assistant.kb_topics`, on by default (Settings › Knowledge on the web, Settings › Knowledge Selection on the iPhone and iPad, and Persona's settings tool after the user confirms). Off, neither step calls the model; the topics
   already written stay readable, and turning it back on continues from the marks.
 - **Reading**: topics list (the most points first), open (`points` in the detail, `links` to the projects and chats they came from), search (`summary.md` and `meta.json`) and change
   events (`kb.changed` with kind `topics`) like the other kinds, through the app API, the assistant's `kb_list` / `kb_get` / `kb_search` and the extension `kb.*` RPC. `kb.recent`
-  does not include them by default (it is what came in, and topics are derived). The web shows them under Knowledge › Topics and in the knowledge map (`docs/web/web.md`); the iOS
-  and Android apps do not show the kind yet and skip it.
+  does not include them by default (it is what came in, and topics are derived). The web shows them under Knowledge › Topics and in the knowledge map (`docs/web/web.md`); the iPhone
+  and iPad too (#7251: Knowledge › Topics, a topic's points by subtopic, a point in a sheet, and the map as an outline, with a detail
+  column where there is room; `docs/design/DESIGN_SYSTEM.md` "Knowledge map outline"). The Android app does not show the kind yet and skips it.
 - **Deleting a source** removes the points that came only from it ("Deleting a connector's saved knowledge" above).
 
 ## Who uses it

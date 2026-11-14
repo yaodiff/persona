@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-// A cold knowledge list paints its kinds, count and rows together; cached lists and error recovery stay usable.
+// The knowledge list's kind chips carry no count, so nothing changes their width: they paint at once, stay put while a
+// kind loads and when another kind is picked (a count on the selected chip only re-wrapped the row and moved the chips
+// after it). Cached lists and error recovery stay usable.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,26 +56,27 @@ afterEach(async () => {
 });
 
 describe("the knowledge list's first paint", () => {
-  it("waits for the list before showing the kind chips, count and rows together", async () => {
+  it("paints the kind chips at once, and the rows under them once the list arrives", async () => {
     render();
     expect(requests[0].path).toBe("/kb/docs");
     expect(input()).not.toBeNull();
     expect(host.textContent).toContain("加载中");
-    expect(tablist()).toBeNull();
-    expect(filter()).toBeNull();
+    expect(tablist()).not.toBeNull();
+    expect(selectedTab()?.textContent).toBe("文档");
+    expect(filter()).not.toBeNull();
     expect(host.textContent).not.toContain("还没有文档");
 
     await answer(requests[0], { items: [entry], tags: ["example"] });
-    expect(selectedTab()?.textContent).toBe("文档1");
+    expect(selectedTab()?.textContent).toBe("文档");
     expect(filter()).not.toBeNull();
     expect(host.textContent).toContain(entry.name);
     expect(host.textContent).not.toContain("加载中");
   });
 
-  it("finishes loading an empty response and shows its zero count", async () => {
+  it("finishes loading an empty response", async () => {
     render();
     await answer(requests[0], { items: null, tags: null });
-    expect(selectedTab()?.textContent).toBe("文档0");
+    expect(selectedTab()?.textContent).toBe("文档");
     expect(filter()).not.toBeNull();
     expect(host.textContent).toContain("还没有文档");
     expect(host.textContent).not.toContain("加载中");
@@ -83,7 +86,7 @@ describe("the knowledge list's first paint", () => {
     const cached: KBList = { items, tags: [] };
     lists.set(listKey("docs"), cached);
     render();
-    expect(selectedTab()?.textContent).toBe(`文档${items.length}`);
+    expect(selectedTab()?.textContent).toBe("文档");
     expect(host.textContent).toContain(items.length ? entry.name : "还没有文档");
     expect(host.textContent).not.toContain("加载中");
     const ready = host.innerHTML;
@@ -107,10 +110,10 @@ describe("the knowledge list's first paint", () => {
     const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === "重试")!;
     act(() => retry.click());
     expect(requests).toHaveLength(2);
-    expect(tablist()).toBeNull();
+    expect(tablist()).not.toBeNull();
     expect(host.textContent).toContain("加载中");
     await answer(requests[1], { items: [entry], tags: [] });
-    expect(selectedTab()?.textContent).toBe("文档1");
+    expect(selectedTab()?.textContent).toBe("文档");
     expect(host.textContent).toContain(entry.name);
     expect(host.textContent).not.toContain("连不上 hub");
   });
@@ -129,9 +132,29 @@ describe("the knowledge list's first paint", () => {
     search("");
     expect(host.textContent).toContain("加载中");
     expect(host.textContent).not.toContain(entry.name);
-    expect(tablist()).toBeNull();
+    expect(tablist()).not.toBeNull();
     await answer(requests[0], { items: [entry], tags: [] });
-    expect(selectedTab()?.textContent).toBe("文档1");
+    expect(selectedTab()?.textContent).toBe("文档");
     expect(host.textContent).toContain(entry.name);
+  });
+});
+
+describe("the kind chips", () => {
+  const chips = () => [...host.querySelectorAll('[role="tab"]')].map((a) => a.textContent);
+
+  it("read only their kind, whichever is selected, and stay while the next kind loads", async () => {
+    render("docs");
+    const names = chips();
+    expect(names).toEqual(["项目", "主题", "会话", "人", "文档", "会议", "日程", "录音"]);
+    await answer(requests[0], { items: [entry, { ...entry, id: "two" }, { ...entry, id: "three" }], tags: [] });
+    expect(chips()).toEqual(names);
+
+    render("recordings");
+    expect(selectedTab()?.textContent).toBe("录音");
+    expect(chips()).toEqual(names); // the row is still there while recordings load, and no chip changed
+    expect(host.textContent).toContain("加载中");
+    await answer(requests[1], { items: [], tags: [] });
+    expect(chips()).toEqual(names);
+    expect(host.textContent).toContain("还没有录音");
   });
 });

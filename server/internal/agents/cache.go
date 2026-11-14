@@ -88,10 +88,32 @@ func (c *cache) putLatest(source string, gen int, id string, limit int, p *Messa
 func (c *cache) invalidate(source string, ids []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.invalidateLocked(source, ids)
+}
+
+func (c *cache) invalidateLocked(source string, ids []string) {
 	c.gen[source]++ // reject in-flight lists fetched before this change
 	delete(c.sessions, source)
 	for _, id := range ids {
 		delete(c.latest, id)
+	}
+}
+
+// putChanged is invalidate for a change found in list itself (the poll's, asked at gen): the pages of ids go and
+// lists asked before it are rejected, but list stays as source's list, so the re-reads the change's hint brings find
+// it instead of each asking the source again. A change reported while list was being asked (gen moved) may be newer
+// than list, which is then dropped as invalidate would.
+func (c *cache) putChanged(source string, gen int, list []Session, ids []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	current := c.gen[source] == gen
+	c.invalidateLocked(source, ids)
+	if !current {
+		return
+	}
+	c.sessions[source] = sessionsEntry{list: list, at: time.Now()}
+	if c.onSessions != nil {
+		c.onSessions(source, list)
 	}
 }
 

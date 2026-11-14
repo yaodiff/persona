@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,7 +95,14 @@ func parseConfig(s string) ([]int32, pixelFormat, error) {
 type bench struct {
 	url     string
 	browser string
-	polled  time.Time // a page last asked for the scene
+	// front brings the page's browser forward (nil: open -a browser); wheel's own browser instance sets it.
+	front  func()
+	polled time.Time // a page last asked for the scene
+
+	// The wheel scene's scroller: where the page last said it was, and where the harness last put it (wseq counts).
+	top  float64
+	wtop float64
+	wseq int
 
 	mu     sync.Mutex
 	scene  string
@@ -112,14 +120,19 @@ type pageEvent struct {
 	H    int     `json:"h"`
 	DPR  float64 `json:"dpr"`
 	FPS  float64 `json:"fps"`
+	D    float64 `json:"d"` // a wheel event's deltaY
+	M    int     `json:"m"` // and its deltaMode (0 pixels, 1 lines, 2 pages)
 }
 
-func newBench() (*bench, error) {
+// benchPort is the bench page's fixed port, so a page left open by an earlier run comes back to this one by itself (it
+// asks /state every 100 ms) instead of a new tab each run.
+const benchPort = "127.0.0.1:38780"
+
+// newBench serves the bench page at addr (any free port when that is taken).
+func newBench(addr string) (*bench, error) {
 	b := &bench{scene: "idle"}
 	b.photos = photos()
-	// A fixed port, so a page left open by an earlier run comes back to this one by itself (it asks /state every
-	// 100 ms) instead of a new tab each run.
-	l, err := net.Listen("tcp", "127.0.0.1:38780")
+	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		if l, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
 			return nil, err
@@ -134,7 +147,10 @@ func newBench() (*bench, error) {
 	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		b.polled = time.Now()
-		s := map[string]any{"scene": b.scene, "freeze": b.freeze, "photos": len(b.photos)}
+		if v, err := strconv.ParseFloat(r.URL.Query().Get("top"), 64); err == nil {
+			b.top = v
+		}
+		s := map[string]any{"scene": b.scene, "freeze": b.freeze, "photos": len(b.photos), "wseq": b.wseq, "wtop": b.wtop}
 		b.mu.Unlock()
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(s)
@@ -191,6 +207,15 @@ func photos() []string {
 		out = append(out, dst)
 	}
 	return out
+}
+
+// forward brings the page's browser to the front.
+func (b *bench) forward() {
+	if b.front != nil {
+		b.front()
+		return
+	}
+	_ = exec.Command("open", "-a", b.browser).Run()
 }
 
 // show brings the page up: one already open finds this run within a moment; else the browser opens it.
@@ -348,7 +373,7 @@ func aim(b *bench, c *probeConn, p image.Point) error {
 			return nil
 		}
 		if try%4 == 3 {
-			_ = exec.Command("open", "-a", b.browser).Run()
+			b.forward()
 		}
 		time.Sleep(400 * time.Millisecond)
 	}
@@ -483,7 +508,7 @@ func runScenes(ctx context.Context, t target, cred credentials, f runFlags) erro
 	if *f.scenes == "all" {
 		scenes = []string{"idle", "type", "scroll", "drag", "video"}
 	}
-	b, err := newBench()
+	b, err := newBench(benchPort)
 	if err != nil {
 		return err
 	}
@@ -609,7 +634,7 @@ func ensure(b *bench, c *probeConn, scene string) (layout, error) {
 	deadline := time.Now().Add(20 * time.Second)
 	for try := 0; time.Now().Before(deadline); try++ {
 		if try > 0 && try%4 == 0 {
-			_ = exec.Command("open", "-a", b.browser).Run()
+			b.forward()
 		}
 		time.Sleep(300 * time.Millisecond)
 		b.mu.Lock()
@@ -880,7 +905,7 @@ func recordOnly(ctx context.Context, t target, cred credentials, config, mode, p
 // update's start, end, size and painted area, in milliseconds from the start: how the server answers each way of
 // asking.
 func trace(ctx context.Context, t target, cred credentials, scene, mode string, d time.Duration, areaSpec string) error {
-	b, err := newBench()
+	b, err := newBench(benchPort)
 	if err != nil {
 		return err
 	}

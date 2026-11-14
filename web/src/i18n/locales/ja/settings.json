@@ -1,6 +1,7 @@
 {
   "retry": "再試行",
   "back": "設定に戻る",
+  "back_to": "{name}に戻る",
   "sidebar": "サイドバー",
   "title": "設定",
   "about_persona": "Personaについて",
@@ -25,7 +26,7 @@
   "linked_hubs_hint": "これらのハブのコンピューターもここに表示され、このハブ経由でアクセスします",
   "computers": "コンピューター",
   "computers_online": "{online} / {total}台オンライン",
-  "disconnect_browser": "このブラウザーを切断",
+  "disconnect_browser": "このブラウザーを切断…",
   "install_installed": "すでに専用ウインドウで開いています",
   "install_prompt": "デスクトップやホーム画面に追加して専用ウインドウで開きます",
   "install_ios": "Safari の共有メニューで「ホーム画面に追加」を選んでください",
@@ -152,5 +153,7 @@
   "search_settings": "設定を検索",
   "search_in_page": "このページ内",
   "search_no_results": "一致する設定がありません",
-  "search_placeholder_settings": "設定を検索"
+  "search_placeholder_settings": "設定を検索",
+  "search_key_words": "API キー、シークレットキー",
+  "device_tokens": "デバイスのトークン"
 }

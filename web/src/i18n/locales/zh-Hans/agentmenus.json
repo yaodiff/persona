@@ -8,7 +8,7 @@
   "move_to_other_todo": "改挂到其他待办…",
   "link_to_todo": "关联到待办…",
   "unlink": "解除关联",
-  "copy_folder": "拷贝目录",
+  "copy_folder": "拷贝目录路径",
   "copy_resume": "拷贝恢复命令",
   "delete_chat": "删除对话…",
   "unlinked": "已解除待办关联",

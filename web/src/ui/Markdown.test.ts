@@ -292,6 +292,60 @@ describe("Markdown tables (#5275)", () => {
   });
 });
 
+// A table on a phone (audit item 77): a column is as narrow as its words, and the copy button never sits on header words.
+describe("Markdown table widths and the copy button (audit item 77)", () => {
+  it("marks the cells short enough for one line; long ones keep their minimum and wrap", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { Markdown } = await import("./Markdown");
+    const md = "| # | 事项 | 裁定 |\n| --- | --- | --- |\n| 1 | 小组件刷新频率 | 按小时刷新，夜间降到每三小时一次，省电优先 |\n| 2 | **图标** | 换成`描边`版本 |";
+    const html = renderToStaticMarkup(createElement(Markdown, { text: md }));
+    expect(html).toContain('<td data-fit="">1</td>');
+    expect(html).toContain('<td data-fit=""><strong>图标</strong></td>');
+    expect(html).toContain("<td>小组件刷新频率</td>");
+    expect(html).toContain("<td>按小时刷新，夜间降到每三小时一次，省电优先</td>");
+    // the header cells are left as they were (they never wrap)
+    expect(html).toContain("<th>#</th>");
+  });
+
+  it("counts wide characters as wider, and a line break or a picture as never fitting", async () => {
+    const { cellFits } = await import("./Markdown");
+    const text = (value: string) => ({ type: "element", tagName: "td", children: [{ type: "text", value }] });
+    expect(cellFits(text("中国气象局"))).toBe(true);
+    expect(cellFits(text("中国气象局开放平台"))).toBe(false);
+    expect(cellFits(text("1,496 ms"))).toBe(true);
+    expect(cellFits(text("a sentence that wraps"))).toBe(false);
+    expect(cellFits({ type: "element", tagName: "td", children: [{ type: "text", value: "a" }, { type: "element", tagName: "br", children: [] }] })).toBe(false);
+    expect(cellFits({ type: "element", tagName: "td", children: [{ type: "element", tagName: "img", children: [] }] })).toBe(false);
+    expect(cellFits(undefined)).toBe(false);
+  });
+
+  it("styles.css: no minimum for headers or short cells, 7em for long ones, and room for the button in the header row", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const css = readFileSync(join(__dirname, "../styles.css"), "utf8");
+    const rule = (sel: RegExp) => css.match(new RegExp(`(?:^|\\n)${sel.source}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    expect(rule(/\.prose-j th,\s*\.prose-j td/)).not.toContain("min-width");
+    expect(rule(/\.prose-j td/)).toMatch(/min-width:\s*7em/);
+    expect(rule(/\.prose-j td\[data-fit\]/)).toMatch(/min-width:\s*0;\s*white-space:\s*nowrap/);
+    expect(rule(/\.prose-j th(?!,)/)).not.toContain("min-width");
+    expect(rule(/\.prose-j \.md-table th:last-child/)).toMatch(/padding-right:\s*2\.25rem/);
+  });
+
+  it("puts the copy button on a cap the header row's color, shown with it", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { Markdown } = await import("./Markdown");
+    const html = renderToStaticMarkup(createElement(Markdown, { text: "| a | b |\n| --- | --- |\n| 1 | 2 |" }));
+    const cap = /<span data-table-copy="[^"]*" class="([^"]*)"><button[^>]*aria-label="拷贝表格"/.exec(html);
+    expect(cap).not.toBeNull();
+    expect(cap![1]).toContain("to-inset");
+    expect(cap![1]).toContain("rounded-tr-card");
+    expect(cap![1]).toContain("opacity-0");
+    expect(cap![1]).toContain("[@media(hover:none)]:opacity-100");
+  });
+});
+
 // Finished blocks drawn again from markdown-cache.ts (#2465): a kept tree draws what a fresh one does, and a change of
 // anything a tree is made from (machine, directory, formulas in or out, the path-link set) never draws another's.
 describe("Markdown cache (#2465)", () => {

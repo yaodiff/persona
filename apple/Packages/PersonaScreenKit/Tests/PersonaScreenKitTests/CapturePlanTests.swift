@@ -38,6 +38,28 @@ final class CapturePlanTests: XCTestCase {
         XCTAssertTrue(CapturePlan.size(width: 4000, height: 1, maxSize: 400) == (400, 2), "a sliver stays 2 high")
     }
 
+    /// Quality tiers (#6396): a scale is pixels per point of the display, never past its pixels, then the phone's cap.
+    func testSizeFromAScale() {
+        let points = (width: 1512, height: 982), retina = (width: 3024, height: 1964)
+        XCTAssertTrue(CapturePlan.size(points: points, pixels: retina, scale: 2, maxSize: 0) == (3024, 1964), "native pixels")
+        XCTAssertTrue(CapturePlan.size(points: points, pixels: retina, scale: 2, maxSize: 2868) == (2868, 1862), "the phone's cap")
+        XCTAssertTrue(CapturePlan.size(points: points, pixels: retina, scale: 1.5, maxSize: 2868) == (2268, 1472))
+        XCTAssertTrue(CapturePlan.size(points: points, pixels: retina, scale: 1, maxSize: 2868) == (1512, 982))
+        XCTAssertTrue(CapturePlan.size(points: points, pixels: retina, scale: 3, maxSize: 0) == (3024, 1964), "never past the pixels")
+        XCTAssertTrue(CapturePlan.size(points: points, pixels: retina, scale: nil, maxSize: 1920) == (1920, 1246),
+                      "no scale: the pixels, as before")
+        let plain = (width: 1920, height: 1080)
+        XCTAssertTrue(CapturePlan.size(points: plain, pixels: plain, scale: 2, maxSize: 2868) == (1920, 1080), "a 1× display")
+        XCTAssertTrue(CapturePlan.size(points: plain, pixels: plain, scale: 0.01, maxSize: 0) == (480, 270), "clamped to 0.25")
+        XCTAssertTrue(CapturePlan.size(points: (0, 0), pixels: plain, scale: 1, maxSize: 0) == (1920, 1080), "no points: pixels")
+    }
+
+    func testBandFloor() {
+        XCTAssertEqual(CapturePlan.floorKbps(2_000, cap: 8_000), 2_000)
+        XCTAssertEqual(CapturePlan.floorKbps(50, cap: 8_000), CapturePlan.minKbps, "never below the helper's floor")
+        XCTAssertEqual(CapturePlan.floorKbps(9_000, cap: 8_000), 8_000, "never above the ceiling")
+    }
+
     func testFrameRateStaysWithinOneToSixty() {
         XCTAssertEqual(CapturePlan.fps(60), 60)
         XCTAssertEqual(CapturePlan.fps(120), 60)

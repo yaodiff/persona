@@ -1,7 +1,19 @@
 // The workflow board's switch (#2475) takes only answers newer than what it shows (#4136): a read on its way when the
 // switch is flipped, or a write overtaken by the next flip, does not put the old value back.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "./api";
+import { resetManagerChoice, settleRosterDefault } from "./manager-choice";
 import { getWorkspaceBoardSetting, refreshWorkspaceBoardSetting, resetWorkspaceBoardSettingForTest, setWorkspaceBoardEnabled } from "./workspace-board-setting";
+
+// the hub's pushes, by type, as the switch's module listens for them
+const pushes = vi.hoisted(() => new Map<string, (msg: Record<string, unknown>) => void>());
+vi.mock("./store", async (orig) => ({
+  ...(await orig<typeof import("./store")>()),
+  onHubEvent: (type: string, l: (msg: Record<string, unknown>) => void) => {
+    pushes.set(type, l);
+    return () => {};
+  },
+}));
 
 interface Held {
   method: string;
@@ -112,5 +124,85 @@ describe("workspace board switch: a read asked for while one is out", () => {
     await settle();
     expect(held).toHaveLength(2);
     expect(getWorkspaceBoardSetting().enabled).toBe(false);
+  });
+});
+
+describe("workspace board switch: a read that fails", () => {
+  it("with nothing known yet, keeps why (not loading forever), and the next read that works clears it", async () => {
+    const held = heldHub();
+    const read = refreshWorkspaceBoardSetting();
+    await settle();
+    held[0].answer({ error: "database is down", code: "internal" }, 500);
+    await read;
+    expect(getWorkspaceBoardSetting().enabled).toBeNull();
+    expect((getWorkspaceBoardSetting().error as ApiError).status).toBe(500);
+
+    const again = refreshWorkspaceBoardSetting(); // Retry, or the next hello
+    await settle();
+    held[1].answer({ enabled: true, can_write: true });
+    await again;
+    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: true });
+  });
+
+  it("after the hub answered once, keeps what it said and adds no error", async () => {
+    const held = heldHub();
+    const first = refreshWorkspaceBoardSetting();
+    await settle();
+    held[0].answer({ enabled: true, can_write: true });
+    await first;
+    const second = refreshWorkspaceBoardSetting();
+    await settle();
+    held[1].answer({ error: "busy" }, 503);
+    await second;
+    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: true });
+  });
+
+  it("404 (a hub from before the switch): the board shows, and the switch is missing rather than read-only", async () => {
+    const held = heldHub();
+    const read = refreshWorkspaceBoardSetting();
+    await settle();
+    held[0].answer({ error: "Not Found", code: "not_found" }, 404);
+    await read;
+    expect(getWorkspaceBoardSetting()).toMatchObject({ enabled: true, canWrite: false });
+    expect((getWorkspaceBoardSetting().error as ApiError).status).toBe(404);
+  });
+});
+
+describe("workspace board switch: a push after a read that failed", () => {
+  const settled = async () => {
+    for (let i = 0; i < 5; i++) await settle();
+  };
+  afterEach(() => resetManagerChoice());
+
+  it("takes on or off from the push, but not that this device can't change it, and reads the switch again for that", async () => {
+    const held = heldHub();
+    settleRosterDefault(); // the roster names the default manager, whose switch the page reads
+    await settled();
+    expect(held).toHaveLength(1);
+    held[0].answer({ error: "database is down", code: "internal" }, 500);
+    await settled();
+    expect(getWorkspaceBoardSetting().enabled).toBeNull();
+
+    pushes.get("workspace_board_settings")!({ type: "workspace_board_settings", enabled: true }); // another device turned it on
+    expect(getWorkspaceBoardSetting().enabled).toBe(true);
+    // who may change it is still unknown: the failure stays, so Settings doesn't call this device read-only
+    expect((getWorkspaceBoardSetting().error as ApiError).status).toBe(500);
+    await settled();
+    expect(held.map((h) => h.method)).toEqual(["GET", "GET"]);
+    held[1].answer({ enabled: true, can_write: true });
+    await settled();
+    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: true });
+  });
+
+  it("after a read that worked, a push changes only on or off and reads nothing more", async () => {
+    const held = heldHub();
+    settleRosterDefault();
+    await settled();
+    held[0].answer({ enabled: false, can_write: false });
+    await settled();
+    pushes.get("workspace_board_settings")!({ type: "workspace_board_settings", enabled: true });
+    await settled();
+    expect(held).toHaveLength(1);
+    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: false });
   });
 });

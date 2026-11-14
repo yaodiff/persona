@@ -25,7 +25,7 @@
   "interval_hint_blank": "每隔几分钟运行一次，从保存时算起。",
   "section_prompt": "提示词",
   "prompt_placeholder": "要 Persona 做什么",
-  "prompt_hint": "像在对话里一样写：看哪些数据、怎么汇报。它可以用 schedule_followup 再安排一次性的跟进，比如会前 10 分钟。",
+  "prompt_hint": "像在对话里一样写：看哪些数据、怎么汇报。它还能自己安排一次性的跟进，比如会前 10 分钟。",
   "section_run": "运行方式",
   "permission_label": "权限模式",
   "permission_default": "默认（先问你）",
@@ -33,7 +33,7 @@
   "bypass_body": "这个任务运行时，跑任何命令、改任何文件、用任何工具都不再问你，也没有人能中途拦下。只给你信得过、出了错也能接受的提示词用。",
   "bypass_confirm": "全部放行",
   "bypass_on": "全部放行：运行时跑命令、改文件都不再问你。",
-  "permission_hint": "空着就是助手的默认。定时任务在后台跑，要你批准时会推送到手机，没人点就一直等着；要它跑命令也不问你，可以选「自动」（自己判断风险）。",
+  "permission_hint": "空着就是助手的默认。定时任务在后台跑，要你批准时会推送到手机，没人点就一直等着；要它跑命令也不问你，可以选「{mode}」（自己判断风险）。",
   "permission_hint_resume": "接着原来的对话运行时，那段对话也会换成这里的设置。",
   "section_push": "跑完推送",
   "push_every": "每次",
@@ -86,5 +86,7 @@
   "cron_hint_zone": "你的时区",
   "cron_checking": "正在检查…",
   "cron_next": "接下来的运行时间（{zone}）",
-  "cron_examples": "示例"
+  "cron_examples": "示例",
+  "daily_hint_zone": "{days} {time}，按 {zone} 时区。",
+  "cron_hint_named": "分 时 日 月 周，按 {zone} 时区计算。日和周都写了时，满足其中一个就运行。"
 }

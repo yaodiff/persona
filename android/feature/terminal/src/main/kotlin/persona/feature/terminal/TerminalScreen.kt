@@ -138,6 +138,10 @@ internal fun TerminalPage(
             val uriHandler = LocalUriHandler.current
             // The notice sits above the terminal, never over its text.
             val notRunning = state.note == TerminalNote.NoTerminal
+            if (state.resumable && !notRunning) JNotice(stringResource(R.string.terminal_stopped),
+                Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.s),
+                actionLabel = stringResource(if (state.resuming) R.string.terminal_resuming else R.string.terminal_resume),
+                onAction = if (state.resuming) null else model::resume)
             state.note?.takeUnless { notRunning }?.let { note -> JNotice(stringResource(note.text), Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.s),
                 actionLabel = stringResource(R.string.terminal_retry), onAction = model::retry) }
             Box(Modifier.fillMaxWidth().weight(1f).background(palette.terminalBackground)) {
@@ -170,7 +174,7 @@ internal fun TerminalPage(
 
 /**
  * The session isn't running (#4345): in place of the terminal, as on iOS (#4328), with Resume session for a Claude Code
- * session; others resume with their next message.
+ * session. A retained shell stays visible with the same explicit Resume action above it.
  */
 @Composable
 private fun TerminalNotRunning(resumable: Boolean, resuming: Boolean, onResume: () -> Unit, modifier: Modifier) {

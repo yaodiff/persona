@@ -51,6 +51,9 @@ data class AssistantCard(
 ) {
     fun page(name: String?): ExtensionView? = if (name == null) root else pages[name]
 
+    /** Whether a picture of the reply draws it (Share as a picture, #7261): an HTML page on its first page only runs live. */
+    val drawsInPicture: Boolean get() = html.none { it.page == null }
+
     /**
      * The field names [action] sends, as the hub's `viewReplyMessage` takes them: every field of its page when it
      * submits, a segmented's own name, and the page's search (`q`) and filter with a submit, the search's or the

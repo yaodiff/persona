@@ -110,7 +110,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
     if (originalOpen) setSource(null);
   };
   const sourceToggle = event ? (
-    <Button tone="quiet" size="sm" className="-my-1 shrink-0" testId="inbox-original-toggle" expanded={embed ? originalOpen : undefined}
+    <Button tone="quiet" size="sm" className="-my-1 ml-auto shrink-0" testId="inbox-original-toggle" expanded={embed ? originalOpen : undefined}
       icon={embed ? (originalOpen ? "list" : item.mail ? "mail" : "chat") : showEvent ? (item.mail ? "mail" : "chat") : "list"}
       onClick={embed ? toggleOriginal : () => setSource(showEvent ? {} : null)}>
       {embed ? t(originalOpen ? "inbox-inboxdetail.hide_source" : "inbox-inboxdetail.view_source") : t(showEvent ? "inbox-inboxdetail.view_source" : "inbox-inboxdetail.view_event")}
@@ -145,13 +145,17 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
             <div className="flex items-start gap-3">
               <ItemAvatar it={item} size={36} />
               <div className="min-w-0 flex-1">
-                <h2 className={cx("flex min-w-0 items-center gap-2 text-[15px] font-semibold text-ink", item.source === "larkcli" && "flex-wrap gap-y-1 sm:flex-nowrap")}>
+                {/* where a narrow page puts the keyboard when the item opens (Inbox.tsx), so its ring shows there */}
+                <h2 tabIndex={-1} data-item-title className={cx("flex min-w-0 items-center gap-2 rounded-chip text-[15px] font-semibold text-ink outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent", item.source === "larkcli" && "flex-wrap gap-y-1 sm:flex-nowrap")}>
                   <span className={item.source === "larkcli" ? "min-w-0 max-w-full break-words sm:truncate" : "truncate"} title={translated?.subject ? item.title : undefined}>{translated?.subject || item.title}</span>
                   {label && <Tag urgent={labelIsUrgent(item)}>{label}</Tag>}
                 </h2>
-                {/* with a place, the small line gives way to Original / Handling; an older item keeps its time */}
+                {/* with a place, the small line gives way to Original / Handling (at its end); an older item keeps its
+                    time right after where it came from, "Lark · DM · 08:29": the words take only their width, so the
+                    time no longer sits at the far end as a stray " · 08:29" (audit item 60), and on a narrow screen the
+                    words are cut before it, which stays whole */}
                 <p className="mt-0.5 flex min-w-0 items-center text-[12px] text-ink-3" data-detail-meta>
-                  <span className="min-w-0 flex-1 truncate">{detailMeta}</span>
+                  <span className="min-w-0 truncate">{detailMeta}</span>
                   {!item.where && time && <span className="shrink-0 whitespace-pre">{detailMeta ? ` · ${time}` : time}</span>}
                   {sourceToggle}
                 </p>

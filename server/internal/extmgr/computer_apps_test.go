@@ -153,7 +153,8 @@ func TestComputerAppsAreAskedOnce(t *testing.T) {
 	if res := h.callComputerTool(short, "conv1234", "computer_run", json.RawMessage(`{"machine": "mac", "steps": `+term+`}`)); res.IsError {
 		t.Fatalf("turned off: nothing asked: %+v", res)
 	}
-	if _, after := seen(); len(after) != len(before)+3 || after[len(after)-1].Tool != "run_steps" {
+	// The looks: whether Terminal runs as several processes (#7591), then at the apps and windows (#4336).
+	if _, after := seen(); len(after) != len(before)+4 || after[len(before)].Tool != "list_windows" || after[len(after)-1].Tool != "run_steps" {
 		t.Fatalf("turned off: no card, only the look at the apps and windows (#4336), then the call: %+v", after[len(before):])
 	}
 }

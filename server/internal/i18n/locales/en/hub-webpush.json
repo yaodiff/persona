@@ -1,0 +1,12 @@
+{
+  "test_title": "Notifications reach this browser",
+  "test_body": "Persona can notify you here even when no Persona page is open.",
+  "err_device": "This browser's notification ID is missing or invalid.",
+  "err_service": "{host} is not a push service Persona sends to.",
+  "err_endpoint": "This browser's push subscription address is invalid.",
+  "err_keys": "This browser's push subscription keys are invalid.",
+  "err_key_changed": "The hub's push key has changed. Subscribe again.",
+  "err_owned": "Another device set up notifications for this browser. Sign in again in this browser, then turn them on.",
+  "err_none": "This browser has not turned on notifications while Persona is closed.",
+  "err_push": "The push service did not take the notification: {error}"
+}

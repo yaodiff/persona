@@ -15,7 +15,7 @@ import (
 // machine_id filtering. Presence matters: malformed new parameters must be
 // parsed and rejected rather than silently falling back to the legacy API.
 func Enabled(v url.Values) bool {
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "space", "catalog", "todo", "waiting", "exclude_pane_source"} {
+	for _, key := range []string{"search", "limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "space", "catalog", "todo", "waiting", "exclude_pane_source"} {
 		if _, exists := v[key]; exists {
 			return true
 		}
@@ -28,7 +28,18 @@ func Enabled(v url.Values) bool {
 // Options fields: adapters choose those answers, while Query ignores the selectors.
 func Parse(v url.Values) (Options, error) {
 	o := Options{Limit: defaultLimit}
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "with_counts", "pane_source", "roots", "parent_session_id", "catalog", "todo", "waiting", "exclude_pane_source"} {
+	if values, exists := v["search"]; exists {
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" || !utf8.ValidString(values[0]) || len(values[0]) > 1024 {
+			return Options{}, failure("invalid_query", "search must contain 1 to 1024 UTF-8 bytes")
+		}
+		o.Search, o.Limit = values[0], 40
+		for _, key := range []string{"q", "since", "counts", "with_counts", "catalog", "session_id"} {
+			if _, present := v[key]; present {
+				return Options{}, failure("invalid_query", "search cannot be combined with "+key)
+			}
+		}
+	}
+	for _, key := range []string{"search", "limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "with_counts", "pane_source", "roots", "parent_session_id", "catalog", "todo", "waiting", "exclude_pane_source"} {
 		if values, exists := v[key]; exists && len(values) != 1 {
 			return Options{}, failure("invalid_query", key+" must have exactly one value")
 		}
@@ -167,6 +178,14 @@ func positiveInteger(s string) (int, error) {
 }
 
 func validate(o Options) (Options, error) {
+	if o.Search != "" {
+		if strings.TrimSpace(o.Search) == "" || !utf8.ValidString(o.Search) || len(o.Search) > 1024 || o.Q != "" || o.Since != "" || o.ID != "" || o.Limit > 100 {
+			return Options{}, failure("invalid_query", "invalid runtime search query")
+		}
+		if o.Limit == 0 {
+			o.Limit = 40
+		}
+	}
 	if o.ID != "" && (o.Cursor != "" || o.Since != "") {
 		return Options{}, failure("invalid_query", "exact identity cannot be combined with cursor or since")
 	}
@@ -231,7 +250,7 @@ func (o Options) filters() filters {
 }
 
 func (o Options) binding() binding {
-	return binding{filters: o.filters(), Summary: o.Summary, Since: o.Since}
+	return binding{filters: o.filters(), Summary: o.Summary, Since: o.Since, Search: o.Search, AllowedMachines: allowedMachineKey(o.AllowedMachines)}
 }
 
 func validTokenPart(s string) bool {

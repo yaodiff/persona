@@ -11,6 +11,8 @@ struct GitPane: View {
     @Binding var status: GitStatus?
     /// Opens the review of the session's changes at a scope (#151); nil where there is none (no `git_review`, the Mac).
     var review: ((GitReviewScope?) -> Void)? = nil
+    /// Where a pull request's review thread goes as a comment for the agent (#7014); nil when the chat takes no messages.
+    var commentKey: SessionKey? = nil
     @State private var error: String?
     /// A refresh the user asked for failed over a status already shown (#1889): said above it, which stays.
     @State private var refreshError: String?
@@ -31,6 +33,8 @@ struct GitPane: View {
     @State private var commitMessage = ""
     /// A push waiting for its yes.
     @State private var askingPush: GitPushKind?
+    /// The branch's pull request (#7014).
+    @State private var prModel = GitPRModel()
 
     /// The hub writes for this tab (`git_write`, #7013): iPhone and iPad only, the Mac app is frozen.
     private var canWrite: Bool {
@@ -64,6 +68,10 @@ struct GitPane: View {
                     header(s)
                     if canWrite { sheetRows(s) }
                 }
+                if canWrite {
+                    GitPRSection(status: s, pr: prModel, open: { sheet = .pr }, create: { sheet = .prCreate },
+                                 retry: { Task { await readPR(force: true) } })
+                }
                 changes(s)
                 history(s)
             } else if let error {
@@ -79,11 +87,16 @@ struct GitPane: View {
         .listStyle(.insetGrouped)
         .themedPage()
         .safeAreaInset(edge: .bottom) { commitBar }
-        .refreshable { await load() }
+        .refreshable {
+            await load()
+            await readPR(force: true)
+        }
         #if os(macOS)
         .pageToolbar { MacRefreshItem(id: [machineID, cwd]) { await load() } } // no pull to refresh on the Mac
         #endif
         .task(id: cwd) { await load() }
+        // The pull request again only when what was pushed moved (gh asks GitHub each time), as on the web.
+        .task(id: canWrite ? GitPRModel.key(status) : "") { await readPR() }
         #if DEBUG
         // `-showGitReload YES`: a refresh and a Load Earlier Commits two seconds after the first read, as the user's
         // would be, to see what their failures say (#1889, with scripts/mock/mock_hub.py MOCK_GIT_READ_FAIL=1).
@@ -163,7 +176,7 @@ struct GitPane: View {
         } label: {
             HStack(spacing: Theme.Space.xs) {
                 if pullModel.isPulling { ProgressView().controlSize(.mini) }
-                Chip(text: pullModel.isPulling ? String(localized: "Pulling") : s.behind > 0 ? String(localized: "Pull \(s.behind)") : String(localized: "Pull"),
+                Chip(text: pullModel.isPulling ? String(localized: "Pulling") : s.behind > 0 ? String(localized: "Pull \(s.behind)") : String(localized: "git.pull", defaultValue: "Pull"),
                      symbol: pullModel.isPulling ? nil : Theme.Icon.down,
                      look: .tint(s.behind > 0 ? Theme.cautionText : Theme.accent))
                     .monospacedDigit()
@@ -345,7 +358,7 @@ struct GitPane: View {
     }
 
     enum WriteSheet: String, Identifiable {
-        case commit, branches, stashes
+        case commit, branches, stashes, pr, prCreate
         var id: String { rawValue }
     }
 
@@ -384,6 +397,15 @@ struct GitPane: View {
                                          applied: { applied($0) }, openStashes: { sheet = .stashes })
                     case .stashes:
                         GitStashesSheet(machineID: machineID, cwd: cwd, status: s, writer: writer, deps: deps, applied: { applied($0) })
+                    case .pr:
+                        if let api = model.api(group) {
+                            GitPRSheet(machineID: machineID, cwd: cwd, status: s, pr: prModel, deps: GitPRModel.Deps(api: api), commentKey: commentKey)
+                        }
+                    case .prCreate:
+                        if let api = model.api(group) {
+                            GitPRCreateSheet(machineID: machineID, cwd: cwd, status: s, pr: prModel, deps: GitPRModel.Deps(api: api),
+                                             branches: { try await deps.branches(machineID, cwd) }, opened: { sheet = .pr })
+                        }
                     }
                 }
             }
@@ -462,6 +484,12 @@ struct GitPane: View {
         status = r.status
         error = nil
         return true
+    }
+
+    /// Reads the branch's pull request when what was pushed moved, or always with force.
+    private func readPR(force: Bool = false) async {
+        guard canWrite, let api = model.api(group) else { return }
+        await prModel.read(status, machine: machineID, cwd: cwd, deps: GitPRModel.Deps(api: api), force: force)
     }
 
     private func pull() async {

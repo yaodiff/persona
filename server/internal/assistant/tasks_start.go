@@ -377,7 +377,17 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	}
 	t.Permission = strings.TrimSpace(t.Permission)
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
-	if err != nil && ctx.Err() == nil && !startStalled(err) {
+	var lost startLinkLost
+	if errors.As(err, &lost) && lost.back {
+		// The link took the start's answer and the machine, back, does not show the agent: start it once more, with
+		// a whole start's time of its own (the first may have spent its own on the dead link). Not counted against
+		// the launcher (#7511).
+		s.logf("task %s: start: %v; the link to %s dropped and came back without the agent; starting once more", t.TodoID, err, t.Machine)
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartTimeout)
+		defer rcancel()
+		ctx = rctx
+		mid, sid, err = s.startTaskAgent(ctx, &t, retry)
+	} else if err != nil && ctx.Err() == nil && !startStalled(err) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
 		// launcher failure may move a flexible task, after verifying its directory on the destination.
 		// An unknown result (the wait ran out or the link dropped while the answer was out) already went through
@@ -388,7 +398,22 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		if !shouldRetry && t.MachinePolicy == machineFlexible && !unknown {
 			shouldRetry = s.healthyPlace(ctx, &t)
 		}
-		if shouldRetry {
+		if shouldRetry && (errors.Is(err, errMachineOffline) || errors.Is(err, apierr.ErrOffline)) {
+			// Not sent: no connection to the machine. The retry waits a moment and then for the link to come back
+			// (#7511), not only a fixed moment that a reconnect taking a minute outlasts; still down when the wait
+			// ends, it fails as offline at once without reaching the machine.
+			s.logf("task %s: start: %v; retrying once %s is back", t.TodoID, err, t.Machine)
+			select {
+			case <-time.After(s.taskStartRetry()):
+			case <-ctx.Done():
+			}
+			if ctx.Err() == nil {
+				s.waitMachineBack(ctx, t.Machine)
+			}
+			if ctx.Err() == nil {
+				mid, sid, err = s.startTaskAgent(ctx, &t, retry)
+			}
+		} else if shouldRetry {
 			s.logf("task %s: start: %v; retrying", t.TodoID, err)
 			select {
 			case <-time.After(s.taskStartRetry()):
@@ -660,8 +685,9 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 	return s.todoView(ctx, cur.ID)
 }
 
-// taskStartRetryDelay is how long a task waits before its one retry after a dropped link (Service.taskRetry shortens
-// it in tests).
+// taskStartRetryDelay is how long a task waits before its one retry after a start the new tab's terminal was not
+// ready for, or a flexible task's move (Service.taskRetry shortens it in tests). A start that found no connection to
+// its machine waits for the link instead (waitMachineBack, tasks_start_link.go).
 const taskStartRetryDelay = 3 * time.Second
 
 // taskStartRetry is the wait before a failed task start's one retry: taskStartRetryDelay unless tests set taskRetry.

@@ -128,7 +128,7 @@ function HealthConversation({ sid, onToggleSidebar }: { sid: string; onToggleSid
     );
   }
   if (!mid) return <div className="flex h-full items-center justify-center"><Loading /></div>;
-  return <ChatView key={sid} mid={mid} sid={sid} assistant onToggleSidebar={onToggleSidebar} headerActions={<HealthChatActions sid={sid} list={list} />} />;
+  return <ChatView key={sid} mid={mid} sid={sid} assistant placeholder={t("health.ask_placeholder")} onToggleSidebar={onToggleSidebar} headerActions={<HealthChatActions sid={sid} list={list} />} />;
 }
 
 function HealthHome({ onToggleSidebar }: { onToggleSidebar: () => void }) {
@@ -283,6 +283,8 @@ function HealthMemory() {
   }, []);
   useEffect(() => {
     void load();
+    // read again on every hello, as the space's conversations and reports are: one that failed while the hub was away
+    return onHubEvent("hello", () => void load());
   }, [load]);
   const entries = useMemo(() => memoryEntries(files ?? []), [files]);
 

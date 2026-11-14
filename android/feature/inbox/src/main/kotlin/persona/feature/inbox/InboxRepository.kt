@@ -40,6 +40,8 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     val preferences: Flow<InboxPreferences> get() = flowOf(InboxPreferences())
     /** Whether the hub shows source subscriptions (#2041, `source_subscriptions`): their entry joins the Inbox's other settings. */
     val subscriptionsShown: Flow<Boolean> get() = flowOf(false)
+    /** Whether those pages are Inbox Sources (#5278, `inbox_sources`): the menu uses that name only then. */
+    val inboxSourcesShown: Flow<Boolean> get() = flowOf(false)
     suspend fun savePreferences(value: InboxPreferences) = Unit
     /** Where Hand to AI last sent each source's items (#2121, [InboxHandOffMemory]): the group's own, latest first. */
     val handOffMemory: Flow<List<HandOffMemoryEntry>> get() = flowOf(emptyList())

@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -419,8 +420,9 @@ func (d *doctorReport) pushRoutes(ctx context.Context, get func(context.Context,
 		return // the checks before said whether the hub answers at all
 	}
 	var body struct {
-		Direct  bool         `json:"direct"`
-		Devices []pushDevice `json:"devices"`
+		Direct  bool            `json:"direct"`
+		Devices []pushDevice    `json:"devices"`
+		Web     []webPushListed `json:"web"`
 	}
 	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body)
 	resp.Body.Close()
@@ -437,6 +439,7 @@ func (d *doctorReport) pushRoutes(ctx context.Context, get func(context.Context,
 	if body.Direct {
 		way = i18n.T(l, "hub-doctor.push_way_direct")
 	}
+	defer d.webPushRoutes(body.Web)
 	if len(body.Devices) == 0 {
 		d.ok(item, i18n.T(l, "hub-doctor.push_no_devices", i18n.Args{"way": way}))
 		return
@@ -461,6 +464,40 @@ func (d *doctorReport) pushRoutes(ctx context.Context, get func(context.Context,
 			name = i18n.T(l, "hub-doctor.device_kind", i18n.Args{"name": name, "kind": dev.Kind})
 		}
 		d.note(i18n.T(l, "hub-doctor.item_detail", i18n.Args{"item": name, "detail": pushRouteLine(l, dev.Push)}))
+	}
+}
+
+// webPushRoutes reports the browsers with Web Push (#7459), when there are any: through which push service, and
+// whether the last push went out or the subscription was made with an earlier key.
+func (d *doctorReport) webPushRoutes(web []webPushListed) {
+	if len(web) == 0 {
+		return
+	}
+	l := d.l
+	item := i18n.T(l, "hub-doctor.item_web_push")
+	bad := 0
+	for _, b := range web {
+		if !b.Current || b.FailedAt != nil {
+			bad++
+		}
+	}
+	if bad == 0 {
+		d.ok(item, i18n.T(l, "hub-doctor.web_push_ok", i18n.Args{"count": len(web)}))
+	} else {
+		d.problem(item, i18n.T(l, "hub-doctor.web_push_bad", i18n.Args{"count": bad}))
+	}
+	for _, b := range web {
+		name := cmp.Or(b.Browser, b.Device)
+		route := i18n.T(l, "hub-doctor.web_push_route", i18n.Args{"service": cmp.Or(b.Service, "?")})
+		line := route
+		switch {
+		case !b.Current:
+			line = i18n.T(l, "hub-doctor.web_push_stale", i18n.Args{"route": route})
+		case b.FailedAt != nil:
+			line = i18n.T(l, "hub-doctor.push_reason_failed_at", i18n.Args{"route": route, "detail": b.Error,
+				"at": b.FailedAt.UTC().Format("01-02 15:04 UTC")})
+		}
+		d.note(i18n.T(l, "hub-doctor.item_detail", i18n.Args{"item": name, "detail": line}))
 	}
 }
 

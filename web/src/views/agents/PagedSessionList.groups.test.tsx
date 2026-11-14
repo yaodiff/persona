@@ -106,6 +106,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setShown(true);
   act(() => root.unmount());
   host.remove();
   vi.useRealTimers();
@@ -136,6 +137,11 @@ const rowsIn = (section: HTMLElement) => [...section.querySelectorAll<HTMLElemen
 async function toggle(section: HTMLElement) {
   await act(async () => heading(section).click());
   await settle();
+}
+const hubHint = () => { for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn(); };
+function setShown(shown: boolean) {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => shown ? "visible" : "hidden" });
+  document.dispatchEvent(new Event("visibilitychange"));
 }
 async function hint() {
   await act(async () => {
@@ -243,6 +249,52 @@ describe("the list by computer", () => {
     expect(sections().map((s) => heading(s).getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true"]);
     expect(rowsIn(sections()[3])).toEqual(["c1"]);
   });
+
+  it("opens the section of an open conversation on a later page", async () => {
+    const filler = Array.from({ length: 50 }, (_, i) => row(`f${i}`, "mac", "/bulk"));
+    const all = [...filler, ...ROWS];
+    const selected = (q: URLSearchParams) => {
+      const places = q.getAll("place"), spaces = q.getAll("space");
+      return all.filter((r) => (!q.get("state") || q.get("state") === r.state) && (!q.get("machine_id") || q.get("machine_id") === r.machine) &&
+        (!q.get("project") || q.get("project") === r.project) && (!q.get("group") || q.get("group") === r.group) && (!q.get("q") || r.id.includes(q.get("q")!)) &&
+        (!places.length || places.includes(listPair(r.machine, r.project))) && (!spaces.length || spaces.includes(listPair(r.machine, r.group))));
+    };
+    vi.mocked(api).mockImplementation((path) => {
+      const q = params(path as string);
+      const rows = selected(q);
+      const answer = q.has("catalog") ? catalogOf(rows) : q.has("counts") ? countsOf(rows)
+        : q.has("cursor") ? { sessions: rows, remove: [], has_more: false, total: rows.length, revision: "r" }
+          : { sessions: rows.slice(0, 50), remove: [], has_more: true, next_cursor: "second", total: rows.length, revision: "r" };
+      return Promise.resolve(answer) as ReturnType<typeof api>;
+    });
+    await show({ open: "c1" });
+    await browseBy("machine");
+    expect(sections().map((s) => heading(s).getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true"]);
+    expect(rowsIn(sections()[3])).toEqual(["c1"]);
+    expect(reads("page").filter((path) => params(path).get("cursor") === "second")).toHaveLength(1);
+  });
+});
+
+describe("a list by group whose first read fails", () => {
+  // audit item 4: the groups come from the root list's counts, and its failed read left them on "Loading…" for good
+  it("says why with Retry instead of loading for good, and draws the groups once Retry reads them", async () => {
+    localStorage.setItem("persona.agentBrowseBy", "machine");
+    const answer = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(() => Promise.reject(new Error("HTTP 500")));
+    await list.load().catch(() => {});
+    await act(async () => root.render(<PagedSessionList root={list} path="/sessions" identity={identity} compare={compare} event="sessions_list"
+      label={(_, id) => NAMES[id] ?? id} renderRow={(r) => <span data-row={r.id}>{r.id}</span>} />));
+    await settle();
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    const alerts = [...host.querySelectorAll('[role="alert"]')].map((el) => el.textContent);
+    expect(alerts).toEqual(["HTTP 500"]);
+    vi.mocked(api).mockImplementation(answer);
+    const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === t("sidebar.retry"))!;
+    await act(async () => retry.click());
+    await settle();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(sections().map(summary)).toEqual(["MacBook 1 3", "Windows PC 2", "Lab 1", "NAS 1"]);
+  });
 });
 
 describe("the list by project, on a hub with the catalog", () => {
@@ -317,6 +369,22 @@ describe("the list by project, on a hub with the catalog", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
     await hint();
     expect(groupReads()).toBe(2);
+  });
+
+  it("reads nothing for the hints a hidden tab gets, and once for them all when it is shown again", async () => {
+    await show();
+    await browseBy("machine");
+    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    vi.mocked(api).mockClear();
+    await act(async () => setShown(false));
+    for (let i = 0; i < 10; i++) await act(async () => { hubHint(); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2 * SESSION_LIST_METRICS.groupsRefresh); });
+    expect(calls()).toEqual([]);
+    await act(async () => setShown(true));
+    await settle();
+    // each open section reads once, the groups once; the folded section still reads nothing
+    expect(reads("page").map((path) => params(path).get("machine_id")).sort()).toEqual(["lab", "mac", "pc"]);
+    expect(reads("counts")).toHaveLength(1);
   });
 
   it("reads a catalog again while its computers are still answering, less often as it goes on", async () => {

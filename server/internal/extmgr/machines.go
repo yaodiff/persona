@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/devices"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/streams"
 )
@@ -103,6 +104,14 @@ func (m *Machine) isOnline() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.online
+}
+
+// mcpWaitCapable is the target node's authenticated handshake promise to preserve call_id through a nested elicitation.
+// Protocol 0 and an omitted capability are deliberately incapable, so an older target yields the unknown fallback.
+func (m *Machine) mcpWaitCapable() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.info.Protocol > 0 && slices.Contains(m.info.Capabilities, nodeproto.MCPWait)
 }
 
 // devicesPeer is a computer's node through the devices in this process.

@@ -161,6 +161,15 @@ export function applyLook(doc: Document = document) {
   else root.dataset.textSize = size;
 }
 
+// Another tab of this browser changed one (or its storage was cleared): this one follows at once, as with the appearance
+// (views/theme.ts), and its Settings show the choice it shows.
+if (typeof window !== "undefined")
+  addEventListener("storage", (e) => {
+    if (e.key !== null && e.key !== ACCENT_KEY && e.key !== PERSONA_ACCENT_KEY && e.key !== TEXT_SIZE_KEY) return;
+    applyLook();
+    notify();
+  });
+
 export function setAccentChoice(c: AccentChoice) {
   write(ACCENT_KEY, c === "default" ? null : c);
   applyLook();

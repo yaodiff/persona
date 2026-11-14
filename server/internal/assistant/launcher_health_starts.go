@@ -167,6 +167,9 @@ func codedStartRefusal(err error) (string, map[string]string) {
 func (s *Service) startFailureText(ctx context.Context, machine string, err error) string {
 	code, args := codedStartRefusal(err)
 	if code == "" {
+		if text := s.linkFailureText(ctx, machine, err); text != "" { // machine busy or link down (#7511)
+			return text
+		}
 		return err.Error()
 	}
 	return startErrorText(s.lang(ctx), s.machineName(machine), proto.Session{StartError: err.Error(), StartErrorCode: code, StartErrorArgs: args})
