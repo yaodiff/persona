@@ -341,6 +341,8 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 	ask := triageOpenAsk(t.Ask)
 	at := func(section, rule string) todoTriage { return todoTriage{Section: section, Rule: rule, Last: last} }
 	review := triageReviewState(t.Todo)
+	// The owner chose Don't handle on this decision round (task_review_dismissals.go): it no longer waits on them.
+	dismissed := t.DecisionReview != nil && t.DecisionReview.DismissalID != ""
 	// An open concern closes only with the secretary's report: nothing else files it with the finished ones.
 	concern := t.Kind == db.KindConcern && t.DoneAt == nil
 	// rule 8's signals: a turn nobody has seen, a review not done yet, an ask that says done / please verify
@@ -360,7 +362,7 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageDone, ruleFailedStart)
 	case status == "needs_you" || status == "interrupted":
 		return at(triageWaiting, ruleAgentAsks)
-	case t.DoneAt == nil && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
+	case t.DoneAt == nil && !dismissed && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
 		return at(triageWaiting, ruleOwnerDecides)
 	case status == "working" || status == "waiting":
 		return at(triageWorking, ruleAgentRunning)

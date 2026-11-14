@@ -2,7 +2,7 @@
 // agents' sessions (alive, running, asking), its PR / delivery state, the latest task_review verdict and when it last moved —
 // never from what an agent says about itself. The rules are the SOP's table, in its order; the first that holds wins.
 
-import { acceptanceStands, latestReview, reviewState } from "./supervision";
+import { acceptanceStands, decisionDismissed, latestReview, reviewState } from "./supervision";
 import { openAsk, todoDueBy, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { todoStageIndex } from "./todo-stage";
 
@@ -134,7 +134,8 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
     return at("done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
-  if (!todo.done_at && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
+  // a decision the owner chose Don't handle on no longer waits on them (decisionDismissed)
+  if (!todo.done_at && !decisionDismissed(todo) && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
   // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.

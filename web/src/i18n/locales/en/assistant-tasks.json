@@ -159,6 +159,7 @@
   "review_pending": "Awaiting review",
   "review_rework": "Rework round {round}",
   "review_needs_user": "Needs your call",
+  "review_dismissed": "Not handling",
   "review_parked": "Parked",
   "review_parked_until": "Parked until {time} · {reason}",
   "review_parked_reason": "Parked · {reason}",

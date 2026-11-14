@@ -1,7 +1,7 @@
 import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./background-work";
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
-import { reviewState } from "./supervision";
+import { decisionDismissed, reviewState } from "./supervision";
 import { supersededFailedStarts } from "./todo-triage";
 import { dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
@@ -161,7 +161,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });
     else if (waits || decision) {
       // Only the review decision is hidden; a live Agent question above still has its home.
-      if (!(status !== "needs_you" && decision && (todo.decision_review?.dismissal_id && todo.decision_review.review_at === decisionRound(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
+      if (!(status !== "needs_you" && decision && (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
         deciding.push({ item: { kind: "task", key, todo, status, asks, countsOpen }, rank: todoRank(todo, status), at: card.at });
       }
     }

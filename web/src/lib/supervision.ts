@@ -138,10 +138,18 @@ export function parkedLine(todo: (Pick<Todo, "done_at"> & { supervision?: Superv
 
 export type ReviewTone = "accent" | "red" | "orange" | "green" | "muted";
 
+/** The owner chose Don't handle on the decision round waiting now (the hub's task_review_dismissals): it no longer waits
+ *  on them, in the main conversation, on the To-dos page and in the badge alike. An answer later undoes it on the hub. */
+export function decisionDismissed(todo: Pick<Todo, "decision_review"> & { supervision?: Supervision }): boolean {
+  const r = todo.decision_review;
+  return !!r?.dismissal_id && r.review_at === (todo.supervision?.reviews?.at(-1)?.at || r.review_at);
+}
+
 /** What the state is called and how it is coloured; undefined for a task that is not supervised. */
-export function reviewBadge(todo: Pick<Todo, "done_at"> & { supervision?: Supervision }): { label: string; tone: ReviewTone } | undefined {
+export function reviewBadge(todo: Pick<Todo, "done_at" | "decision_review"> & { supervision?: Supervision }): { label: string; tone: ReviewTone } | undefined {
   const sup = todo.supervision;
   if (!sup) return undefined;
+  if (reviewState(todo) === "needs_user" && decisionDismissed(todo)) return { label: t("assistant-tasks.review_dismissed"), tone: "muted" };
   switch (reviewState(todo)) {
     case "pending_review":
       return { label: t("assistant-tasks.review_pending"), tone: "accent" };

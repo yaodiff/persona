@@ -158,7 +158,11 @@ func (s *Service) acceptTryAs(ctx context.Context, id, card string, byDefault bo
 func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card string, byDefault bool) (bool, error) {
 	t, todoOK := s.todoNow(id)
 	if todoOK {
-		if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
+		if byDefault { // Hidden is not answered: no default is taken for a dismissed round
+			if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
+				return false, err
+			}
+		} else if err := s.undoDismissalForAnswer(ctx, t); err != nil { // the owner's OK beats Don't handle
 			return false, err
 		}
 	}

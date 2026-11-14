@@ -47,6 +47,10 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 		task.Delivery = clip(oneLine(deliverySummary(t)), 80)
 		var rank int
 		task.Health, rank = taskHealth(t, agents, now) // supervised tasks: what needs the assistant first (supervise.go)
+		if dismissed, err := s.decisionDismissed(ctx, t); err == nil && dismissed {
+			// The owner chose Don't handle on this decision: not theirs to answer now, so it is not raised again.
+			task.Health, rank = "你选了不处理这个决定", 6 // i18n-ignore: the snapshot's words, as taskHealth has them
+		}
 		if v := t.Supervision; v.state(t) == reviewParked {
 			task.Health = parkedHealth(v.parked(), s.location(ctx)) // until when, in the owner's zone (parked.go)
 		}

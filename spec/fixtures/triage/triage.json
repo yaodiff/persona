@@ -147,6 +147,88 @@
       "from_test": "web/src/lib/todo-triage.test.ts > a decision for the owner is Waiting on you"
     },
     {
+      "name": "owner_decides_dismissed",
+      "description": "用户对这一轮决定选了「不处理」：不再算「等你」。",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "web/src/lib/todo-triage.ts triage"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "ask",
+            "state": "needs_you",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "run",
+            "state": "working",
+            "status": "working",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "unseen",
+            "state": "unread",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "idle",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-10T10:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "old",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-06T08:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "t",
+          "title": "t",
+          "created_at": "2026-10-29T00:00:00.000Z",
+          "updated_at": "2026-11-10T11:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "idle",
+              "linked_at": "2026-11-02T04:00:00.000Z"
+            }
+          ],
+          "origin": "conv",
+          "supervision": {
+            "supervisor": "c",
+            "state": "needs_user",
+            "reviews": [
+              {
+                "at": "2026-11-10T09:00:00.000Z",
+                "verdict": "needs_user"
+              }
+            ]
+          },
+          "decision_review": {
+            "review_at": "2026-11-10T09:00:00.000Z",
+            "dismissal_id": "dismiss_example"
+          }
+        }
+      },
+      "expected": {
+        "section": "other",
+        "rule": "rest"
+      },
+      "from_test": "spec fixture: Don't handle reads the same on every surface"
+    },
+    {
       "name": "owner_decides_ask",
       "description": "ask 是一个决定：等你拍板。",
       "source": [

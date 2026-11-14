@@ -145,6 +145,7 @@
   "review_pending": "待验收",
   "review_rework": "返工第 {round} 轮",
   "review_needs_user": "等你决定",
+  "review_dismissed": "不处理",
   "review_parked": "已搁置",
   "review_parked_until": "搁置到 {time} · {reason}",
   "review_parked_reason": "已搁置 · {reason}",

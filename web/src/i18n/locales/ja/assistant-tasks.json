@@ -145,6 +145,7 @@
   "review_pending": "検収待ち",
   "review_rework": "差し戻し {round} 回目",
   "review_needs_user": "判断待ち",
+  "review_dismissed": "対応しない",
   "review_parked": "保留中",
   "review_parked_until": "{time} まで保留 · {reason}",
   "review_parked_reason": "保留中 · {reason}",

@@ -296,7 +296,7 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (bo
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
 	if t, ok := s.todoNow(id); ok {
-		if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
+		if err := s.undoDismissalForAnswer(ctx, t); err != nil { // an answer beats Don't handle
 			return false, err
 		}
 	}
@@ -354,11 +354,8 @@ func (s *Service) routeDecisionAnswer(ctx context.Context, conversation, id, ask
 	if !ok || t.Origin != conversation {
 		return FeedItem{}, i18n.Err("assistant-tasks.route_no_task")
 	}
-	if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
-		if err != nil {
-			return FeedItem{}, err
-		}
-		return FeedItem{}, i18n.Err("assistant-feishu_cards.already_handled")
+	if err := s.undoDismissalForAnswer(ctx, t); err != nil { // an answer beats Don't handle
+		return FeedItem{}, err
 	}
 	a, err := s.askRound(id, asked)
 	if err != nil {
@@ -428,7 +425,7 @@ func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response str
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
 	if t, ok := s.todoNow(id); ok {
-		if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
+		if err := s.undoDismissalForAnswer(ctx, t); err != nil { // an answer beats Don't handle
 			return false, err
 		}
 	}

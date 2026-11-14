@@ -86,7 +86,7 @@ func (s *Service) decisionTold(ctx context.Context, id, label, machine, session,
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
 	if t, ok := s.todoNow(id); ok {
-		if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
+		if err := s.undoDismissalForAnswer(ctx, t); err != nil { // an answer beats Don't handle
 			return false, err
 		}
 	}

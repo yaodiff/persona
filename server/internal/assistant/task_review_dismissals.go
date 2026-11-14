@@ -80,6 +80,40 @@ func (s *Service) decisionDismissed(ctx context.Context, t Todo) (bool, error) {
 	return d.ReviewAt.Equal(r.ReviewAt) && d.DismissalID != "" && !d.Undone, nil
 }
 
+// undoDismissalForAnswer: the owner answered decision t after choosing Don't handle on it (OK or an option on a card,
+// an answer in the chat or on Lark, task_decided). An answer is the owner handling it after all: the dismissal of this
+// round is undone, persisted, and the answer goes through. Only answers call this; the deadline's default and the wait
+// reminders still keep away from a dismissed round (decisionDismissed). Fails closed when the book cannot be read or
+// saved, as decisionDismissed does.
+func (s *Service) undoDismissalForAnswer(ctx context.Context, t Todo) error {
+	r := currentDecisionReview(t)
+	if r == nil {
+		return nil
+	}
+	b := &s.reviewDismissals
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := s.loadTaskReviewDismissalsLocked(ctx); err != nil {
+		return err
+	}
+	d, ok := b.byTodo[t.ID]
+	if !ok || !d.ReviewAt.Equal(r.ReviewAt) || d.DismissalID == "" || d.Undone {
+		return nil
+	}
+	st := s.store()
+	if st == nil {
+		return errAcceptStore
+	}
+	next := d
+	next.Undone = true
+	b.byTodo[t.ID] = next
+	if err := st.PutSetting(ctx, taskReviewDismissalsKey, b.byTodo); err != nil {
+		b.byTodo[t.ID] = d
+		return errAcceptStore
+	}
+	return nil
+}
+
 func (s *Service) listDecisionReviews(ctx context.Context, list []listedTodo) error {
 	b := &s.reviewDismissals
 	b.mu.Lock()
