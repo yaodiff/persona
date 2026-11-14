@@ -615,3 +615,46 @@ func TestAcceptRouteNotTakenReadsInTheRequestLanguage(t *testing.T) {
 		}
 	}
 }
+
+// A decision answered in words on Lark is made even when its agent cannot take it now: recorded, out of needs_user,
+// its ask answered, and its supervisor told what to pass on. The hub does not resend it, so a later reply to the same
+// card finds it answered and nothing reaches the agent twice.
+func TestDecisionAnsweredInWordsStaysDecidedWhenTheSendFails(t *testing.T) {
+	s, f, todo, _, notes := conclusionService(t, false)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
+	a := askOf(s, todo.ID)
+	f.mu.Lock()
+	f.failSend = errors.New("a dialog is open")
+	f.mu.Unlock()
+	sent := len(sentToAgent(f))
+	if !s.acceptReply(ctx, "om_words", "直接全量吧", false, a.MessageID) {
+		t.Fatal("reply not taken")
+	}
+	if got := todoNow(s, todo.ID).Supervision.State; got == reviewNeedsUser {
+		t.Fatalf("still waits on the owner: %q", got)
+	}
+	if got := askOf(s, todo.ID); got.AcceptedAt.IsZero() {
+		t.Fatalf("ask not answered: %+v", got)
+	}
+	want := i18n.T(s.botLang(ctx), "assistant-reports.accept_decided_not_sent", i18n.Args{"error": "a dialog is open"})
+	if n := notes(); len(n) == 0 || n[len(n)-1] != want {
+		t.Fatalf("reply note %q", n)
+	}
+	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+	s.supervise.mu.Lock()
+	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	s.supervise.mu.Unlock()
+	if !(pending && g.Key == key && strings.Contains(g.Detail, "直接全量") && strings.Contains(g.Detail, "a dialog is open")) && !told {
+		t.Fatalf("supervisor not told: %+v (told %v)", g, told)
+	}
+	f.mu.Lock()
+	f.failSend = nil
+	f.mu.Unlock()
+	s.acceptReply(ctx, "om_again", "直接全量吧", false, a.MessageID)
+	if n := len(sentToAgent(f)); n != sent {
+		t.Fatalf("%d sends after the failed one: the hub resent it", n-sent)
+	}
+}

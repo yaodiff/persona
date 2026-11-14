@@ -106,13 +106,32 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 	}
 	if _, err := s.relayToTask(ctx, t.Origin, id, msg, nil); err != nil {
 		s.logf("task %s: acceptance to agent: %v", id, err)
-		s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 120)}), media))
+		why := clip(oneLine(err.Error()), 120)
+		if !decideAsk(&ask) {
+			s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": why}), media))
+			return true
+		}
+		// A decision answered in words is made even when its agent cannot take it now (a dialog open in its terminal,
+		// its computer away): recorded above, it leaves needs_user and its ask is answered, and its supervisor is told to
+		// pass it on. Never resent by the hub, so the agent cannot get the same answer twice.
+		s.userDecided(ctx, id)
+		s.answeredInWords(ctx, id)
+		s.signal(superviseSignal{Todo: id, Kind: sigIdle, Key: "undelivered|" + ask.AskedAt.UTC().Format(time.RFC3339Nano),
+			Detail: i18n.T(l, "assistant-reports.decision_not_delivered", i18n.Args{"decision": clip(oneLine(text), 200), "error": why})})
+		s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_decided_not_sent", i18n.Args{"error": why}), media))
 		return true
 	}
 	if decideAsk(&ask) {
 		s.userDecided(ctx, id) // decided: its agent's next stop goes back to the supervisor
 	}
-	// Changed again: the next deploy asks again. A decision is answered: its card stays known, and says so to a reply.
+	s.answeredInWords(ctx, id)
+	s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_sent"), media))
+	return true
+}
+
+// answeredInWords: the owner's words answered task id's ask. Changed again: the next deploy asks again. A decision is answered:
+// its card stays known, and says so to a reply.
+func (s *Service) answeredInWords(ctx context.Context, id string) {
 	b := &s.accept
 	b.mu.Lock()
 	if a := b.asks[id]; a != nil && decideAsk(a) {
@@ -122,8 +141,6 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 	}
 	s.saveAcceptLocked(ctx)
 	b.mu.Unlock()
-	s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_sent"), media))
-	return true
 }
 
 // withMediaDropped is note with, when the reply carried pictures or files, the line saying they did not go to the agent.

@@ -33,6 +33,7 @@
   "accept_question": "验收意见",
   "accept_to_agent": "用户验收时的意见（从飞书回的）：\n{feedback}\n\n照这个改，改完重新部署，最后的回复里写清改了什么、去哪看、怎么验。",
   "accept_not_sent": "已记进待办，但没能交给 Agent：{error}",
+  "accept_decided_not_sent": "你的决定已记下，但没能交给 Agent：{error}。督办会转给它，不会自动重发",
   "accept_not_taken": "推荐没能交给干活的 Agent（{error}），什么都没改，可以再试一次",
   "accept_sent": "已记进待办的决策，交给原来的 Agent 改了",
   "accept_media_dropped": "验收意见目前只认文字，图片和文件没交给 Agent；请用文字说明哪里不对，或到 App 里把图发给它",
@@ -113,5 +114,6 @@
   "brief_dropped_plain": "➖ {criterion}（已去掉）",
   "brief_more": "……另有 {n} 条",
   "brief_also_done": "另外做了：{list}",
-  "brief_also_sep": "；"
+  "brief_also_sep": "；",
+  "decision_not_delivered": "用户已决定：{decision}。已记下，但没发到 Agent（{error}），也没有自动重发：等 Agent 能接收时由你转给它"
 }

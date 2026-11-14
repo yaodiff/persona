@@ -33,6 +33,7 @@
   "accept_question": "確認時の意見",
   "accept_to_agent": "ユーザーが確認時に返した意見（Lark から）：\n{feedback}\n\nこのとおり直して再デプロイし、最後の返信に変更点・見る場所・確認方法を書いてください。",
   "accept_not_sent": "ToDo には記録しましたが、Agent に渡せませんでした：{error}",
+  "accept_decided_not_sent": "決定は記録しましたが、Agent に渡せませんでした：{error}。監督役が伝えます。自動では再送しません",
   "accept_not_taken": "おすすめを担当の Agent に渡せませんでした（{error}）。何も変更していないので、もう一度お試しください",
   "accept_sent": "ToDo の決定事項に記録し、元の Agent に渡しました",
   "accept_media_dropped": "確認時の意見は今のところ文字だけを受け付けます。画像とファイルは Agent に渡していません。どこが違うかを文字で書くか、App から画像を Agent に送ってください",
@@ -113,5 +114,6 @@
   "brief_dropped_plain": "➖ {criterion}（対象外に変更）",
   "brief_more": "…ほか {n} 件",
   "brief_also_done": "ほかに実施：{list}",
-  "brief_also_sep": "；"
+  "brief_also_sep": "；",
+  "decision_not_delivered": "オーナーの決定：{decision}。記録済みですが、Agent に届いておらず（{error}）、自動では再送していません。Agent が受け取れるようになったら伝えてください"
 }
