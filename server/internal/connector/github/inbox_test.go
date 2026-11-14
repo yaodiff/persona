@@ -3,9 +3,11 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,9 +21,10 @@ import (
 type fakeNotifications struct {
 	mu            sync.Mutex
 	notifications string
-	prs           map[string]string // path -> JSON
-	comments      map[string]string // path -> JSON
-	notModified   bool              // answer 304 when If-Modified-Since comes
+	prs           map[string]string   // path -> JSON
+	comments      map[string]string   // path -> JSON
+	pages         map[string][]string // path -> JSON of each page, served with GitHub's Link header
+	notModified   bool                // answer 304 when If-Modified-Since comes
 	sinceSeen     []string
 	requests      []string
 	posted        []string
@@ -55,6 +58,14 @@ func (f *fakeNotifications) server(t *testing.T) *Connector {
 			f.posted = append(f.posted, r.URL.Path+" "+string(b))
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{}`))
+		case len(f.pages[r.URL.Path]) > 0:
+			ps := f.pages[r.URL.Path]
+			n, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			n = max(1, min(n, len(ps)))
+			if len(ps) > 1 {
+				w.Header().Set("Link", fmt.Sprintf(`<%s?per_page=100&page=%d>; rel="last"`, r.URL.Path, len(ps)))
+			}
+			_, _ = w.Write([]byte(ps[n-1]))
 		case f.prs[r.URL.Path] != "":
 			_, _ = w.Write([]byte(f.prs[r.URL.Path]))
 		case f.comments[r.URL.Path] != "":
@@ -293,5 +304,39 @@ func TestPushOrEditIsNoNewMessage(t *testing.T) {
 	c.poll(context.Background())
 	if last := things(t, c)["example-org/example-repo#12"]; last.Last != newer {
 		t.Fatalf("a new review kept Last %q", last.Last)
+	}
+}
+
+// A PR with more than 100 reviews: the newest review is on the last page, and it is the new message (#7481).
+func TestNewestReviewBeyondTheFirstPage(t *testing.T) {
+	f := notificationsFixture()
+	review := func(i int) string {
+		return `{"user":{"login":"carol"},"state":"COMMENTED","body":"Review ` + strconv.Itoa(i) +
+			`","submitted_at":"` + fixtureAt(time.Duration(i)*time.Minute) + `"}`
+	}
+	var first []string
+	for i := range 100 {
+		first = append(first, review(i))
+	}
+	path := "/repos/example-org/example-repo/pulls/12/reviews"
+	f.comments["/repos/example-org/example-repo/issues/12/comments"] = `[{"user":{"login":"dave"},"body":"A comment.","created_at":"` +
+		fixtureAt(150*time.Minute) + `"}]`
+	f.pages = map[string][]string{path: {"[" + strings.Join(first, ",") + "]", "[" + review(100) + "]"}}
+	f.notifications = "[" + note("1", "author", "PullRequest", "https://api.github.com"+api12, t1) + "]"
+	c := f.server(t)
+	c.poll(context.Background())
+	if pr := things(t, c)["example-org/example-repo#12"]; pr.Last != fixtureAt(150*time.Minute) {
+		t.Fatalf("before the new review: %+v", pr)
+	}
+
+	newer := fixtureAt(200 * time.Minute)
+	f.mu.Lock()
+	f.pages[path][1] = "[" + review(100) + `,{"user":{"login":"carol"},"state":"APPROVED","body":"Looks good now.","submitted_at":"` + newer + `"}]`
+	f.notifications = "[" + note("1", "author", "PullRequest", "https://api.github.com"+api12, t2) + "]"
+	f.mu.Unlock()
+	c.inbox.fullAt = time.Time{}
+	c.poll(context.Background())
+	if pr := things(t, c)["example-org/example-repo#12"]; pr.Last != newer || pr.Preview != "批准了 Looks good now." {
+		t.Fatalf("a review on the second page was not the newest message: %+v", pr)
 	}
 }

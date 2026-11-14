@@ -414,9 +414,22 @@ func (c *Connector) describe(ctx context.Context, n notification, me string) (co
 	}
 	reviewed := false
 	if pr {
+		// Reviews come oldest first with no count on the PR: the Link header names the last page, which holds the newest.
 		var rs []comment
-		if _, err := c.Get(ctx, fmt.Sprintf("/repos/%s/pulls/%s/reviews?per_page=100", repo, number), &rs); err != nil {
+		h, err := c.Get(ctx, fmt.Sprintf("/repos/%s/pulls/%s/reviews?per_page=100", repo, number), &rs)
+		if err != nil {
 			return t, err
+		}
+		last, err := listLastPage(strings.Join(h.Values("Link"), ", "))
+		if err != nil {
+			return t, err
+		}
+		if last > 1 {
+			var tail []comment
+			if _, err := c.Get(ctx, fmt.Sprintf("/repos/%s/pulls/%s/reviews?per_page=100&page=%d", repo, number, last), &tail); err != nil {
+				return t, err
+			}
+			rs = append(rs, tail...)
 		}
 		for _, r := range rs {
 			verb := map[string]string{"APPROVED": "批准了", "CHANGES_REQUESTED": "要求修改", "COMMENTED": "评审了"}[r.State]
