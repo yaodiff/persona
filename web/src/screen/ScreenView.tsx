@@ -11,11 +11,17 @@ import "../views/theme"; // follows the system's light / dark while open (index.
 import { ensureSubtleAES } from "./aes";
 import { displayChoice, framing, keepPointerIn, layoutDisplays, machineDisplays, setDisplayChoice, type MachineDisplay, type Rect, type Size } from "./displays";
 import { accountOf, keepLabel, keysymsOf, screenSocket, toApp, type ScreenTarget } from "./screen";
-import { pictureChoice, qualityChoice, setPictureChoice, setQualityChoice, setStatsShown, statsShown, videoAdvertised, type ScreenPicture, type ScreenQuality } from "./video";
+import { newPair } from "./pair";
+import { pictureChoice, qualityChoice, setPictureChoice, setQualityChoice, setStatsShown, statsShown, videoOffered, webTiers, type ScreenPicture, type ScreenQuality } from "./video";
+import type { Want } from "./video-link";
+import { budgetOf, chooseMobileData, currentMobileData, markMobileDataAsked, onMobileData, readNetwork, shouldAskMobileData, watchNetwork, type MobileData } from "./data-use";
+import type { Probe } from "./video-probe";
 
 type DisplayMenuView = typeof import("./DisplayMenu").default;
 type ScreenMenuView = typeof import("./ScreenMenu").default;
 type StatsKit = typeof import("./StatsOverlay");
+type VideoKit = typeof import("./VideoPicture");
+type VideoState = import("./VideoPicture").VideoState;
 
 type Phase =
   | { kind: "checking" }
@@ -25,7 +31,7 @@ type Phase =
   | { kind: "live" }
   | { kind: "closed"; why: string };
 
-type Computer = { enabled?: boolean; screen_sharing?: boolean; displays?: unknown; screen_video?: unknown };
+type Computer = { enabled?: boolean; screen_sharing?: boolean; displays?: unknown; screen_video?: { permission?: string; asked?: boolean } | unknown };
 /** A sign-in sent to the Mac: typed (and to keep or not), or the one the app kept (saved). */
 type Credentials = { account: string; password: string; remember: boolean; saved: boolean };
 type MachineRow = { id: string; name: string; home?: string; online: boolean };
@@ -64,7 +70,17 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
   // so no Mac shows a control it can't use — as the iOS app gates it (AppModel.advertisesVideo). The choice is kept per
   // Mac in this browser (video.ts). Input always rides RFB; only the picture path changes.
   const [hasVideo, setHasVideo] = useState(false);
-  const [picture, setPicture] = useState<ScreenPicture>(() => pictureChoice(target.mid) ?? "vnc");
+  const hasVideoRef = useRef(false);
+  hasVideoRef.current = hasVideo;
+  // The video channel itself (#6558): whether the Mac allowed it (`permission`, and whether macOS has asked yet), what
+  // this browser decodes, and the channel's state; the pair that binds it to the RFB connection once that is signed in.
+  const [videoPermission, setVideoPermission] = useState<{ missing: boolean; asked: boolean }>({ missing: false, asked: false });
+  const [probe, setProbe] = useState<Probe | null>(null);
+  const [video, setVideo] = useState<VideoState | null>(null);
+  const [livePair, setLivePair] = useState<string | null>(null);
+  // The choice kept for this Mac, null until one is made: video then by default where it plays (`playable`), as on the
+  // iPhone; VNC otherwise.
+  const [pictureKept, setPicture] = useState<ScreenPicture | null>(() => pictureChoice(target.mid));
   const [quality, setQuality] = useState<ScreenQuality>(() => qualityChoice(target.mid));
   // Connection stats (#6558): off until turned on, kept per Mac (video.ts). The overlay measures this connection: noVNC
   // and the RFB WebSocket the page handed it, while it is shown.
@@ -87,7 +103,9 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
         const on = await sharing(target);
         if (!gone) {
           setDisplays(machineDisplays(on.displays));
-          setHasVideo(videoAdvertised(on.screen_video));
+          setHasVideo(videoOffered(on.screen_video));
+          const sv = (on.screen_video ?? {}) as { permission?: string; asked?: boolean };
+          setVideoPermission({ missing: sv.permission === "missing", asked: sv.asked === true });
           setPhase({ kind: "connecting" });
           setGo(true);
         }
@@ -110,7 +128,9 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
     // The page opens the RFB WebSocket and hands it to noVNC (its constructor takes a channel), so the connection stats
     // can count what it carries; it is the socket noVNC would open itself, the same URL with no subprotocols. noVNC
     // closes it when it disconnects.
-    const socket = new WebSocket(screenSocket(window.location, target.mid, target.token));
+    // A Mac that offers video gets a pair on its RFB connection: the video channel binds to this one once it signs in.
+    const pair = hasVideoRef.current ? newPair() : undefined;
+    const socket = new WebSocket(screenSocket(window.location, target.mid, target.token) + (pair ? `&pair=${pair}` : ""));
     let r: RFB;
     try {
       r = new RFB(screen.current, socket, { shared: true });
@@ -146,6 +166,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
     };
     r.addEventListener("connect", () => {
       setPhase({ kind: "live" });
+      if (pair) setLivePair(pair);
       // One-tap unlock (#1507 a-2): in, so the app hands over the kept password for the lock screen (personaScreen.unlock).
       if (target.unlock && !unlockAsked.current) {
         unlockAsked.current = true;
@@ -191,6 +212,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
       answer.current = null;
       rfb.current = null;
       setLink(null);
+      setLivePair(null);
       r.disconnect();
     };
   }, [go, attempt, target, canKeep]);
@@ -306,6 +328,69 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
     setStatsShown(target.mid, on);
   };
 
+  // The video channel's chunk (#6558), fetched only for a Mac that offers video, in a page with a bar; it first asks
+  // what this browser decodes. One that would not load leaves the page on RFB with nothing said.
+  const [Video, setVideoKit] = useState<VideoKit | null>(null);
+  useEffect(() => {
+    if (Video || target.embedded || !hasVideo) return;
+    let gone = false;
+    import("./VideoPicture").then(
+      async (m) => {
+        const p = await m.probeHere();
+        if (!gone) {
+          setProbe(p);
+          setVideoKit(m);
+        }
+      },
+      () => {},
+    );
+    return () => {
+      gone = true;
+    };
+  }, [Video, hasVideo, target.embedded]);
+  const playable = hasVideo && !!probe?.codecs.length && !video?.decoderFailed;
+  const picture: ScreenPicture = pictureKept ?? (playable ? "video" : "vnc");
+  // What video shows: video chosen, the Mac allowed it, and one display: its only one, or one chosen of several the node
+  // numbered (`display-<id>`); all of several at once stay RFB, since video carries one.
+  const want = useMemo<Want | null>(() => {
+    if (!playable || picture !== "video" || videoPermission.missing) return null;
+    if (offered.length <= 1) return { display: null, rect: null };
+    if (!shown?.id.startsWith("display-")) return null;
+    const id = Number(shown.id.slice("display-".length));
+    return Number.isFinite(id) ? { display: id, rect: [shown.frame.x, shown.frame.y, shown.frame.w, shown.frame.h] } : null;
+  }, [playable, picture, videoPermission.missing, offered.length, shown]);
+  // Why VNC shows while video was chosen; nothing while VNC isn't live (the page says so itself).
+  const fallback = phase.kind === "live" && playable && picture === "video" ? (videoPermission.missing ? "notAllowed" : (video?.fallback ?? null)) : null;
+  // Why video isn't playing on this page although the Mac offers it: the stats panel says so, only then.
+  const noVideo = !hasVideo ? null : probe?.why === "insecure" ? "insecure" : probe?.why === "unsupported" ? "unsupported" : video?.decoderFailed ? "failed" : null;
+
+  // How much data the video may use (./data-use, the iPhone's rules): the network as the browser tells it, and with
+  // tiers on both sides the choice for mobile data, asked on the card at most twice while nothing is chosen (once a
+  // page); the choice also sits in ⋯ while it applies.
+  const [net, setNet] = useState(readNetwork);
+  useEffect(() => watchNetwork(() => setNet(readNetwork())), []);
+  const tiersOn = webTiers.supported && !!video?.tiers;
+  const [mobileData, setMobileData] = useState<MobileData>(currentMobileData);
+  // The cap without tiers starts the stream; the tiers, once the helper lists them, work under the cap with the choice.
+  const budget = useMemo(() => budgetOf(net, null), [net]);
+  const tierBudget = useMemo(() => budgetOf(net, mobileData), [net, mobileData]);
+  const dataChoice = tiersOn && onMobileData(net);
+  const [askData, setAskData] = useState(false);
+  const askedHere = useRef(false);
+  useEffect(() => {
+    if (!dataChoice || askedHere.current) return;
+    askedHere.current = true;
+    if (shouldAskMobileData()) {
+      markMobileDataAsked();
+      setAskData(true);
+    }
+  }, [dataChoice]);
+  const chooseData = (m: MobileData) => {
+    chooseMobileData(m);
+    setMobileData(m);
+    setAskData(false);
+  };
+
   // In the app (#1343) the app draws the name, the state and "View only" / "Take control" around the page: it hears the phase, and
   // says "Take control" through window.personaScreen.
   useEffect(() => {
@@ -381,8 +466,16 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
           <span className="ml-2 text-[11.5px] font-normal text-ink-3">{live ? (control ? t("screen-screenview.in_control") : t("screen-screenview.view_only")) : phaseLabel(phase)}</span>
         </p>
         {offering && DisplayMenu && <DisplayMenu offered={offered} shown={shown?.id ?? null} onChoose={choose} onOpen={reask} />}
-        {live && !target.embedded && hasVideo && ScreenMenu && (
-          <ScreenMenu picture={picture} quality={quality} onPicture={choosePicture} onQuality={chooseQuality} />
+        {live && !target.embedded && playable && ScreenMenu && (
+          <ScreenMenu
+            picture={picture}
+            quality={quality}
+            onPicture={choosePicture}
+            onQuality={chooseQuality}
+            qualityOffered={tiersOn}
+            mobileData={dataChoice ? mobileData : null}
+            onMobileData={chooseData}
+          />
         )}
         {live && Stats && <Stats.StatsToggle on={statsOn} onToggle={showStats} />}
         {live && (
@@ -410,7 +503,42 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
         <div ref={clip} className={cx("absolute", frame ? "overflow-hidden" : "inset-0", !live && "invisible")} style={frame ? place(frame.clip) : undefined}>
           <div ref={screen} className={cx("absolute", !frame && "inset-0")} style={frame ? place(frame.inner) : undefined} data-testid="screen" />
         </div>
-        {live && !target.embedded && statsOn && Stats && link && <Stats.StatsOverlay rfb={link.rfb} socket={link.socket} onClose={() => showStats(false)} />}
+        {!target.embedded && Video && playable && link && (
+          <Video.VideoChannel
+            rfb={link.rfb}
+            screen={screen.current}
+            pair={livePair}
+            want={want}
+            codecs={probe!.codecs}
+            budget={budget}
+            tierBudget={tierBudget}
+            quality={quality}
+            tiers={webTiers.supported}
+            mid={target.mid}
+            token={target.token}
+            onState={setVideo}
+          />
+        )}
+        {/* under the bar, centered: why VNC shows, and the mobile-data question; the strip between lets the picture take clicks */}
+        {!target.embedded && Video && (fallback || (askData && dataChoice && live && picture === "video")) && (
+          <div className="pointer-events-none absolute top-3 right-3 left-3 z-10 flex flex-col items-center gap-2">
+            {fallback && (
+              <div className="pointer-events-auto">
+                <Video.FallbackLine fallback={fallback} asked={videoPermission.asked} />
+              </div>
+            )}
+            {askData && dataChoice && live && picture === "video" && <Video.MobileDataCard onChoose={chooseData} onClose={() => setAskData(false)} />}
+          </div>
+        )}
+        {live && !target.embedded && statsOn && Stats && link && (
+          <Stats.StatsOverlay
+            rfb={link.rfb}
+            socket={link.socket}
+            onClose={() => showStats(false)}
+            video={video?.showing ? { reading: video.reading, codec: video.codec, size: video.size, tier: tiersOn && video.tier ? { change: video.tier, at: video.tierAt ?? 0, quality } : null } : null}
+            noVideo={noVideo}
+          />
+        )}
         {!live && (
           <div className="absolute inset-0 flex items-center justify-center p-6">
             {phase.kind === "signin" ? (

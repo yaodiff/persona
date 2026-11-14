@@ -5918,6 +5918,28 @@
       },
       "extractionState" : "manual"
     },
+    "%lld ms round trip" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ms round trip"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "往復 %lld ms"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "往返 %lld ms"
+          }
+        }
+      }
+    },
     "%lld Picked" : {
       "localizations" : {
         "en" : {
@@ -8398,6 +8420,76 @@
           }
         }
       }
+    },
+    "%lld machines have an issue" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machine has an issue"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machines have an issue"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンに異常があります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台机器异常"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "%lld machines offline" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machine offline"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machines offline"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台がオフライン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台机器离线"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "%lld machines running high" : {
       "localizations" : {
@@ -11783,6 +11875,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%lld%% lost" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld%% lost"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "損失 %lld%%"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢包 %lld%%"
+          }
+        }
+      }
     },
     "%lld%% similar" : {
       "localizations" : {
@@ -29734,6 +29848,28 @@
       },
       "extractionState" : "manual"
     },
+    "Choose the Fastest Route Automatically" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose the Fastest Route Automatically"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最速の経路を自動で選ぶ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动选择最快的线路"
+          }
+        }
+      }
+    },
     "CI" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -36341,6 +36477,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. iOS asks for permission the first time Claude uses one, or when you turn it on here; Health asks only here. If you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. iOS asks for permission the first time Claude uses one, or when you turn it on here; Health asks only here. If you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オンにしたデータは、Claudeがphone_*ツールで読み取れます。予定やリマインダーの作成などの書き込みは、先にiPhoneで確認します。Claudeが初めて使うとき、またはここでオンにしたときに、システムの許可を求めます（ヘルスケアはここでのみ）。以前に拒否した場合は設定に移動します。ハブがiPhoneにアクセスできるのは、Personaがフォアグラウンドにある（またはバックグラウンドに移った直後の）ときだけです。iOSではメッセージ、メモ、他社製Appのデータは利用できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开的数据，Claude 可以通过 phone_* 工具读取；新建日程、提醒等写操作会先在手机上问你。Claude 第一次用到某项数据时，或你在这里打开它时，系统会请求权限；健康数据只在这里请求。以前拒绝过的会跳到系统设置。Persona 在前台（或刚切到后台）时，hub 才能调到手机。iOS 不开放短信、备忘录、第三方 App 的数据。"
+          }
+        }
+      }
     },
     "Claude desktop app" : {
       "localizations" : {
@@ -51677,6 +51836,29 @@
       },
       "extractionState" : "manual"
     },
+    "Default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標準"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认"
+          }
+        }
+      }
+    },
     "Default (no background)" : {
       "localizations" : {
         "en" : {
@@ -62424,6 +62606,51 @@
       },
       "extractionState" : "manual"
     },
+    "Faster" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faster"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速め"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较快"
+          }
+        }
+      }
+    },
+    "Faster route" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faster route"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "より速い経路"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找到更快的线路"
+          }
+        }
+      }
+    },
     "FYI" : {
       "localizations" : {
         "en" : {
@@ -70212,6 +70439,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "How far a computer's screen scrolls when you drag two fingers on it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How far a computer's screen scrolls when you drag two fingers on it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータの画面を2本指でドラッグしたときの、スクロールの速さです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用两指在电脑画面上拖动时，画面滚动的快慢。"
+          }
+        }
+      }
     },
     "How full your subscription windows are, and today's tokens. [Home Widgets]" : {
       "extractionState" : "manual",
@@ -90193,6 +90443,28 @@
       },
       "extractionState" : "manual"
     },
+    "Network changed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network changed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ネットワークが変わった"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络变了"
+          }
+        }
+      }
+    },
     "Network on, scripts still off" : {
       "localizations" : {
         "en" : {
@@ -102356,6 +102628,29 @@
       },
       "extractionState" : "manual"
     },
+    "Off by default. After you enable this, a workout of at least 10 minutes is reported right after it is saved to Health, even while Persona is closed: its measurements go to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off by default. After you enable this, a workout of at least 10 minutes is reported right after it is saved to Health, even while Persona is closed: its measurements go to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "初期設定はオフです。有効にすると、10分以上のワークアウトがヘルスケアに保存された直後に、Persona を開いていなくてもレポートを作成します。測定データは hub に送信されます。有効にする前の運動は取り込みません。オフにしても、送信済みのレポートは完了する場合があります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认关闭。开启后，至少持续 10 分钟的运动一存进「健康」就会生成报告，Persona 没打开也一样：运动数据会发送到你的 hub 生成报告。不导入开启前的运动。关闭后，已提交的报告仍可能完成。"
+          }
+        }
+      }
+    },
     "Off by default. After you enable this, opening Persona checks for new workouts of at least 10 minutes and sends their measurements to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -103044,6 +103339,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "On the same Wi-Fi or Tailscale as your computer, the screen comes straight from it, faster and steadier. Turned off, it always goes through your hub." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On the same Wi-Fi or Tailscale as your computer, the screen comes straight from it, faster and steadier. Turned off, it always goes through your hub."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータと同じ Wi-Fi や Tailscale にいるときは、画面がコンピュータから直接届き、速く安定します。オフにすると、常にハブを経由します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "和电脑在同一 Wi-Fi 或 Tailscale 上时，画面直接从电脑传过来，更快更稳。关掉后始终经 hub 中转。"
+          }
+        }
+      }
     },
     "On This iPhone [Meeting Transcription]" : {
       "extractionState" : "manual",
@@ -115352,6 +115669,50 @@
       },
       "extractionState" : "manual"
     },
+    "Previous route dropped" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous route dropped"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前の経路が切れた"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一条线路断了"
+          }
+        }
+      }
+    },
+    "Previous route got worse" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous route got worse"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前の経路が不安定になった"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一条线路变差了"
+          }
+        }
+      }
+    },
     "Previous Version" : {
       "localizations" : {
         "en" : {
@@ -117650,6 +118011,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Reports contain measurement cards, heart-rate and pace charts when data is available, a comparison with your recent workouts of the same kind, and a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reports contain measurement cards, heart-rate and pace charts when data is available, a comparison with your recent workouts of the same kind, and a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レポートには測定値カード、データがある場合は心拍数とペースのグラフ、最近の同じ種類のワークアウトとの比較、簡潔なまとめが含まれます。ヘルスケアの読み取り権限は iOS の設定で管理できます。結果が空の場合、権限が許可されていない可能性もあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报告包含数据卡片、有数据时的心率图和配速图、与最近同类运动的对比，以及简短总结。健康数据读取权限可在 iOS 设置中管理；没有读取到运动也可能是未授予权限。"
+          }
+        }
+      }
+    },
+    "Route [Screen Stats]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Route"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "経路"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "线路"
+          }
+        }
+      }
     },
     "RTF document" : {
       "localizations" : {
@@ -124202,29 +124609,6 @@
         }
       }
     },
-    "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "レポートには測定値カード、データがある場合は心拍数グラフ、簡潔なまとめが含まれます。ヘルスケアの読み取り権限は iOS の設定で管理できます。結果が空の場合、権限が許可されていない可能性もあります。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "报告包含数据卡片、有数据时的心率图，以及简短总结。健康数据读取权限可在 iOS 设置中管理；没有读取到运动也可能是未授予权限。"
-          }
-        }
-      }
-    },
     "Repository" : {
       "localizations" : {
         "en" : {
@@ -127926,6 +128310,41 @@
       },
       "extractionState" : "manual"
     },
+    "Running on %lld machines" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Running on %1$lld machine"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Running on %1$lld machines"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンで実行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %1$lld 台机器上运行"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Running the tests: 128 of 160 pass so far. [Layout sample]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -130180,6 +130599,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Scroll Speed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scroll Speed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スクロールの速さ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "滚动速度"
+          }
+        }
+      }
     },
     "Scroll up to load earlier output" : {
       "localizations" : {
@@ -138880,6 +139322,29 @@
       },
       "extractionState" : "manual"
     },
+    "Slower" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slower"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遅め"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较慢"
+          }
+        }
+      }
+    },
     "Slowest and most careful" : {
       "localizations" : {
         "en" : {
@@ -141719,6 +142184,41 @@
       },
       "extractionState" : "manual"
     },
+    "Starting on %lld machines" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Starting on %1$lld machine"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Starting on %1$lld machines"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンで起動中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在 %1$lld 台机器上启动"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Starting tasks [Agent Follow-Up]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -143508,6 +144008,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "停在「%1$@」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Stopped on %lld machines" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Stopped on %1$lld machine"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Stopped on %1$lld machines"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンで停止中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台机器已停止"
           }
         }
       },
@@ -149156,6 +149691,29 @@
       },
       "extractionState" : "manual"
     },
+    "That Mac will show a window: choose Open System Settings, then turn on Persona Screen." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That Mac will show a window: choose Open System Settings, then turn on Persona Screen."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その Mac にウインドウが表示されます。「システム設定を開く」を選んでから、Persona Screen をオンにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那台 Mac 上会弹一个窗口，点「打开系统设置」，然后打开 Persona Screen。"
+          }
+        }
+      }
+    },
     "That commit isn't in this repository" : {
       "localizations" : {
         "en" : {
@@ -149452,6 +150010,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The computer's firewall blocks direct connections" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The computer's firewall blocks direct connections"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータのファイアウォールが直接接続を止めています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑的防火墙挡住了直连"
+          }
+        }
+      }
     },
     "The Fullest [Home Widgets]" : {
       "extractionState" : "manual",
@@ -168386,6 +168966,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "调大音量"
+          }
+        }
+      }
+    },
+    "Turned off in Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turned off in Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定でオフ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在设置中关闭"
           }
         }
       }
@@ -195193,6 +195795,420 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "拉取"
+          }
+        }
+      }
+    },
+    "Clearer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clearer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高画質"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清晰一些"
+          }
+        }
+      }
+    },
+    "Data Saver" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data Saver"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "データ節約"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "省流量"
+          }
+        }
+      }
+    },
+    "Live Screen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Screen"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ画面"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时屏幕"
+          }
+        }
+      }
+    },
+    "On Mobile Data" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On Mobile Data"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モバイルデータ通信中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在使用移动数据"
+          }
+        }
+      }
+    },
+    "Quality on Mobile Data" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quality on Mobile Data"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モバイルデータ通信時の画質"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移动数据下的画质"
+          }
+        }
+      }
+    },
+    "About 0.6 GB an hour" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About 0.6 GB an hour"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1時間あたり約0.6 GB"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "约 0.6 GB / 小时"
+          }
+        }
+      }
+    },
+    "About 0.2–0.3 GB an hour" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About 0.2–0.3 GB an hour"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1時間あたり約0.2〜0.3 GB"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "约 0.2–0.3 GB / 小时"
+          }
+        }
+      }
+    },
+    "The screen is saving data. Make it clearer?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The screen is saving data. Make it clearer?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面はデータを節約しています。高画質にしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面正在省流量，要清晰一些吗？"
+          }
+        }
+      }
+    },
+    "For watching a computer's screen on mobile data or a personal hotspot. On Wi-Fi the picture is always as clear as the connection allows, and with Low Data Mode on it always saves data." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For watching a computer's screen on mobile data or a personal hotspot. On Wi-Fi the picture is always as clear as the connection allows, and with Low Data Mode on it always saves data."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モバイルデータ通信やインターネット共有でコンピュータの画面を見るときに使います。Wi-Fi では回線が許す限り高画質で表示し、低データモードがオンのときは常にデータを節約します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在移动数据或个人热点上看电脑屏幕时用。连着 Wi-Fi 时画面总是按网络撑得住的最清晰来；系统开了「低数据模式」时总是省流量。"
+          }
+        }
+      }
+    },
+    "settings.search.live_screen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "live screen screen route direct connection quality cellular mobile data hotspot scroll scrolling scroll speed two fingers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ画面 画面 経路 直接接続 画質 モバイル通信 インターネット共有 スクロール スクロールの速さ 2本指"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时屏幕 屏幕 线路 直连 画质 蜂窝 移动数据 热点 滚动 滚动速度 双指"
+          }
+        }
+      }
+    },
+    "On a Personal Hotspot" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On a Personal Hotspot"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インターネット共有を使用中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在使用个人热点"
+          }
+        }
+      }
+    },
+    "%lld s ago" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld s ago"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld秒前"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 秒前"
+          }
+        }
+      }
+    },
+    "Picked for this connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Picked for this connection"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回線に合わせて開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按当前网络起步"
+          }
+        }
+      }
+    },
+    "Connection slowed down" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection slowed down"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回線が遅くなりました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络变慢"
+          }
+        }
+      }
+    },
+    "Connection is steady" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection is steady"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回線が安定しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络稳定"
+          }
+        }
+      }
+    },
+    "iPhone is warm or saving power" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone is warm or saving power"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone が高温か省電力中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机发热或在省电"
+          }
+        }
+      }
+    },
+    "iPhone couldn’t keep up" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone couldn’t keep up"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone の処理が追いつきません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机跟不上"
+          }
+        }
+      }
+    },
+    "You changed Quality" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You changed Quality"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画質を変更しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你改了画质"
           }
         }
       }

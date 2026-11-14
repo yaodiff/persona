@@ -1,0 +1,13 @@
+{
+  "forbidden": "This device cannot rename agents",
+  "upgrade": "Update the assistant to name agents automatically from here",
+  "assistant_session": "Persona names its own conversations. Auto Rename is for agents",
+  "model_not_configured": "No model is set up for naming. Choose one for Sorting in Settings › Model configuration",
+  "no_dialogue": "This agent has no conversation to name it from yet",
+  "invalid_name": "The model did not give a usable name. Try again",
+  "model_failed": "The naming model could not be reached. Try again",
+  "dialogue_unavailable": "Couldn't read this agent's conversation. Check that its computer is online, then try again",
+  "timeout": "Naming took too long. Try again",
+  "save_failed": "Couldn't save the new name. Try again",
+  "renamed_meanwhile": "This agent was renamed while its name was being written. The new name was kept"
+}

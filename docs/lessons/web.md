@@ -1,5 +1,74 @@
 # Lessons: web UI and interactions
 
+## A paging hub pushes no sessions: a computer's Agents are not in `sessions[mid]` (web audit items 3 and 30)
+
+A connection that asked for `sessions_list` gets no `sessions` / `sessions_delta` pushes (docs/protocol/protocol.md
+"Bounded Agents lists"), so the store's `sessions[mid]` stays empty and `sessionSummaries` holds only the list's first
+page. The Machines cards and a computer's page read `sessions[mid]` and said "No agents running" / "Agent 0" for every
+computer. Read a computer's Agents the way the Agents list does (`useFullAgentSessions`, folded, without the assistant's
+conversations), and keep the older hub's pushed path working (the same hook returns the store's rows there). A count
+whose source has not been read yet, or failed, is unknown, not zero: `useFullAgentSessions().loaded` / `error` and
+`useAgentListStatus()` tell the page to say "Loading…" or "Couldn't load …" instead. Take that status from the same
+source as the count: with several assistants Overview counts from the complete list, and a status read from the paged
+list said "loaded" while the complete list was still on its way or had failed (`useScopedAgentListStatus`). A count of
+the first pages (`sessionSummaries`) is not a computer's count either while the list has more pages. Check with
+`MOCK_SESSIONS_LIST=1` and without it, with the default roster (several assistants) and `MOCK_MANAGERS=1`, and with
+`GET /api/v1/sessions` answering 500 in the browser.
+
+## A date field's change fires per typed segment; a list hidden under a narrow detail drops the focus (web audit, 2026-11-14)
+
+- `<input type="date">`, `time` and `datetime-local` fire `input` (React's `onChange`) whenever the typed segments make
+  a valid value: the "1" of a day "15" is already the 1st. A field that saves on `onChange` and disables itself while
+  saving stores the half-typed day and takes the focus away before the next digit. Save typed changes on blur or Enter
+  and a change with no key before it (the browser's picker) at once, and never disable a field mid-edit
+  (`PlanField` in `web/src/views/Todos.tsx`). A half-typed field reads `""` with `validity.badInput`: go back to the
+  saved value, do not clear it. Chrome's first Tab out of the last segment stops on the picker button. Playwright's
+  `fill` sends no keys, so a test needs real `keyboard.type` (`web/e2e/todos-keyboard-layout.mjs`).
+- A list hidden with `display: none` under a phone-width detail takes the focused row with it: the focus falls to
+  `<body>`. Move it to the detail's Back when a row opens it, and back to that row on the way back (Back, Esc, the
+  browser's Back). Chrome keeps a hidden scroller's offset but reads `scrollTop` as 0 while hidden and fires a scroll
+  event, so a scroll memory that saves on every event can store 0.
+- A count shown under one name ("Done") must come from the rule that fills the section of that name, in every
+  grouping: the header counting closed to-dos by `done_at` disagreed with the Done section (seen or 24 hours old) and
+  with a failed start the sections show open. Count a merged row's to-dos under the row's section, as the section titles
+  do, not each under its own.
+- A grouping drawn from a hub list that holds only some to-dos (the pinned directions' tree lists only open ones,
+  `server/internal/assistant/direction_tree.go`) must still place the ones it leaves out: a to-do moved out of the
+  page's Done fold vanished from 常驻 and was counted as "open, under no direction". Check every grouping for each
+  to-do state a rule change moves.
+
+## A read that only handles the expected failure loads forever (2026-11-14, workflow board)
+
+The board's switch started as "not answered yet" (`enabled: null`) and its read handled only 404; a 500 left it null,
+so `/workspace-board` and Settings showed their loaders until the next reconnect. Any state that a page draws as
+"loading" needs an exit on every failure: keep the reason next to it and draw it with Retry. The same page also read
+every 503 as "this hub has no board, update it", while the manager answers 503 `assistant_offline` while it restarts:
+tell an unsupported hub from a passing failure by the error's `code` (`not_supported`), not by its status, and offer
+Retry only for what a retry can fix. A message about the hub's version belongs on its own, without the controls of a
+page that cannot work there. The switch's module is on the first screen and its pages are lazy: exporting its read for
+their Retry renamed the first screen's imports (ja +120 B), while handing `retry` out through the hook they already
+import, and keeping the 404 as the stored failure rather than a flag of its own, kept it within a few dozen bytes of main.
+
+## A folded sidebar group kept every row mounted (web usability audit, 2026-11-14)
+
+`Collapse` keeps its children unless it is `lazy`, and the sidebar's folds were not: with 400 Agents the rows under
+folded groups stayed in the DOM, inert, about 8,800 elements that every page switch laid out again (230–310 ms long
+tasks on a 4x-throttled phone, none with 74 Agents). Sidebar folds are lazy by default now, so a test that looks for a
+folded group's rows (to check they are inert) opens the group first. Two smaller costs hid behind the big DOM: each
+group heading read its height in a layout effect (`getBoundingClientRect`), and one set a custom property on the
+scroller, which restyles everything under it before the next heading's read. Take such heights from a
+`ResizeObserver`: its first report comes after the browser's own layout and before the paint, and `flushSync` applies
+state from it in that frame. Measure with a production build (`vite preview`), CDP CPU throttling and a `longtask`
+observer, against the same mock with fewer sessions (`web/e2e/sidebar-many-agents.mjs`).
+
+Dropping what is not drawn has three costs to pay for. A broadcast to mounted listeners (Collapse all / Expand all)
+misses the groups that are gone, so note each broadcast and have a group take the one it missed when it mounts again
+(`src/lib/fold-all.ts`). Rows split into one wrapper per part remount when they cross a part boundary (React keys are
+per parent), losing focus to `body`: keep every row a keyed sibling under one parent and mark where parts start. And a
+lazily loaded chunk rendered by something always on screen (the sidebar) takes the whole app down when its download
+fails, since no error boundary sits above it: keep such code in the always-loaded bundle, or put a boundary with a
+plain fallback around it.
+
 ## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
 
 The star toast was browser-local, but readiness refresh and successful Agent creation loaded its rule lazily.
@@ -344,7 +413,7 @@ A background wake can reopen an exchange before its recap. Find the live exchang
 
 ## Optional sidebar entries need both setup and list results (#2934)
 
-A paged list can publish rows before its independent source-status request completes. Gate the optional Personal agents section on both results, not merely a loaded count, and keep its subscription mounted while hidden. An `agents` event must reread source status as well as sessions in bounded mode; otherwise enabling a source leaves the entry hidden until a reload. Cold failures with no conversations stay hidden, while refresh errors for existing conversations retain their retry UI. Regress both result orders and live empty/setup transitions under StrictMode.
+A paged list can publish rows before its independent source-status request completes. Gate the optional Personal agents section on both results, not merely a loaded count, and keep its subscription mounted while hidden. An `agents` event that says the list changed (`session_ids: []`, which the hub sends when a source is added or removed, when its listing starts or stops failing, and for an extension's keyless `agentsrc.updated`) must reread source status as well as sessions in bounded mode; otherwise enabling a source leaves the entry hidden until a reload. An event naming sessions rereads only the sessions, and the status with them once it is a minute old (#7681): the status read asks every source's extension in turn, and a session's new message does not change it. Cold failures with no conversations stay hidden, while refresh errors for existing conversations retain their retry UI. Regress both result orders and live empty/setup transitions under StrictMode.
 
 ## Report evidence is separate from report prose (#2554)
 
@@ -524,6 +593,7 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 - **Rendering categories before counts still shifts the first screen**: on a narrow screen, one extra digit in the selected category can wrap the final pill onto another line. Do not guess digit width or fix the width of loaded pills. Without a cached list, show only the existing `Loading` below search, then mount filters and content together when the list arrives. Keep the loading notice in that branch too, so newly inserted filters cannot push it down (following #4029's one-time display approach).
 - **Loading gates distinguish empty lists from failures**: an empty list object is loaded and cached data can display immediately; a first-load failure must still allow category switching or retry. Search is independent of category lists and must not be blocked by this gate.
 - **Validate real layout**: jsdom checks timing only. Measure wrapping with Playwright + mock hub at width 390, using `layout-shift` over 4 seconds after navigation, excluding `hadRecentInput`, with 3 repetitions per group. Also delay list responses and capture light / dark loading and loaded states. Pin time and animation frames for before / after comparisons, checking loaded pixels rather than mistaking timers or animation for layout changes.
+- **Later (2026-11-14): the count left the pills**. Holding the pills back until the count arrived kept the first paint still, but picking another kind still changed the selected pill's width, so the row re-wrapped and every pill after it moved, and an uncached kind took the whole row away while it loaded. The pills now carry no count (each section under them says how many it holds), so they paint at once and never move; `web/e2e/knowledge-kind-chips.mjs` measures every pill's box while each picked kind's list read is held (a mock answers in milliseconds, so without the hold the loading state is never measured) and once the list is drawn. The iOS app still shows the count on its selected pill. A width that depends on the selection is the bug: remove what varies before reaching for reserved widths.
 
 ### Confirmed facts belong to the requested entry (#1341)
 
@@ -969,7 +1039,7 @@ Writes without items (titles, modes) also advance `updated_at`, returning empty 
 ## Wrap horizontal rows when they do not fit; do not rely on horizontal scrolling (#3594)
 
 Scrollbars are globally hidden, and mouse wheels scroll vertically only. Overflowing horizontal rows (Settings categories) hide later items from mouse users, who cannot scroll to them. Wrap the row (button text stays single-line) or use a menu.
-If the header grows, elements below it (App.tsx connection-status pill) cannot assume 56px; Settings writes actual header height to `<main>` `--page-header`.
+Nothing may float under a page's header assuming its height: the connection-status pill once sat at `--page-header` (Settings wrote its taller header's height there) and still covered fields and titles, so it is now a strip above the page that pushes it down (`App.tsx`, web usability audit item 87).
 
 ## Do not fade answers in again after remounting (2026-11-06, #4107)
 
@@ -1214,3 +1284,43 @@ px, while `offsetHeight` and the computed height say 44. Reduced motion only sho
 frame is still drawn. Wait for the panel's animations before measuring:
 `await dialog.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)))`
 (`web/e2e/standing-authorizations.mjs`).
+
+## A focus trap that lists only controls misses Chrome's focusable scrollers
+
+Chrome lets the keyboard focus a scrolling element with no focusable child of its own (the shortcut help's list). A
+modal's Tab trap that only knows the controls from `focusables()` sees the focus "outside" its list there and jumps back
+to the first control, so the controls after the scroller are never reached by Tab. Decide from where the focus is in
+the document instead: inside the modal but on no listed control, let the browser's order go on and wrap only past either
+end (`trapTabIn` in `web/src/ui/overlay.ts`). Check a trap with Tab in a real browser, not only in jsdom, which has no such
+focus stops.
+
+## Uppercase label styles rewrite names
+
+A heading styled as a label (`uppercase tracking-[0.06em]`) also capitalizes whatever is put in it. A menu header or a
+palette section that holds a space, project or computer name then shows "weather" as "WEATHER", a name the user never
+typed. Give those headings their text as written (`Menu`'s `headerAsWritten`, the palette's `sectionAsWritten`) and
+keep the label style for label words.
+
+## A reload another tab asks for waits for a calm page
+
+A `storage` listener that reloads the page (a language picked in another tab) runs whatever the page holds: a half-typed
+dialog or field is lost, and a page with a `beforeunload` guard pops a leave-page prompt from a background tab. Reuse
+the calm test a new build waits for (`mayReload(pageCalm())` in `web/src/lib/new-version.ts`: no draft, no open dialog or
+menu, the page hidden or left alone) and offer the reload in a toast meanwhile (`web/src/lib/language-sync.ts`). Its
+words come from the catalog's rest, which `main.tsx`'s own imports do not wait for: wait for `i18nRest()` before `t()`.
+
+## Testing Web Push in Playwright needs a real profile (2026-11-14, #7459)
+
+- Chrome has no push messaging in an incognito-like context, and every `browser.newContext()` is one: `pushManager.subscribe` fails with "AbortError: Registration failed - permission denied" whatever permissions are granted, headless or not. `chromium.launchPersistentContext(<temp dir>)` gives a real profile, where headless Chrome subscribes at FCM and receives pushes; drop `--disable-background-networking` from Playwright's default switches (`ignoreDefaultArgs`), which push needs.
+- A push can be handed to the service worker without a push service: DevTools' `ServiceWorker.deliverPushMessage` with the registration id from `ServiceWorker.workerRegistrationUpdated` (`web/e2e/web-push.mjs`).
+- FCM now and then answers 410 for a subscription a fresh headless profile made moments before; subscribing again works. A live check retries once that way instead of failing.
+- Vite's dev server registers no service worker (`lib/pwa.ts`): anything that depends on it is checked against the built app under `vite preview`, which keeps the dev server's `/api` proxy.
+
+## An IntersectionObserver says nothing about a jump across its view (audit item 51)
+
+An observer reports a target only when it crosses a threshold. A mark that goes from below a scroller's view to above it
+in one frame (a long scroll, `scrollTop` set by script, a reveal) is "not intersecting" both times, so no entry comes and
+code that tells "above" from "below" by `boundingClientRect.top < rootBounds.top` keeps the old answer. When only "above
+the view" matters, open the view far below the scroller (`rootMargin: "0px 0px 1000000px 0px"`): a mark is then either
+in it or above it, and every change between the two is reported (`watchPin` in `web/src/views/SidebarSection.tsx`, the
+sidebar's pinned headings). Check such code with a jump, not only with a scroll a few pixels at a time.

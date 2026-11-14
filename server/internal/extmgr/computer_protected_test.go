@@ -54,8 +54,10 @@ func TestUnnamedSteps(t *testing.T) {
 }
 
 // The assistant never operates System Settings or a permission or password prompt (#4336): a call naming one is
-// refused before any card or action, app approval on or off; on Cua Driver so is any call while one has a window on the
-// screen, and steps naming no app go one at a time, stopping when a prompt comes up. Reading stays as it was.
+// refused before any card or action, app approval on or off; on Cua Driver so is any call while a prompt is on the
+// screen, and, while System Settings is open, a call that could reach it (#7560): other apps still go. Steps naming
+// no app go one at a time, stopping when a prompt comes up. Reading stays as it was. The rules themselves are
+// protectedapps' (check_test.go); this is computer_run's use of them.
 func TestComputerRunNeverOperatesProtectedApps(t *testing.T) {
 	h, _ := extensionTestHub(t)
 	ctx := context.Background()
@@ -135,7 +137,7 @@ func TestComputerRunNeverOperatesProtectedApps(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no card for Calculator")
 	}
-	if res := <-calcAsked; !res.IsError || !strings.Contains(res.Content[0].Text, "SecurityAgent is open on its screen") {
+	if res := <-calcAsked; !res.IsError || !strings.Contains(res.Content[0].Text, "prompt (SecurityAgent) is on its screen") {
 		t.Fatalf("allowed on the phone, then refused for the prompt that came up meanwhile: %+v", res)
 	}
 	if _, calls := seen(); len(acted(calls)) != 0 {
@@ -159,14 +161,27 @@ func TestComputerRunNeverOperatesProtectedApps(t *testing.T) {
 	refused("app approval off", `{"machine": "mac-protected", "steps": [{"click": {"app": "System Settings", "name": "x"}}]}`, themselves)
 
 	calc := `{"machine": "mac-protected", "steps": [{"click": {"app": "Calculator", "name": "7"}}]}`
-	setWindows(func(int) string {
-		return `{"windows": [{"app_name": "Réglages Système", "pid": 70, "is_on_screen": true}]}`
-	})
-	refused("System Settings on the screen, known by its pid", calc, "Réglages Système is open on its screen")
+	settingsOpen := func(int) string {
+		return `{"windows": [{"app_name": "Réglages Système", "pid": 70, "window_id": 7, "is_on_screen": true, "z_index": 9,
+			"bounds": {"x": 100, "y": 100, "width": 600, "height": 500}},
+			{"app_name": "Calculator", "pid": 63, "window_id": 3, "is_on_screen": true, "z_index": 4,
+			"bounds": {"x": 0, "y": 0, "width": 300, "height": 400}}]}`
+	}
+	setWindows(settingsOpen)
+	if res := run(calc); res.IsError {
+		t.Fatalf("System Settings open behind: Calculator still goes: %+v", res)
+	}
+	if res := run(`{"machine": "mac-protected", "steps": [{"click": {"element_token": "s00000063:5"}}]}`); res.IsError {
+		t.Fatalf("System Settings open: another window's element token goes: %+v", res)
+	}
+	refused("one of System Settings' own element tokens", `{"machine": "mac-protected", "steps": [{"click": {"element_token": "s00000070:5"}}]}`, themselves)
+	refused("a point where System Settings is on top", `{"machine": "mac-protected", "steps": [{"click": {"app": "Calculator", "x": 250, "y": 300}}]}`,
+		"Réglages Système is on top where this would click")
+	refused("a script while it is open", `{"machine": "mac-protected", "script": "await cua.getApp(\"Calculator\"); return 1"}`, "use steps instead")
 	setWindows(func(int) string {
 		return `{"windows": [{"app_name": "UserNotificationCenter", "pid": 99, "is_on_screen": true}]}`
 	})
-	refused("a permission prompt on the screen, by its process name", calc, "UserNotificationCenter is open on its screen")
+	refused("a permission prompt on the screen, by its process name", calc, "prompt (UserNotificationCenter) is on its screen")
 	setWindows(func(int) string { return `{"oops": true}` })
 	refused("the windows unreadable", calc, "could not be read")
 	setWindows(func(int) string {
@@ -188,7 +203,7 @@ func TestComputerRunNeverOperatesProtectedApps(t *testing.T) {
 	_, before := seen()
 	res := run(keys)
 	_, after := seen()
-	if !res.IsError || !strings.Contains(res.Content[0].Text, "before step 2") || !strings.Contains(res.Content[0].Text, themselves) {
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "Stopped before step 2 of 2") || !strings.Contains(res.Content[0].Text, "answer it themselves") {
 		t.Fatalf("a prompt the first key brought up stops the second: %+v", res)
 	}
 	if steps := acted(after[len(before):]); len(steps) != 1 || len(steps[0]) != 1 {

@@ -3,7 +3,8 @@
 // answered already (POST …/resolve → {already, resolution}) — the answer that took effect, as its history keeps it.
 import { t } from "../i18n";
 import { fields, type Field } from "./elicitation";
-import type { Interaction } from "./types";
+import { optionDisplay, pickedOption } from "./tool-detail";
+import type { Interaction, Question } from "./types";
 
 export type Resolution = Record<string, unknown>;
 
@@ -26,6 +27,18 @@ const MODE_LABEL: Record<string, string> = { acceptEdits: t("lib-answered.mode_a
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
+/** A question's answer as the card shows it: the options picked without Claude's "(Recommended)" suffix (the card said
+ *  it with its tag; the answer sent back keeps the whole label), words typed instead as they were typed. */
+function shownAnswer(q: Question, answer: string): string {
+  // the option an answer names, compared as pickedOption does (the label kept raw, the answer trimmed)
+  const option = (a: string) => (q.options ?? []).find((o) => pickedOption(o.label, a, false))?.label;
+  const whole = option(answer);
+  // a multi-select answer is its labels joined by ", ", as the cards send it
+  const picks = whole !== undefined ? [whole] : q.multi_select ? answer.split(", ").map(option) : [];
+  if (!picks.length || picks.some((p) => p === undefined)) return answer;
+  return picks.map((p) => optionDisplay(p!.trim()).text).join(", ");
+}
+
 /** The lines an answered card shows. */
 export function answerLines(ix: Interaction, r: Resolution): AnswerLine[] {
   if (r.dismiss === true) return [{ label: "", answer: t("lib-answered.dismissed") }];
@@ -33,7 +46,7 @@ export function answerLines(ix: Interaction, r: Resolution): AnswerLine[] {
   switch (ix.kind) {
     case "question": {
       const answers = (r.answers ?? {}) as Record<string, unknown>;
-      return (ix.questions ?? []).map((q) => ({ label: q.question, answer: str(answers[q.question]) || t("lib-answered.unanswered") }));
+      return (ix.questions ?? []).map((q) => ({ label: q.question, answer: shownAnswer(q, str(answers[q.question])) || t("lib-answered.unanswered") }));
     }
     case "plan":
       if (r.approve === true) return [{ label: "", answer: MODE_LABEL[str(r.mode)] ? t("lib-answered.approved_mode", { mode: MODE_LABEL[str(r.mode)] }) : t("lib-answered.approved") }];
@@ -46,7 +59,10 @@ export function answerLines(ix: Interaction, r: Resolution): AnswerLine[] {
       return elicitationLines(ix, r);
     default: {
       const options = ix.dialog?.options ?? [];
-      const labelOf = (key: string) => options.find((o) => o.key === key)?.label ?? key;
+      const labelOf = (key: string) => {
+        const label = options.find((o) => o.key === key)?.label;
+        return label === undefined ? key : optionDisplay(label).text;
+      };
       const typed = str(r.text) && (ix.secret || r.text === "<redacted>" ? t("lib-answered.entered") : str(r.text));
       const picked = Array.isArray(r.options) ? (r.options as unknown[]).map((k) => labelOf(str(k))) : str(r.option) ? [labelOf(str(r.option))] : [];
       const answer = [...picked, typed].filter(Boolean).join(t("lib-answered.separator"));

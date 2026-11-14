@@ -607,7 +607,7 @@ class OutboxMessageSender(
         private val reconcilable = uncertain + setOf(OutboxState.Sent, OutboxState.NeedsConfirmation)
         private val dispatchable = setOf(OutboxState.Queued, OutboxState.WaitingForNetwork)
         private val hidden = setOf(OutboxState.Cancelled, OutboxState.Shown)
-        private val refusals = setOf("input_draft", "dialog_open", "codex_not_ready", "codex_first_text", "codex_waiting", "op_id_reused", "invalid", "stale_session")
+        private val refusals = setOf("agent_stopped", "input_draft", "dialog_open", "codex_not_ready", "codex_first_text", "codex_waiting", "op_id_reused", "invalid", "stale_session")
         /** A message that keeps coming back waiting while the link is up goes again this often (iOS retryOutboxSoon). */
         private const val StallRetryMillis = 10_000L
         /** …and is refused after this long, about six tries (iOS OutboxWait.connectedLimit). */

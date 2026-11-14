@@ -20,5 +20,8 @@
   "recent": "最近（停止中）",
   "gone_title": "スペースが見つかりません",
   "gone_detail": "{machine}に「{name}」のエージェントが見つかりません。閉じられたか、名前が変更された可能性があります。",
-  "back_to_machine_button": "マシンに戻る"
+  "back_to_machine_button": "マシンに戻る",
+  "agents_failed_title": "このスペースのエージェントを読み込めませんでした",
+  "agents_failed_detail": "少ししてからもう一度試します。",
+  "retry": "再試行"
 }

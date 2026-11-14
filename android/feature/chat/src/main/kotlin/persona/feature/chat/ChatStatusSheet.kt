@@ -21,6 +21,7 @@ import persona.core.contracts.resultUnknown
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.sort.resumeCommand
+import persona.core.domain.sort.canSend
 
 @Composable
 internal fun ChatStatusSheet(
@@ -100,7 +101,7 @@ internal fun ChatStatusSheet(
                     Column(Modifier.fillMaxWidth().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                         Text(composerMessagePreview(message.text), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
                         OutboxStatus(message, message.clientMessageId in busyIds,
-                            onAction = onAction?.let { action -> { choice -> action(message, choice) } })
+                            onAction = onAction?.let { action -> { choice -> action(message, choice) } }, canSend = session?.canSend != false)
                         if (message.state.resultUnknown) {
                             Text(stringResource(when (message.state) {
                                 DeliveryState.Verifying -> R.string.chat_status_verifying

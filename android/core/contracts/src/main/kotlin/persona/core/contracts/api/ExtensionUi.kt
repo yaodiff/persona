@@ -95,6 +95,11 @@ data class ExtensionUiContext(
     val locale: String? = null,
     val platform: String? = null,
     @SerialName("ui_version") val uiVersion: Int? = null,
+    /**
+     * Inbox Sources only (#5278, #5661): the assistant's display name, the one the composer shows ("Ask {name}…").
+     * Sent even when empty (`""`): the key says this app opens Set Up with …. Never set for an extension.
+     */
+    val assistant: String? = null,
 )
 
 /**

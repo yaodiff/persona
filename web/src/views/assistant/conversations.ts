@@ -18,8 +18,24 @@ export const MAIN_TITLE = "Persona";
 
 export function conversationTitle(s: Pick<Session, "title">, isMain = false): string {
   if (isMain) return MAIN_TITLE;
-  const title = s.title?.trim();
+  const title = readableTitle(s.title?.trim() ?? "");
   return !title || title === "Claude Code" || title === "assistant" ? t("assistant-conversations.untitled") : title;
+}
+
+/** A chat started from picked context is titled by its first message, a `<persona-context …>` tag (docs/protocol/protocol.md
+ *  "Tags in messages"): what was typed after the tag, else the tag's own title, entities decoded; empty when it has
+ *  neither. Any other title as it is. */
+const CONTEXT_BLOCK = /^\s*<persona-context\b[^>]*>[\s\S]*?<\/persona-context>/;
+const CONTEXT_OPEN = /^<persona-context\b([^>]*)/;
+const decodeAttr = (s: string) => s.replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+function readableTitle(title: string): string {
+  const open = CONTEXT_OPEN.exec(title);
+  if (!open) return title;
+  let rest = title;
+  for (let m = CONTEXT_BLOCK.exec(rest); m; m = CONTEXT_BLOCK.exec(rest)) rest = rest.slice(m[0].length);
+  const typed = rest === title ? "" : rest.trim().split("\n")[0].trim();
+  return typed || decodeAttr(/\btitle="([^"]*)"/.exec(open[1])?.[1] ?? "").trim();
 }
 
 const fold = (s: string) => s.normalize("NFKC").toLowerCase();

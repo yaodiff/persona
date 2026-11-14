@@ -74,9 +74,10 @@ export function SidebarPagesGroup() {
               <span className="flex size-7 shrink-0 items-center justify-center rounded-control bg-inset text-ink-2 shadow-hairline">
                 <Icon name={p.icon} size={14} />
               </span>
+              {/* the page's name and where it is wrap on a phone, beside the row's three controls, rather than being cut */}
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] text-ink">{p.label}</div>
-                <div className="mt-0.5 truncate text-[11.5px] text-ink-3">
+                <div className="break-words text-[13px] text-ink">{p.label}</div>
+                <div className="mt-0.5 break-words text-[11.5px] text-ink-3">
                   {locked ? t("settings.sidebar_pages_locked") : on ? t("settings.sidebar_pages_in_list") : t("settings.sidebar_pages_in_more")}
                   {from && ` · ${from}`}
                 </div>

@@ -6,8 +6,9 @@ use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
 use persona_core::{
-    PersonaCore, PersonaCoreHost, notify_drain_started_for_test, persona_core_bytes_free, persona_core_dispatch,
-    persona_core_drain, persona_core_flush, persona_core_free, persona_core_new,
+    PersonaCore, PersonaCoreChatCallback, PersonaCoreHost, notify_drain_started_for_test, persona_core_bytes_free,
+    persona_core_dispatch, persona_core_drain, persona_core_flush, persona_core_free, persona_core_new,
+    persona_core_set_changed_chat,
 };
 use persona_core_runtime::wire::{self, Action, ChatEvent, ChatPatch, ChatSnapshot, Config, WireBatch};
 
@@ -194,6 +195,23 @@ fn last_lease_drain_does_not_join_a_callback_that_is_still_finishing() {
     release
         .recv_timeout(Duration::from_secs(5))
         .expect("host released after its callback completes");
+}
+
+unsafe extern "C" fn changed_chat(context: *mut c_void, chat: *const u8, length: usize, _version: u64) {
+    let context = unsafe { &*(context as *const Context) };
+    let chat = unsafe { std::slice::from_raw_parts(chat, length) };
+    let _ = context.ready.send(chat == b"chat");
+}
+
+#[test]
+fn close_rejects_late_targeted_registration() {
+    let (core, _context, _ready, release) = new_core();
+    assert!(unsafe { persona_core_set_changed_chat(core, PersonaCoreChatCallback(changed_chat)) });
+    free(core);
+    assert!(!unsafe { persona_core_set_changed_chat(core, PersonaCoreChatCallback(changed_chat)) });
+    release
+        .recv_timeout(Duration::from_secs(5))
+        .expect("host released once");
 }
 
 #[test]

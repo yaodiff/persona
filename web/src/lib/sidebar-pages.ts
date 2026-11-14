@@ -85,8 +85,10 @@ export function arrangePages<T extends { k: string }>(pages: readonly T[], prefs
 
 const listeners = new Set<() => void>();
 let cached: { raw: string | null; prefs: SidebarPrefs } = { raw: null, prefs: NONE };
+let volatile: { raw: string | null; prefs: SidebarPrefs } | null = null;
 
 export function getSidebarPrefs(): SidebarPrefs {
+  if (volatile) return volatile.prefs;
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(KEY);
@@ -98,12 +100,15 @@ export function getSidebarPrefs(): SidebarPrefs {
 }
 
 function save(p: SidebarPrefs) {
+  const raw = p.order.length || p.shown.length || p.hidden.length ? JSON.stringify(p) : null;
   try {
-    if (p.order.length || p.shown.length || p.hidden.length) localStorage.setItem(KEY, JSON.stringify(p));
+    if (raw !== null) localStorage.setItem(KEY, raw);
     else localStorage.removeItem(KEY);
+    volatile = null;
   } catch {
-    // storage blocked: the change lasts until the page reloads at most
+    volatile = { raw, prefs: p }; // storage blocked: the change lasts until the page reloads at most
   }
+  cached = { raw, prefs: p };
   listeners.forEach((l) => l());
 }
 
@@ -137,7 +142,10 @@ export function resetSidebarPrefs() {
 if (typeof window !== "undefined") {
   // another tab changed it
   window.addEventListener("storage", (e) => {
-    if (e.key === KEY || e.key === null) listeners.forEach((l) => l());
+    if (e.key === KEY || e.key === null) {
+      volatile = null;
+      listeners.forEach((l) => l());
+    }
   });
 }
 

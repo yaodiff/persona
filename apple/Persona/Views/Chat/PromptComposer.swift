@@ -339,6 +339,13 @@ final class Dictation {
     /// may have none), for screenshots and recordings of the composer's mic. Without `permission` nothing is asked.
     @ObservationIgnored var sample = UserDefaults.standard.string(forKey: "showDictationSample")
     #endif
+    /// The microphone's loudness, for the dictation bar's wave; nothing observes it (`DictationMeter`).
+    @ObservationIgnored let meter = DictationMeter()
+    /// Everything heard so far in this run, as the last update gave it.
+    @ObservationIgnored private(set) var heard = ""
+    /// `finish()` is waiting for the recognizer's last words; set when they came.
+    @ObservationIgnored private var finishing = false
+    @ObservationIgnored private var gotFinal = false
 
     /// A recognizer for the language the owner speaks (`DictationLanguage`): their choice, else the language of `hints`
     /// (the draft and their recent messages in this chat), else the last sure choice, else the interface language.
@@ -367,6 +374,8 @@ final class Dictation {
     func start(hints: [String] = [], update: @escaping (String) -> Void, failed: @escaping (String) -> Void = { _ in }) {
         let turn = UUID()
         startTurn = turn
+        heard = ""
+        meter.reset()
         Task {
             if let problem = await listen(turn, hints: hints, update: update) { failed(problem) }
         }
@@ -398,11 +407,20 @@ final class Dictation {
         }
         guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
         #if os(iOS) || os(visionOS) // a Mac has no audio session to configure: the engine takes the input as it is
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-        } catch {
+        // On the audio queue, after any deactivation a closing bar left there (`stop(settling:)`).
+        let opened: Bool = await withCheckedContinuation { c in
+            Self.audioQueue.async {
+                do {
+                    let session = AVAudioSession.sharedInstance()
+                    try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+                    try session.setActive(true, options: .notifyOthersOnDeactivation)
+                    c.resume(returning: true)
+                } catch {
+                    c.resume(returning: false)
+                }
+            }
+        }
+        guard opened else {
             RecordingMicrophone.shared.release(microphoneOwner)
             return String(localized: "Couldn't open the microphone")
         }
@@ -410,7 +428,7 @@ final class Dictation {
         let engine = AVAudioEngine()
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        Self.tap(engine.inputNode, into: request)
+        Self.tap(engine.inputNode, into: request, meter: meter)
         engine.prepare()
         do { try engine.start() } catch {
             engine.inputNode.removeTap(onBus: 0)
@@ -428,8 +446,13 @@ final class Dictation {
         task = Self.recognize(recognizer, request) { [weak self] heard, done in
             Task { @MainActor in
                 guard let self, self.listeningRun == run else { return }
-                if let heard { self.update?(heard) }
-                if done { self.stop() }
+                if let heard {
+                    self.heard = heard
+                    self.update?(heard)
+                }
+                if done {
+                    if self.finishing { self.gotFinal = true } else { self.stop() }
+                }
             }
         }
         return nil
@@ -439,6 +462,7 @@ final class Dictation {
     private func startSample(_ sample: String, update: @escaping (String) -> Void) -> String? {
         guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
         self.update = update
+        meter.reset(synthetic: true)
         isListening = true
         listeningRun = UUID(); let run = listeningRun
         let words = sample.split(separator: " ").map(String.init)
@@ -446,20 +470,49 @@ final class Dictation {
             for count in 1...max(1, words.count) {
                 try? await Task.sleep(for: .milliseconds(350))
                 guard let self, self.listeningRun == run else { return }
-                self.update?(words.prefix(count).joined(separator: " "))
+                self.heard = words.prefix(count).joined(separator: " ")
+                self.update?(self.heard)
             }
         }
         return nil
     }
     #endif
 
-    /// Ends dictation, and a start still waiting for permission (its turn passes).
-    func stop() {
+    /// Stops listening and returns everything heard: the microphone closes at once, then the recognizer gets up to
+    /// `Theme.DictationBar.finalWait` for its last words (the dictation bar's stop and send, which show "Transcribing").
+    func finish(settling: Bool = false) async -> String {
         startTurn = UUID()
-        stopListening()
+        guard isListening else { return heard }
+        if engine != nil, task != nil {
+            finishing = true
+            gotFinal = false
+            engine?.stop()
+            engine?.inputNode.removeTap(onBus: 0)
+            request?.endAudio()
+            meter.reset()
+            let deadline = ContinuousClock.now + Theme.DictationBar.finalWait
+            while !gotFinal, isListening, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+            finishing = false
+        }
+        let words = heard
+        stopListening(settling: settling)
+        return words
     }
 
-    private func stopListening() {
+    /// Ends dictation, and a start still waiting for permission (its turn passes). `settling`: the audio session is let
+    /// go a moment later, off the main thread, when the microphone is still free then; giving it up blocks for about
+    /// 50 ms, a dropped frame in the middle of the dictation bar closing. Callers that hand the audio to something else
+    /// straight away (a voice call) stop without settling.
+    func stop(settling: Bool = false) {
+        startTurn = UUID()
+        stopListening(settling: settling)
+    }
+
+    private func stopListening(settling: Bool = false) {
+        finishing = false
+        meter.reset()
         guard RecordingMicrophone.shared.release(microphoneOwner) else { return }
         listeningRun = UUID()
         engine?.stop()
@@ -472,9 +525,22 @@ final class Dictation {
         update = nil
         isListening = false
         #if os(iOS) || os(visionOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if settling {
+            Task { @MainActor in
+                try? await Task.sleep(for: Theme.DictationBar.settle)
+                guard RecordingMicrophone.shared.isFree else { return } // someone took it meanwhile: theirs now
+                Self.audioQueue.async { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+            }
+        } else {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         #endif
     }
+
+    #if os(iOS) || os(visionOS)
+    /// Dictation's audio session calls, in order, off the main thread.
+    private static let audioQueue = DispatchQueue(label: "persona.dictation.audio-session")
+    #endif
 
     private static func allowed() async -> Bool {
         let speech = await withCheckedContinuation { c in
@@ -487,9 +553,11 @@ final class Dictation {
 
     // The audio tap and the recognizer call back off the main thread: their closures are made here, outside the
     // main actor, so they are not taken for main-actor code.
-    nonisolated private static func tap(_ input: AVAudioInputNode, into request: SFSpeechAudioBufferRecognitionRequest) {
+    nonisolated private static func tap(_ input: AVAudioInputNode, into request: SFSpeechAudioBufferRecognitionRequest,
+                                        meter: DictationMeter) {
         input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in
             request.append(buffer)
+            meter.take(buffer)
         }
     }
 

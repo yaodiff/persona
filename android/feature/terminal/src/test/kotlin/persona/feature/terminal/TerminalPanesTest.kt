@@ -52,12 +52,12 @@ class TerminalPanesTest {
         val shell = tree[0].tabs[1].panes[0]
         assertEquals(SessionKey("desk~g2", "pane:w1:p2"), shell.key)
         assertNull(shell.state)
-        assertEquals("zsh", shell.title)
-        assertEquals("~/persona", shell.detail)
+        assertEquals("", shell.title)
+        assertEquals("zsh · ~/persona", shell.detail)
         // An older node without `terminal`: the address is the pane id; a shell with no title goes by its folder.
         val notes = tree[1].tabs.single().panes.single()
         assertEquals(SessionKey("desk~g2", "pane:w2:p1"), notes.key)
-        assertEquals("notes", notes.title)
+        assertEquals("", notes.title)
         assertEquals("~/notes", notes.detail)
         assertTrue(notes.key.isPaneAddress && !agent.key.isPaneAddress)
     }
@@ -65,7 +65,7 @@ class TerminalPanesTest {
     @Test fun aPanesTitleIsItsPlace() {
         val tree = terminalTree("desk", response, emptyList())
         val persona = tree[0]
-        assertEquals("persona › shell › zsh", paneTrail(persona, persona.tabs[1], persona.tabs[1].panes[0], "Terminal"))
+        assertEquals("persona › shell › Terminal", paneTrail(persona, persona.tabs[1], persona.tabs[1].panes[0], "Terminal"))
         val notes = tree[1]
         assertEquals("notes", paneTrail(notes, notes.tabs[0], notes.tabs[0].panes[0].copy(title = ""), "notes"))
     }

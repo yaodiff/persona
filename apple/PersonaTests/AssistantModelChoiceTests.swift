@@ -48,8 +48,10 @@ struct AssistantModelChoiceTests {
         #expect(!e.picked)
     }
 
-    @Test func theDefaultsModelIsIgnoredForAnotherLaunchersRunningProcess() {
-        let r = response(default: def(launcher: "team-api", model: "claude-sonnet-5-5"))
+    /// A default that names only a launcher runs that launcher's own default model: the running process's model belongs
+    /// to its own launcher (the web's `assistantSetup`). A default that names a model runs it, as above.
+    @Test func theRunningModelIsIgnoredWhenTheDefaultNamesAnotherLauncher() {
+        let r = response(default: def(launcher: "team-api", model: nil))
         let e = AssistantModelChoice.effective(launcher: "claude", model: "claude-haiku-5-5", effort: nil,
                                                pick: nil, response: r)
         #expect(e.launcher == "team-api")

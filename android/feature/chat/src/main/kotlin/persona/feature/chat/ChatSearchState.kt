@@ -3,6 +3,7 @@ package persona.feature.chat
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalResources
 import persona.core.chatlist.*
+import persona.core.contracts.Item
 import persona.core.domain.lines.ChatLine
 import kotlinx.coroutines.delay
 
@@ -18,6 +19,45 @@ internal class ChatSearchState {
     var returning by mutableStateOf(false)
     var highlight by mutableStateOf<String?>(null)
     var notice by mutableStateOf<String?>(null)
+    /** Steps of folds this search fetched without opening them, plus which fold each belongs to. */
+    var foldItems by mutableStateOf<List<Item>>(emptyList())
+        private set
+    var foldOfItem by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+    var foldsLoading by mutableStateOf(false)
+    var foldsPartial by mutableStateOf(false)
+    var foldCacheKey = ""
+        private set
+    private val fetchedFolds = mutableMapOf<String, Pair<Int, List<Item>>>()
+    private var foldSpent = 0
+
+    /** Drops a previous chat's folds when the session or its history file changes. */
+    fun resetFolds(key: String) {
+        if (foldCacheKey == key) return
+        foldCacheKey = key
+        fetchedFolds.clear()
+        foldSpent = 0
+        foldsPartial = false
+        publishFolds()
+    }
+
+    fun needsFold(fold: Item): Boolean = fetchedFolds[fold.id]?.first != (fold.fold?.throughSeq ?: -1)
+
+    fun acceptFold(fold: Item, items: List<Item>) {
+        fetchedFolds[fold.id]?.second?.let { foldSpent -= foldItemsSize(it) }
+        fetchedFolds[fold.id] = (fold.fold?.throughSeq ?: -1) to items
+        foldSpent += foldItemsSize(items)
+        publishFolds()
+    }
+
+    fun foldBudgetLeft(): Int = (FOLD_SEARCH_BUDGET - foldSpent).coerceAtLeast(0)
+
+    private fun publishFolds() {
+        foldItems = fetchedFolds.values.flatMap { it.second }
+        val owners = HashMap<String, String>()
+        for ((id, stored) in fetchedFolds) for (item in stored.second) owners[item.id] = id
+        foldOfItem = owners
+    }
 
     fun open(list: ChatListState, freeze: () -> Unit) {
         if (origin == null) origin = list.readingPosition()
@@ -55,26 +95,28 @@ internal fun searchVisibleLines(lines: List<ChatLine>, itemId: String?): List<Ch
 }.distinctBy { it.id }
 
 @Composable
-internal fun ChatSearchNavigation(search: ChatSearchState, list: ChatListState, lines: List<ChatLine>) {
+internal fun ChatSearchNavigation(
+    search: ChatSearchState, list: ChatListState, lines: List<ChatLine>, foldFailed: Set<String> = emptySet(),
+) {
     val resources = LocalResources.current
-    LaunchedEffect(search.pending, search.selected, lines) {
+    LaunchedEffect(search.pending, search.selected, lines, foldFailed) {
         val hit = search.selected ?: return@LaunchedEffect
         if (!search.pending) return@LaunchedEffect
-        val target = searchTarget(lines, hit.itemId)
-        if (target == null) {
-            search.pending = false
-            search.notice = resources.getString(R.string.chat_search_unlocatable)
-            return@LaunchedEffect
-        }
-        if (!list.position.expanded.containsAll(target.expand)) {
-            list.setExpanded(list.position.expanded + target.expand)
-            return@LaunchedEffect
-        }
-        if (lines.none { it.contentKey == target.rowId }) return@LaunchedEffect
-        withFrameNanos { }
-        if (list.scrollToEntry(ChatListEntry(target.rowId), alignTop = true)) {
-            search.pending = false
-            search.highlight = target.rowId
+        when (val step = searchGo(lines, hit.itemId, list.position.expanded, search.foldOfItem[hit.itemId], foldFailed)) {
+            is SearchGo.Expand -> if (step.groups != list.position.expanded) list.setExpanded(step.groups)
+            SearchGo.Waiting -> Unit
+            SearchGo.Missing -> {
+                search.pending = false
+                search.notice = resources.getString(R.string.chat_search_unlocatable)
+            }
+            is SearchGo.Scroll -> {
+                if (lines.none { it.contentKey == step.rowId }) return@LaunchedEffect
+                withFrameNanos { }
+                if (list.scrollToEntry(ChatListEntry(step.rowId), alignTop = true)) {
+                    search.pending = false
+                    search.highlight = step.rowId
+                }
+            }
         }
     }
     LaunchedEffect(search.returning, lines) {

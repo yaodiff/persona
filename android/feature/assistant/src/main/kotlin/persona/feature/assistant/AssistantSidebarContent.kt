@@ -93,6 +93,16 @@ fun AssistantSidebarContent(
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
         })), query, words)
     }
+    val searchOn = management != null && !demo && AssistantSearchFeature in LocalHubFeatures.current
+    val knownChats = remember(received.conversations, ended, archived, history.titles, history.archived) {
+        val open = history.titled(received.conversations.filter { it.key !in archived }.map {
+            if (it.key in ended) it.copy(status = "offline", state = "offline") else it
+        })
+        (open + history.shownArchived(openKeys(open))).distinctBy { it.sessionId }
+    }
+    val (foundChats, searchPartial) = rememberFoundChats(
+        query, remember(groups) { (groups.directions + groups.others).distinctBy { it.sessionId } },
+        knownChats, searchOn, management, "${choice.hubId.orEmpty()}|${choice.shown}")
     Column(Modifier.fillMaxHeight()) {
         failure?.let { JNotice(it, status = Status.NeedsYou) }
         Box(Modifier.weight(1f)) {
@@ -136,7 +146,8 @@ fun AssistantSidebarContent(
                 archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
                 onTodos = onTodos, todoCount = todoCount, showTodos = showTodos,
                 settingsCount = settingsCount, settingsDot = settingsDot, settingsBadge = settingsBadge,
-                pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher)
+                pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher,
+                found = foundChats, searchPartial = searchPartial)
         }
     }
     ConversationHistoryDialogs(history, received.conversations, operationScope, onOpen = onOpen,

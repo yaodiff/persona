@@ -167,6 +167,7 @@
     <string name="chat_screen_added_context">コンテキストとして追加しました。次のメッセージと一緒に送信されます</string>
     <string name="chat_search_category_event">システムイベント</string>
     <string name="chat_search_category_text">本文</string>
+    <string name="chat_search_category_quoted">引用</string>
     <string name="chat_search_category_thinking">思考</string>
     <string name="chat_search_category_tool_input">ツールの入力</string>
     <string name="chat_search_category_tool_output">ツールの出力</string>

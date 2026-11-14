@@ -1,22 +1,44 @@
 // Dialog to link an agent session or project space to an uncompleted todo
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { errorText } from "../lib/api";
+import { ago } from "../lib/format";
 import { composing } from "../lib/send-history";
+import { useAgentSessions } from "../lib/sessions";
 import { refresh, refreshTodos, setSpacesSupported, useStore } from "../lib/store";
+import { projectNames, useTodoProjects } from "../lib/todo-projects";
 import {
   createTodo,
   isLegacySpacesRouteError,
   linkAgentToTodo,
   linkSpaceToTodo,
+  makeSessionLookup,
   resolveLinkCurrentTodoId,
+  shownStatus,
+  todoStatus,
+  todoStatusLabel,
+  TODO_STATUS_INFO,
+  TODO_TONE_CLASS,
   unlinkAgentFromTodo,
   unlinkSpaceFromTodo,
   type Todo,
 } from "../lib/todos";
 import type { Session } from "../lib/types";
-import { Button, cx, Dialog, toast } from "../ui/atoms";
+import { hasFinePointer } from "../lib/viewport";
+import { Button, cx, Dialog, toast, useNow } from "../ui/atoms";
 import { Icon } from "../ui/icons";
+import { SearchField } from "../ui/SearchField";
 import { t } from "../i18n";
+
+/** From this many open to-dos the list gets a search field: its box shows five two-line rows whole (and a peek of the
+ *  sixth, so a longer list is seen to scroll), so from six one has to be scrolled to. */
+export const LINK_SEARCH_FROM = 6;
+
+/** The open to-dos whose title, notes or project name hold `query` (all of them for an empty one). */
+export function matchTodos(todos: readonly Todo[], query: string, project: (slug: string) => string = (slug) => slug): Todo[] {
+  const q = query.trim().toLocaleLowerCase();
+  if (!q) return [...todos];
+  return todos.filter((todo) => [todo.title, todo.notes ?? "", todo.project ? project(todo.project) : ""].some((text) => text.toLocaleLowerCase().includes(q)));
+}
 
 export interface LinkTargetSpace {
   machineId: string;
@@ -45,6 +67,12 @@ export function LinkTodoDialog({
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
+  // Cancelling a new to-do puts the keyboard back on "New to-do…", not on the page under the dialog.
+  const refocusNew = useRef(false);
+  const cancelCreating = () => {
+    refocusNew.current = true;
+    setCreating(false);
+  };
 
   // Reset dialog state when opened or when target changes (#874 item 3)
   const targetKey = getLinkDialogTargetKey(space, session);
@@ -166,28 +194,9 @@ export function LinkTodoDialog({
         <div className="text-[12.5px] text-ink-3">{description}</div>
 
         {uncompleted.length === 0 ? (
-          <div className="py-4 text-center text-[13px] text-ink-3">{t("linktododialog.empty")}</div>
+          <div className="py-4 text-center text-meta text-ink-3">{t("linktododialog.empty")}</div>
         ) : (
-          <div className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-control border border-line p-1">
-            {uncompleted.map((todo) => {
-              const isCurrent = todo.id === currentTodoId;
-              return (
-                <button
-                  key={todo.id}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => handleSelect(todo)}
-                  className={cx(
-                    "flex w-full items-center justify-between gap-2 rounded px-2.5 py-2 text-left text-[13px] transition-colors whitespace-nowrap",
-                    isCurrent ? "bg-accent-tint text-accent font-medium" : "hover:bg-hover text-ink",
-                  )}
-                >
-                  <span className="truncate">{todo.title}</span>
-                  {isCurrent && <Icon name="check" size={13} stroke={2.5} />}
-                </button>
-              );
-            })}
-          </div>
+          <TodoChoices todos={uncompleted} currentTodoId={currentTodoId} busy={busy} onPick={(todo) => void handleSelect(todo)} />
         )}
 
         {creating ? (
@@ -204,14 +213,16 @@ export function LinkTodoDialog({
                   e.preventDefault();
                   void handleCreateAndLink();
                 } else if (e.key === "Escape") {
-                  setCreating(false);
+                  // only the new to-do is cancelled: the dialog, and the list under it, stay for the next Escape
+                  e.stopPropagation();
+                  cancelCreating();
                 }
               }}
               placeholder={t("linktododialog.new_placeholder")}
               className="w-full bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
             />
             <div className="flex items-center justify-end gap-2">
-              <Button tone="quiet" className="px-2 py-1 text-[12px] whitespace-nowrap" onClick={() => setCreating(false)} disabled={busy}>
+              <Button tone="quiet" className="px-2 py-1 text-[12px] whitespace-nowrap" onClick={cancelCreating} disabled={busy}>
                 {t("common.cancel")}
               </Button>
               <Button tone="primary" className="px-2 py-1 text-[12px] whitespace-nowrap" onClick={() => void handleCreateAndLink()} disabled={busy || !newTitle.trim()}>
@@ -223,6 +234,12 @@ export function LinkTodoDialog({
           <button
             type="button"
             disabled={busy}
+            ref={(el) => {
+              if (el && refocusNew.current) {
+                refocusNew.current = false;
+                el.focus();
+              }
+            }}
             onClick={() => {
               setNewTitle("");
               setCreating(true);
@@ -248,5 +265,69 @@ export function LinkTodoDialog({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+/** The open to-dos to pick from. Each row says, under its title, where the to-do stands (the To-dos page's word), its
+ *  project and when it last changed, so two with one title can be told apart; a long list gets a search field. */
+function TodoChoices({ todos, currentTodoId, busy, onPick }: { todos: Todo[]; currentTodoId?: string; busy: boolean; onPick: (todo: Todo) => void }) {
+  const sessions = useAgentSessions();
+  const lookup = useMemo(() => makeSessionLookup(sessions), [sessions]);
+  const project = projectNames(useTodoProjects());
+  const now = useNow(60_000);
+  const [query, setQuery] = useState("");
+  const searchable = todos.length >= LINK_SEARCH_FROM;
+  const shown = searchable ? matchTodos(todos, query, project) : todos;
+  return (
+    <>
+      {searchable && (
+        <SearchField
+          tone="inset"
+          autoFocus={hasFinePointer()}
+          value={query}
+          onChange={setQuery}
+          onKeyDown={(e) => {
+            // Escape empties the search first (the dialog stays); with nothing typed it reaches the dialog and closes it
+            if (e.key !== "Escape" || !query || composing(e.nativeEvent)) return;
+            e.stopPropagation();
+            setQuery("");
+          }}
+          placeholder={t("linktododialog.search")}
+        />
+      )}
+      {shown.length === 0 ? (
+        <div className="py-4 text-center text-meta text-ink-3">{t("linktododialog.no_match")}</div>
+      ) : (
+        <div className="flex max-h-72 flex-col gap-1 overflow-y-auto rounded-control border border-line p-1" data-link-todos>
+          {shown.map((todo) => {
+            const isCurrent = todo.id === currentTodoId;
+            const status = todoStatus(todo, lookup);
+            const tone = TODO_STATUS_INFO[shownStatus(todo, status)].tone;
+            const where = [todo.project ? project(todo.project) : "", ago(todo.updated_at, now, "narrow")].filter(Boolean);
+            return (
+              <button
+                key={todo.id}
+                type="button"
+                disabled={busy}
+                onClick={() => onPick(todo)}
+                className={cx(
+                  "flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left transition-colors whitespace-nowrap",
+                  isCurrent ? "bg-accent-tint text-accent" : "hover:bg-hover text-ink",
+                )}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className={cx("block truncate text-meta", isCurrent && "font-medium")}>{todo.title}</span>
+                  <span className="block truncate text-xs text-ink-3">
+                    <span className={TODO_TONE_CLASS[tone]}>{todoStatusLabel(todo, status)}</span>
+                    {where.map((part) => ` · ${part}`).join("")}
+                  </span>
+                </span>
+                {isCurrent && <Icon name="check" size={13} stroke={2.5} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }

@@ -11,8 +11,8 @@ import { startGateway } from "./smoke-gateway.mjs";
 
 /**
  * Development-only acceptance smoke: a real Electron process against the repository's synthetic hub, serving the built
- * web client the way the hub does, once at the origin root and once below a reverse-proxy prefix. Every service runs
- * on a port this script owns and is stopped by it; the hub refuses every request without a credential, and the app signs
+ * web client the way the hub does, once at the origin root, once below a reverse-proxy prefix, and once with an
+ * explicit Continue to a second hub origin. Every service runs on a port this script owns and is stopped by it; the hub refuses every request without a credential, and the app signs
  * in with a temporary pairing code made for this run.
  *
  *   node desktop/scripts/smoke-with-hub.mjs [output directory]     (default desktop/release/smoke)
@@ -87,7 +87,7 @@ async function startHub(env, attempt = 1) {
 
 async function scenario(name, { prefix, token, starting }) {
   const directory = join(output, name);
-  let hub, gateway, result, profile;
+  let hub, other, gateway, otherGateway, result, profile;
   try {
     await rm(directory, { recursive: true, force: true }); // a previous run's verdict must not stand in for this one
     await mkdir(directory, { recursive: true });
@@ -96,6 +96,14 @@ async function scenario(name, { prefix, token, starting }) {
     if (started.error) throw started.error;
     hub = started.hub;
     gateway = await startGateway({ dist, mockPort: hub.port, prefix });
+    if (name === "hub-change" || name === "hub-prefix-parent") {
+      // A second hub proves that Continue replaces both the live window and its partition. The prefix-parent case
+      // deliberately shares the origin: /old/ is inside /, but it is not the same hub session.
+      const token = `jp_${randomBytes(18).toString("hex")}`;
+      other = await startHub({ MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "30", MOCK_DESKTOPS: "1" });
+      other.token = token;
+      otherGateway = await startGateway({ dist, mockPort: other.port, prefix: "" });
+    }
     const direct = `http://127.0.0.1:${hub.port}/api/v1`;
     if ((await fetch(`${direct}/sessions`, { signal: AbortSignal.timeout(3000) })).status !== 401) throw new Error("The synthetic hub answers without a credential");
     // The pairing code opens the hub until the page trades it: pick the waiting card the session screenshot shows.
@@ -109,6 +117,11 @@ async function scenario(name, { prefix, token, starting }) {
       env: {
         ...process.env, PERSONA_HUB_URL: gateway.url, PERSONA_DESKTOP_DISABLE_UPDATE: "1", PERSONA_DESKTOP_E2E: directory,
         PERSONA_DESKTOP_E2E_SCENARIO: name, PERSONA_DESKTOP_E2E_MOCK: `http://127.0.0.1:${hub.port}`, PERSONA_DESKTOP_E2E_TOKEN: token,
+        ...(other && otherGateway ? {
+          PERSONA_DESKTOP_E2E_OTHER_MOCK: `http://127.0.0.1:${other.port}`,
+          PERSONA_DESKTOP_E2E_OTHER_HUB_URL: otherGateway.url,
+          PERSONA_DESKTOP_E2E_OTHER_TOKEN: other.token,
+        } : {}),
         PERSONA_DESKTOP_E2E_CARD: JSON.stringify(card ? { id: card.id, kind: card.kind, machine_id: card.machine_id, session_id: card.session_id } : null),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -119,7 +132,7 @@ async function scenario(name, { prefix, token, starting }) {
     const timer = setTimeout(() => child.kill("SIGKILL"), 180_000);
     const exit = await new Promise(done => child.once("close", (code, signal) => done({ code, signal })));
     clearTimeout(timer);
-    await writeFile(join(directory, "electron.log"), log.replaceAll(profile, "<temporary profile>").replaceAll(token, "<run token>"), "utf8");
+    await writeFile(join(directory, "electron.log"), log.replaceAll(profile, "<temporary profile>").replaceAll(token, "<run token>").replaceAll(other?.token ?? "no-second-pairing-code", "<second run token>"), "utf8");
     try { result = JSON.parse(await readFile(join(directory, "result.json"), "utf8")); } catch { result = { ok: false, error: "No result was written", steps: [] }; }
     if (exit.code !== 0) result = { ...result, ok: false, error: result.error ?? `Electron exited with ${JSON.stringify(exit)}` };
     const outside = gateway.outside();
@@ -130,6 +143,8 @@ async function scenario(name, { prefix, token, starting }) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error), steps: [] };
     console.error(`${name}: ${result.error}`);
   } finally {
+    await otherGateway?.close().catch(() => {});
+    await other?.stop().catch(() => {});
     await gateway?.close().catch(() => {});
     await (await starting).hub?.stop().catch(() => {});
     if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => {});
@@ -140,6 +155,7 @@ async function scenario(name, { prefix, token, starting }) {
 }
 
 let failure;
+let plans = [];
 const scenarios = {};
 try {
   if (await run(npm, ["--prefix", "desktop", "run", "build"]) !== 0) throw new Error("The desktop build failed");
@@ -149,9 +165,10 @@ try {
   }
   await mkdir(output, { recursive: true });
   // The root hub lists desktop_unregister; the prefixed one is an older hub, where only closing the socket withdraws.
+  // The third scenario owns another hub origin for its explicit signed-in Continue action.
   // Both hubs start now, each with a temporary pairing code as `personad hub pair` makes (the page trades it for its
   // own device credential): on a hosted macOS runner a hub started after the first Electron run took over 30 s.
-  const plans = [["root", "", { MOCK_DESKTOPS: "1" }], ["subpath", PREFIX, {}]].map(([name, prefix, hubEnv]) => {
+  plans = [["root", "", { MOCK_DESKTOPS: "1" }], ["subpath", PREFIX, {}], ["hub-change", "", { MOCK_DESKTOPS: "1" }], ["hub-prefix-parent", PREFIX, { MOCK_DESKTOPS: "1" }]].map(([name, prefix, hubEnv]) => {
     const token = `jp_${randomBytes(18).toString("hex")}`;
     const starting = startHub({ MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "2", ...hubEnv }).then(hub => ({ hub }), error => ({ error }));
     return { name, prefix, token, starting };
@@ -162,7 +179,7 @@ try {
   console.error(failure);
 }
 const names = Object.keys(scenarios);
-const ok = !failure && names.length === 2 && names.every(name => scenarios[name].ok === true);
+const ok = !failure && names.length === plans.length && names.every(name => scenarios[name].ok === true);
 const line = `Desktop acceptance smoke (${process.platform}): ${ok ? "PASS" : "FAIL"}${names.length ? ` (${names.map(name => `${name} ${scenarios[name].ok ? "PASS" : "FAIL"}, ${scenarios[name].steps.filter(s => s.ok).length}/${scenarios[name].steps.length} steps`).join("; ")})` : ""}${failure ? `: ${failure}` : ""}`;
 await mkdir(output, { recursive: true });
 await writeFile(join(output, "result.json"), `${JSON.stringify({

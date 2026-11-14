@@ -42,12 +42,12 @@ describe("a node's items as palette commands", () => {
     expect(titles).toContain("重命名");
     expect(titles).toContain("新建窗格 · 向右拆分");
     expect(titles).toContain("Git · 拉取");
-    expect(titles).toContain("Git · 复制分支名");
-    expect(titles).toContain("复制路径");
+    expect(titles).toContain("Git · 拷贝分支名");
+    expect(titles).toContain("拷贝目录路径");
     expect(cmds.every((c) => c.section === "Workspace · build")).toBe(true);
     expect(new Set(cmds.map((c) => c.id)).size).toBe(cmds.length);
     expect(cmds.find((c) => c.title === "关闭标签页")?.danger).toBe(true);
-    expect(cmds.find((c) => c.title === "复制路径")?.danger).toBeFalsy();
+    expect(cmds.find((c) => c.title === "拷贝目录路径")?.danger).toBeFalsy();
   });
 
   it("a rename asks for the name, and commits a changed one", async () => {
@@ -105,7 +105,7 @@ describe("a node's items as palette commands", () => {
 
   it("a plain item just runs", async () => {
     const d = deps();
-    itemsToCommands("s", tab, nodeActions(tab, d)).find((c) => c.title === "复制路径")!.run();
+    itemsToCommands("s", tab, nodeActions(tab, d)).find((c) => c.title === "拷贝目录路径")!.run();
     await flush();
     expect(d.copy).toHaveBeenCalledWith("/home/me/proj");
   });
@@ -124,14 +124,17 @@ describe("the node the user is on", () => {
   it("a terminal page's pane is its tab and its workspace", () => {
     setKnownTree("m1", buildTerminalTree(res, []));
     const where = nodesFor({ route: { name: "terminal", mid: "m1", id: "pane:w1:p2" } });
-    expect(where.map((w) => [w.section, w.node.kind])).toEqual([["Workspace · zsh", "tab"], ["Workspace · proj", "workspace"]]);
+    // in the menus' words, translated (Moshi's "Workspace · …" was English in every language)
+    expect(where.map((w) => [w.section, w.node.kind])).toEqual([["标签页 · zsh", "tab"], ["空间 · proj", "workspace"]]);
     expect(where[0].node).toMatchObject({ tabId: "w1:t2", paneId: "w1:p2", agent: "" });
   });
 
   it("is registered with the palette, and offers nothing where there is no node", () => {
     setKnownTree("m1", buildTerminalTree(res, []));
     const cmds = contextCommands({ route: { name: "terminal", mid: "m1", id: "pane:w1:p2" } });
-    expect(cmds.some((c) => c.title === "关闭标签页" && c.section === "Workspace · zsh")).toBe(true);
+    expect(cmds.some((c) => c.title === "关闭标签页" && c.section === "标签页 · zsh")).toBe(true);
+    // the heading holds a name: drawn as written, not in capitals
+    expect(cmds.every((c) => c.sectionAsWritten)).toBe(true);
     expect(nodeCommands({ route: { name: "home" } })).toEqual([]);
     expect(nodeCommands({ route: { name: "terminal", mid: "m1", id: "pane:w9:p9" } })).toEqual([]);
   });
@@ -140,7 +143,7 @@ describe("the node the user is on", () => {
     const withWt = { hosts: [{ ...res.hosts[0], worktree: true }] };
     setKnownTree("m1", buildTerminalTree(withWt, []));
     const cmds = contextCommands({ route: { name: "terminal", mid: "m1", id: "pane:w1:p2" } });
-    expect(cmds.filter((c) => c.title === "新建 worktree").map((c) => c.section)).toEqual(["Workspace · proj"]);
+    expect(cmds.filter((c) => c.title === "新建 worktree").map((c) => c.section)).toEqual(["空间 · proj"]);
     // an older node does not say, so the command is not there
     setKnownTree("m1", buildTerminalTree(res, []));
     expect(contextCommands({ route: { name: "terminal", mid: "m1", id: "pane:w1:p2" } }).some((c) => c.title === "新建 worktree")).toBe(false);
@@ -153,5 +156,7 @@ describe("the node the user is on", () => {
     state.sessions = { m1: [session as never] };
     const where = nodesFor({ route: { name: "session", mid: "m1", sid: "s1" }, pane: { mid: "m1", sid: "s1" } });
     expect(where.find((w) => w.node.kind === "workspace")?.node.canWorktree).toBe(true);
+    // the agent's pane under its title, its space under its name
+    expect(where.map((w) => w.section)).toEqual(["窗格 · t", "空间 · proj"]);
   });
 });

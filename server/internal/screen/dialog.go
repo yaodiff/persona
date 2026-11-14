@@ -57,6 +57,11 @@ func ParseDialog(plain string) *Dialog {
 	for i, l := range lines {
 		lines[i] = strings.TrimRight(strings.ReplaceAll(l, " ", " "), " ")
 	}
+	// A fresh pane taller than what claude has drawn reads as the dialog then blank rows down to the bottom (Claude
+	// Code's Bypass Permissions confirmation on a start: 36 of them in a 50-row pane). The readers below look back
+	// from the last row a fixed number of rows (dialogTop, the cursor's search), so those rows pushed the dialog out
+	// and no card could offer its choices.
+	lines = withoutBlankTail(lines)
 	if d := numbered(lines); d != nil {
 		return d
 	}

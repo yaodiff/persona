@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { useChosenManager, useShownManager } from "./manager-choice";
 import { installedManagers, managerOf, multiManager, ownerIn, useRoster, type Manager, type ManagerList } from "./managers";
-import { stateCounts, useAgentSessions, useCounts, useFullAgentSessions } from "./sessions";
+import { stateCounts, useAgentListStatus, useAgentSessions, useCounts, useFullAgentSessions, type AgentList } from "./sessions";
 import { useStore } from "./store";
 import type { Session } from "./types";
 
@@ -92,5 +92,19 @@ export function useScopedCounts(): ReturnType<typeof useCounts> {
   return useMemo(
     () => (scope.several ? { ...stateCounts(scoped(sessions, scope)), interactions, quietCounted: false } : whole),
     [scope, sessions, interactions, whole],
+  );
+}
+
+/** Whether the agents useScopedAgentSessions and useScopedCounts give are known, from where they come: with several
+ *  assistants the complete list ("loading" until it is read, "failed" while its read has failed, its `error`; it is read
+ *  again every few seconds, and retryAgentList reads it at once, loading until the answer), else the Agents list's pages
+ *  (useAgentListStatus). `whole`: they are every agent, so a page can count them by computer. */
+export function useScopedAgentListStatus(): AgentList {
+  const scope = useScope();
+  const page = useAgentListStatus();
+  const { loaded, error } = useFullAgentSessions(scope.several);
+  return useMemo<AgentList>(
+    () => (scope.several ? { status: loaded ? "loaded" : error ? "failed" : "loading", whole: loaded } : page),
+    [scope.several, page, loaded, error],
   );
 }

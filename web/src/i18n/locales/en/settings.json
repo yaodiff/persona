@@ -1,6 +1,7 @@
 {
   "retry": "Retry",
   "back": "Back to Settings",
+  "back_to": "Back to {name}",
   "sidebar": "Sidebar",
   "title": "Settings",
   "about_persona": "About Persona",
@@ -25,7 +26,7 @@
   "linked_hubs_hint": "Computers on these hubs are listed here too, reached through this hub",
   "computers": "Computers",
   "computers_online": "{online} / {total} online",
-  "disconnect_browser": "Disconnect this browser",
+  "disconnect_browser": "Disconnect this browser…",
   "install_installed": "Already open in its own window",
   "install_prompt": "Install to your desktop or home screen and open it in its own window",
   "install_ios": "In Safari's Share menu, choose Add to Home Screen",
@@ -155,5 +156,7 @@
   "search_settings": "Search settings",
   "search_in_page": "In this page",
   "search_no_results": "No matching settings",
-  "search_placeholder_settings": "Search settings"
+  "search_placeholder_settings": "Search settings",
+  "search_key_words": "API key, secret key",
+  "device_tokens": "Device tokens"
 }

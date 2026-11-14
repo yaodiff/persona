@@ -54,6 +54,46 @@ final class ReceiverSignalsTests: XCTestCase {
         XCTAssertEqual(s.deliveredKbps ?? 0, 3_000, accuracy: 1)
     }
 
+    /// A backlog read three frames at a time (#7842): every frame's bytes count, so the rate is the link's.
+    func testFramesReadTogetherAllCount() {
+        var r = ReceiverSignals()
+        r.frame(captureMicros: 0, arrivalMicros: 10_000 + offset, firstByteMicros: nil, bytes: 1_000, refinement: false, fps: 60)
+        var arrival: UInt64 = 1_000_000
+        for read in 0..<6 { // three 30 KB frames per read, a read every 240 ms: 3 Mbit/s
+            arrival += 240_000
+            for i in 0..<3 {
+                r.frame(captureMicros: 900_000 + UInt64(read * 3 + i) * 16_667, arrivalMicros: arrival + offset, firstByteMicros: nil,
+                        bytes: 30_000, refinement: false, fps: 60)
+            }
+        }
+        XCTAssertEqual(r.take(now: arrival + offset).deliveredKbps ?? 0, 3_000, accuracy: 1)
+    }
+
+    /// A keyframe's wake (#7842): it and the frames queued behind it are left out of the p95 that says whether the
+    /// link is calm, but not out of the p50 or the bursts; frames after it count again.
+    func testAKeyframesWakeIsNotABusyLink() {
+        var r = ReceiverSignals()
+        var capture: UInt64 = 1_000_000
+        func frame(_ delayMs: UInt64, bytes: Int = 4_000, firstByte: UInt64? = nil, keyframe: Bool = false) {
+            r.frame(captureMicros: capture, arrivalMicros: capture + delayMs * 1000 + offset, firstByteMicros: firstByte.map { $0 + offset },
+                    bytes: bytes, refinement: false, keyframe: keyframe, fps: 30)
+            capture += 33_333
+        }
+        for _ in 0..<5 { frame(10) }
+        let keyAt = capture + 130_000
+        frame(130, bytes: 200_000, firstByte: keyAt - 80_000, keyframe: true) // 80 ms to come in: 20 Mbit/s
+        frame(100)
+        frame(70)
+        frame(10)
+        var s = r.take(now: capture + offset)
+        XCTAssertEqual(s.queueP95Ms ?? -1, 0, accuracy: 0.01, "the wake is left out")
+        XCTAssertEqual(s.burstKbps, [20_000])
+        for _ in 0..<12 { frame(10) }
+        frame(90)
+        s = r.take(now: capture + offset)
+        XCTAssertEqual(s.queueP95Ms ?? -1, 80, accuracy: 0.01, "a late frame after the wake counts")
+    }
+
     func testRefinementIsABurstButNoQueue() {
         var r = ReceiverSignals()
         r.frame(captureMicros: 0, arrivalMicros: 10_000 + offset, firstByteMicros: nil, bytes: 1_000, refinement: false, fps: 60)

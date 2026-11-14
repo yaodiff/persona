@@ -122,3 +122,22 @@ func TestPagedRemovedSourceDoesNotResurrect(t *testing.T) {
 		t.Fatalf("removed source counted: %+v %v", counts, err)
 	}
 }
+
+// The runtime palette's grammar is not a new spelling for a personal source's
+// message search. Reject it before a provider is consulted instead of pretending
+// its title-only index implements runtime operators and match evidence.
+func TestPersonalAgentsRejectRuntimeSearch(t *testing.T) {
+	source := &memSource{name: "example", fail: errors.New("provider should not be called")}
+	service := NewService(nil, nil, nil, source)
+	opts := sessionlist.Options{Search: "is:pinned needle"}
+	for _, read := range []func() error{
+		func() error { _, err := service.ListPage(context.Background(), opts); return err },
+		func() error { _, err := service.ListPageWithCounts(context.Background(), opts); return err },
+		func() error { _, err := service.ListCounts(context.Background(), opts); return err },
+	} {
+		var typed *sessionlist.Error
+		if err := read(); !errors.As(err, &typed) || typed.Code != "invalid_query" {
+			t.Fatalf("runtime search reached personal provider: %v", err)
+		}
+	}
+}

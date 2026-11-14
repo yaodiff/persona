@@ -69,6 +69,8 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 	devices := s.devices(ctx)
 	b := &s.health
 	var wg sync.WaitGroup
+	round := time.Now()
+	var scheduled time.Duration // machines started so far, times healthStagger: see healthStagger
 	for _, d := range devices {
 		b.mu.Lock()
 		s.healthLoadLocked(ctx)
@@ -83,6 +85,8 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 			continue
 		}
 		wg.Add(1)
+		due := round.Add(scheduled) // an absolute time, so a goroutine that is scheduled late does not slip into the one before
+		scheduled += healthStagger
 		go func() {
 			defer wg.Done()
 			defer func() {
@@ -90,6 +94,13 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 				delete(b.checking, d.ID)
 				b.mu.Unlock()
 			}()
+			if left := time.Until(due); left > 0 { // not healthRound's wait: this goroutine only
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(left):
+				}
+			}
 			s.checkMachine(ctx, d, cfg, cameOnline, "")
 			s.repairMachine(ctx, d, cfg)
 		}()
@@ -142,11 +153,28 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 				continue // the login shell's check cannot tell (recordHealth): it waits for a start, or goes stale
 			}
 		}
-		if res, ok := s.probeLauncherHealth(ctx, d.ID, name); ok {
+		if res, ok := s.probeLauncherWithRetry(ctx, d.ID, name); ok {
 			out = append(out, s.recordHealth(ctx, d.ID, name, res))
 		}
 	}
 	return out
+}
+
+// probeLauncherWithRetry is probeLauncherHealth, asked once more right away when the first check timed out: only a
+// second timeout in a row is recorded. A gateway can leave one request without a first token while the same account
+// answers the others in seconds (2026-11-14: one shared account left a few percent of its requests silent for 90
+// seconds and longer), and a single silent request would otherwise mark a working launcher failing until the next
+// round, half an hour later. A fresh request is a new upstream stream and usually answers.
+func (s *Service) probeLauncherWithRetry(ctx context.Context, machine, launcher string) (healthResult, bool) {
+	res, ok := s.probeLauncherHealth(ctx, machine, launcher)
+	if !ok || res.ok || classifyLauncherError(res.err) != errKindTimeout || ctx.Err() != nil {
+		return res, ok
+	}
+	s.logf("launcher health: %s on %s timed out, checking once more: %s", launcher, machine, clip(oneLine(res.err), 200))
+	if again, ok := s.probeLauncherHealth(ctx, machine, launcher); ok {
+		return again, true
+	}
+	return res, true
 }
 
 // ---- picking a machine ----

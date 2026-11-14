@@ -136,6 +136,7 @@ sealed class Request {
     }
 
     data class FetchRange(
+        val fold_id: String?,
         val from_seq: Long,
         val through_seq: Long
     ) : Request() {
@@ -144,6 +145,7 @@ sealed class Request {
         override fun serialize(serializer: com.novi.serde.Serializer) {
             serializer.increase_container_depth()
             serializer.serialize_variant_index(4)
+            TraitHelpers.serialize_option_str(this.fold_id, serializer)
             serializer.serialize_i64(this.from_seq)
             serializer.serialize_i64(this.through_seq)
             serializer.decrease_container_depth()
@@ -153,10 +155,11 @@ sealed class Request {
             @Throws(com.novi.serde.DeserializationError::class)
             fun load(deserializer: com.novi.serde.Deserializer): FetchRange {
                 deserializer.increase_container_depth()
+                val fold_id = TraitHelpers.deserialize_option_str(deserializer)
                 val from_seq = deserializer.deserialize_i64()
                 val through_seq = deserializer.deserialize_i64()
                 deserializer.decrease_container_depth()
-                return FetchRange(from_seq, through_seq)
+                return FetchRange(fold_id, from_seq, through_seq)
             }
         }
     }

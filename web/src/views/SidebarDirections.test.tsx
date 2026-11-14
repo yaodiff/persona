@@ -104,7 +104,8 @@ describe("the 常驻 rows' disclosure", () => {
     // a direction with no task has nothing to open, and says nothing of a fold: an invisible spacer keeps the column
     expect(direction("lead-b")!.querySelector("button[aria-expanded]")).toBeNull();
     expect(direction("lead-b")!.querySelector("span[aria-hidden].invisible")).not.toBeNull();
-    expect(host.querySelector("[data-direction] [inert] a[href^='/todos']")).not.toBeNull();
+    // folded, its tasks are not drawn at all (a folded group mounts no rows)
+    expect(host.querySelector("[data-direction] a[href^='/todos']")).toBeNull();
   });
 
   it("opens to the tasks with their state words, each task to its agents and theirs; the fold is kept", async () => {

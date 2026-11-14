@@ -172,6 +172,7 @@ sealed class ChatEvent {
     }
 
     data class Range(
+        val fold_id: String?,
         val items_json: String,
         val more: Boolean
     ) : ChatEvent() {
@@ -180,6 +181,7 @@ sealed class ChatEvent {
         override fun serialize(serializer: com.novi.serde.Serializer) {
             serializer.increase_container_depth()
             serializer.serialize_variant_index(5)
+            TraitHelpers.serialize_option_str(this.fold_id, serializer)
             serializer.serialize_str(this.items_json)
             serializer.serialize_bool(this.more)
             serializer.decrease_container_depth()
@@ -189,10 +191,11 @@ sealed class ChatEvent {
             @Throws(com.novi.serde.DeserializationError::class)
             fun load(deserializer: com.novi.serde.Deserializer): Range {
                 deserializer.increase_container_depth()
+                val fold_id = TraitHelpers.deserialize_option_str(deserializer)
                 val items_json = deserializer.deserialize_str()
                 val more = deserializer.deserialize_bool()
                 deserializer.decrease_container_depth()
-                return Range(items_json, more)
+                return Range(fold_id, items_json, more)
             }
         }
     }
@@ -288,20 +291,26 @@ sealed class ChatEvent {
         }
     }
 
-    object RangeFailed : ChatEvent() {
+    data class RangeFailed(
+        val fold_id: String?
+    ) : ChatEvent() {
 
         @Throws(com.novi.serde.SerializationError::class)
         override fun serialize(serializer: com.novi.serde.Serializer) {
             serializer.increase_container_depth()
             serializer.serialize_variant_index(11)
+            TraitHelpers.serialize_option_str(this.fold_id, serializer)
             serializer.decrease_container_depth()
         }
 
-        @Throws(com.novi.serde.DeserializationError::class)
-        fun load(deserializer: com.novi.serde.Deserializer): RangeFailed {
-            deserializer.increase_container_depth()
-            deserializer.decrease_container_depth()
-            return RangeFailed
+        companion object {
+            @Throws(com.novi.serde.DeserializationError::class)
+            fun load(deserializer: com.novi.serde.Deserializer): RangeFailed {
+                deserializer.increase_container_depth()
+                val fold_id = TraitHelpers.deserialize_option_str(deserializer)
+                deserializer.decrease_container_depth()
+                return RangeFailed(fold_id)
+            }
         }
     }
 }

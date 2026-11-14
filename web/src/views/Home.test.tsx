@@ -17,15 +17,15 @@ vi.mock("react-dom", async (importOriginal) => ({
   createPortal: (children: React.ReactNode) => children,
 }));
 
-const fake = vi.hoisted(() => ({ loaded: true, sessions: [] as Session[], interactions: [] as Interaction[], machines: [] as Machine[], todos: [] as Todo[], answered: {} as Record<string, unknown> }));
+const fake = vi.hoisted(() => ({ loaded: true, sessions: [] as Session[], interactions: [] as Interaction[], machines: [] as Machine[], todos: [] as Todo[], answered: {} as Record<string, unknown>, conn: undefined as "connecting" | "online" | "offline" | undefined, list: "loaded" as "loaded" | "loading" | "failed", partial: false }));
 
 vi.mock("../lib/store", async (importOriginal) => {
   const real = await importOriginal<typeof import("../lib/store")>();
-  return { ...real, useStore: <T,>(select: (s: ReturnType<typeof real.getState>) => T) => select({ ...real.getState(), loaded: fake.loaded, machines: fake.machines, interactions: fake.interactions, todos: fake.todos, answered: fake.answered as ReturnType<typeof real.getState>["answered"] }) };
+  return { ...real, useStore: <T,>(select: (s: ReturnType<typeof real.getState>) => T) => select({ ...real.getState(), loaded: fake.loaded, machines: fake.machines, interactions: fake.interactions, todos: fake.todos, answered: fake.answered as ReturnType<typeof real.getState>["answered"], ...(fake.conn ? { conn: fake.conn } : {}) }) };
 });
 vi.mock("../lib/sessions", async (importOriginal) => {
   const real = await importOriginal<typeof import("../lib/sessions")>();
-  return { ...real, useAgentSessions: () => fake.sessions, useCounts: () => ({ ...real.stateCounts(fake.sessions), interactions: fake.interactions.length }) };
+  return { ...real, useAgentSessions: () => fake.sessions, useCounts: () => ({ ...real.stateCounts(fake.sessions), interactions: fake.interactions.length }), useAgentListStatus: () => ({ status: fake.list, whole: fake.list === "loaded" && !fake.partial }) };
 });
 
 // the extensions' overview cards are not this test's
@@ -127,6 +127,92 @@ describe("the overview", () => {
     expect(buttonLabels(html)).not.toContain("打开机器页");
     expect(html).not.toContain("一切就绪");
     expect(html).not.toContain("所有 Agent 都在等你");
+  });
+
+  it("says it is loading, not connecting, once the hub is connected and its first answers are on their way (audit item 85)", () => {
+    const at = (conn: "connecting" | "online" | "offline") => {
+      Object.assign(fake, { conn });
+      try {
+        return render([], [], { loaded: false });
+      } finally {
+        Object.assign(fake, { conn: undefined, loaded: true });
+      }
+    };
+    const connected = at("online");
+    expect(connected).toContain("正在读取…");
+    expect(connected).not.toContain("正在连上 hub");
+    expect(at("connecting")).toContain("正在连上 hub…");
+    expect(at("offline")).toContain("正在连上 hub…");
+  });
+
+  describe("when a paging hub's Agents list has not come back (audit item 30)", () => {
+    const studio: Machine = { ...mac, system: { name: "macOS 26.1" } } as Machine;
+    const ix = { id: "i1", kind: "permission", machine_id: "mac", session_id: "s-any", tool_name: "Bash" } as Interaction;
+    const summaryLine = (html: string) => html.match(/<h1[^>]*>[^<]*<\/h1><div[^>]*>([\s\S]*?)<\/div><\/div>/)?.[1] ?? "";
+    const as = (list: "loading" | "failed", run: () => string) => {
+      fake.list = list;
+      try {
+        return run();
+      } finally {
+        fake.list = "loaded";
+      }
+    };
+
+    it("says it couldn't read them, with Retry, instead of a lone full stop", () => {
+      const html = as("failed", () => render([], [ix], { machines: [studio] }));
+      const line = summaryLine(html);
+      expect(line).toContain("没能读到 Agent 的状态。");
+      expect(buttonLabels(line)).toContain("重试");
+      expect(line).not.toMatch(/>。<\/p>/);
+      // the cards still wait below it
+      expect(heading(html, "需要你")).toBeGreaterThan(-1);
+    });
+
+    it("gives no computer an agent count it doesn't have", () => {
+      for (const list of ["failed", "loading"] as const) {
+        const html = as(list, () => render([], [], { machines: [studio] }));
+        const line = html.match(/data-machine-line="true">([^<]*)</)?.[1];
+        expect(line).toBe("macOS 26.1");
+        expect(html).not.toContain("0 个 Agent");
+        // and does not say nothing needs you, or that all is set: nobody knows yet
+        expect(html).not.toContain("一切就绪");
+        expect(html).not.toContain("所有 Agent 都在等你");
+      }
+      const plain = as("failed", () => render([], [], { machines: [mac] }));
+      expect(plain.match(/data-machine-line="true">([^<]*)</)?.[1]).toBe("在线");
+      expect(render([], [], { machines: [studio] }).match(/data-machine-line="true">([^<]*)</)?.[1]).toBe("0 个 Agent · macOS 26.1");
+    });
+
+    it("gives no computer a count of only the list's first pages", () => {
+      fake.partial = true;
+      try {
+        const html = render([agent(1, 0, "working")], [], { machines: [studio] });
+        expect(html.match(/data-machine-line="true">([^<]*)</)?.[1]).toBe("macOS 26.1");
+        // the summary is the hub's count of every agent: it stays
+        expect(html).toContain("1 个工作中");
+      } finally {
+        fake.partial = false;
+      }
+    });
+
+    it("says it is loading while the list is read", () => {
+      const line = summaryLine(as("loading", () => render([], [ix], { machines: [studio] })));
+      expect(line).toContain("正在读取…");
+      expect(buttonLabels(line)).not.toContain("重试");
+    });
+
+    it("keeps asking for a computer first when there is none", () => {
+      const html = as("failed", () => render([], [], { machines: [] }));
+      expect(html).toContain("先接入一台电脑，再开始使用 Agent。");
+      expect(html).not.toContain("没能读到 Agent 的状态");
+    });
+  });
+
+  it("never builds an empty sentence: with only a card whose agent is not counted, it says how many requests wait (audit item 30)", () => {
+    const other = { id: "q3", machine_id: "mac", session_id: "assistant-1", kind: "question" } as Interaction;
+    const html = render([], [other]);
+    expect(html).toContain("有 1 件事等你处理。");
+    expect(html).not.toMatch(/>。<\/p>/);
   });
 
   it.each([{ state: "online", online: true }, { state: "offline", online: false }])("keeps the ready state with an existing $state computer and no agents", ({ online }) => {

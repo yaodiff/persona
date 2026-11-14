@@ -35,10 +35,10 @@ import (
 // Recording grant then survives updates of the helper. Without the setting it runs the helper where Persona Link put
 // it; Persona Link builds it the same way each time, so the grant lasts until the helper itself changes.
 
-// advertiseScreenVideo says whether the computer and browser statuses carry screen_video. Off until the iPhone decodes
-// the video (#3954 slice 3) is in the official TestFlight build: apps before it show the picture switcher for any
-// screen_video and can't play it. screen.dial works either way.
-const advertiseScreenVideo = false
+// advertiseScreenVideo says whether the computer and browser statuses carry screen_video, and whether the node asks
+// macOS for the helper's grant (askScreenPermission). On since the official TestFlight build decodes the video (#3954
+// slices 3b and 3c); apps before it don't offer the picture switcher. screen.dial works either way.
+const advertiseScreenVideo = true
 
 // screenVideoVersion is the wire protocol version this node's helper speaks (PersonaScreenKit's protocolVersion).
 const screenVideoVersion = 1
@@ -264,6 +264,103 @@ func (c *permissionCache) get(ctx context.Context, helper string) string {
 	return c.value
 }
 
+// current is the helper to run, as helper says, and the installed helper's version (its stamp; "" when unreadable).
+func (r *helperResolver) current(ctx context.Context, logf func(string, ...any)) (string, string) {
+	path := r.helper(ctx, logf)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if path == "" {
+		return "", ""
+	}
+	return path, r.stamp
+}
+
+// screenAsks records which helper version macOS was asked about (#3954). The first time an app that plays the video
+// signs in to the live screen while the helper has no Screen Recording grant, the node starts the helper with
+// --request-permission, once per helper version. macOS shows its alert on the Mac's own screen, which that app is
+// showing over VNC at that moment: the user answers it there or at the Mac, and nothing in Persona does (computer-use
+// can't target it, #4336). Once asked, Persona Screen is in System Settings' list; the statuses say so (asked). The
+// version is kept beside the node's helper copy, so a restart doesn't ask again.
+var screenAsks = &askRecord{file: func() string { return filepath.Join(screenCopyDir(), "Persona Screen.asked") }}
+
+type askRecord struct {
+	mu   sync.Mutex
+	file func() string
+}
+
+// asked says whether macOS was asked for this helper version.
+func (a *askRecord) asked(stamp string) bool {
+	if stamp == "" {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b, err := os.ReadFile(a.file())
+	return err == nil && strings.TrimSpace(string(b)) == stamp
+}
+
+// claim records this helper version as asked, and says whether the caller is the one to ask: false when it was asked
+// already, or when the record can't be written (no asking that can't be remembered).
+func (a *askRecord) claim(stamp string) bool {
+	if stamp == "" {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f := a.file()
+	if b, err := os.ReadFile(f); err == nil && strings.TrimSpace(string(b)) == stamp {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+		return false
+	}
+	return os.WriteFile(f, []byte(stamp+"\n"), 0o600) == nil
+}
+
+// screenAskWait is how long askScreenPermission waits for the screen-sharing stream to sign in, and screenAskPoll how
+// often it looks. Variables for tests.
+var (
+	screenAskWait = 30 * time.Second
+	screenAskPoll = 250 * time.Millisecond
+)
+
+// askScreenPermission is the ask above, for the 5900 stream carrying pair (only an app that plays the video sends one):
+// once that stream signs in, if the helper has no grant and macOS wasn't asked for this version, the helper asks. It
+// returns at once; the waiting and asking happen on their own goroutine, and done (tests) runs when that ends.
+func (n *Node) askScreenPermission(pair string, done func()) {
+	if !advertiseScreenVideo || pair == "" {
+		if done != nil {
+			done()
+		}
+		return
+	}
+	logf := func(string, ...any) {}
+	if n.logger != nil {
+		logf = n.logger.Printf
+	}
+	go func() {
+		if done != nil {
+			defer done()
+		}
+		deadline := time.Now().Add(screenAskWait)
+		for !n.screens.signedIn(pair) {
+			if time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(screenAskPoll)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		helper, stamp := screenHelpers.current(ctx, logf)
+		if helper == "" || screenPermissions.get(ctx, helper) != "missing" || !screenAsks.claim(stamp) {
+			return
+		}
+		if err := screenLaunch(ctx, helper, "--request-permission"); err != nil {
+			logf("screen helper: asking macOS for Screen Recording: %v", err)
+		}
+	}()
+}
+
 // screenVideoStatus is screen_video for the computer and browser statuses: nil while advertiseScreenVideo is off, on
 // a computer that isn't a Mac, or without the helper.
 func screenVideoStatus(ctx context.Context) *proto.ScreenVideo {
@@ -274,15 +371,20 @@ func screenVideoAdvertised(ctx context.Context, advertise bool) *proto.ScreenVid
 	if !advertise {
 		return nil
 	}
-	return screenVideoReport(ctx, screenHelpers.helper(ctx, func(string, ...any) {}))
+	helper, stamp := screenHelpers.current(ctx, func(string, ...any) {})
+	return screenVideoReport(ctx, helper, stamp)
 }
 
-// screenVideoReport is what a Mac with this helper can do for the video channel, nil without one.
-func screenVideoReport(ctx context.Context, helper string) *proto.ScreenVideo {
+// screenVideoReport is what a Mac with this helper (of version stamp) can do for the video channel, nil without one.
+func screenVideoReport(ctx context.Context, helper, stamp string) *proto.ScreenVideo {
 	if helper == "" {
 		return nil
 	}
-	return &proto.ScreenVideo{Version: screenVideoVersion, Codecs: []string{"hevc", "h264"}, Permission: screenPermissions.get(ctx, helper)}
+	v := &proto.ScreenVideo{Version: screenVideoVersion, Codecs: []string{"hevc", "h264"}, Permission: screenPermissions.get(ctx, helper)}
+	if v.Permission == "missing" {
+		v.Asked = screenAsks.asked(stamp)
+	}
+	return v
 }
 
 // screenHelperWait bounds the helper's start: launched, connected and token said. A variable for tests.

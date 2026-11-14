@@ -1,7 +1,6 @@
 package node
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -65,11 +64,16 @@ type claudeProc struct {
 }
 
 // liveClaudes reads the sessions/<pid>.json of every claude still running, in every config directory, once per pid.
+// The list calls it on every rebuild (once a second): a file is read again only once it changed (claudefiles.go).
 func (n *Node) liveClaudes() []claudeProc {
 	var out []claudeProc
 	seen := map[int]bool{}
+	var dirs []string
 	for _, dir := range n.claudeConfigDirs() {
-		sessions := filepath.Join(dir, "sessions")
+		dirs = append(dirs, filepath.Join(dir, "sessions"))
+	}
+	listed := map[string]bool{}
+	for _, sessions := range dirs {
 		files, _ := filepath.Glob(filepath.Join(sessions, "*.json"))
 		for _, f := range files {
 			p, err := strconv.Atoi(strings.TrimSuffix(filepath.Base(f), ".json"))
@@ -80,18 +84,20 @@ func (n *Node) liveClaudes() []claudeProc {
 			if err != nil || st.Size() > 64<<10 {
 				continue
 			}
-			b, err := os.ReadFile(f)
-			if err != nil {
+			listed[f] = true
+			c, ok := n.cfiles.parse(f, st)
+			if !ok {
 				continue
 			}
-			c := claudeProc{pid: p, dir: sessions}
-			if json.Unmarshal(b, &c) != nil || !sameProcess(p, claudeFileStart(c.ProcStart)) {
+			c.pid, c.dir = p, sessions
+			if !sameProcess(p, claudeFileStart(c.ProcStart)) {
 				continue // a file left by a claude that exited (its pid may have been reused)
 			}
 			seen[p] = true
 			out = append(out, c)
 		}
 	}
+	n.cfiles.keep(dirs, listed)
 	return out
 }
 

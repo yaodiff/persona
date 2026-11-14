@@ -9,7 +9,7 @@ vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
-import { COLLAPSED_KEY, getLayout, setSidebarCollapsed } from "../lib/layout";
+import { COLLAPSED_KEY, getLayout, setSidebarCollapsed, useLayout } from "../lib/layout";
 import { setAllFolded } from "../lib/sidebar-api";
 import { refresh, reset } from "../lib/store";
 import type { AssistantInfo, Session } from "../lib/types";
@@ -79,6 +79,53 @@ describe("folding the whole sidebar", () => {
     setSidebarCollapsed(true);
     act(() => open.click());
     expect(getLayout().sidebarCollapsed).toBe(false);
+  });
+});
+
+describe("the focus across a fold (web usability audit item 23)", () => {
+  // as App.tsx draws the column: the rail in place of the sidebar, so the button pressed is taken away
+  function Column({ shortcuts = false }: { shortcuts?: boolean }) {
+    const folded = useLayout().sidebarCollapsed;
+    return (
+      <div data-sidebar-column>
+        {shortcuts && <Keys />}
+        {folded ? <SidebarRail route={{ name: "todos" }} onSearch={() => {}} onNewAgent={() => {}} /> : <Sidebar route={{ name: "todos" }} onSearch={() => {}} onNewAgent={() => {}} />}
+      </div>
+    );
+  }
+  function Keys() {
+    useShortcuts({ route: { name: "todos" }, narrow: false, toggleDrawer: () => {} });
+    return null;
+  }
+
+  it("moves to the expand button after folding by the keyboard, and back to collapse after opening", async () => {
+    act(() => root.render(<Column />));
+    await flush();
+    const fold = button("收起侧边栏")!;
+    fold.focus();
+    act(() => fold.click()); // Enter and Space on a focused button click it
+    expect(getLayout().sidebarCollapsed).toBe(true);
+    expect(document.activeElement).toBe(button("展开侧边栏"));
+    act(() => button("展开侧边栏")!.click());
+    expect(getLayout().sidebarCollapsed).toBe(false);
+    expect(document.activeElement).toBe(button("收起侧边栏"));
+  });
+
+  it("takes no focus when the button was not focused (Safari doesn't focus a clicked button)", async () => {
+    act(() => root.render(<Column />));
+    await flush();
+    act(() => button("收起侧边栏")!.click());
+    expect(getLayout().sidebarCollapsed).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("keeps the focus in the column when the shortcut folds it from a row inside", async () => {
+    act(() => root.render(<Column shortcuts />));
+    await flush();
+    host.querySelector<HTMLAnchorElement>('a[href="/todos"]')!.focus();
+    act(() => void dispatchEvent(new KeyboardEvent("keydown", { key: "b", code: "KeyB", ctrlKey: true, altKey: true, bubbles: true, cancelable: true })));
+    expect(getLayout().sidebarCollapsed).toBe(true);
+    expect(document.activeElement).toBe(button("展开侧边栏"));
   });
 });
 

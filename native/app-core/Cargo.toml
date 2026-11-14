@@ -13,6 +13,7 @@ publish = false
 
 [workspace.dependencies]
 persona-core = { path = "crates/persona-core" }
+persona-core-domain = { path = "crates/persona-core", package = "persona-core" }
 persona-core-runtime = { path = "crates/persona-core-runtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

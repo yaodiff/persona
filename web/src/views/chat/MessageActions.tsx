@@ -1,6 +1,7 @@
 // What you can do with a message (iOS MessageMenu.swift: "Copy" / "Select" / "Quote" / "Forward" / "Edit"): every item on
 // right-click; on a touch screen, a long press opens them (and "Select" shows the text to select, since the press no longer
-// selects). With a mouse, a small bar on hover too: beside your own bubbles, and under a turn's last reply cindy's bar
+// selects). With a mouse, a small bar on hover too: beside your own bubbles (under one that leaves it no room), and
+// under a turn's last reply cindy's bar
 // (ReplyBar, #5314: Copy message, Start a new session, ⋯, the time); the other replies (narration in a work summary, words
 // still streaming) have the menus only, and on a touch screen the last reply has a copy button and a ⋯ under it. "Quote" puts
 // it as a quote in front of the draft, "Edit" (your own messages) puts it back in the composer to change and send again.
@@ -33,6 +34,21 @@ const ReplyBar = lazy(() => replyBar().then((m) => ({ default: m.ReplyBar })));
 // what the exchange cost, at the end of a touch screen's row (the reply bar has it on hover)
 const TurnUsage = lazy(() => replyBar().then((m) => ({ default: m.TurnUsage })));
 
+
+/** The left edge of what shows `el`: the nearest box that clips it sideways (the chat's scroller), or the window's. */
+function shownLeft(el: HTMLElement): number {
+  for (let box = el.parentElement; box; box = box.parentElement) {
+    const style = getComputedStyle(box);
+    if (style.overflowX !== "visible" || /paint|strict|content/.test(style.contain)) return Math.max(0, box.getBoundingClientRect().left);
+  }
+  return 0;
+}
+
+/** Whether the hover bar beside your bubble (`side`: to its left, 0.375rem away) fits inside what shows the chat. */
+export function sideBarFits(row: HTMLElement, bar: HTMLElement): boolean {
+  const gap = 0.375 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+  return row.getBoundingClientRect().left - gap - bar.offsetWidth >= shownLeft(row);
+}
 
 function pointAnchor(x: number, y: number): HTMLElement {
   const el = document.createElement("span");
@@ -210,6 +226,18 @@ export function MessageActions({
   const contextActions = side ? actions.filter((a) => a.key === "forward" || a.key === "context") : [];
   const more: MenuItem[] = [...contextActions, ...extras].map((a, i) => ({ ...a, divider: i === contextActions.length && i > 0 }));
   const anchorRef = useRef<HTMLElement | null>(null);
+  // Your bubble's hover bar sits to its left; in a narrow window a wide bubble leaves no room there and the bar fell
+  // off the screen, its buttons still reached by Tab (audit item 73). Measured when the pointer comes or focus moves in
+  // (not for every bubble as the chat opens): with no room, the same buttons sit under the bubble instead, so the one
+  // focused stays focused and in sight.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [below, setBelow] = useState(false);
+  const placeBar = (row: HTMLElement) => {
+    const bar = barRef.current;
+    if (!side || !bar) return;
+    const fits = sideBarFits(row, bar);
+    if (fits === below) setBelow(!fits);
+  };
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
   const opened = useRef(0);
 
@@ -236,7 +264,11 @@ export function MessageActions({
   const items: MenuItem[] = [...actions, ...extras].map((a, i) => ({ ...a, divider: i === actions.length && i > 0 }));
 
   return (
-    <div className={cx("group/msg", (side || corner || PickRow) && "relative", PickRow && (side ? "isolate" : "isolate pl-7"), className)}>
+    <div
+      className={cx("group/msg", (side || corner || PickRow) && "relative", PickRow && (side ? "isolate" : "isolate pl-7"), className)}
+      onPointerEnter={side ? (e) => e.pointerType !== "touch" && placeBar(e.currentTarget) : undefined}
+      onFocus={side ? (e) => placeBar(e.currentTarget) : undefined}
+    >
       {PickRow && picker && pick && <PickRow pick={picker} message={pick} side={side} />}
       <div
         inert={picking || undefined}
@@ -288,10 +320,19 @@ export function MessageActions({
         </Suspense>
       ) : (side || corner) && (
       <div
+        ref={barRef}
+        data-side-bar={side ? (below ? "below" : "beside") : undefined}
         className={cx(
           "hidden h-6 items-center gap-0.5 opacity-0 transition-opacity duration-200 group-hover/msg:opacity-100 focus-within:opacity-100 [@media(hover:hover)]:flex",
           moreAnchor && "opacity-100", // the ⋯ menu is open: its bar stays while the pointer is in the menu
-          side ? "absolute right-full bottom-0.5 mr-1.5" : "absolute top-2 right-2 rounded-[8px] bg-surface px-0.5 shadow-hairline",
+          side
+            ? below
+              ? // over what comes next while shown only: hidden, it takes no clicks meant for that; a bridge over the gap
+                // keeps the pointer on its way down from the bubble in the hover
+                cx("absolute top-full right-0 z-10 mt-1 rounded-control bg-surface px-0.5 shadow-hairline before:absolute before:inset-x-0 before:-top-1 before:h-1",
+                  moreAnchor ? "pointer-events-auto" : "pointer-events-none group-hover/msg:pointer-events-auto focus-within:pointer-events-auto")
+              : "absolute right-full bottom-0.5 mr-1.5"
+            : "absolute top-2 right-2 rounded-[8px] bg-surface px-0.5 shadow-hairline",
         )}
       >
         {side && ts && !latest && <span className="mr-1 text-[12px] whitespace-nowrap text-ink-3 tabular-nums">{clock(ts)}</span>}

@@ -8,6 +8,10 @@ import { installSetupIPC } from "./setup-ipc.js";
 import { JSONStore } from "./store.js";
 import { restoreWindow, DEFAULT_WINDOW } from "./window-state.js";
 import { closeToTray, installTray } from "./tray.js";
+import type { DesktopTray } from "./tray.js";
+import { desktopLocale, loadStrings } from "./strings.js";
+import { updateMenu } from "./update-state.js";
+import type { UpdateMenuItem } from "./update-state.js";
 import { hubPartition } from "./sessions.js";
 import { installSmokeCapture } from "./smoke.js";
 import { installAutoUpdate } from "./updater.js";
@@ -70,6 +74,20 @@ function secureHubWindow(window: BrowserWindow): void {
   contents.session.setPermissionCheckHandler((_contents, permission) => permission === "notifications");
 }
 
+// A different hub needs a new window and its own persistent session, not navigation of the old window.
+async function replaceMainWindow(next: HubAddress, close: (window: BrowserWindow) => void): Promise<void> {
+  const previous = mainWindow;
+  if (!previous || previous.isDestroyed()) return;
+  // Sub-path containment is not equality: /old/ is inside a new / hub, but still needs its own origin-isolated session.
+  if (inHub(next, previous.webContents.getURL()) && (() => { try { return parseHubAddress(previous.webContents.getURL()).url.href === next.url.href; } catch { return false; } })()) return;
+  // Setting hub first lets closeToTray destroy this window without putting the old hub back on screen.
+  hub = next;
+  const closed = new Promise<void>(done => previous.once("closed", done));
+  close(previous);
+  await closed;
+  mainWindow = undefined;
+}
+
 async function showMain(): Promise<void> {
   if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); return; }
   const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
@@ -113,8 +131,14 @@ async function showMain(): Promise<void> {
   secureHubWindow(current);
   closeToTray(current, () => quitting);
   const removeIPC = installDesktopIPC(current, {
-    hub: () => hub,
+    // The partition is immutable, so derive authorization from this window's actual origin, never a later global hub.
+    hub: () => {
+      const url = current.webContents.getURL();
+      if (hub && inHub(hub, url)) return hub;
+      try { return parseHubAddress(url); } catch { return undefined; }
+    },
     presence: () => desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported()),
+    openLocalSettings: () => { void showSetup(); },
     notifications: new DesktopNotifications(route => {
       current.show();
       current.focus();
@@ -170,6 +194,7 @@ async function showSetup(): Promise<void> {
       try {
         const next = parseHubAddress(raw);
         await store().update({ hub: next.url.href });
+        await replaceMainWindow(next, window => window.destroy());
         hub = next;
         setup.close();
         await showMain();
@@ -206,7 +231,14 @@ else {
     // Resume by itself is not proof that the person unlocked the computer; only unlock-screen restores presence.
     powerMonitor.on("resume", publishPresence);
     presenceTimer = setInterval(publishPresence, 30_000);
-    installAutoUpdate();
+    const strings = await loadStrings(join(import.meta.dirname, "locales"), desktopLocale(app.getLocale()));
+    // The first check starts here, before any window loads; its state is kept until the tray exists to show it.
+    let tray: DesktopTray | undefined;
+    let updateItems: readonly UpdateMenuItem[] = [];
+    const updates = installAutoUpdate({
+      changed: state => { updateItems = updateMenu(state, strings); tray?.setUpdate(updateItems); },
+      prepareQuit: () => { quitting = true; },
+    });
     const saved = await store().read<{ hub?: string }>();
     try { hub = parseHubAddress(process.env.PERSONA_HUB_URL ?? saved?.hub ?? ""); } catch { hub = undefined; }
     for (const scheme of ["persona", "jarvis"]) {
@@ -214,10 +246,14 @@ else {
     }
     if (hub) await showMain();
     else await showSetup();
-    installTray(() => {
+    tray = installTray({ open: strings.tray_open ?? "Open Persona", quit: strings.tray_quit ?? "Quit Persona" }, () => {
       if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); }
       else void showMain();
-    }, () => { quitting = true; app.quit(); });
+    }, () => { quitting = true; app.quit(); }, action => {
+      if (action === "restart") updates?.restart();
+      else updates?.check();
+    });
+    tray.setUpdate(updateItems);
   }).catch(error => {
     dialog.showErrorBox("Persona could not start", error instanceof Error ? error.message : String(error));
     app.quit();

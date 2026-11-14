@@ -66,6 +66,10 @@ public struct ScreenVideoParser {
 
     public init() {}
 
+    /// Bytes of a message that hasn't come whole yet: a frame spread over several reads (the phone times large ones,
+    /// `ReceiverSignals.frame(firstByteMicros:)`).
+    public var pendingBytes: Int { buffer.count }
+
     /// Appends `bytes` and returns every message that is now complete. Call it with each chunk read from the socket.
     public mutating func push(_ bytes: Data) throws -> [ScreenVideoWire.RawMessage] {
         buffer.append(contentsOf: bytes)

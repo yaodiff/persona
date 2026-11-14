@@ -91,6 +91,7 @@ public actor ScreenLinkSession {
     private var lost: Set<String> = []
     private var networkChanged = false
     private var pendingVideo: [Int: CheckedContinuation<UInt8, Error>] = [:]
+    private var muted: Set<LinkStats.Kind> = []
     private var ended = false
     private var ticker: Task<Void, Never>?
 
@@ -205,6 +206,17 @@ public actor ScreenLinkSession {
         out(id, .attach(token: token))
     }
 
+    /// For tests on real networks (the DEBUG command channel): direct routes of `kind` go silent (everything that
+    /// arrives on them is ignored, as when a network drops packets without closing anything), or speak again.
+    public func muteDirect(kind: LinkStats.Kind, _ on: Bool) {
+        if on { muted.insert(kind) } else { muted.remove(kind) }
+    }
+
+    /// For tests: direct routes of `kind` close now, as when the connection breaks.
+    public func dropDirect(kind: LinkStats.Kind) {
+        for (id, l) in links where l.route != nil && l.kind == kind { lose(id) }
+    }
+
     /// The routes the app no longer has (their interface went away), so the policy treats them as lost now.
     public func dropDirect(route: String, networkChanged changed: Bool) {
         networkChanged = networkChanged || changed
@@ -270,6 +282,7 @@ public actor ScreenLinkSession {
 
     private func handle(_ m: ScreenLinkMessage, from id: Int) {
         guard !ended else { return }
+        if let l = links[id], l.route != nil, muted.contains(l.kind) { return } // a test's black-holed route
         links[id]?.unanswered = nil
         switch m {
         case let .data(ch, off, bytes):

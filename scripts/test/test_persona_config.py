@@ -83,27 +83,46 @@ class PersonaConfigTests(unittest.TestCase):
         target.write_bytes((ROOT / 'apple' / config.APP_ENTITLEMENTS).read_bytes())
         return root
 
-    def test_carplay_entitlements_only_for_json_true(self):
-        for value in (None, False, 'false', 'False', 'true', 'no', 0, 1, [], {}):
+    def test_opt_in_entitlements_only_for_json_true(self):
+        for switch in config.OPT_IN:
+            for value in (None, False, 'false', 'False', 'true', 'no', 0, 1, [], {}):
+                with self.subTest(switch=switch, value=value), tempfile.TemporaryDirectory() as directory:
+                    root = self._fake_root(directory)
+                    cfg = {} if value is None else {'app': {switch.split('.', 1)[1]: value}}
+                    with patch.object(config, 'ROOT', str(root)):
+                        self.assertEqual(config.app_entitlements(cfg), config.APP_ENTITLEMENTS)
+                    self.assertFalse((root / 'apple' / config.OPT_IN_ENTITLEMENTS).exists())
+
+    def test_opt_in_entitlements_keep_the_app_keys(self):
+        cases = {
+            'carplay_voice': ['com.apple.developer.carplay-voice-based-conversation'],
+            'health_background_delivery': ['com.apple.developer.healthkit.background-delivery'],
+        }
+        cases['both'] = cases['carplay_voice'] + cases['health_background_delivery']
+        for name, keys in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                root = self._fake_root(directory)
+                app = {'carplay_voice': True, 'health_background_delivery': True} if name == 'both' else {name: True}
+                with patch.object(config, 'ROOT', str(root)):
+                    self.assertEqual(config.app_entitlements({'app': app}), config.OPT_IN_ENTITLEMENTS)
+                with open(root / 'apple' / config.APP_ENTITLEMENTS, 'rb') as f:
+                    original = plistlib.load(f)
+                with open(root / 'apple' / config.OPT_IN_ENTITLEMENTS, 'rb') as f:
+                    generated = plistlib.load(f)
+                self.assertTrue(original)
+                for key in keys:
+                    self.assertIs(generated.pop(key), True)
+                self.assertEqual(generated, original)
+
+    def test_health_background_delivery_flag_follows_the_switch(self):
+        for value, flag in ((True, 'YES'), (None, 'NO'), (False, 'NO'), ('true', 'NO')):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
                 root = self._fake_root(directory)
-                cfg = {} if value is None else {'app': {'carplay_voice': value}}
+                cfg = {} if value is None else {'app': {'health_background_delivery': value}}
                 with patch.object(config, 'ROOT', str(root)):
-                    self.assertEqual(config.app_entitlements(cfg), config.APP_ENTITLEMENTS)
-                self.assertFalse((root / 'apple' / config.CARPLAY_ENTITLEMENTS).exists())
-
-    def test_carplay_entitlements_keep_the_app_keys(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = self._fake_root(directory)
-            with patch.object(config, 'ROOT', str(root)):
-                self.assertEqual(config.app_entitlements({'app': {'carplay_voice': True}}), config.CARPLAY_ENTITLEMENTS)
-            with open(root / 'apple' / config.APP_ENTITLEMENTS, 'rb') as f:
-                original = plistlib.load(f)
-            with open(root / 'apple' / config.CARPLAY_ENTITLEMENTS, 'rb') as f:
-                generated = plistlib.load(f)
-            self.assertTrue(original)
-            self.assertIs(generated.pop('com.apple.developer.carplay-voice-based-conversation'), True)
-            self.assertEqual(generated, original)
+                    config.xcconfig(cfg)
+                text = (root / 'apple' / 'Config.xcconfig').read_text()
+                self.assertIn('PERSONA_HEALTH_BACKGROUND_DELIVERY = %s\n' % flag, text)
 
 
 class SigningProfileConfigTests(unittest.TestCase):

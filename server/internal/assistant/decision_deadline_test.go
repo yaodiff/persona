@@ -362,6 +362,12 @@ func TestIrreversibleAskUserIsOnlyReminded(t *testing.T) {
 	if n := pushes() - before; n != 1 {
 		t.Fatalf("%d reminders, want 1", n)
 	}
+	e.f.mu.Lock()
+	last := e.f.pushes[len(e.f.pushes)-1]
+	e.f.mu.Unlock()
+	if last.Level != "P0" || !strings.HasPrefix(last.RelatedKey, "ask-overdue:") {
+		t.Fatalf("an overdue decision of the owner's is P0: level %q key %q", last.Level, last.RelatedKey)
+	}
 	e.s.sweepDecisionDeadlines(time.Now().Add(48 * time.Hour))
 	if n := pushes() - before; n != 1 {
 		t.Fatalf("%d reminders after the sweep, want 1", n)

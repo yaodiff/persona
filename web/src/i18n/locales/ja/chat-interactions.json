@@ -103,5 +103,6 @@
   "secret_handoff_lead_bare": "Agent が今回の実行だけ受け取ります：",
   "secret_handoff_note": "Persona とアシスタントは値を見ません。",
   "secret_handoff_always_scope": "常に許可：{scope}。",
-  "secret_handoff_card_only": "チャットのカードで承認してください。"
+  "secret_handoff_card_only": "チャットのカードで承認してください。",
+  "show_card": "リクエスト全体を表示"
 }

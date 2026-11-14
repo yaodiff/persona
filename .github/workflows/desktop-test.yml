@@ -1,18 +1,10 @@
 name: Desktop CI
 
 on:
+  # Signing belongs only to the administrator-gated release workflow. Development and pull-request checks build
+  # unsigned artifacts, so this workflow never receives a certificate or a notarization key.
   workflow_call:
-    inputs:
-      signed:
-        description: 'Sign and notarize release artifacts using repository secrets'
-        type: boolean
-        default: false
   workflow_dispatch:
-    inputs:
-      signed:
-        description: 'Sign and notarize release artifacts using repository secrets'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -86,11 +78,6 @@ jobs:
         if: ${{ !cancelled() }} # the package and the smoke report separately
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
-          CSC_LINK: ${{ inputs.signed && secrets.MAC_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ inputs.signed && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-          APPLE_API_KEY: ${{ inputs.signed && secrets.APPLE_API_KEY || '' }}
-          APPLE_API_KEY_ID: ${{ inputs.signed && secrets.APPLE_API_KEY_ID || '' }}
-          APPLE_API_ISSUER: ${{ inputs.signed && secrets.APPLE_API_ISSUER || '' }}
         run: scripts/ci/desktop-package.sh mac
       - uses: actions/upload-artifact@v4
         if: always()
@@ -102,7 +89,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: persona-desktop-macos${{ inputs.signed && '-signed' || '-unsigned' }}
+          name: persona-desktop-macos-unsigned
           path: |
             desktop/release/*.dmg
             desktop/release/*.zip
@@ -140,8 +127,6 @@ jobs:
         shell: bash
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
-          CSC_LINK: ${{ inputs.signed && secrets.WIN_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ inputs.signed && secrets.WIN_CSC_KEY_PASSWORD || '' }}
         run: scripts/ci/desktop-package.sh win
       - uses: actions/upload-artifact@v4
         if: always()
@@ -153,9 +138,53 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: persona-desktop-windows${{ inputs.signed && '-signed' || '-unsigned' }}
+          name: persona-desktop-windows-unsigned
           path: |
             desktop/release/*.exe
             desktop/release/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  # A real update with no certificate and no published release: the packaged old version finds, downloads and
+  # verifies a new one from a feed served on the runner (desktop/scripts/update-test.mjs).
+  update:
+    name: Update from a local feed (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+          - name: Linux
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install desktop dependencies
+        shell: bash
+        run: npm --prefix desktop ci --ignore-scripts
+      - name: Update test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a node desktop/scripts/update-test.mjs desktop/release/update-test/result
+          else
+            node desktop/scripts/update-test.mjs desktop/release/update-test/result
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-desktop-update-test-${{ matrix.name }}
+          path: desktop/release/update-test/result
           if-no-files-found: error
           retention-days: 7

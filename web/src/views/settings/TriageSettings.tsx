@@ -101,28 +101,28 @@ export function TriageSettings({ onModel }: { onModel?: () => void }) {
           <Row label={t("settings-triagesettings.title")} hint={t("settings-triagesettings.enabled_hint")}>
             <Switch on={sw.enabled} onChange={flip("enabled")} disabled={busy} label={t("settings-triagesettings.title")} />
           </Row>
-          <Row label={t("settings-triagesettings.decide")} hint={t("settings-triagesettings.decide_hint")}>
+          <Row anchor="triage-decide" label={t("settings-triagesettings.decide")} hint={t("settings-triagesettings.decide_hint")}>
             <Switch on={sw.decide} onChange={flip("decide")} disabled={busy || off} label={t("settings-triagesettings.decide")} />
           </Row>
-          <Row label={t("settings-triagesettings.auto_continue")} hint={t("settings-triagesettings.auto_continue_hint")}>
+          <Row anchor="triage-auto-continue" label={t("settings-triagesettings.auto_continue")} hint={t("settings-triagesettings.auto_continue_hint")}>
             <Switch on={sw.auto_continue} onChange={flip("auto_continue")} disabled={busy || off} label={t("settings-triagesettings.auto_continue")} />
           </Row>
-          <Row label={t("settings-triagesettings.wake")} hint={t("settings-triagesettings.wake_hint")}>
+          <Row anchor="triage-wake" label={t("settings-triagesettings.wake")} hint={t("settings-triagesettings.wake_hint")}>
             <Switch on={sw.wake} onChange={flip("wake")} disabled={busy || off} label={t("settings-triagesettings.wake")} />
           </Row>
-          <Row label={t("settings-triagesettings.tool_loop")} hint={t("settings-triagesettings.tool_loop_hint")} wrapHint>
+          <Row anchor="triage-tool-loop" label={t("settings-triagesettings.tool_loop")} hint={t("settings-triagesettings.tool_loop_hint")} wrapHint>
             <Switch on={sw.tool_loop === true} onChange={flip("tool_loop")} disabled={busy || off} label={t("settings-triagesettings.tool_loop")} />
           </Row>
           {/* Ask for a closeout (#3612): off when the hub does not send it, like tool_loop */}
-          <Row label={t("settings-triagesettings.closeout")} hint={t("settings-triagesettings.closeout_hint")} wrapHint>
+          <Row anchor="triage-closeout" label={t("settings-triagesettings.closeout")} hint={t("settings-triagesettings.closeout_hint")} wrapHint>
             <Switch on={sw.closeout === true} onChange={flip("closeout")} disabled={busy || off} label={t("settings-triagesettings.closeout")} />
           </Row>
           {/* Ask for the status afterwards (#3616): off when the hub does not send it, like closeout */}
-          <Row label={t("settings-triagesettings.closeout_ask")} hint={t("settings-triagesettings.closeout_ask_hint")} wrapHint>
+          <Row anchor="triage-closeout-ask" label={t("settings-triagesettings.closeout_ask")} hint={t("settings-triagesettings.closeout_ask_hint")} wrapHint>
             <Switch on={sw.closeout_ask === true} onChange={flip("closeout_ask")} disabled={busy || off} label={t("settings-triagesettings.closeout_ask")} />
           </Row>
           {/* no model call, so it works with the triage off */}
-          <Row label={t("settings-triagesettings.reply_reminder")} hint={t("settings-triagesettings.reply_reminder_hint", { minutes: sw.reply_reminder_minutes || REPLY_REMINDER_MINUTES })}>
+          <Row anchor="triage-reply-reminder" label={t("settings-triagesettings.reply_reminder")} hint={t("settings-triagesettings.reply_reminder_hint", { minutes: sw.reply_reminder_minutes || REPLY_REMINDER_MINUTES })}>
             <Switch on={replyReminderOn(sw)} onChange={flip("reply_reminder")} disabled={busy} label={t("settings-triagesettings.reply_reminder")} />
           </Row>
         </>

@@ -166,25 +166,53 @@ struct AgentStateBadge: View {
     }
 }
 
-/// A row's name and the chips that go with it: side by side; at the accessibility text sizes the chips on a line under
-/// the name. A `Chip` never gives up width, and beside one a narrow phone left the name a character or none (#1796).
+/// A row's name and the chips that go with it: the chips right after the name while the name keeps at least half the
+/// width, or all it needs when that is less; otherwise the chips on a line under the name. A `Chip` never gives up
+/// width, and beside one a narrow phone left the name a character or none (#1796). It goes by measured widths, not by
+/// the text size, so a short name keeps its chips beside it at any size.
 struct NameWithChips<Name: View, Chips: View>: View {
     @ViewBuilder var name: Name
     @ViewBuilder var chips: Chips
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                name
-                HStack(spacing: Theme.Space.sm) { chips }
-            }
-        } else {
-            HStack(spacing: Theme.Space.sm) {
-                name
-                chips
-            }
+        NameThenChips {
+            name
+            HStack(spacing: Theme.Space.sm) { chips }
         }
+    }
+}
+
+private struct NameThenChips: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else { return subviews.first?.sizeThatFits(proposal) ?? .zero }
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil }
+            ?? subviews[0].sizeThatFits(.unspecified).width + Theme.Space.sm + subviews[1].sizeThatFits(.unspecified).width
+        return CGSize(width: width, height: frames(width, subviews).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: proposal); return }
+        for (i, frame) in frames(bounds.width, subviews).rects.enumerated() {
+            subviews[i].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), anchor: .topLeading,
+                              proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func frames(_ width: CGFloat, _ subviews: Subviews) -> (rects: [CGRect], height: CGFloat) {
+        let ideal = subviews[0].sizeThatFits(.unspecified)
+        let chips = subviews[1].sizeThatFits(.unspecified)
+        let room = width - chips.width - Theme.Space.sm
+        if room >= min(ideal.width, width / 2) {
+            let name = subviews[0].sizeThatFits(ProposedViewSize(width: room, height: nil))
+            let height = max(name.height, chips.height)
+            return ([CGRect(x: 0, y: (height - name.height) / 2, width: name.width, height: name.height),
+                     CGRect(x: name.width + Theme.Space.sm, y: (height - chips.height) / 2, width: chips.width, height: chips.height)],
+                    height)
+        }
+        let name = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        let y = name.height + Theme.Space.xxs
+        return ([CGRect(x: 0, y: 0, width: width, height: name.height),
+                 CGRect(x: 0, y: y, width: min(chips.width, width), height: chips.height)], y + chips.height)
     }
 }
 

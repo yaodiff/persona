@@ -6,6 +6,8 @@ import os
 import socket
 import time
 import unittest
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from test_mock_hub_mesh import Mock
 
@@ -19,12 +21,15 @@ def free_port():
 class Socket:
     """A WebSocket to the mock, enough to send one masked text frame at a time."""
 
-    def __init__(self, port):
+    def __init__(self, port, token=None, query_token=False):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=3)
         stream = self.sock.makefile("rb")
         key = base64.b64encode(os.urandom(16)).decode()
-        self.sock.sendall((f"GET /api/v1/ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n"
-                           f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        credential = "" if query_token else f"Authorization: Bearer {token}\r\n" if token else ""
+        query = f"?token={quote(token or '')}" if query_token else ""
+        self.sock.sendall((f"GET /api/v1/ws{query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n"
+                           f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
+                           f"{credential}\r\n").encode())
         status = stream.readline()
         stream.close()
         if b" 101 " not in status:
@@ -73,6 +78,35 @@ class DesktopsMockTests(unittest.TestCase):
         state = self.state(hub, lambda s: not s["registered"])
         self.assertEqual(state["registered"], [])
         self.assertEqual([e["event"] for e in state["log"]], ["register", "unregister", "register", "close"])
+
+    def test_answer_only_cannot_register(self):
+        hub = self.hub(MOCK_PAIR_TOKEN="jp_desktop_test")
+        request = Request(hub.base + "/api/v1/auth/tokens", method="POST",
+                          data=json.dumps({"kind": "watch", "name": "Test watch"}).encode(),
+                          headers={"Authorization": "Bearer jp_desktop_test", "Content-Type": "application/json"})
+        with urlopen(request, timeout=5) as response:
+            credential = json.load(response)
+        self.assertEqual(credential["role"], "answer")
+        watch = Socket(hub.port, credential["token"])
+        self.addCleanup(watch.close)
+        for _ in range(3):
+            watch.send({"type": "register_desktop", "device_name": "Not a desktop"})
+            state = self.state(hub, lambda s: s["registered"])
+            self.assertEqual(state, {"registered": [], "log": []})
+
+    def test_full_credential_can_register(self):
+        hub = self.hub(MOCK_PAIR_TOKEN="jp_desktop_test")
+        request = Request(hub.base + "/api/v1/auth/tokens", method="POST",
+                          data=json.dumps({"kind": "phone", "name": "Test phone"}).encode(),
+                          headers={"Authorization": "Bearer jp_desktop_test", "Content-Type": "application/json"})
+        with urlopen(request, timeout=5) as response:
+            credential = json.load(response)
+        self.assertEqual(credential["role"], "full")
+        phone = Socket(hub.port, credential["token"], query_token=True)
+        self.addCleanup(phone.close)
+        phone.send({"type": "register_desktop", "device_name": "Persona desktop"})
+        state = self.state(hub, lambda s: s["registered"])
+        self.assertEqual(state["registered"], ["Persona desktop"])
 
     def test_feature_only_when_asked(self):
         self.assertNotIn("desktop_unregister", self.hub().get("/api/v1/health")["features"])

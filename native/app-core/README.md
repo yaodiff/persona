@@ -25,7 +25,19 @@ cargo test --locked                                # unit tests and the shared f
 cargo run --locked -p persona-core-typegen          # regenerate the clients' codecs after changing a wire type
 cargo run --locked -p persona-core-typegen -- --check
 cargo build --locked --release -p persona-core-ffi # libpersona_core.{a,so,dylib}
+python3 -I scripts/ohos-napi-defs.py --check        # napi-derive definitions and index.d.ts
+python3 -I scripts/test_ohos_napi_defs.py           # declaration parser and drift-check regressions
 ```
+
+`scripts/ohos-napi-defs.py` runs a host `cargo check` with the `ohos` feature and `NAPI_TYPE_DEF_TMP_FOLDER` set.
+`napi-derive-ohos` 1.2.0 writes one JSON record per exported function there; this generator maps those records to
+`harmony/entry/src/main/cpp/types/libpersona_core/index.d.ts` in its stable function order. `Buffer` is exposed as
+`Uint8Array`, and every wake/effect callback must have no leading error argument and return `void`; `changedChat`
+keeps separate chat and version arguments. The declaration's `CoreHost` facade and method references stay unchanged.
+`--check` compares the complete generated file; without it, the same deterministic output is written for inspection.
+No NAPI library is linked or loaded. For testing the converter alone, `--records <JSON-lines file>` replaces Cargo,
+and `--print-records` prints the validated raw records. Keep the complete generic `ThreadsafeFunction` types on the
+`#[napi]` functions: napi-derive does not expand Rust type aliases into their TypeScript callback signatures.
 
 `scripts/ci/core.sh` runs all of these, plus formatting and clippy. Android's `:core:rustcore` tests build a host copy of
 the library and replay the same fixtures through the real JNI binding:
@@ -56,6 +68,7 @@ values and the open cells for #6871.
 | Apple XCFramework and real-C XCTest | `native/app-core/scripts/build-apple.sh`, then `xcrun swift test --package-path apple/Packages/PersonaCore -Xswiftc -warnings-as-errors` | macOS and Xcode; no physical phone is needed. `DEVELOPER_DIR=<Xcode 26.0.1>/Contents/Developer scripts/ci/apple.sh packages` checks the minimum compiler when that Xcode is installed. Other Xcode versions must be labelled "26.0 not verified". |
 | Apple launch, stream, scroll and ten-open/close memory | `scripts/app/perf-test.sh` covers only its listed frame/hitch suites. A launch and ten-open/close memory entry is not yet implemented; do not infer those results from it. | Physical-iPhone evidence is **blocked: no physical device** (maintainer decision, 2026-11-14); do not wait for it. An owned simulator and named optimized build may still supply reference data. App Launch / Allocations / Animation Hitches are the procedures for a later device; an XCFramework or archive is not a download-size measurement. |
 | HarmonyOS API 26 library | `OHOS_SDK_NATIVE=<API 26 native SDK> native/app-core/scripts/build-ohos.sh` | An installed API 26 native SDK, the Rust OHOS target and populated offline Cargo cache are still required. The script derives `OHOS_NDK_HOME` (which `napi-build-ohos` reads) from the directory that holds the SDK's `native` directory. With a stub SDK layout the build compiles the release closure and stops at the link step; an actual link has not been run. Host registry tests do not link the device NAPI. |
+| ArkTS codec and wire corpus against the real core, on the host | `scripts/ci/core.sh` builds the helper and runs `harmony/tests/core-host/replay.test.mjs` and `transport.test.mjs`. Locally: `cd native/app-core && cargo build --locked -p persona-core-ohos --example host_replay`, then `PERSONA_CORE_HOST_REPLAY=$PWD/target/debug/examples/host_replay node --test '../harmony/tests/core-host/*.test.mjs'` (Node.js 22.15+). | ArkTS-encoded actions drive the real runtime through `persona-core-ohos`'s registry, and ArkTS decodes the effects and patches: 38 cases / 94 steps, plus 42 values built independently in Rust whose bytes must match in both directions. It caught `u32` fields being written and read as 8 bytes (#7485). The wire corpus is also replayed through the transport decoder with byte-identical items, and representative `WirePayload` actions are compared with hand-built `WireBatch` actions. Host evidence only: no NAPI library, HAP or device; callbacks arrive as records, not thread-safe functions. |
 | HarmonyOS real-NAPI replay | `devecocli build --modules entry@ohosTest`, then install and run `aa test` with `coreReplay 1`; exact arguments are in `harmony/README.md`. | **Blocked: no physical device** (maintainer decision, 2026-11-14); do not wait for it. A future API 26/HDC environment must also have DevEco CLI and the native SDK. HAP linking, real NAPI callbacks, device timing and packaged increment remain unmeasured. |
 
 Physical-device cells are no longer prerequisites for the next milestones. They stay explicitly blocked above rather than
@@ -63,6 +76,10 @@ being marked passed or supplied by a simulator. Xcode 26.0.1 minimum-compiler ve
 toolchain task, not a physical-device requirement. Device selection, signing, SDK installation and license acceptance
 belong to the maintainer's environment if it later becomes available; none is silently substituted by an emulator or
 a release upload.
+
+The ArkTS host tests live outside the portable `harmony/tests/*.test.mjs` glob, because the replay needs the helper
+binary; a missing helper or too-old Node fails the test rather than skipping it. `harmony/tests/rustcore-wire.test.mjs`
+round-trips the generated codec against itself, which cannot catch a symmetric mistake, so it is not a substitute.
 
 ## Host-only boundary diagnostics
 
@@ -97,7 +114,7 @@ they do not replace the original Android benchmark, the 50 µs / 1 ms budgets, o
 ## Transport decoding
 
 `persona_core::transport` turns the bytes the host received into the values `continuity` takes (the plan's decision 2:
-JSON is decoded once, in Rust). It is pure decoding: no boundary action carries bytes yet, and no client calls it.
+JSON is decoded once, in Rust). `Action::WirePayload` carries the bytes (below); no production client sends them yet.
 
 | Function | Payload | iOS type it follows |
 | --- | --- | --- |
@@ -115,7 +132,10 @@ JSON is decoded once, in Rust). It is pure decoding: no boundary action carries 
   and the `items` events of `compatibility.json`), all of them accepted payloads, and rebuilds every payload step of
   the continuity corpus from bytes, comparing the step and the state with the hand-built batch. Of the 79 expected
   fields of those cases, 52 are values the decoder produced; 25 are item fields the core does not read, compared with
-  the item's kept JSON, and 2 are the frame's type.
+  the item's kept JSON, and 2 are the frame's type. The same 17 cases are replayed through the real JNI binding as
+  `Action.WirePayload` by Android's `TransportBindingFixtureTest` (`./gradlew :core:rustcore:test`, a host library),
+  which feeds each case's `input` exactly as the file holds it and compares every published item with its raw source
+  text; that is host evidence only, not a device or iOS run.
 - The refusal rules are tested by the crate's unit tests: every key a decoder reads, with every kind of wrong value.
 
 It does not match iOS everywhere. The module's documentation has the full list; in short:
@@ -130,6 +150,25 @@ It does not match iOS everywhere. The module's documentation has the full list; 
   reader, which added 33,328 B to the stripped x86_64 host library (741,032 B to 774,360 B) when measured.
 - **Encoding and kinds.** The core takes only UTF-8 without a byte order mark, and keeps an unknown item `kind` as
   the hub wrote it.
+
+The same decoders are reached by `Action::WirePayload { chat, payload }` (`persona-core-runtime`'s `wire`): a
+`Payload` is one response body or WebSocket frame as received, and its variant says which request it answers
+(`Latest`, `Newer`, `Reloaded`, `Older`, `Range`, `Frame`). Decoding happens on the worker, never in `dispatch`; a
+`Frame` of another type is ignored and one iOS would drop is dropped without an error. A refused page is an
+`Effect::Rejected` whose reason is a code and protocol key names, never payload content.
+`crates/persona-core-runtime/tests/transport_through_runtime.rs` replays the 17 wire cases through it with the JSON
+exactly as the files hold it: 32 items checked byte for byte, every case except the opened-fold range page also
+compared with the equivalent hand-built `ChatEvent`, plus separate tests that drive a range page into an opened fold
+and an older page into history, and refusal, other-frame and dispatch-cost tests. The same corpus is replayed through the real JNI
+binding (`TransportBindingFixtureTest` in `:core:rustcore`) and through ArkTS and the transport decoder on the host
+(`harmony/tests/core-host/transport.test.mjs`); both are host evidence, not device runs.
+
+The patch also carries `verified` (the chat's items are known complete, the rule Android used to derive per
+client), and `acked` (a host's acknowledgement watermark, so an applied no-op is visible). `Action::HubChanged`
+settles as if a gap were found, iOS's `settle(.fill)`. Folds are keyed by id and independent: different folds open
+and complete in either order, with `fold_id` on the range request, event and payload; a caller that sends no id keeps
+the older single-opening behaviour. `RangeFailed { fold_id: None }` cancels **every** opening, so a transport failure
+for one of several keyed folds must report its id or the other folds are cancelled too.
 
 Nothing here was executed on iOS. The rules were read from the Swift sources and from swift-foundation's
 `JSONDecoder`; the wire cases' expectations are derived from the iOS sources as well (`derived: true`) and are checked

@@ -222,3 +222,21 @@ func TestPlainMarkdownResolvesEscapesAndReferences(t *testing.T) {
 		t.Errorf("PlanTitle = %q, want %q", got, want)
 	}
 }
+
+func TestSearchMarkdownKeepsFoldedWordsWithoutHiddenHTML(t *testing.T) {
+	input := "<details>\n<summary data-secret=\"attribute-token\">Result</summary>\n**foldedneedle** proof\n<script>script-token</script><style>style-token</style><!-- comment-token -->\n</details>"
+	got := SearchMarkdown(input)
+	for _, word := range []string{"Result", "foldedneedle", "proof"} {
+		if !strings.Contains(got, word) {
+			t.Fatalf("visible word %q lost in %q", word, got)
+		}
+	}
+	for _, word := range []string{"attribute-token", "script-token", "style-token", "comment-token", "<details>"} {
+		if strings.Contains(got, word) {
+			t.Fatalf("hidden HTML %q included in %q", word, got)
+		}
+	}
+	if PlainMarkdown(input) != "" {
+		t.Fatal("search changed the legacy preview's HTML behavior")
+	}
+}

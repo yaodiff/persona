@@ -1,0 +1,25 @@
+{
+  "description" : "Nothing arrived: no frames, nothing measured.",
+  "name" : "still_screen",
+  "steps" : [
+    {
+      "expected" : {
+        "burstKbps" : [
+
+        ],
+        "decodeP95Ms" : null,
+        "deliveredKbps" : null,
+        "frames" : 0,
+        "lateShare" : null,
+        "queueFalling" : false,
+        "queueP50Ms" : null,
+        "queueP95Ms" : null,
+        "queueRising" : false,
+        "replacedShare" : null
+      },
+      "take" : {
+        "now" : 5000000
+      }
+    }
+  ]
+}

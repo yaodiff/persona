@@ -84,6 +84,7 @@
     <string name="assistant_phone_tools_unavailable">スマホのツールは利用不可</string>
     <string name="assistant_phone_permissions_pending">スマホの権限を確認待ち</string>
     <string name="assistant_search_chats">チャットを検索</string>
+    <string name="assistant_search_partial">以前のチャットを整理中です。まだ表示されないものがあります。</string>
     <string name="assistant_start_main">メインチャットを開始</string>
     <string name="assistant_main_chat">メインチャット</string>
     <!-- The drawer's newest eligible chats, between 常驻 and All chats (#4922, #5196) -->

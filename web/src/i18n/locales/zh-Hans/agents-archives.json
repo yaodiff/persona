@@ -1,5 +1,6 @@
 {
   "title": "已归档的 Agent",
+  "back": "返回 Agent 列表",
   "refresh": "刷新",
   "search_placeholder": "搜索已归档的 Agent",
   "clear_search": "清除搜索",

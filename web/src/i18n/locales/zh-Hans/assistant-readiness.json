@@ -33,7 +33,6 @@
   "help_model_claude": "已经在用 Claude Code：在那台电脑上登录一次就行，不用再填什么。",
   "probe_ok": "试过了，回答：{answer}",
   "probe_failed": "试了一句，没成功：{error}",
-  "resend": "重新发送",
   "help_model_computer": "不管哪一种，现在主对话都还要在你的一台电脑上运行：只粘贴 API Key、不接电脑，还开始不了。",
   "help_model_no_computer": "你还没接上电脑，先添加一台。",
   "help_model_computer_not_ready": "你的电脑还没准备好，先处理它：{step}"

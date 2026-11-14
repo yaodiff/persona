@@ -48,6 +48,38 @@ describe("扩展的文字", () => {
     expect(listSummary([extension("running"), extension("needs_setup"), extension("error"), extension("disabled")])).toBe("4 个 · 2 个要处理");
     expect(listSummary([extension("running")])).toBe("1 个");
   });
+  it("says the node program's aggregate, not the idle hub process", () => {
+    const summary: HubExtension["node_status"] = { total: 2, running: 2, starting: 0, stopped: 0, offline: 0, abnormal: 0 };
+    const running = extension("running", { node_status: summary });
+    expect(extensionState(running)).toBe("在 2 台机器上运行");
+    expect(runNote(running)).toBe(""); // the node line already says where it runs
+
+    const mixed = extension("running", { node_status: { total: 2, running: 1, starting: 0, stopped: 0, offline: 0, abnormal: 1 } });
+    expect(extensionState(mixed)).toBe("在 1 台机器上运行 · 1 台机器异常");
+
+    const abnormalOnly = extension("error", { node_status: { total: 2, running: 0, starting: 0, stopped: 0, offline: 1, abnormal: 1 } });
+    expect(extensionState(abnormalOnly)).toBe("1 台机器异常 · 1 台机器离线");
+
+    const starting = extension("starting", { node_status: { total: 1, running: 0, starting: 1, stopped: 0, offline: 0, abnormal: 0 } });
+    expect(extensionState(starting)).toBe("正在 1 台机器上启动");
+
+    const allStopped = extension("stopped", { node_status: { total: 2, running: 0, starting: 0, stopped: 2, offline: 0, abnormal: 0 } });
+    expect(extensionState(allStopped)).toBe("2 台机器已停止");
+
+    const allOffline = extension("stopped", { node_status: { total: 1, running: 0, starting: 0, stopped: 0, offline: 1, abnormal: 0 } });
+    expect(extensionState(allOffline)).toBe("1 台机器离线");
+
+    // A stopped machine and an offline one: the stopped headline plus the offline count, never "Stopped on 0".
+    const stoppedAndOffline = extension("stopped", { node_status: { total: 2, running: 0, starting: 0, stopped: 1, offline: 1, abnormal: 0 } });
+    expect(extensionState(stoppedAndOffline)).toBe("1 台机器已停止 · 1 台机器离线");
+
+    // Running machines and one away: the running headline plus the offline count.
+    const runningAndOffline = extension("running", { node_status: { total: 3, running: 2, starting: 0, stopped: 0, offline: 1, abnormal: 0 } });
+    expect(extensionState(runningAndOffline)).toBe("在 2 台机器上运行 · 1 台机器离线");
+
+    // No node summary: the hub process's own status wording stands.
+    expect(extensionState(extension("stopped"))).toBe("启动");
+  });
   it("puts the state, version and source on one line", () => {
     expect(stateLine(extension("running", { version: "1.2.0", source: "installed" }))).toBe("启动 · 1.2.0 · 已安装");
     expect(stateLine(extension("running", { source: "hub.json" }))).toBe("启动 · manager.json");

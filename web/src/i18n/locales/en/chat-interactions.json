@@ -106,5 +106,6 @@
   "secret_handoff_lead_bare": "An Agent gets these for this run only:",
   "secret_handoff_note": "Persona and the assistant never see the values.",
   "secret_handoff_always_scope": "Always allow {scope}.",
-  "secret_handoff_card_only": "Approve it on its card in the chat."
+  "secret_handoff_card_only": "Approve it on its card in the chat.",
+  "show_card": "Show the whole request"
 }

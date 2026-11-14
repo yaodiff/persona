@@ -16,7 +16,7 @@ import persona.core.rustcore.wire.ListOp
 class KotlinCodecComparisonTest {
     @Test fun compareStrictRangeDecoderWithStrictCopiedDecoder() {
         val patch = ChatPatch(
-            version = 3u, covered = 2, history = "history", has_more = true, loaded_once = true,
+            version = 3u, covered = 2, history = "history", has_more = true, loaded_once = true, verified = true, acked = null,
             ops = listOf(ListOp.Insert(index = 0u, id = "item#0", json = "{\"text\":\"中文🦀\"}")),
         )
         val bytes = patch.bincodeSerialize()

@@ -4,6 +4,7 @@ import { storedValue, storeValue } from "./compatibility";
 // `onGrouping` and marks its list `data-sidebar-rows`, and the shortcuts call the rest. Kept out of the sidebar's views
 // so they only gain the few lines that listen.
 import { AGENT_GROUPINGS, agentGrouping, type AgentGrouping } from "./agent-groups";
+import { noteFoldAll } from "./fold-all";
 
 export const GROUPING_KEY = "persona.agentGrouping";
 
@@ -30,8 +31,10 @@ export function onFoldAll(listener: (folded: boolean) => void, scope?: string): 
   return () => void foldListeners.delete(listener);
 }
 
-/** Folds or opens every group, or only those of `scope`. */
+/** Folds or opens every group, or only those of `scope`: the ones mounted now, and those not drawn now (under a folded
+ *  group, in a long group's parts out of view) when they are next drawn (lib/fold-all.ts). */
 export function setAllFolded(folded: boolean, scope?: string) {
+  noteFoldAll(folded, scope);
   foldListeners.forEach((s, f) => (scope === undefined || s === scope) && f(folded));
 }
 

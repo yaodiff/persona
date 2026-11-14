@@ -27,7 +27,8 @@ import persona.core.navigation.ExtensionUiRoute
  * pages it draws, "Extension market" with its extensions and markets, a launcher of a machine (from the machine's page), and one channel
  * of "Channels".
  */
-fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, services: SettingsServices) {
+fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, services: SettingsServices,
+    askPersona: ((Navigator, String) -> Unit)? = null) {
     val demo = services.demo
     entry<EngineRoute> { route ->
         EngineSelectionScreen(route.machineId, services.sessions, services.machines.takeUnless { demo }, pairing = false,
@@ -60,7 +61,8 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
         ExtensionUiPage(services.extensions.takeUnless { demo }, route.extensionId, route.uiId, route.title, onBack = navigator::back,
             initialState = route.state, depth = route.depth,
             shown = LocalExtensionPageVisible.current && (persona.core.navigation.LocalDetailKey.current == null || persona.core.navigation.LocalDetailKey.current == route),
-            onPush = { navigator.navigate(it.copy(manager = it.manager ?: route.manager)) }, manager = route.manager)
+            onPush = { navigator.navigate(it.copy(manager = it.manager ?: route.manager)) }, manager = route.manager,
+            onAsk = if (route.extensionId == persona.core.contracts.api.SUBSCRIPTIONS_UI) askPersona?.let { ask -> { text -> ask(navigator, text) } } else null)
     }
     // The market of the current assistant's Extensions (docs/assistant/managers.md "Clients"): what it installs is that one's.
     entry<ExtensionMarketRoute> {

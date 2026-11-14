@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/coder/websocket"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"io"
 	"net/http"
@@ -504,6 +505,9 @@ func (c *conversation) handle(gen int, e event) {
 		}
 	case evError:
 		c.logf("upstream: session error (%s, %s): %s", e.code, firstNonEmpty(e.param, "-"), clipRunes(e.text, errorRunes))
+		if e.code == codeUpstreamUnavailable {
+			c.down.session, c.down.text = sessionNo(gen), clipRunes(e.text, errorRunes)
+		}
 		c.serviceRefused(e)
 	}
 }
@@ -558,7 +562,15 @@ func (c *conversation) lost(gen int, why error) {
 		c.reconnects = 0 // it held: a drop now is not one of a run of them (docs/assistant/voice.md "Reconnect and resume")
 	}
 	if c.reconnects >= maxReconnects {
+		down, text := c.down.session == sessionNo(gen), c.down.text
 		c.mu.Unlock()
+		if down {
+			// The service said this session's model is down (it may start a session and only then say so): what the
+			// app shows is the service being unavailable, not a dropped connection.
+			c.failCode(codeUpstreamUnavailable, i18n.T(c.language(), "voice-upstream.unavailable",
+				i18n.Args{"reason": firstNonEmpty(text, codeUpstreamUnavailable)}), true)
+			return
+		}
 		c.failCode(codeUpstreamFailed, "语音连接断了，重连也没成功。点下面的按钮重新开始", true)
 		return
 	}
@@ -609,6 +621,6 @@ func (c *conversation) lost(gen int, why error) {
 			}
 			c.logf("reconnect (try %d of 3) failed: %s", attempt+1, failure(err))
 		}
-		c.failCode(codeUpstreamFailed, "语音连接断了，重连没成功："+err.Error(), true)
+		c.failCode(firstNonEmpty(upstreamCode(err), codeUpstreamFailed), "语音连接断了，重连没成功："+err.Error(), true)
 	}()
 }

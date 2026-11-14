@@ -12,6 +12,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -40,6 +42,9 @@ type agentNameRecord struct {
 	Failures    int       `json:"failures,omitempty"`
 	LastFailure string    `json:"last_failure,omitempty"`
 	NextAttempt time.Time `json:"next_attempt,omitempty"`
+	// Requested: the user asked for this automatic name (agent_naming_request.go). It also covers a custom title
+	// and a title of unknown provenance, until the native title changes or the user names the session by hand.
+	Requested bool `json:"requested,omitempty"`
 }
 
 type agentNamingBook struct {
@@ -53,6 +58,9 @@ type agentNamingBook struct {
 	interval  time.Duration // zero is the production pass interval; tests use a shorter queue delay
 	timer     *time.Timer
 	timerSeq  uint64
+	requests  singleflight.Group // one model call per session for requested names (agent_naming_request.go)
+	// beforeRequest lets a concurrency test observe every caller reaching the singleflight gate; nil in production.
+	beforeRequest func()
 }
 
 func agentNameKey(machine, session string) string {
@@ -325,8 +333,10 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 	}
 	r := b.records[key]
 	if c.TitleManual || c.TitleSource.String() == "manual" {
-		if !r.Manual && r.Title != "" {
+		// A name the user asked for over this custom title stays until the title changes again.
+		if !r.Manual && r.Title != "" && !(r.Requested && sameAgentRawTitle(r.RawTitle, c.Title)) {
 			r.Manual = true
+			r.Requested = false
 			r.Title = ""
 			_ = s.putAgentNameLocked(ctx, key, r)
 		}
@@ -356,33 +366,8 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 	b.mu.Unlock()
 	callCtx, cancel := context.WithTimeout(ctx, agentNamingTimeout)
 	defer cancel()
-	first, recent, err := s.agentNameDialogue(callCtx, machine, c.SessionID)
-	failureReason := "dialogue_unavailable"
-	var reply ai.Reply
-	if err == nil && first == "" && recent == "" {
-		err = errors.New("no dialogue")
-		failureReason = "no_dialogue"
-	}
-	if err == nil {
-		failureReason = "model_call_failed"
-		reply, err = s.purposeModel("inbox.triage").Chat(callCtx, ai.Request{System: prompts.RenderAgentSessionName(), Messages: []ai.Message{{Role: ai.RoleUser, Content: prompts.RenderAgentSessionNameInput(prompts.AgentSessionNameInput{First: first, Recent: recent})}}, MaxTokens: 256, BoundOutput: true})
-	}
-	title := strings.TrimSpace(strings.Trim(strings.TrimSpace(reply.Text), "\"“”『』")) // i18n-ignore: punctuation normalization
-	if err == nil && (reply.Truncated || !validAgentName(title)) {
-		err = errors.New("invalid name")
-		failureReason = "invalid_name"
-		if reply.Truncated {
-			failureReason = "model_output_truncated"
-		}
-	}
-	if err != nil {
-		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-			failureReason = "naming_timeout"
-		} else if errors.Is(callCtx.Err(), context.Canceled) {
-			failureReason = "naming_canceled"
-		}
-		// Provider errors may contain credentials or echoed private text. Log only
-		// static reason codes, even if a later native-title recheck discards the result.
+	title, failureReason := s.agentNameFromModel(callCtx, machine, c.SessionID)
+	if failureReason != "" {
 		s.logf("agent naming: session=%q/%q reason=%s", machine, c.SessionID, failureReason)
 	}
 	// Observe the raw node row, not our decorated title; a native /rename wins immediately.
@@ -399,7 +384,7 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 	if !agentNameDue(prefs, check, current, time.Now()) {
 		return true
 	}
-	if err != nil {
+	if failureReason != "" {
 		r.Failures++
 		r.LastFailure = failureReason
 		r.NextAttempt = now.Add(time.Duration(10*(1<<min(r.Failures-1, 5))) * time.Minute)
@@ -416,7 +401,7 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 		// baseline. Otherwise a daily setting would call again every hour.
 		// Keep proof that this prompt fallback was checked, without counting a
 		// title change. Otherwise an already concise first message retries forever.
-		r.Title, r.RawTitle = title, current.Title
+		r.Title, r.RawTitle, r.Requested = title, current.Title, false
 		r.NamedAt, r.NamedOutput, r.Failures, r.NextAttempt = now, c.OutputTokens, 0, time.Time{}
 		r.LastFailure = ""
 		if err := s.putAgentNameLocked(ctx, key, r); err != nil {
@@ -424,7 +409,7 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 		}
 		return true
 	}
-	r.Title, r.RawTitle = title, current.Title
+	r.Title, r.RawTitle, r.Requested = title, current.Title, false
 	r.Changes++
 	r.Failures = 0
 	r.LastFailure = ""
@@ -438,6 +423,44 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 	// Publishing takes the ledger lock to decorate, so release it before the asynchronous publication.
 	go s.publishSessions(machine)
 	return true
+}
+
+// agentNameFromModel asks the naming model for session id's name: the dialogue, the prompt and the validity check
+// the background pass and a requested name share. reason is "" with a usable title, else a static code. Provider
+// errors may contain credentials or echoed private text, so only the code leaves here, for the log, the ledger and
+// the app; the caller logs it, even if a later native-title recheck discards the result.
+func (s *Service) agentNameFromModel(ctx context.Context, machine, id string) (title, reason string) {
+	first, recent, err := s.agentNameDialogue(ctx, machine, id)
+	reason = "dialogue_unavailable"
+	var reply ai.Reply
+	if err == nil && first == "" && recent == "" {
+		err = errors.New("no dialogue")
+		reason = "no_dialogue"
+	}
+	if err == nil {
+		reason = "model_call_failed"
+		reply, err = s.purposeModel("inbox.triage").Chat(ctx, ai.Request{System: prompts.RenderAgentSessionName(), Messages: []ai.Message{{Role: ai.RoleUser, Content: prompts.RenderAgentSessionNameInput(prompts.AgentSessionNameInput{First: first, Recent: recent})}}, MaxTokens: 256, BoundOutput: true})
+		if ai.IsNotConfigured(err) {
+			reason = "model_not_configured"
+		}
+	}
+	title = strings.TrimSpace(strings.Trim(strings.TrimSpace(reply.Text), "\"“”『』")) // i18n-ignore: punctuation normalization
+	if err == nil && (reply.Truncated || !validAgentName(title)) {
+		err = errors.New("invalid name")
+		reason = "invalid_name"
+		if reply.Truncated {
+			reason = "model_output_truncated"
+		}
+	}
+	if err == nil {
+		return title, ""
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		reason = "naming_timeout"
+	} else if errors.Is(ctx.Err(), context.Canceled) {
+		reason = "naming_canceled"
+	}
+	return "", reason
 }
 
 func (s *Service) rawAgentForNaming(ctx context.Context, machine, id string) (proto.Session, bool) {
@@ -491,20 +514,49 @@ func (s *Service) agentNameDialogue(ctx context.Context, machine, id string) (st
 }
 
 func (s *Service) agentDisplayName(machine string, c proto.Session) string {
-	if c.Assistant || c.TitleManual || c.TitleSource.String() == "manual" {
-		return ""
+	title, _ := s.agentDisplay(machine, c)
+	return title
+}
+
+// agentDisplay is the manager's name for the row ("" for none) and whether the user asked for it as an automatic
+// name: that one stands over a custom title too, so the row's provenance is then the manager's to state.
+func (s *Service) agentDisplay(machine string, c proto.Session) (title string, requested bool) {
+	if c.Assistant {
+		return "", false
 	}
 	b := &s.agentNames
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.agentNamesLocked(context.Background()) {
-		return ""
+		return "", false
 	}
 	r := b.display[[2]string{machine, c.SessionID}]
-	if !r.Manual && (!knownAgentTitle(c) || !sameAgentNamingTitle(r.RawTitle, c)) {
-		return ""
+	if r.Requested && !r.Manual {
+		if !sameAgentNamingTitle(r.RawTitle, c) {
+			return "", false // the native title changed since: it wins
+		}
+		return r.Title, r.Title != ""
 	}
-	return r.Title
+	if c.TitleManual || c.TitleSource.String() == "manual" {
+		return "", false
+	}
+	if !r.Manual && (!knownAgentTitle(c) || !sameAgentNamingTitle(r.RawTitle, c)) {
+		return "", false
+	}
+	return r.Title, false
+}
+
+// nameAgentRow puts the manager's name on a row the apps get. A name the user asked for is an automatic one whatever
+// the native title's provenance was.
+func (s *Service) nameAgentRow(machine string, c *proto.Session) {
+	title, requested := s.agentDisplay(machine, *c)
+	if title == "" {
+		return
+	}
+	c.Title = title
+	if requested {
+		c.TitleSource, c.TitleManual = proto.TitleSourceAuto, false
+	}
 }
 
 // Manual intent is recorded before contacting the node. A refused/uncertain rename
@@ -521,7 +573,7 @@ func (s *Service) renameAgent(ctx context.Context, p RenameParams, c proto.Sessi
 		}
 		r := b.records[key]
 		r.Machine, r.Session = p.MachineID, p.SessionID
-		r.Manual = true
+		r.Manual, r.Requested = true, false
 		if err := s.putAgentNameLocked(ctx, key, r); err != nil {
 			b.mu.Unlock()
 			return nil, err
@@ -541,6 +593,7 @@ func (s *Service) renameAgent(ctx context.Context, p RenameParams, c proto.Sessi
 		r := b.records[key]
 		r.Title = title
 		r.RawTitle = c.Title
+		r.Manual, r.Requested = true, false // also when a requested name landed while the node was renaming
 		err := s.putAgentNameLocked(ctx, key, r)
 		b.mu.Unlock()
 		if err != nil {

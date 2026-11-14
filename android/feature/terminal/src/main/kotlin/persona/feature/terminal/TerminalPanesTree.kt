@@ -13,18 +13,24 @@ import persona.core.contracts.api.TerminalAddress
 // machine's `GET /machines/{mid}/panes` lists turned into workspaces → tabs → panes, each pane with the key its
 // terminal opens by. Pure, so it is tested without Android.
 
-/** One pane's row. [state] is null for a plain shell. */
+enum class TermPaneKind { Agent, Finished, Plain }
+
+/** One pane's row. The wire identity decides its kind, independently of the Agent's displayed state. */
 data class TermPane(
     /** What the terminal opens by: the agent's session when there is one (it shares that stream), else the pane's address. */
     val key: SessionKey,
-    /** The agent's session title, the shell's title or folder; empty when the host says nothing (the page says "Terminal"). */
+    /** The Agent's session title; empty for a plain terminal (the page says "Terminal"). */
     val title: String,
     /** The line under the title: the agent, the folder. */
     val detail: String,
     val state: AgentState?,
     /** The host's own id for the pane ("w1:p2"). */
     val pane: String,
-)
+    val kind: TermPaneKind = TermPaneKind.Plain,
+) {
+    val finished: Boolean get() = kind == TermPaneKind.Finished
+    val canClose: Boolean get() = kind != TermPaneKind.Agent
+}
 
 data class TermTab(val id: String, val label: String, val panes: List<TermPane>)
 
@@ -75,7 +81,7 @@ fun terminalTree(machineId: String, response: PanesResponse?, sessions: List<Ses
             val tabs = (listed + strays).map { tab ->
                 TermTab(tab.id, tab.label.ifEmpty { tab.id }, panesOf[space.id to tab.id].orEmpty()
                     .sortedWith(compareBy<PaneItem> { paneNumber(it.pane) }.thenBy { it.pane })
-                    .map { pane(machineId, it, it.sessionId?.let(bySession::get), home) })
+                    .map { pane(machineId, it, (it.sessionId?.takeIf(String::isNotEmpty) ?: it.agentSession)?.let(bySession::get), home) })
             }.filter { it.panes.isNotEmpty() }
             if (tabs.isEmpty() && !host.newTab) continue
             out += TermSpace(space.id, host.kind, space.label.ifEmpty { space.id }, space.branch.orEmpty(), host.newTab, tabs)
@@ -84,23 +90,48 @@ fun terminalTree(machineId: String, response: PanesResponse?, sessions: List<Ses
     return out
 }
 
-/** A pane's row: an agent by its session's title, a shell by what the terminal says (its title, else its folder). */
+/** An Agent keeps its title; a plain terminal puts its program and folder under the localized "Terminal" label. */
 internal fun pane(machineId: String, item: PaneItem, session: Session?, home: String?): TermPane {
     val folder = shortPath(item.cwd, home)
     val agent = item.agent.orEmpty()
-    // A pane with a session opens by it; one without by its address (`terminal`, or `pane:` + its id from an older node).
-    val key = if (!item.sessionId.isNullOrEmpty()) SessionKey(machineId, item.sessionId!!)
+    val previous = item.agentSession
+    // Running and stopped Agents open by session, as on iOS, so a retained shell keeps Resume. Plain panes use their address.
+    val sessionId = item.sessionId?.takeIf(String::isNotEmpty) ?: item.agentSession?.takeIf(String::isNotEmpty)
+    val key = if (sessionId != null) SessionKey(machineId, sessionId)
         else TerminalAddress.key(machineId, item.terminal.ifEmpty { item.pane })
     return when {
+        agent.isEmpty() && item.sessionId.isNullOrEmpty() && !previous.isNullOrEmpty() -> {
+            val title = finishedTitle(session, previous)
+            TermPane(key, title, plainDetails(title, item.foreground, terminalFolder(item.cwd)),
+                null, item.pane, TermPaneKind.Finished)
+        }
         session != null -> TermPane(key, session.displayTitle, listOf(agent, folder).filter(String::isNotEmpty).joinToString(" · "),
-            session.agentState, item.pane)
-        agent.isNotEmpty() -> TermPane(key, item.title?.trim().orEmpty().ifEmpty { agent },
-            listOf(agent, folder).filter(String::isNotEmpty).joinToString(" · "), AgentState.of(null, item.status), item.pane)
+            session.agentState, item.pane, TermPaneKind.Agent)
+        agent.isNotEmpty() || !item.sessionId.isNullOrEmpty() -> TermPane(key, item.title?.trim().orEmpty().ifEmpty { agent },
+            listOf(agent, folder).filter(String::isNotEmpty).joinToString(" · "), AgentState.of(null, item.status), item.pane, TermPaneKind.Agent)
         else -> {
-            val title = item.title?.trim().orEmpty().ifEmpty { item.cwd.orEmpty().trimEnd('/').substringAfterLast('/') }
-            TermPane(key, title, if (title == folder) "" else folder, null, item.pane)
+            val program = item.foreground?.trim().orEmpty().ifEmpty { item.title?.trim().orEmpty() }
+            TermPane(key, "", listOf(program, folder).filter(String::isNotEmpty).joinToString(" · "), null, item.pane)
         }
     }
+}
+
+/** iOS TerminalsView.title(finished:): an actual title, else the first eight characters of the session id. */
+internal fun finishedTitle(session: Session?, id: String): String = session?.title?.takeIf(String::isNotEmpty) ?: id.take(8)
+
+/** iOS TerminalsList.plainDetails: the title already names some programs, so say those only once. */
+internal fun plainDetails(title: String, foreground: String?, folder: String): String =
+    listOfNotNull(foreground?.takeIf { it.isNotEmpty() && !title.contains(it, ignoreCase = true) }, folder.takeIf(String::isNotEmpty))
+        .joinToString(" · ")
+
+internal fun terminalFolder(cwd: String?): String {
+    val path = cwd.orEmpty().trimEnd('/')
+    return if (path.isEmpty() && !cwd.isNullOrEmpty()) "/" else path.substringAfterLast('/')
+}
+
+/** The cleanup action is offered only when the hub lists a retained Agent terminal, as on iOS. */
+internal fun hasFinished(response: PanesResponse?): Boolean = response?.hosts.orEmpty().any { host ->
+    host.panes.any { !it.agentSession.isNullOrEmpty() }
 }
 
 /** The pane's place, for the terminal's title: space › tab › title (a tab named like its workspace, or a pane like its tab, once). */

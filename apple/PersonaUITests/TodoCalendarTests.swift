@@ -2,8 +2,8 @@ import XCTest
 
 /// The to-dos' calendar (#2029) against the mock hub, whose to-dos are due today at 10:00, 16:00 and two at 18:00, on a
 /// day in two days and yesterday, and one has no due date: the day, the week and the month show them; a block opens
-/// its to-do; a day of the week opens that day; "+" makes a to-do due on the day shown; the bar under the calendar
-/// goes back to the list; a to-do dragged to another time, the All Day row, another day of the week or the month is
+/// its to-do; a day of the week opens that day; the bar under the calendar goes back to the list; "+" makes a to-do due
+/// on the day shown; a to-do dragged to another time, the All Day row, another day of the week or the month is
 /// saved with Undo on its toast (#2045); at the largest text size the screens come up. TEST_RUNNER_PERSONA_SHOTS=<dir>
 /// also saves the screens (TEST_RUNNER_PERSONA_SHOTS_APPEARANCE names them light / dark).
 final class TodoCalendarTests: XCTestCase {
@@ -57,23 +57,37 @@ final class TodoCalendarTests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(weather.waitForExistence(timeout: 10))
 
-        // "+" makes a to-do due on the day shown, all day.
+        // The bar under the calendar goes back to the list; the switch brings the calendar back, still on the day.
+        app.descendants(matching: .any)["todo.calendar.undated"].tap()
+        XCTAssertTrue(app.textFields["搜索待办"].waitForExistence(timeout: 10))
+        calendarSwitch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["todo.calendar.strip"].waitForExistence(timeout: 10))
+
+        // "+" makes a to-do due on the day shown, all day. Last, and the app closed after it (#6100): on an iPad XCTest
+        // can miss the end of the keyboard's animation here, and then waits a minute for an idle app before every later
+        // tap, the turn back to portrait and the next test's first step. The steps here wait for what they need instead.
         app.buttons["新建待办"].tap()
         let title = app.textFields["todo.calendar.newTitle"]
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         title.typeText("日历里记的事")
+        // The words in the field and Add on before the tap: an iPad's keyboard can hold typed words a moment before the
+        // field takes them, and a tap on Add while it is still off does nothing.
+        let add = app.buttons["todo.calendar.newAdd"]
+        let typed = [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "日历里记的事"), object: title),
+                     XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: add)]
+        XCTAssertEqual(XCTWaiter.wait(for: typed, timeout: 10), .completed,
+                       "title \(title.value as? String ?? "nil"), Add enabled \(add.isEnabled)")
         shot("calendar-add")
-        app.buttons["todo.calendar.newAdd"].tap()
+        add.tap()
         XCTAssertTrue(wait { try self.todos(hub).contains { $0["title"] as? String == "日历里记的事" && $0["due_date"] is String } })
+        XCTAssertTrue(title.waitForNonExistence(timeout: 10), "the sheet stayed open")
         XCTAssertTrue(entry("日历里记的事").waitForExistence(timeout: 10))
         // the mock as it was, for the tests after this one (a to-do due today, all day, would be today's first line)
         for t in try todos(hub) where t["title"] as? String == "日历里记的事" {
             try send(hub, "DELETE", "/api/v1/todos/\(t["id"] as? String ?? "")")
         }
-
-        // The bar under the calendar goes back to the list.
-        app.descendants(matching: .any)["todo.calendar.undated"].tap()
-        XCTAssertTrue(app.textFields["搜索待办"].waitForExistence(timeout: 10))
+        // Closed before the turn back to portrait (the defer above), which waits for the app to be idle.
+        app.terminate()
     }
 
     /// Moving a to-do (#2045): held and dragged on the day's axis two hours later, onto the All Day row, to the next

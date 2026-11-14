@@ -355,6 +355,9 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 		Steps      json.RawMessage `json:"steps"`
 		Observe    json.RawMessage `json:"observe"`
 		TimeoutMS  int             `json:"timeout_ms"`
+		// PID and WindowID name the process and window when app has more than one (computer_window.go, #7591).
+		PID      int `json:"pid"`
+		WindowID int `json:"window_id"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return proto.TextResult("bad arguments: "+err.Error(), true)
@@ -363,8 +366,20 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
-	session := "persona-" + convID(sessionID)
+	session := cuaConversationLabel(sessionID)
 	lcu := h.callBackend(m) == "lcu"
+	if a.PID != 0 || a.WindowID != 0 {
+		switch {
+		case lcu:
+			return proto.TextResult("pid and window_id are Cua Driver's: this machine's computer-use backend is LCU; name the app", true)
+		case a.Script != "":
+			return proto.TextResult("pid and window_id go with steps, not a script (a script names its apps with cua.getApp(\"…\"))", true)
+		}
+		// The app they are, for the checks and approvals below, which go by app: never the model's word for it.
+		if a.App, a.PID, err = h.computerTarget(ctx, m, session, sessionID, a.App, a.PID, a.WindowID); err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+	}
 	declined := func(what string) proto.ToolResult {
 		h.logf("[%s] %s declined on the phone (%s)", m.cfg.ID, name, what)
 		return proto.TextResult("The user declined this on the phone. Do not retry it unless they ask.", true)
@@ -375,7 +390,7 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 			return declined("look")
 		}
 		shot := a.Screenshot == nil || *a.Screenshot
-		return h.computerState(ctx, m, session, sessionID, a.App, a.Query, shot)
+		return h.computerState(ctx, m, session, sessionID, a.App, a.Query, shot, a.PID, a.WindowID)
 	}
 	var tool string
 	in := map[string]any{}
@@ -403,8 +418,8 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 			tool, in["code"] = "js", code
 		} else {
 			tool, in["steps"] = "run_steps", a.Steps
-			if a.App != "" {
-				in["app"] = a.App
+			if res := h.pinSteps(ctx, m, session, sessionID, a.App, a.PID, a.WindowID, a.Steps, in); res != nil {
+				return *res
 			}
 			if len(a.Observe) > 0 {
 				in["observe"] = a.Observe
@@ -413,40 +428,42 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	default:
 		return proto.TextResult("give script (run_script) or steps (run_steps)", true)
 	}
-	// Never System Settings or a permission prompt (#4336, computer_protected.go), before any card.
+	if tool == "run_script" {
+		if res := h.scriptProcesses(ctx, m, session, sessionID, a.Script); res != nil {
+			return *res
+		}
+	}
+	// Never System Settings or a permission prompt (#4336, #7560, computer_protected.go), before any card.
 	if a.Script != "" && !whole {
 		h.logf("[%s] computer_run refused: a script whose apps cannot all be read", m.cfg.ID)
 		return proto.TextResult(protectedapps.UnreadableScript, true)
 	}
 	var known []protectedapps.App
-	if !lcu {
-		known = h.knownApps(ctx, m)
-	}
-	for _, x := range h.appsOn(ctx, m, apps, known) {
-		if protectedApp(x) {
-			h.logf("[%s] computer_run refused: protected app %s", m.cfg.ID, strings.TrimPrefix(x.BundleID, "name:"))
-			return proto.TextResult(refusedText(m.name(), "it would operate "+x.Name), true)
+	// guard checks this call, or one of its steps alone, on the Mac as it is now (protectedapps.Look.Check). LCU asks
+	// before touching any app, and those questions are refused for these (computer_lcu.go): it only checks names here.
+	guard := func(string, map[string]any) protectedapps.Verdict { return protectedapps.Verdict{} }
+	if lcu {
+		for _, x := range h.appsOn(ctx, m, apps, nil) {
+			if protectedApp(x) {
+				h.logf("[%s] computer_run refused: protected app %s", m.cfg.ID, strings.TrimPrefix(x.BundleID, "name:"))
+				return proto.TextResult(refusedText(m.name(), "it would operate "+x.Name), true)
+			}
+		}
+	} else {
+		guard = func(tool string, in map[string]any) protectedapps.Verdict {
+			raw, _ := json.Marshal(in)
+			look := h.protectedLook(ctx, m, known)
+			v := look.Check(m.name(), tool, raw)
+			known = look.Apps()
+			return v
 		}
 	}
-	// LCU asks before touching any app, and those questions are refused for these (computer_lcu.go).
-	onScreen := func() *proto.ToolResult {
-		found, ok := h.protectedOnScreen(ctx, m, &known)
-		switch {
-		case !ok:
-			h.logf("[%s] computer_run refused: the windows could not be read", m.cfg.ID)
-			res := proto.TextResult(protectedapps.Unchecked, true)
-			return &res
-		case len(found) > 0:
-			h.logf("[%s] computer_run refused: protected app on screen", m.cfg.ID)
-			res := proto.TextResult(refusedText(m.name(), strings.Join(found, ", ")+" is open on its screen"), true)
-			return &res
-		}
-		return nil
+	refuse := func(v protectedapps.Verdict) proto.ToolResult {
+		h.logf("[%s] computer_run refused (%s): %s", m.cfg.ID, v.Rule, v.App)
+		return proto.TextResult(v.Why, true)
 	}
-	if !lcu {
-		if res := onScreen(); res != nil {
-			return *res
-		}
+	if v := guard(tool, in); v.Why != "" {
+		return refuse(v)
 	}
 	what := computerSummary(h.userLang(), m.name(), tool, a.Script, a.Steps)
 	asked, ok := h.approveApps(ctx, m, h.assistantAsker(sessionID, m.cfg.ID), name, apps, whole, args, known)
@@ -454,16 +471,18 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	if refused {
 		return declined(computerLogWhat(tool, a.Script, a.Steps))
 	}
-	if !lcu && (asked || h.cua().Confirm) { // a card may have waited minutes: look again
-		if res := onScreen(); res != nil {
-			return *res
+	if asked || h.cua().Confirm { // a card may have waited minutes: look again
+		if v := guard(tool, in); v.Why != "" {
+			return refuse(v)
 		}
 	}
 	start := time.Now()
 	var res *proto.ComputerResult
 	var stopped string
 	if !lcu && tool == "run_steps" && unnamedSteps(a.App, a.Steps) {
-		res, stopped, err = h.runStepsOneByOne(ctx, m, session, sessionID, a.Steps, a.Observe, &known)
+		res, stopped, err = h.runStepsOneByOne(ctx, m, session, sessionID, a.Steps, a.Observe, func(step json.RawMessage) protectedapps.Verdict {
+			return guard("run_steps", map[string]any{"steps": []json.RawMessage{step}})
+		})
 	} else {
 		res, err = h.computerCall(ctx, m, session, sessionID, tool, in)
 	}
@@ -473,8 +492,7 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 		return proto.TextResult(err.Error(), true)
 	}
 	if stopped != "" {
-		h.logf("[%s] computer_run refused partway: protected app on screen", m.cfg.ID)
-		return proto.TextResult(refusedText(m.name(), stopped), true)
+		return proto.TextResult(stopped, true)
 	}
 	return computerResult(res)
 }
@@ -504,7 +522,7 @@ func (h *Manager) computerMachineIDs() string {
 
 // computerState: one window of app (its accessibility tree, and its screenshot), or without app the whole screen and
 // the apps and windows on it.
-func (h *Manager) computerState(ctx context.Context, m *Machine, session, conversation, app, query string, shot bool) proto.ToolResult {
+func (h *Manager) computerState(ctx context.Context, m *Machine, session, conversation, app, query string, shot bool, pid, windowID int) proto.ToolResult {
 	if h.callBackend(m) == "lcu" {
 		res, err := h.computerCall(ctx, m, session, conversation, "js", map[string]any{"code": lcuconfirm.StateJS(app, query)})
 		if err != nil {
@@ -516,7 +534,7 @@ func (h *Manager) computerState(ctx context.Context, m *Machine, session, conver
 		return computerResult(res)
 	}
 
-	if app == "" {
+	if app == "" && pid == 0 {
 		tree, err := h.computerCall(ctx, m, session, conversation, "get_accessibility_tree", map[string]any{})
 		if err != nil {
 			return proto.TextResult(err.Error(), true)
@@ -533,26 +551,44 @@ func (h *Manager) computerState(ctx context.Context, m *Machine, session, conver
 		}
 		return out
 	}
-	// The window cua-driver's own lookup picks (the app's frontmost), then its state under the same session label, so
-	// its element tokens work in computer_run.
-	script := "const a = await cua.getApp(" + jsString(app) + "); return {pid: a.pid, window_id: a.windowId};"
-	found, err := h.computerCall(ctx, m, session, conversation, "run_script", map[string]any{"script": script})
-	if err != nil {
-		return proto.TextResult(err.Error(), true)
+	// The window: the one given; of an app with several processes (or of the process given), the one chosen
+	// (computer_window.go); else the one Cua Driver's own lookup picks (the app's frontmost). Then its state under the
+	// same session label, so its element tokens work in computer_run.
+	if windowID == 0 {
+		pick, err := h.chooseWindow(ctx, m, session, conversation, app, pid)
+		switch {
+		case err != nil && pid != 0:
+			return proto.TextResult(err.Error(), true)
+		case err != nil: // the windows not read (an LCU machine on auto, say): Cua Driver's own lookup, as before
+		case len(pick.Candidates) > 0:
+			return ambiguousWindows(app, "computer_state", pick, false)
+		case pick.Processes > 1 || pid != 0 && pick.WindowID != 0:
+			pid, windowID = pick.PID, pick.WindowID
+		case pid != 0:
+			return proto.TextResult(fmt.Sprintf("pid %d (%s) has no window to read", pid, app), true)
+		}
 	}
-	var r struct {
-		OK    bool `json:"ok"`
-		Value struct {
-			PID      int `json:"pid"`
-			WindowID int `json:"window_id"`
-		} `json:"value"`
+	if windowID == 0 {
+		script := "const a = await cua.getApp(" + jsString(app) + "); return {pid: a.pid, window_id: a.windowId};"
+		found, err := h.computerCall(ctx, m, session, conversation, "run_script", map[string]any{"script": script})
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+		var r struct {
+			OK    bool `json:"ok"`
+			Value struct {
+				PID      int `json:"pid"`
+				WindowID int `json:"window_id"`
+			} `json:"value"`
+		}
+		if json.Unmarshal(found.Output, &r) != nil || !r.OK || r.Value.WindowID == 0 {
+			res := computerResult(found)
+			res.IsError = true
+			return res
+		}
+		pid, windowID = r.Value.PID, r.Value.WindowID
 	}
-	if json.Unmarshal(found.Output, &r) != nil || !r.OK || r.Value.WindowID == 0 {
-		res := computerResult(found)
-		res.IsError = true
-		return res
-	}
-	in := map[string]any{"pid": r.Value.PID, "window_id": r.Value.WindowID, "include_screenshot": shot}
+	in := map[string]any{"pid": pid, "window_id": windowID, "include_screenshot": shot}
 	if query != "" {
 		in["query"] = query
 	}
@@ -580,8 +616,8 @@ func (h *Manager) callBackend(m *Machine) string {
 	}
 }
 
-// computerCall runs one computer-use tool on m's node.
-func (h *Manager) computerCall(ctx context.Context, m *Machine, session, conversation, tool string, args map[string]any) (*proto.ComputerResult, error) {
+// computerCallOnce runs one computer-use tool on m's node, as it is (computerCall handles a session that ended).
+func (h *Manager) computerCallOnce(ctx context.Context, m *Machine, session, conversation, tool string, args map[string]any) (*proto.ComputerResult, error) {
 	var res proto.ComputerResult
 	s := h.cua()
 	backend := h.callBackend(m)

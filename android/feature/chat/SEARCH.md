@@ -4,7 +4,7 @@
 
 搜索和聊天共用冻结的记录窗口，展开过的服务端折叠记录也参与搜索。历史页通过 `ChatRepository.loadOlder` 连续向前加载，失败或游标没有前进时停止，支持手动停止和继续加载。搜索页覆盖聊天时不标记消息已读。
 
-`docs/protocol/protocol.md` 没有会话搜索接口，因此只在本地匹配已加载内容。更早记录来自已有的 `/items?before_seq=` 分页接口，不新增协议。尚未展开的服务端折叠、截断工具输出的未加载全文均不参与匹配，页面有范围说明。
+`docs/protocol/protocol.md` 没有会话搜索接口，因此只在本地匹配已加载内容。更早记录来自已有的 `/items?before_seq=` 分页接口，不新增协议。Folded steps of folds already on screen are fetched for search without opening them (`ChatRepository.loadRange`, the same `from_seq` / `through_seq` pages). Truncated full text is still not searched. The page says so.
 
 防抖、命中上限、描边时长和单次分页上限沿用 UX 3.3 的交互配置；搜索耗时、吞吐与内存占用未实测。
 

@@ -12,6 +12,7 @@ import {
   setDone, unsentReplies, type InboxItem,
 } from "../../lib/inbox";
 import { isTransient } from "../../lib/ops";
+import { hasFinePointer } from "../../lib/viewport";
 import { machineWithHub } from "../../lib/mesh";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate } from "../../lib/router";
@@ -53,7 +54,8 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   const agentText = agentDraft(item);
   const [text, setText] = useState(() => unsentReplies.get(key) ?? agentText ?? "");
   const [instruction, setInstruction] = useState("");
-  const [loading, setLoading] = useState(false);
+  // with nothing to show yet it drafts as it opens (below): busy from the first frame, so the text is not offered before it
+  const [loading, setLoading] = useState(() => !unsentReplies.has(key) && !agentText);
   const [error, setError] = useState("");
   // unticked proposed changes are kept with the text: the item's draft card shows and sends the same
   const dropped = useDroppedChanges(key);
@@ -61,6 +63,8 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   const kept = keptChanges(item, dropped);
   const generation = useRef(0);
   const agent = item.agent;
+  const box = useRef<HTMLTextAreaElement>(null);
+  const focused = useRef(false);
 
   // Save as text changes (the draft card shows it): navigation can unmount without onClose, and sendReply owns
   // clearing/restoring on send.
@@ -92,6 +96,19 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
+
+  // "Edit" is for changing the words: once they are in, the caret waits at their end (audit item 16). The dialog itself
+  // takes the focus first (ui/atoms Dialog), which keeps a phone's keyboard down: a touch screen alone still taps in.
+  useEffect(() => {
+    if (loading || focused.current) return;
+    focused.current = true;
+    const el = box.current;
+    // not over a field taken meanwhile (the instruction, typed while it drafted)
+    const at = document.activeElement;
+    if (!el || !hasFinePointer() || (at && at !== document.body && at !== el.closest("[role=dialog]"))) return;
+    el.focus({ preventScroll: true });
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [loading]);
 
   const cancel = () => {
     // Like manual mail, Cancel discards; incidental dismissal keeps the reply and the unticked changes.
@@ -160,6 +177,7 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
       {item.connector?.reply_to && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to })}</p>}
       <div className="relative">
         <textarea
+          ref={box}
           value={text}
           onChange={(e) => keepText(e.target.value)}
           disabled={loading}

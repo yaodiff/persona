@@ -28,13 +28,17 @@ internal val DeliveryState.pendingStatus: PendingStatus?
 /** [RetryNow]: one still on its way (queued, waiting for the network) tries at once (iOS's Retry Now on a waiting message). */
 internal enum class DeliveryAction { Cancel, Edit, Retry, RetryNow, Delete, Discard, ConfirmDelivered, ConfirmNotDelivered }
 
+/** Sending and restoring text into a composer require an editable chat; cleanup and delivery review do not. */
+internal fun DeliveryAction.available(canSend: Boolean): Boolean = canSend ||
+    this !in setOf(DeliveryAction.Edit, DeliveryAction.Retry, DeliveryAction.RetryNow)
+
 /**
  * Cancel and edit are for what has not gone out yet; a refused message (refused by the computer, or confirmed as never
  * delivered) or one the hub turned down reached nothing either, so it can be edited (back into the box, the bubble gone)
  * or deleted outright. Cancel and Delete take the bubble away with Undo ([ChatDeliveryActions.perform]'s `removed`).
  * One whose delivery is unknown can be discarded: the phone stops asking and retrying, whatever the computer got.
  */
-internal fun DeliveryState.allows(action: DeliveryAction): Boolean = when (action) {
+internal fun DeliveryState.allows(action: DeliveryAction, canSend: Boolean = true): Boolean = action.available(canSend) && when (action) {
     DeliveryAction.Cancel, DeliveryAction.RetryNow -> this == DeliveryState.Queued || this == DeliveryState.WaitingForNetwork
     DeliveryAction.Edit -> this == DeliveryState.Queued || this == DeliveryState.WaitingForNetwork || this == DeliveryState.Refused
     DeliveryAction.Delete -> this == DeliveryState.Refused || this == DeliveryState.Rejected

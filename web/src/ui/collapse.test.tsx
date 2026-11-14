@@ -18,6 +18,13 @@ describe("Collapse", () => {
     expect(renderToStaticMarkup(<Collapse open lazy><p>trace</p></Collapse>)).toContain("trace");
   });
 
+  it("mounts a folded sidebar group's rows only when it opens, unless told to keep them", () => {
+    // a folded group with 400 Agents kept every row mounted, laid out on every page switch
+    expect(renderToStaticMarkup(<Collapse open={false} sidebarFold><p>Agent 7</p></Collapse>)).not.toContain("Agent 7");
+    expect(renderToStaticMarkup(<Collapse open sidebarFold><p>Agent 7</p></Collapse>)).toContain("Agent 7");
+    expect(renderToStaticMarkup(<Collapse open={false} sidebarFold lazy={false}><p>Agent 7</p></Collapse>)).toContain("Agent 7");
+  });
+
   it("clips a sidebar fold at its outer grid and other folds at their inner track", () => {
     const boxes = (markup: string) => [...markup.matchAll(/<div class="([^"]*)"/g)].map((match) => match[1]);
     const clip = "overflow-hidden [contain:layout_paint]";

@@ -20,4 +20,8 @@ The production build needs macOS for the universal DMG/ZIP and Windows for the s
 
 The lockfile omits an upstream package's deprecated-contact text so the repository's privacy scan stays clean. Package versions, resolved URLs and integrity hashes are unchanged, and `npm ci` verifies the lockfile against the registry.
 
+## Updates
+
+The app checks at launch and every four hours, downloads in the background and installs on quit or from the tray's "Restart to update". `node scripts/update-test.mjs` runs a real update of a packaged test build against a local feed (Windows, macOS, and Linux under Xvfb). Release publishing and the signing secrets are described in `docs/desktop/desktop.md` ("Updates").
+
 This is an implementation scaffold, not yet platform acceptance evidence. The full product migration and maintained documentation are tracked in #6770.

@@ -68,8 +68,12 @@ func newWithdrawals() withdrawals {
 // sendCard pushes manager's card id (sendLocalizedQuiet) under cardCollapseID and notes which devices that understand
 // withdrawals it went to. only, when not nil, is the devices that can take it at all (an MCP form or link: those that
 // registered for one).
-func (p *Pusher) sendCard(manager string, build localized, id string, wants func(NotifyPrefs) bool, rule quietRule, only func(Device) bool) {
+func (p *Pusher) sendCard(manager string, policy pushPolicy, build localized, id string, wants func(NotifyPrefs) bool, rule quietRule, only func(Device) bool) {
 	if p == nil {
+		return
+	}
+	policy.manager = manager
+	if allow, _ := p.applyLn(policy); !allow {
 		return
 	}
 	p.sendFromTo(manager, build, cardCollapseID(manager, id), wants, rule, only, func(d Device) {

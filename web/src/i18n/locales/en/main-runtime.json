@@ -1,13 +1,11 @@
 {
-  "main": "Main conversation",
-  "not_started": "Main conversation has not started",
-  "starting": "Main conversation · Starting…",
-  "unknown": "Main conversation · Runtime not reported",
+  "main": "Main chat",
+  "not_started": "Main chat hasn't started yet",
+  "starting": "Main chat · Starting…",
   "running": "Running",
-  "location_unknown": "Location not reported",
-  "proxy": "Via {name} (execution location not reported)",
+  "proxy": "Via {name}",
   "container": "Container {name}",
-  "offline": "Main conversation · Offline",
-  "stopped": "Main conversation · Stopped",
+  "offline": "Main chat · Offline",
+  "stopped": "Main chat · Stopped",
   "last_location": "Last ran on {location}"
 }

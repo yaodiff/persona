@@ -77,6 +77,11 @@ struct ComposerHoldMic: View {
     var id: String
     /// What tells dictation the language spoken besides the draft: the owner's recent messages in this chat.
     var hints: () -> [String] = { [] }
+    /// What a tap does; nil: dictation into the draft on or off (`Dictation.toggle`).
+    var tap: (() -> Void)? = nil
+    /// The dictation bar is over it and shows the listening itself: the mic under it does not pulse (a hidden pulse still
+    /// stepped the window's animations every frame).
+    var quiet = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Counts the touch toward a hold; cancelled when the finger lifts first (a tap).
     @State private var pending: Task<Void, Never>?
@@ -86,7 +91,7 @@ struct ComposerHoldMic: View {
     @State private var decided = false
 
     var body: some View {
-        ComposerMicFace(listening: dictation.isListening && !hold.holding)
+        ComposerMicFace(listening: dictation.isListening && !hold.holding && !quiet)
             .gesture(press)
             .onChange(of: touching) { _, down in
                 guard !down else { return }
@@ -106,9 +111,13 @@ struct ComposerHoldMic: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(dictation.isListening ? String(localized: "Stop Dictation") : String(localized: "Dictate"))
             .accessibilityHint("Touch and hold to dictate. Slide left to cancel, or up to keep dictating.")
-            .accessibilityAction { dictation.toggle(into: $text, hints: hints) }
+            .accessibilityAction { tapped() }
             .accessibilityIdentifier(id)
             .shellScaled()
+    }
+
+    private func tapped() {
+        if let tap { tap() } else { dictation.toggle(into: $text, hints: hints) }
     }
 
     private var press: some Gesture {
@@ -137,7 +146,7 @@ struct ComposerHoldMic: View {
                     hold.finish(DictationHold.onRelease(value.translation, velocity: value.velocity), dictation, text: $text,
                                 reduceMotion: reduceMotion)
                 } else if !decided {
-                    dictation.toggle(into: $text, hints: hints) // a tap
+                    tapped()
                 }
                 decided = false
             }
