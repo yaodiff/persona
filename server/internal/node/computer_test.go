@@ -242,3 +242,75 @@ func TestCuaEndToEnd(t *testing.T) {
 		_ = os.WriteFile(out, data, 0o600)
 	}
 }
+
+// fakeCuaEnded is a cua-driver that has ended the session labels named by files in its ended directory (#7590): it
+// refuses every call under one as Cua Driver does, until start_session; it logs each call's tool and input.
+func fakeCuaEnded(t *testing.T, ended ...string) (bin, log string) {
+	t.Helper()
+	dir := t.TempDir()
+	gone := filepath.Join(dir, "ended")
+	if err := os.Mkdir(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range ended {
+		if err := os.WriteFile(filepath.Join(gone, l), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log = filepath.Join(dir, "calls")
+	script := `#!/bin/sh
+case "$1" in
+status) echo "Cua Driver daemon is running"; exit 0 ;;
+call)
+  tool="$4"; input=$(cat)
+  echo "$tool $input" >> "` + log + `"
+  label=$(printf '%s' "$input" | sed -n 's/.*"session":"\([^"]*\)".*/\1/p')
+  if [ -n "$label" ] && [ -e "` + gone + `/$label" ]; then
+    if [ "$tool" = start_session ]; then rm "` + gone + `/$label"; printf '{"active": true, "revived": true}\n'; exit 0; fi
+    echo "session has ended; tool call '$tool' was rejected. Call start_session with session '$label' to start it again, or use a new session label." >&2
+    exit 1
+  fi
+  printf '{"tool": "%s", "input": %s}\n' "$tool" "$input" ;;
+esac
+`
+	bin = filepath.Join(dir, "cua-driver")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, log
+}
+
+// The hub may start the call's own label again, and nothing else with it; the node's own label starts again by
+// itself once Cua Driver ended it (5 minutes idle), a conversation's is the hub's to decide (#7590).
+func TestComputerCallSessionEnded(t *testing.T) {
+	bin, log := fakeCuaEnded(t, "persona-gate", "persona-c1")
+	cuaBin = func() string { return bin }
+	t.Cleanup(func() { cuaBin = findCua })
+	ctx := context.Background()
+	calls := func() string { b, _ := os.ReadFile(log); return string(b) }
+
+	res, err := computerCall(ctx, json.RawMessage(`{"session": "persona-gate", "tool": "list_windows", "args": {}}`))
+	if err != nil || !strings.Contains(string(res.Output), `"tool": "list_windows"`) {
+		t.Fatalf("the node's own label is started again and read: %v %s\n%s", err, res.Output, calls())
+	}
+	if got := calls(); strings.Count(got, "list_windows") != 2 || !strings.Contains(got, `start_session {"session":"persona-gate"}`) {
+		t.Fatalf("refused, started again, read again: %s", got)
+	}
+
+	_, err = computerCall(ctx, json.RawMessage(`{"session": "persona-c1", "conversation": "c1", "tool": "list_windows", "args": {}}`))
+	if err == nil || !strings.Contains(err.Error(), "cua-driver list_windows: session has ended") {
+		t.Fatalf("a conversation's label: Cua Driver's own answer, for the hub: %v", err)
+	}
+	if strings.Contains(calls(), `start_session {"session":"persona-c1"}`) {
+		t.Fatalf("the node started a conversation's label again by itself: %s", calls())
+	}
+
+	res, err = computerCall(ctx, json.RawMessage(`{"session": "persona-c1", "tool": "start_session",
+		"args": {"session": "someone-else", "cursor_theme": {"theme_id": "x"}}}`))
+	if err != nil || !strings.Contains(string(res.Output), `"revived": true`) || !strings.Contains(calls(), `start_session {"session":"persona-c1"}`+"\n") {
+		t.Fatalf("start_session: the call's own label and nothing else: %v %s\n%s", err, res.Output, calls())
+	}
+	if _, err := computerCall(ctx, json.RawMessage(`{"tool": "start_session", "args": {"session": "someone-else"}}`)); err == nil {
+		t.Fatal("start_session with no label of the call's own")
+	}
+}

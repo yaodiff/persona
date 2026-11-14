@@ -100,5 +100,69 @@ struct WorkoutReportsTests {
         #expect(restored.pending.first?.distance == nil)
         #expect(restored.anchor == Data([1, 2]))
     }
+
+    /// A report queued by the version before splits (#2526) still decodes and is sent without the new fields.
+    @Test func aReportQueuedBeforeSplitsStillGoesOut() throws {
+        let old = #"{"id":"12345678-1234-1234-1234-123456789abc","title":"Workout report","activity":"Running","source":"Watch","start":"2026-11-01T08:00:00Z","end":"2026-11-01T08:40:00Z","enabled_at":"2026-11-01T07:00:00Z","duration":2400,"distance":6000,"energy":400,"heart_rate":[]}"#
+        let report = try JSON.decoder.decode(WorkoutReports.Report.self, from: Data(old.utf8))
+        #expect(report.splits == nil && report.elevation_gain == nil && report.heart_rate_max == nil)
+        let sent = try #require(String(data: JSON.encoder.encode(report), encoding: .utf8))
+        #expect(!sent.contains("splits") && !sent.contains("elevation_gain"))
+    }
+}
+
+/// Per-kilometre splits from a workout's distance samples (#2526).
+struct WorkoutSplitsTests {
+    private let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+    /// Samples of `meters` every `seconds` from the start.
+    private func steady(_ count: Int, meters: Double, seconds: Double) -> [WorkoutSplits.Sample] {
+        (0..<count).map { i in
+            WorkoutSplits.Sample(start: start.addingTimeInterval(Double(i) * seconds),
+                                 end: start.addingTimeInterval(Double(i + 1) * seconds), meters: meters)
+        }
+    }
+
+    @Test func anEvenRunGivesEvenKilometresAndDropsThePartOne() {
+        // 2.5 km at 5 min/km, a sample every 30 s.
+        let samples = steady(25, meters: 100, seconds: 30)
+        let splits = WorkoutSplits.of(samples, start: start, end: start.addingTimeInterval(750), paused: [])
+        #expect(splits == [WorkoutSplit(km: 1, seconds: 300), WorkoutSplit(km: 2, seconds: 300)])
+    }
+
+    @Test func aPauseIsLeftOut() {
+        // 1 km at 5 min/km, then a 2-minute pause, then another km.
+        let first = steady(10, meters: 100, seconds: 30)
+        let second = steady(10, meters: 100, seconds: 30).map {
+            WorkoutSplits.Sample(start: $0.start.addingTimeInterval(420), end: $0.end.addingTimeInterval(420), meters: $0.meters)
+        }
+        let pause = DateInterval(start: start.addingTimeInterval(300), duration: 120)
+        let splits = WorkoutSplits.of(first + second, start: start, end: start.addingTimeInterval(720), paused: [pause])
+        #expect(splits.map(\.seconds) == [300, 300])
+    }
+
+    @Test func aKilometreInsideOneSampleIsSharedOut() {
+        // One sample of 2 km over 10 minutes: each km took 5 minutes.
+        let sample = WorkoutSplits.Sample(start: start, end: start.addingTimeInterval(600), meters: 2000)
+        #expect(WorkoutSplits.of([sample], start: start, end: start.addingTimeInterval(600), paused: []).map(\.seconds) == [300, 300])
+    }
+
+    @Test func samplesThatCannotGiveASensibleSplitGiveNone() {
+        let end = start.addingTimeInterval(600)
+        let instant = WorkoutSplits.Sample(start: start, end: start, meters: 1500)
+        #expect(WorkoutSplits.of([instant], start: start, end: end, paused: []).isEmpty, "a kilometre in no time")
+        let before = WorkoutSplits.Sample(start: start.addingTimeInterval(-60), end: start.addingTimeInterval(300), meters: 1200)
+        #expect(WorkoutSplits.of([before], start: start, end: end, paused: []).isEmpty, "a sample from before the workout")
+        #expect(WorkoutSplits.of([], start: start, end: end, paused: []).isEmpty)
+    }
+
+    @Test func pausesComeFromTheWorkoutsEvents() {
+        let at = { (s: Double) in self.start.addingTimeInterval(s) }
+        let paused = WorkoutSplits.pauses([(.pause, at(100)), (.resume, at(160)), (.motionPaused, at(300)),
+                                           (.motionResumed, at(330)), (.lap, at(400)), (.pause, at(500))], end: at(600))
+        #expect(paused == [DateInterval(start: at(100), end: at(160)), DateInterval(start: at(300), end: at(330)),
+                           DateInterval(start: at(500), end: at(600))])
+        #expect(WorkoutSplits.active(from: at(0), to: at(600), paused: paused) == 600 - 60 - 30 - 100)
+    }
 }
 #endif

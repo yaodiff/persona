@@ -34,7 +34,7 @@ import { conversationTitle } from "./assistant/conversations";
 import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
-import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, type MenuItem } from "../ui/atoms";
+import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon, type IconName } from "../ui/icons";
 import { HerdrNotices as HerdrNoticesContent } from "./agents/HerdrNotices";
@@ -69,6 +69,7 @@ import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu,
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
 import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
+import { WindowedRows } from "./WindowedRows";
 import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
 import { AssistantSwitcher } from "./AssistantSwitcher";
 import { sidebarPending } from "./sidebar-pending";
@@ -109,15 +110,15 @@ function reveal(el: HTMLElement): boolean {
   return false;
 }
 
-/** Keep group headings below Persona at every text size, without doing layout work on scroll. */
+/** Keep group headings below Persona at every text size, without doing layout work on scroll. The observer's first
+ *  report, after the browser's own layout and before the frame is painted, sets it: reading the row's height here made
+ *  the browser lay out the whole sidebar there and then. */
 function useStickyTop(ref: React.RefObject<HTMLElement | null>) {
   useLayoutEffect(() => {
     const nav = ref.current;
     const pinned = nav?.querySelector<HTMLElement>(":scope > [data-sidebar-sticky]");
     if (!nav || !pinned) return;
-    const measure = () => nav.style.setProperty("--sidebar-sticky-top", `${pinned.getBoundingClientRect().height}px`);
-    measure();
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(([e]) => nav.style.setProperty("--sidebar-sticky-top", `${e?.borderBoxSize?.[0]?.blockSize ?? pinned.getBoundingClientRect().height}px`));
     observer.observe(pinned);
     return () => { observer.disconnect(); nav.style.removeProperty("--sidebar-sticky-top"); };
   }, [ref]);
@@ -205,9 +206,16 @@ function useGlide(activeKey: string) {
   });
   // keyedRefs keeps a key's entry for the element that holds it (a folded tab's row and its hidden pane row may share a
   // key, #2320); on top, each row's size is watched while it is registered, so a row growing or folding away moves the
-  // glide (#2476)
+  // glide (#2476). The open row drawn after the list's own render (a group opening for it mounts its rows then, a long
+  // group draws its part later, WindowedRows) is brought into view the frame after, as the render's would have.
   const [reg] = useState<RegFn>(() => {
     const keyed = keyedRefs(rows.current);
+    let later = 0;
+    const revealLater = () => {
+      later = 0;
+      const open = following.current ? rows.current.get(active.current) : undefined;
+      if (open?.isConnected && open.offsetHeight && reveal(open)) setTimeout(() => following.current && open.isConnected && reveal(open), 350);
+    };
     return (k: string) => {
       const set = keyed(k);
       let mine: HTMLElement | null = null;
@@ -216,6 +224,7 @@ function useGlide(activeKey: string) {
         set(el);
         mine = el;
         if (el) sizes.current?.observe(el);
+        if (el && k === active.current && following.current && !later) later = requestAnimationFrame(revealLater);
       };
     };
   });
@@ -332,7 +341,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
           (4 + 48 + 1 gap + 1 line + 8 margins), 58px on a coarse pointer (44px touch row): 64px covers both */}
       {/* isolate: the rows' own layers (the sticky Persona row and group headers at z-30, chips, segments) stay inside this
           column, so the usage popover that opens upward over it from the bottom is never drawn under them */}
-      <div ref={nav} data-sidebar-rows onMouseLeave={() => hover(null)} className="relative isolate min-h-0 flex-1 scroll-pt-16 overflow-y-auto overscroll-contain px-2.5 pb-3">
+      <div ref={nav} data-sidebar-rows data-row-scroller onMouseLeave={() => hover(null)} className="relative isolate min-h-0 flex-1 scroll-pt-16 overflow-y-auto overscroll-contain px-2.5 pb-3">
         {highlight}
         {/* the main conversation is the column's first row, Persona with the app's mark, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), with a solid divider above the sticky groups */}
@@ -447,7 +456,7 @@ export function AgentsList({ route, onNewAgent, workspaceActions }: { route: Rou
   const none = useAgentSessions().length === 0 && bare;
   const adding = useAddComputer();
   return (
-    <div className="h-full overflow-y-auto overscroll-contain">
+    <div data-row-scroller className="h-full overflow-y-auto overscroll-contain">
       <div ref={nav} onMouseLeave={() => hover(null)} className="relative mx-auto max-w-[640px] px-2.5 pb-6">
         {highlight}
         {none ? <NoComputers body={t("agentspage.no_computers_body")} onAdd={adding.open} /> : <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} workspaceActions={workspaceActions} add={false} />}
@@ -812,12 +821,13 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, []);
   const listed = useMemo(() => withoutBotmux(all, botmuxHidden), [all, botmuxHidden]);
   const facets = useMemo(() => buildAgentFacets(listed, machines, pins), [listed, machines, pins]);
-  const evalCtx = useMemo(() => ({ machines, pins, interactions, now: Date.now() }), [machines, pins, interactions]);
+  const dimActive = hasActiveDimensionFilters(dimFilters);
+  const clock = useNow(60_000, dimActive);
+  const evalCtx = useMemo(() => ({ machines, pins, interactions, now: Date.now() }), [listed, dimFilters, machines, pins, interactions, clock]);
   const { sessions: dimFiltered, plan: searchPlan } = useMemo(
     () => applyDimensionFilters(listed, dimFilters, evalCtx, facets),
     [listed, dimFilters, evalCtx, facets],
   );
-  const dimActive = hasActiveDimensionFilters(dimFilters);
   const { live, recent: offline } = useMemo(() => splitAgentSessions(dimFiltered, machines), [dimFiltered, machines]);
   const seeded = useRef(false);
   useEffect(() => {
@@ -936,9 +946,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const recentState = worstTreeState(recent.map(agentTreeState));
   const recentRows = (
     <>
-      {recentShown.map((s) => (
+      <WindowedRows items={recentShown} holds={(s) => rowKey(s) === activeKey} render={(s) => (
         <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} />
-      ))}
+      )} />
       {recent.length > 8 && (
         <button type="button" onClick={() => setShowAllRecent((x) => !x)} className="relative z-10 w-full rounded-[7px] px-2 py-1 text-left text-[12px] text-ink-3 hover:text-ink-2 [@media(pointer:coarse)]:min-h-11">
           {showAllRecent ? t("sidebar.show_less") : t("sidebar.show_more", { count: recent.length - recentShown.length })}
@@ -1039,10 +1049,10 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
 
       {listNote ?? (chatList ? (
         <div className="mt-1 flex flex-col gap-1" data-testid="agent-chatlist-section">
-          {chatListUnpinned.map((s) => {
+          <WindowedRows items={chatListUnpinned} holds={(s) => rowKey(s) === activeKey} render={(s) => {
             const key = `s:${s.machine_id}/${s.session_id}`;
             return <AgentChatListRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} pinned={false} mutes={mutes} filters={dimFilters} ctx={evalCtx} onMenu={onRowMenu} />;
-          })}
+          }} />
         </div>
       ) : shownGrouping === "space" ? <>
       {active.map((sp) => (
@@ -1051,11 +1061,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
 
       {idle.length > 0 && (
         <Section title={t("sidebar.idle_spaces", { count: idle.length })} folded={idleFolded} onToggle={toggleIdle}>
-          {idle.flatMap((sp) =>
-            sp.sessions.map((s) => (
-              <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={sp.sessions.length > 1 ? `${sp.name} › ${tabLabel(s)}` : sp.name} onMenu={onRowMenu} />
-            )),
-          )}
+          <WindowedRows items={idle.flatMap((sp) => sp.sessions.map((s) => ({ sp, s })))} holds={({ s }) => rowKey(s) === activeKey} render={({ sp, s }) => (
+            <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={sp.sessions.length > 1 ? `${sp.name} › ${tabLabel(s)}` : sp.name} onMenu={onRowMenu} />
+          )} />
         </Section>
       )}
 
@@ -1237,7 +1245,7 @@ function AgentSection({ group, machines, byTodo, showHost, reg, hover, activeKey
 
   return (
     <Section title={titleNode} folded={folded} onToggle={toggle} right={rightNode}>
-      {group.sessions.map(row)}
+      <WindowedRows items={group.sessions} holds={(s) => rowKey(s) === activeKey} render={row} />
     </Section>
   );
 }

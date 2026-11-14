@@ -30,6 +30,7 @@ import { stateCount } from "../lib/state-labels";
 import { neverConnected } from "../lib/add-computer";
 import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
 import { NavRow, SessionRow } from "./SidebarRows";
+import { WindowedRows } from "./WindowedRows";
 import type { WorkspaceTarget } from "../lib/workspace-catalog";
 import { selectWorkspace, useWorkspaceSelection } from "../lib/workspace-selection";
 import { DirectionCountsText, DirectionStateText } from "./DirectionMarks";
@@ -204,7 +205,7 @@ const LooseBranch = memo(function LooseBranch({ g, section, ...p }: { g: LooseGr
   const [folded, toggle] = useFolded(g.key, g.folded, { follow: true, holds: holdsRow(g.sessions, p.activeKey) });
   return (
     <GroupBranch branch={g.key} name={g.name} hint={g.hint} icon="layers" n={g.sessions.length} state={g.state} label={g.label} folded={folded} onToggle={toggle} section={section}>
-      {g.agents.map((a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />)}
+      <WindowedRows items={g.agents} holds={(a) => withinAgent(a, p.activeKey) !== ""} render={(a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />} />
     </GroupBranch>
   );
 });
@@ -238,7 +239,7 @@ export const TreeTodoRows = memo(function TreeTodoRows({ td, top, ...p }: { td: 
       title={title}
       end={<>{(td.sessions.length > 0 || !td.taskState) && <GroupCount n={td.sessions.length} label={t("sidebar.agent_count", { count: td.sessions.length })} className="shrink-0" />}{state}</>}
     >
-      {td.agents.map((a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />)}
+      <WindowedRows items={td.agents} holds={(a) => withinAgent(a, p.activeKey) !== ""} render={(a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />} />
     </TreeBranch>
   );
 });
@@ -336,14 +337,14 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu, selected, ...
       onToggle={toggle}
       right={<GroupCount n={tree.count} label={t("sidebar.agent_count", { count: tree.count })} />}
     >
-      {flat ? tree.worktrees[0]!.sessions.map((s) => row(s, tree.name)) : tree.worktrees.map((w) => <RepoWorktreeRows key={w.key} w={w} repo={tree.name} row={row} activeKey={activeKey} go={go} selected={selected} {...actions} />)}
+      {flat ? <WindowedRows items={tree.worktrees[0]!.sessions} holds={(s) => rowKey(s) === activeKey} render={(s) => row(s, tree.name)} /> : tree.worktrees.map((w) => <RepoWorktreeRows key={w.key} w={w} repo={tree.name} row={row} activeKey={activeKey} go={go} selected={selected} {...actions} />)}
     </Section>
   );
 }
 
 /** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
  *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
-function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
+function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactElement; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
   const [folded, toggle] = useFolded(w.key, !w.workspace && w.sessions.length === 0, { holds: holdsRow(w.navigationTree ?? w.tree, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
   const descendants = w.navigationTree ? w.children.flatMap((c) => c.navigationTree ?? c.tree) : w.tree.slice(w.sessions.length);
   const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
@@ -371,7 +372,7 @@ function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }:
       </div>
       <Collapse open={!folded} sidebarFold>
         <div inert={folded || undefined}>
-          <div className="flex flex-col gap-px pl-2">{w.sessions.map((s) => row(s, `${repo} › ${w.name}`))}</div>
+          <div className="flex flex-col gap-px pl-2"><WindowedRows items={w.sessions} holds={(s) => rowKey(s) === activeKey} render={(s) => row(s, `${repo} › ${w.name}`)} /></div>
           {w.children.length > 0 && (
             <>
               <RepoChildToggle count={w.children.length} counts={w.childStates} folded={childrenFolded} onToggle={toggleChildren} />
@@ -462,9 +463,9 @@ export function SpaceSection({ sp, machineName, reg, hover, activeKey, go, pinne
         </>
       }
     >
-      {sp.sessions.map((s) => (
+      <WindowedRows items={sp.sessions} holds={(s) => rowKey(s) === activeKey} render={(s) => (
         <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} tab showTodoTag onMenu={onRowMenu} />
-      ))}
+      )} />
     </Section>
   );
 }
@@ -562,12 +563,12 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
       }>
       <Collapse open={!folded} sidebarFold unclipped>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
-          {m.spaces.map((sp) => <WorkspaceBlock key={sp.key} sp={sp} {...p} />)}
+          <WindowedRows items={m.spaces} holds={(sp) => holdsRow(sp.tree, p.activeKey)} render={(sp) => <WorkspaceBlock key={sp.key} sp={sp} {...p} />} />
           {shells && shells.length > 0 && <ShellTree mid={m.machine.id} online={online} spaces={shells} {...p} />}
           {m.other.length > 0 && (
             // "Other": the machine's agents outside any workspace (Codex threads, runtimes without spaces)
             <TreeBlock foldKey={m.otherFoldKey} sessions={m.other} activeKey={p.activeKey} title={<span className="min-w-0 truncate font-medium">{t("sidebar.other")}</span>} right={(folded) => <SessionTally sessions={m.other} folded={folded} />}>
-              {m.other.map((s) => <TreeSessionRow key={s.session_id} s={s} {...p} />)}
+              <WindowedRows items={m.other} holds={(s) => rowKey(s) === p.activeKey} render={(s) => <TreeSessionRow key={s.session_id} s={s} {...p} />} />
             </TreeBlock>
           )}
           {!m.sessions.length && <p className="truncate px-3 py-1 text-[12px] text-ink-3">{online ? t("sidebar.none_running") : t("sidebar.agents_in_recent")}</p>}
@@ -624,8 +625,12 @@ function WorkspaceBlock({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
         </>
       )}
     >
-      {sp.tabs.map((t) => <TabRow key={t.key} t={t} {...p} />)}
-      {sp.loose.map((s) => <TreeSessionRow key={s.session_id} s={s} {...p} />)}
+      {/* a workspace with hundreds of tabs is drawn a part at a time, as the other groupings' long groups are */}
+      <WindowedRows<HerdrTab | Session>
+        items={sp.tabs.length && sp.loose.length ? [...sp.tabs, ...sp.loose] : sp.tabs.length ? sp.tabs : sp.loose}
+        holds={(x) => ("lead" in x ? holdsRow(x.sessions, p.activeKey) : rowKey(x) === p.activeKey)}
+        render={(x) => ("lead" in x ? <TabRow key={x.key} t={x} {...p} /> : <TreeSessionRow key={x.session_id} s={x} {...p} />)}
+      />
       {sp.children.length > 0 && <ChildSpaces sp={sp} {...p} />}
     </TreeBlock>
   );
@@ -704,8 +709,8 @@ function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
   const [folded, toggle] = useFolded(tab.foldKey, false);
   const shut = single || folded;
   const open = tab.sessions.find((x) => rowKey(x) === activeKey);
-  // opened up, the open agent's own row is the one lit; folded, the tab's row is, and the hidden pane rows (still
-  // mounted in the collapse) register under no key, so the highlight and the scroll to the open row find the tab's
+  // opened up, the open agent's own row is the one lit; folded, the tab's row is, and the pane rows (still mounted
+  // while the fold closes) register under no key, so the highlight and the scroll to the open row find the tab's
   const keys = tabRowKeys(`t:${tab.key}`, tab.sessions.map(rowKey), activeKey, shut);
   const k = keys.row;
   const to: Route = { name: "tab", mid: tab.lead.machine_id, space: tab.spaceId, slot: tab.slotId };
@@ -846,9 +851,9 @@ export function LooseSection({ sessions, reg, hover, activeKey, go, onRowMenu }:
   const [folded, toggle] = useFolded("loose", sessions.every((s) => isQuiet(s, mutes)) && sessions.length > 3, { holds: holdsRow(sessions, activeKey) });
   return (
     <Section title={t("sidebar.other_agents")} folded={folded} onToggle={toggle} right={<SessionTally sessions={sessions} folded={folded} />}>
-      {sessions.map((s) => (
+      <WindowedRows items={sessions} holds={(s) => rowKey(s) === activeKey} render={(s) => (
         <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} />
-      ))}
+      )} />
     </Section>
   );
 }

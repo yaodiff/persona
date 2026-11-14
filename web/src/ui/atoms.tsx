@@ -1,10 +1,11 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
 import type { AgentState } from "../lib/types";
 import { Icon, type IconName } from "./icons";
 import { StatusMark } from "./StatusMark";
 import { collapseMounted } from "../lib/disclosure";
+import { foldAllSeq, FoldMissed, type FoldRegion } from "../lib/fold-all";
 import { FeedbackGate, offlineNow } from "../lib/feedback";
 import { useCloseOnBack } from "../lib/back-close";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
@@ -160,6 +161,7 @@ export function Button({
   expanded,
   testId,
   size,
+  ref,
   ...aria
 }: {
   children: React.ReactNode;
@@ -184,6 +186,8 @@ export function Button({
   /** "sm": 28 px tall (a row of actions inside a card, as the error notice's). A height in `className` does not win
    *  over the 32 px one here: the classes are joined, not merged, and the stylesheet's order decides. */
   size?: "sm";
+  /** The button, for a page that hands the focus back to it (not the link's: `href` draws an <a>). */
+  ref?: React.Ref<HTMLButtonElement>;
 }) {
   const base = cx("inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150", size === "sm" ? "h-7" : "h-8");
   if (href && !disabled && !busy) {
@@ -213,6 +217,7 @@ export function Button({
   return (
     <button
       {...aria}
+      ref={ref}
       type={type}
       title={title}
       disabled={disabled || busy}
@@ -278,10 +283,17 @@ export function Kbd({ children }: { children: React.ReactNode }) {
  *  the clicked row still while the height runs (`anchoredScroll`, #1124). `clipClassName` goes on the box that clips the
  *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed.
  *  `min-w-0`: the grid's implicit column's `auto` minimum is the item's content-based minimum, so one child that cannot
- *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262). */
-export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing. */ sidebarFold?: boolean }) {
+ *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262).
+ *  A sidebar fold is lazy unless it says otherwise: a folded group holds no rows, so the sidebar costs what is open,
+ *  not every Agent (with 400 Agents its folded groups kept about 8,800 elements, laid out on every page switch). The
+ *  groups in it then miss a "Collapse / Expand all" while it is folded; opened, it has them take the last one
+ *  (`FoldMissed`, lib/fold-all.ts, #7440). */
+export function Collapse({ open, children, className = "", clipClassName = "", lazy: lazyProp, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing; lazy by default. */ sidebarFold?: boolean }) {
+  const lazy = lazyProp ?? sidebarFold;
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
+  const mounted = collapseMounted(lazy, open, closing);
+  const missed = useFoldRegion(lazy && sidebarFold, !mounted);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout
   // would otherwise land inside the transition, which then starts most of the way open.
   const [laidOut, setLaidOut] = useState(open || !lazy);
@@ -322,9 +334,23 @@ export function Collapse({ open, children, className = "", clipClassName = "", l
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className={`min-h-0 min-w-0 ${!sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
+      <div className={`min-h-0 min-w-0 ${!sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${clipClassName}`}>{mounted && (missed ? <FoldMissed.Provider value={missed}>{children}</FoldMissed.Provider> : children)}</div>
     </div>
   );
+}
+
+/** A sidebar fold's place for the "Collapse / Expand all" its groups miss while it holds none (lib/fold-all.ts): from
+ *  when it dropped them (or from what the place around it missed), until they mount again and have read it. None for a
+ *  fold that keeps its children. */
+function useFoldRegion(on: boolean, hidden: boolean): FoldRegion | null {
+  const around = useContext(FoldMissed);
+  const [region] = useState<FoldRegion>(() => ({ since: around.since ?? (hidden ? foldAllSeq() : null) }));
+  useEffect(() => {
+    if (!on) return;
+    if (!hidden) region.since = null;
+    else region.since ??= foldAllSeq();
+  }, [on, hidden, region]);
+  return on ? region : null;
 }
 
 // ── popover menu with a gliding highlight ───────────────

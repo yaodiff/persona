@@ -161,6 +161,7 @@ func installCua(ctx context.Context, step func(string)) error {
 	cmd := exec.CommandContext(ctx, "/bin/bash", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "CUA_DRIVER_RS_TELEMETRY_ENABLED=0", "CUA_DRIVER_NO_MODIFY_PATH=1")
+	killGroupOnCancel(cmd)
 	var out tailBuffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {

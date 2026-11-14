@@ -41,7 +41,7 @@ from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
 from xml.parsers.expat import ExpatError
 
-ROOT = subprocess.run(["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+ROOT = subprocess.run(["git", "-C", os.environ.get("PERSONA_PRIVACY_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
 HOME = os.path.expanduser("~")
 # Environment variables that name a build config, current name first (config_values reads each one set).
@@ -95,7 +95,7 @@ def strings(o, key=()):
 
 def example_values():
     try:
-        return {v for _, v in strings(json.load(open(os.path.join(ROOT, "config.example.json"))))}
+        return {v for _, v in strings(json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.example.json"))))}
     except (OSError, ValueError):
         return set()
 

@@ -14,6 +14,9 @@ interface CoreHost {
     /** Something changed at [version]: pull patches with [RustCore.drain] on the next frame. */
     fun changed(version: Long)
 
+    /** Targeted wake for adapters; existing version-only hosts keep the old callback. */
+    fun changedChat(chat: String, version: Long) = changed(version)
+
     /** A request or timer for the client to run. */
     fun run(effect: Effect)
 }
@@ -51,6 +54,8 @@ class RustCore(config: Config, host: CoreHost) : AutoCloseable {
 internal class HostBridge(private val host: CoreHost) {
     fun changed(version: Long) = host.changed(version)
 
+    fun changedChat(chat: String, version: Long) = host.changedChat(chat, version)
+
     fun run(effect: ByteArray) = host.run(Effect.bincodeDeserialize(effect))
 }
 
@@ -70,4 +75,7 @@ internal object NativeBridge {
     @JvmStatic external fun flush(handle: Long, timeoutMillis: Int): Boolean
 
     @JvmStatic external fun destroy(handle: Long)
+
+    /** Projects the Agents list from a JSON input string. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectSort(input: String): String
 }

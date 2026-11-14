@@ -1,0 +1,117 @@
+{
+  "valid": [
+    {
+      "name": "hello",
+      "hex": "c8010000000000000000000000000000",
+      "kind": 0,
+      "phase": 0,
+      "momentum": 0,
+      "dy": 0.0,
+      "dx": 0.0
+    },
+    {
+      "name": "fingers down, scrolling to see below",
+      "hex": "c801010100000000c148000000000000",
+      "kind": 1,
+      "phase": 1,
+      "momentum": 0,
+      "dy": -12.5,
+      "dx": 0.0
+    },
+    {
+      "name": "fingers moving, a little sideways",
+      "hex": "c80101020000000040500000bf000000",
+      "kind": 1,
+      "phase": 2,
+      "momentum": 0,
+      "dy": 3.25,
+      "dx": -0.5
+    },
+    {
+      "name": "fingers lifted",
+      "hex": "c8010104000000000000000000000000",
+      "kind": 1,
+      "phase": 4,
+      "momentum": 0,
+      "dy": 0.0,
+      "dx": 0.0
+    },
+    {
+      "name": "coast begins",
+      "hex": "c801010001000000c220000000000000",
+      "kind": 1,
+      "phase": 0,
+      "momentum": 1,
+      "dy": -40.0,
+      "dx": 0.0
+    },
+    {
+      "name": "coast goes on",
+      "hex": "c801010002000000c1a6000000000000",
+      "kind": 1,
+      "phase": 0,
+      "momentum": 2,
+      "dy": -20.75,
+      "dx": 0.0
+    },
+    {
+      "name": "coast ends",
+      "hex": "c8010100030000000000000000000000",
+      "kind": 1,
+      "phase": 0,
+      "momentum": 3,
+      "dy": 0.0,
+      "dx": 0.0
+    },
+    {
+      "name": "touch cancelled",
+      "hex": "c8010108000000000000000000000000",
+      "kind": 1,
+      "phase": 8,
+      "momentum": 0,
+      "dy": 0.0,
+      "dx": 0.0
+    },
+    {
+      "name": "reserved bytes are read past",
+      "hex": "c8010102000102033f80000000000000",
+      "kind": 1,
+      "phase": 2,
+      "momentum": 0,
+      "dy": 1.0,
+      "dx": 0.0
+    }
+  ],
+  "invalid": [
+    {
+      "name": "one byte short",
+      "hex": "c80101020000000000000000000000",
+      "error": "length"
+    },
+    {
+      "name": "another message type",
+      "hex": "05010100000000000000000000000000",
+      "error": "type"
+    },
+    {
+      "name": "a newer version",
+      "hex": "c8020100000000000000000000000000",
+      "error": "version"
+    },
+    {
+      "name": "an unknown kind",
+      "hex": "c8010700000000000000000000000000",
+      "error": "kind"
+    },
+    {
+      "name": "an unknown scroll phase",
+      "hex": "c8010103000000000000000000000000",
+      "error": "phase"
+    },
+    {
+      "name": "an unknown momentum phase",
+      "hex": "c8010100040000000000000000000000",
+      "error": "momentum"
+    }
+  ]
+}

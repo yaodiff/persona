@@ -27,8 +27,8 @@ not.
 - Not covered here: cards of the conversation's own session (they are always Needs you rows and are added by the
   screen), message cards the user put off (`later`), Android's inbox drafts, and subtasks: Android leaves an Agent
   another one started out of the Agent rows while the Agent above it is shown (#4769, `TaskDockTest`); iOS and the web
-  do not yet. An Agent several tasks list: the web gives it one home and counts its cards once (2026-11-14,
-  `docs/assistant/unified-entry.md`), Android (#7531) and iOS / Mac (#7532) do not yet; its case comes here once they do.
+  do not yet. An Agent several tasks list: the web and Android (#7531) give it one home and count its cards once
+  (2026-11-14, `docs/assistant/unified-entry.md`); iOS / Mac (#7532) do not yet. Its case comes here once they do.
 - Background activity cases (#3588) additionally carry `expected.activity` keyed by running row: `tasks`, `subagents`,
   `workflows`, and optional `phase` / `progress`; null means no background work. They cover command/Monitor counts,
   workflow summary phase and progress, subagents, mixed counts, a real external wait, user-question precedence,

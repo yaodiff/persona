@@ -33,10 +33,13 @@ vi.mock("../lib/assistant-search", async (importOriginal) => ({
 }));
 const { closePalette, openPalette, setPaletteQuery } = await import("../lib/palette");
 const { Palette } = await import("./Palette");
+await import("../lib/assistant-search");
+await import("../lib/agent-search");
 
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   fake.asked = [];
   fake.features = ["assistant_search"];
   host = document.createElement("div");
@@ -47,13 +50,17 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   closePalette();
+  vi.useRealTimers();
 });
 async function search(query: string) {
   openPalette("jump");
   setPaletteQuery(query);
   act(() => root.render(<Palette open onClose={() => {}} onNewAgent={() => {}} />));
-  await act(async () => { await new Promise((ok) => setTimeout(ok, 300)); });
+  await act(async () => { await vi.dynamicImportSettled(); });
+  await act(async () => { vi.advanceTimersByTime(210); });
+  await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+  if (fake.features.includes("assistant_search")) expect(fake.asked).toContain(query);
   return document.body;
 }
 

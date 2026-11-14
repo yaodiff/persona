@@ -1,6 +1,11 @@
 import Foundation
+import PersonaCore
 import PersonaCoreTestSupport
 @testable import Persona
+
+public typealias ContinuityCase = PersonaCoreTestSupport.ContinuityCase
+private typealias ContinuityJSON = PersonaCoreTestSupport.ContinuityJSON
+private typealias ContinuityFixtureError = PersonaCoreTestSupport.ContinuityFixtureError
 
 /// Replays the shared JSON against the actual iOS `ChatStore`, not a second translation of the Rust reducer. The
 /// store is untouched: this type is used only by PersonaTests and compiled into that iOS test target. Scheduling is
@@ -12,6 +17,110 @@ public struct NativeChatStoreContinuityReplay {
         print("native continuity directory: \(directory.path), cases: \(cases.count)")
         for `case` in cases { try replay(`case`) }
         return (cases.count, cases.reduce(0) { $0 + $1.events.count })
+    }
+
+    /// Test-only shadow comparison: the same fixture reaches native ChatStore and the real C adapter. No production
+    /// selector or default implementation is changed; diagnostics identify the rule and input shape, not item text.
+    public static func replayShadow(_ case: ContinuityCase) throws {
+        do {
+            try replay(`case`)
+            let shadow = try CoreContinuityShadow(chat: "fixture/continuity")
+            defer { shadow.close() }
+            let initial = `case`.initial
+            let snapshot = ChatSnapshot(
+                itemsJson: try initial.itemsJSON(), history: initial.text("history"),
+                covered: Int64(initial.number("covered") ?? 0), hasMore: initial.boolean("has_more"),
+                loadedOnce: initial.flag("loaded_once")
+            )
+            try shadow.dispatch(.openChat(chat: shadow.chat, snapshot: snapshot))
+            var list: [(id: String, json: String)] = []
+            try shadow.flush()
+            func apply(_ patch: ChatPatch) throws {
+                for operation in patch.ops {
+                    switch operation {
+                    case let .remove(index: index):
+                        guard index < list.count else {
+                            throw CoreContinuityShadow.Mismatch(rule: "patch-remove-index", inputShape: "out-of-bounds")
+                        }
+                        list.remove(at: Int(index))
+                    case let .insert(index: index, id: id, json: json):
+                        guard index <= list.count else {
+                            throw CoreContinuityShadow.Mismatch(rule: "patch-insert-index", inputShape: "out-of-bounds")
+                        }
+                        let object = try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data(json.utf8)))
+                        guard object["id"] == .string(id) else {
+                            throw CoreContinuityShadow.Mismatch(rule: "patch-insert-identity", inputShape: "id-json-mismatch")
+                        }
+                        list.insert((id, json), at: Int(index))
+                    case let .update(index: index, id: id, json: json):
+                        guard index < list.count else {
+                            throw CoreContinuityShadow.Mismatch(rule: "patch-update-index", inputShape: "out-of-bounds")
+                        }
+                        let object = try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data(json.utf8)))
+                        guard object["id"] == .string(id), list[Int(index)].id == id else {
+                            throw CoreContinuityShadow.Mismatch(rule: "patch-update-identity", inputShape: "id-json-or-index-mismatch")
+                        }
+                        list[Int(index)] = (id, json)
+                    }
+                }
+            }
+            try apply(try shadow.drain())
+            try shadowCheck(shadow.wakeChatIDs() == [shadow.chat], "wake-chat")
+            var previousPatchVersion = try shadow.drain().version
+            var previousWakeCount = shadow.wakeChatIDs().count
+            _ = shadow.drainEffects()
+            for (index, event) in `case`.events.enumerated() {
+                let action: Action
+                if let event = try event.chatEvent() {
+                    action = .chat(chat: shadow.chat, event: event)
+                } else {
+                    action = .continueFill(chat: shadow.chat)
+                }
+                try shadow.dispatch(action)
+                try shadow.flush()
+                // The worker publishes, invokes the synchronous host callback, and only then accounts for this action
+                // as done. After flush has returned, every wake that belongs to this action must therefore be recorded.
+                let wakes = shadow.wakeChatIDs()
+                let patch = try shadow.drain()
+                try apply(patch)
+                try shadowCheck(wakes.allSatisfy { $0 == shadow.chat }, "wake-chat", step: index)
+                try shadowCheck(patch.version > previousPatchVersion ? wakes.count == previousWakeCount + 1 : wakes.count == previousWakeCount,
+                                "wake-delivery", step: index)
+                previousPatchVersion = patch.version
+                previousWakeCount = wakes.count
+                let effects = shadow.drainEffects()
+                let requests = try effects.map { effect -> ContinuityJSON in
+                    switch effect {
+                    case let .fetch(chat: effectChat, request: _):
+                        guard effectChat == shadow.chat else {
+                            throw CoreContinuityShadow.Mismatch(rule: "effect-chat", inputShape: "another-chat")
+                        }
+                        return try effect.requestJSON ?? .null
+                    case .rejected:
+                        throw CoreContinuityShadow.Mismatch(rule: "rejected", inputShape: "effect-rejected")
+                    }
+                }
+                let expected = `case`.expected[index]
+                let actualItems = ContinuityJSON.array(try list.map { try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data($0.json.utf8))) })
+                try shadowCheck(.array(list.map { .string($0.id) }) == expected["item_ids"], "item-ids", step: index)
+                try shadowCheck(.array(requests) == expected["actions"], "actions", step: index)
+                try shadowCheck(actualItems == expected["items"], "items", step: index)
+                try shadowCheck(.number(Double(patch.covered)) == expected["covered"], "covered", step: index)
+                try shadowCheck((patch.history.map(ContinuityJSON.string) ?? .null) == expected["history"], "history", step: index)
+                try shadowCheck((patch.hasMore.map(ContinuityJSON.bool) ?? .null) == expected["has_more"], "has-more", step: index)
+                try shadowCheck(.bool(patch.loadedOnce) == expected["loaded_once"], "loaded-once", step: index)
+            }
+        } catch let mismatch as CoreContinuityShadow.Mismatch {
+            throw mismatch
+        } catch {
+            throw CoreContinuityShadow.Mismatch(rule: "adapter-error", inputShape: String(describing: type(of: error)))
+        }
+    }
+
+    private static func shadowCheck(_ condition: Bool, _ rule: String, step: Int? = nil) throws {
+        guard condition else {
+            throw CoreContinuityShadow.Mismatch(rule: rule, inputShape: step.map { "step-\($0)" } ?? "initial")
+        }
     }
 
     private static func replay(_ case: ContinuityCase) throws {

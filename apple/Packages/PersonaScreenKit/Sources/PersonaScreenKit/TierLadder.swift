@@ -17,6 +17,8 @@ public enum TierLadder {
     }
 
     public struct Tier: Equatable, Sendable {
+        /// The scale asked of the helper (`update.scale`): the ladder's step, which the display's pixels and the phone's
+        /// long-edge cap may cut down.
         public var scale: Double
         public var fps: Int
         public var width: Int
@@ -24,14 +26,19 @@ public enum TierLadder {
         /// The bitrate band in kbit/s: the helper adapts inside it (`RateController.setBand`).
         public var minKbps: Int
         public var maxKbps: Int
+        /// The scale the picture really has: its width over the display's in points (#7842). On a display at one pixel
+        /// per point every step is 1; under the long-edge cap, less than the step. What Connection Stats shows and what
+        /// Data Saver's one pixel per point is held to.
+        public var pixelsPerPoint: Double
 
-        public init(scale: Double, fps: Int, width: Int, height: Int, minKbps: Int, maxKbps: Int) {
+        public init(scale: Double, fps: Int, width: Int, height: Int, minKbps: Int, maxKbps: Int, pixelsPerPoint: Double? = nil) {
             self.scale = scale
             self.fps = fps
             self.width = width
             self.height = height
             self.minKbps = minKbps
             self.maxKbps = maxKbps
+            self.pixelsPerPoint = pixelsPerPoint ?? scale
         }
 
         /// The pixels encoded a second.
@@ -77,8 +84,9 @@ public enum TierLadder {
             let perSecond = Double(size.width * size.height * fps)
             let floor = max(CapturePlan.minKbps, Int((perSecond * floorBitsPerPixel * factor / 1000).rounded()))
             let ceiling = min(cap, max(floor, Int((perSecond * ceilingBitsPerPixel * factor / 1000).rounded())))
+            let real = points.width > 0 ? Double(size.width) / Double(points.width) : step.scale
             tiers.append(Tier(scale: step.scale, fps: fps, width: size.width, height: size.height, minKbps: floor,
-                              maxKbps: ceiling))
+                              maxKbps: ceiling, pixelsPerPoint: real))
         }
         // A tier the phone's cap can't carry at its floor is left out; the lowest stays, its floor the helper's own.
         if var last = tiers.popLast() {

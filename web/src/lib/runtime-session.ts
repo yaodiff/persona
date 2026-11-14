@@ -10,6 +10,11 @@ import { t } from "../i18n";
 export class UnsupportedSessionLookup extends Error {}
 
 export async function exactSession(mid: string, sid: string, signal?: AbortSignal): Promise<Session | undefined> {
+  return (await exactLookup(mid, sid, signal)).row;
+}
+
+/** exactSession's row, and the revision of the index it was read at. */
+async function exactLookup(mid: string, sid: string, signal?: AbortSignal): Promise<{ row: Session | undefined; revision: string }> {
   const params = new URLSearchParams({ summary: "0", limit: "50", machine_id: mid, session_id: sid });
   let page: ListPage<Session>;
   try { page = await api<ListPage<Session>>(`/sessions?${params}`, { signal }); }
@@ -25,8 +30,11 @@ export async function exactSession(mid: string, sid: string, signal?: AbortSigna
   }
   const row = page.sessions[0];
   if (row && (row.machine_id !== mid || row.session_id !== sid || typeof row.waiting === "boolean")) throw new UnsupportedSessionLookup(t("runtime-session.invalid_lookup"));
-  return row;
+  return { row, revision: page.revision };
 }
+
+/** A `sessions_list` hint; `since` and `changed` only from a hub that was asked for them (SESSIONS_LIST_CHANGES_FEATURE). */
+export interface ListHint { revision?: unknown; since?: unknown; changed?: unknown }
 
 export interface DetailState { loading: boolean; error: string; missing: boolean; legacy: boolean }
 
@@ -45,6 +53,8 @@ export class SessionDetailLoader {
   private gone = false;
   private failures = 0;
   private retryTimer?: ReturnType<typeof setTimeout>;
+  /** The index revision the exact lookup's last answer stands at: "" when there is none to build on. */
+  private at = "";
   constructor(
     private mid: string,
     private sid: string,
@@ -61,17 +71,19 @@ export class SessionDetailLoader {
       do {
         if (this.stopped || generation !== this.generation) return;
         this.queued = false;
+        this.at = "";
         this.controller = new AbortController();
         // an earlier failure's words, or "no such session", stay until an answer replaces them
         this.emit({ loading: true, error: this.last, missing: this.gone, legacy: this.legacy || !this.lookup() });
         if (this.stopped || generation !== this.generation) return;
         try {
           if (this.lookup() && !this.legacy) {
-            const row = await exactSession(this.mid, this.sid, this.controller.signal);
+            const { row, revision } = await exactLookup(this.mid, this.sid, this.controller.signal);
             if (this.stopped || generation !== this.generation) return;
             if (row) this.commit(row);
             if (this.stopped || generation !== this.generation) return;
             this.answered();
+            this.at = revision;
             this.gone = !row;
             this.last = row ? "" : t("runtime-session.missing");
             this.emit({ loading: false, error: this.last, missing: this.gone, legacy: false });
@@ -117,6 +129,17 @@ export class SessionDetailLoader {
     clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(() => void this.load(), detailRetryMs(++this.failures));
   }
+  /** A `sessions_list` hint: read again, unless it starts where the last answer stands (`since`) and its `changed` does
+   *  not name this chat. Then another session changed, the answer still holds, and it stands at the hint's revision
+   *  (#6685). A hint without them (an older hub, a change too big to list), a gap, or a read still out reads. */
+  hint(msg?: ListHint) {
+    if (!this.inFlight && this.at !== "" && msg?.since === this.at && typeof msg.revision === "string" && Array.isArray(msg.changed)
+      && !msg.changed.some((id) => Array.isArray(id) && id[0] === this.mid && id[1] === this.sid)) {
+      this.at = msg.revision;
+      return;
+    }
+    void this.load();
+  }
   /** Read without the exact lookup: an older hub, or one that turned the lookup down. */
   get onLegacy() {
     return this.legacy || !this.lookup();
@@ -155,7 +178,7 @@ export function useRuntimeSession(mid: string, sid: string, enabled = true) {
     setRetry(() => read);
     read();
     const offHello = onHubEvent("hello", () => { if (live && document.visibilityState !== "hidden") void loader.restart(); });
-    const offList = onHubEvent("sessions_list", read);
+    const offList = onHubEvent("sessions_list", (msg) => { if (live && document.visibilityState !== "hidden") loader.hint(msg as ListHint); });
     // Without the exact lookup only the list carries this chat's row, and on a cold open it can land after the first read
     // (an older hub pushes `sessions`, not `sessions_list`). Read once more when it does, so the "no details" notice goes
     // as the sidebar shows the chat (#2450). Watched only until the row is there; the list itself is never asked for.

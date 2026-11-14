@@ -132,13 +132,43 @@ func (p *phone) next(want byte) msg {
 // waitFor polls cond for up to two seconds.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
 	for !cond() {
-		if time.Now().After(deadline) {
+		select {
+		case <-deadline:
 			t.Fatalf("timed out waiting: %s", what)
+		case <-tick.C:
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// fakeClock is a session's clock in a test that needs time to pass without waiting for it.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
+// useClock has s read c's time from now on (s.now is read under s.mu).
+func useClock(s *Session) *fakeClock {
+	c := &fakeClock{now: time.Now()}
+	s.mu.Lock()
+	s.now = c.Now
+	s.mu.Unlock()
+	return c
 }
 
 // screenSharing is the far end of the node's connection to Screen Sharing (or to the helper).
@@ -288,23 +318,17 @@ func TestTheWindowBoundsWhatTheNodeHolds(t *testing.T) {
 	p.carry(relay)
 	p.next(TypePaths)
 
-	var mu sync.Mutex
-	written := 0
-	go func() {
-		chunk := make([]byte, 4<<10)
-		for {
-			if _, err := ss.Write(chunk); err != nil {
-				return
-			}
-			mu.Lock()
-			written += len(chunk)
-			mu.Unlock()
+	// Write until a write blocks: the node stopped reading Screen Sharing. Each write has a second to go through, far
+	// longer than the node takes while it has room.
+	got, chunk := 0, make([]byte, 4<<10)
+	for got < 4*testLimits.WindowRFB {
+		_ = ss.SetWriteDeadline(time.Now().Add(time.Second))
+		n, err := ss.Write(chunk)
+		got += n
+		if err != nil {
+			break
 		}
-	}()
-	time.Sleep(150 * time.Millisecond)
-	mu.Lock()
-	got := written
-	mu.Unlock()
+	}
 	if got > testLimits.WindowRFB+32<<10 {
 		t.Fatalf("the node read %d bytes with nothing acknowledged; window %d", got, testLimits.WindowRFB)
 	}
@@ -461,13 +485,15 @@ func openVideo(t *testing.T, ack bool, limits ...Limits) (*Session, *phone, *car
 func TestAStaleVideoBacklogIsDroppedForAKeyframe(t *testing.T) {
 	for _, how := range []string{"the relay drops", "the phone moves it"} {
 		t.Run(how, func(t *testing.T) {
-			_, p, cv, helper, id, _ := openVideo(t, false)
+			s, p, cv, helper, id, _ := openVideo(t, false)
+			clock := useClock(s)
 			rfbRelay := p.carriers[0]
 			go helper.Write(append(videoFrameMsg(1, true, 100), videoFrameMsg(2, false, 100)...))
 			waitFor(t, "two frames", func() bool { return len(frames(t, p.received(id))) == 2 })
 			two := p.offset(id)
 			go helper.Write(videoFrameMsg(3, false, 100)) // the backlog: on its way, never acknowledged
-			time.Sleep(2 * testLimits.VideoBacklog)
+			waitFor(t, "frame 3 read", func() bool { return len(frames(t, p.received(id))) == 3 })
+			clock.Advance(2 * testLimits.VideoBacklog) // the backlog grows old
 
 			keyReq := make(chan []byte, 1)
 			go func() { b := make([]byte, 5); io.ReadFull(helper, b); keyReq <- b }()

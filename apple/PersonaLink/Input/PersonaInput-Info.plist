@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Persona Input: the live screen's pixel scrolling helper (#7775), an app bundle inside Persona Link.app/Contents/Helpers/
+     so its Accessibility permission is its own, not the node's or Persona Screen's. mac-link.sh substitutes
+     __INPUT_BUNDLE_ID__ (the Link bundle id + ".input") when it embeds the bundle. Nothing here changes from build to
+     build (no timestamp, no version that moves): an unchanged helper keeps its ad-hoc signature, and with it its
+     permission, across Persona Link updates. LSUIElement keeps it off the Dock. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleIdentifier</key>
+	<string>__INPUT_BUNDLE_ID__</string>
+	<key>CFBundleName</key>
+	<string>Persona Input</string>
+	<key>CFBundleDisplayName</key>
+	<string>Persona Input</string>
+	<key>CFBundleExecutable</key>
+	<string>PersonaInput</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Persona</string>
+</dict>
+</plist>

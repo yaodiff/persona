@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // Restart delays, as the Linux units have them (RestartSec): persona-link 5 s, the node 10 s.
@@ -23,8 +24,11 @@ var linkRestart, nodeRestart = 5 * time.Second, 10 * time.Second
 
 // supervise is `persona-link supervise [--no-node]`, what the scheduled task runs (winservice.go), from the
 // console-less copy persona-link-service.exe. It keeps persona-link (`run --log`) and, unless --no-node, the resident
-// node (`node --attach`) running: each started with CREATE_NO_WINDOW, so it has a console but no window, and started
-// again a few seconds after it exits, however it exits. Both are in a job that kills them when the supervisor ends:
+// node (`node --attach --supervised`) running: each started with CREATE_NO_WINDOW, so it has a console but no window,
+// and started again a few seconds after it exits, however it exits, or at once when it asks to be (an update, below).
+// --supervised tells the node that this restarts it, which is what lets the hub update it (nodeupdate.Options): with no
+// exec on Windows, the node ends with nodeproto.RestartExitCode once the update or a rollback put another file in place.
+// Both are in a job that kills them when the supervisor ends:
 // ending the task (install, uninstall, signing out) ends them too, and a supervisor the task starts again never finds
 // the old ones still running. It writes what it does to link-service.log, persona-link's own errors included; the
 // node's log goes to node-attach.log, as on Linux.
@@ -68,7 +72,7 @@ func supervise(e *env, args []string) error {
 		go func() {
 			defer wg.Done()
 			keepRunning(ctx, logger, "node", nodeRestart, func() *exec.Cmd {
-				cmd := exec.Command(e.nodeBin(), "node", "--attach")
+				cmd := exec.Command(e.nodeBin(), "node", "--attach", "--supervised")
 				cmd.Env, cmd.Stderr = vars, nlog
 				return cmd
 			})
@@ -108,8 +112,11 @@ func waitListening(sock string, began time.Time, timeout time.Duration) bool {
 }
 
 // keepRunning starts what mk makes, waits for it to exit and starts it again delay later, until ctx ends (the
-// supervisor's never does). Its stdout goes nowhere: persona-link's status lines are for the menu bar app.
+// supervisor's never does). One that exits with nodeproto.RestartExitCode is started again at once, unless the run
+// before it also asked within delay of starting: a program that keeps asking still waits delay between runs. Its
+// stdout goes nowhere: persona-link's status lines are for the menu bar app.
 func keepRunning(ctx context.Context, logger *log.Logger, name string, delay time.Duration, mk func() *exec.Cmd) {
+	quick := false // the last run asked to start again within delay of starting
 	for ctx.Err() == nil {
 		cmd := mk()
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
@@ -119,6 +126,12 @@ func keepRunning(ctx context.Context, logger *log.Logger, name string, delay tim
 			logger.Printf("%s started (pid %d)", name, cmd.Process.Pid)
 			err = cmd.Wait()
 		}
+		if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == nodeproto.RestartExitCode && !quick {
+			quick = time.Since(began) < delay
+			logger.Printf("%s ended after %s asking to start again: starting it now", name, time.Since(began).Round(time.Second))
+			continue
+		}
+		quick = false
 		logger.Printf("%s ended after %s: %v; starting it again in %s", name, time.Since(began).Round(time.Second), err, delay)
 		select {
 		case <-ctx.Done():

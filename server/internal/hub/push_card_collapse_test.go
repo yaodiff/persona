@@ -33,7 +33,7 @@ func TestCardCollapseIDIsTheManagers(t *testing.T) {
 	sent := 0
 	push := func(from, id string) apnsCall {
 		t.Helper()
-		if err := h.deliverPushFrom(from, assistantwire.Notification{Kind: assistantwire.NotifyInput, Interaction: &proto.Interaction{ID: id}}); err != nil {
+		if _, err := h.deliverPushFrom(from, assistantwire.Notification{Kind: assistantwire.NotifyInput, Interaction: &proto.Interaction{ID: id}}); err != nil {
 			t.Fatalf("%s's card %q: %v", from, id, err)
 		}
 		sent++
@@ -89,7 +89,7 @@ func TestTheAssistantsCardKeepsItsIDUnlessTooLong(t *testing.T) {
 	sent := 0
 	push := func(id string) string {
 		t.Helper()
-		if err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{Kind: assistantwire.NotifyInput, Interaction: &proto.Interaction{ID: id}}); err != nil {
+		if _, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{Kind: assistantwire.NotifyInput, Interaction: &proto.Interaction{ID: id}}); err != nil {
 			t.Fatalf("card %q: %v", id, err)
 		}
 		sent++
@@ -148,7 +148,7 @@ func TestManagerPushCollapsesOnItsID(t *testing.T) {
 	sent := 0
 	push := func(from, id string) apnsCall {
 		t.Helper()
-		if err := h.deliverPushFrom(from, assistantwire.Notification{ID: id, Kind: assistantwire.NotifyPush, Title: "Your day recap is ready"}); err != nil {
+		if _, err := h.deliverPushFrom(from, assistantwire.Notification{ID: id, Kind: assistantwire.NotifyPush, Title: "Your day recap is ready"}); err != nil {
 			t.Fatalf("%s's push %q: %v", from, id, err)
 		}
 		sent++
@@ -188,7 +188,7 @@ func TestManagerPushCarriesItsRecording(t *testing.T) {
 	<-app.out // client_hello_ack
 	const rid = "22222222-2222-4222-8222-222222222222"
 	for i, c := range []struct{ sent, want string }{{strings.ToUpper(rid), rid}, {"../not-a-recording", ""}, {"", ""}} {
-		if err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{ID: "ntf_minutes_" + strconv.Itoa(i),
+		if _, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{ID: "ntf_minutes_" + strconv.Itoa(i),
 			Kind: assistantwire.NotifyPush, Title: "Minutes ready", RecordingID: c.sent}); err != nil {
 			t.Fatal(err)
 		}

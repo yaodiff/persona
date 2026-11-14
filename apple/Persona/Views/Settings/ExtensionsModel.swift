@@ -55,8 +55,8 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     var downloadsUpdatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, market, upgrade, nodes, nodeStatus, auth, tools, manager, attached, sandbox, downloads
-        case iconURL = "icon_url", downloadsUpdatedAt = "downloads_updated_at"
+        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, market, upgrade, nodes, auth, tools, manager, attached, sandbox, downloads
+        case iconURL = "icon_url", downloadsUpdatedAt = "downloads_updated_at", nodeStatus = "node_status"
         case needsSetup = "needs_setup", autoUpgrade = "auto_upgrade", autoUpgradePaused = "auto_upgrade_paused", upgradeNote = "upgrade_note"
     }
 

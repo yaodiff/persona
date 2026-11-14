@@ -183,6 +183,9 @@ type Config struct {
 	Assistant AssistantProfile `json:"assistant"`
 	// Notify tunes when "finished" pushes go out (notify.go); which ones a device gets is its own setting.
 	Notify NotifyConfig `json:"notify,omitempty"`
+	// InterceptReaders lists the extension IDs whose tokens may read GET /api/v1/push/intercepts, on top of the
+	// notify scope. Full credentials always may; an extension token not on this list is refused even with notify.
+	InterceptReaders []string `json:"intercept_readers,omitempty"`
 	// Public is how the hub is reached from outside its LAN: TLS, the addresses it hands out (config_public.go).
 	Public PublicConfig `json:"public,omitempty"`
 

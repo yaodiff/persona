@@ -96,5 +96,21 @@
   "unsupported_body": "这个 hub 的版本太旧，或者没开看板存储。",
   "open_hub_settings": "打开 hub 设置",
   "setting_failed": "读不到工作流看板的开关：{error}",
-  "setting_unsupported": "这个 hub 的版本还没有这个开关。更新 hub 后，就能在这里打开或关闭看板。"
+  "setting_unsupported": "这个 hub 的版本还没有这个开关。更新 hub 后，就能在这里打开或关闭看板。",
+  "select_cards": "选择卡片",
+  "select_card": "选择 {card}",
+  "selection_done": "完成选择",
+  "selected_count": "已选 {count} 项",
+  "select_all_visible": "全选可见项",
+  "clear_selection": "清空选择",
+  "selection_actions": "已选工作空间",
+  "bulk_move_to": "将所选项移至",
+  "bulk_move": "移动",
+  "bulk_move_placeholder": "选择一列",
+  "bulk_archive": "归档",
+  "bulk_updated": "工作空间已更新",
+  "bulk_undo": "撤销上次修改",
+  "selection_hint": "只选择当前可见的工作空间，Agent 会继续运行。",
+  "bulk_saving": "正在更新工作空间…",
+  "activity": "活动记录"
 }

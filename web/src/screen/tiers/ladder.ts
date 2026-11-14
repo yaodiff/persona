@@ -5,7 +5,11 @@ import { capFor, fpsFor, MIN_KBPS, rounded, scaledSize } from "./capture-plan";
 
 export type Bias = "auto" | "sharper" | "smoother";
 
-export type Tier = { scale: number; fps: number; width: number; height: number; minKbps: number; maxKbps: number };
+/** `scale` is what the helper is asked for (`update.scale`), the ladder's step, which the display's pixels and the
+ *  long-edge cap may cut down; `pixelsPerPoint` is the scale the picture really has, its width over the display's in
+ *  points (#7842): 1 for every step on a display at one pixel per point. Connection stats show it, and Data Saver's
+ *  one pixel per point holds to it. */
+export type Tier = { scale: number; fps: number; width: number; height: number; minKbps: number; maxKbps: number; pixelsPerPoint: number };
 
 /** Bits per pixel per frame at a band's floor and at its ceiling. */
 export const FLOOR_BITS_PER_PIXEL = 0.02;
@@ -52,7 +56,8 @@ export function makeLadder({ points, pixels, maxSize, bias, capKbps, maxFps, cod
     const perSecond = size.width * size.height * fps;
     const floor = Math.max(MIN_KBPS, rounded((perSecond * FLOOR_BITS_PER_PIXEL * factor) / 1000));
     const ceiling = Math.min(cap, Math.max(floor, rounded((perSecond * CEILING_BITS_PER_PIXEL * factor) / 1000)));
-    tiers.push({ scale, fps, width: size.width, height: size.height, minKbps: floor, maxKbps: ceiling });
+    const pixelsPerPoint = points[0] > 0 ? size.width / points[0] : scale;
+    tiers.push({ scale, fps, width: size.width, height: size.height, minKbps: floor, maxKbps: ceiling, pixelsPerPoint });
   }
   // A tier the cap can't carry at its floor is left out; the lowest stays, its floor the helper's own.
   const last = tiers.pop();

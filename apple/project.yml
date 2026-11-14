@@ -206,6 +206,9 @@ targets:
         # Home's tools are offered only in a build signed with the HomeKit capability: YES there, with the
         # com.apple.developer.homekit entitlement (docs/apple/phone-tools.md "Home"). Empty: no Home tools.
         PersonaHomeKit: $(PERSONA_HOMEKIT)
+        # Workout reports right after a workout, Persona closed or not: YES in a build signed with the HealthKit background
+        # delivery entitlement (config.json app.health_background_delivery, docs/assistant/health.md). Else when Persona opens.
+        PersonaHealthBackgroundDelivery: $(PERSONA_HEALTH_BACKGROUND_DELIVERY)
         NSCalendarsFullAccessUsageDescription: "Persona lets Claude read and add calendar events when you ask, for example to check whether you are free on Friday afternoon or to book a meeting. It also names a meeting recording after the event happening now."
         NSCalendarsWriteOnlyAccessUsageDescription: "Persona adds events to your calendar when you ask Claude to, for example to save a meeting it scheduled for you."
         NSRemindersFullAccessUsageDescription: "Persona lets Claude read and create reminders when you ask, for example to add “review the PR” to your Today list."

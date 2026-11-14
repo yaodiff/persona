@@ -343,6 +343,7 @@ printf 'catalog placeholders preserved in all languages\n'
             scripts.mkdir()
             shutil.copy2(ROOT / 'scripts/persona_identity.py', scripts / 'persona_identity.py')
             for name in ('personad-linux-amd64', 'persona-link-linux-amd64', 'persona-node-linux-amd64',
+                         'persona-link-windows-amd64.exe', 'persona-link-windows-arm64.exe',
                          'persona-hub-linux-amd64', 'persona-manager-linux-amd64'):
                 (binaries / name).write_bytes(('fixture ' + name).encode())
             command = 'set -eu\nOUT=release-fixture\nVERSION=fixture\n' + publisher[start:end]
@@ -356,6 +357,10 @@ printf 'catalog placeholders preserved in all languages\n'
             self.assertEqual({name for name in names if name.startswith(FORMER_NAME)}, set())
             for current in ('personad', 'persona-link'):
                 self.assertIn(current + '-linux-amd64.gz', names)
+            for arch in ('amd64', 'arm64'):
+                self.assertIn(f'persona-link-windows-{arch}.exe.gz', names)
+            self.assertIn('for t in windows/amd64 windows/arm64; do', publisher)
+            self.assertIn('persona-link-${t%/*}-${t#*/}.exe', publisher)
             for digest, name in sums:
                 self.assertEqual(hashlib.sha256((binaries / name).read_bytes()).hexdigest(), digest)
 

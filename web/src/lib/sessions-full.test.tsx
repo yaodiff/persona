@@ -475,6 +475,14 @@ describe("complete session snapshots for the sidebar fallback", () => {
     expect(host.querySelector("output")!.dataset.error).toBe("");
   });
 
+  it("never says an old hub's pushed list failed", async () => {
+    fixture.state = { ...fixture.state, features: [], sessions: { demo: [row("pushed")] } };
+    await mount();
+    expect(host.textContent).toBe("pushed");
+    expect(host.querySelector("output")!.dataset.error).toBe("");
+    expect(fixture.api).not.toHaveBeenCalled();
+  });
+
   it("retries an initial failure even when the hub sends no further hints", async () => {
     fixture.api.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ sessions: [row("recovered")] });
     await mount();

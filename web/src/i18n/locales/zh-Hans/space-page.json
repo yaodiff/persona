@@ -20,5 +20,8 @@
   "recent": "最近（未运行）",
   "gone_title": "找不到这个空间",
   "gone_detail": "「{name}」在 {machine} 上没有 Agent，可能已经关闭或改了名字。",
-  "back_to_machine_button": "回到机器"
+  "back_to_machine_button": "回到机器",
+  "agents_failed_title": "没能读到这个空间的 Agent",
+  "agents_failed_detail": "稍后会再试。",
+  "retry": "重试"
 }

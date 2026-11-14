@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -460,6 +461,9 @@ func (h *Hub) notifyComputerCode(by principal, machine string) {
 		h.logf("device %q (%s) made a pairing code for computer %q (push unavailable)", by.Name, by.ID, machine)
 		return
 	}
+	// This receipt goes through sendBuilt on purpose (no preference or push grading), so the daily counts record it
+	// explicitly: the hub's own pairing alerts are P0 and manager "".
+	h.push.recordSent(pushPolicy{level: assistantwire.LevelP0}, assistantwire.LevelP0, h.push.now())
 	h.push.sendBuilt(func(l i18n.Lang) map[string]any {
 		device := by.Name
 		if device == "" { // never the credential id: ids only go in `pair`

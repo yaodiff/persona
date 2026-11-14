@@ -37,6 +37,7 @@ import { doneTeamAsk, useTeamAsk } from "./lib/team";
 import { setToken } from "./lib/api";
 import type { Machine, Session } from "./lib/types";
 import { App } from "./App";
+import { t } from "./i18n";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -216,5 +217,60 @@ describe("the shell's session links", () => {
     await open("/t/mac/sp/sl");
     expect(drawn.chatSid).toBe("p2");
     expect(location.pathname).toBe("/t/mac/sp/sl/p2");
+  });
+});
+
+describe("the browser tab's title on an Agent's page (web usability audit item 35)", () => {
+  it("names the open Agent as its header does, and follows a rename, so several tabs tell apart", async () => {
+    await open("/s/mac/s1");
+    expect(document.title).toMatch(/^(\(\d+\) )?Task s1 · Persona$/);
+    await open("/t/mac/sp/sl/p1");
+    expect(document.title).toMatch(/^(\(\d+\) )?Task p1 · Persona$/);
+    act(() => upsertSession({ ...getState().sessions.mac.find((s) => s.session_id === "p1")!, title: "排查 /orders 接口变慢" }));
+    await flush();
+    expect(document.title).toMatch(/^(\(\d+\) )?排查 \/orders 接口变慢 · Persona$/);
+  });
+
+  it("takes the folder's name for an untitled one, and says Agent only while its row is not known", async () => {
+    await open("/s/mac/bare");
+    expect(document.title).toMatch(/^(\(\d+\) )?Agent · Persona$/);
+    act(() => upsertSession(row("bare", { title: "", cwd: "/code/weather-app" })));
+    await flush();
+    expect(document.title).toMatch(/^(\(\d+\) )?weather-app · Persona$/);
+  });
+});
+
+describe("an address that is no page (web usability audit item 42)", () => {
+  it("says the page isn't there, with the way to Overview, and keeps the address", async () => {
+    await open("/foo-bar-unknown");
+    for (let i = 0; i < 20 && !host.textContent?.includes(t("not-found.page_title")); i++) await act(() => new Promise((r) => setTimeout(r, 10)));
+    expect(host.textContent).toContain(t("not-found.page_title"));
+    expect(location.pathname).toBe("/foo-bar-unknown");
+    expect(document.title).toMatch(new RegExp(`^(\\(\\d+\\) )?${t("app.title_not_found")} · Persona$`));
+    const back = [...host.querySelectorAll("button")].find((b) => b.textContent === t("not-found.page_back"));
+    await act(async () => back!.click());
+    expect(location.pathname).toBe("/overview");
+  });
+});
+
+describe("the reconnect pill (web usability audit item 87)", () => {
+  it("is a strip at the top of the page's column that pushes the page down, never a layer over its header or fields", async () => {
+    await open("/overview");
+    act(() => Object.assign(getState(), { loaded: true, conn: "offline" }));
+    act(() => root.render(<App />));
+    await flush();
+    const main = host.querySelector("main")!;
+    const pill = main.querySelector("[data-connection-pill]");
+    expect(pill).not.toBeNull();
+    // the strip comes first in <main>'s column, and the page's box after it
+    const strip = main.firstElementChild!;
+    expect(strip.contains(pill)).toBe(true);
+    expect(strip.nextElementSibling?.contains(pill)).toBe(false);
+    expect(main.className).toMatch(/\bflex-col\b/);
+    // nothing between the pill and <main> takes it out of the flow
+    for (let el = pill!.parentElement; el && el !== main; el = el.parentElement) expect(el.className).not.toMatch(/\b(absolute|fixed)\b/);
+    // once still, the strip doesn't clip the pill's details, which open over the page
+    await act(() => new Promise((r) => setTimeout(r, 500)));
+    expect(strip.querySelector(".overflow-hidden")).toBeNull();
   });
 });

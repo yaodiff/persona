@@ -815,7 +815,13 @@ the owner turns on by making a leader. Code: `server/internal/assistant/ask_rout
   the main chat). The 5 minutes do not count while the conversation holding the card is on a
   turn: a supervisor working through a long round is not neglecting it, and its time starts when the turn ends. A
   conversation still on a turn an hour (`askBusyMax`) after the card came is counted as stuck instead, and the card
-  climbs all the same, so no card waits on a conversation for ever.
+  climbs all the same, so no card waits on a conversation for ever. With the hub's push tiering on (the
+  low-distraction switch, `docs/server/server.md`) a card never reaches the user on a timeout: past the last rung it
+  goes back to the task's supervisor once (the entry says so; the owner gets a held P1 notice for the briefing), then
+  stays with the last rung until it is answered or escalated; with the switch turned off it climbs on as before.
+  `ask_escalate` takes `why_owner` and `p0`: with the switch on only `irreversible`, `visible_to_others`,
+  `only_owner_knows` or `p0` push, the rest go to the Needs you list and the briefing without a push, bot card or
+  channel message.
 - **Limits**: the route lives on the pending card, not in the store. After a manager restart the card is back on the
   apps without a push (as every card is); its route is made again from the task's supervisor, so the supervisor can
   still answer it or escalate it. Whether the user was told of the card before the restart is not kept either, so a

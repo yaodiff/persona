@@ -5164,6 +5164,11 @@ export interface LeaderReportEvent {
   doing?: string;
   needs_you?: string;
   links?: string[];
+  /**
+   * set only while the hub's push tiering (low-distraction switch) is on: P1 for progress, reached and stuck (keep it
+   * in the log and the briefing, alert nobody), P0 for a decision
+   */
+  level?: string;
 }
 
 /**

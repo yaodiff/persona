@@ -1,6 +1,8 @@
-"""go_partitions: internal/node's tests split into exact, disjoint -run patterns (CI node shard and release build)."""
+"""go_partitions: internal/node's and internal/assistant's tests split into exact, disjoint -run patterns (CI shards,
+release build, test-server.sh)."""
 import re
 import unittest
+from unittest import mock
 
 import go_partitions as gp
 
@@ -43,11 +45,31 @@ class PartitionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "too long"):
             gp.patterns(["Test%06d%s" % (i, "x" * 40) for i in range(6000)], 2)
 
-    def test_only_the_package_itself_is_partitioned(self):
-        self.assertTrue(gp.is_partitioned("./internal/node"))
-        self.assertTrue(gp.is_partitioned("github.com/example/persona/server/internal/node"))
+    def test_only_the_packages_themselves_are_partitioned(self):
+        for name in ("node", "assistant"):
+            self.assertEqual(gp.partitioned("./internal/" + name), "./internal/" + name)
+            self.assertEqual(gp.partitioned("./internal/%s/" % name), "./internal/" + name)
+            self.assertEqual(gp.partitioned("github.com/example/persona/server/internal/" + name), "./internal/" + name)
         self.assertFalse(gp.is_partitioned("github.com/example/persona/server/internal/node/hostinfo"))
         self.assertFalse(gp.is_partitioned("github.com/example/persona/server/internal/nodeupdate"))
+        self.assertFalse(gp.is_partitioned("github.com/example/persona/server/internal/assistantwire"))
+        self.assertFalse(gp.is_partitioned("github.com/example/persona/server/internal/assistant/fleet"))
+
+    def test_split_keeps_the_rest_in_order_and_names_each_partitioned_package_once(self):
+        module = "github.com/example/persona/server"
+        rest, parts = gp.split([module + "/internal/assistant", module + "/cmd/personad", "./internal/node/",
+                                module + "/internal/node", module + "/internal/node/sub", "./internal/assistant"])
+        self.assertEqual(rest, [module + "/cmd/personad", module + "/internal/node/sub"])
+        self.assertEqual(parts, ["./internal/assistant", "./internal/node"])
+        self.assertEqual(gp.split(["./internal/hub"]), (["./internal/hub"], []))
+
+    def test_each_package_is_split_into_its_own_number_of_partitions(self):
+        listing = "\n".join("Test%03d" % i for i in range(10)) + "\nok  \texample\t0.1s\n"
+        for package, partitions in gp.PACKAGES.items():
+            with mock.patch.object(gp.subprocess, "check_output", return_value=listing) as listed:
+                self.assertEqual(len(gp.list_patterns("/server", package)), partitions)
+            self.assertEqual(listed.call_args.args[0], ["go", "test", "-list", ".*", package])
+            self.assertEqual(listed.call_args.kwargs["cwd"], "/server")
 
 
 if __name__ == "__main__":

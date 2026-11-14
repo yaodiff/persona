@@ -211,9 +211,9 @@ export function DraftCard({ it, onEdit, onSend }: { it: InboxItem; onEdit: () =>
   const dropped = useDroppedChanges(key);
   // the four lines may cut it: "Show all" shows the rest in place, so it is read before "Send" (#4742)
   const [open, setOpen] = useState(false);
-  const { ref: textRef, cut: long } = useClamped<HTMLParagraphElement>(open);
+  const text = kept ?? draft ?? "";
+  const { ref: textRef, cut: long } = useClamped<HTMLParagraphElement>(open, "y", text);
   if (!draft) return null;
-  const text = kept ?? draft;
   const changes = keptChanges(it, dropped);
   // as sent: a failed send keeps the text trimmed, and the AI's own draft with a trailing newline is not an edit
   const edited = (kept !== undefined && kept.trim() !== draft.trim()) || dropped.length > 0;

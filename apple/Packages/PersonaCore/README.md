@@ -34,5 +34,20 @@ the launch path. Host callbacks run on the Rust worker thread and must not synch
 the C header specifies the ownership and borrowed-buffer contract. The callback box is retained once and released once.
 Errors from an effect callback are reported by the next test-only `flush` rather than silently discarded.
 
+## Adapter and shadow contract
+
+`PersonaCoreCallbacks.changedChat` carries the chat ID and the global patch version. `Effect.Fetch` already carries the
+chat, so the adapter can route a wake and its transport request to the same owner without guessing from a global version.
+Legacy `changed` remains the version-only compatibility path when no targeted callback is supplied. C/JNI/OHOS preserve
+that fallback; an existing host does not need a new callback.
+
+`CoreContinuityShadow` is a test-only adapter used by fixture comparisons. Native `ChatStore` remains the
+iOS behavioral reference and the production default. The shadow harness applies the same action, drains one patch and
+compares items, continuity fields and per-step effects; every event's wake is checked against its chat and whether the
+patch changed. Diagnostics contain only a rule and an input shape, never message contents or expected/actual item JSON.
+The shadow does not select Rust for production. Real `AppModel` tests with manually released `APIClient` responses
+cover independent concurrent folds, coalescing two opens of one fold, overlapping reloads retaining newer pushes, and
+per-owner subscriptions; fold/reload rules must remain covered before any later adapter integration.
+
 The package and fixture replay are not proof of physical-device performance, download-size, launch or memory budgets.
 Those remain unmeasured until a named device/simulator, optimized build and workload are reported.

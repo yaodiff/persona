@@ -156,21 +156,22 @@ export function appCommands(input: AppCommandInput): PaletteCommand[] {
 /** The keycaps of a command's chord ([] without one). */
 export const commandKeys = (c: Pick<PaletteCommand, "chord">, platform?: Platform): string[] => (c.chord ? chordParts(c.chord, platform) : []);
 
-function score(c: PaletteCommand, words: string[]): number {
-  const title = c.title.toLowerCase();
-  const joined = words.join(" ");
-  if (title.startsWith(joined)) return 100;
-  if (title.includes(joined)) return 80;
-  const hay = [c.section, c.keywords, c.id].join(" ").toLowerCase();
-  return words.every((w) => title.includes(w) || hay.includes(w)) ? 40 : 0;
+/** Shared name/metadata matching for commands and immediate chat previews. Query is already lowercased. */
+export function matchPaletteWords(title: string, query: string, context: string): number {
+  if (!query) return 1;
+  const name = title.toLowerCase();
+  if (name.startsWith(query)) return 100;
+  if (name.includes(query)) return 80;
+  const hay = context.toLowerCase();
+  return query.split(/\s+/).every((word) => name.includes(word) || hay.includes(word)) ? 40 : 0;
 }
 
 /** The commands that match what is typed after `>`, the best first (the order they came in otherwise); all of them when nothing is typed. */
 export function filterCommands(commands: readonly PaletteCommand[], text: string): PaletteCommand[] {
-  const words = text.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return [...commands];
+  const query = text.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!query) return [...commands];
   return commands
-    .map((c, i) => ({ c, i, s: score(c, words) }))
+    .map((c, i) => ({ c, i, s: matchPaletteWords(c.title, query, [c.section, c.keywords, c.id].join(" ")) }))
     .filter((x) => x.s > 0)
     .sort((a, b) => b.s - a.s || a.i - b.i)
     .map((x) => x.c);

@@ -33,11 +33,17 @@ public enum TierReason: String, Equatable, Sendable {
 /// keep up for 2 s, the next tier with a lower frame rate.
 ///
 /// Up slow: one tier, after a stable window (8 s; 3 s in the stream's first 10 s or after a route change) of queueing
-/// under 50 ms, nothing skipped and decoding keeping up, and only with proof of headroom: the link carried, calmly, at
+/// under 50 ms (a keyframe's wake left out: its queue is its size, and its burst is the proof, #7842), nothing skipped
+/// and decoding keeping up, and only with proof of headroom: the link carried, calmly, at
 /// least 1.25× the next tier's floor (the screen using most of the helper's bitrate, so it was a test of the link), or
 /// three large frames arrived at 1.5× that floor. A tier fits a link when its floor is at most 80% of what the link
 /// carries, the same rule both ways, so a step up is never one the down rule would undo on the same numbers. A step up
 /// undone within 15 s doubles that tier's window (to 60 s at most); two minutes on it start the window over.
+///
+/// The helper's `timing` comes once a second while frames flow and not at all on a still screen, so what it said is
+/// used only while fresh: its skipped frames until the next one is due (1.25 s), its bitrate as proof once (#7842; a
+/// still screen kept stepping down, once a second, on the last second's skipped frames). A new bias or budget starts from at least the current tier's floor, which the link
+/// is carrying, never from a still screen's low numbers.
 ///
 /// Times are seconds on any monotonic clock; pure, so it tests with any timeline.
 public struct TierPolicy: Sendable {
@@ -77,6 +83,7 @@ public struct TierPolicy: Sendable {
     static let longestWindow = 60.0
     static let windowReset = 120.0
     static let burstProofs = 3
+    static let helperStale = 1.25
 
     public private(set) var ladder: [TierLadder.Tier]
     public private(set) var index: Int
@@ -106,6 +113,9 @@ public struct TierPolicy: Sendable {
     private var helperTarget: Int?
     private var helperSent: Int?
     private var helperSkipped = 0
+    /// A `timing` came since the last tick, and when the last one was first ticked on.
+    private var helperFresh = false
+    private var helperAt: Double?
 
     /// The stream's first tier: from the route (`link`; nil before one is measured, read as the relay over Wi-Fi), or
     /// the tier this computer last settled on over the same route (`remembered`, an index into the same ladder).
@@ -135,11 +145,15 @@ public struct TierPolicy: Sendable {
         helperTarget = t.targetKbps
         helperSent = t.kbps
         helperSkipped = t.skipped ?? 0
+        helperFresh = true
     }
 
     /// One decision, every 250 ms. A change is returned for the app to send as an `update`.
     public mutating func tick(_ s: TierSignals, now: Double) -> Change? {
-        let skipping = helperSkipped > 0
+        let fresh = helperFresh
+        helperFresh = false
+        if fresh { helperAt = now }
+        let skipping = helperSkipped > 0 && helperAt.map { now - $0 < Self.helperStale } ?? false
         let queue = s.queueP50Ms ?? 0
 
         // Down, fast: a long queue or skipped frames for a quarter second.
@@ -184,7 +198,7 @@ public struct TierPolicy: Sendable {
         if calmSince == nil { calmSince = now }
         if index > 0 {
             let next = ladder[index - 1]
-            if let target = helperTarget, let sent = helperSent, Double(sent) >= 0.8 * Double(target),
+            if fresh, let target = helperTarget, let sent = helperSent, Double(sent) >= 0.8 * Double(target),
                Double(sent) >= 1.25 * Double(next.minKbps) {
                 motionKbps = max(motionKbps ?? 0, sent)
             }
@@ -290,8 +304,10 @@ public struct TierPolicy: Sendable {
     }
 
     private mutating func rebuild(reason: TierReason, now: Double) -> Change {
-        let rate = helperTarget ?? last.targetKbps
         let current = tier
+        // At least the current tier's floor: the link carries it (the tier would have stepped down otherwise), and a still
+        // screen's bitrate says nothing about the link (#7842: Smoother on a still screen fell to 15 fps).
+        let rate = max(helperTarget ?? last.targetKbps, current.minKbps)
         ladder = Self.tiers(display: display, bias: bias, capKbps: capKbps, maxFps: maxFps, maxScale: maxScale)
         windows.removeAll()
         lastUp = nil
@@ -315,13 +331,14 @@ public struct TierPolicy: Sendable {
         }
     }
 
-    /// The ladder under the phone's caps, without the tiers above `maxScale` (Data Saver: 1× only; every ladder ends on 1×
-    /// tiers, so it never empties).
+    /// The ladder under the phone's caps, without the tiers whose picture has more than `maxScale` pixels per point
+    /// (Data Saver: 1× only, which on a display at one pixel per point is every tier; every ladder ends on 1× tiers, so it
+    /// never empties).
     static func tiers(display: Display, bias: TierLadder.Bias, capKbps: Int, maxFps: Int, maxScale: Double?) -> [TierLadder.Tier] {
         let all = TierLadder.make(points: display.pointSize, pixels: display.pixelSize, maxSize: display.maxSize, bias: bias,
                                   capKbps: capKbps, maxFps: maxFps)
         guard let maxScale else { return all }
-        let kept = all.filter { $0.scale <= maxScale }
+        let kept = all.filter { $0.pixelsPerPoint <= maxScale + 1e-9 }
         return kept.isEmpty ? Array(all.suffix(1)) : kept
     }
 

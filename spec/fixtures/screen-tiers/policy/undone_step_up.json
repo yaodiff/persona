@@ -32,6 +32,7 @@
     "index" : 1,
     "maxKbps" : 12000,
     "minKbps" : 4006,
+    "pixelsPerPoint" : 1.5,
     "reason" : "start",
     "scale" : 1.5,
     "targetKbps" : 4006,
@@ -292,6 +293,7 @@
         "index" : 0,
         "maxKbps" : 12000,
         "minKbps" : 6408,
+        "pixelsPerPoint" : 1.8968253968253967,
         "reason" : "link_steady",
         "scale" : 2,
         "targetKbps" : 11500,
@@ -342,6 +344,7 @@
         "index" : 1,
         "maxKbps" : 12000,
         "minKbps" : 4006,
+        "pixelsPerPoint" : 1.5,
         "reason" : "link_slowed",
         "scale" : 1.5,
         "targetKbps" : 5950,
@@ -363,6 +366,13 @@
           "queueRising" : false,
           "replacedShare" : 0
         }
+      }
+    },
+    {
+      "helper" : {
+        "kbps" : 11500,
+        "skipped" : 0,
+        "targetKbps" : 12000
       }
     },
     {
@@ -1652,6 +1662,7 @@
         "index" : 0,
         "maxKbps" : 12000,
         "minKbps" : 6408,
+        "pixelsPerPoint" : 1.8968253968253967,
         "reason" : "link_steady",
         "scale" : 2,
         "targetKbps" : 11500,

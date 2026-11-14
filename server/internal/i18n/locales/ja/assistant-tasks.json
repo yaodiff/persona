@@ -20,6 +20,7 @@
   "ultracode_skipped": "ultracode なしで開始しました：{reason}",
   "task_failed_title": "「{name}」を開始できませんでした",
   "task_failed_title_health": "タスクを開始できませんでした",
+  "ask_held_title": "「{name}」のカードが監督の対応を待っています",
   "task_failed_body": "{reason}。会話を開いて「再試行」をタップするか、別のパソコンに割り当ててください",
   "task_failed_body_no_reason": "会話を開いて「再試行」をタップするか、別のパソコンに割り当ててください",
   "not_retryable": "再試行できるのは、開始できなかったタスクか、モデルサービスのエラーで中断されたタスクだけです",

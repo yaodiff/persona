@@ -226,11 +226,11 @@ func TestTheOutboxKeepsWhatTheHubMissed(t *testing.T) {
 	out := &memOutbox{}
 	b := startOutboxManager(t, h, out)
 	ctx := context.Background()
-	if err := b.NotifyRequest(ctx, push("ntf_1")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_1")); err != nil {
 		t.Fatalf("a push while the hub is away: %v", err)
 	}
 	b.Broadcast(ctx, live("todos"))
-	if err := b.NotifyRequest(ctx, push("ntf_2")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_2")); err != nil {
 		t.Fatal(err)
 	}
 	if out.len() != 3 {
@@ -245,7 +245,7 @@ func TestTheOutboxKeepsWhatTheHubMissed(t *testing.T) {
 	if out.len() != 0 {
 		t.Fatalf("still kept after the hub took them: %d", out.len())
 	}
-	if err := b.NotifyRequest(ctx, push("ntf_3")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_3")); err != nil {
 		t.Fatal(err)
 	}
 	h.waitFor(t, []string{"push ntf_1", "broadcast todos", "push ntf_2", "push ntf_3"})
@@ -256,7 +256,7 @@ func TestTheOutboxKeepsWhatTheHubMissed(t *testing.T) {
 	for b.Connected() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := b.NotifyRequest(ctx, push("ntf_4")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_4")); err != nil {
 		t.Fatal(err)
 	}
 	h.up.Store(true)
@@ -269,7 +269,7 @@ func TestTheOutboxToAnOlderHub(t *testing.T) {
 	h.legacy = true
 	b := startOutboxManager(t, h, &memOutbox{})
 	ctx := context.Background()
-	if err := b.NotifyRequest(ctx, push("ntf_1")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_1")); err != nil {
 		t.Fatal(err)
 	}
 	b.Broadcast(ctx, live("assistant_feed"))
@@ -326,7 +326,7 @@ func TestTheOutboxWaitsForTheReport(t *testing.T) {
 	h := newOutboxHub(t)
 	rep := slowReport{release: make(chan struct{})}
 	b := startOutboxManager(t, h, &memOutbox{}, rep)
-	if err := b.NotifyRequest(context.Background(), push("ntf_1")); err != nil {
+	if _, err := b.NotifyRequest(context.Background(), push("ntf_1")); err != nil {
 		t.Fatal(err)
 	}
 	h.up.Store(true)
@@ -357,7 +357,7 @@ func TestAPushThatTimedOutIsKept(t *testing.T) {
 	h.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	if err := b.NotifyRequest(ctx, push("ntf_slow")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_slow")); err != nil {
 		t.Fatalf("a push the hub did not answer: %v", err)
 	}
 	if out.len() != 1 {

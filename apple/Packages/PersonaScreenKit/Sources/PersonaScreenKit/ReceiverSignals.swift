@@ -7,7 +7,10 @@ import Foundation
 /// Queueing is a frame's one-way delay (the phone's arrival less the helper's capture time) above the lowest one of the
 /// last 10 s, the same rule as the helper's `RateController`, so the two clocks needn't agree. Idle refinement's frames
 /// are left out of the queue and the delivered rate (a large frame sent on purpose is no congestion), but their bursts
-/// count: they are the cleanest probe of what the link can carry. Times are µs on the phone's monotonic clock.
+/// count: they are the cleanest probe of what the link can carry. A keyframe (the helper sends one every 10 s) and the
+/// frames that queued behind it while it crossed the link are its wake: left out of `queueP95Ms`, which says whether the
+/// link is calm, since that queue is the keyframe's size, not a slower link (#7842); they count everywhere else. Times
+/// are µs on the phone's monotonic clock.
 ///
 /// The rate that arrived (`deliveredKbps`) is what the link carried while it was busy: over frames that came in queued
 /// behind the one before (both over 50 ms of queueing), their bytes over the time between their arrivals, which is the
@@ -21,8 +24,12 @@ public struct ReceiverSignals: Sendable {
     static let baselineMicros: UInt64 = 10_000_000
 
     private var baseline: [(at: UInt64, delay: Int64)] = []
-    /// Each frame's arrival, queueing in ms, whether it was late and its bytes, over the last two seconds.
-    private var queue: [(at: UInt64, ms: Double, late: Bool, bytes: Int)] = []
+    /// Each frame's arrival, queueing in ms, whether it was late, its bytes and whether it came in a keyframe's wake, over
+    /// the last two seconds.
+    private var queue: [(at: UInt64, ms: Double, late: Bool, bytes: Int, wake: Bool)] = []
+    /// Until when frames arriving are in the last keyframe's wake: its arrival, plus the time it took to come in, plus two
+    /// frame intervals.
+    private var wakeUntil: UInt64?
     static let busyMs = 50.0
     /// Bytes that arrived, by arrival, over the last second.
     private var arrivals: [(at: UInt64, bytes: Int)] = []
@@ -35,7 +42,7 @@ public struct ReceiverSignals: Sendable {
     /// A frame arrived whole at `arrival`, its first bytes at `firstByte` (when it spanned several reads). `fps` is the
     /// frame rate asked for, which says when a frame is late (over two frame intervals queued).
     public mutating func frame(captureMicros: UInt64, arrivalMicros: UInt64, firstByteMicros: UInt64?, bytes: Int,
-                               refinement: Bool, fps: Int) {
+                               refinement: Bool, keyframe: Bool = false, fps: Int) {
         if bytes >= Self.burstBytes, let first = firstByteMicros, arrivalMicros > first,
            arrivalMicros - first >= Self.burstMinSpanMicros {
             bursts.append(Double(bytes) * 8 * 1000 / Double(arrivalMicros - first))
@@ -47,7 +54,12 @@ public struct ReceiverSignals: Sendable {
         while baseline.count > 1, arrivalMicros &- baseline[0].at > Self.baselineMicros { baseline.removeFirst() }
         let ms = Double(delay - baseline[0].delay) / 1000
         let interval = 1000 / Double(max(fps, 1))
-        queue.append((arrivalMicros, ms, ms > 2 * interval, bytes))
+        if keyframe {
+            let took = firstByteMicros.map { arrivalMicros > $0 ? arrivalMicros - $0 : 0 } ?? 0
+            wakeUntil = arrivalMicros + took + UInt64(2 * interval * 1000)
+        }
+        let wake = keyframe || wakeUntil.map { arrivalMicros <= $0 } ?? false
+        queue.append((arrivalMicros, ms, ms > 2 * interval, bytes, wake))
         arrivals.append((arrivalMicros, bytes))
         prune(arrivalMicros)
     }
@@ -69,6 +81,7 @@ public struct ReceiverSignals: Sendable {
         baseline.removeAll()
         queue.removeAll()
         arrivals.removeAll()
+        wakeUntil = nil
     }
 
     private mutating func prune(_ now: UInt64) {
@@ -85,22 +98,30 @@ public struct ReceiverSignals: Sendable {
     public mutating func take(now: UInt64) -> TierSignals {
         prune(now)
         defer { bursts.removeAll() }
-        let recent = queue.filter { Self.within($0.at, now, 500_000) }.map(\.ms)
+        let window = queue.filter { Self.within($0.at, now, 500_000) }
+        let recent = window.map(\.ms)
         var s = TierSignals()
         s.frames = recent.count
         s.queueP50Ms = Self.percentile(recent, 0.5)
-        s.queueP95Ms = Self.percentile(recent, 0.95)
+        s.queueP95Ms = Self.percentile(window.filter { !$0.wake }.map(\.ms), 0.95)
         let early = queue.filter { Self.within($0.at, now, 1_000_000) && !Self.within($0.at, now, 750_000) }.map(\.ms)
         let late = queue.filter { Self.within($0.at, now, 250_000) }.map(\.ms)
         if let a = Self.mean(early), let b = Self.mean(late) {
             s.queueRising = b - a > 10
             s.queueFalling = b - a < -10
         }
-        var busyBytes = 0, busyMicros: UInt64 = 0, busyFrames = 0
-        for (a, b) in zip(queue, queue.dropFirst()) where a.ms > Self.busyMs && b.ms > Self.busyMs && b.at > a.at {
-            busyBytes += b.bytes
-            busyMicros += b.at - a.at
-            busyFrames += 1
+        // Frames read together (a backlog arrives several to a read, #7842) all count, in the time since the read before;
+        // skipping all but the first under-read the link, and the policy stepped down past the tier that fits. Those that
+        // came with the run's first read came in before it started, so they don't.
+        var busyBytes = 0, busyMicros: UInt64 = 0, busyFrames = 0, counting = false
+        for (a, b) in zip(queue, queue.dropFirst()) {
+            guard a.ms > Self.busyMs, b.ms > Self.busyMs, b.at >= a.at else { counting = false; continue }
+            if b.at > a.at {
+                counting = true
+                busyMicros += b.at - a.at
+                busyFrames += 1
+            }
+            if counting { busyBytes += b.bytes }
         }
         if busyFrames >= 3, busyMicros >= 50_000 {
             s.deliveredKbps = Double(busyBytes) * 8 * 1000 / Double(busyMicros)
@@ -109,7 +130,6 @@ public struct ReceiverSignals: Sendable {
             s.deliveredKbps = Double(bytes) * 8 * 1000 / Double(last.at - first.at)
         }
         s.burstKbps = bursts
-        let window = queue.filter { Self.within($0.at, now, 500_000) }
         s.lateShare = window.isEmpty ? nil : Double(window.filter(\.late).count) / Double(window.count)
         s.decodeP95Ms = Self.percentile(decodes.map(\.ms), 0.95)
         s.replacedShare = shown.isEmpty ? nil : Double(shown.filter(\.replaced).count) / Double(shown.count)
@@ -130,6 +150,7 @@ public struct TierSignals: Equatable, Sendable {
     /// Frames that arrived in the last half second; 0 on a still screen, when nothing below says anything.
     public var frames = 0
     public var queueP50Ms: Double?
+    /// Leaving out a keyframe's wake (#7842): nil when only that came, which doesn't break a calm stretch.
     public var queueP95Ms: Double?
     /// The queue grew over the last second (its last quarter's mean over 10 ms above its first's), or shrank.
     public var queueRising = false

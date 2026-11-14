@@ -20,6 +20,7 @@ RUNNER_SPEC = importlib.util.spec_from_file_location("go_test_partitioned", ROOT
 RUNNER = importlib.util.module_from_spec(RUNNER_SPEC)
 RUNNER_SPEC.loader.exec_module(RUNNER)
 PARTITIONS = RUNNER.go_partitions
+NODE = "./internal/node"  # the fixture module's one partitioned package
 
 
 class ServerTestEnvironmentTests(unittest.TestCase):
@@ -253,7 +254,7 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  "if str(source)=='schema/extension':\n"
                  f" pathlib.Path({str(schema_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n")
             packages = ["github.com/example/fixture/server/internal/example",
-                        "github.com/example/fixture/server" + PARTITIONS.IMPORT_SUFFIX]
+                        "github.com/example/fixture/server/internal/node"]
             node_tests = ["TestNodeA", "TestNodeB", "TestNodeC", "ExampleNode"]
             node_listing = [*node_tests[:2], "BenchmarkNode", *node_tests[2:], "ok  fixture 0.1s"]
             tool("go", "import json,os,pathlib,sys\n"
@@ -268,7 +269,7 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  # what go_test_partitioned.py lists to split the module and internal/node, whatever -list pattern it uses
                  f"if sys.argv[1:]==['list',{RUNNER.WHOLE_MODULE!r}]:\n"
                  f" record(); print('\\n'.join({packages!r})); sys.exit(0)\n"
-                 f"if sys.argv[1:3]==['test','-list'] and sys.argv[-1]=={PARTITIONS.PACKAGE!r}:\n"
+                 f"if sys.argv[1:3]==['test','-list'] and sys.argv[-1]=={NODE!r}:\n"
                  f" record(); print('\\n'.join({node_listing!r})); sys.exit(0)\n"
                  "base=pathlib.Path.cwd().parent\n"
                  "sdk=base/'sdk/go'\n"
@@ -305,10 +306,10 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             flags = ["test", "-count=1", "-p", "1"]
             # A listing call's -list pattern is the runner's choice; compare it by its shape.
             is_listing = lambda call: call[:1] == ["list"] or call[:2] == ["test", "-list"]
-            shape = lambda call: ["test", "-list", PARTITIONS.PACKAGE] if call[:2] == ["test", "-list"] else call
-            listing = [["list", RUNNER.WHOLE_MODULE], ["test", "-list", PARTITIONS.PACKAGE]]
-            whole = [[*flags, packages[0]]] + [[*flags, "-run", pattern, PARTITIONS.PACKAGE]
-                                               for pattern in PARTITIONS.patterns(node_tests)]
+            shape = lambda call: ["test", "-list", NODE] if call[:2] == ["test", "-list"] else call
+            listing = [["list", RUNNER.WHOLE_MODULE], ["test", "-list", NODE]]
+            whole = [[*flags, packages[0]]] + [[*flags, "-run", pattern, NODE]
+                                               for pattern in PARTITIONS.patterns(node_tests, PARTITIONS.PACKAGES[NODE])]
             for index, (args, expected, expected_listing, extra) in enumerate((
                 ([], whole, listing, {}),
                 (["-run", "TestFixture", "./internal/example"],

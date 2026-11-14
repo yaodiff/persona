@@ -13,6 +13,17 @@
   z-index: 20;
   background: var(--sidebar-group-bg, var(--page));
 }
+/* Pinned over its rows (SidebarGroup sets data-edge on the innermost pinned heading): the Persona row's divider under
+   it, so a row half under the heading reads as scrolled beneath it, not as text run into it (audit item 51). */
+.sidebar-group-heading[data-edge]::after {
+  content: "";
+  position: absolute;
+  inset-inline: calc(var(--spacing) * 2);
+  bottom: 0;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
 [data-sidebar-rows] {
   --sidebar-group-bg: var(--canvas);
   scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));

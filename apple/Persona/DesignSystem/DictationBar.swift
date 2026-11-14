@@ -16,7 +16,9 @@ final class DictationBarModel {
     private(set) var slow = false
     /// Which way the wave goes as the bar closes: into ✕ (cancel) or into ↑ / ■ (kept).
     private(set) var closing: Ending = .cancel
-    @ObservationIgnored private var run = UUID()
+    /// Which start, stop or send a late answer belongs to. Lazy: the model is a `@State` value, built again with each
+    /// rebuild of the composer's initializer, and keeps no work there (docs/apple/performance.md P3).
+    @ObservationIgnored private lazy var run = UUID()
     /// One generator, prepared before it is needed: `Haptics.tap()` makes a new one each time, and the first impact of a
     /// cold one started the haptic engine on the main thread right as the bar moved (100–600 ms frames on a simulator).
     @ObservationIgnored private var haptic: UIImpactFeedbackGenerator?
@@ -355,7 +357,8 @@ private struct WaveCanvas: View {
 
 /// The wave's samples across ticks, outside SwiftUI's state: taking one must not invalidate anything.
 private final class WaveBox {
-    var state = DictationWave(capacity: 1)
+    /// Lazy for the same reason as `DictationBarModel.run`: the box is a `@State` value (P3).
+    lazy var state = DictationWave(capacity: 1)
     /// When the last sample was due.
     private var last: TimeInterval?
 

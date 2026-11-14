@@ -45,6 +45,21 @@ describe("quickAnswers (#4090, as iOS's 需要你 cards)", () => {
     expect(quickAnswers(ix({ kind: "screen", dialog: { options, review: true } }))).toBeNull();
   });
 
+  it("offers Claude Code's Bypass Permissions confirmation as its two choices, each sending its option", () => {
+    // the dialog as the hub reads it off a fresh pane (claude-2.1.322-bypass-confirm-160.txt)
+    const dialog = {
+      question: "WARNING: Claude Code running in Bypass Permissions mode",
+      options: [
+        { key: "1", label: "No, exit" },
+        { key: "2", label: "Yes, I accept" },
+      ],
+    };
+    const q = quickAnswers(ix({ kind: "screen", dialog }))!;
+    expect(q.map((c) => c.label)).toEqual(["No, exit", "Yes, I accept"]);
+    expect(q.map((c) => c.body)).toEqual([{ option: "1" }, { option: "2" }]);
+    expect(q.some((c) => c.primary)).toBe(false); // neither choice is made to look like the default
+  });
+
   it("never answers a plan or an MCP form in one tap", () => {
     expect(quickAnswers(ix({ kind: "plan", plan: "# 计划" }))).toBeNull();
     expect(quickAnswers(ix({ kind: "elicitation" }))).toBeNull();

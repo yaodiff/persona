@@ -9,13 +9,14 @@ between the two lanes that keep the two sides.
 
 `TierLadder.make`: `input` is `points` and `pixels` (`[width, height]`), `maxSize` (the long-edge cap; 0: none),
 `bias` (`auto` / `sharper` / `smoother`), `capKbps` (0: no cap), `maxFps` and `codec` (`hevc` / `h264`). `expected` is
-the whole ladder, best first: `scale`, `fps`, `width`, `height`, `minKbps`, `maxKbps`.
+the whole ladder, best first: `scale` (what the helper is asked for), `fps`, `width`, `height`, `minKbps`, `maxKbps`,
+`pixelsPerPoint` (the scale the picture really has: `width` over the display's points, #7842).
 
 ## `signals/`
 
 `ReceiverSignals`: `steps` in order, each one of
 - `frame`: `capture`, `arrival` and `firstByte` (µs; `firstByte` null when the frame came in one read), `bytes`,
-  `refinement`, `fps`;
+  `refinement`, `keyframe` (#7842: a keyframe's wake is left out of `queueP95Ms`), `fps`;
 - `decoded`: `ms`, `at` (µs); `shown`: `replaced`, `at` (µs); `pathChanged`: `{}`;
 - `take`: `now` (µs), with `expected`, every `TierSignals` field (`frames`, `queueP50Ms`, `queueP95Ms`,
   `queueRising`, `queueFalling`, `deliveredKbps`, `burstKbps`, `lateShare`, `decodeP95Ms`, `replacedShare`), null
@@ -32,7 +33,7 @@ limit; Data Saver: 1), `link` (`kind`, `via`, `minRttMs`, `srttMs`; null before 
 - `setBias`: `bias` and `now`; `setBudget`: `capKbps`, `maxFps`, `maxScale` and `now`;
 
 each with `expected`, the Change it returned (`index`, `scale`, `fps`, `width`, `height`, `minKbps`, `maxKbps`,
-`targetKbps`, `reason`) or null. Times are seconds, as the API takes them.
+`pixelsPerPoint`, `targetKbps`, `reason`) or null. Times are seconds, as the API takes them.
 
 ## Numbers
 

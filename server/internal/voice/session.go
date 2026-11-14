@@ -81,6 +81,13 @@ type conversation struct {
 	started    bool // the app got its ready
 	outRate    int
 	reconnects int
+	// down is the last session the service said it cannot serve (error upstream_unavailable, its model's backend is
+	// down) with its words, clipped: it closes that session right after (docs/lessons/voice.md "Errors"), so the
+	// session's loss is the service's, not the network's.
+	down struct {
+		session int // sessionNo; 0 none
+		text    string
+	}
 	// toolless: its sessions declare no function tools, as its provider's service refused them (Provider.Tools unset,
 	// #1420). Set once, never cleared; read without mu (toolSet).
 	toolless atomic.Bool

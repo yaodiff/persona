@@ -31,6 +31,16 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## A reversed range traps on the audio tap's thread (#7740)
+
+A TestFlight iPhone crashed with `EXC_BREAKPOINT` (`brk 1`) on the recorder's input-tap queue, an `NSLock` and a
+collection's uniqueness check in its registers. Hub transcription's ring (`MeetingAudioRing.append`, under the uplink's
+lock) recorded what fell out of its 60 seconds as `lose(max(start, acked)..<newStart)`; once the hub acknowledged audio
+inside the 60 seconds held, which it does every 5 seconds while streaming, the lower bound passed the upper and `..<`
+trapped: every streaming hub-mode meeting about a minute in. `..<` and `...` check their bounds in Release too. Where
+positions come from two clocks (the tap's and the other side's acknowledgements), compare them before making a range,
+and test the ring full with an acknowledgement inside it, not only behind it.
+
 ## A Debug build on an iPhone has a 1 MB main-thread stack (#6735)
 
 A Debug build installed on an iPhone crashed every time it opened on Agents: `EXC_BAD_ACCESS` in the main thread's stack
@@ -2513,6 +2523,18 @@ synchronously flushes `RootView`'s dirtied SwiftUI graph (`ChatView`, `ChatTrans
   its own write and causes an endless `updateUIView` loop; compare against `@ObservationIgnored` shadow fields and write via
   pure setter assignment.
 
+## A split view's columns keep out of a sheet's keyboard too (2026-11-14, #7629)
+
+- Every SwiftUI view in the window keeps out of the keyboard's safe area, whoever owns the keyboard. On an iPad the
+  sidebar column of `AssistantView`'s `NavigationSplitView` shrank under a form sheet's keyboard (New To-Do over the
+  to-dos calendar): its list kept a row or two, then laid itself out again as the keyboard went, behind the sheet's dim.
+- A column with a field of its own takes the keyboard only while that field is focused:
+  `.ignoresSafeArea(.keyboard, edges: drawer == nil && !searching ? Edge.Set.bottom : [])` on the sidebar (`AssistantSidebar`),
+  so its search still lists the chats found above the keyboard. The drawer on an iPhone keeps its own handling
+  (`DrawerSidebarHost`, `safeAreaRegions = .keyboard`).
+- The detail column (the calendar under the sheet) keeps out of the keyboard the same way, but behind the sheet and the
+  keyboard it is out of sight; it was left as it is.
+
 ## What `nonisolated` covers where MainActor is the default, and what it does not (2026-11-13, #4262)
 
 Twenty blocking calls carried `// perf-ok:` because their author believed they ran off the main thread. The isolation
@@ -2579,3 +2601,30 @@ that opens the package (`scripts/test/isolation-lint`) leaves a `.build` folder 
   (`UnfoldTrace`) constant on opening and folding at the oldest end; `UnfoldTests.testWorkLineAtTheOldestEnd` with
   `MOCK_LONG_HISTORY=oldest` and `-showOldest`. A stale report is not proof the list is there: also read the offset
   (`-scrollTrace`, the `why` column of the pin says how the last hold ended).
+
+## A full reconnect must not rely on the subscription's backlog alone (2026-11-14, #4315)
+
+A message sent from the web (another device) while the phone's socket was down never showed on the phone: after a
+hello that did not resume, `AppModel.didConnect` only sent `subscribe` with `since_seq` and waited for the hub's
+backlog. Nothing else read the gap: `AgentSync` leaves chats on screen to their subscription, and its stall check only
+fires when the session's `updated_at` is newer than the chat's newest line. When the backlog did not come (in the real
+hub `sendBacklog` answers with an `error` frame if the node is not back yet after a hub restart), the chat stayed
+short until the next push. The web reads `/items?after_seq=` itself after such a hello, which is why the shared case
+`sent_with_picture_on_other_device_reopened` passed there and failed on iOS. Now a full reconnect also runs `fill`
+for every open chat that has a `covered`; the backlog and the read merge by id and seq.
+
+## New files inherit the target's MainActor isolation; `nonisolated actor` is illegal (2026-11-14, #7677)
+
+The app target defaults to MainActor isolation, so every type in a new file is implicitly `@MainActor` unless it says
+otherwise. A file written to be used off the main actor (a background tool call answering a silent push) hit four
+compile errors at once: a `nonisolated(unsafe) static var` closure could not reference `UIApplication.shared`, a
+`Codable` model's synthesized (main-actor) conformances could not be used from an actor, and actor instance methods
+could not read the actor's own `static let`s. The fix is per declaration, and one tempting spelling is a hard error:
+
+- Mark the off-main types explicitly: `nonisolated struct` / `nonisolated enum` / `nonisolated protocol` (all legal,
+  already used in the repo), and mark the statics an actor method needs as `nonisolated static let`.
+- **`nonisolated actor` does not compile** ("'nonisolated' modifier cannot be applied to this declaration"): an actor
+  already defines its own isolation domain; leave the keyword off the actor and just make its protocol and statics
+  nonisolated. A plain actor can still conform to a `nonisolated ... : Sendable` protocol.
+- A `@Sendable` closure that must touch a main-actor API (`UIApplication.shared.isProtectedDataAvailable`) wraps the
+  read in `MainActor.assumeIsolated { ... }`; give tests an injectable closure so they never hit the real API.

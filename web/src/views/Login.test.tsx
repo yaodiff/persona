@@ -33,7 +33,12 @@ afterEach(() => {
 
 const input = (label: string) => host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
 const advancedToggle = () => host.querySelector<HTMLButtonElement>('button[aria-controls="login-advanced"]')!;
-const alert = () => host.querySelector('[role="alert"]')!.textContent;
+// each form's own error line: the link form's under it, the master key's under its button inside its form
+const alert = (from: "link" | "master" = "link") => {
+  const master = host.querySelector<HTMLInputElement>('input[type="password"]')!.form!;
+  const [own] = [...host.querySelectorAll('[role="alert"]')].filter((el) => master.contains(el) === (from === "master"));
+  return own.textContent;
+};
 
 function type(el: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -58,7 +63,7 @@ describe("Login", () => {
     const field = input(t(from === "link" ? "login.link_placeholder" : "login.master_placeholder"));
     type(field, from === "link" ? "https://hub.example/#token=jp_example" : "synthetic-master-key");
     await submit(field);
-    expect(alert()).toBe(t(from === "link" ? "login.invalid_link" : "login.invalid_token"));
+    expect(alert(from)).toBe(t(from === "link" ? "login.invalid_link" : "login.invalid_token"));
     expect(onDone).not.toHaveBeenCalled();
     expect(field.form!.querySelector("button")!.disabled).toBe(false);
   });
@@ -109,6 +114,35 @@ describe("Login", () => {
     type(input(t("login.master_placeholder")), "master-key");
     await submit(input(t("login.master_placeholder")));
     expect(fake.pair).toHaveBeenCalledWith("master-key");
-    expect(alert()).toBe(t("login.invalid_token"));
+    expect(alert("master")).toBe(t("login.invalid_token"));
+  });
+
+  it("says the master key's error under its own button, not under the link form, and drops it once edited (web usability audit item 41)", async () => {
+    fake.pair.mockRejectedValueOnce(new ApiError(401, "Unauthorized", {}));
+    act(() => root.render(<Login onDone={() => {}} />));
+    act(() => advancedToggle().click());
+    const key = input(t("login.master_placeholder"));
+    type(key, "wrong-master");
+    await submit(key);
+    const shown = [...host.querySelectorAll('[role="alert"]')].find((el) => el.textContent === t("login.invalid_token"))!;
+    // in the master key's form, after its button
+    expect(key.form!.contains(shown)).toBe(true);
+    expect(key.form!.querySelector('button[type="submit"]')!.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(alert("link")).toBe("");
+    type(key, "wrong-master-2");
+    expect(alert("master")).toBe("");
+  });
+
+  it("drops the link form's error once the link is edited, a signed-out note included", async () => {
+    fake.pair.mockRejectedValueOnce(new Error("invalid token"));
+    act(() => root.render(<Login onDone={() => {}} error="This browser was signed out." />));
+    expect(alert("link")).toBe("This browser was signed out.");
+    const link = input(t("login.link_placeholder"));
+    type(link, "https://hub.example/#token=jp_abc");
+    expect(alert("link")).toBe("");
+    await submit(link);
+    expect(alert("link")).toBe(t("login.invalid_link"));
+    type(link, "https://hub.example/#token=jp_abd");
+    expect(alert("link")).toBe("");
   });
 });

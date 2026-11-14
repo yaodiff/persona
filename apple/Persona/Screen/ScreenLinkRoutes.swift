@@ -7,15 +7,15 @@ import PersonaScreenKit
 
 // The live screen's routes on the iPhone (#6398, docs/extensions/computer-use.md "Live screen routes (#6398)"): the
 // hub's relays opened as a screen session when the hub and the node offer one, the node's direct candidates probed
-// and measured, and the route policy run. This stage measures and decides only: the picture and input stay on the
-// relay.
+// and measured, the route policy run, and the session's channels (picture and input) moved to the route it picks.
 
 enum ScreenRoutes {
     nonisolated static let log = Logger(subsystem: "persona", category: "screen-link")
 
-    /// Direct routes ship off until their real-device acceptance has passed (#6398); one line turns them on. A DEBUG
-    /// build launched with -showScreenRoutes has them meanwhile.
-    nonisolated static let releaseEnabled = false
+    /// Direct routes ship on since the acceptance before real devices passed (#6398); false again turns them off in the
+    /// next build, and the hub's `screen_link_off` keeps every live screen on its relays without one. A DEBUG build
+    /// launched with -showScreenRoutes has them whatever this says.
+    nonisolated static let releaseEnabled = true
 
     /// Whether this app offers direct routes at all (Settings shows the switch only then).
     nonisolated static var offered: Bool {
@@ -253,6 +253,7 @@ actor ScreenLinkProber {
     private var interfaces = PhoneInterfaces()
     private var monitors: [NWPathMonitor] = []
     private var latest: [ObjectIdentifier: NWPath] = [:]
+    private let wake = RetryWake()
 
     init(session: ScreenLinkSession, pair: String, group: String, machine: String) {
         self.session = session
@@ -264,7 +265,10 @@ actor ScreenLinkProber {
     /// Runs until the session ends.
     func run() async {
         startMonitors()
-        defer { monitors.forEach { $0.cancel() } }
+        defer {
+            monitors.forEach { $0.cancel() }
+            wake.cancel()
+        }
         for await e in session.events {
             switch e {
             case let .paths(p):
@@ -283,6 +287,7 @@ actor ScreenLinkProber {
                 }
             case let .lost(route):
                 plan.failed(route, now: ScreenLinkSession.monotonic())
+                armWake()
             case let .moved(change):
                 let kind = change.to.kind.rawValue, why = change.reason.rawValue, pair = pair
                 ScreenRoutes.log.info("moved to \(kind, privacy: .public) (\(why, privacy: .public))")
@@ -341,6 +346,7 @@ actor ScreenLinkProber {
         guard let conn else {
             ScreenRoutes.log.info("direct \(kind.rawValue, privacy: .public): no connection")
             plan.failed(route, now: ScreenLinkSession.monotonic())
+            armWake()
             return
         }
         plan.attached(route)
@@ -365,6 +371,14 @@ actor ScreenLinkProber {
                 await self.dialed(conn, route: route, kind: kind, via: via)
             }
         }
+        armWake()
+    }
+
+    /// Probes again when the next candidate waiting after a failure is due (#7791). Without it only new paths or a
+    /// network change dialed again, and a lost direct route stayed lost: the live screen kept the hub's relay.
+    private func armWake() {
+        let now = ScreenLinkSession.monotonic()
+        wake.arm(in: plan.nextRetry(after: now).map { $0 - now }) { [weak self] in await self?.probe() }
     }
 }
 #endif

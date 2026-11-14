@@ -30,7 +30,7 @@ describe("space route (/space/<mid>/<space>)", () => {
   });
 
   it("needs the machine and the space", () => {
-    expect(parse("/space/mac").name).toBe("home");
+    expect(parse("/space/mac").name).toBe("not-found");
   });
 });
 

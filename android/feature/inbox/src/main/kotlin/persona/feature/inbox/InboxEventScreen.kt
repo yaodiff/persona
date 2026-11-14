@@ -1,27 +1,43 @@
 package persona.feature.inbox
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.contracts.InboxSuggestion
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PersonaIcons
+import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.inbox.InboxTier
 import persona.core.navigation.Navigator
@@ -32,6 +48,7 @@ import persona.core.navigation.Navigator
  * chat/mail items whose originals must stay unmounted until an explicit source action, open here ([inboxRowPage]). Record
  * lookup and its loading / missing / failed states belong to the history package.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, navigator: Navigator) {
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
@@ -72,9 +89,9 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
         { InboxSayAction(repository, current, oldMark, onStale = { stale = it }) }
     }
     val stateActions: (@Composable () -> Unit)? = if (sayAction == null) processingAction else ({
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        FlowRow {
             processingAction?.invoke()
-            sayAction?.invoke()
+            sayAction.invoke()
         }
     })
     fun go(target: ChainTarget) {
@@ -219,15 +236,82 @@ private fun EventFallbackState(record: InboxRecord, modifier: Modifier = Modifie
 @Composable
 internal fun EventStateLine(mark: EventMark, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
     when (mark) {
-        is EventMark.Working -> JInlineStatus(stringResource(mark.word), modifier, tone = InlineTone.Busy, action = action)
-        EventMark.Preparing -> JInlineStatus(stringResource(R.string.inbox_handling_preparing), modifier, tone = InlineTone.Busy, action = action)
-        is EventMark.Failed -> JInlineStatus(mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
-            ?: stringResource(R.string.inbox_handling_failed), modifier, tone = InlineTone.Failed, action = action)
+        is EventMark.Working -> AdaptiveEventStateLine(stringResource(mark.word), modifier, InlineTone.Busy, action = action)
+        EventMark.Preparing -> AdaptiveEventStateLine(stringResource(R.string.inbox_handling_preparing), modifier,
+            InlineTone.Busy, action = action)
+        is EventMark.Failed -> AdaptiveEventStateLine(mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
+            ?: stringResource(R.string.inbox_handling_failed), modifier, InlineTone.Failed, action = action)
         is EventMark.Suggests -> Unit
         is EventMark.Now -> {
             val icon = inboxNowIcon(mark.key)
-            JInlineStatus(mark.text, modifier, tone = icon.tone, icon = icon.icon, action = action)
+            AdaptiveEventStateLine(mark.text, modifier, icon.tone, icon.icon, action)
         }
+    }
+}
+
+/** Keep the existing inline status while its whole sentence and actions fit; otherwise give the actions the next line. */
+@Composable
+private fun AdaptiveEventStateLine(
+    text: String,
+    modifier: Modifier = Modifier,
+    tone: InlineTone,
+    icon: PhIcon? = null,
+    action: (@Composable () -> Unit)? = null,
+) {
+    if (action == null) {
+        JInlineStatus(text, modifier, tone = tone, icon = icon)
+        return
+    }
+    val textMeasurer = rememberTextMeasurer()
+    val textStyle = PersonaTheme.type.caption
+    var actionWidth by remember(text, LocalDensity.current) { mutableIntStateOf(0) }
+    // Keep the widest real measurement: actions that wrap must not make the inline / stacked choice oscillate.
+    val measuredAction: @Composable () -> Unit = {
+        Box(Modifier.onSizeChanged { actionWidth = maxOf(actionWidth, it.width) }) { action() }
+    }
+    SubcomposeLayout(modifier) { constraints ->
+        val textWidth = textMeasurer.measure(AnnotatedString(text), style = textStyle, maxLines = 1, softWrap = false).size.width
+        // Probe only the icon, spacing and padding; the real sentence and actions enter semantics exactly once.
+        val chromeWidth = subcompose("event-state-chrome-width") {
+            JInlineStatus("", Modifier.width(IntrinsicSize.Max), tone = tone, icon = icon, action = { Spacer(Modifier) })
+        }.single().measure(constraints.copy(minWidth = 0, maxWidth = Constraints.Infinity)).width
+        val stacked = chromeWidth + textWidth + actionWidth > constraints.maxWidth
+        val content = subcompose("event-state-content") {
+            if (!stacked) {
+                JInlineStatus(text, Modifier.fillMaxWidth(), tone = tone, icon = icon, action = measuredAction)
+            } else {
+                val palette = PersonaTheme.palette
+                val ink = when (tone) {
+                    InlineTone.Busy -> palette.ink2
+                    InlineTone.Caution -> palette.cautionText
+                    InlineTone.Failed -> palette.danger.text
+                    InlineTone.Done -> palette.done.text
+                }
+                Column(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape)
+                    .background(PersonaTheme.palette.statusSurface)) {
+                    Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}
+                        .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                        when {
+                            icon != null -> JIcon(icon, null, size = Tokens.Space.l, tint = ink)
+                            tone == InlineTone.Busy -> JSpinner(Modifier.size(Tokens.Size.markS), color = ink,
+                                stroke = SpinnerTokens.compactStroke)
+                            tone == InlineTone.Caution -> JIcon(PhIcons.Warning, null, size = Tokens.Space.Standard.l,
+                                tint = palette.caution)
+                            tone == InlineTone.Failed -> JIcon(PhIcons.WarningCircle, null, size = Tokens.Space.Standard.l,
+                                tint = palette.danger.dot)
+                            tone == InlineTone.Done -> JIcon(PhIcons.CheckCircle, null, size = Tokens.Space.Standard.l,
+                                tint = palette.positive)
+                        }
+                        Text(text, Modifier.weight(1f), style = textStyle, color = ink)
+                    }
+                    Row(Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m).padding(bottom = Tokens.Space.xs),
+                        horizontalArrangement = Arrangement.End) { measuredAction() }
+                }
+            }
+        }.single().measure(constraints)
+        layout(content.width, content.height) { content.place(0, 0) }
     }
 }
 

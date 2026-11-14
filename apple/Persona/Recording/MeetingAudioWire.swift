@@ -387,8 +387,8 @@ nonisolated struct MeetingAudioRing: Sendable {
             first = Int(min(Int64(samples.count), end - position))
             if first == samples.count { return }
         } else if position > end {
-            lose(max(start, acked)..<end)
-            lose(end..<position)
+            lose(from: max(start, acked), to: end)
+            lose(from: end, to: position)
             start = position
             end = position
             if cursor != nil {
@@ -402,7 +402,8 @@ nonisolated struct MeetingAudioRing: Sendable {
         }
         if end - start > Int64(capacity) {
             let newStart = end - Int64(capacity)
-            lose(max(start, acked)..<newStart)
+            // While the hub acknowledges as the audio goes, its `ack` lies inside the 60 seconds held: none of this is lost.
+            lose(from: max(start, acked), to: newStart)
             start = newStart
             if let c = cursor, c < start {
                 cursor = start
@@ -468,8 +469,12 @@ nonisolated struct MeetingAudioRing: Sendable {
         MeetingGap.union(lost.map { MeetingGap(from: MeetingAudioClock.seconds($0.lowerBound), to: MeetingAudioClock.seconds($0.upperBound)) })
     }
 
-    private mutating func lose(_ range: Range<Int64>) {
-        guard !range.isEmpty else { return }
+    /// `[from, to)` fell out unacknowledged (or never reached the ring); nothing when `from >= to`, as when the hub
+    /// acknowledged up to `to` or past it. Compared before they make a range: `..<` traps on reversed bounds, and here
+    /// that is the recorder's tap thread (#7740: an iPhone crashed on it once a hub-mode meeting filled the ring).
+    private mutating func lose(from: Int64, to: Int64) {
+        guard from < to else { return }
+        let range = from..<to
         if let last = lost.last, last.upperBound >= range.lowerBound {
             lost[lost.count - 1] = min(last.lowerBound, range.lowerBound)..<max(last.upperBound, range.upperBound)
         } else {

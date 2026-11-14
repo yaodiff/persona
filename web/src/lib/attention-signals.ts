@@ -6,7 +6,7 @@ import { agentKey } from "./pins";
 import { homeKey } from "./folded-rows";
 import { useCounts, useAgentSessions } from "./sessions";
 import { getState, useStore, onHello, send, appSocketReady, connect, disconnect, DESKTOP_UNREGISTER_FEATURE } from "./store";
-import { answeredTags, attentionSoundEnabled, badgeText, batchDue, finishedBatch, detectNewCards, detectTransitions, pickEvent, rateLimiter, SETTLE_MS, settledTags, suppressed, tabTitle, trackTurns, type Turn } from "./attention";
+import { answeredTags, attentionSoundEnabled, onAttentionSoundChange, badgeText, batchDue, finishedBatch, detectNewCards, detectTransitions, pickEvent, rateLimiter, SETTLE_MS, settledTags, suppressed, tabTitle, trackTurns, type Turn } from "./attention";
 import { claimNotification, closeNotification, dismissNotification, releaseClaim, FRONT_BEAT_MS, inQuietHours, loadNotifyPrefs, markFront, notificationText, notifyPrefs, waitingCard, otherTabInFront, postNotification, systemNotifyAllowed, systemNotifyActive, onSystemNotifyChange, wants, managerMuted } from "./notify";
 import { webPushFlag } from "./web-push-flag";
 import { defaultManager } from "./manager-choice";
@@ -115,19 +115,43 @@ export function setFaviconBadge(needs: number): void {
 let ctx: AudioContext | undefined;
 let gestured = false;
 
-/** Browsers only start audio after a user gesture: until one has happened nothing plays (and nothing is queued). */
-export function armAudio(): void {
-  if (typeof window === "undefined") return;
-  const unlock = () => {
-    gestured = true;
-    try {
-      ctx ??= new AudioContext();
-      void ctx.resume();
-    } catch {
-      // no WebAudio here: silent
-    }
+const GESTURES = ["pointerdown", "keydown", "touchend"] as const;
+
+/** Listens for the gesture that starts audio, or stops listening (adding the same listener twice adds it once). */
+function listen(on: boolean) {
+  for (const ev of GESTURES) window[on ? "addEventListener" : "removeEventListener"](ev, unlock, { capture: true });
+}
+
+function unlock() {
+  gestured = true;
+  listen(false);
+  try {
+    ctx ??= new AudioContext();
+    void ctx.resume();
+  } catch {
+    // no WebAudio here: silent
+  }
+}
+
+/**
+ * Browsers only start audio after a user gesture: until one has happened nothing plays (and nothing is queued). Making
+ * the AudioContext takes 80–130 ms of the gesture it runs in, so it is made only for the alert sound, which is off by
+ * default: on the first gesture once it is on, or at once when it is switched on by a click or a key (Settings ›
+ * Notifications), which is a gesture itself. With it off, the page's first key or click pays nothing. Returns the cleanup.
+ */
+export function armAudio(): () => void {
+  if (typeof window === "undefined") return () => {};
+  const follow = () => {
+    const want = attentionSoundEnabled() && ctx?.state !== "running";
+    if (want && navigator.userActivation?.isActive) unlock();
+    else listen(want);
   };
-  for (const ev of ["pointerdown", "keydown", "touchend"]) window.addEventListener(ev, unlock, { once: true, capture: true });
+  follow();
+  const off = onAttentionSoundChange(follow);
+  return () => {
+    off();
+    listen(false);
+  };
 }
 
 // [frequency Hz, start s, length s, peak gain]

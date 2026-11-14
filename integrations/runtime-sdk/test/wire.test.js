@@ -55,6 +55,18 @@ function newlineScan(t, fn) {
 
 const eventLine = (params) => JSON.stringify({ event: 'e', params })
 
+test('a null JSON line is ignored and a following event is still dispatched', () => {
+  const sock = fakeSocket()
+  const events = []
+  const peer = new Peer(sock, { onEvent: (event, params) => events.push([event, params]) })
+  assert.doesNotThrow(() => {
+    sock.emit('data', 'null\n' + JSON.stringify({ event: 'ready', params: { ok: true } }) + '\n')
+  })
+  assert.deepEqual(events, [['ready', { ok: true }]])
+  assert.equal(peer.closed, false)
+  assert.equal(sock.destroyed, false)
+})
+
 test('a 32 MiB line in 64 KiB chunks is dispatched once, looking at each character about once', (t) => {
   const sock = fakeSocket()
   const got = []

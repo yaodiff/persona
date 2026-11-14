@@ -6,7 +6,7 @@ import { toast } from "../ui/atoms";
 import { AGENT_GROUPINGS } from "./agent-groups";
 import { adjacentTab, machineAt, panelToggle, terminalChat, type PaneRef } from "./shortcut-nav";
 import { closeHelp, toggleHelp } from "./shortcut-help";
-import { toggleMaximized, toggleSidebarColumn } from "./layout";
+import { focusInColumn, toggleMaximized, toggleSidebarColumn } from "./layout";
 import { closePalette, getPalette, togglePalette, type PaletteMode } from "./palette";
 import { closePanel, getPanel, openPanel, type Panel } from "./panel";
 import { inWorkView, navigate, withWorkView, type Route } from "./router";
@@ -87,7 +87,7 @@ export function useShortcuts(ctx: ShortcutContext) {
       }),
       registerShortcut("left-sidebar", () => {
         if (at.current.narrow) at.current.toggleDrawer();
-        else toggleSidebarColumn();
+        else toggleSidebarColumn(focusInColumn());
       }),
       registerShortcut("maximize", () => (at.current.narrow ? false : void toggleMaximized())),
       registerShortcut("terminal-chat", () => {

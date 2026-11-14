@@ -35,6 +35,18 @@ struct VNCDisplaysTests {
         #expect(VNCDisplays.fromMachine(node, framebuffer: CGSize(width: 4288, height: 1440)).map(\.frame.minX) == [0, 1728])
     }
 
+    /// #7775: a wheel notch scrolls a point of the Mac's screen, so two fingers turn view points into Mac points through
+    /// the framebuffer's pixels a point: 2 for displays sent at 2×, 1 at 1× or with nothing to go by.
+    @Test func pixelsPerMacPointFollowTheArrangement() {
+        let node = [MachineDisplay(id: 3, x: 0, y: 0, width: 2560, height: 1440, main: true),
+                    MachineDisplay(id: 1, x: -1728, y: 0, width: 1728, height: 1117)]
+        #expect(VNCDisplays.pixelsPerMacPoint(node, framebuffer: CGSize(width: 8576, height: 2880)) == 2)
+        #expect(VNCDisplays.pixelsPerMacPoint(node, framebuffer: CGSize(width: 4288, height: 1440)) == 1)
+        #expect(VNCDisplays.pixelsPerMacPoint([node[0]], framebuffer: CGSize(width: 5120, height: 2880)) == 2, "one display too")
+        #expect(VNCDisplays.pixelsPerMacPoint([], framebuffer: CGSize(width: 1920, height: 1080)) == 1, "nothing to go by")
+        #expect(VNCDisplays.pixelsPerMacPoint(node, framebuffer: CGSize(width: 8576, height: 1000)) == 1, "not its shape")
+    }
+
     /// An arrangement without the framebuffer's shape (a display plugged in or out since the node looked, or a server that
     /// draws them otherwise) offers nothing; nor do fewer than two displays.
     @Test func anArrangementThatDoesNotFitOffersNothing() {

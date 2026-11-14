@@ -50,7 +50,7 @@ nonisolated final class ScreenVideoTiers: @unchecked Sendable {
         lock.withLock {
             guard let policy else { return }
             signals.frame(captureMicros: f.captureMicros, arrivalMicros: arrival, firstByteMicros: firstByte, bytes: bytes,
-                          refinement: f.flags.contains(.refinement), fps: policy.tier.fps)
+                          refinement: f.flags.contains(.refinement), keyframe: f.flags.contains(.keyframe), fps: policy.tier.fps)
         }
     }
 

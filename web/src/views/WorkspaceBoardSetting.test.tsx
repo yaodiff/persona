@@ -104,6 +104,7 @@ describe("the workflow board switch", () => {
 
   it("opens the saved board when the hub says it is on (a board in use before the switch counts as on)", async () => {
     enabled = true;
+    settleRosterDefault();
     act(() => root.render(<><Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} /><WorkspaceBoard /></>));
     await flush();
     expect(sidebarEntry()).not.toBeNull();
@@ -155,6 +156,7 @@ describe("when the hub can't give the switch or the board", () => {
 
   it("an older hub (404): one message to update the hub, none of the board's controls, and Settings says the hub lacks the switch", async () => {
     stubHub((path) => (path.startsWith("/api/v1/workspace-board") ? notFound() : undefined));
+    settleRosterDefault();
     act(() => root.render(<><AgentGroup /><WorkspaceBoard /></>));
     await flush();
     // what to do once, in the title; the body only says why
@@ -187,6 +189,7 @@ describe("when the hub can't give the switch or the board", () => {
       if (path === "/api/v1/workspace-board" && away) return json({ error: "assistant offline", code: "assistant_offline" }, 503);
       return undefined;
     });
+    settleRosterDefault();
     act(() => root.render(<WorkspaceBoard />));
     await flush();
     expect(host.textContent).not.toContain("更新 hub");

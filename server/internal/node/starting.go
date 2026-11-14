@@ -39,10 +39,16 @@ type startLog struct {
 	running sync.WaitGroup // the start workers and their initial session-list notifications
 }
 
+// get returns the live start or recent failure, removing a failure once its display window has elapsed.
 func (l *startLog) get(id string) *startRec {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.m[id]
+	r := l.m[id]
+	if r != nil && !r.ended.IsZero() && time.Since(r.ended) > startFailedFor {
+		delete(l.m, id)
+		return nil
+	}
+	return r
 }
 
 // recovered forgets a failed start after an explicit resume has found or started the agent.

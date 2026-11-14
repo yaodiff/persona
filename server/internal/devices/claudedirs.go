@@ -30,6 +30,15 @@ func (m *Machine) blockedClaudeDirs(ctx context.Context) []string {
 	return out
 }
 
+// blockedClaudeDirsParam is node.configure's claude_dirs_blocked: never null, which the node reads as "leave the
+// patterns as they are", so lifting the last pattern would leave its directory blocked there.
+func (m *Machine) blockedClaudeDirsParam(ctx context.Context) []string {
+	if out := m.blockedClaudeDirs(ctx); out != nil {
+		return out
+	}
+	return []string{}
+}
+
 // readBlockedClaudeDirs is blockedClaudeDirs with the read error, for the writers that must not act on a list they
 // could not read.
 func (m *Machine) readBlockedClaudeDirs(ctx context.Context) ([]string, error) {
@@ -109,7 +118,7 @@ func (m *Machine) usageWindows() bool { return m.cfg.UsageWindows == nil || *m.c
 // with their keys; not on a machine the hub says is another manager's now).
 func (m *Machine) configureNode(ctx context.Context, peer *rpc.Peer, hub *devicewire.ConnectedReply, own bool) {
 	params := map[string]any{"machine_id": m.cfg.ID, "claude_dirs": m.claudeDirs(ctx),
-		"claude_dirs_blocked": m.blockedClaudeDirs(ctx), "botmux": m.botmux(ctx), "claude_start_dir": m.cfg.ClaudeStartDir,
+		"claude_dirs_blocked": m.blockedClaudeDirsParam(ctx), "botmux": m.botmux(ctx), "claude_start_dir": m.cfg.ClaudeStartDir,
 		"herdr_autostart": m.herdrAutostart(ctx), "herdr_autoinstall": m.cfg.HerdrAutoinstall, "claude_global_hooks": m.cfg.ClaudeGlobalHooks,
 		"usage_windows": m.usageWindows(), "claude_live_replies": m.liveReplies(ctx)}
 	// The sessions it lists however quiet are the assistant's to say (its profile); before it said, the node keeps
@@ -281,7 +290,7 @@ func (m *Machine) reconfigureClaudeDirs(ctx context.Context) {
 	// botmux too: this can come between the connection and its own node.configure, and the session list that follows
 	// must not be the node's first word on it (an older hub's, node/hostbotmux.go useBotmux).
 	if err := m.call(ctx, "node.configure", map[string]any{"claude_dirs": m.claudeDirs(ctx),
-		"claude_dirs_blocked": m.blockedClaudeDirs(ctx), "botmux": m.botmux(ctx)}, nil); err != nil {
+		"claude_dirs_blocked": m.blockedClaudeDirsParam(ctx), "botmux": m.botmux(ctx)}, nil); err != nil {
 		m.d.logf("[%s] configure claude dirs: %v", m.cfg.ID, err)
 		return
 	}

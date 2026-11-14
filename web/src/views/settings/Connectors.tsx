@@ -33,7 +33,9 @@ interface LarkStatus {
   last_event_at?: number;
 }
 
-export function Connectors({ open, onOpen, onChannel }: { open: string | null; onOpen: (id: string | null) => void; onChannel?: (id: string, manager?: string) => void }) {
+/** `headerBack`: the page's top bar has the way back (a phone), so an item's page draws no Back of its own. `openBeside`:
+ *  the item open beside this list (Settings' two columns), whose row the list marks. */
+export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: { open: string | null; onOpen: (id: string | null) => void; onChannel?: (id: string, manager?: string) => void; headerBack?: boolean; openBeside?: string | null }) {
   // An older hub has no connectors API (feature "connectors"): only mail and Feishu, as before.
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   // Lark (the Lark gateway through /api/v1/lark/…) only on a hub that has it (feature `lark`); "Lark bot" is the hub's own.
@@ -44,7 +46,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   // `<id>@<manager>`: another manager's connector, opened from its extension's page (docs/assistant/managers.md "Clients")
   if (open === SENT_SUB) return (
     <>
-      <Button tone="quiet" icon="chevronLeft" onClick={() => onOpen(null)} className="-ml-2 mb-3">{t("settings-hubconnector.back")}</Button>
+      {!headerBack && <Button tone="quiet" icon="chevronLeft" onClick={() => onOpen(null)} className="-ml-2 mb-3">{t("settings-hubconnector.back")}</Button>}
       <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{t("settings-sent.entry_label")}</h2>
       <SentSettings />
     </>
@@ -52,7 +54,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   if (open && open !== "feishu-bot") {
     const { id, manager } = parseOwnedSub(open);
     // no `@manager` in the address: the current assistant's copy, as for an extension
-    return <ConnectorDetail key={`${open}@${manager ?? ""}`} id={id} manager={manager ?? otherManager(picked ?? undefined)} onBack={() => onOpen(null)} onChannel={onChannel} />;
+    return <ConnectorDetail key={`${open}@${manager ?? ""}`} id={id} manager={manager ?? otherManager(picked ?? undefined)} onBack={headerBack ? undefined : () => onOpen(null)} onChannel={onChannel} />;
   }
   return (
     <>
@@ -62,7 +64,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
       <Mail />
       {lark && <Feishu />}
       <FeishuBot onChannel={onChannel} larkcli={larkcli} onOpen={onOpen} />
-      {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} />}
+      {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} openBeside={openBeside} />}
       <Group anchor="sent">
         <Row icon="send" label={t("settings-sent.entry_label")} hint={t("settings-sent.hint")} onClick={() => onOpen(SENT_SUB)} />
       </Group>

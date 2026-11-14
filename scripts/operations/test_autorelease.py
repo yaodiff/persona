@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -681,6 +682,20 @@ class AutoreleaseTests(unittest.TestCase):
         self.wait_for(gone)
         self.assertEqual(self.state()["targets"]["hub"]["failures"], 1)
         self.assertIn("result=step-1-timeout", self.entries(self.notify_log)[0]["args"][0])
+
+    def test_kill_group_ignores_a_group_with_only_exited_members(self):
+        leader = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        try:
+            def exited_unreaped():
+                state = subprocess.run(["ps", "-o", "stat=", "-p", str(leader.pid)],
+                                       capture_output=True, text=True).stdout.strip()
+                return state.startswith("Z")
+
+            self.wait_for(exited_unreaped)
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                autorelease.kill_group(leader.pid, sig)
+        finally:
+            leader.wait()
 
     def test_notify_timeout_retains_outbox(self):
         self.config["notify_timeout"] = 0.4

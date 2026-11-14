@@ -24,6 +24,7 @@
 //! | 7 | reencode | wire type `u8`, bytes | Rust's encoding of the value it decoded |
 //! | 8 | samples | none | none, after one `sample` record per value |
 //! | 9 | transport | payload kind `u8`, UTF-8 JSON body | decoded result as UTF-8 JSON, including an `error` object on refusal |
+//! | 10 | sort | UTF-8 JSON `sort::Input` | the `sort::Projection` as UTF-8 JSON |
 //!
 //! Wire types for `reencode`: 1 `Action`, 2 `ChatEvent`, 3 `ChatPatch`, 4 `ChatSnapshot`, 5 `Config`, 6 `Effect`,
 //! 7 `ListOp`, 8 `Request`, 9 `WireBatch`, 10 `Payload`. It uses the decoder the worker uses for actions, which
@@ -93,6 +94,7 @@ const CLOSE: u8 = 6;
 const REENCODE: u8 = 7;
 const SAMPLES: u8 = 8;
 const TRANSPORT: u8 = 9;
+const SORT: u8 = 10;
 
 const OK: u8 = 1;
 const ERROR: u8 = 2;
@@ -704,6 +706,19 @@ fn run(input: &mut impl Read, output: &mut impl Write) -> Result<(), String> {
                     serde_json::from_slice::<serde_json::Value>(&transport_json(kind, fields.rest()))
                         .map(|value| value.to_string().into_bytes()),
                 )?;
+            }
+            SORT => {
+                let fields = fields("sort");
+                let input = fields.rest();
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    let Ok(input) = serde_json::from_slice::<persona_core::sort::Input>(input) else {
+                        return Err("sort: input does not decode".to_owned());
+                    };
+                    let projection = persona_core::sort::project(&input);
+                    serde_json::to_string(&projection).map_err(|e| e.to_string())
+                }))
+                .unwrap_or_else(|_| Err("sort: projection panicked".to_owned()));
+                write_result(output, result.map(|json| json.into_bytes()))?;
             }
             other => return Err(format!("unknown command {other}")),
         }

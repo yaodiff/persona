@@ -106,6 +106,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setShown(true);
   act(() => root.unmount());
   host.remove();
   vi.useRealTimers();
@@ -136,6 +137,11 @@ const rowsIn = (section: HTMLElement) => [...section.querySelectorAll<HTMLElemen
 async function toggle(section: HTMLElement) {
   await act(async () => heading(section).click());
   await settle();
+}
+const hubHint = () => { for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn(); };
+function setShown(shown: boolean) {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => shown ? "visible" : "hidden" });
+  document.dispatchEvent(new Event("visibilitychange"));
 }
 async function hint() {
   await act(async () => {
@@ -363,6 +369,22 @@ describe("the list by project, on a hub with the catalog", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
     await hint();
     expect(groupReads()).toBe(2);
+  });
+
+  it("reads nothing for the hints a hidden tab gets, and once for them all when it is shown again", async () => {
+    await show();
+    await browseBy("machine");
+    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    vi.mocked(api).mockClear();
+    await act(async () => setShown(false));
+    for (let i = 0; i < 10; i++) await act(async () => { hubHint(); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2 * SESSION_LIST_METRICS.groupsRefresh); });
+    expect(calls()).toEqual([]);
+    await act(async () => setShown(true));
+    await settle();
+    // each open section reads once, the groups once; the folded section still reads nothing
+    expect(reads("page").map((path) => params(path).get("machine_id")).sort()).toEqual(["lab", "mac", "pc"]);
+    expect(reads("counts")).toHaveLength(1);
   });
 
   it("reads a catalog again while its computers are still answering, less often as it goes on", async () => {

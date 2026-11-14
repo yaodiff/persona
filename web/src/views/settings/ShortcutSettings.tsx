@@ -112,7 +112,7 @@ export function ShortcutSettings() {
         }
         footer={prefs.off ? t("settings-shortcutsettings.all_off_footer") : undefined}
       >
-        <Row label={t("settings-shortcutsettings.enable_all")} hint={t("settings-shortcutsettings.enable_all_hint")}>
+        <Row label={t("settings-shortcutsettings.enable_all")} hint={t("settings-shortcutsettings.enable_all_hint")} anchor="shortcuts-all">
           <Switch on={!prefs.off} onChange={setShortcutsOn} label={t("settings-shortcutsettings.enable_all")} />
         </Row>
       </Group>
@@ -148,7 +148,7 @@ export function ShortcutSettings() {
               t("settings-shortcutsettings.row_off")
             ) : undefined;
             return (
-              <Row key={s.id} label={<span className={cx((!on || prefs.off) && "text-ink-3")}>{s.label}</span>} hint={hint}>
+              <Row key={s.id} anchor={`shortcut-${s.id}`} label={<span className={cx((!on || prefs.off) && "text-ink-3")}>{s.label}</span>} hint={hint}>
                 <RowConfirm
                   open={Boolean(asking)}
                   confirm={t("settings-shortcutsettings.replace")}
@@ -203,7 +203,7 @@ export function ShortcutSettings() {
       ))}
       <Group title={t("settings-shortcutsettings.terminal_title")} anchor="shortcuts-terminal" footer={t("settings-shortcutsettings.terminal_footer")}>
         {LOCAL_SHORTCUTS.map((s) => (
-          <Row key={s.id} label={s.label} hint={platform === "other" ? s.note : undefined}>
+          <Row key={s.id} anchor={`shortcut-${s.id}`} label={s.label} hint={platform === "other" ? s.note : undefined}>
             <span className="flex items-center gap-1 px-1.5">
               {chordParts(s.chord[platform], platform).map((k, i) => (
                 <Kbd key={i}>{k}</Kbd>
