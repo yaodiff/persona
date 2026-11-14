@@ -2,5 +2,9 @@
   "destination": "工作区",
   "existing_hint": "在此现有工作区中启动。",
   "choose_folder": "改为选择文件夹",
-  "owner_changed": "此工作区属于先前的连接或管理器。请从工作区列表重新选择。"
+  "owner_changed": "此工作区属于先前的连接或管理器。请从工作区列表重新选择。",
+  "kind_main": "主检出",
+  "kind_worktree": "工作树",
+  "kind_folder": "文件夹",
+  "other": "其他工作区"
 }

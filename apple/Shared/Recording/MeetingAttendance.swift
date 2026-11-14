@@ -75,6 +75,31 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// fill the chat they are fed to, so the main chat never gets them by default; no session named without this pick
     /// means nobody was chosen, and the meeting goes as off (`sentRole`).
     var mainPicked: Bool = false
+    /// The transcription mode the meeting asked for as it started (#3862 phase 5, docs/assistant/meeting-minutes.md
+    /// 「Choosing the mode」), taken only while the hub listed `meeting_transcription` beside `meeting_conversation` and
+    /// `meeting_live_view`: the flag's snapshot, kept for life. Its uploads name it (`transcription`); nil: the hub
+    /// didn't list it, and they name no mode (the hub's `device`). Which mode is in effect is the upload's `200`'s word
+    /// (`MeetingTranscription`): never `hub` unless asked for here, so a meeting's audio leaves the phone only by choice.
+    var transcription: MeetingTranscriptionMode? = nil
+    /// Every role this meeting had, with where it began on the recording's clock (the first at the start): the hub's
+    /// timeline in hub mode (`timeline.roles`, the audio socket's `start` and `role`). Kept only for a meeting that asked
+    /// for a transcription mode (`transcription`), so every other attendance stays as it was.
+    var roles: [RecordingRoleChange] = []
+    /// The stretches of the recording's clock that were hub-mode meeting time (#3862 phase 5): one opens as a meeting
+    /// that asked for `hub` starts or as the recording becomes one (`openHubTime`), and closes when it turns into a Note,
+    /// when an older manager rolls it back, and at Stop (`closeHubTime`); the last is open (`end` nil) while it goes on.
+    /// Only audio inside them ever leaves the phone after the meeting (the gap uploads): what was recorded as a Note, or
+    /// after a rollback, stays here whatever the hub lacks. Empty: none, so nothing is uploaded.
+    var hubTime: [RecordingPeriod] = []
+    /// An older manager answered an upload of this meeting (a `200` without `transcription`, docs/assistant/
+    /// meeting-minutes.md「Choosing the mode」): `device` for the rest of the recording, kept with it so a relaunch with the
+    /// newer manager back never streams or uploads its audio again.
+    var hubRolledBack = false
+    /// Hub transcription stopped for this meeting (a fatal `error` the phone stops on, an unknown code included, or a
+    /// refused socket; docs/assistant/meeting-minutes.md「Audio from the phone」): where on its clock, and the code. Kept with
+    /// the recording, so its hub-mode time ends there for good, also after a relaunch: no socket, and no audio recorded
+    /// from then on goes up, live or as a gap. Nil while it may run.
+    var hubStopped: RecordingHubStop?
 
     nonisolated enum StopReason: String, Codable, Sendable {
         case unsupported
@@ -87,21 +112,26 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     }
 
     /// A room meeting's attendance as it starts: no attending session (the meeting's own room attends), whatever the role.
-    /// `highlights` counts only beside `liveView`, as the hub lists it only beside `meeting_live_view`.
+    /// `highlights` counts only beside `liveView`, as the hub lists it only beside `meeting_live_view`. `transcription`:
+    /// the mode asked for, when the hub lists `meeting_transcription` (phase 5); its role is the first of `roles`.
     static func room(_ role: MeetingAttendance, private privateMark: Bool, photos: Bool, liveView: Bool = false,
-                     highlights: Bool = false, at: Double = 0) -> RecordingAttendance {
+                     highlights: Bool = false, transcription: MeetingTranscriptionMode? = nil, at: Double = 0) -> RecordingAttendance {
         var a = RecordingAttendance(role: role, at: at)
         a.room = true
         a.photos = photos
         a.liveView = liveView
         a.highlights = liveView && highlights
         a.privateMark = privateMark
+        a.transcription = transcription
+        if transcription != nil { a.roles = [RecordingRoleChange(at: max(0, at), attendance: role)] }
+        a.openHubTime(at: at)
         return a
     }
 
     enum CodingKeys: String, CodingKey {
         case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped, room, photos, liveView, highlights,
              privateMark, mainPicked
+        case transcription, roles, hubTime, hubRolledBack, hubStopped
     }
 
     init(from decoder: Decoder) throws {
@@ -124,6 +154,49 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         privateMark = try? c.decodeIfPresent(Bool.self, forKey: .privateMark)
         // Written since #3862; a file from before has none: its main chat was never picked, so it goes as off.
         mainPicked = (try? c.decodeIfPresent(Bool.self, forKey: .mainPicked)) ?? false
+        // Phase 5: a mode a later app wrote and this one doesn't know names none (the upload sends no mode).
+        transcription = try? c.decodeIfPresent(MeetingTranscriptionMode.self, forKey: .transcription)
+        roles = (try? c.decodeIfPresent([RecordingRoleChange].self, forKey: .roles)) ?? []
+        // None read: no hub-mode time, so none of its audio is ever uploaded after the meeting.
+        hubTime = (try? c.decodeIfPresent([RecordingPeriod].self, forKey: .hubTime)) ?? []
+        hubRolledBack = (try? c.decodeIfPresent(Bool.self, forKey: .hubRolledBack)) ?? false
+        hubStopped = try? c.decodeIfPresent(RecordingHubStop.self, forKey: .hubStopped)
+    }
+
+    /// The recording is a meeting that asked for `hub` from `at` on (its start, or a Note turned into a meeting): a
+    /// stretch of hub-mode time opens, unless one is open already, an older manager rolled the meeting back or hub
+    /// transcription stopped for it.
+    mutating func openHubTime(at: Double) {
+        guard transcription == .hub, !hubRolledBack, hubStopped == nil, hubTime.last.map({ $0.end != nil }) ?? true else { return }
+        hubTime.append(RecordingPeriod(start: max(0, at, hubTime.last?.end ?? 0)))
+    }
+
+    /// Hub-mode time ends at `at` (the recording turned into a Note, or stopped): the open stretch closes there.
+    mutating func closeHubTime(at: Double) {
+        guard let last = hubTime.indices.last, hubTime[last].end == nil else { return }
+        hubTime[last].end = max(at, hubTime[last].start)
+    }
+
+    /// An older manager answered at `at`: hub-mode time ends, for the rest of the recording.
+    mutating func rollBackHub(at: Double) {
+        closeHubTime(at: at)
+        hubRolledBack = true
+    }
+
+    /// Hub transcription stopped for this meeting at `at`, with `code`: hub-mode time ends there, for the rest of the
+    /// recording (the first stop is kept).
+    mutating func stopHub(at: Double, code: String) {
+        closeHubTime(at: at)
+        if hubStopped == nil { hubStopped = RecordingHubStop(at: max(0, at), code: code) }
+    }
+
+    /// The hub-mode stretches as `[from, to]` pairs on the recording's clock, an open one ending at `end` (the recording's
+    /// length), none past where hub transcription stopped: what gap uploads are clipped to.
+    func hubStretches(until end: Double) -> [(from: Double, to: Double)] {
+        hubTime.compactMap { p in
+            let to = min(p.end ?? end, end, hubStopped?.at ?? end)
+            return to > p.start ? (p.start, to) : nil
+        }
     }
 
     /// The attending session, nil for the main chat (when `mainPicked`) or nobody.
@@ -139,11 +212,15 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// target is never sent, whatever built the attendance.
     var sentRole: MeetingAttendance { role.attends && !hasAttendee ? .off : role }
 
-    /// Sets the role at `at` (seconds on the recording's clock), opening or closing the attending period.
+    /// Sets the role at `at` (seconds on the recording's clock), opening or closing the attending period; a meeting that
+    /// asked for a transcription mode also keeps the change in `roles` (the hub's timeline).
     mutating func set(_ next: MeetingAttendance, at: Double) {
         let open = periods.last.map { $0.end == nil } ?? false
         if next.attends, !open { periods.append(RecordingPeriod(start: max(0, at))) }
         if !next.attends, open, let last = periods.indices.last { periods[last].end = max(at, periods[last].start) }
+        if transcription != nil, roles.last?.attendance != next {
+            roles.append(RecordingRoleChange(at: max(0, at, roles.last?.at ?? 0), attendance: next))
+        }
         role = next
         if next.attends { stopped = nil }
     }
@@ -199,12 +276,34 @@ nonisolated struct RecordingSpan: Codable, Hashable, Sendable {
     }
 }
 
+/// How a meeting is transcribed (#3862 phase 5, docs/assistant/meeting-minutes.md「Choosing the mode」): on this phone
+/// (`device`, privacy mode: the meeting's audio never leaves it) or by the hub (`hub`: the audio goes to the hub, which
+/// transcribes it with the speech service it is set up with, and the phone's own text fills its gaps).
+nonisolated enum MeetingTranscriptionMode: String, Codable, CaseIterable, Sendable {
+    case device
+    case hub
+}
+
+/// A role a meeting took on at `at` (seconds on the recording's clock): one entry of the hub's timeline
+/// (`{"at", "attendance"}`, docs/assistant/meeting-minutes.md「The timeline」).
+nonisolated struct RecordingRoleChange: Codable, Hashable, Sendable {
+    var at: Double
+    var attendance: MeetingAttendance
+}
+
 /// A stretch with an open end: attending since `start`, until `end` (nil while it goes on).
 nonisolated struct RecordingPeriod: Codable, Hashable, Sendable {
     var start: Double
     var end: Double?
 
     func holds(_ time: Double) -> Bool { time >= start && end.map { time <= $0 } ?? true }
+}
+
+/// Where on a recording's clock hub transcription stopped for it, and why (`RecordingAttendance.hubStopped`): the fatal
+/// `error`'s code, or `http_<status>` for a refused socket.
+nonisolated struct RecordingHubStop: Codable, Hashable, Sendable {
+    var at: Double
+    var code: String
 }
 
 /// The hub's side of attending (docs/assistant/meeting-minutes.md「Attendance fields」).
@@ -252,19 +351,56 @@ nonisolated enum MeetingAttendanceDefaults {
     /// The last hub heard listed `meeting_echo`.
     static func hubEcho(_ store: UserDefaults = .standard) -> Bool { store.bool(forKey: echoKey) }
 
+    /// …and hub transcription (phase 5: the upload's `transcription` and `timeline`, the audio socket, gap uploads); only
+    /// ever with `meeting_conversation` and `meeting_live_view`.
+    static let transcriptionFeature = "meeting_transcription"
+
     /// Whether the hub listed them, for a start without the app in front, as `offeredKey`.
     static let conversationKey = "recording.meeting.conversation"
     static let photosKey = "recording.meeting.photos"
     static let liveViewKey = "recording.meeting.liveView"
     static let highlightsKey = "recording.meeting.highlights"
+    static let transcriptionKey = "recording.meeting.transcription"
+    /// The hub's `meeting_transcription_default` and `meeting_transcription_ready` as last read (`GET /api/v1/assistant`),
+    /// for a one-tap start before the settings are in.
+    static let transcriptionDefaultKey = "recording.meeting.transcriptionDefault"
+    static let transcriptionReadyKey = "recording.meeting.transcriptionReady"
+    /// The iPhone's own **Hub transcription on Wi-Fi only** (off by default, kept on this phone, never on the hub):
+    /// with it on and no Wi-Fi, no audio leaves the phone; that time goes up as gaps once on Wi-Fi.
+    static let wifiOnlyKey = "recording.meeting.transcriptionWiFiOnly"
 
     /// Keeps whether the hub lists them (a start without the app in front reads them).
     static func remember(conversation: Bool, photos: Bool, liveView: Bool = false, highlights: Bool = false,
+                         transcription: Bool = false,
                          _ store: UserDefaults = .standard) {
         if store.object(forKey: conversationKey) == nil || store.bool(forKey: conversationKey) != conversation { store.set(conversation, forKey: conversationKey) }
         if store.object(forKey: photosKey) == nil || store.bool(forKey: photosKey) != photos { store.set(photos, forKey: photosKey) }
         if store.object(forKey: liveViewKey) == nil || store.bool(forKey: liveViewKey) != liveView { store.set(liveView, forKey: liveViewKey) }
         if store.object(forKey: highlightsKey) == nil || store.bool(forKey: highlightsKey) != highlights { store.set(highlights, forKey: highlightsKey) }
+        if store.object(forKey: transcriptionKey) == nil || store.bool(forKey: transcriptionKey) != transcription {
+            store.set(transcription, forKey: transcriptionKey)
+        }
+    }
+
+    /// Keeps the hub's transcription settings as read (each only when known).
+    static func remember(transcriptionDefault: MeetingTranscriptionMode?, ready: Bool?, _ store: UserDefaults = .standard) {
+        if let transcriptionDefault, store.string(forKey: transcriptionDefaultKey) != transcriptionDefault.rawValue {
+            store.set(transcriptionDefault.rawValue, forKey: transcriptionDefaultKey)
+        }
+        if let ready, store.object(forKey: transcriptionReadyKey) == nil || store.bool(forKey: transcriptionReadyKey) != ready {
+            store.set(ready, forKey: transcriptionReadyKey)
+        }
+    }
+
+    /// The mode a meeting started with nothing picked asks for (pure, for the tests; docs/assistant/meeting-minutes.md
+    /// 「Choosing the mode」): nil while the hub doesn't list `meeting_transcription` (no mode is named), `picked` when the
+    /// start sheet offered one (`hub` only while the hub is ready, which the sheet's choice already says), else the hub's
+    /// default, `device` while the hub isn't ready.
+    static func startMode(listed: Bool, hubDefault: MeetingTranscriptionMode?, ready: Bool,
+                          picked: MeetingTranscriptionMode? = nil) -> MeetingTranscriptionMode? {
+        guard listed else { return nil }
+        let wanted = picked ?? hubDefault ?? .device
+        return wanted == .hub && ready ? .hub : .device
     }
 
     /// Keeps every meeting flag of a hub's `hello` as it arrives (`features`, not empty: an empty list says nothing), so a
@@ -277,7 +413,8 @@ nonisolated enum MeetingAttendanceDefaults {
         let conversation = offered && features.contains(conversationFeature)
         let liveView = conversation && features.contains(liveViewFeature)
         remember(conversation: conversation, photos: conversation && features.contains(photosFeature),
-                 liveView: liveView, highlights: liveView && features.contains(highlightsFeature), store)
+                 liveView: liveView, highlights: liveView && features.contains(highlightsFeature),
+                 transcription: liveView && features.contains(transcriptionFeature), store)
         let echo = offered && features.contains(echoFeature)
         if store.object(forKey: echoKey) == nil || store.bool(forKey: echoKey) != echo { store.set(echo, forKey: echoKey) }
     }

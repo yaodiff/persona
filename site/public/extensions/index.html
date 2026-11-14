@@ -12,6 +12,9 @@
 <meta property="og:url" content="https://personaside.com/extensions/">
 <meta property="og:image" content="https://personaside.com/img/recording.webp">
 <link rel="canonical" href="https://personaside.com/extensions/">
+<link rel="alternate" hreflang="zh-CN" href="https://personaside.com/extensions/">
+<link rel="alternate" hreflang="en" href="https://personaside.com/en/extensions/">
+<link rel="alternate" hreflang="x-default" href="https://personaside.com/extensions/">
 <meta name="theme-color" content="#EFE4D6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#131217" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/favicon.png" media="(prefers-color-scheme: light)">
@@ -294,7 +297,7 @@ dialog[open]::backdrop{animation:fade .28s ease both}
 @media (max-width:640px){
   :root{--page:calc(100vw - 32px)}
   body{font-size:16px}
-  .top nav a:not(.go){display:none}
+  .top nav a:not(.go):not(.lang){display:none}
   .hero{padding:12px 0 36px;gap:28px}
   .lede{font-size:17px}
   .stats{gap:8px}
@@ -341,6 +344,7 @@ dialog[open]::backdrop{animation:fade .28s ease both}
     <a href="/releases/">下载与版本</a>
     <a href="https://github.com/nwverse/persona-extensions" target="_blank" rel="noopener">GitHub</a>
     <a class="go" href="/#start">开始用</a>
+    <a class="lang" href="/en/extensions/?lang=en" hreflang="en" lang="en" aria-label="View in English">EN</a>
   </nav>
 </header>
 

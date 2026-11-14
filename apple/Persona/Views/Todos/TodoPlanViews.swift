@@ -45,10 +45,11 @@ struct TodoPlanLine: View {
                 }
                 if let due {
                     let overdue = TodosLogic.isOverdue(todo)
-                    HStack(spacing: Theme.Space.xs) {
+                    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
                         ThemedIcon(Theme.Icon.dueDate)
+                        // The date and time may break onto a second line at a large text size rather than be cut.
                         Text(overdue ? "Was due \(due)" : "Due \(due)")
-                            .lineLimit(1)
+                            .lineLimit(2)
                     }
                     .foregroundStyle(overdue ? Theme.danger : Color.secondary)
                 }
@@ -104,17 +105,23 @@ nonisolated struct TodoPlanDraft: Equatable {
     }
 }
 
-/// The detail page's due date, reminder and priority. A change is saved shortly after it is made (a date picker
+/// The detail page's due date, reminder, priority and project. A change is saved shortly after it is made (a date picker
 /// sends every step); the controls follow the to-do again once nothing is being saved.
 struct TodoPlanSection: View {
     var todo: TodoItem
     @State private var store = TodoStore.shared
     @State private var draft: TodoPlanDraft
     @State private var saving: Task<Void, Never>?
+    @State private var projects = TodoProjects.shared
+    /// The project picked, its slug; "" none. Saved on its own: a project gone from the knowledge base since must not
+    /// make a date change fail.
+    @State private var project: String
+    @State private var savingProject: Task<Void, Never>?
 
     init(todo: TodoItem) {
         self.todo = todo
         _draft = State(initialValue: TodoPlanDraft(todo))
+        _project = State(initialValue: todo.project ?? "")
     }
 
     var body: some View {
@@ -150,13 +157,45 @@ struct TodoPlanSection: View {
                 Label { Text("Priority") } icon: { ThemedIcon(Theme.Icon.highPriority) }
             }
             .accessibilityIdentifier("todo.plan.priority")
+            Picker(selection: $project) {
+                Text("None [Todo Project]").tag("")
+                ForEach(TodoProjectLogic.choices(projects.list, current: todo.project)) { p in
+                    Text(p.name).tag(p.slug)
+                }
+            } label: {
+                Label { Text("Project") } icon: { ThemedIcon(Theme.Icon.space) }
+            }
+            .accessibilityIdentifier("todo.plan.project")
         }
         .onChange(of: draft) { _, new in
             guard !new.means(TodoPlanDraft(todo)) else { return }
             save(new)
         }
+        .onChange(of: project) { _, new in
+            guard new != (todo.project ?? "") else { return }
+            saveProject(new)
+        }
         .onChange(of: todo) { _, now in
             if saving == nil { draft = TodoPlanDraft(now) }
+            if savingProject == nil { project = now.project ?? "" }
+        }
+        .task { await projects.load(AppModel.shared.api?.currentAssistantSettings()) }
+    }
+
+    /// The hub refuses a project it does not have (deleted, or not a project any more): the picker goes back.
+    private func saveProject(_ slug: String) {
+        savingProject?.cancel()
+        let id = todo.id
+        savingProject = Task {
+            do {
+                try await store.updatePlan(id: id, APIClient.TodoPlanChange(project: slug))
+                Haptics.selection()
+            } catch {
+                guard !Task.isCancelled else { return } // a newer pick is being saved
+                project = todo.project ?? ""
+                AppModel.shared.show(error)
+            }
+            if !Task.isCancelled { savingProject = nil }
         }
     }
 

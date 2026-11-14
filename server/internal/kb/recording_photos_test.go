@@ -536,9 +536,12 @@ func TestPhotosTrimKeepsCited(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// With a summary card (#6563): its bullet and its conclusion cite photo 1 as the point does.
+	card := &MinutesOverview{Conclusions: []MinutesConclusion{{Text: "照白板办", At: 5, Photo: 1}},
+		Groups: []MinutesGroup{{Topics: []MinutesTopic{{Title: "白板", Icon: "design", Bullets: []MinutesBullet{{Text: "白板", At: 5, Photo: 1}}}}}}}
 	putMeetingMinutes(t, e, recID, Minutes{Version: 1, Revision: 1, Title: "Design review", When: "w",
 		Points: []MinutesPoint{{Text: "白板", At: 5, Photo: 1}}, Actions: []MinutesAction{{ID: "a1", What: "提纲", At: 20, Photo: 3}},
-		Markdown: "# Design review"})
+		Overview: card, Markdown: "# Design review"})
 	rev := e.PhotosRev(recID)
 	asks := recordingNow(t, e, recID).MinutesAsks
 	told[recID] = 0
@@ -599,7 +602,8 @@ func TestPhotosTrimKeepsCited(t *testing.T) {
 	if _, withdraw := e.PhotosForRoom(recID); len(withdraw) != 0 {
 		t.Fatalf("withdraw %+v", withdraw)
 	}
-	if m, _ := e.Store.ReadMinutes(recID); m.Points[0].Photo != 1 {
+	// The summary card too: on a trimmed recording the minutes stay as they are, the overview included.
+	if m, _ := e.Store.ReadMinutes(recID); m.Points[0].Photo != 1 || !jsonEqual[MinutesOverview](t, m.Overview, card) || m.Version != 1 {
 		t.Fatalf("minutes %+v", m)
 	}
 
@@ -852,7 +856,8 @@ func TestMinutesPhotoDeletedDuringCall(t *testing.T) {
 				return "", err
 			}
 		}
-		return `{"title":"t","points":[{"text":"白板","photo":1},{"text":"第一句","line":1}],
+		return `{"title":"t","conclusions":[{"text":"白板上的结论","photo":1,"line":1}],
+		  "topics":[{"title":"白板","points":[{"text":"白板","photo":1}]},{"title":"开场","points":[{"text":"第一句","line":1}]}],
 		  "actions":[{"what":"照片里的事","photo":1},{"what":"第一句的事","line":1}]}`, nil
 	}}
 	e = goldenEngine(t, model)
@@ -863,9 +868,14 @@ func TestMinutesPhotoDeletedDuringCall(t *testing.T) {
 	e.WriteMinutes(context.Background(), 2)
 	m, _ := e.Store.ReadMinutes(recID)
 	if m == nil || len(m.Points) != 1 || m.Points[0].Photo != 0 || len(m.Actions) != 1 || m.Actions[0].ID != "a1" || m.Actions[0].What != "第一句的事" ||
-		strings.Contains(m.Markdown, "照片") {
+		strings.Contains(m.Markdown, "照片") || strings.Contains(m.Markdown, "白板") {
 		t.Fatalf("stored %+v", m)
 	}
+	// The overview's topic and conclusion citing it go too (the conclusion cited the photo, which a bullet cited).
+	if m.Overview == nil || !slices.Equal(groupsOf(m.Overview), []string{": 开场"}) || m.Overview.Conclusions != nil {
+		t.Fatalf("overview %+v", m.Overview)
+	}
+	checkOverview(t, m)
 	if r := recordingNow(t, e, recID); r.MinutesState != MinutesPending || len(told) != 0 {
 		t.Fatalf("settled by minutes read before the delete: %q told %v", r.MinutesState, told)
 	}
@@ -933,8 +943,10 @@ func TestPhotosMarkdown(t *testing.T) {
 func TestPhotoDeleteUncitesAtOnce(t *testing.T) {
 	model := &funcModel{f: func(_ int, _, user string) (string, error) {
 		if strings.Contains(user, "[P1] ") {
-			return `{"title":"t","points":[{"text":"白板上的 photocanary","photo":1},{"text":"第一句","line":1}],
-			  "decisions":[{"text":"照 photocanary 办","photo":1}],"open":[{"text":"photocanary 够吗","photo":1}],
+			return `{"title":"t","headline":"一句话概括","conclusions":[{"text":"照 **photocanary** 办","photo":1},{"text":"第一句**定了**","line":1}],
+			  "topics":[{"title":"白板","points":[{"text":"白板上的 photocanary","photo":1}],"decisions":[{"text":"照 photocanary 办","photo":1}]},
+			            {"title":"开场","points":[{"text":"第一句","line":1}]}],
+			  "open":[{"text":"photocanary 够吗","photo":1}],
 			  "actions":[{"what":"整理 photocanary","photo":1},{"what":"第二句的事","line":2}]}`, nil
 		}
 		return `{"title":"t","points":[{"text":"第一句","line":1}],"actions":[{"what":"第二句的事","line":2}]}`, nil
@@ -947,7 +959,8 @@ func TestPhotoDeleteUncitesAtOnce(t *testing.T) {
 	addPhoto(t, e, recID, photoUpload(1, 0, "白板", "预算"), false)
 	e.WriteMinutes(ctx, 2)
 	m, err := e.Store.ReadMinutes(recID)
-	if err != nil || len(m.Actions) != 2 || m.Actions[1].ID != "a2" || len(e.Search("photocanary", false, 10)) == 0 {
+	if err != nil || len(m.Actions) != 2 || m.Actions[1].ID != "a2" || len(e.Search("photocanary", false, 10)) == 0 ||
+		m.Overview == nil || !slices.Equal(groupsOf(m.Overview), []string{": 白板, 开场"}) || len(m.Overview.Conclusions) != 2 {
 		t.Fatalf("first minutes %+v %v", m, err)
 	}
 	if _, err := e.SetMinutesTodos(recID, m.Version, map[string]string{"a2": "todo_1"}, nil); err != nil {
@@ -965,8 +978,13 @@ func TestPhotoDeleteUncitesAtOnce(t *testing.T) {
 		jsonOf(t, after.Actions) != jsonOf(t, []MinutesAction{{ID: "a1", What: "第二句的事", At: 10, TodoID: "todo_1"}}) {
 		t.Fatalf("items left %+v", after)
 	}
+	// The overview's bullets and conclusions citing it go with them, and its topic; the rest stays one to one.
+	if o := after.Overview; o == nil || !slices.Equal(groupsOf(o), []string{": 开场"}) || len(o.Conclusions) != 1 || o.Conclusions[0].Text != "第一句定了" {
+		t.Fatalf("overview left %+v", after.Overview)
+	}
+	checkOverview(t, after)
 	if md := readFile(t, e, recID, "minutes.md"); strings.Contains(md, "photocanary") || strings.Contains(md, "照片") ||
-		strings.Contains(after.Markdown, "photocanary") || !strings.Contains(md, "- [14:00:10] 第二句的事") {
+		strings.Contains(after.Markdown, "photocanary") || !strings.Contains(md, "- [14:00:10] 第二句的事") || !strings.Contains(md, "## 核心结论") {
 		t.Fatalf("minutes.md:\n%s", md)
 	}
 	if hits := e.Search("photocanary", false, 10); len(hits) != 0 {

@@ -981,7 +981,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     func claimRetentionPass(now: Date, every interval: TimeInterval) async -> Bool {
         await onQueue {
             let url = self.root.appendingPathComponent(Self.retentionFile)
-            if let data = try? Data(contentsOf: url), // perf-ok: store queue
+            if let data = try? Data(contentsOf: url),
                let last = try? JSONDecoder().decode(Date.self, from: data),
                now >= last, now.timeIntervalSince(last) < interval {
                 return false
@@ -1350,7 +1350,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     /// A day's span, without decoding its text when it isn't in memory: an erase looks at every day the phone holds.
     private func span(of id: UUID) -> DateInterval? {
         if let record = cache[id] { return record.span }
-        if let data = try? Data(contentsOf: dayURL(id)), // perf-ok: store queue
+        if let data = try? Data(contentsOf: dayURL(id)),
            let head = try? Self.dayDecoder().decode(RecordingDayHead.self, from: data), head.id == id {
             return head.span
         }
@@ -1428,7 +1428,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     }
 
     private func readRequests() -> RecordingDayWatchRequests {
-        guard let data = try? Data(contentsOf: requestsURL) else { return RecordingDayWatchRequests() } // perf-ok: store queue
+        guard let data = try? Data(contentsOf: requestsURL) else { return RecordingDayWatchRequests() }
         return (try? JSONDecoder().decode(RecordingDayWatchRequests.self, from: data)) ?? RecordingDayWatchRequests()
     }
 
@@ -1507,7 +1507,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     /// What the journal names: the seqs whose sidecars were written since `day.json` was, and whether events or local
     /// erases were. A line a crash cut short is skipped.
     private func readJournal(_ id: UUID) -> Unsaved {
-        guard let data = try? Data(contentsOf: journalURL(id)) else { return Unsaved() } // perf-ok: store queue
+        guard let data = try? Data(contentsOf: journalURL(id)) else { return Unsaved() }
         var unsaved = Unsaved()
         for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
             if line == Self.eventsEntry {
@@ -1634,7 +1634,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     }
 
     private func readDayFile(_ id: UUID) -> RecordingDayRecord? {
-        guard let data = try? Data(contentsOf: dayURL(id)) else { return nil } // perf-ok: store queue
+        guard let data = try? Data(contentsOf: dayURL(id)) else { return nil }
         if let record = try? Self.dayDecoder().decode(RecordingDayRecord.self, from: data), record.id == id { return record }
         // Written by a build that reads it differently: kept aside, not overwritten, and the day rebuilt from its folder.
         let aside = folder(id).appendingPathComponent(Self.unreadableFile)
@@ -1644,18 +1644,18 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     }
 
     private func readSidecar(_ url: URL) -> RecordingDaySidecar? {
-        guard let data = try? Data(contentsOf: url) else { return nil } // perf-ok: store queue
+        guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(RecordingDaySidecar.self, from: data)
     }
 
     /// The events the watch sent for the day, in the order they came; a line a crash cut short is skipped.
     private func readEvents(_ id: UUID) -> [RecordingDayEventEnvelope] {
-        guard let data = try? Data(contentsOf: eventsURL(id)) else { return [] } // perf-ok: store queue
+        guard let data = try? Data(contentsOf: eventsURL(id)) else { return [] }
         return data.split(separator: UInt8(ascii: "\n")).compactMap { RecordingDayEventEnvelope(data: Data($0)) }
     }
 
     private func readLocalErases(_ id: UUID) -> [RecordingDayErasure] {
-        guard let data = try? Data(contentsOf: erasesURL(id)) else { return [] } // perf-ok: store queue
+        guard let data = try? Data(contentsOf: erasesURL(id)) else { return [] }
         return (try? JSONDecoder().decode([RecordingDayErasure].self, from: data)) ?? []
     }
 
@@ -1681,7 +1681,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
 
     private func list(_ id: UUID) -> Listing {
         let keys: [URLResourceKey] = [.contentModificationDateKey]
-        let files = (try? FileManager.default.contentsOfDirectory(at: folder(id), includingPropertiesForKeys: keys)) ?? [] // perf-ok: store queue
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder(id), includingPropertiesForKeys: keys)) ?? []
         var listing = Listing()
         for file in files {
             let name = file.lastPathComponent
@@ -1773,7 +1773,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     /// returns, and noted for `recoverOnLaunch`. Folders already read are skipped, so running it again is cheap.
     private func sweep() {
         for id in unreported.sorted(by: { $0.uuidString < $1.uuidString }) where !forgetIfDeleted(id) { write(id) }
-        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] // perf-ok: store queue
+        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         for folder in folders {
             // A deleted day's folder is the library's to remove (its init does).
             guard let id = UUID(uuidString: folder.lastPathComponent), !reconciled.contains(id), !forgetIfDeleted(id) else { continue }
@@ -1831,7 +1831,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     }
 
     private func dayIDs() -> [UUID] {
-        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] // perf-ok: store queue
+        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         var ids = Set(cache.keys)
         for folder in folders {
             guard let id = UUID(uuidString: folder.lastPathComponent),

@@ -143,6 +143,8 @@ SIGTERM no longer cancels the hub's ctx directly; it runs `beginStop` first:
 3. Hand the `NodeInfo` and session lists of the machines online at this moment, as the managers reported them, to the next hub (its own settings, `hub_settings` `hub.devices_warm`), and write what each manager has (`hub.machine_entries`; a machine connected at this moment is last seen now);
 4. Then cancel the ctx and stop in the original order: close the listener → close WebSockets with 1001 (reason changed to "hub restarting") → drain HTTP → wait for node connections → **hand over the event log** → close the database.
 
+The two machine writes form one bounded shutdown step. A stalled Store call or a wait for `reportedSave` cannot hold `beginStop` past the step and total shutdown budgets; the stop caller advances while an already-started Store call finishes with its context. If the handover was waiting for `reportedSave` when its context expired, it returns after acquiring the lock without starting another write. An already-running background machine-entries write keeps its own timeout and is not joined after the handover deadline.
+
 During shutdown, node connections drop, machines go offline and their interactions end; all of this is caused by the shutdown itself, so it is **no longer broadcast** (`detach` / `markOffline` check `stopping`).
 Previously clients received a string of "machine offline" and "interaction ended" just before being disconnected, then saw it all come back after reconnecting.
 

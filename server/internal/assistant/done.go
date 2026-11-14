@@ -417,14 +417,17 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 // autoFinishTask: t's receipt went out (its agents all stopped). work is when one of them last started a turn. The
 // todo is marked done when the judge finds the work finished; otherwise it stays as it is.
 func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), taskDoneTimeout)
+	defer cancel()
 	if skip := autoDoneSkip(t, work, worked); skip != "" {
 		if skip == "reopened" {
 			s.logf("task %s: reopened by the user and no new turn since: not judged", t.ID)
 		}
+		s.turnJudged(ctx, t.ID, taskDoneCheck{}, nil, skip) // nothing to judge: the sweep does not ask again (task_turns.go)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), taskDoneTimeout)
-	defer cancel()
+	s.taskJudging(t.ID, 1) // the sweep leaves a turn alone while it is judged (resumeTurn)
+	defer s.taskJudging(t.ID, -1)
 	if !worked {
 		work = t.CreatedAt
 	}
@@ -454,7 +457,11 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 // stretch of work. A supervised task waits for its supervisor's review (never closed here); another is closed when
 // the judge found it done. autoFinishTask and Re-check with apply (doneCheckRoute) end here.
 func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, worked bool, c taskDoneCheck, err error) {
-	if err == nil {
+	if ai.IsNotConfigured(err) {
+		// A missing provider is not a transient judge failure: keep the same localized explanation the settings row shows.
+		c = taskDoneCheck{Verdict: verdictWaiting, Reason: mc(s.lang(ctx), s.noAPIStatus(ctx))}
+	}
+	if err == nil || ai.IsNotConfigured(err) {
 		s.keepTaskCheck(ctx, t, work, c) // why it is (not) done, on the todo (task_check.go)
 	}
 	if err == nil && c.Delivery != nil && c.Verdict != verdictNotDone {
@@ -469,9 +476,11 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 		if !worked {
 			work = t.CreatedAt
 		}
+		s.turnJudged(ctx, t.ID, c, err, "")     // on the turn's ledger before its signal: judged once, told once (task_turns.go)
 		s.superviseJudged(ctx, t, work, c, err) // never closed here: its supervisor reviews it (supervise.go)
 		return
 	}
+	s.turnJudged(ctx, t.ID, c, err, "")
 	if err != nil {
 		if !ai.IsPaused(err) {
 			s.logf("task %s: done judge: %v (left open)", t.ID, err)

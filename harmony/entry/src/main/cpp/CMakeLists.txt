@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(persona_ssh LANGUAGES CXX)
+project(persona_native LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(persona_ssh SHARED ssh_napi.cpp)
@@ -20,3 +20,19 @@ target_link_libraries(persona_ssh PRIVATE libace_napi.z.so persona_ssh_core)
 set_target_properties(persona_ssh PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN" BUILD_WITH_INSTALL_RPATH TRUE)
 add_custom_command(TARGET persona_ssh POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
   $<TARGET_FILE:persona_ssh_core> $<TARGET_FILE_DIR:persona_ssh>/libpersona_ssh_core.so)
+
+# ohos-rs supplies the NAPI registration and thread-safe callbacks. There is deliberately no C++ app-core shim.
+if(DEFINED ENV{PERSONA_CORE_LIBRARY})
+  set(PERSONA_CORE_LIBRARY "$ENV{PERSONA_CORE_LIBRARY}")
+else()
+  set(PERSONA_CORE_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../../../../native/app-core/target/aarch64-unknown-linux-ohos/release/libpersona_core_ohos.so")
+endif()
+if(NOT EXISTS "${PERSONA_CORE_LIBRARY}")
+  message(FATAL_ERROR "Build the locked shared Rust core with native/app-core/scripts/build-ohos.sh before the HAP")
+endif()
+add_library(persona_core_ohos SHARED IMPORTED GLOBAL)
+set_target_properties(persona_core_ohos PROPERTIES IMPORTED_LOCATION "${PERSONA_CORE_LIBRARY}" IMPORTED_NO_SONAME TRUE)
+add_custom_target(persona_core_package ALL
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PERSONA_CORE_LIBRARY}" "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/libpersona_core_ohos.so"
+  DEPENDS "${PERSONA_CORE_LIBRARY}")

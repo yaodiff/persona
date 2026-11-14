@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -20,8 +21,11 @@ type TaskCard struct {
 	At        time.Time `json:"at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	State     string    `json:"state"`
-	ReceiptID string    `json:"receipt_id,omitempty"`
-	ReportID  string    `json:"report_id,omitempty"`
+	// Reason is why the card is in its current state when the hub knows: an admission-gate queue's waiting reason.
+	// Clients that do not render it yet simply ignore the field.
+	Reason    string `json:"reason,omitempty"`
+	ReceiptID string `json:"receipt_id,omitempty"`
+	ReportID  string `json:"report_id,omitempty"`
 }
 
 // taskCards projects only task-related feed events. A since page may not contain
@@ -145,6 +149,14 @@ func (s *Service) taskCards(ctx context.Context, items []FeedItem, feedPlans map
 			}
 			if t, ok := todos[task.TodoID]; ok {
 				taskCardState(&card, t, agentsFor(t))
+			}
+			// A task parked by the admission gate has no agent yet, so the todo alone reads "not started": show it as
+			// waiting (the hub will retry it) with the gate's reason (#6909).
+			if task.Queue != nil {
+				card.State = "waiting"
+				card.Reason = i18n.T(s.lang(ctx), "assistant-tasks.admission_queued", i18n.Args{
+					"reason": task.Queue.Reason})
+				card.UpdatedAt = task.Queue.NextAt
 			}
 			cards[card.ID] = card
 		}

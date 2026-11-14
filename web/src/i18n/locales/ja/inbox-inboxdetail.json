@@ -13,7 +13,12 @@
   "mute": "ミュート",
   "more": "その他",
   "view_source": "原文",
+  "hide_source": "原文を閉じる",
   "view_event": "処理",
   "linked_task": "関連するタスク",
-  "linked_agent": "関連するエージェント"
+  "linked_agent": "関連するエージェント",
+  "assistant_says": "アシスタントによると",
+  "say_something": "ひとこと伝える",
+  "retry": "もう一度試す",
+  "retry_text": "もう一度試してください。"
 }

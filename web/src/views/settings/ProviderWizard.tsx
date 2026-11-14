@@ -51,6 +51,8 @@ import {
   fillFromCatalog,
   formFromView,
   formModel,
+  connectProblems,
+  firstConnectProblem,
   formProblems,
   hostOf,
   mergeDiscovered,
@@ -62,6 +64,7 @@ import {
   testModel,
   testText,
   withoutAutoAuth,
+  type ConnectField,
   type FormModel,
   type ProviderForm,
   type ProviderModel,
@@ -196,6 +199,13 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
   const moreRef = useRef<HTMLDivElement>(null);
   const authRef = useRef<HTMLDivElement>(null);
   const revealAuth = useRef(false);
+  // Next pressed on Connect with something wrong (audit item 19): each field says its own problem under it, and the
+  // first one's field takes the focus and comes into view (`flagged`, a new object per press)
+  const [tried, setTried] = useState(false);
+  const [flagged, setFlagged] = useState<{ field: ConnectField } | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  // the focus going to a flagged field: the address it leaves is not "entered" by that (a half-typed one stays waiting)
+  const flagging = useRef(false);
   // null: not touched, so it follows the readiness (off while Claude Code already answers)
   const [assignSet, setAssign] = useState<boolean | null>(null);
   const [keyTest, setKeyTest] = useState<KeyTest | null>(null);
@@ -315,6 +325,9 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
 
   const set = <K extends keyof ProviderForm>(k: K) => (v: ProviderForm[K]) => setF((x) => ({ ...x, [k]: v }));
   const problems = formProblems(f, isNew, !!old?.has_key, autoName);
+  const fieldProblems = connectProblems(f, isNew, !!old?.has_key, autoName);
+  // what a field says under it once Next was pressed (the display name's and a typed startup ID's say it as typed)
+  const shownProblem = (k: ConnectField) => (tried ? fieldProblems[k] || undefined : undefined);
   // models were found for this connection: choosing them is what comes next
   const foundModels = !!found && !found.error && found.n > 0;
   const openAI = f.kind === "api" && (f.api === "responses" || f.api === "chat");
@@ -456,7 +469,24 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
   // Leaving the step is leaving the URL field (a field removed while focused never blurs).
   useEffect(() => {
     if (step !== "connect") setUrlTyping(false);
+    setTried(false);
   }, [step]);
+  // The field Next flagged takes the focus and is followed into view while a fold it is in opens, its problem with it.
+  useEffect(() => {
+    if (!flagged) return;
+    const box = formRef.current?.querySelector<HTMLElement>(`[data-provider-field="${flagged.field}"]`);
+    flagging.current = true;
+    box?.querySelector<HTMLElement>("input, textarea")?.focus({ preventScroll: true });
+    flagging.current = false;
+    const until = performance.now() + REVEAL_MS;
+    let frame = 0;
+    const follow = () => {
+      box?.scrollIntoView?.({ block: "nearest" });
+      if (performance.now() < until) frame = requestAnimationFrame(follow);
+    };
+    follow();
+    return () => cancelAnimationFrame(frame);
+  }, [flagged]);
 
   const save = async () => {
     if (busy || !canSave) return;
@@ -504,11 +534,15 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
   const at = steps.indexOf(step);
   const stepProblem = step === "connect" ? problems.connect : step === "models" ? problems.models || problems.advanced : step === "devices" ? devicesProblem : "";
   const next = () => {
-    if (stepProblem) {
-      // a startup ID that keeps the step from going on is shown where it was typed
-      if (step === "connect" && launcherNameProblem(f.name)) setMore(true);
-      return setError(stepProblem);
+    const field = step === "connect" ? firstConnectProblem(fieldProblems) : null;
+    if (field) {
+      // said by the field it is about, which takes the focus; a startup ID under "More options" opens it
+      if (field === "name") setMore(true);
+      setError("");
+      setTried(true);
+      return setFlagged({ field });
     }
+    if (stepProblem) return setError(stepProblem);
     setError("");
     setStep(steps[at + 1]);
   };
@@ -536,9 +570,9 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
     </Labelled>
   );
   const idField = (
-    <TextField label={t("settings-providerwizard.startup_id")} value={f.name} onChange={set("name")} disabled={!isNew} mono
+    <TextField field="name" label={t("settings-providerwizard.startup_id")} value={f.name} onChange={set("name")} disabled={!isNew} mono
       placeholder={!isNew ? undefined : autoName ? t("settings-providerwizard.startup_id_auto") : t("settings-providerwizard.name_placeholder", { example: "my_gateway" })}
-      error={isNew ? launcherNameProblem(f.name) : undefined} hint={isNew ? t("settings-providerwizard.startup_id_hint") : t("settings-providerwizard.startup_id_fixed")} />
+      error={shownProblem("name") ?? (isNew ? launcherNameProblem(f.name) : undefined)} hint={isNew ? t("settings-providerwizard.startup_id_hint") : t("settings-providerwizard.startup_id_fixed")} />
   );
 
   return (
@@ -597,6 +631,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
       }
     >
       <form
+        ref={formRef}
         className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
@@ -649,7 +684,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
         {step === "connect" && (
           <div className="flex flex-col gap-3">
             {/* left empty, the provider shows what the placeholder says (the hub names a new one after its host) */}
-            <TextField label={t("settings-providerwizard.display_name")} value={f.display_name} onChange={set("display_name")}
+            <TextField field="display_name" label={t("settings-providerwizard.display_name")} value={f.display_name} onChange={set("display_name")}
               placeholder={fallbackTitle(f, autoName) || t("settings-providerwizard.display_name_placeholder")} error={displayNameProblem(f.display_name)} hint={t("settings-providerwizard.display_name_hint")} />
             {!idInMore && idField}
             {isNew && (
@@ -673,7 +708,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
                 <Segmented<ProviderForm["api"]> wrap label={t("settings-providerwizard.api_protocol")} value={f.api} onChange={set("api")} options={[{ v: "messages", label: "Anthropic Messages" }, { v: "responses", label: "OpenAI Responses" }, { v: "chat", label: t("settings-providerwizard.protocol_chat") }]} />
               </Labelled>
             )}
-            <TextField label={t("settings-providerwizard.base_url")} value={f.base_url} mono inputMode="url" placeholder="https://…"
+            <TextField field="base_url" label={t("settings-providerwizard.base_url")} value={f.base_url} mono inputMode="url" placeholder="https://…" error={shownProblem("base_url")}
               onChange={(v) => {
                 // typed, or a paste into part of it; a paste over all of it is the address as the user has it
                 setUrlTyping(urlPaste.current === null || oneLine(urlPaste.current) !== v.trim());
@@ -689,10 +724,10 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
                 if (whole && oneLine(text) === el.value.trim()) setUrlTyping(false);
               }}
               // left for another field or the page; the window losing focus keeps the field focused, and the URL unfinished
-              onBlur={(e) => document.activeElement !== e.currentTarget && setUrlTyping(false)}
+              onBlur={(e) => !flagging.current && document.activeElement !== e.currentTarget && setUrlTyping(false)}
               hint={urlHint(f)} />
             {!openAI && !autoAuth && authField}
-            <KeyField label={isNew || !old?.has_key ? "API Key" : t("settings-providerwizard.key_keep")} value={f.api_key} onChange={set("api_key")} placeholder={old?.has_key ? t("settings-providerwizard.key_set") : "sk-…"} hint={f.key_by_reference ? undefined : t("settings-providerwizard.key_hint")}
+            <KeyField field="api_key" error={shownProblem("api_key")} label={isNew || !old?.has_key ? "API Key" : t("settings-providerwizard.key_keep")} value={f.api_key} onChange={set("api_key")} placeholder={old?.has_key ? t("settings-providerwizard.key_set") : "sk-…"} hint={f.key_by_reference ? undefined : t("settings-providerwizard.key_hint")}
               byReference={f.key_by_reference} stored={old?.key_reference}
               onByReference={keyRefs ? (on) => setF((x) => ({ ...x, key_by_reference: on, api_key: "" })) : undefined} />
             {f.kind === "api" && (

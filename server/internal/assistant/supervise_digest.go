@@ -157,17 +157,21 @@ func (s *Service) sendDigest(ctx context.Context) {
 func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, list []superviseSignal, web string, now, prev time.Time) bool {
 	b := &s.supervise
 	var entries []prompts.SuperviseEntry
-	var kept []superviseSignal
+	var kept, moot []superviseSignal
 	s.remedyGoesTo(to, list) // a failed start is ended by this conversation's turn, no other's (start_remedy.go)
 	for _, g := range list {
 		if e, ok := s.digestEntry(ctx, g, web); ok {
 			entries = append(entries, e)
 			kept = append(kept, g)
+		} else {
+			moot = append(moot, g)
 		}
 	}
+	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either (task_turns.go)
 	if len(entries) == 0 {
 		return false
 	}
+	holds := kept
 	entries, kept, rollback, err := s.reserveSupervision(ctx, entries, kept, now)
 	if err != nil {
 		s.logf("supervise: deduplication unavailable; retrying: %v", err)
@@ -175,6 +179,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return false
 	}
 	if len(entries) == 0 {
+		s.turnsTold(ctx, holds) // said the same within the window: told
 		b.mu.Lock()
 		if b.last.Equal(now) {
 			b.last = prev
@@ -189,6 +194,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			return
 		}
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
+		s.turnsTold(ctx, holds)    // and how a turn ended: kept went, the rest of them was said the same within the window
 	}()
 	background := to != here.Main && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
 	leader := background || to != here.Main && s.isLeader(ctx, to)
@@ -202,7 +208,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 				return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot
 			}),
 			Inbox: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigInbox }),
-			Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes())})
+			Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), LowDistraction: askedIn(list) && s.quietModeOn(ctx)})
 	}
 	b.mu.Lock()
 	queued := b.queued[to]

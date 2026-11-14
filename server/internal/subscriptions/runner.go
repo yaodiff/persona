@@ -224,7 +224,9 @@ func (s *Service) runOne(ctx context.Context, id string) {
 		return
 	}
 	s.mu.Lock()
-	delete(s.asked, id)
+	if asked {
+		delete(s.asked, id) // a scheduled run must not consume a RunNow made after the snapshot above
+	}
 	delete(s.kicked, id)
 	s.mu.Unlock()
 	s.execute(ctx, *sub, asked, now)

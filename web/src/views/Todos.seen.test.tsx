@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // #5707: Got it on a Just finished row files the to-do under Done at once (before the hub answers), the hub keeps the mark
 // (PUT …/seen) and the toast's Undo takes it off (DELETE). Opening a Just finished to-do and leaving it counts as seeing
-// it, without a word. A hub without `todo_seen` gets neither. Unfinished to-dos start open, above Just finished. The hub
-// is faked; the data made up.
+// it, without a word. A hub without `todo_seen` gets neither. Unfinished to-dos start open, above Just finished. Got it
+// sits at the end of the row's status line, not on a line of its own, and its press never opens the to-do (#6578). The
+// hub is faked; the data made up.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -101,6 +102,34 @@ describe("seen to-dos (#5707)", () => {
     expect(seenCalls("DELETE")).toHaveLength(1);
     expect(getState().todos.find((x) => x.id === "notes")?.seen_at ?? null).toBeNull();
     expect(section("just_done")?.querySelector("[data-testid=todo-triage-row][data-id=notes]")).not.toBeNull();
+  });
+
+  it("draws Got it at the end of the status line, adding no line, and its press never opens the to-do (#6578)", async () => {
+    const row = () => section("just_done")?.querySelector<HTMLElement>("[data-testid=todo-triage-row][data-id=notes] > [role=button]");
+    const lines = () => row()!.querySelector("[data-testid=todo-status-line]")!.parentElement!.children.length;
+    await render(["locale"]);
+    const without = lines();
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render(["todo_seen"]);
+    const gotIt = row()!.querySelector<HTMLButtonElement>("[data-testid=todo-seen]")!;
+    const line = row()!.querySelector("[data-testid=todo-status-line]")!;
+    expect(gotIt.closest("[data-testid=todo-status-line]")).toBe(line);
+    expect(line.lastElementChild?.contains(gotIt)).toBe(true);
+    expect(line.textContent).toContain(t("todos.seen"));
+    expect(lines()).toBe(without);
+
+    history.replaceState(null, "", "/todos");
+    // Enter on Got it is its own (the browser turns it into Got it's click), never the row's
+    await act(async () => gotIt.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(location.search).toBe("");
+    await act(async () => gotIt.click());
+    expect(location.search).toBe("");
+    expect(section("done")?.getAttribute("data-todos")).toBe("1");
+    // the row under it does open a to-do on a click
+    await act(async () => section("other")!.querySelector<HTMLElement>("[data-id=nas] > [role=button]")!.click());
+    expect(location.search).toBe("?id=nas");
+    history.replaceState(null, "", "/");
   });
 
   it("puts the row back and says so when the hub refuses", async () => {

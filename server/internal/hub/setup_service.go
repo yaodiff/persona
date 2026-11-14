@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/update"
 	"html"
@@ -25,7 +26,7 @@ import (
 
 func (e *setupEnv) service(ctx context.Context, cfg *setupConfig) error {
 	if e.o.noService {
-		e.report("service", true, "按 --no-service 没装常驻服务", "")
+		e.report("service", true, i18n.T(e.l, "hub-setup.service_skipped"), "")
 		return nil
 	}
 	if err := e.portsFree(ctx, cfg); err != nil {
@@ -33,7 +34,8 @@ func (e *setupEnv) service(ctx context.Context, cfg *setupConfig) error {
 	}
 	bin, err := e.hubBinary()
 	if err != nil {
-		return e.fail("service", "放不进 "+filepath.Join(e.root, "bin", "personad")+"："+err.Error(), "检查这个目录的权限")
+		return e.fail("service", i18n.T(e.l, "hub-setup.binary_copy_failed", i18n.Args{"path": filepath.Join(e.root, "bin", "personad"), "error": e.errText(err)}),
+			i18n.T(e.l, "hub-setup.check_permissions"))
 	}
 	switch e.goos {
 	case "linux":
@@ -41,7 +43,7 @@ func (e *setupEnv) service(ctx context.Context, cfg *setupConfig) error {
 	case "darwin":
 		return e.launchdService(ctx, cfg.Config, bin)
 	}
-	return e.fail("service", e.goos+" 上还装不了常驻服务", "加 --no-service，自己让 personad hub run 一直运行")
+	return e.fail("service", i18n.T(e.l, "hub-setup.service_unsupported", i18n.Args{"os": e.goos}), i18n.T(e.l, "hub-setup.service_unsupported_next"))
 }
 
 // splitHub is <root>/bin/persona-hub when the hub's systemd unit runs it in personad's place (docs/server/server.md
@@ -62,13 +64,15 @@ func (e *setupEnv) splitOff() bool { return strings.TrimSpace(e.getenv(update.Sp
 // macStaysNote is what setup on a Mac says when the hub's agent ran personad before (an installed Mac) and a
 // persona-hub is beside it: the agent stays on personad. macOS holds a LaunchAgent and what it starts to the agent's
 // program for its privacy permissions (Full Disk Access): staying keeps the entry the user allowed; moving would need
-// another one added.
-const macStaysNote = "；这台 Mac 的 hub 服务原来运行 personad，照旧运行它（已经装好的 Mac 不换成 persona-hub：完全磁盘访问权限里允许的是 personad，换了要另加一项）"
+// another one added. In l, with the separator that joins it to the line before.
+func macStaysNote(l i18n.Lang) string {
+	return i18n.T(l, "hub-setup.sep") + i18n.T(l, "hub-setup.mac_stays")
+}
 
 // macSwitchNote is what setup on a Mac adds when the hub's agent moved to another program (to): what the agent starts
 // reads with that program's privacy permissions now.
-func macSwitchNote(to string) string {
-	return "；macOS 的完全磁盘访问权限现在看 " + filepath.Base(to) + "：本机的 node 要读桌面、文稿、下载或信息的话，在那里加上它"
+func macSwitchNote(l i18n.Lang, to string) string {
+	return i18n.T(l, "hub-setup.sep") + i18n.T(l, "hub-setup.mac_switch", i18n.Args{"program": filepath.Base(to)})
 }
 
 // programVersion is what the program at path says to `version -v`.
@@ -79,19 +83,21 @@ func (e *setupEnv) programVersion(ctx context.Context, path string) (string, err
 
 // switchNote says the hub's service moved from one program to the other (before and after: what it ran and runs, as
 // paths; "" when this run cannot tell); restarted: this run restarted the hub and the report does not say so yet;
-// child: the built-in manager restarted with it, as the hub's child.
-func switchNote(before, after string, restarted, child bool) string {
+// child: the built-in manager restarted with it, as the hub's child. In l, with the separator that joins it on.
+func switchNote(l i18n.Lang, before, after string, restarted, child bool) string {
 	if before == "" || after == "" || resolvedPath(before) == resolvedPath(after) {
 		return ""
 	}
-	note := "；服务改成运行 " + filepath.Base(after)
-	if restarted {
-		note += "，重启了 hub"
+	key := "hub-setup.switched"
+	switch {
+	case restarted && child:
+		key = "hub-setup.switched_restarted_child"
+	case restarted:
+		key = "hub-setup.switched_restarted"
+	case child:
+		key = "hub-setup.switched_child"
 	}
-	if child {
-		note += "，内置管理者跟着重启"
-	}
-	return note
+	return i18n.T(l, "hub-setup.sep") + i18n.T(l, key, i18n.Args{"program": filepath.Base(after)})
 }
 
 // ownProgram says p is a program setup writes into the hub's service: this root's personad (or its former name) or
@@ -138,8 +144,8 @@ func (e *setupEnv) portsFree(ctx context.Context, cfg *setupConfig) error {
 	if len(busy) == 0 || e.hubAnswers(ctx, cfg.Config) || e.ownSocketActive(ctx) {
 		return nil
 	}
-	return e.fail("service", "端口 "+strings.Join(busy, "、")+" 被别的程序占着，可能是另一个 Persona",
-		"停掉占着它的程序，或者改 "+e.hubJSON()+" 的 listen / public.tls_listen，再重跑")
+	return e.fail("service", i18n.T(e.l, "hub-setup.ports_busy", i18n.Args{"ports": strings.Join(busy, i18n.T(e.l, "hub-setup.list_separator")), "count": len(busy)}),
+		i18n.T(e.l, "hub-setup.ports_busy_next", i18n.Args{"path": e.hubJSON()}))
 }
 
 func (e *setupEnv) ownSocketActive(ctx context.Context) bool {
@@ -360,15 +366,14 @@ func (e *setupEnv) systemctl(ctx context.Context, args ...string) error {
 func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) error {
 	units, unitErr := e.compatibleHubUnits()
 	if unitErr != nil {
-		return unitErr
+		return errors.New(e.errText(unitErr)) // printed as it is (personad's log.Fatal): in e.l
 	}
 	if !e.userSystemd(ctx) {
-		return e.fail("service", "这台电脑没有 systemd 用户服务（systemctl --user 用不了）",
-			"加 --no-service 重跑，自己让 "+bin+" hub 一直运行（例如 tmux、nohup）")
+		return e.fail("service", i18n.T(e.l, "hub-setup.no_systemd"), i18n.T(e.l, "hub-setup.no_systemd_next", i18n.Args{"bin": bin}))
 	}
 	dir := e.unitDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return e.fail("service", "建不了 "+dir+"："+err.Error(), "检查这个目录的权限")
+		return e.fail("service", i18n.T(e.l, "hub-setup.mkdir_failed", i18n.Args{"path": dir, "error": err.Error()}), i18n.T(e.l, "hub-setup.check_permissions"))
 	}
 	socketChoice, explicitSocket := identity.LookupEnv("PERSONA_HUB_SOCKET")
 	useSocket := socketChoice != "0"
@@ -409,11 +414,11 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 		}
 	}
 	if err := os.WriteFile(servicePath, []byte(service), 0o644); err != nil {
-		return e.fail("service", "写不了 "+servicePath+"："+err.Error(), "检查这个目录的权限")
+		return e.fail("service", e.writeFailed(servicePath, err), i18n.T(e.l, "hub-setup.check_permissions"))
 	}
 	if useSocket {
 		if err := os.WriteFile(socketPath, []byte(socket), 0o644); err != nil {
-			return e.fail("service", "写不了 "+socketPath+"："+err.Error(), "检查这个目录的权限")
+			return e.fail("service", e.writeFailed(socketPath, err), i18n.T(e.l, "hub-setup.check_permissions"))
 		}
 	} else {
 		_ = os.Remove(socketPath)
@@ -423,7 +428,7 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 		dropin := filepath.Join(servicePath+".d", compatDropin)
 		dropinChanged, err := syncDropin(dropin, hubExecStart(e.root, split != ""))
 		if err != nil {
-			return e.fail("service", "写不了 "+dropin+"："+err.Error(), "检查这个目录的权限")
+			return e.fail("service", e.writeFailed(dropin, err), i18n.T(e.l, "hub-setup.check_permissions"))
 		}
 		changed = changed || dropinChanged
 	}
@@ -435,7 +440,10 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 	steps := [][]string{{"daemon-reload"}, {"enable", "personad"}}
 	serviceActive := e.systemctl(ctx, "is-active", "--quiet", "personad") == nil
 	socketActive := e.systemctl(ctx, "is-active", "--quiet", e.compatibleHubName("personad.socket")) == nil
-	what := "装好了常驻服务（systemd 用户服务 personad，端口归 personad.socket）并启动"
+	what := i18n.T(e.l, "hub-setup.systemd_installed_socket")
+	if !useSocket {
+		what = i18n.T(e.l, "hub-setup.systemd_installed")
+	}
 	restartSaid := false
 	switch {
 	case useSocket && (!socketActive || socketChanged):
@@ -450,48 +458,46 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 		steps = append(steps, []string{"restart", "personad"})
 	case e.restartHub:
 		steps = append(steps, []string{"restart", "personad"})
-		what = "常驻服务已经装好；" + e.restartReason(binChanged) + "，重启了 hub"
+		what = i18n.T(e.l, "hub-setup.service_restarted_hub", i18n.Args{"why": e.restartReason(binChanged)})
 		restartSaid = true
 	case binChanged:
 		// The units are as they were, but the binary is new (an upgrade): the hub running is the old one. The port
 		// stays with personad.socket, so the restart is not noticed (docs/operations/hub-restart.md).
 		steps = append(steps, []string{"restart", "personad"})
-		what = "常驻服务已经装好；hub 换了新版本，重启了它"
+		what = i18n.T(e.l, "hub-setup.service_updated")
 		restartSaid = true
 	case runsOther:
 		steps = append(steps, []string{"restart", "personad"})
-		what = "常驻服务已经装好"
+		what = i18n.T(e.l, "hub-setup.service_ready")
 	default:
-		what = "常驻服务已经装好、在运行，没动它"
-	}
-	if !useSocket {
-		what = strings.Replace(what, "，端口归 personad.socket", "", 1)
+		what = i18n.T(e.l, "hub-setup.service_unchanged")
 	}
 	for _, s := range steps {
 		if err := e.systemctl(ctx, s...); err != nil {
-			return e.fail("service", "systemctl --user "+strings.Join(s, " ")+" 失败："+err.Error(), "运行 journalctl --user -u personad -n 50 看原因")
+			return e.fail("service", i18n.T(e.l, "hub-setup.systemctl_failed", i18n.Args{"args": strings.Join(s, " "), "error": err.Error()}),
+				i18n.T(e.l, "hub-setup.journal_next"))
 		}
 	}
 	noteBinary(bin, sum)
 	e.hubRestart = func(ctx context.Context) error { return e.systemctl(ctx, "restart", "personad") }
 	if e.ownProgram(programAfter) {
-		what += switchNote(programBefore, programAfter, serviceActive && !restartSaid, serviceActive && cfg.Assistant.StartsBuiltin())
+		what += switchNote(e.l, programBefore, programAfter, serviceActive && !restartSaid, serviceActive && cfg.Assistant.StartsBuiltin())
 	}
 	if splitNote != "" {
-		what += "；没用 persona-hub（" + splitNote + "），服务运行 personad"
+		what += e.sep() + i18n.T(e.l, "hub-setup.split_skipped", i18n.Args{"why": splitNote})
 	}
 	detail, next := what, e.linger(ctx)
 	if next != "" {
-		detail += "；没打开 linger：你退出登录后 hub 会停"
+		detail += e.sep() + i18n.T(e.l, "hub-setup.no_linger")
 	}
 	if !units.legacy && programAfter != "" && resolvedPath(programAfter) != resolvedPath(wantProgram) {
 		// Another drop-in (the owner's) sets ExecStart: the service runs what it says, which setup leaves alone.
-		detail += "；服务实际运行 " + programAfter + "：别的 drop-in 改了它的 ExecStart"
-		fix := "要它运行 " + wantProgram + "，按 systemctl --user cat personad 改掉那个 drop-in 里的 ExecStart，再重跑"
+		detail += e.sep() + i18n.T(e.l, "hub-setup.dropin_program", i18n.Args{"program": programAfter})
+		fix := i18n.T(e.l, "hub-setup.dropin_fix", i18n.Args{"program": wantProgram})
 		if next == "" {
 			next = fix
 		} else {
-			next += "；" + fix
+			next += e.sep() + fix
 		}
 	}
 	e.report("service", true, detail, next)
@@ -501,7 +507,7 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 // linger keeps the user's services running after they log out (and starts them at boot): systemd user services stop
 // with the last session otherwise. It may take sudo; that is asked once, saying why. Returns what is left to do.
 func (e *setupEnv) linger(ctx context.Context) string {
-	manual := "运行 sudo loginctl enable-linger " + e.user + "，让 hub 在你退出登录、电脑重启后也接着运行"
+	manual := i18n.T(e.l, "hub-setup.linger_manual", i18n.Args{"user": e.user})
 	if _, err := e.lookPath("loginctl"); err != nil || e.user == "" {
 		return ""
 	}
@@ -514,7 +520,7 @@ func (e *setupEnv) linger(ctx context.Context) string {
 	yes := e.o.yes
 	if !yes {
 		var asked bool
-		yes, asked = e.ask("要让 hub 在你退出登录、电脑重启后也接着运行，需要用 sudo 打开 linger（loginctl enable-linger）。现在打开吗？")
+		yes, asked = e.ask(i18n.T(e.l, "hub-setup.linger_ask"))
 		if !asked {
 			return manual
 		}
@@ -666,9 +672,9 @@ func (e *setupEnv) agentPlist(label string) string {
 func (e *setupEnv) restartReason(binChanged bool) string {
 	why := e.restartWhy
 	if binChanged {
-		why = append([]string{"hub 换了新版本"}, why...)
+		why = append([]string{i18n.T(e.l, "hub-setup.restart_why_binary")}, why...)
 	}
-	return strings.Join(why, "、")
+	return strings.Join(why, i18n.T(e.l, "hub-setup.list_separator"))
 }
 
 // relaunch is a launchd agent's restart, for undoing a switch to the built-in manager's own service.
@@ -684,7 +690,8 @@ func (e *setupEnv) relaunch(target string) func(context.Context) error {
 // kickstart restarts a loaded launchd agent (hub-systemd.sh's way on a Mac).
 func (e *setupEnv) kickstart(ctx context.Context, target string) error {
 	if out, err := e.run(ctx, nil, "launchctl", "kickstart", "-k", target); err != nil {
-		return e.fail("service", "重启 launchd 服务 "+target+" 失败："+setupFirstLine(string(out)), "运行 launchctl print "+target+" 看原因")
+		return e.fail("service", i18n.T(e.l, "hub-setup.launchd_restart_failed", i18n.Args{"target": target, "error": setupFirstLine(string(out))}),
+			i18n.T(e.l, "hub-setup.launchctl_print_next", i18n.Args{"target": target}))
 	}
 	return nil
 }
@@ -693,16 +700,17 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 	domain := "gui/" + strconv.Itoa(e.uid)
 	sum, binChanged := binaryChanged(bin)
 	if label := e.otherHubAgent(bin); label != "" {
-		detail := "用已有的 launchd 服务 " + label
+		detail := i18n.T(e.l, "hub-setup.launchd_existing", i18n.Args{"label": label})
 		if _, err := e.run(ctx, nil, "launchctl", "print", domain+"/"+label); err != nil {
 			if out, err := e.run(ctx, nil, "launchctl", "bootstrap", domain, e.agentPlist(label)); err != nil {
-				return e.fail("service", "启动已有的 launchd 服务 "+label+" 失败："+setupFirstLine(string(out)), "运行 launchctl print "+domain+"/"+label+" 看原因")
+				return e.fail("service", i18n.T(e.l, "hub-setup.launchd_start_failed", i18n.Args{"label": label, "error": setupFirstLine(string(out))}),
+					i18n.T(e.l, "hub-setup.launchctl_print_next", i18n.Args{"target": domain + "/" + label}))
 			}
 		} else if binChanged || e.restartHub {
 			if err := e.kickstart(ctx, domain+"/"+label); err != nil {
 				return err
 			}
-			detail += "；" + e.restartReason(binChanged) + "，重启了它"
+			detail += e.sep() + i18n.T(e.l, "hub-setup.restarted_it", i18n.Args{"why": e.restartReason(binChanged)})
 		}
 		e.hubRestart = e.relaunch(domain + "/" + label)
 		noteBinary(bin, sum)
@@ -722,13 +730,13 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 	case e.splitOff():
 	case beforeErr == nil && e.runsPersonad(programBefore) && !strings.Contains(string(before), "<key>"+update.SplitEnv+"</key>"):
 		if fi, err := os.Stat(filepath.Join(e.root, "bin", "persona-hub")); err == nil && !fi.IsDir() {
-			macNote = macStaysNote
+			macNote = macStaysNote(e.l)
 		}
 	default:
 		split, splitNote = e.splitHub(ctx)
 	}
 	if splitNote != "" {
-		macNote = "；没用 persona-hub（" + splitNote + "），服务运行 personad"
+		macNote = e.sep() + i18n.T(e.l, "hub-setup.split_skipped", i18n.Args{"why": splitNote})
 	}
 	programAfter := bin
 	if split != "" {
@@ -738,12 +746,12 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 	_, loadedErr := e.run(ctx, nil, "launchctl", "print", domain+"/"+hubLaunchdLabel)
 	e.hubRestart = e.relaunch(domain + "/" + hubLaunchdLabel)
 	if string(before) == want && loadedErr == nil {
-		detail := "常驻服务已经装好、在运行，没动它（launchd " + hubLaunchdLabel + "）"
+		detail := i18n.T(e.l, "hub-setup.launchd_unchanged", i18n.Args{"label": hubLaunchdLabel})
 		if binChanged || e.restartHub {
 			if err := e.kickstart(ctx, domain+"/"+hubLaunchdLabel); err != nil {
 				return err
 			}
-			detail = "常驻服务已经装好；" + e.restartReason(binChanged) + "，重启了它（launchd " + hubLaunchdLabel + "）"
+			detail = i18n.T(e.l, "hub-setup.launchd_restarted", i18n.Args{"why": e.restartReason(binChanged), "label": hubLaunchdLabel})
 		}
 		noteBinary(bin, sum)
 		e.report("service", true, detail+macNote, "")
@@ -753,25 +761,25 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 		// A hub with this token runs already, started some other way (a terminal, an agent setup cannot tell runs
 		// it): a second agent could not get the port and would restart forever. Leave it to the user.
 		e.hubRestart = nil // not restarted here: it runs with the hub.json it read when it started
-		e.report("service", true, "hub 已经在运行，但不是 launchd 服务起的，没装常驻服务",
-			"停掉正在运行的 hub 后重跑 personad hub setup，装成登录后自动运行的服务")
+		e.report("service", true, i18n.T(e.l, "hub-setup.launchd_other_hub"), i18n.T(e.l, "hub-setup.launchd_other_hub_next"))
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		return e.fail("service", "建不了 "+filepath.Dir(file)+"："+err.Error(), "检查这个目录的权限")
+		return e.fail("service", i18n.T(e.l, "hub-setup.mkdir_failed", i18n.Args{"path": filepath.Dir(file), "error": err.Error()}), i18n.T(e.l, "hub-setup.check_permissions"))
 	}
 	if err := os.WriteFile(file, []byte(want), 0o644); err != nil {
-		return e.fail("service", "写不了 "+file+"："+err.Error(), "检查这个目录的权限")
+		return e.fail("service", e.writeFailed(file, err), i18n.T(e.l, "hub-setup.check_permissions"))
 	}
 	_, _ = e.run(ctx, nil, "launchctl", "bootout", domain+"/"+hubLaunchdLabel)
 	if out, err := e.run(ctx, nil, "launchctl", "bootstrap", domain, file); err != nil {
-		return e.fail("service", "launchctl bootstrap 失败："+setupFirstLine(string(out)), "运行 launchctl print "+domain+"/"+hubLaunchdLabel+" 看原因")
+		return e.fail("service", i18n.T(e.l, "hub-setup.launchd_bootstrap_failed", i18n.Args{"error": setupFirstLine(string(out))}),
+			i18n.T(e.l, "hub-setup.launchctl_print_next", i18n.Args{"target": domain + "/" + hubLaunchdLabel}))
 	}
 	noteBinary(bin, sum)
-	detail := fmt.Sprintf("装好了常驻服务（launchd %s，登录后自动运行），日志在 %s", hubLaunchdLabel, filepath.Join(e.root, "hub.log"))
+	detail := i18n.T(e.l, "hub-setup.launchd_installed", i18n.Args{"label": hubLaunchdLabel, "path": filepath.Join(e.root, "hub.log")})
 	if beforeErr == nil {
-		if moved := switchNote(programBefore, programAfter, loadedErr == nil, loadedErr == nil && cfg.Assistant.StartsBuiltin()); moved != "" {
-			detail += moved + macSwitchNote(programAfter)
+		if moved := switchNote(e.l, programBefore, programAfter, loadedErr == nil, loadedErr == nil && cfg.Assistant.StartsBuiltin()); moved != "" {
+			detail += moved + macSwitchNote(e.l, programAfter)
 		}
 	}
 	e.report("service", true, detail+macNote, "")

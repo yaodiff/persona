@@ -1,5 +1,6 @@
 package persona.feature.inbox
 
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -15,11 +16,16 @@ import java.util.Locale
 @Config(sdk = [35])
 class InboxTimeLanguagesTest {
     private val zone = ZoneOffset.UTC
+    private val res = ApplicationProvider.getApplicationContext<android.content.Context>().resources
     private val at = "2026-11-05T14:30:00Z"
     private val ms = Instant.parse(at).toEpochMilli().toDouble()
 
-    @Test fun rowAndMomentTimesAreMonthDayAndTimeInTheLanguage() {
-        for (format in listOf<(Locale) -> String>({ displayTime(at, it, zone) }, { formatMomentTime(ms, it, zone) })) {
+    @Test fun rowUsesTwentyFourHoursAndMomentTimesKeepTheirLocale() {
+        val now = Instant.parse("2026-11-05T10:00:00Z")
+        for (locale in listOf(Locale.SIMPLIFIED_CHINESE, Locale.US, Locale.JAPANESE)) {
+            assertEquals("14:30", displayTime(at, locale, res, zone, now))
+        }
+        for (format in listOf<(Locale) -> String>({ formatMomentTime(ms, it, zone) })) {
             val zh = format(Locale.SIMPLIFIED_CHINESE)
             assertTrue(zh, zh.startsWith("11月5日") && zh.endsWith("14:30"))
             val en = format(Locale.US)
@@ -38,7 +44,7 @@ class InboxTimeLanguagesTest {
     }
 
     @Test fun badInputStaysQuiet() {
-        assertEquals("", displayTime("not a time", Locale.US, zone))
+        assertEquals("", displayTime("not a time", Locale.US, res, zone))
         assertEquals("", formatMomentTime(null, Locale.US, zone))
         assertEquals("not a time", larkTime("not a time", Locale.US, zone))
     }

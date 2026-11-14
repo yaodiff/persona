@@ -8,7 +8,7 @@
   "move_to_other_todo": "改挂到其他待办…",
   "link_to_todo": "关联到待办…",
   "unlink": "解除关联",
-  "copy_folder": "拷贝目录",
+  "copy_folder": "拷贝目录路径",
   "copy_resume": "拷贝恢复命令",
   "delete_chat": "删除对话…",
   "unlinked": "已解除待办关联",
@@ -26,9 +26,9 @@
   "mark_all_seen_body_other": "把 {count} 个完成未看的会话标为已看？手机和其他浏览器也会一起变成已看。",
   "open_space": "打开空间页",
   "archive": "归档",
-  "archive_close": "归档并关闭…",
+  "close": "关闭…",
   "archive_busy": "正忙：等它做完再归档",
-  "archive_close_busy": "正忙：工作、等待、跑循环或跑服务时不能关闭",
+  "close_busy": "正忙：工作、等待、跑循环或跑服务时不能关闭",
   "archived_agents": "已归档的 Agent",
   "worktree_source_unavailable": "请先在支持工作树的终端引擎中打开此仓库。"
 }

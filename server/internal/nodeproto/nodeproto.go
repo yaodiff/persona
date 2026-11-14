@@ -19,6 +19,11 @@ const (
 // change the node protocol floor or become a required capability.
 const PersonaContracts = "persona_contracts_v1"
 
+// MCPWait is the additive enum-only wait-update contract. As a hub feature it gates local MCP opt-in; as a manager
+// capability it gates hub-mediated relays; as a node capability it promises to preserve call_id across computer.call
+// and its nested computer.elicit. An old peer on any hop keeps the conservative unknown fallback.
+const MCPWait = "mcp_wait_v1"
+
 // ManagerUpdateInventory is the optional read-only local update.inventory
 // contract. A legacy peer remains compatible, but cannot produce idle evidence.
 const ManagerUpdateInventory = "manager_update_inventory_v1"
@@ -49,6 +54,9 @@ const (
 	AssistantConfigDir = "assistant_config_dir"
 	// SessionSkills: session.skills and validated explicit skill selections on ordinary session.send.
 	SessionSkills = "session_skills_v1"
+	// AssistantServiceTier: assistant.send takes service_tier for a new Codex conversation and acknowledges it before
+	// the first turn. A node without it would start the conversation and silently drop an explicit, billable choice.
+	AssistantServiceTier = "assistant_service_tier"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -138,8 +146,13 @@ const (
 	ProgramPersonaNode = "persona-node"
 )
 
+// RestartExitCode is how a resident node on Windows, which has no exec, asks its supervisor to start the installed
+// program again at once: it exits with this code after an update or a rollback put another file in place
+// (nodeupdate.Restart), and persona-link's scheduled-task supervisor restarts it without its usual delay.
+const RestartExitCode = 75
+
 // Announced is what a node built from this code announces.
-var Announced = []string{SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace}
+var Announced = []string{SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

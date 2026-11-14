@@ -12,12 +12,54 @@ and push-relay entry (`/relay/*`, `docs/operations/push-relay.md`). Deploy only 
 a secret can't be read back, so take the values from the password manager). `publish.sh` reads `/relay/v1/health` before and after every deploy
 and fails when a relay that was healthy before the deploy no longer is.
 
-## Home page
+## Pages and languages
 
-`site/public/index.html` is the whole home page (#3842): Chinese, CSS and JS inline, no build step. It leads with the
-SuperAgent, the same story as the README, then the demo-mode recording, shared context, linked computers, every
-client, extensions, privacy, getting started, an FAQ and a closing line. The privacy, terms and 404 pages keep their
-own `site/public/style.css`.
+`site/public/index.html` is the whole Chinese home page (#3842), with its English sibling at `site/public/en/index.html`;
+CSS and JS are inline, with no build step. It leads with the SuperAgent, the same story as the README, then the
+demo-mode recording, shared context, linked computers, every client, extensions, privacy, getting started, an FAQ and a
+closing line. The privacy, terms and 404 pages keep their own `site/public/style.css` and have English siblings under
+`site/public/en/`, as do extensions and releases. **Change both languages in the same PR**, just as for the two READMEs:
+`node --test site/i18n.test.mjs` fails when a pair gains or loses a section, heading, link target or the install command.
+
+## Languages and URLs
+
+Every page has a distinct, shareable English URL; the existing unprefixed URL stays the Chinese canonical URL.
+
+| Chinese | English |
+| --- | --- |
+| `/` | `/en/` |
+| `/extensions/` | `/en/extensions/` |
+| `/releases/` | `/en/releases/` |
+| `/privacy/` | `/en/privacy/` |
+| `/terms/` | `/en/terms/` |
+| `/404.html` | `/en/404.html` |
+
+`site/language.mjs` handles only HTML selection; the dynamic routes in `site/worker.mjs` still run first, and all other
+existing assets go back to the static binding unchanged. On a legacy HTML URL with no explicit choice, the Worker first
+compares the supported `zh*` and `en*` ranges by quality and header order. If none has q > 0, any other valid language
+range with q > 0 selects English; missing, empty, wildcard-only, malformed and all-q=0 headers select Chinese, so
+scripts, crawlers and old clients keep their existing behavior. An English result is a 302 to the `/en/` sibling, never
+a permanent redirect. The visible switch uses `?lang=en` or `?lang=zh`; that explicit choice wins over the browser header, sets a
+one-year `persona_lang` cookie (`Secure`, `HttpOnly`, `SameSite=Lax`, path `/`) and redirects to the clean localized URL.
+Opening a shared `/en/` URL always shows English but does not itself change the remembered preference. Japanese remains
+follow-up work; this site version is English and Chinese.
+
+Legacy HTML responses and negotiation/switch redirects carry `Cache-Control: private, no-store` and
+`Vary: Accept-Language, Cookie`: the Hong Kong entry must not reuse a Chinese page or English redirect for a visitor with
+a different preference. Canonical `/en/` pages have distinct URLs and retain normal static caching. Localized 404 bodies
+keep status 404 and are likewise `no-store`. `run_worker_first` starts with `/*` so every missing path reaches this logic;
+negative patterns then keep `/img/*`, `/fonts/*`, both root favicons, `style.css`, `releases/*.js` and the publish-time
+`install.sh` on the unmetered direct-static-asset path. They do not cover `/dl/*`, `/relay/*`, `/releases/data.json`,
+the extension catalog/icons, HTML pages or unknown paths. `site/releases.test.mjs` walks every non-HTML public file and
+fails if an asset lacks an exclusion or an exclusion covers a dynamic route. Both languages use the same data and assets;
+there is no `/en/releases/data.json` or other localized API.
+
+The English home follows `README.md` as the Chinese page follows `README.zh-CN.md`: the same facts, sections, hero story
+and install command in natural English. Legal translations preserve the source meaning and need a human read before
+first publication. The privacy page's website paragraph also discloses the explicit-choice preference cookie; change
+that statement whenever the cookie behavior changes.
+
+## Home page
 
 - **The hero demo is scripted, with made-up data** (the task, PR numbers, test counts). What it acts out is real: main
   chat splits a request into Agent tasks that wait for **Start**, answers an Agent's technical question itself and
@@ -27,12 +69,14 @@ own `site/public/style.css`.
   for people deciding whether to try Persona; the docs are for the rest.
 - **State colors keep their app meaning**: red needs you, amber working, green done, also for the packets moving on
   the diagrams.
-- **Assets** come from `scripts/assets/make_site_assets.py`: `site/public/img/recording.webp` (a copy of
-  `docs/assets/readme/hero-dark.zh-CN.webp`), `site/public/img/paper.webp` (the mascot cut from the Apple Vision Pro
-  icon's front layer) and `site/public/fonts/persona-serif.woff`, Noto Serif CJK SC Bold cut down to the characters of
-  `h1`, `h2` and `.hello`. **After editing any of that text, run `python3 scripts/assets/make_site_assets.py serif`**,
-  or the new characters fall back to the visitor's own serif. The source font is not in the repository; the script
-  finds a system copy or takes `--serif-font`.
+- **Assets** come from `scripts/assets/make_site_assets.py`: `site/public/img/recording.webp` and
+  `recording-en.webp` (copies of `docs/assets/readme/hero-dark.zh-CN.webp` and `hero-dark.webp` for the matching page
+  language), `site/public/img/paper.webp` (the mascot cut from the Apple Vision Pro icon's front layer) and `site/public/fonts/persona-serif.woff`, Noto Serif CJK SC Bold cut down to the characters of
+  the **Chinese** pages' `h1`, `h2` and `.hello`. English headings use the system serif stack (`Iowan Old Style`,
+  Palatino, Georgia), so they need no downloaded CJK or new Latin font and are deliberately not inputs to the subsetter.
+  **After editing any Chinese text in those elements, run `python3 scripts/assets/make_site_assets.py serif`**, or the
+  new characters fall back to the visitor's own serif. The source font is not in the repository; the script finds a
+  system copy or takes `--serif-font`.
 - **Motion** only starts with JavaScript; without it every section is visible and static, and with reduced motion
   the page shows its finished state (the switches on, the underline drawn, no moving packets).
 - **The version in the top bar** is the latest stable GitHub release from `/releases/data.json` ("最新 v0.4.0"), the
@@ -42,24 +86,29 @@ own `site/public/style.css`.
 - **Download section** (`#download`, the top bar's 下载): one tile per device with the latest stable files straight
   from GitHub, filled from `/releases/data.json` with the releases page's own `model.js` (same file choice, same
   fallback to an older release while one is uploading, same address check). Without the data each tile links to its
-  card on `/releases/`; the visitor's device is marked, and the web app tile says how to open it instead.
+  card on `/releases/`; the visitor's device is marked, and the web app tile says how to open it instead. Demo-only
+  selectors are scoped to `.chat`, so the marked tile keeps the same grid-cell width and row height as its neighbours.
 - **Light only.** The previous page also had a dark variant; this one follows the app icon's paper in both schemes.
 
 ## Legal pages and support
 
 The privacy and terms pages describe the self-hosted app independently of its distribution channel. Their contact links use
-`/#contact`, the home page's existing product-support footer, which offers email and issue reporting. Keep that anchor stable
-and verify the whole route, not just an HTTP 200 from the legal page. `site/worker.test.mjs` pins both links and their destination.
+`/#contact` in Chinese and `/en/#contact` in English, each home page's existing product-support footer, which offers email
+and issue reporting. Keep those anchors stable and verify the whole route, not just an HTTP 200 from the legal page.
+`site/worker.test.mjs` pins the Chinese links and their destination, and `site/i18n.test.mjs` keeps the English pair in step.
 The App Store review notes give the Release-compatible offline demo entry and its limits (`release.md`, "External testing").
 
 ## Extensions page
 
-`/extensions/` (`site/public/extensions/index.html`, #4781) lists the extensions of the official market: icon, name,
-description, version and downloads, most downloaded first, with search (name, id, description, tags) and filters. It
-uses the home page's palette, type and footer; the home page's top bar, extensions section and footer link to it.
-Unlike the home page it follows the system's dark scheme (#4810): every color is a variable at the top of its CSS, and
+`/extensions/` (`site/public/extensions/index.html`, #4781) and `/en/extensions/`
+(`site/public/en/extensions/index.html`) list the extensions of the official market: icon, name,
+description, version and downloads, most downloaded first, with search (name, id, description, tags) and filters. They
+use the home page's palette, type and footer; the home page's top bar, extensions section and footer link to the matching
+language. Unlike the home page they follow the system's dark scheme (#4810): every color is a variable at the top of the CSS, and
 `prefers-color-scheme: dark` swaps paper and ink for a warm night set; text on orange and amber and the install card
-keep their colors in both. Add a color as a variable with both values, never as a literal in a rule, or one scheme breaks. Its h1 and h2 are set in the serif too: `make_site_assets.py serif` reads the home, extensions and releases pages.
+keep their colors in both. Add a color as a variable with both values, never as a literal in a rule, or one scheme breaks.
+The Chinese h1 and h2 are set in the subset serif too: `make_site_assets.py serif` reads the Chinese home, extensions and
+releases pages; English uses the system serif described above.
 
 - **Data**: the page reads `/extensions/catalog.json`, which `site/extensions.mjs` builds from the market's signed
   index (`persona-extensions.json` on the market repository's `main`; `EXTENSIONS_CATALOG_URL` overrides it). It keeps
@@ -91,12 +140,19 @@ keep their colors in both. Add a color as a variable with both values, never as 
 - **Icons go through `/extensions/icons/<id>`**: icon hosts such as raw.githubusercontent.com are often unreachable from
   mainland China, this site is not. The Worker fetches only the `icon_url` the catalog gives that id, passes image types
   only (at most 512 KB), and sends `nosniff` and a sandboxing CSP so an SVG opened on its own runs nothing here.
-- Both routes are in `run_worker_first` in `site/wrangler.jsonc`: with `not_found_handling` set, a path that is not a
-  static file never reaches the Worker otherwise.
+- `run_worker_first` in `site/wrangler.jsonc` has the `/*` positive pattern for HTML and unknown paths plus negative
+  patterns for the committed static assets and `install.sh`. The small dynamic-handler set still contains only the
+  catalog and icon routes in this section; those routes, `/dl/*`, `/relay/*` and `/releases/data.json` are deliberately
+  not excluded. The wildcard is required for localized 404s because, with `not_found_handling` set, a missing path would
+  otherwise never reach the Worker. Keep the negative list current when adding an asset: the releases test checks every
+  non-HTML file and rejects any exclusion that covers a dynamic route.
 
 ## Releases page
 
-`/releases/` (`site/public/releases/index.html`, redesigned in #6338) is the download page. It is for people installing
+`/releases/` (`site/public/releases/index.html`, redesigned in #6338) and `/en/releases/`
+(`site/public/en/releases/index.html`) are the download pages. The static shells carry their own language; both load the
+same `releases/page.js` and `releases/model.js`, which select presentation copy from `<html lang>` while sharing all
+release and download behavior. They are for people installing
 Persona who may not know GitHub's release layout: they should see the latest version, get the file for the device they
 are on in one click, and still reach every other device, component and earlier version.
 
@@ -140,15 +196,17 @@ are on in one click, and still reach every other device, component and earlier v
   cannot be reached the old copy is served marked `stale` for up to 30 days. With no copy the route answers 503 and
   `no-store`. A new release appears without a site deployment.
 - **No package bandwidth on this site**: every download goes from the browser straight to `github.com`. A file whose
-  `browser_download_url` is not exactly GitHub's address for this repository, tag and name is dropped. Only
-  `/releases/data.json` is in `run_worker_first`; there is no download or redirect route under `/releases/`, and no
-  package passes through the Hong Kong entry, the Worker or R2. `install.sh` is not offered on this page: it fetches
+  `browser_download_url` is not exactly GitHub's address for this repository, tag and name is dropped. `/*` reaches the
+  Worker unless a negative static-asset pattern matches, but only `/releases/data.json` has a dynamic handler under this
+  section; `releases/*.js` bypasses the Worker while the JSON route never does. There is no download or redirect route
+  under `/releases/`, and no package passes through the Hong Kong entry, the Worker or R2. `install.sh` is not offered on
+  this page: it fetches
   from this site's `/dl/`, which stays for hub and node updates (`docs/operations/release.md`, "Publishing personad").
-- **Tests**: `node --test site/worker.test.mjs site/releases.test.mjs` covers version filtering and ordering, file
-  classification, hostile download addresses, note summaries, caching, stale fallback, the per-device fallback to an
-  older release, platform detection and the page's text-only drawing. After editing the page's `h1` / `h2` / `.hello`
-  text, run `python3 scripts/assets/make_site_assets.py serif`. The ticket's title is set by script, so it uses the sans
-  face, not the subset serif.
+- **Tests**: `node --test site/worker.test.mjs site/releases.test.mjs site/i18n.test.mjs` covers version filtering and
+  ordering, file classification, hostile download addresses, note summaries, caching, stale fallback, the per-device
+  fallback to an older release, platform detection, the page's text-only drawing, language negotiation and bilingual page
+  parity. After editing a Chinese page's `h1` / `h2` / `.hello` text, run `python3 scripts/assets/make_site_assets.py serif`.
+  The ticket's title is set by script, so it uses the sans face, not the subset serif.
 
 ## Current routing (since 2026-11-04, #1134)
 
@@ -162,7 +220,17 @@ Old builds / deployed hubs ──► <old-domain> ──► 301 to same path on 
   Overseas requests detour through Hong Kong, adding 0.5–1.5 seconds; current users are domestic, so this is the interim choice.
 - **Hong Kong entry**: smallest ECS in Alibaba Cloud `cn-hongkong` (instance, IP, account in `CLAUDE.local.md`), Debian + nginx, security group opens only 80 / 443 / ICMP,
   no SSH; manage with Alibaba Cloud Assistant (`ecs RunCommand`). nginx proxies all requests to `origin.<site-domain>`, resolving dynamically with 60-second caching,
-  so Cloudflare IP changes need no restart. Cache pages / static files for 60 seconds, serving stale if Worker fails; `/relay/`, `/dl/`, `/install.sh` stream without cache.
+  so Cloudflare IP changes need no restart. Cache canonical pages / static files for 60 seconds, serving stale if Worker fails; `/relay/`, `/dl/`, `/install.sh` stream without cache.
+  Negotiated legacy HTML, language redirects and localized 404s carry `private, no-store` and **must bypass the entry cache**;
+  never override their `Cache-Control`, `Set-Cookie` or `Vary` with `proxy_ignore_headers`, or one visitor's language can be
+  served to another. After the relay check, `deploy_site` in `scripts/release/publish.sh` runs
+  `scripts/release/site_language_check.sh <base url>`: three alternating Chinese/English rounds on `/`, the explicit English
+  cookie against a Chinese header, the canonical English page, and `/install.sh` when present (direct, non-HTML). Every
+  request has a timeout and each failure names its step. A failed check prints a loud entry-cache error but lets all normal
+  post-deploy release checks finish; the final publish status then fails instead of skipping those checks. On failure, make
+  the entry honor `Cache-Control` and `Vary`, bypass its cache for negotiated HTML, redirects and localized 404s, and never
+  cache a `Set-Cookie` response for another visitor. Rerun the same command directly after changing the entry; local Worker
+  tests cannot verify that external configuration.
 - **Client addresses**: after forwarding, `cf-connecting-ip` is the entry's address. Entry adds `x-persona-edge-secret` (Worker secret `EDGE_SECRET`)
   and `X-Forwarded-For: <client>`. `site/worker.mjs` trusts it only with the matching secret, using it for push-relay rate limits; absent / incorrect secret preserves original behavior.
   Secret in 1Password; entry copy `/etc/nginx/persona/edge-secret.conf` (0600).

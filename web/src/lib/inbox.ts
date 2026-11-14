@@ -147,6 +147,8 @@ export interface InboxItem {
   suggestion?: InboxSuggestion;
   /** Handling chain, oldest first. */
   chain?: ChainEntry[];
+  /** The rows merged into this one by hand (the hub hides them; #6480). */
+  merged_from?: { id: string; source: string; account_name?: string; title?: string }[];
   related?: InboxRelated[];
   /** The conversations it was handed to with "Hand to AI" (POST /inbox/{id}/handoff), oldest first: they may write back to it. */
   handoffs?: InboxHandoff[];
@@ -1056,6 +1058,17 @@ export function replaceItem(item: InboxItem, manager?: string) {
   if (item?.id) patchItem({ id: item.id, manager: item.manager ?? manager }, (before) => keepStamp(item, before));
 }
 
+/** Rows the hub changed or took out of the list (a merge, a to-do): its copies replace ours (`manager` says whose answer it is:
+ *  the default's answers carry no stamp), and `gone` ids leave the list (a merged row's members are hidden by the hub). */
+export function applyInboxChange(changed: InboxItem[], gone: string[], manager?: string) {
+  const fresh = new Map(changed.map((it) => [it.id, it]));
+  const out = new Set(gone);
+  const same = (it: InboxItem) => sameManager(it.manager, manager);
+  set({
+    items: withPending(state.items.filter((it) => !(same(it) && out.has(it.id))).map((it) => (same(it) && fresh.has(it.id) ? keepStamp(fresh.get(it.id)!, it) : it))),
+  });
+}
+
 /** A done / open mark still being sent: what the item shows until the hub answers. A mute's mark also carries its
  * reason ("Muted: <name>"). */
 type DoneMark = Pick<InboxItem, "done_at" | "done_by" | "reason">;
@@ -1759,13 +1772,13 @@ export async function sendReply(item: InboxItem, text: string, changes: DocChang
 
 /** "Send" / "Start" / "Got it" / "Confirm", "Reject", "Say something" on the item's suggestion: the hub's item replaces ours. A suggestion that
  * changed meanwhile is not run: "Suggestion updated" and the item as it is now. Resolves to whether it went through. */
-export async function suggestionAct(item: InboxItem, action: SuggestionAction, text?: string): Promise<boolean> {
+export async function suggestionAct(item: InboxItem, action: SuggestionAction, text?: string, due?: string): Promise<boolean> {
   const s = item.suggestion;
   const key = itemKey(item);
   if (!s || state.sending.includes(key)) return false;
   set({ sending: [...state.sending, key] });
   try {
-    const r = await actOnSuggestion(itemPath(item.id), s.version, action, text, undefined, item.manager);
+    const r = await actOnSuggestion(itemPath(item.id), s.version, action, text, undefined, item.manager, due);
     if (r.ok) {
       if (r.item?.id === item.id) replaceItem(r.item, item.manager);
       toast(actedText(s, action), "ok");

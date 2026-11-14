@@ -74,10 +74,15 @@ import OSLog
         let topic = entry.attendance?.liveView == true ? MeetingTopic.current(MeetingConversation.shared.meeting(id).topics)?.title : nil
         // Talk (#3862 phase 4): whether a span is open, read here so the activity follows it at once.
         let talking = MeetingCall.shared.talk?.recording == id
+        // Hub transcription (#3862 phase 5): the hub's latest line while it transcribes, else the phone's own, said so.
+        let transcription = MeetingTranscription.shared
+        let hub = transcription.meeting(id)
+        let transcribed = hub.hubMode
+            ? Transcribed(hubLine: hub.lines.last?.text, shown: transcription.shown(id, role: entry.attendance?.role ?? .off)) : nil
         let content = Self.content(entry: entry, recording: state == .recording, interrupted: interrupted,
                                    elapsed: capture.timeline, previous: previous, now: now,
                                    answer: answered?.text, answeredAt: answered?.at,
-                                   topic: topic, roomMissing: roomMissing, talking: talking)
+                                   topic: topic, roomMissing: roomMissing, talking: talking, transcribed: transcribed)
         // The answer gives way to the latest line 60 s after it came: looked at again then.
         if content.answer != nil, entry.attendance?.liveView == true, let at = answered?.at,
            at.addingTimeInterval(Self.answerShown) > now {
@@ -100,6 +105,13 @@ import OSLog
 
     /// Where an answer on the third line came from.
     enum AnswerSource: Hashable { case ask, call }
+
+    /// A hub-mode meeting's line (#3862 phase 5): the hub's latest, and what the page shows of the hub
+    /// (`MeetingTranscriptionRule.Shown`): its lines while it is up and healthy, else the phone's own with the notice.
+    nonisolated struct Transcribed: Equatable {
+        var hubLine: String?
+        var shown: MeetingTranscriptionRule.Shown
+    }
 
     /// An answer and when this phone first had it.
     nonisolated struct Answer: Equatable {
@@ -144,25 +156,33 @@ import OSLog
     /// A room meeting Persona can be asked in has Talk (#3862 phase 4, `MeetingCallRule.talkOffered`): `talking` false,
     /// or true while a span is open (`talking`), which the Lock Screen says ("Listening to you…") in place of the third
     /// line; every other recording has nil, and Ask Persona as before.
+    ///
+    /// A meeting the hub transcribes (#3862 phase 5, `transcribed`): its line is the hub's latest while the page shows the
+    /// hub's lines, else the phone's own, with `fellBack` once transcription has fallen back to this iPhone (the Lock
+    /// Screen says "On iPhone: …").
     nonisolated static func content(entry: RecordingEntry, recording: Bool, interrupted: Bool, elapsed: Double,
                                     previous: Content?, now: Date, answer: String? = nil, answeredAt: Date? = nil,
-                                    topic: String? = nil, roomMissing: Bool = false, talking: Bool = false) -> Content {
+                                    topic: String? = nil, roomMissing: Bool = false, talking: Bool = false,
+                                    transcribed: Transcribed? = nil) -> Content {
         let phase: Content.Phase = recording ? .recording : interrupted ? .interrupted : .paused
         let keep = recording && previous?.phase == .recording
         let since = recording ? (keep ? previous?.runningSince : nil) ?? now.timeIntervalSince1970 - elapsed : nil
         let attended = MeetingAsk.canAsk(entry, roomMissing: roomMissing)
         let liveView = attended && entry.attendance?.liveView == true
         let answer = attended ? Self.cut(answer, Self.answerLength) : nil
-        let line = liveView ? Self.cut(entry.attendance?.live.last?.text, Self.lineLength) : nil
+        let hubLines = transcribed?.shown.hubLines == true
+        let line = liveView ? Self.cut(hubLines ? transcribed?.hubLine : entry.attendance?.live.last?.text, Self.lineLength) : nil
         let fresh = answeredAt.map { now.timeIntervalSince($0) < Self.answerShown } ?? true
         let showsAnswer = answer != nil && (line == nil || fresh)
+        let fellBack = !showsAnswer && line != nil && !hubLines && transcribed?.shown.fellBack == true
         return Content(phase: phase, runningSince: since, elapsed: keep ? previous?.elapsed ?? elapsed : elapsed,
                        title: String(entry.displayTitle.prefix(Self.titleLength)), meeting: entry.isMeeting, marks: entry.marks.count,
                        persona: attended ? entry.attendance?.role.rawValue : nil,
                        answer: showsAnswer ? answer : nil,
                        topic: liveView ? Self.cut(topic, Self.topicLength) : nil,
                        line: showsAnswer ? nil : line,
-                       talking: MeetingCallRule.talkOffered(entry, roomMissing: roomMissing) ? recording && talking : nil)
+                       talking: MeetingCallRule.talkOffered(entry, roomMissing: roomMissing) ? recording && talking : nil,
+                       fellBack: fellBack ? true : nil)
     }
 
     /// How long to hold `next` back when `shown` went out at `sentAt` (pure, for the tests): an answer, a phase, the

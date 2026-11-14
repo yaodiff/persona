@@ -1,3 +1,4 @@
+import SwiftUI
 import Testing
 @testable import BeautifulUI
 
@@ -26,5 +27,22 @@ import Testing
         a.setCustom("Two", in: 0, kind: .single)
         #expect(a.hasAnswer(0))
         #expect(a.picks[0] == [])
+    }
+}
+
+@MainActor @Suite struct ApprovalCardTests {
+    @Test func legacyTrailingClosuresStayOnSubmit() {
+        let plain = ApprovalCard(questions: [ApprovalQuestion("Continue?", options: ["Yes"])]) { (_: ApprovalAnswers) in }
+        #expect(plain.onSubmit != nil)
+        #expect(plain.onSkip == nil)
+
+        let contextual = ApprovalCard(questions: [ApprovalQuestion("Continue?", options: ["Yes"])]) { (_: ApprovalAnswers) in }
+            context: { _ in EmptyView() }
+        #expect(contextual.onSubmit != nil)
+        #expect(contextual.onSkip == nil)
+
+        let skipping = ApprovalCard(questions: [ApprovalQuestion("Continue?", options: ["Yes"])], onSkip: { _ in })
+        #expect(skipping.onSkip != nil)
+        #expect(skipping.onSubmit == nil)
     }
 }

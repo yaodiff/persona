@@ -141,12 +141,11 @@ func installedHelper(t *testing.T, permission string) string {
 func TestStartScreenHelperJoinsTheStreamAndEndsWithScreenSharing(t *testing.T) {
 	installedHelper(t, "granted")
 	swap(t, &screenLaunch, fakeHelper(t, func(token string) string { return token }, ""))
-	var mu sync.Mutex
-	var sent []string
+	streamClosed := make(chan struct{})
 	n := &Node{screens: newScreenLogins(), streams: streams.New(func(event string, _ any) error {
-		mu.Lock()
-		sent = append(sent, event)
-		mu.Unlock()
+		if event == streams.EventClose {
+			close(streamClosed)
+		}
 		return nil
 	})}
 	// The paired screen-sharing stream, signed in.
@@ -158,7 +157,7 @@ func TestStartScreenHelperJoinsTheStreamAndEndsWithScreenSharing(t *testing.T) {
 	n.screens.mu.Unlock()
 
 	var released atomic.Int32
-	if err := n.startScreenHelper(context.Background(), "v1", "K", false, func() { released.Add(1) }); err != nil {
+	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, func() { released.Add(1) }); err != nil {
 		t.Fatal(err)
 	}
 	n.screens.mu.Lock()
@@ -169,11 +168,11 @@ func TestStartScreenHelperJoinsTheStreamAndEndsWithScreenSharing(t *testing.T) {
 	}
 
 	_ = tee.Close() // screen sharing ends: the video ends with it, and its slot is released once
-	deadline := time.Now().Add(2 * time.Second)
-	for released.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-streamClosed: // The stream pump has closed the helper connection again.
+	case <-time.After(2 * time.Second):
+		t.Fatal("the screen-sharing stream ended without closing the video stream")
 	}
-	time.Sleep(50 * time.Millisecond) // the stream pump closing it again must not release twice
 	if got := released.Load(); got != 1 {
 		t.Fatalf("slot released %d times, want 1", got)
 	}
@@ -184,13 +183,13 @@ func TestStartScreenHelperRefusesWithoutAHelperOrPermission(t *testing.T) {
 	n.screens.byID["K"] = &screenPair{result: rfbLoginSignedIn, open: true}
 
 	installedHelper(t, "missing")
-	if err := n.startScreenHelper(context.Background(), "v1", "K", false, func() {}); dialErrCode(t, err) != "video_unavailable" {
+	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
 		t.Fatalf("no Screen Recording permission: %v", err)
 	}
 
 	swap(t, &screenHelperSource, func() string { return "" })
 	swap(t, &screenHelpers, &helperResolver{})
-	if err := n.startScreenHelper(context.Background(), "v1", "K", false, func() {}); dialErrCode(t, err) != "video_unavailable" {
+	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
 		t.Fatalf("no helper installed: %v", err)
 	}
 }
@@ -206,29 +205,118 @@ func TestAPairThatClosedBindsNoVideo(t *testing.T) {
 	}
 }
 
-// screen_video stays out of the statuses until the iPhone decodes video in the official build: apps before it show a
-// picture switcher for any screen_video and can't play it (#3954).
-func TestScreenVideoIsAdvertisedOnlyWhenSwitchedOn(t *testing.T) {
-	if advertiseScreenVideo {
-		t.Fatal("advertiseScreenVideo is on: turn it on only once the official TestFlight build decodes video (#3954)")
+// screen_video is in the statuses now that the official build decodes video (#3954), from what the helper says; the
+// switch still gates it, so a node can be built without it.
+func TestScreenVideoIsAdvertised(t *testing.T) {
+	if !advertiseScreenVideo {
+		t.Fatal("advertiseScreenVideo is off: the official TestFlight build decodes video since #3954 slices 3b and 3c")
 	}
 	installedHelper(t, "granted")
 	ctx := context.Background()
-	if v := screenVideoStatus(ctx); v != nil {
-		t.Fatalf("status while switched off = %+v, want none", v)
+	v := screenVideoStatus(ctx)
+	if v == nil || v.Version != screenVideoVersion || strings.Join(v.Codecs, ",") != "hevc,h264" || v.Permission != "granted" || v.Asked {
+		t.Fatalf("status, helper granted = %+v", v)
 	}
 	if v := screenVideoAdvertised(ctx, false); v != nil {
 		t.Fatalf("switched off = %+v, want none", v)
-	}
-	v := screenVideoAdvertised(ctx, true)
-	if v == nil || v.Version != screenVideoVersion || strings.Join(v.Codecs, ",") != "hevc,h264" || v.Permission != "granted" {
-		t.Fatalf("switched on, helper granted = %+v", v)
 	}
 
 	swap(t, &screenHelperSource, func() string { return "" })
 	swap(t, &screenHelpers, &helperResolver{})
 	if v := screenVideoAdvertised(ctx, true); v != nil {
-		t.Fatalf("switched on, no helper = %+v, want none", v)
+		t.Fatalf("no helper = %+v, want none", v)
+	}
+}
+
+// askingFor sets up the ask (#3954): the helper installed with this permission, the record in a temporary bin, and
+// launches counted. It returns the node, a pair signed in on it, and the launches so far.
+func askingFor(t *testing.T, permission string) (*Node, func() [][]string) {
+	t.Helper()
+	installedHelper(t, permission)
+	bin := t.TempDir()
+	swap(t, &screenCopyDir, func() string { return bin })
+	swap(t, &screenAsks, &askRecord{file: func() string { return filepath.Join(bin, "Persona Screen.asked") }})
+	swap(t, &screenAskPoll, 5*time.Millisecond)
+	var mu sync.Mutex
+	var launched [][]string
+	swap(t, &screenLaunch, func(_ context.Context, helper string, args ...string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		launched = append(launched, append([]string{filepath.Base(helper)}, args...))
+		return nil
+	})
+	n := &Node{screens: newScreenLogins()}
+	rfb, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close(); _ = rfb.Close() })
+	_ = n.screens.observe("K", rfb)
+	n.screens.mu.Lock()
+	n.screens.byID["K"].result = rfbLoginSignedIn
+	n.screens.mu.Unlock()
+	return n, func() [][]string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([][]string(nil), launched...)
+	}
+}
+
+func ask(n *Node, pair string) {
+	done := make(chan struct{})
+	n.askScreenPermission(pair, func() { close(done) })
+	<-done
+}
+
+// The first time an app that plays the video signs in without the helper's grant, the helper asks macOS, once per
+// helper version; the statuses then say it asked, so the app can point to System Settings.
+func TestTheHelperAsksForScreenRecordingOncePerVersion(t *testing.T) {
+	n, launched := askingFor(t, "missing")
+	ctx := context.Background()
+	if v := screenVideoStatus(ctx); v == nil || v.Permission != "missing" || v.Asked {
+		t.Fatalf("before asking = %+v, want missing, not asked", v)
+	}
+	ask(n, "K")
+	if got := launched(); len(got) != 1 || strings.Join(got[0], " ") != screenHelperName+" --request-permission" {
+		t.Fatalf("launched %v, want the helper once with --request-permission", got)
+	}
+	if v := screenVideoStatus(ctx); v == nil || !v.Asked {
+		t.Fatalf("after asking = %+v, want asked", v)
+	}
+	ask(n, "K")
+	if got := launched(); len(got) != 1 {
+		t.Fatalf("asked again for the same helper version: %v", got)
+	}
+
+	// A new helper version (Persona Link updated it): its grant is a new one, so it may ask once more.
+	app := fakeHelperBundle(t, t.TempDir(), "com.example.persona.link.screen", "v2")
+	swap(t, &screenHelperSource, func() string { return app })
+	if v := screenVideoStatus(ctx); v == nil || v.Asked {
+		t.Fatalf("new version before asking = %+v, want not asked", v)
+	}
+	ask(n, "K")
+	if got := launched(); len(got) != 2 {
+		t.Fatalf("launched %v, want a second ask for the new version", got)
+	}
+}
+
+// It asks only for a stream that signed in, and never when the grant is there.
+func TestTheHelperAsksOnlyAfterASignInAndWithoutTheGrant(t *testing.T) {
+	n, launched := askingFor(t, "missing")
+	swap(t, &screenAskWait, 30*time.Millisecond)
+	ask(n, "nobody") // no such stream: gives up
+	n.screens.mu.Lock()
+	n.screens.byID["K"].result = rfbLoginFailed
+	n.screens.mu.Unlock()
+	ask(n, "K") // the login failed
+	if got := launched(); len(got) != 0 {
+		t.Fatalf("asked without a sign-in: %v", got)
+	}
+	if v := screenVideoStatus(context.Background()); v == nil || v.Asked {
+		t.Fatalf("status = %+v, want not asked", v)
+	}
+
+	n, launched = askingFor(t, "granted")
+	ask(n, "K")
+	if got := launched(); len(got) != 0 {
+		t.Fatalf("asked with the grant there: %v", got)
 	}
 }
 

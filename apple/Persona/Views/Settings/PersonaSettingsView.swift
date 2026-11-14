@@ -8,7 +8,6 @@ import SwiftUI
 /// avatar made that way can be deleted with the button in its card's corner (`UploadedAvatarDelete`).
 struct PersonaPicker: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var uploads = AvatarUploadsModel()
     /// The crop sheet for the picked image.
     @State private var cropping: AvatarUploadModel?
@@ -21,9 +20,8 @@ struct PersonaPicker: View {
     /// A card's picture area: the 64 pt face with room around it.
     private static let cardHeight: CGFloat = PersonaStore.thumbnailPoints + Theme.Space.xxl
     private var columns: [GridItem] {
-        let n = typeSize.isAccessibilitySize ? 2 : 3
         let item = GridItem(.flexible(), spacing: 12, alignment: .top)
-        return Array(repeating: item, count: n)
+        return Array(repeating: item, count: 3)
     }
 
     var body: some View {
@@ -149,17 +147,9 @@ struct PersonaPicker: View {
     }
     #endif
 
-    /// The chosen one's dot in each state, moving as in the top bar: in a row; at the accessibility text sizes two a row,
-    /// where five in a row cut every name to "…" and three ran them together (#1796).
+    /// The chosen one's dot in each state, moving as in the top bar, in a row.
     private var states: some View {
-        Group {
-            if typeSize.isAccessibilitySize {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Theme.Space.xxs, alignment: .top), count: 2),
-                          spacing: Theme.Space.s) { stateCells }
-            } else {
-                HStack(spacing: Theme.Space.xxs) { stateCells }
-            }
-        }
+        HStack(spacing: Theme.Space.xxs) { stateCells }
         .padding(.vertical, Theme.Space.s)
         .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         .accessibilityElement(children: .ignore)

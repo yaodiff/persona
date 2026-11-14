@@ -151,6 +151,10 @@ type Engine struct {
 	clock func() time.Time
 	// jobLeft is how long a recap job has left (tests); nil: until its context's deadline.
 	jobLeft func(ctx context.Context) time.Duration
+	// minutesCall and minutesPart are the transcript runes the minutes read in one call and in one part of a long
+	// meeting (tests; zero: minutesOneCall and minutesChunk): the behaviour check sends a short meeting through the
+	// merging call.
+	minutesCall, minutesPart int
 }
 
 // Retries are the knowledge base steps' failures and when each may be tried again (retrySet, one per step).
@@ -253,7 +257,12 @@ func (e *Engine) AttachmentDaysFor(source string) int {
 // textCutoff and line stop writing. With a selection, each line's days are its deciding rule's (PruneSelected), and
 // documents past the days the user set for them go too (pruneDocs); a selection that cannot be read now
 // (Selection.Stopgap) prunes nothing: the next round tries again. The count is of day files, attachment days and documents.
-func (e *Engine) Prune(now time.Time) int {
+func (e *Engine) Prune(now time.Time) (removed int) {
+	defer func() {
+		if removed > 0 {
+			e.Store.SearchIndexPurge() // what retention removed leaves the search index at its next update
+		}
+	}()
 	if sel := e.selection(); sel != nil {
 		if sel.Stopgap() {
 			return 0

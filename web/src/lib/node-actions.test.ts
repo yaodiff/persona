@@ -3,6 +3,18 @@ import type { MenuItem } from "../ui/menu-model";
 import { canChangeHost, canRenameIn, gitOutcomeText, machineNode, nodeActions, sessionNode, termPaneNode, termSpaceNode, termTabNode, type MenuNode, type NodeActionDeps } from "./node-actions";
 import { buildTerminalTree, shellsOnly, type PanesResponse } from "./terminals";
 import type { Session } from "./types";
+import zhNode from "../i18n/locales/zh-Hans/lib-node-actions.json";
+import enNode from "../i18n/locales/en/lib-node-actions.json";
+import jaNode from "../i18n/locales/ja/lib-node-actions.json";
+import zhWorktree from "../i18n/locales/zh-Hans/worktree-actions.json";
+import enWorktree from "../i18n/locales/en/worktree-actions.json";
+import jaWorktree from "../i18n/locales/ja/worktree-actions.json";
+import zhAgent from "../i18n/locales/zh-Hans/agentmenus.json";
+import enAgent from "../i18n/locales/en/agentmenus.json";
+import jaAgent from "../i18n/locales/ja/agentmenus.json";
+import zhChat from "../i18n/locales/zh-Hans/chat-chatview.json";
+import enChat from "../i18n/locales/en/chat-chatview.json";
+import jaChat from "../i18n/locales/ja/chat-chatview.json";
 
 function deps(over: Partial<NodeActionDeps> = {}): NodeActionDeps {
   return {
@@ -186,7 +198,7 @@ describe("git", () => {
     expect(git.hint).toBe("main");
     const ops = git.children as MenuItem[];
     // the branch is copied from the Git menu, as Moshi's is
-    expect(ops.map((i) => [i.label, i.accel])).toEqual([["拉取", "p"], ["推送", "u"], ["获取", "f"], ["复制分支名", "b"]]);
+    expect(ops.map((i) => [i.label, i.accel])).toEqual([["拉取", "p"], ["推送", "u"], ["获取", "f"], ["拷贝分支名", "b"]]);
     await ops[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/git", { op: "push", pane: "w1:p2" });
     expect(d.notify).toHaveBeenCalledWith("推送：已是最新", "ok");
@@ -237,6 +249,33 @@ describe("read-only items", () => {
     (by(items, "node-git").children as MenuItem[]).find((i) => i.key === "node-copy-branch")!.onSelect();
     expect(d.copy).toHaveBeenLastCalledWith("feat/x");
   });
+  it("says one verb and ID, and names the id by what it is, never by the engine (herdr) behind it", () => {
+    const d = deps();
+    const space: MenuNode = { kind: "workspace", mid: "m1", host: "herdr", label: "proj", workspaceId: "w1", cwd: "/home/me/proj" };
+    const labels = (node: MenuNode) => nodeActions(node, d).filter((i) => i.icon === "copy").map((i) => i.label);
+    expect(labels(pane)).toEqual(["拷贝目录路径", "拷贝会话 ID", "拷贝窗格 ID"]);
+    expect(labels(tab)).toEqual(["拷贝目录路径", "拷贝标签页 ID"]);
+    expect(labels(space)).toEqual(["拷贝目录路径", "拷贝空间 ID"]);
+    expect(labels({ kind: "machine", mid: "m1" })).toEqual(["拷贝机器 ID"]);
+    // the same values as before: only the words changed
+    by(nodeActions(tab, d), "node-copy-id").onSelect();
+    expect(d.copy).toHaveBeenLastCalledWith("w1:t2");
+    by(nodeActions(space, d), "node-copy-id").onSelect();
+    expect(d.copy).toHaveBeenLastCalledWith("w1");
+    for (const node of [pane, tab, space]) for (const label of labels(node)) expect(label).not.toMatch(/herdr|复制|\bid\b/);
+  });
+  it("copies a folder's path in the same words in every menu of the Agents list and a chat, in every language", () => {
+    const languages = [
+      { node: zhNode, worktree: zhWorktree, agent: zhAgent, chat: zhChat },
+      { node: enNode, worktree: enWorktree, agent: enAgent, chat: enChat },
+      { node: jaNode, worktree: jaWorktree, agent: jaAgent, chat: jaChat },
+    ];
+    for (const { node, worktree, agent, chat } of languages) {
+      expect(new Set([node.copy_path, worktree.copy_path, agent.copy_folder, chat.copy_folder]).size).toBe(1);
+    }
+    // the By repository grouping's worktree menu, beside the node menus, says their verb
+    expect([zhWorktree.copy_name, zhWorktree.copy_path, zhNode.copy_path]).toEqual(["拷贝工作树名称", "拷贝目录路径", "拷贝目录路径"]);
+  });
   it("leaves out what is not known", () => {
     const k = keys(nodeActions({ kind: "pane", mid: "m1", paneId: "w1:p3", agent: "" }, deps()));
     expect(k).not.toContain("node-copy-path");
@@ -255,6 +294,43 @@ describe("read-only items", () => {
     await by(nodeActions(pane, d), "node-close-pane").onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/close", { pane: "w1:p3" });
     expect(keys(nodeActions(pane, d))).not.toContain("node-close-tab");
+  });
+});
+
+describe("closing a pane (#7125)", () => {
+  const shell: MenuNode = { kind: "pane", mid: "m1", host: "herdr", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p4", agent: "", cwd: "/home/me/proj", branch: "main" };
+  const agent: MenuNode = { ...shell, paneId: "w1:p3", sessionId: "sid-1", agent: "claude" };
+  it("sits with the pane's own actions, right after New pane, not in a danger group at the bottom", () => {
+    const items = nodeActions(shell, deps());
+    expect(keys(items)).toEqual(["node-split", "node-close-pane", "node-agent", "node-git", "node-copy-path", "node-copy-id"]);
+    expect(by(items, "node-close-pane")).toMatchObject({ danger: true, closes: true, confirm: "确认关闭", inline: true });
+    expect(by(items, "node-close-pane").divider).toBeFalsy();
+  });
+  it("a shell's pane closes after the menu's second click, as before", async () => {
+    const d = deps({ closeAgent: vi.fn(() => undefined) });
+    await by(nodeActions(shell, d), "node-close-pane").onSelect();
+    expect(d.post).toHaveBeenCalledWith("m1", "panes/close", { pane: "w1:p4" });
+    expect(d.closeAgent).not.toHaveBeenCalled();
+  });
+  it("an agent's pane asks with the agent's Close… instead, so a busy agent is never closed by the second click alone", () => {
+    const open = vi.fn();
+    const d = deps({ closeAgent: vi.fn(() => ({ onSelect: open })) });
+    const close = by(nodeActions(agent, d), "node-close-pane");
+    expect(d.closeAgent).toHaveBeenCalledWith("m1", "sid-1");
+    expect(close.confirm).toBeUndefined();
+    expect(close.inline).toBeUndefined();
+    close.onSelect();
+    expect(open).toHaveBeenCalledOnce();
+    expect(d.post).not.toHaveBeenCalled();
+  });
+  it("stays disabled, saying why, where the agent's Close… is", () => {
+    const d = deps({ closeAgent: () => ({ onSelect: () => {}, disabled: true, detail: "正忙" }) });
+    expect(by(nodeActions(agent, d), "node-close-pane")).toMatchObject({ disabled: true, detail: "正忙" });
+  });
+  it("closes the pane as a shell's when the page doesn't list the agent's session", async () => {
+    const d = deps({ closeAgent: () => undefined });
+    await by(nodeActions(agent, d), "node-close-pane").onSelect();
+    expect(d.post).toHaveBeenCalledWith("m1", "panes/close", { pane: "w1:p3" });
   });
 });
 

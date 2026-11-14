@@ -212,6 +212,185 @@ import Testing
         #expect(RecordingMinutes(points: [.init(text: "a")]).text(title: "Weekly").hasPrefix("# Weekly"))
     }
 
+    // MARK: The summary card (#6563)
+
+    /// The contract's example of minutes with an overview ("The `overview` field"), as the hub returns them.
+    private let overviewJSON = """
+    {"version": 3, "title": "Sprint review", "where": "Room 3", "attendees": ["Ada", "Bo"],
+     "points": [{"text": "Export drops entries over 4 MB", "at": 312.0, "who": "Ada"},
+                {"text": "The cache bug reproduced once on a weak network", "at": 1950.0, "photo": 2}],
+     "decisions": [{"text": "Export keeps the cap, with a warning when an entry is skipped", "at": 1504.5}],
+     "actions": [{"id": "a1", "who": "Bo", "what": "Add the regression test.", "by": "Friday", "at": 2100.0, "todo_id": ""}],
+     "open": [{"text": "Whether the cap is per entry or per recording", "at": 2408.0}],
+     "overview": {
+       "headline": "Export ships with the size cap",
+       "conclusions": [{"text": "Export ships with the 4 MB cap and a warning", "strong": ["4 MB"], "at": 1504.5}],
+       "groups": [
+         {"title": "Project progress", "topics": [
+           {"title": "Export", "icon": "progress", "bullets": [
+             {"text": "Export drops entries over 4 MB", "strong": ["4 MB"], "at": 312.0, "who": "Ada"},
+             {"text": "Export keeps the cap, with a warning when an entry is skipped", "strong": ["keeps the cap"], "at": 1504.5, "decision": true}]}]},
+         {"title": "Tooling and performance", "topics": [
+           {"title": "Cache bug", "icon": "quality", "bullets": [
+             {"text": "The cache bug reproduced once on a weak network", "strong": ["once"], "at": 1950.0, "photo": 2}]}]}]},
+     "markdown": "# Sprint review\\n\\nExport ships with the size cap\\n"}
+    """
+
+    private func decode(_ json: String) throws -> RecordingMinutes {
+        try JSONDecoder().decode(RecordingMinutes.self, from: Data(json.utf8))
+    }
+
+    /// The overview is read beside the lists, which keep their meaning; what the watch is sent keeps it all.
+    @Test func overviewDecodesBesideTheLists() throws {
+        let m = try decode(overviewJSON)
+        let o = try #require(m.overview)
+        #expect(o.headline == "Export ships with the size cap")
+        #expect(o.conclusions.map(\.strong) == [["4 MB"]])
+        #expect(o.conclusions.first?.decision == false && o.conclusions.first?.who == nil)
+        #expect(o.groups.map(\.title) == ["Project progress", "Tooling and performance"])
+        #expect(o.groups[0].topics[0].icon == .progress)
+        #expect(o.groups[0].topics[0].bullets.map(\.decision) == [false, true])
+        #expect(o.groups[0].topics[0].bullets[0].who == "Ada")
+        #expect(o.groups[1].topics[0].bullets[0].photo == 2)
+        #expect(m.points.count == 2 && m.decisions.count == 1 && m.actions.first?.id == "a1" && m.openQuestions.count == 1)
+        #expect(m.markdown == "# Sprint review\n\nExport ships with the size cap\n")
+        #expect(try JSONDecoder().decode(RecordingMinutes.self, from: JSONEncoder().encode(m)) == m)
+        // Minutes without one, from any hub before #6563, have none.
+        #expect(try decode(minutesJSON).overview == nil)
+        #expect(try decode(minutesJSON).markdown == nil)
+    }
+
+    /// A broken overview never costs the minutes their lists: no overview, the same points, decisions, actions and open
+    /// questions (docs/assistant/meeting-minutes.md "Clients").
+    @Test(arguments: [
+        #""x""#, "null", "[]", "3", "{}", #"{"groups": "x"}"#, #"{"groups": {}}"#, #"{"groups": []}"#,
+        #"{"groups": [{"title": "A"}]}"#, #"{"groups": [{"topics": "x"}]}"#, #"{"groups": [{"topics": [{"bullets": [{"text": "a"}]}]}]}"#,
+        #"{"groups": [{"topics": [{"title": "  ", "bullets": [{"text": "a"}]}]}]}"#,
+        #"{"groups": [{"topics": [{"title": 3, "bullets": [{"text": "a"}]}]}]}"#,
+        #"{"groups": [{"topics": [{"title": "T", "bullets": "a"}]}]}"#,
+        #"{"groups": [{"topics": [{"title": "T", "bullets": [{"text": " \n"}, {"text": 4}, "a", null]}]}]}"#,
+        #"{"groups": ["x", 3, null, [{"topics": []}]]}"#,
+    ])
+    func aBrokenOverviewIsNone(_ overview: String) throws {
+        let json = #"{"version": 2, "points": [{"text": "p", "at": 1}], "decisions": [{"text": "d", "at": 2}], "#
+            + #""actions": [{"id": "a1", "what": "w"}], "open": [{"text": "o"}], "markdown": "M", "overview": "# + overview + "}"
+        let m = try decode(json)
+        #expect(m.overview == nil)
+        #expect(m.points.map(\.text) == ["p"] && m.decisions.map(\.text) == ["d"] && m.actions.first?.id == "a1")
+        #expect(m.openQuestions.map(\.text) == ["o"] && m.version == 2)
+        // Copy and Share keep the phone's own text, as without an overview.
+        #expect(m.shareText(title: "Weekly") == m.text(title: "Weekly"))
+    }
+
+    /// The cleaning, member by member: what is not an object goes, a group's title that is not a string is "", a wrong
+    /// headline, conclusion, `who`, `strong` or `at` counts as absent, only `true` marks a decision, only a positive
+    /// whole number cites a photo, an unknown icon is `general`; empty topics and groups go.
+    @Test func overviewIsCleanedMemberByMember() throws {
+        let json = #"""
+        {"overview": {"headline": 3, "conclusions": [{"text": "c1", "at": -1, "strong": "x"}, "c2", {"text": ""}, {"text": "c3", "at": "12", "photo": 0}],
+         "groups": [
+           "x",
+           {"title": 7, "topics": [
+             3,
+             {"title": "Empty", "icon": "progress", "bullets": [{"text": "  "}]},
+             {"title": "Kept", "icon": "rocket", "bullets": [
+               {"text": "b1", "strong": ["b", 2, "", null], "at": 12.5, "who": 4, "decision": "true", "photo": 2.0},
+               {"text": "b2", "at": true, "decision": 1, "photo": 2.5},
+               {"text": "b3", "who": "Ada", "decision": true, "photo": "3", "at": 0}]}]},
+           {"title": "Gone", "topics": [{"title": "No bullets", "bullets": []}]}]}}
+        """#
+        let o = try #require(try decode(json).overview)
+        #expect(o.headline == nil)
+        #expect(o.conclusions.map(\.text) == ["c1", "c3"])
+        #expect(o.conclusions.map(\.at) == [nil, nil] && o.conclusions.map(\.strong) == [[], []] && o.conclusions[1].photo == nil)
+        #expect(o.groups.count == 1 && o.groups[0].title == "")
+        let topic = try #require(o.groups.first?.topics.first)
+        #expect(o.groups[0].topics.count == 1 && topic.title == "Kept" && topic.icon == .general)
+        #expect(topic.bullets.map(\.text) == ["b1", "b2", "b3"])
+        #expect(topic.bullets.map(\.strong) == [["b"], [], []])
+        #expect(topic.bullets.map(\.at) == [12.5, nil, 0])
+        #expect(topic.bullets.map(\.who) == [nil, nil, "Ada"])
+        #expect(topic.bullets.map(\.decision) == [false, false, true])
+        #expect(topic.bullets.map(\.photo) == [2, nil, nil])
+    }
+
+    /// Every icon on the contract's list is read as itself; anything else, a wrong case included, is `general`.
+    @Test func topicIconsFromTheClosedList() throws {
+        for icon in RecordingMinutes.TopicIcon.allCases {
+            let json = #"{"overview": {"groups": [{"title": "", "topics": [{"title": "T", "icon": "\#(icon.rawValue)", "bullets": [{"text": "b"}]}]}]}}"#
+            #expect(try decode(json).overview?.groups.first?.topics.first?.icon == icon)
+        }
+        for icon in [#""Progress""#, #""rocket""#, "3", "null", "\"\""] {
+            let json = #"{"overview": {"groups": [{"title": "", "topics": [{"title": "T", "icon": "# + icon + #", "bullets": [{"text": "b"}]}]}]}}"#
+            #expect(try decode(json).overview?.groups.first?.topics.first?.icon == .general, "\(icon)")
+        }
+        #expect(RecordingMinutes.TopicIcon.allCases.count == 13)
+    }
+
+    /// Bold (`strong`): each entry's first exact occurrence at or after the end of the one before; one not found bolds
+    /// nothing and the search goes on from where it was; code units, no case folding or normalization.
+    @Test func boldPlacesFollowTheStrongRule() {
+        func parts(_ text: String, _ strong: [String]) -> [String] {
+            RecordingMinutes.boldParts(text, strong: strong).map { $0.bold ? "**\($0.text)**" : $0.text }
+        }
+        #expect(parts("QPS raised to 40K", ["40K"]) == ["QPS raised to ", "**40K**"])
+        #expect(parts("from 20K to 40K", ["20K", "40K"]) == ["from ", "**20K**", " to ", "**40K**"])
+        // A figure twice: the second entry is found after the first.
+        #expect(parts("4 MB here, 4 MB there", ["4 MB", "4 MB"]) == ["**4 MB**", " here, ", "**4 MB**", " there"])
+        // Out of order: the second is looked for after the first, so it is not found.
+        #expect(parts("a b", ["b", "a"]) == ["a ", "**b**"])
+        // Not found: skipped, the next still found from where the search was.
+        #expect(parts("module X done", ["Y", "done"]) == ["module X ", "**done**"])
+        #expect(parts("Done done", ["done"]) == ["Done ", "**done**"])
+        #expect(parts("café", ["cafe\u{301}"]) == ["café"])
+        #expect(parts("plain", []) == ["plain"])
+        #expect(parts("x", ["", "x"]) == ["**x**"])
+        #expect(parts("核心结论：完成 90%", ["完成", "90%"]) == ["核心结论：", "**完成**", " ", "**90%**"])
+        #expect(parts("emoji 👍🏽 ok", ["👍🏽"]) == ["emoji ", "**👍🏽**", " ok"])
+        // Never read as Markdown: asterisks and links stay words.
+        #expect(parts("**not bold** [x](https://example.com)", []) == ["**not bold** [x](https://example.com)"])
+        let bold = RecordingMinutes.bolded("QPS to 40K", strong: ["40K"])
+        #expect(String(bold.characters) == "QPS to 40K")
+        #expect(bold.runs.map { $0.inlinePresentationIntent } == [nil, .stronglyEmphasized])
+    }
+
+    /// Copy and Share: with the summary card, the hub's own Markdown; without one (or from a hub that sends none), the
+    /// phone's text exactly as before.
+    @Test func copySendsTheHubsMarkdownWithTheSummaryCard() throws {
+        let m = try decode(overviewJSON)
+        #expect(m.shareText(title: "x") == "# Sprint review\n\nExport ships with the size cap\n")
+        var bare = m
+        bare.markdown = nil
+        #expect(bare.shareText(title: "x") == bare.text(title: "x"))
+        bare.markdown = " \n"
+        #expect(bare.shareText(title: "x") == bare.text(title: "x"))
+        let legacy = try decode(minutesJSON)
+        #expect(legacy.shareText(title: "fallback") == legacy.text(title: "fallback"))
+        // The legacy text has no trace of the overview.
+        var withMarkdown = legacy
+        withMarkdown.markdown = "# Other"
+        #expect(withMarkdown.shareText(title: "fallback") == legacy.text(title: "fallback"))
+    }
+
+    /// What Copy and Share send, picked as the page picks it (`RecordingDetailView`: the summary card when the prepared
+    /// Summary has an overview): the hub's Markdown with the summary card; the phone's own text for minutes without an
+    /// overview, and for one the contract's cleaning empties (`"groups": "x"`), Markdown or not.
+    @Test func copyAndShareSendWhatTheSummaryShows() throws {
+        func sent(_ m: RecordingMinutes) -> String {
+            let summaryCard = RecordingMinutesCards.summary(m, sentences: []).overview != nil
+            return RecordingMinutesActions.text(m, title: "fallback", summaryCard: summaryCard)
+        }
+        let m = try decode(overviewJSON)
+        #expect(sent(m) == "# Sprint review\n\nExport ships with the size cap\n")
+        #expect(RecordingMinutesActions.text(m, title: "fallback", summaryCard: false) == m.text(title: "fallback"))
+        let legacy = try decode(minutesJSON)
+        #expect(sent(legacy) == legacy.text(title: "fallback"))
+        let malformed = try decode(overviewJSON.replacingOccurrences(of: #""groups": ["#, with: #""groups": "x", "was": ["#))
+        #expect(malformed.markdown?.isEmpty == false)
+        #expect(sent(malformed) == malformed.text(title: "fallback"))
+        #expect(sent(malformed) != malformed.markdown)
+    }
+
     /// A time lands on the line said then (or just before), the first line before any.
     @Test func timeFindsItsTranscriptLine() {
         let lines = [RecordingSentence(start: 2, end: 10, text: "a"), RecordingSentence(start: 21, end: 30, text: "b"),

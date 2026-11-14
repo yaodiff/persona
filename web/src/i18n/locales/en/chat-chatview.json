@@ -9,6 +9,7 @@
   "interrupt_failed": "Couldn't interrupt: {error}",
   "new_chat": "New chat",
   "session": "Session",
+  "not_found_title": "Conversation not found",
   "continue_text": "Continue",
   "start_failed": "Couldn't start: {error}",
   "start_failed_title": "Couldn't start",
@@ -57,7 +58,6 @@
   "copy_session_id": "Copy session ID",
   "copy_folder": "Copy folder path",
   "copy_resume_command": "Copy resume command",
-  "close_agent_menu": "Close agent…",
   "delete_chat": "Delete chat…",
   "sidebar": "Sidebar",
   "same_space_count": "Same space {count}",
@@ -136,5 +136,6 @@
   "search_origin_changed": "Where you were has changed. Carry on from here.",
   "search_return": "Back to where you were",
   "search_menu": "Search in chat",
-  "todo_completed_label": "To-do (Completed): {title}"
+  "todo_completed_label": "To-do (Completed): {title}",
+  "export": "Export Conversation…"
 }

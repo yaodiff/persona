@@ -14,7 +14,6 @@ apple/Persona/Views/Shell/ShellPager.swift	docs/apple/ios.md	只在前台做的�
 apple/PersonaUITests/ExtensionMarketTests.swift	docs/extensions/extensions.md	自动升级
 apple/Shared/APIClient.swift	docs/protocol/protocol.md	发消息
 apple/Shared/APIClient.swift	docs/protocol/protocol.md	操作回执
-apple/project.yml	docs/apple/mac.md	验收清单
 docs/apple/ios.md	docs/integrations/codex.md	Effort
 docs/apple/phone-tools.md	docs/android/android.md	App shell and direct page navigation,
 docs/apple/recording.md	protocol.md	Recording synchronization

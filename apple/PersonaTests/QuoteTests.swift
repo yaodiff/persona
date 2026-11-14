@@ -68,6 +68,28 @@ struct SelectionQuoteTests {
         #expect(whole.quoteHeading == "引用 Claude")
     }
 
+    /// Workspaces are user-picked contexts. Their empty URL cannot collide with an ordinary quote or another workspace.
+    @Test func workspaceContextsAndMentionDeduplication() {
+        let one = ContextRef(kind: "workspace", title: "One", url: "", text: "Workspace: One\nComputer: Mac\nFolder: /one",
+                             extra: ["machine": "m", "cwd": "/one"])
+        let two = ContextRef(kind: "workspace", title: "Two", url: "", text: "Workspace: Two\nComputer: Mac\nFolder: /two",
+                             extra: ["machine": "m", "cwd": "/two"])
+        let quote = ContextRef.quote("Earlier", from: "Claude", msg: "m1")
+        #expect(one.isQuote)
+        #expect(one.quoteHeading == "工作区 · One")
+        #expect(one.quoteSummary == "Computer: Mac Folder: /one")
+        let withQuote = ContextRef.addingMention(one, to: [quote]) ?? []
+        #expect(withQuote.count == 2)
+        #expect(ContextRef.addingMention(quote, to: [one])?.count == 2)
+        #expect(ContextRef.addingMention(one, to: withQuote) == nil)
+        #expect(ContextRef.addingMention(two, to: withQuote)?.count == 3)
+        let changed = ContextRef(kind: "workspace", title: one.title, url: "", text: one.text + "\nBranch: next")
+        #expect(ContextRef.addingMention(changed, to: [one])?.count == 2)
+        let samePage = ContextRef(kind: "context", title: "Same", url: "https://example.com", text: "one")
+        let samePageAgain = ContextRef(kind: "context", title: "Same again", url: "https://example.com", text: "two")
+        #expect(ContextRef.addingMention(samePageAgain, to: [samePage]) == nil)
+    }
+
     /// A quote saved over the box by an older build (no `part`) still loads.
     @Test func aSavedQuoteWithoutAPartStillLoads() throws {
         let json = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","kind":"quote","title":"Claude","url":"","text":"x","msg":"1"}"#

@@ -213,6 +213,14 @@ func (s *Service) signal(g superviseSignal) {
 		g.At = time.Now()
 	}
 	b := &s.supervise
+	if turnSignalKind(g.Kind) && s.turnSignalled(g) {
+		// How its turn ended was told already, by this manager or by the one before a restart (task_turns.go).
+		b.mu.Lock()
+		b.init()
+		b.sent[g.id()] = g.Key
+		b.mu.Unlock()
+		return
+	}
 	b.mu.Lock()
 	b.init()
 	if b.sent[g.id()] == g.Key {
@@ -280,7 +288,8 @@ func (s *Service) retryDigestLocked(d time.Duration) {
 }
 
 // watchSignals are what t and its agents show now that the supervisor should hear of, by their state alone: a task
-// waiting for review (told once per review: again after a restart of the assistant, which forgot what it told), an
+// waiting for review (told once per review: the turns' ledger keeps that it was told across a restart of the
+// assistant, task_turns.go; a review no turn on the ledger raised is told again after one), an
 // agent waiting for an answer (at once for a quiet task), working without progress for long, or in any other state
 // with nothing new in its transcript for longer still (silentAfter, #5124). Nothing more for a
 // task waiting for review or for the user, only that its time came for a parked one, and nothing for one done or not
@@ -356,6 +365,7 @@ func silentAfter(expect int) time.Duration {
 func (s *Service) superviseLoop(ctx context.Context) {
 	t := time.NewTicker(superviseTick)
 	defer t.Stop()
+	s.turnOf(ctx, "") // the turns' ledger is kept from the manager's start, not from its first tick (task_turns.go)
 	for {
 		select {
 		case <-ctx.Done():
@@ -376,14 +386,17 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
 	s.askTick(now) // cards held past their time go up a rung (ask_route.go)
 	routed := s.routedSessions()
+	s.pruneTurns(ctx) // the turns' ledger: read before the first signal (what was told before a restart is not told again), closed tasks off it
 	tasks := s.todosOf(ctx, "*")
+	lists := machineSessions{}   // each machine listed once for all the supervised tasks (#3029)
 	s.backfillBriefs(ctx, tasks) // tasks from before briefs get one from what they still have (task_brief.go)
 	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
 		s.remedyWatch(ctx, t, now) // a failed start's kept tab expired (start_remedy.go)
-		for _, g := range watchSignals(t, s.taskAgents(ctx, t), now) {
+		agents := s.taskAgentsIn(ctx, t, lists)
+		for _, g := range watchSignals(t, agents, now) {
 			if g.Kind == sigNeedsYou && routed[[2]string{g.Machine, g.Session}] {
 				continue // its card is with the supervisor as an ask already
 			}
@@ -395,7 +408,8 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if g, ok := s.undecidableSignal(ctx, t, now); ok { // waits for the owner with nothing to answer (decision.go)
 			s.signal(g)
 		}
-		s.briefClock(ctx, t, now) // past its brief's clock with no end (task_brief_scope.go)
+		s.briefClock(ctx, t, now)   // past its brief's clock with no end (task_brief_scope.go)
+		s.watchTurn(ctx, t, agents) // a turn that ended with no working heard, or was left half handled (task_turns.go)
 	}
 	b := &s.supervise
 	b.mu.Lock()

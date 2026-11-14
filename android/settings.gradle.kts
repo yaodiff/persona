@@ -30,7 +30,7 @@ include(":core:demo")
 include(":feature:machines")
 include(":feature:files")
 include(":feature:knowledge")
-include(":app", ":core:contracts", ":core:domain", ":core:terminal")
+include(":app", ":core:contracts", ":core:domain", ":core:terminal", ":core:rustcore", ":core:rustcore-android")
 
 include(
     ":core:navigation", ":core:hub", ":core:data", ":core:designsystem", ":core:chatlist",

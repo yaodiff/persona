@@ -10,15 +10,21 @@ struct AssistantFullSearch: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @FocusState private var focused: Bool
+    /// What was said in the chats, found by the manager (#6284): merged into the title / last-message matches.
+    @State private var chatSearch: AssistantChatSearch? // made on the first query (P3: no work in the initial value)
 
     /// The sidebar's conversations (the latest first), read here: the sidebar under the cover is off the window, and what
     /// it handed in would not follow a conversation that comes or is renamed meanwhile.
-    private var hits: [Session] { AssistantSidebarSearch.filter(model.assistantConversations, query) }
+    private var hits: [AssistantSearchMerge.Row] {
+        let local = AssistantSidebarSearch.filter(model.assistantConversations, query)
+        guard let answer = chatSearch?.answer(for: query) else { return local.map { AssistantSearchMerge.Row(session: $0) } }
+        return AssistantSearchMerge.rows(local: local, answer: answer, known: model.assistantConversations + model.archivedConversations)
+    }
 
     var body: some View {
         List {
             Section {
-                ForEach(hits) { row($0) }
+                ForEach(hits) { row($0.session, said: $0.hit) }
             } header: {
                 Text(query.isEmpty ? String(localized: "Recent") : String(localized: "\(hits.count) Chats [Assistant Sidebar a72a2a]"))
                     .font(Theme.Font.secondaryMedium)
@@ -44,6 +50,10 @@ struct AssistantFullSearch: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { bar }
         .background(Theme.pageBackground.ignoresSafeArea())
         .onAppear { focused = true }
+        .onChange(of: query) { _, q in
+            if chatSearch == nil, !q.isEmpty { chatSearch = AssistantChatSearch() }
+            chatSearch?.search(q, api: model.api, on: model.features(model.hub?.group ?? "").contains(AssistantChatSearch.feature))
+        }
         .accessibilityAction(.escape) { dismiss() } // VoiceOver's scrub, as on a sheet
     }
 
@@ -84,11 +94,15 @@ struct AssistantFullSearch: View {
         .padding(.vertical, Theme.Space.s)
     }
 
-    private func row(_ s: Session) -> some View {
+    /// `said`: the message a search found it by (#6284): its sentence in place of the last message, and opened at.
+    private func row(_ s: Session, said: AssistantSearchAnswer.Hit? = nil) -> some View {
         let title = s.key == model.assistantMain ? AssistantSidebar.mainDisplayName(model)
             : s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
-        return Button { open(s.key) } label: {
+        return Button {
+            if let said { model.messageJump = MessageJump(key: s.key, item: said.itemID) }
+            open(s.key)
+        } label: {
             HStack(spacing: Theme.Space.m) {
                 ThemedIcon(Theme.Icon.conversation)
                     .font(Theme.Font.body)
@@ -97,7 +111,9 @@ struct AssistantFullSearch: View {
                     .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Theme.Fill.well))
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
-                    if !preview.isEmpty {
+                    if let said {
+                        SearchSaidLine(hit: said)
+                    } else if !preview.isEmpty {
                         Text(preview).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }

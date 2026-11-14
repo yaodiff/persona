@@ -227,7 +227,6 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
                 Label { Text("Uninstall").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.delete) }
             }
             .themedButton()
-            .tint(Theme.danger)
             .disabled(busy || !policy.canUninstall)
             .accessibilityIdentifier("extension-uninstall")
         } header: {

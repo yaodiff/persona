@@ -417,12 +417,15 @@ import Testing
         full.effort = "high"
         full.ultracode = true
         full.queued = ["next"]
+        full.suggestion = "Review before sending"
+        full.suggestionRisky = true
         full.listWaiting = nil
         let merged = summary.preservingDetails(from: full)
         #expect(merged.permissionMode == "plan")
         // A list row has no ultracode: the mark on the agent's to-do stays (#12).
         #expect(merged.ultracode == true)
         #expect(merged.queued == ["next"])
+        #expect(merged.suggestion == "Review before sending" && merged.suggestionRisky)
         #expect(merged.state == .idle)
         #expect(merged.isWaiting)
         let shaped = AgentsFeed.shape([summary], searching: false).sessions[0]

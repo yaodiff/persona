@@ -1,0 +1,463 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "continuing_item_batch_advances_coverage",
+      "description": "from_seq 是续读游标：批次包含 from_seq + 1 到 to_seq；from_seq == covered 时连续推进。",
+      "source": [
+        "ios/Shared/ChatStore.swift: apply",
+        "ios/PersonaTests/ChatStoreTests.swift: aBatchThatDoesNotContinueRevealsAHole"
+      ],
+      "derived": true,
+      "input": {
+        "initial": {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            }
+          ],
+          "covered": 12,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true
+        },
+        "events": [
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "13#0",
+                "seq": 13,
+                "role": "assistant",
+                "kind": "text",
+                "text": "示例答复"
+              }
+            ],
+            "history": "h",
+            "from_seq": 12,
+            "to_seq": 15
+          }
+        ]
+      },
+      "expected": [
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            },
+            {
+              "id": "13#0",
+              "seq": 13,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
+            }
+          ],
+          "covered": 15,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "13#0"
+          ],
+          "gap": "none",
+          "actions": []
+        }
+      ]
+    },
+    {
+      "name": "empty_batch_at_covered_advances_without_fill",
+      "description": "from_seq 等于 covered + 1 时空批次也连续推进一行；from_seq == covered 也可重叠补读。",
+      "source": [
+        "ios/Shared/ChatStore.swift: apply",
+        "ios/PersonaTests/ChatStoreTests.swift: emptyBatchesMoveCoveredForward"
+      ],
+      "derived": true,
+      "input": {
+        "initial": {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            }
+          ],
+          "covered": 12,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true
+        },
+        "events": [
+          {
+            "kind": "ws_items",
+            "items": [],
+            "history": "h",
+            "from_seq": 12,
+            "to_seq": 13
+          },
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "14#0",
+                "seq": 14,
+                "role": "assistant",
+                "kind": "text",
+                "text": "示例答复"
+              }
+            ],
+            "history": "h",
+            "from_seq": 13,
+            "to_seq": 14
+          },
+          {
+            "kind": "ws_items",
+            "items": [],
+            "history": "h",
+            "from_seq": 14,
+            "to_seq": 15
+          }
+        ]
+      },
+      "expected": [
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            }
+          ],
+          "covered": 13,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "item_ids": [
+            "1#0"
+          ],
+          "gap": "none",
+          "actions": []
+        },
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            },
+            {
+              "id": "14#0",
+              "seq": 14,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
+            }
+          ],
+          "covered": 14,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "14#0"
+          ],
+          "gap": "none",
+          "actions": []
+        },
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            },
+            {
+              "id": "14#0",
+              "seq": 14,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
+            }
+          ],
+          "covered": 15,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "14#0"
+          ],
+          "gap": "none",
+          "actions": []
+        }
+      ]
+    },
+    {
+      "name": "one_more_sequence_is_a_gap",
+      "description": "非空批次从 covered + 1 开始时缺首行，立即补洞；一次空结果后仍补，随后取到缺失行恢复。",
+      "source": [
+        "ios/Shared/ChatStore.swift: apply",
+        "ios/Persona/App/AppModel.swift: settle, fill"
+      ],
+      "derived": true,
+      "input": {
+        "initial": {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            }
+          ],
+          "covered": 12,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true
+        },
+        "events": [
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "15#0",
+                "seq": 15,
+                "role": "assistant",
+                "kind": "text",
+                "text": "示例答复"
+              }
+            ],
+            "history": "h",
+            "from_seq": 14,
+            "to_seq": 15
+          },
+          {
+            "kind": "http_after",
+            "items": [],
+            "history": "h",
+            "from_seq": 12,
+            "to_seq": 12
+          },
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "16#0",
+                "seq": 16,
+                "role": "assistant",
+                "kind": "text",
+                "text": "另一个缺口"
+              }
+            ],
+            "history": "h",
+            "from_seq": 15,
+            "to_seq": 16
+          },
+          {
+            "kind": "http_after",
+            "items": [
+              {
+                "id": "13#0",
+                "seq": 13,
+                "role": "assistant",
+                "kind": "text",
+                "text": "补齐示例"
+              },
+              {
+                "id": "14#0",
+                "seq": 14,
+                "role": "assistant",
+                "kind": "text",
+                "text": "补齐后续"
+              },
+              {
+                "id": "15#0",
+                "seq": 15,
+                "role": "assistant",
+                "kind": "text",
+                "text": "示例答复"
+              }
+            ],
+            "history": "h",
+            "from_seq": 12,
+            "to_seq": 15
+          }
+        ]
+      },
+      "expected": [
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            },
+            {
+              "id": "15#0",
+              "seq": 15,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
+            }
+          ],
+          "covered": 12,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "15#0"
+          ],
+          "gap": "fill",
+          "actions": [
+            {
+              "kind": "fetch_after",
+              "after_seq": 12
+            }
+          ]
+        },
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            },
+            {
+              "id": "15#0",
+              "seq": 15,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
+            }
+          ],
+          "covered": 12,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "15#0"
+          ],
+          "gap": "none",
+          "actions": []
+        },
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            },
+            {
+              "id": "15#0",
+              "seq": 15,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
+            },
+            {
+              "id": "16#0",
+              "seq": 16,
+              "role": "assistant",
+              "kind": "text",
+              "text": "另一个缺口"
+            }
+          ],
+          "covered": 12,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "15#0",
+            "16#0"
+          ],
+          "gap": "fill",
+          "actions": [
+            {
+              "kind": "fetch_after",
+              "after_seq": 12
+            }
+          ]
+        },
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例问题"
+            },
+            {
+              "id": "13#0",
+              "seq": 13,
+              "role": "assistant",
+              "kind": "text",
+              "text": "补齐示例"
+            },
+            {
+              "id": "14#0",
+              "seq": 14,
+              "role": "assistant",
+              "kind": "text",
+              "text": "补齐后续"
+            },
+            {
+              "id": "15#0",
+              "seq": 15,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
+            },
+            {
+              "id": "16#0",
+              "seq": 16,
+              "role": "assistant",
+              "kind": "text",
+              "text": "另一个缺口"
+            }
+          ],
+          "covered": 15,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "13#0",
+            "14#0",
+            "15#0",
+            "16#0"
+          ],
+          "gap": "none",
+          "actions": []
+        }
+      ]
+    }
+  ]
+}

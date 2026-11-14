@@ -18,7 +18,6 @@ struct BrowserLoginsSection: View {
     @State private var file: PickedFile?
     /// The sites the confirmation asks about.
     @State private var clearing: [String]?
-    @Environment(\.dynamicTypeSize) private var size
 
     init(ref: MachineRef, online: Bool, logins: BrowserLoginsModel, listOpen: Binding<Bool>) {
         self.ref = ref
@@ -129,7 +128,7 @@ struct BrowserLoginsSection: View {
                 ThemedIcon(Theme.Icon.siteLogin).foregroundStyle(.secondary).scaledFrame(width: Theme.Size.icon)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(String(localized: "\(logins.summary.count) sites")).font(Theme.Font.body).foregroundStyle(.primary).lineLimit(1)
-                    if let detail = Self.summaryDetail(logins.summary) { detail.font(Theme.Font.label.monospacedDigit()).lineLimit(size.isAccessibilitySize ? nil : 1) }
+                    if let detail = Self.summaryDetail(logins.summary) { detail.font(Theme.Font.label.monospacedDigit()).lineLimit(1) }
                 }
                 Spacer(minLength: Theme.Space.s)
                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
@@ -198,22 +197,19 @@ struct BrowserLoginsSection: View {
 struct BrowserSiteRow: View, Equatable {
     var site: BrowserCookieSite
     var expired: Bool
-    @Environment(\.dynamicTypeSize) private var size
 
     static func == (a: Self, b: Self) -> Bool { a.site == b.site && a.expired == b.expired }
 
     var body: some View {
-        // At the accessibility sizes a domain wraps in full instead of losing its end, the part that tells sites apart.
-        let lines: Int? = size.isAccessibilitySize ? nil : 1
         HStack(spacing: Theme.Space.m) {
             ThemedIcon(Theme.Icon.siteLogin).foregroundStyle(.secondary).scaledFrame(width: Theme.Size.icon)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 HStack(spacing: Theme.Space.s) {
-                    Text(site.domain).font(Theme.Font.body).lineLimit(lines).accessibilityIdentifier("browser-logins-site")
+                    Text(site.domain).font(Theme.Font.body).lineLimit(1).accessibilityIdentifier("browser-logins-site")
                     if expired { Chip(text: String(localized: "Expired"), look: .review(.caution)) }
                 }
                 Text(BrowserLoginsSection.detail(count: site.count, expires: site.expires))
-                    .font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(lines)
+                    .font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: Theme.Space.s)
         }

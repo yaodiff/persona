@@ -952,11 +952,11 @@ final class MeetingPhotos {
     private nonisolated static func fileName(_ id: String) -> String { id + ".jpg" }
 
     private nonisolated static func read(_ file: URL) -> Data? {
-        try? Data(contentsOf: file) // perf-ok: nonisolated, only called inside Task.detached
+        try? Data(contentsOf: file)
     }
 
     private nonisolated static func names(in folder: URL) -> [String] {
-        (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] // perf-ok: nonisolated, only called inside Task.detached
+        (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
     }
 
     /// The JPEG into `<folder>/photos/`; false when the recording's folder is gone or the write failed.

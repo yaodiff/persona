@@ -78,15 +78,23 @@ nonisolated struct RecordingMinutes: Codable, Hashable, Sendable {
     var decisions: [Item] = []
     var actions: [Item] = []
     var openQuestions: [Item] = []
+    /// The minutes as one summary card (#6563, docs/assistant/meeting-minutes.md "Summary card (#6563)"): the headline, the
+    /// core conclusions, and the points and decisions grouped by topic. Read on its own and cleaned as the contract's
+    /// "Clients" says (`Overview.clean`); nil when there is none or nothing usable is left, and then the page is as before.
+    var overview: Overview?
+    /// The hub's own Markdown of these minutes: what Copy and Share send in the summary card's layout (`shareText`).
+    var markdown: String?
 
     init(title: String? = nil, when: String? = nil, start: Date? = nil, end: Date? = nil, place: String? = nil, attendees: [String] = [],
-         points: [Item] = [], decisions: [Item] = [], actions: [Item] = [], openQuestions: [Item] = []) {
+         points: [Item] = [], decisions: [Item] = [], actions: [Item] = [], openQuestions: [Item] = [], overview: Overview? = nil,
+         markdown: String? = nil) {
         self.title = title; self.when = when; self.start = start; self.end = end; self.place = place; self.attendees = attendees
         self.points = points; self.decisions = decisions; self.actions = actions; self.openQuestions = openQuestions
+        self.overview = overview; self.markdown = markdown
     }
 
     enum CodingKeys: String, CodingKey {
-        case version, title, when, start, end, attendees, points, decisions, actions
+        case version, title, when, start, end, attendees, points, decisions, actions, overview, markdown
         case place = "where", openQuestions = "open"
     }
 
@@ -104,6 +112,9 @@ nonisolated struct RecordingMinutes: Codable, Hashable, Sendable {
         decisions = try c.decodeIfPresent([Item].self, forKey: .decisions) ?? []
         actions = try c.decodeIfPresent([Item].self, forKey: .actions) ?? []
         openQuestions = try c.decodeIfPresent([Item].self, forKey: .openQuestions) ?? []
+        // Apart from the fields above: an overview of any shape, however broken, never costs the minutes their lists.
+        overview = Overview.clean(try? c.decodeIfPresent(JSONValue.self, forKey: .overview))
+        markdown = (try? c.decodeIfPresent(String.self, forKey: .markdown)).flatMap { $0 }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -119,6 +130,8 @@ nonisolated struct RecordingMinutes: Codable, Hashable, Sendable {
         try c.encode(decisions, forKey: .decisions)
         try c.encode(actions, forKey: .actions)
         try c.encode(openQuestions, forKey: .openQuestions)
+        try c.encodeIfPresent(overview, forKey: .overview)
+        try c.encodeIfPresent(markdown, forKey: .markdown)
     }
 
     var isEmpty: Bool { points.isEmpty && decisions.isEmpty && actions.isEmpty && openQuestions.isEmpty }
@@ -169,6 +182,179 @@ nonisolated struct RecordingMinutes: Codable, Hashable, Sendable {
         section(String(localized: "Action Items"), actions)
         section(String(localized: "Open Questions"), openQuestions)
         return out.joined(separator: "\n")
+    }
+
+    /// What Copy and Share send: with the summary card, the hub's own Markdown, which follows its layout (#6563); without
+    /// it, or from a hub that sends none, the phone's own text as before (`text(title:)`).
+    func shareText(title fallback: String) -> String {
+        if overview != nil, let markdown, !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return markdown }
+        return text(title: fallback)
+    }
+}
+
+// MARK: The summary card (#6563)
+
+nonisolated extension RecordingMinutes {
+    /// A topic's icon as the hub names it: one of a closed list, so the model never names a symbol. A value this app does
+    /// not know is `general`, so the list can grow (docs/assistant/meeting-minutes.md "The `overview` field").
+    nonisolated enum TopicIcon: String, CaseIterable, Codable, Hashable, Sendable {
+        case progress, schedule, release, performance, metrics, tooling, quality, design, people, customer, budget, risk, general
+    }
+
+    /// `detail.minutes.overview`, cleaned: every group has a topic, every topic a bullet. Its bullets are the minutes'
+    /// points and decisions, word for word; actions and open questions are never in it.
+    nonisolated struct Overview: Codable, Hashable, Sendable {
+        /// A conclusion or a topic's bullet: its words, the places in them set in bold (`strong`), its time and the photo
+        /// it cites; a bullet also who said it (a point) or that it is a decision.
+        nonisolated struct Line: Codable, Hashable, Sendable {
+            var text: String
+            var strong: [String] = []
+            var at: Double?
+            var photo: Int?
+            var who: String?
+            var decision = false
+
+            enum CodingKeys: String, CodingKey { case text, strong, at, photo, who, decision }
+
+            init(text: String, strong: [String] = [], at: Double? = nil, photo: Int? = nil, who: String? = nil, decision: Bool = false) {
+                self.text = text; self.strong = strong; self.at = at; self.photo = photo; self.who = who; self.decision = decision
+            }
+
+            init(from decoder: Decoder) throws {
+                guard let line = Self.clean(try JSONValue(from: decoder), bullet: true) else {
+                    throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "no words"))
+                }
+                self = line
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(text, forKey: .text)
+                if !strong.isEmpty { try c.encode(strong, forKey: .strong) }
+                try c.encodeIfPresent(at, forKey: .at)
+                try c.encodeIfPresent(photo, forKey: .photo)
+                try c.encodeIfPresent(who, forKey: .who)
+                if decision { try c.encode(true, forKey: .decision) }
+            }
+
+            /// A bullet (`bullet`) or a conclusion as the contract's "Clients" reads it: dropped without words; a wrong
+            /// `strong`, `who` or `at` counts as absent, `strong`'s wrong entries are dropped, a `photo` that is not a
+            /// positive whole number is none, and only `true` marks a decision (a bullet's; a conclusion has neither).
+            static func clean(_ value: JSONValue, bullet: Bool) -> Line? {
+                guard case .object(let o) = value, let text = Overview.words(o["text"]) else { return nil }
+                var line = Line(text: text)
+                if case .array(let entries)? = o["strong"] {
+                    line.strong = entries.compactMap { if case .string(let s) = $0, !s.isEmpty { s } else { nil } }
+                }
+                if case .number(let n)? = o["at"], n.isFinite, n >= 0 { line.at = n }
+                if case .number(let n)? = o["photo"], n >= 1, n.rounded() == n, let whole = Int(exactly: n) { line.photo = whole }
+                if bullet {
+                    line.who = Overview.words(o["who"])
+                    line.decision = o["decision"] == .bool(true)
+                }
+                return line
+            }
+        }
+
+        nonisolated struct Topic: Codable, Hashable, Sendable {
+            var title: String
+            var icon: TopicIcon = .general
+            var bullets: [Line]
+        }
+
+        nonisolated struct TopicGroup: Codable, Hashable, Sendable {
+            /// "" for the one group without a title: no heading shows for it.
+            var title: String
+            var topics: [Topic]
+        }
+
+        /// One line saying what the meeting was; nil without one (the card then heads with the minutes' title).
+        var headline: String?
+        /// Where the meeting landed, the most important first: at most four.
+        var conclusions: [Line] = []
+        var groups: [TopicGroup]
+
+        init(headline: String? = nil, conclusions: [Line] = [], groups: [TopicGroup]) {
+            self.headline = headline; self.conclusions = conclusions; self.groups = groups
+        }
+
+        init(from decoder: Decoder) throws {
+            guard let overview = Self.clean(try JSONValue(from: decoder)) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "no bullet"))
+            }
+            self = overview
+        }
+
+        /// The contract's cleaning ("Clients"): no overview for one that is not an object or whose `groups` is not an
+        /// array; members that are not objects go; a group without an array of `topics`, a topic without an array of
+        /// `bullets` or a title with words, and a bullet or conclusion without words go; a group's title that is not a
+        /// string is ""; an unknown icon is `general`; then empty topics and groups go. Nil when no bullet is left.
+        static func clean(_ value: JSONValue?) -> Overview? {
+            guard case .object(let o)? = value, case .array(let groups)? = o["groups"] else { return nil }
+            let kept: [TopicGroup] = groups.compactMap { value in
+                guard case .object(let g) = value, case .array(let topics)? = g["topics"] else { return nil }
+                let title: String = if case .string(let s)? = g["title"] { s } else { "" }
+                let kept: [Topic] = topics.compactMap { value in
+                    guard case .object(let t) = value, case .array(let bullets)? = t["bullets"], let title = words(t["title"]) else { return nil }
+                    let icon: TopicIcon = if case .string(let s)? = t["icon"] { TopicIcon(rawValue: s) ?? .general } else { .general }
+                    let lines = bullets.compactMap { Line.clean($0, bullet: true) }
+                    return lines.isEmpty ? nil : Topic(title: title, icon: icon, bullets: lines)
+                }
+                return kept.isEmpty ? nil : TopicGroup(title: title, topics: kept)
+            }
+            guard !kept.isEmpty else { return nil }
+            let conclusions: [Line] = if case .array(let a)? = o["conclusions"] { a.compactMap { Line.clean($0, bullet: false) } } else { [] }
+            return Overview(headline: words(o["headline"]), conclusions: conclusions, groups: kept)
+        }
+
+        /// A string with something besides spaces in it, as it was written; anything else is none.
+        static func words(_ value: JSONValue?) -> String? {
+            guard case .string(let s)? = value, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return s
+        }
+    }
+
+    /// A stretch of an overview's text, set in bold or not.
+    nonisolated struct BoldPart: Hashable, Sendable {
+        var text: String
+        var bold: Bool
+    }
+
+    /// `text` cut where `strong` bolds it (docs/assistant/meeting-minutes.md "Bold (`strong`)"): from the start, each
+    /// entry's first exact occurrence at or after the end of the one before (UTF-16 code units, no case folding or
+    /// normalization, as every client and the Markdown find them); an entry not found bolds nothing and the search goes
+    /// on from where it was. The text is never read as Markdown: words from a transcript cannot become links.
+    static func boldParts(_ text: String, strong: [String]) -> [BoldPart] {
+        let units = Array(text.utf16)
+        var marks: [Range<Int>] = []
+        var cursor = 0
+        for entry in strong {
+            let wanted = Array(entry.utf16)
+            guard !wanted.isEmpty, wanted.count <= units.count - cursor else { continue }
+            guard let at = (cursor...(units.count - wanted.count)).first(where: { units[$0..<$0 + wanted.count].elementsEqual(wanted) })
+            else { continue }
+            marks.append(at..<at + wanted.count)
+            cursor = at + wanted.count
+        }
+        func piece(_ r: Range<Int>) -> String { String(decoding: units[r], as: UTF16.self) }
+        var parts: [BoldPart] = []
+        var from = 0
+        for mark in marks {
+            if mark.lowerBound > from { parts.append(BoldPart(text: piece(from..<mark.lowerBound), bold: false)) }
+            parts.append(BoldPart(text: piece(mark), bold: true))
+            from = mark.upperBound
+        }
+        if from < units.count || parts.isEmpty { parts.append(BoldPart(text: piece(from..<units.count), bold: false)) }
+        return parts
+    }
+
+    /// The same as styled text: the bold places strongly emphasized, which `Text` draws in its font's bold weight.
+    static func bolded(_ text: String, strong: [String]) -> AttributedString {
+        boldParts(text, strong: strong).reduce(into: AttributedString()) { out, part in
+            var run = AttributedString(part.text)
+            if part.bold { run.inlinePresentationIntent = .stronglyEmphasized }
+            out.append(run)
+        }
     }
 }
 
@@ -245,6 +431,12 @@ nonisolated enum RecordingMinutesCards {
         var action: String? = nil
         /// An action item already a to-do (Added).
         var added = false
+        /// The to-do it became (`todo_id`): in the summary card's layout its done circle shows once the app holds it (#6563).
+        var todo: String? = nil
+        /// In the summary card (#6563): its words with the bold places (`RecordingMinutes.bolded`), and whether it is a
+        /// decision, which shows the decision mark instead of the dot and the word Decision where a point has its speaker.
+        var words: AttributedString? = nil
+        var decision = false
     }
 
     nonisolated struct Card: Identifiable, Hashable, Sendable {
@@ -263,6 +455,9 @@ nonisolated enum RecordingMinutesCards {
         var cards: [Card]
         /// The hub numbers these minutes (`version`), so their action items can become to-dos (#4062).
         var offered = false
+        /// The summary card (#6563), when the minutes carry an overview with a bullet left: the page shows it, its topic
+        /// cards, then the Action Items and Open Questions of `cards`, instead of the four cards. Nil: as before.
+        var overview: Overview? = nil
 
         /// The action items shown that can still become to-dos: what Add All sends.
         var addable: [String] {
@@ -271,7 +466,115 @@ nonisolated enum RecordingMinutesCards {
         }
     }
 
-    static func summary(_ minutes: RecordingMinutes, sentences: [RecordingSentence],
+    /// What the recording page's header already shows of the meeting (`RecordingMeetingFacts`, from its calendar event),
+    /// so the summary card leaves it out (#6563). The four cards' header card keeps all of it, as before.
+    nonisolated struct Shown: Hashable, Sendable {
+        var when = false
+        var place = false
+        var attendees = false
+
+        init(when: Bool = false, place: Bool = false, attendees: Bool = false) {
+            self.when = when; self.place = place; self.attendees = attendees
+        }
+
+        /// What `RecordingMeetingFacts` draws for `meeting`.
+        init(_ meeting: RecordingMeeting?) {
+            self.init(when: meeting?.start != nil && meeting?.end != nil, place: meeting?.location?.isEmpty == false,
+                      attendees: meeting?.attendees.isEmpty == false)
+        }
+    }
+
+    /// A topic's card: its title, its icon (`Theme.Icon`), its group's tint and its bullets, of which the first `shown`
+    /// show until Show N More.
+    nonisolated struct Topic: Identifiable, Hashable, Sendable {
+        /// `topic-<group>-<topic>`, by place: rewritten minutes replace them all.
+        var id: String
+        var title: String
+        var symbol: String
+        /// Its group's place among the topic tints (`Theme.Hue.minutesGroups`).
+        var hue: Int
+        var bullets: [Item]
+        var shown: Int
+        /// How many Show N More opens.
+        var folded: Int { bullets.count - shown }
+    }
+
+    /// A group of topics under its heading (none for the one untitled group), in its tint.
+    nonisolated struct TopicGroup: Identifiable, Hashable, Sendable {
+        /// `group-<group>`.
+        var id: String
+        var title: String?
+        var hue: Int
+        var topics: [Topic]
+    }
+
+    /// The summary card's layout (docs/assistant/meeting-minutes.md "Clients"): the headline, the facts the page's header
+    /// does not show, the core conclusions, then the topic cards under their group headings.
+    nonisolated struct Overview: Hashable, Sendable {
+        /// The card's heading: the headline; nil without one, and then the minutes' title heads it (`Summary.title`).
+        var headline: String?
+        var facts: String?
+        /// The facts line's icon: the calendar when it says when, the pin when it is only the place (as the page's header,
+        /// `RecordingMeetingFacts`, one symbol per meaning).
+        var factsSymbol = Theme.Icon.calendarEvent
+        var attendees: String?
+        var conclusions: [Item]
+        var groups: [TopicGroup]
+    }
+
+    /// The `Theme.Icon` for a topic's icon: each meaning its own symbol, `general` for what this app does not know.
+    static func symbol(_ icon: RecordingMinutes.TopicIcon) -> String {
+        switch icon {
+        case .progress: Theme.Icon.topicProgress
+        case .schedule: Theme.Icon.topicSchedule
+        case .release: Theme.Icon.topicRelease
+        case .performance: Theme.Icon.topicPerformance
+        case .metrics: Theme.Icon.topicMetrics
+        case .tooling: Theme.Icon.topicTooling
+        case .quality: Theme.Icon.topicQuality
+        case .design: Theme.Icon.topicDesign
+        case .people: Theme.Icon.topicPeople
+        case .customer: Theme.Icon.topicCustomer
+        case .budget: Theme.Icon.topicBudget
+        case .risk: Theme.Icon.topicRisk
+        case .general: Theme.Icon.topicGeneral
+        }
+    }
+
+    /// The summary card from cleaned minutes (`RecordingMinutes.overview`), nil without one. A group's tint is its place
+    /// (the first group the first of the four), never the model's choice; a decision's line under its words says Decision.
+    static func overview(_ minutes: RecordingMinutes, sentences: [RecordingSentence], shown: Shown, before: Int, after: Int,
+                         fold: Int = Theme.Recording.topicBulletsShown) -> Overview? {
+        guard let overview = minutes.overview else { return nil }
+        let tints = max(1, Theme.Recording.topicTints)
+        func item(_ line: RecordingMinutes.Overview.Line, id: String, context lines: Bool) -> Item {
+            let byline = line.decision ? String(localized: "Decision [Minutes Overview]") : line.who
+            return Item(id: id, text: line.text, at: line.at, byline: byline,
+                        context: lines ? context(at: line.at, in: sentences, before: before, after: after) : [], photo: line.photo,
+                        words: RecordingMinutes.bolded(line.text, strong: line.strong), decision: line.decision)
+        }
+        let groups = overview.groups.enumerated().map { g, group in
+            let hue = g % tints
+            let topics = group.topics.enumerated().map { t, topic in
+                let id = "topic-\(g)-\(t)"
+                let bullets = topic.bullets.enumerated().map { b, line in item(line, id: "\(id)-\(b)", context: true) }
+                return Topic(id: id, title: topic.title, symbol: symbol(topic.icon), hue: hue, bullets: bullets,
+                             shown: min(bullets.count, max(1, fold)))
+            }
+            let title = group.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : group.title
+            return TopicGroup(id: "group-\(g)", title: title, hue: hue, topics: topics)
+        }
+        // A conclusion sums up more than one line: no transcript opens under it, only its time.
+        let conclusions = overview.conclusions.enumerated().map { i, line in item(line, id: "conclusion-\(i)", context: false) }
+        let when = shown.when ? nil : minutes.whenLine
+        let facts = [when, shown.place ? nil : minutes.place].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · ")
+        let attendees = shown.attendees || minutes.attendees.isEmpty ? nil : ListFormatter.localizedString(byJoining: minutes.attendees)
+        return Overview(headline: overview.headline, facts: facts.isEmpty ? nil : facts,
+                        factsSymbol: when == nil ? Theme.Icon.place : Theme.Icon.calendarEvent, attendees: attendees,
+                        conclusions: conclusions, groups: groups)
+    }
+
+    static func summary(_ minutes: RecordingMinutes, sentences: [RecordingSentence], shown: Shown = Shown(),
                         before: Int = Theme.Recording.contextBefore, after: Int = Theme.Recording.contextAfter) -> Summary {
         let facts = [minutes.whenLine, minutes.place].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · ")
         let cards: [Card] = Kind.allCases.compactMap { kind in
@@ -281,13 +584,15 @@ nonisolated enum RecordingMinutesCards {
                 .map { index, item in
                     Item(id: "\(kind.rawValue)-\(index)", text: item.text, at: item.at, byline: RecordingMinutes.byline(item),
                          context: context(at: item.at, in: sentences, before: before, after: after), photo: item.photo,
-                         action: kind == .actions ? item.id.flatMap { $0.isEmpty ? nil : $0 } : nil, added: kind == .actions && item.added)
+                         action: kind == .actions ? item.id.flatMap { $0.isEmpty ? nil : $0 } : nil, added: kind == .actions && item.added,
+                         todo: kind == .actions && item.added ? item.todoID : nil)
                 }
             return items.isEmpty ? nil : Card(kind: kind, items: items)
         }
         return Summary(title: minutes.title?.isEmpty == false ? minutes.title : nil, facts: facts.isEmpty ? nil : facts,
                        attendees: minutes.attendees.isEmpty ? nil : ListFormatter.localizedString(byJoining: minutes.attendees),
-                       cards: cards, offered: minutes.version != nil)
+                       cards: cards, offered: minutes.version != nil,
+                       overview: overview(minutes, sentences: sentences, shown: shown, before: before, after: after))
     }
 
     /// The line said at `seconds` with `before` lines before it and `after` after it, as far as the transcript goes.

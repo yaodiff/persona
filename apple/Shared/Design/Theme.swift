@@ -143,6 +143,9 @@ nonisolated enum Theme {
     #endif
     /// A line picked out for a moment in the accent's soft ground (the transcript line a minutes item's time jumped to).
     static var accentTint: Color { accent.opacity(aiTintStrength) }
+    /// Any color's soft ground at the AI tint's strength: behind a mark drawn in that color (a minutes topic's icon tile,
+    /// #6563), so the mark reads at 3:1 or better on it (`StyleSpecTests`).
+    static func softTint(_ color: Color) -> Color { color.opacity(aiTintStrength) }
     /// The AI color at half strength: a mark of the AI's that is at work but not the lit one (a workflow phase with
     /// agents running that the run has moved past), apart from a ring (not started) and the full dot (lit).
     static var aiMuted: Color { ai.opacity(0.5) }
@@ -620,6 +623,9 @@ nonisolated enum Theme {
         static let sidebarMinPhone: CGFloat = 200
         /// What a split's page keeps beside its list column when the list is dragged wider (#2624).
         static let splitDetailMin: CGFloat = 300
+        /// The knowledge map's outline and detail column side by side from this width (#7251): any iPad in landscape,
+        /// a 13-inch one upright beside its sidebar, a large iPhone turned; narrower, the outline alone.
+        static let knowledgeMapTwoColumns: CGFloat = 540
         static let sidebar: CGFloat = 400
         static let sidebarMax: CGFloat = 480
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
@@ -693,6 +699,12 @@ nonisolated enum Theme {
     /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), the dot of a held mic (`DictationHold`) and,
     /// when it is turned on, the composer's glow while a reply is generating (`ComposerGlow`); those stop with Reduce Motion
     /// (the spinner is the system's).
+    /// The Agents' owner-requested single capsule: filter choices and a fixed grouping menu.
+    enum FilterCapsule {
+        static let separatorHeight: CGFloat = 22
+        static var selection: Color { Theme.accent.opacity(0.12) }
+    }
+
     enum Motion {
         static let state = Animation.snappy(duration: 0.25)
         static let layout = Animation.smooth(duration: 0.3)
@@ -701,6 +713,10 @@ nonisolated enum Theme {
         static let standard = state
         /// Task-draft dismissal uses the same six-second Undo window as the web.
         static let draftUndo: Duration = .seconds(6)
+        /// How long an alert that follows another waits before asking: UIKit drops a presentation made while another is
+        /// still going away, and SwiftUI took up to about 0.8 s to close one answered elsewhere (queued "already exists"
+        /// questions, #6113).
+        static let alertHandoff: Duration = .seconds(1)
         /// A block of content unfolding in place, its height growing (the Feishu pinned shelf's rows): slower than a
         /// state change so the eye can follow the rows coming in. `standard` read faster than Feishu's own (2026-11-04).
         static let expand = Animation.smooth(duration: 0.4)
@@ -785,6 +801,14 @@ nonisolated enum Theme {
 
         /// The recording dot's blink, one way (it blinks while the finger holds, and stops with Reduce Motion).
         static let holdBlink = Animation.easeInOut(duration: 0.5)
+        /// The composer turning into the dictation bar and back (`DictationBar`): one spring for the surface's shape, a
+        /// slight bounce coming in and none going out; the buttons come in a beat later and leave quicker.
+        static let dictationIn = Animation.spring(duration: 0.42, bounce: 0.16)
+        static let dictationOut = Animation.spring(duration: 0.32, bounce: 0)
+        static let dictationButtonsIn = Animation.spring(duration: 0.36, bounce: 0.2).delay(0.06)
+        static let dictationButtonsOut = Animation.easeOut(duration: 0.14)
+        /// How small the bar's buttons are as they come in and go.
+        static let dictationButtonFrom: CGFloat = 0.6
     }
 
     /// The 「+」 panel (`AttachSheet`): a system sheet at half height (detents medium and large), a grid of recent photos
@@ -844,6 +868,52 @@ nonisolated enum Theme {
 
     /// Hold the mic to dictate, slide left to drop it, slide up to keep it going hands-free: Telegram's thresholds
     /// for its voice button (`DictationHold`).
+    /// The composer's dictation bar (`DictationBar`, ChatGPT's): [✕] the wave [■] [↑] in the composer's capsule.
+    enum DictationBar {
+        /// A quiet column's dot, and the room from one column's centre to the next.
+        static let dot: CGFloat = 3
+        static let pitch: CGFloat = 6
+        /// The tallest a column grows at full voice, as a share of the wave's height, and the curve from level to height
+        /// (below 1: quiet speech already shows).
+        static let tallest: CGFloat = 0.72
+        static let levelCurve: CGFloat = 0.7
+        /// A new column every this long: the row slides one pitch per column (about 66 pt a second).
+        static let sampleInterval: TimeInterval = 0.09
+        /// The wave's timeline while the bar is off: it stays (no view to build again on the tap) but does nothing.
+        static let idleTick: TimeInterval = 3600
+        /// The level follows the voice up quicker than it falls back (exponential smoothing time constants, seconds).
+        static let attack: TimeInterval = 0.05
+        static let release: TimeInterval = 0.18
+        /// The microphone's loudness mapped onto 0…1 (decibels of full scale).
+        static let floorDB: Float = -50
+        static let ceilingDB: Float = -14
+        /// The oldest columns fade toward the left over this many columns, down to `oldest` of their ink.
+        static let fadeColumns = 7
+        static let oldest = 0.25
+        /// The newest column's ink as it comes in at the right edge (the wave's mask).
+        static let newest = 0.35
+        /// A column's ink, quiet and at full voice.
+        static let quietInk = 0.5
+        static let loudInk = 1.0
+        /// After stop or send, how long the recognizer may take for its last words before the bar settles for what it has.
+        static let finalWait: Duration = .milliseconds(1200)
+        /// The bar's parts while it is off: drawn, but not seen. Fully transparent, SwiftUI skips drawing them, and their first
+        /// drawing (the symbols, the circles, the wave) landed on the frames right after the tap.
+        static let hiddenInk = 0.001
+        /// The composer's row under the bar leaves the accessibility tree this long after the bar opens, past its spring.
+        static let treeAfter: Duration = .milliseconds(450)
+        /// The bar's haptic generator is prepared this long after the bar opens, past the first frames of its spring.
+        static let warmAfter: Duration = .milliseconds(500)
+        /// ■ / ↑: a spinner on the button once the last words have taken this long.
+        static let spinnerAfter: Duration = .milliseconds(150)
+        /// ↑: the longest the bar waits for the send to take the draft before it closes.
+        static let sendWait: Duration = .milliseconds(160)
+        /// After the bar closes, how long before the audio session is let go (past the close's spring).
+        static let settle: Duration = .milliseconds(450)
+        /// The columns' ink is drawn in this many steps of opacity (one fill each).
+        static let inkSteps = 12
+    }
+
     enum Hold {
         /// A touch held this long is a hold; let go sooner it is a tap (dictation on or off, as before).
         static let delay: Duration = .milliseconds(190)
@@ -890,6 +960,11 @@ nonisolated enum Theme {
         static let amber = Color(light: 0xB7791F, dark: 0xF5B342)
         static let yellow = Color(light: 0x9A7B00, dark: 0xFFD60A)
         static let teal = Color(light: 0x0F7C80, dark: 0x40C8C8)
+        /// A blue-gray that reads as a mark on a card (the system gray is under 3:1 there in both modes).
+        static let slate = Color(light: 0x5E6B7D, dark: 0x9AA7B8)
+        /// A meeting's summary card (#6563): the four topic tints a group's cards share, by the group's place (the first
+        /// group the first). They only tell groups apart: never a state's color (red, orange, green, yellow) or the AI's.
+        static let minutesGroups: [Color] = [blue, teal, pink, slate]
     }
 
     /// A permission mode's tone where the Agents header shows it (#3719), by how much the agent does without asking.
@@ -922,6 +997,8 @@ nonisolated enum Theme {
     enum Shell {
         /// The Assistant | Agents switch's selected segment, inside its glass capsule.
         static let segment = Color(light: 0xE6E6E6, dark: 0x3A3A3C)
+        /// The dictation bar's quieter round buttons (cancel, stop): the switch's grey, under the composer's ink.
+        static var roundMuted: Color { segment }
         /// The composer's field and its expanded card.
         static let composer = Color(light: 0xFFFFFF, dark: 0x1F1F21)
         static let composerStroke = Color(light: 0xE3E3E3, dark: 0x3A3A3C)

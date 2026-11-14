@@ -10,7 +10,6 @@ struct TodoDecisionsSection: View {
     let todo: TodoItem
     let lookup: TodosLogic.SessionLookup
     let decisions: TodoDecisionsModel
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         if !decisions.unsupported {
@@ -29,17 +28,9 @@ struct TodoDecisionsSection: View {
                 .foregroundStyle(.secondary)
             Spacer()
             Button { decisions.form = TodoDecisionForm() } label: {
-                // at the accessibility sizes the header keeps the count, Add and the fold button on one line: Add
-                // shows its icon, its name still spoken, rather than "…" (DESIGN_SYSTEM.md 1.2 rule 3)
-                if typeSize.isAccessibilitySize {
-                    Label("Add [Todo Decisions]", systemImage: Theme.Icon.add)
-                        .labelStyle(.iconOnly)
-                        .font(Theme.Font.captionStrong)
-                } else {
-                    Label("Add [Todo Decisions]", systemImage: Theme.Icon.add)
-                        .font(Theme.Font.captionStrong)
-                        .lineLimit(1)
-                }
+                Label("Add [Todo Decisions]", systemImage: Theme.Icon.add)
+                    .font(Theme.Font.captionStrong)
+                    .lineLimit(1)
             }
             .buttonStyle(.borderless)
             .foregroundStyle(Theme.accent)

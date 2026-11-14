@@ -13,6 +13,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.isPopup
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
@@ -55,8 +58,9 @@ class AgentsHomeAffordancesTest {
 
     @Test fun groupingIsAMenuButtonAndQuickFiltersStayToggles() {
         showScreen()
-        // As iOS: the grouping's own name on the pill, which opens a Group By picker with the groupings only (#4338 A4).
-        val grouping = rule.onNodeWithText("By repository")
+        // Final E: the fixed icon speaks the current grouping and opens groupings only.
+        val grouping = rule.onNodeWithTag("agents-grouping")
+        grouping.assertContentDescriptionEquals("Group By: By repository")
         grouping.assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
             .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Selected))
             .assertHasClickAction()
@@ -65,7 +69,7 @@ class AgentsHomeAffordancesTest {
                 SemanticsMatcher.expectValue(SemanticsProperties.Selected, true),
         ).assertCountEquals(1)
         grouping.performClick()
-        rule.onNodeWithText("Group By").assertIsDisplayed()
+        rule.onNode(isPopup()).assertIsDisplayed()
         rule.onNodeWithText("By status").assertIsDisplayed()
         rule.onAllNodesWithText("All machines").assertCountEquals(0) // the computers are behind ⋯, not in the picker
     }
@@ -158,13 +162,13 @@ class AgentsHomeAffordancesTest {
     private fun shootGrouping(dark: Boolean) {
         showScreen(dark)
         val out = File("build/grouping-shots").also { it.mkdirs() }
-        fun save(name: String) = rule.onRoot().captureToImage().asAndroidBitmap().let { bitmap ->
+        fun save(name: String, popup: Boolean = false) = (if (popup) rule.onNode(isPopup()) else rule.onRoot()).captureToImage().asAndroidBitmap().let { bitmap ->
             out.resolve("$name-${if (dark) "dark" else "light"}.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         }
-        save("pill")
-        rule.onNodeWithText("By repository").performClick()
+        save("capsule")
+        rule.onNodeWithTag("agents-grouping").performClick()
         rule.waitForIdle()
-        save("picker")
+        save("picker", popup = true)
     }
 
     // #4338 A1: on Glass the requests and their history are a page at the end of ⋯, after Machines, where iOS keeps its

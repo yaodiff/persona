@@ -8,9 +8,11 @@
 import { useMemo } from "react";
 import { t } from "../../i18n";
 import { api, errorText, sessionPath } from "../../lib/api";
-import { assistantPickKey, assistantSetup, type AssistantChat, type AssistantSetup } from "../../lib/assistant-models";
+import { assistantPickKey, assistantSetup, ASSISTANT_START_SERVICE_TIER_FEATURE, type AssistantChat, type AssistantSetup } from "../../lib/assistant-models";
 import { assistantPanel, assistantPickOf } from "../../lib/assistant-panel";
-import { pickEffort, pickLauncher, pickModel } from "../../lib/assistant-chat";
+import { pickEffort, pickFast, pickLauncher, pickModel } from "../../lib/assistant-chat";
+import { modelSupportsFast } from "../../lib/launcher-models";
+import { useChosenManager } from "../../lib/manager-choice";
 import type { PanelConfig } from "../../lib/model-panel";
 import { TYPED_MODELS_FEATURE } from "../../lib/model-id";
 import { providerTitle } from "../../lib/provider-names";
@@ -94,17 +96,19 @@ export function PickStrip({ chat, setup, named, onBack }: { chat: AssistantChat;
 export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: AssistantChat; mid: string; anchor: HTMLElement; onClose: () => void }) {
   const version = useModelLists();
   const typed = useStore((s) => hubHas(s.features, TYPED_MODELS_FEATURE));
+  const chosen = useChosenManager();
+  const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE)) && !chosen;
   const { info } = assistantLaunchers(mid);
   const setup = assistantSetup(chat, info);
   const engine = chat.session?.agent || "claude";
   // a chat that runs keeps its engine; one whose agent isn't known is refused nothing on a guess, as on the hub
   const running = Boolean(chat.session?.agent);
   const fast = Boolean(chat.session?.service_tiers?.some((x) => x.id === "priority"));
-  const fastOn = chat.session?.service_tier === "priority";
+  const fastOn = Boolean(setup.fast);
   const { providers, state } = useMemo(
-    () => assistantPanel(setup, info, (name) => modelList(mid, name), { typed, engine, running, fast, fastOn }),
+    () => assistantPanel(setup, info, (name) => modelList(mid, name), { typed, engine, running, starting: !chat.session && startServiceTier, fast, fastOn }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` stands for what was read
-    [setup.provider, setup.model, setup.effort, info, mid, typed, engine, running, fast, fastOn, version],
+    [setup.provider, setup.model, setup.effort, setup.fast, info, mid, typed, engine, running, fast, fastOn, startServiceTier, version],
   );
   const latest = () => (chat.session ? (getSession(chat.session.machine_id, chat.session.session_id) ?? chat.session) : undefined);
   const key = assistantPickKey(chat);
@@ -124,17 +128,51 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
     return true;
   };
   const onPick = async (config: PanelConfig) => {
-    const pick = assistantPickOf(config, modelList(mid, config.provider).list, state.current);
-    return pick ? apply(pick) : config.provider === state.current?.provider && config.model === state.current.model;
+    const list = modelList(mid, config.provider).list;
+    const pick = assistantPickOf(config, list, state.current);
+    if (pick) {
+      if (!(await apply(pick))) return false;
+    } else if (config.provider !== state.current?.provider || config.model !== state.current.model) {
+      return false;
+    }
+    if (!chat.session) {
+      const row = list?.models.find((m) => m.id === config.model);
+      const fast = Boolean(startServiceTier && config.fast && modelSupportsFast(row));
+      if (!pick && fast) {
+        // A Recent or Favorite can differ from the shown setup only by Fast. Pin every displayed start option anyway:
+        // a cleared main must not revive its carried launcher, model or effort just because assistantPickOf saw no model edit.
+        const pin = assistantPickOf(config, list, null);
+        if (!pin) return false;
+        keepHere(pin);
+      }
+      pickFast(fast);
+    }
+    return true;
   };
   const onApplyCurrent = async (patch: { effort?: string; fast?: boolean }) => {
     const s = latest();
-    if (patch.fast !== undefined) {
-      const speed = s && speedStep(s, patch.fast, true);
-      return speed && "service_tier" in speed ? setServiceTier(s, speed.service_tier) : false;
-    }
     const now = state.current;
-    if (!patch.effort || !now) return false;
+    if (!now || (patch.effort === undefined && patch.fast === undefined)) return false;
+    let effortApplied = false;
+    if (patch.fast !== undefined) {
+      if (!s) {
+        const list = modelList(mid, now.provider).list;
+        const row = list?.models.find((m) => m.id === now.model);
+        if (patch.fast && (!startServiceTier || !modelSupportsFast(row))) return false;
+        if (patch.fast) {
+          // Pin every displayed start option: a cleared main must not revive its carried launcher, model or effort.
+          const pick = assistantPickOf({ ...now, effort: patch.effort ?? now.effort }, list, null);
+          if (!pick) return false;
+          keepHere(pick);
+          effortApplied = patch.effort !== undefined;
+        }
+        pickFast(patch.fast);
+      } else {
+        const speed = speedStep(s, patch.fast, true);
+        if (!(speed && "service_tier" in speed && (await setServiceTier(s, speed.service_tier)))) return false;
+      }
+    }
+    if (patch.effort === undefined || effortApplied) return true;
     const pick = assistantPickOf({ ...now, effort: patch.effort }, modelList(mid, now.provider).list, null);
     return pick ? apply(pick) : false;
   };
@@ -144,6 +182,7 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
     else {
       pickLauncher(key, undefined);
       pickEffort(key, undefined);
+      pickFast(false);
     }
   };
   const onReload = (provider: string) => void readModels(mid, provider, { again: true, first: provider === setup.provider });

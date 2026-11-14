@@ -8,7 +8,7 @@
   "undo": "元に戻す",
   "unarchived": "「{title}」のアーカイブを解除しました",
   "undo_failed": "元に戻せませんでした：{error}",
-  "copy_id": "セッション ID をコピー",
+  "copy_id": "セッションIDをコピー",
   "end": "終了…",
   "end_confirm": "終了を確認",
   "ended": "チャットを終了しました。履歴は残ります",

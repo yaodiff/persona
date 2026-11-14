@@ -58,26 +58,30 @@ const (
 func SetupCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("hub setup", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	// The usage is written before --lang is read: in the terminal's language.
+	tl := i18n.Terminal()
 	var o setupOptions
-	flags.BoolVar(&o.yes, "yes", false, "不问问题，都按默认做（包括用 sudo 打开 linger）")
-	flags.StringVar(&o.listen, "listen", ":18660", "新装时 hub 的明文端口")
-	flags.StringVar(&o.tls, "tls", ":18662", "新装时 hub 的 TLS 端口（不写地址时只绑局域网 IPv4）")
-	flags.BoolVar(&o.outside, "outside", false, "出门也要用：TLS 端口绑所有地址，自检也查公网")
-	flags.BoolVar(&o.noService, "no-service", false, "不装常驻服务（自己运行 personad hub run）；hub 自己拉起内置管理者")
-	flags.BoolVar(&o.managerService, "manager-service", false, "已有的 hub：把内置管理者改成自己的常驻服务（新装的本来就是）")
-	flags.BoolVar(&o.json, "json", false, "一行一个 JSON：每步 {step, ok, detail, next}，最后 {done, …}")
-	lang := flags.String("lang", "", "a new install's initial user language, en, zh-Hans or ja (default: PERSONA_INSTALL_LANG, which install.sh sets)")
+	flags.BoolVar(&o.yes, "yes", false, i18n.T(tl, "hub-setup.flag_yes"))
+	flags.StringVar(&o.listen, "listen", ":18660", i18n.T(tl, "hub-setup.flag_listen"))
+	flags.StringVar(&o.tls, "tls", ":18662", i18n.T(tl, "hub-setup.flag_tls"))
+	flags.BoolVar(&o.outside, "outside", false, i18n.T(tl, "hub-setup.flag_outside"))
+	flags.BoolVar(&o.noService, "no-service", false, i18n.T(tl, "hub-setup.flag_no_service"))
+	flags.BoolVar(&o.managerService, "manager-service", false, i18n.T(tl, "hub-setup.flag_manager_service"))
+	flags.BoolVar(&o.json, "json", false, i18n.T(tl, "hub-setup.flag_json"))
+	lang := flags.String("lang", "", i18n.T(tl, "hub-setup.flag_lang"))
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("hub setup 不接受位置参数")
-	}
+	// From here on, what setup says is in the language it prints in (setupLang); an unknown --lang is not one.
 	if o.lang = i18n.Lang(*lang); o.lang != "" && !i18n.Valid(o.lang) {
-		return fmt.Errorf("--lang must be en, zh-Hans or ja")
+		return errors.New(i18n.T(setupLang("", identity.Getenv), "hub-setup.lang_invalid"))
+	}
+	l := setupLang(o.lang, identity.Getenv)
+	if flags.NArg() != 0 {
+		return errors.New(i18n.T(l, "hub-setup.no_arguments"))
 	}
 	if o.noService && o.managerService {
-		return fmt.Errorf("--manager-service 要装内置管理者的常驻服务，不能和 --no-service 一起用")
+		return errors.New(i18n.T(l, "hub-setup.manager_service_conflict"))
 	}
 	flags.Visit(func(f *flag.Flag) {
 		o.listenSet = o.listenSet || f.Name == "listen"
@@ -85,7 +89,7 @@ func SetupCommand(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	})
 	for _, a := range []string{o.listen, o.tls} {
 		if _, err := doctorPort(a); err != nil {
-			return fmt.Errorf("%q 不是有效的监听地址：写成 :端口 或 地址:端口", a)
+			return errors.New(i18n.T(l, "hub-setup.listen_flag_invalid", i18n.Args{"address": strconv.Quote(a)}))
 		}
 	}
 	e, err := newSetupEnv(stdout, o)
@@ -103,6 +107,8 @@ type setupEnv struct {
 	user       string
 	out        io.Writer
 	o          setupOptions
+	// l is the language setup prints in (setupLang); --json's detail and next are worded in it too.
+	l i18n.Lang
 
 	run      func(ctx context.Context, env []string, name string, args ...string) ([]byte, error)
 	runTTY   func(ctx context.Context, name string, args ...string) error // sudo: the password prompt needs the terminal
@@ -112,7 +118,7 @@ type setupEnv struct {
 	portFree func(port int) bool
 	exe      func() (string, error)
 	pingDB   func(ctx context.Context, url string) error
-	doctor   func(ctx context.Context, dir string, outside bool) []string
+	doctor   func(ctx context.Context, dir string, outside bool, l i18n.Lang) []string
 	getenv   func(string) string
 	sleep    func(time.Duration)
 
@@ -156,6 +162,7 @@ func newSetupEnv(out io.Writer, o setupOptions) (*setupEnv, error) {
 	}
 	e := &setupEnv{
 		home: home, root: root, goos: runtime.GOOS, uid: os.Getuid(), user: name, out: out, o: o,
+		l:           setupLang(o.lang, identity.Getenv),
 		run:         runCommand,
 		runTTY:      runOnTerminal,
 		lookPath:    exec.LookPath,
@@ -193,26 +200,55 @@ func newSetupEnv(out io.Writer, o setupOptions) (*setupEnv, error) {
 	return e, nil
 }
 
-// --- output ---------------------------------------------------------------------------------------------------
-
-var setupStepNames = map[string]string{
-	"config": "配置", "database": "数据库", "service": "常驻", "health": "启动", "manager": "管理者", "doctor": "自检",
+// setupLang is the language setup prints in (#5520): the installer's (--lang, else PERSONA_INSTALL_LANG, which
+// install.sh sets from the language it ran in), else the terminal's.
+func setupLang(flag i18n.Lang, getenv func(string) string) i18n.Lang {
+	if flag != "" {
+		return flag
+	}
+	if l := i18n.Lang(getenv("PERSONA_INSTALL_LANG")); i18n.Valid(l) {
+		return l
+	}
+	return i18n.Terminal()
 }
 
+// --- output ---------------------------------------------------------------------------------------------------
+
+// setupStepNames are the catalog keys of the steps' names, by the step's machine name (--json's "step").
+var setupStepNames = map[string]string{
+	"config": "hub-setup.step_config", "database": "hub-setup.step_database", "service": "hub-setup.step_service",
+	"health": "hub-setup.step_health", "manager": "hub-setup.step_manager", "doctor": "hub-setup.step_doctor",
+}
+
+// report prints a step's line; detail and next are worded in e.l already. --json keeps step and ok as they are, for
+// programs, and carries detail and next as they read.
 func (e *setupEnv) report(step string, ok bool, detail, next string) {
 	if e.o.json {
 		b, _ := marshalNoEscape(map[string]any{"step": step, "ok": ok, "detail": detail, "next": next})
 		_, _ = e.out.Write(append(b, '\n'))
 		return
 	}
-	mark := "完成"
-	if !ok {
-		mark = "有问题"
+	args := i18n.Args{"step": i18n.T(e.l, setupStepNames[step]), "detail": detail}
+	if ok {
+		fmt.Fprintln(e.out, i18n.T(e.l, "hub-setup.line_ok", args))
+	} else {
+		fmt.Fprintln(e.out, i18n.T(e.l, "hub-setup.line_problem", args))
 	}
-	fmt.Fprintf(e.out, "%s｜%s：%s\n", mark, setupStepNames[step], detail)
 	if next != "" {
-		fmt.Fprintf(e.out, "  下一步：%s\n", next)
+		fmt.Fprintln(e.out, "  "+i18n.T(e.l, "hub-setup.line_next", i18n.Args{"next": next}))
 	}
+}
+
+// sep joins further clauses onto a step's detail or next ("；" in zh-Hans).
+func (e *setupEnv) sep() string { return i18n.T(e.l, "hub-setup.sep") }
+
+// errText is err's text for a step's line: a catalog error (i18n.Err) reads in e.l, any other as it is.
+func (e *setupEnv) errText(err error) string {
+	var m *i18n.Message
+	if errors.As(err, &m) && err.Error() == m.Error() {
+		return m.Text(e.l)
+	}
+	return err.Error()
 }
 
 // fail reports a step that stops setup.
@@ -225,7 +261,7 @@ func (e *setupEnv) fail(step, detail, next string) error {
 
 func (e *setupEnv) setup(ctx context.Context) error {
 	if !e.o.json {
-		fmt.Fprintln(e.out, "安装 hub（personad hub setup）")
+		fmt.Fprintln(e.out, i18n.T(e.l, "hub-setup.title"))
 	}
 	cfg, err := e.config()
 	if err != nil {
@@ -246,12 +282,12 @@ func (e *setupEnv) setup(ctx context.Context) error {
 	if err := e.builtinManager(ctx, cfg); err != nil {
 		return err
 	}
-	problems := e.doctor(ctx, e.root, e.o.outside)
+	problems := e.doctor(ctx, e.root, e.o.outside, e.l)
 	for _, p := range problems {
 		e.report("doctor", false, p, "")
 	}
 	if len(problems) == 0 {
-		e.report("doctor", true, "没发现问题", "")
+		e.report("doctor", true, i18n.T(e.l, "hub-setup.doctor_ok"), "")
 	}
 	return e.finish(ctx, cfg)
 }

@@ -448,6 +448,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	}
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
 	s.parkedDueTold(ctx, kept)
+	s.turnsTold(ctx, kept) // how a turn ended is told once, to a leader too (task_turns.go)
 	return true
 }
 

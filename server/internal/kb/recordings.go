@@ -700,6 +700,7 @@ func (e *Engine) DeleteRecording(rawID string, now time.Time) (bool, error) {
 	if e.Store.ReadOnly() {
 		return false, ErrReadOnly
 	}
+	defer e.Store.SearchIndexPurge() // its summary, minutes and recap leave the search index at its next update
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return false, badRecording("id must be a UUID")
@@ -774,6 +775,9 @@ func (e *Engine) PruneRecordings(now time.Time) int {
 	}
 	n := e.pruneRecordings(now)
 	e.sweepTranscriptions()
+	if n > 0 {
+		e.Store.SearchIndexPurge() // their summaries, minutes and recaps leave the search index at its next update
+	}
 	return n
 }
 
@@ -794,6 +798,9 @@ func (e *Engine) pruneRecordings(now time.Time) int {
 		}
 	}
 	defer func() {
+		if len(order) > 0 {
+			st.SearchIndexPurge() // a trimmed recording's files, too
+		}
 		for _, id := range order {
 			e.meetingChanged(id, told[id])
 		}

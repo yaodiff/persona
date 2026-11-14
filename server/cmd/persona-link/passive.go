@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 )
 
@@ -38,8 +39,10 @@ func pairListen(e *env, listen string, addrs []string) error {
 		fmt.Fprintln(w, "接下来：persona-link install --listen（装成 systemd 用户服务，一直监听），或者前台跑 persona-link run。")
 	case e.goos == "windows":
 		fmt.Fprintln(w, "接下来：persona-link install --listen（装成登录时启动的计划任务，一直监听），或者前台跑 persona-link run。")
+	case e.goos == "darwin":
+		fmt.Fprintln(w, i18n.T(i18n.Terminal(), "link-service.passive_mac_next"))
 	default:
-		fmt.Fprintln(w, "接下来让 persona-link 跑起来（Mac 上是菜单栏 App「Persona Link」；也可以前台跑 persona-link run）。")
+		fmt.Fprintln(w, "接下来让 persona-link 跑起来（前台跑 persona-link run，或者用这台的进程管理）。")
 	}
 	return nil
 }

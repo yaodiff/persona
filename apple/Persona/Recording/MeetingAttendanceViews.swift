@@ -34,7 +34,6 @@ struct MeetingAttendeePicker: View {
     var pick: (MeetingAttendees.Candidate) -> Void
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.dynamicTypeSize) private var size
 
     var body: some View {
         let all = MeetingAttendees.candidates(model)
@@ -82,10 +81,10 @@ struct MeetingAttendeePicker: View {
                 .scaledFrame(width: Theme.Size.markS)
                 .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(c.title).font(Theme.Font.body).foregroundStyle(.primary).lineLimit(size.isAccessibilitySize ? 3 : 1)
+                    Text(c.title).font(Theme.Font.body).foregroundStyle(.primary).lineLimit(1)
                         .accessibilityIdentifier("meeting-attendee-title")
                     if !c.detail.isEmpty {
-                        Text(c.detail).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(size.isAccessibilitySize ? 2 : 1)
+                        Text(c.detail).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 Spacer(minLength: Theme.Space.s)
@@ -124,7 +123,6 @@ struct MeetingAttendeePicker: View {
 struct MeetingExchangeRow: View {
     var exchange: MeetingAsk.Exchange
     var entry: RecordingEntry
-    @Environment(\.dynamicTypeSize) private var size
     @State private var ask = MeetingAsk.shared
     @State private var speaker = MeetingSpeaker.shared
 
@@ -132,7 +130,7 @@ struct MeetingExchangeRow: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 Text(exchange.question ?? String(localized: "What was just said"))
-                    .font(Theme.Font.secondaryMedium).foregroundStyle(.secondary).lineLimit(size.isAccessibilitySize ? 6 : 3)
+                    .font(Theme.Font.secondaryMedium).foregroundStyle(.secondary).lineLimit(3)
                 Spacer(minLength: Theme.Space.s)
                 Text(RecordingFormat.clock(exchange.at)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
@@ -157,11 +155,7 @@ struct MeetingExchangeRow: View {
                         .accessibilityIdentifier("meeting-answer-sources")
                 }
                 if speaker.speaking == exchange.id {
-                    if size.isAccessibilitySize {
-                        VStack(alignment: .leading, spacing: Theme.Space.s) { speaking; stopSpeaking }
-                    } else {
-                        HStack(spacing: Theme.Space.m) { speaking; Spacer(minLength: Theme.Space.s); stopSpeaking }
-                    }
+                    HStack(spacing: Theme.Space.m) { speaking; Spacer(minLength: Theme.Space.s); stopSpeaking }
                 }
             case .failed(let message):
                 Text(message).font(Theme.Font.secondary).foregroundStyle(Theme.danger)

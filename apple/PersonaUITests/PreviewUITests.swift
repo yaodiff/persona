@@ -66,8 +66,8 @@ final class PreviewUITests: XCTestCase {
         }
     }
 
-    /// The largest text size (#5114): the list puts Start… under the server's name, the card's bar puts the address on a
-    /// line of its own, and the panel for a picked element stacks its buttons and scrolls.
+    /// The largest system text size (#5114, #6448): the interface stays at the largest standard size, so the list, the card's
+    /// bar and the panel for a picked element keep their regular layouts and stay reachable.
     @MainActor private func largestText() throws {
         _ = try mock("?mode=1")
         let app = XCUIApplication()
@@ -83,7 +83,6 @@ final class PreviewUITests: XCTestCase {
         see(start, "the stopped api has no Start…", app)
         let name = app.descendants(matching: .any)["preview-server-api"].staticTexts["api"].firstMatch
         see(name, "no api row", app)
-        XCTAssertGreaterThanOrEqual(start.frame.minY, name.frame.maxY, "Start… is not under the name: \(start.frame) \(name.frame)")
         XCTAssertTrue(start.isHittable, "Start… is out of reach")
         sleep(1)
         shot(app, "servers")
@@ -95,7 +94,6 @@ final class PreviewUITests: XCTestCase {
         see(save, "the settings page did not open", app)
         let address = app.descendants(matching: .any)["preview-address"]
         see(address, "no address in the bar", app)
-        XCTAssertGreaterThan(address.frame.width, app.frame.width * 0.8, "the address is not on a line of its own: \(address.frame)")
         // The card's header is a bar capped at the largest standard size: the chooser beside its buttons, more than a letter.
         let chooser = app.buttons["link-servers"], close = app.buttons["link-close"]
         see(chooser, "no server chooser in the header", app)
@@ -115,13 +113,7 @@ final class PreviewUITests: XCTestCase {
         see(cancel, "no Cancel for the comment", timeout: 5, app)
         sleep(1)
         shot(app, "picked")
-        // The panel takes its room before the page: what was picked in sight, Add to Message above the keyboard.
-        let panel = app.scrollViews["preview-note-panel"]
-        see(panel, "the comment panel does not scroll at this size", app)
-        XCTAssertGreaterThanOrEqual(picked.frame.minY, panel.frame.minY - 1, "what was picked is scrolled away: \(picked.frame) \(panel.frame)")
-        XCTAssertTrue(add.isHittable, "Add to Message is under the keyboard: \(add.frame) \(panel.frame)")
-        if !cancel.isHittable { panel.swipeUp() }
-        XCTAssertLessThan(add.frame.maxY, cancel.frame.minY, "the buttons are not stacked with Add to Message first")
+        XCTAssertTrue(add.isHittable, "Add to Message is out of reach")
         cancel.tap()
         see(app.buttons["preview-pick"], "the bar did not come back after Cancel", timeout: 5, app)
     }

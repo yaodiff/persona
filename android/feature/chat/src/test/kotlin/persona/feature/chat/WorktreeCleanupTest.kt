@@ -37,16 +37,21 @@ class WorktreeCleanupTest {
             override suspend fun directories(machineId: String, path: String) = AgentDirectories(path)
             override suspend fun start(request: AgentStartRequest, operationId: String) = AgentStartResult.Unknown
             override suspend fun operation(operationId: String) = AgentStartResult.Unknown
-            override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean): WorktreeRemoved {
-                calls += "$machineId:$path:$deleteBranch:$force"
+            override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean, kind: String?): WorktreeRemoved {
+                calls += "$machineId:$path:$deleteBranch:$force:$kind"
                 if (refusals-- > 0) throw InUse()
                 return WorktreeRemoved(true, deleteBranch)
             }
         }
         val c = WorktreeCleanup(remove = true, deleteBranch = true, confirmed = true)
         assertEquals(WorktreeRemoved(true, true), WorktreeCleanups.remove(service, "mac", busy, c, wait = 0))
-        assertEquals(List(3) { "mac:/wt/x:true:true" }, calls)
+        assertEquals(List(3) { "mac:/wt/x:true:true:null" }, calls)
         refusals = 10
         assertTrue(runCatching { WorktreeCleanups.remove(service, "mac", busy, c, tries = 2, wait = 0) }.exceptionOrNull() is InUse)
+        // by the engine the agent ran in, which made it (a Paseo agent's is Paseo's)
+        calls.clear()
+        refusals = 0
+        WorktreeCleanups.remove(service, "mac", busy, c, kind = "paseo", wait = 0)
+        assertEquals(listOf("mac:/wt/x:true:true:paseo"), calls)
     }
 }

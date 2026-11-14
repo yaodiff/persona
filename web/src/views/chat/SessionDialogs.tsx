@@ -1,13 +1,12 @@
 // The chat's ⋯ menu dialogs: session info, rename (the agent / its space), delete, close, and the header's permission mode.
 import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText, HubTimeoutError, pastHub, sessionPath } from "../../lib/api";
-import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, tabLabel } from "../../lib/format";
+import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath } from "../../lib/format";
 import { openLink } from "../../lib/links";
 import { BYPASS_MODE, effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
 import { bypassRestarts } from "../../lib/header-mode";
 import { sessionLauncher } from "../../lib/model-switch";
-import { href, navigate, parse, showsSession } from "../../lib/router";
-import { stripBase } from "../../lib/base";
+import { href, navigate } from "../../lib/router";
 import { dropSession, getSession, refresh, refreshAssistant, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { Button, copyText, cx, Dialog, Loading, Switch, toast } from "../../ui/atoms";
@@ -16,7 +15,6 @@ import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
 import { AlwaysPermissions } from "./AlwaysPermissions";
 import { DelegatedHistory } from "./Delegated";
-import { appArchiveDeps, archiveAgent } from "../../lib/agent-archives";
 
 interface SessionInfo {
   session_id?: string;
@@ -206,7 +204,7 @@ export function RenameDialog({ session, open, onClose }: { session: Session; ope
   );
 }
 
-// "Rename space": herdr's workspace (and the pins / mutes that name it).
+// "Rename space": herdr's workspace, or Paseo's project (and the pins / mutes that name it). The hint is herdr's.
 export function RenameSpaceDialog({ session, open, onClose }: { session: Session; open: boolean; onClose: () => void }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -254,7 +252,7 @@ export function RenameSpaceDialog({ session, open, onClose }: { session: Session
         }}
       >
         <Field label={t("chat-sessiondialogs.space_name")} value={name} onChange={setName} autoFocus />
-        <p className="text-[12px] leading-relaxed text-ink-3">{t("chat-sessiondialogs.rename_space_hint")}</p>
+        {session.space_kind !== "paseo" && <p className="text-[12px] leading-relaxed text-ink-3">{t("chat-sessiondialogs.rename_space_hint")}</p>}
         <button type="submit" hidden />
       </form>
     </Dialog>
@@ -361,7 +359,7 @@ export function DeleteSessionDialog({ session, machineName, open, onClose }: { s
       if (location.pathname === href({ name: "session", mid: session.machine_id, sid: session.session_id })) navigate({ name: "home" }, true);
       toast(t("chat-sessiondialogs.deleted"), "ok");
       onClose();
-      await runCleanup(session.machine_id, wt, cleanup);
+      await runCleanup(session.machine_id, wt, cleanup, session.host);
     } catch (e) {
       toast(t("chat-sessiondialogs.delete_failed", { error: errorText(e) }), "error");
     } finally {
@@ -401,20 +399,21 @@ export interface Cleanup {
   confirmed: boolean;
 }
 
-const KEEP: Cleanup = { remove: false, deleteBranch: false, confirmed: false };
+export const KEEP: Cleanup = { remove: false, deleteBranch: false, confirmed: false };
 
 /** The worktree the agent's folder is, when Persona made it; null otherwise (and while the computer is asked). */
-function useAgentWorktree(s: Session, open: boolean): WorktreeStatus | null {
+export function useAgentWorktree(s: Session, open: boolean): WorktreeStatus | null {
   const [st, setSt] = useState<WorktreeStatus | null>(null);
   useEffect(() => {
     setSt(null);
     if (!open || !s.cwd) return;
     const c = new AbortController();
-    void worktreeStatus(s.machine_id, s.cwd, c.signal).then((x) => {
+    // asked of the engine it ran in, which made it (a Paseo agent's is Paseo's)
+    void worktreeStatus(s.machine_id, s.cwd, c.signal, s.host).then((x) => {
       if (!c.signal.aborted) setSt(x?.ours && x.path ? x : null);
     });
     return () => c.abort();
-  }, [open, s.machine_id, s.cwd]);
+  }, [open, s.machine_id, s.cwd, s.host]);
   return st;
 }
 
@@ -425,12 +424,13 @@ export function cleanupReady(st: WorktreeStatus | null, c: Cleanup): boolean {
   return c.confirmed || (loss.dirty === 0 && loss.unmerged === 0);
 }
 
-/** After the agent is closed or deleted: removes its worktree when asked, forced only for what the user confirmed. */
-async function runCleanup(mid: string, st: WorktreeStatus | null, c: Cleanup) {
+/** After the agent is closed or deleted: removes its worktree when asked, forced only for what the user confirmed, by
+ *  the engine the agent ran in (kind: its host). */
+export async function runCleanup(mid: string, st: WorktreeStatus | null, c: Cleanup, kind?: string) {
   if (!st?.path || !c.remove) return;
   const loss = worktreeLoss(st, c.deleteBranch);
   try {
-    const r = await removeAgentWorktree(mid, st.path, { deleteBranch: c.deleteBranch, force: loss.dirty > 0 || loss.unmerged > 0 });
+    const r = await removeAgentWorktree(mid, st.path, { deleteBranch: c.deleteBranch, force: loss.dirty > 0 || loss.unmerged > 0, kind });
     toast(t(r.branch_deleted ? "chat-sessiondialogs.wt_removed_branch" : "chat-sessiondialogs.wt_removed"), "ok");
   } catch (e) {
     toast(t("chat-sessiondialogs.wt_remove_failed", { error: errorText(e) }), "error");
@@ -485,96 +485,5 @@ export function WorktreeCleanup({ st, value, onChange }: { st: WorktreeStatus; v
         </div>
       )}
     </div>
-  );
-}
-
-// "Close Agent": quits the agent and closes its tab. The chat's ⋯ and the Agents list's row menu both ask here (#3405).
-// `onClosed`: what to do once it is closed; without it, the page leaves the agent's chat only when that chat is open.
-export function CloseAgentDialog({ open, onClose, onClosed, session, machineName }: { open: boolean; onClose: () => void; onClosed?: () => void; session: Session; machineName: string }) {
-  const [busy, setBusy] = useState(false);
-  const wt = useAgentWorktree(session, open);
-  const [cleanup, setCleanup] = useState<Cleanup>(KEEP);
-  useEffect(() => {
-    if (open) setCleanup(KEEP); // each time: keeping is the default
-  }, [open]);
-  const go = async () => {
-    // the agent went away while the dialog was open: nothing left to close, so don't leave a button that does nothing
-    const current = getSession(session.machine_id, session.session_id);
-    if (!current || current.status === "offline" || !sessionCan(current, "close")) {
-      onClose();
-      return;
-    }
-    setBusy(true);
-    try {
-      await api(`${sessionPath(session.machine_id, session.session_id)}/close`, { method: "POST" });
-      toast(t("chat-chatview.closed"), "ok");
-      onClose();
-      if (onClosed) onClosed();
-      else if (showsSession(parse(stripBase(location.pathname), location.search), session.machine_id, session.session_id)) navigate({ name: "home" });
-      await runCleanup(session.machine_id, wt, cleanup);
-    } catch (e) {
-      toast(t("chat-chatview.close_failed", { error: errorText(e) }), "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title={t("chat-chatview.close_agent_title")}
-      footer={
-        <>
-          <Button tone="quiet" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button tone="danger" busy={busy} disabled={!cleanupReady(wt, cleanup)} onClick={go}>
-            {t("chat-chatview.close_agent")}
-          </Button>
-        </>
-      }
-    >
-      <p className="text-[13px] leading-relaxed text-ink-2">
-        {t(session.source_kind === "runtime" ? "chat-chatview.close_runtime_detail" : "chat-chatview.close_agent_detail", { machine: machineName, title: sessionTitle(session), where: [session.space_name, tabLabel(session)].filter(Boolean).join(" › ") || sessionTitle(session) })}
-      </p>
-      {wt && <WorktreeCleanup st={wt} value={cleanup} onChange={setCleanup} />}
-    </Dialog>
-  );
-}
-
-// "Archive and close" (lib/agent-archives.ts): archives the agent and closes its tab and process on its computer
-// (session.retire); its transcript stays, and a message resumes it. Asked first because it stops a process; the
-// worktree is never removed here (the archive is meant to come back). The chat's ⋯ and the row menu both ask here.
-export function ArchiveCloseDialog({ open, onClose, session, machineName }: { open: boolean; onClose: () => void; session: Session; machineName: string }) {
-  const [busy, setBusy] = useState(false);
-  const go = async () => {
-    // the latest row (its title); if it got busy meanwhile, the hub refuses (409) and the toast says why
-    const now = getSession(session.machine_id, session.session_id) ?? session;
-    setBusy(true);
-    try {
-      await archiveAgent(now, true, appArchiveDeps);
-      onClose();
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title={t("chat-sessiondialogs.archive_close_title")}
-      footer={
-        <>
-          <Button tone="quiet" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button tone="primary" icon="archive" busy={busy} onClick={go}>
-            {t("chat-sessiondialogs.archive_close")}
-          </Button>
-        </>
-      }
-    >
-      <p className="text-[13px] leading-relaxed text-ink-2">{t("chat-sessiondialogs.archive_close_detail", { title: sessionTitle(session), machine: machineName })}</p>
-    </Dialog>
   );
 }

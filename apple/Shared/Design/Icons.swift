@@ -54,6 +54,8 @@ extension Theme {
         static let uncheckedBox = "square"
         /// A box ticked: a file marked viewed in a code review (`TickBoxToggleStyle`), a done to-do in a document.
         static let checkedBox = "checkmark.square.fill"
+        /// A box part of which is ticked: a file partly staged in a session's Git tab (`TickBox`, #7013).
+        static let partlyCheckedBox = "minus.square.fill"
         static let todo = "checklist"
         /// Recent, or waiting to come back (reconnecting, last used).
         static let recent = "clock.arrow.circlepath"
@@ -179,6 +181,8 @@ extension Theme {
         static let gitPull = "arrow.down.to.line.compact"
         static let gitPush = "arrow.up.to.line.compact"
         static let gitFetch = "icloud.and.arrow.down"
+        /// Stashes in a session's Git tab (#7015): uncommitted changes put away for later.
+        static let gitStash = "cabinet"
         /// Split a terminal pane to the right / below (the node menu's Split Pane).
         static let splitRight = "rectangle.split.2x1"
         static let splitDown = "rectangle.split.1x2"
@@ -194,6 +198,8 @@ extension Theme {
         static let undo = "arrow.uturn.backward"
         static let redo = "arrow.uturn.forward"
         static let interrupt = "stop.fill"
+        /// The dictation bar's stop: the words go into the draft, nothing is sent (`DictationBar`).
+        static let stopDictating = interrupt
         static let stopLoop = "stop.circle"
         static let run = "play.fill"
         /// Resume a stopped Agent in a terminal on its computer (#5521): the web's Resume shows the same play mark.
@@ -265,6 +271,8 @@ extension Theme {
         /// A list filter menu: off, and on (something filtered).
         static let filter = "line.3.horizontal.decrease.circle"
         static let filterActive = "line.3.horizontal.decrease.circle.fill"
+        /// Grouping at the fixed end of the Agents filter capsule, without a second circle.
+        static let capsuleGrouping = "line.3.horizontal.decrease"
         /// A plain list layout.
         static let listView = "list.bullet"
         /// A calendar layout (the to-dos' Calendar, beside `listView`, #2029).
@@ -627,6 +635,14 @@ extension Theme {
         static let addedReminder = "checklist.checked"
         /// Kinds of tasks that start without asking first (Start These Directly).
         static let taskTrust = "bolt.shield"
+        /// A go-ahead the owner gave for future tasks on one computer and folder (Standing Authorizations, #7002).
+        static let standingAuthorization = "shield.lefthalf.filled.badge.checkmark"
+        /// Taking such a go-ahead back (Revoke).
+        static let revoke = "xmark.shield"
+        /// An idle Agent Persona started is stopped after a while, its terminal kept (Agent Follow-Up, #7005).
+        static let stopIdle = "powersleep"
+        /// Persona fixes unhelpful session names (Agent Follow-Up, #7005).
+        static let autoName = "character.textbox"
         /// A plan the assistant handed the user (the plan card).
         static let taskPlan = "list.clipboard"
         /// Saying something straight to a task (Message, and Message “xx”).
@@ -675,6 +691,10 @@ extension Theme {
         static let search = "magnifyingglass"
         /// The knowledge base (~/.persona/data).
         static let knowledge = "books.vertical"
+        /// A knowledge-base topic (#7251): what Persona learned on one subject.
+        static let topic = "lightbulb.2"
+        /// The knowledge map (#7251): topics and projects as one outline.
+        static let knowledgeMap = "map"
         /// Health: the health space (docs/assistant/health.md), its entry and its conversations' mark.
         static let health = "heart"
         static let healthFilled = "heart.fill"
@@ -716,6 +736,14 @@ extension Theme {
         static let attendanceOff = "waveform.slash"
         /// Talk to Persona in the meeting (#3862 phase 4): held on the meeting page, a talk window from the Live Activity.
         static let talk = "mic.circle"
+        /// How a meeting is transcribed (#3862 phase 5: on this iPhone or on the hub): speech written as text, as captions.
+        static let meetingTranscription = voiceCaptions
+        /// The names and words the hub's transcription should spell right (#3862 phase 5, the meeting glossary).
+        static let glossary = "character.book.closed"
+        /// Hub transcription on Wi-Fi only (#3862 phase 5): Wi-Fi.
+        static let wifiOnly = pluginWifi
+        /// Mobile data (#6396): the live screen's picture on cellular or a personal hotspot.
+        static let mobileData = "cellularbars"
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
         /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).
@@ -724,6 +752,24 @@ extension Theme {
         static let openQuestion = "questionmark.circle.dashed"
         /// A meeting's minutes as a whole (the watch's Meeting Minutes).
         static let minutes = "note.text"
+        /// The minutes' summary card (#6563): the Core Conclusions box's lightbulb, and a decision's mark in a topic card,
+        /// where a point has a dot.
+        static let conclusions = "lightbulb.max"
+        static let decided = "checkmark.seal.fill"
+        /// A topic card's icon by the hub's `icon` (`RecordingMinutesCards.symbol`); `general` for any other value.
+        static let topicProgress = "chart.bar.xaxis.ascending"
+        static let topicSchedule = "calendar.badge.checkmark"
+        static let topicRelease = "shippingbox"
+        static let topicPerformance = "speedometer"
+        static let topicMetrics = "chart.dots.scatter"
+        static let topicTooling = "screwdriver"
+        static let topicQuality = "ladybug"
+        static let topicDesign = "paintbrush.pointed"
+        static let topicPeople = people
+        static let topicCustomer = "person.bubble"
+        static let topicBudget = "banknote"
+        static let topicRisk = "flame"
+        static let topicGeneral = "circle.grid.2x2"
         /// A meeting's private mark (#3862, Private Meeting): its minutes are never used when Persona answers in later
         /// meetings. What stays private, as Health's note says it.
         static let privateMeeting = privacy

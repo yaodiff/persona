@@ -31,6 +31,8 @@ struct MachineDetailView: View {
     @State private var plugins = ExtensionMachineModel()
     @State private var pluginLink: LinkTarget?
     @State private var filesOpen = Self.initialFilesOpen
+    /// Lives through the Files push / pop, so a remote POST can regain its progress row on return.
+    @State private var folderTransfers = FolderTransfers()
     /// Browser Sign-ins (#5821) and their whole list: owned here, beside Files, not by the section, which exists only
     /// while this page has its machine; a destination inside it went away with it and broke the open list (#6050).
     @State private var browserLogins: BrowserLoginsModel
@@ -165,7 +167,7 @@ struct MachineDetailView: View {
         .themedGroupedPage()
         .pluginLinks($pluginLink)
         .navigationDestination(isPresented: $filesOpen) { // a leaf: the browser walks folders and opens files in place
-            FilesPane(machineID: machineID, group: ref.group, cwd: "~")
+            FilesPane(machineID: machineID, group: ref.group, cwd: "~", transfers: folderTransfers)
                 .detailTitle(String(localized: "Files"))
                 .navigationBarTitleDisplayMode(.inline)
         }

@@ -11,7 +11,8 @@ import persona.core.contracts.Item
  * deliberately preserves it. A changed history clears items, coverage and pagination before
  * accepting a self-contained page or requesting reload for a continuing batch.
  *
- * Ordinary duplicate IDs keep their first value; changed folds replace the work they cover.
+ * A repeated full item replaces the old copy as on iOS; changed folds replace the work they cover.
+ * Opened-fold and promotion retention matches `ChatStore.opened` and `ChatStore.retainingPromotion`.
  * Callers serialize access and execute effects outside this reducer (see [ContinuitySync]).
  */
 class ContinuityReducer {
@@ -24,6 +25,8 @@ class ContinuityReducer {
     )
 
     private val byId = LinkedHashMap<String, Item>()
+    private val cachedPromotionIds = mutableSetOf<String>()
+    private val opened = mutableMapOf<String, Item>()
     private var ordered: List<Item>? = null
     var history: String? = null
         private set
@@ -41,8 +44,13 @@ class ContinuityReducer {
     /** Restores cached state without treating the cache as a received backlog. */
     fun restore(items: List<Item>, history: String?, covered: Int, hasMore: Boolean? = null, loadedOnce: Boolean = false) {
         byId.clear()
+        opened.clear()
         ordered = null
-        items.forEach { byId.putIfAbsent(it.id, it) }
+        cachedPromotionIds.clear()
+        for (item in items) {
+            if (item.supervisionUser == true) cachedPromotionIds += item.id
+            byId[item.id] = item
+        }
         this.history = history
         this.covered = covered.coerceAtLeast(0)
         this.hasMore = hasMore
@@ -114,6 +122,7 @@ class ContinuityReducer {
         val keep = if (history == null || history == this.history)
             byId.values.filter { toSeq != null && it.seq > toSeq } else emptyList()
         byId.clear()
+        opened.clear()
         ordered = null
         this.hasMore = hasMore
         if (history != null) this.history = history
@@ -130,20 +139,70 @@ class ContinuityReducer {
 
     /** Publish accumulated range pages together, discarding fold placeholders in the response. */
     fun unfold(fold: Item, work: List<Item>) {
-        if (byId.remove(fold.id) == null) return
+        val retained = byId.remove(fold.id) ?: return
+        opened[fold.id] = retained
         ordered = null
         merge(work.filter { it.kind != "fold" })
     }
 
+    private fun Item.promoted(): Item {
+        val f = fold
+        return copy(supervisionUser = true, fold = f?.copy(supervisionUser = true))
+    }
+
     private fun merge(new: List<Item>, backlog: Boolean = false, hasMore: Boolean? = null) {
-        val folds = new.filter { it.kind == "fold" && byId[it.id]?.let { old -> old.fold == it.fold } != true }
-        if (folds.isNotEmpty()) {
-            if (byId.values.removeAll { it.isWork() && folds.any { fold -> fold.folds(it) } }) ordered = null
+        if (byId.size != byId.keys.size) ordered = null
+        // A cache may repeat an id: the last copy is authoritative, and earlier promotion is retained.
+        val cached = LinkedHashMap<String, Item>()
+        for (item in byId.values) cached[item.id] = item
+        val evidence = (byId.values + opened.values + new).filter { it.supervisionUser == true || it.fold?.supervisionUser == true }
+        val promotedIDs = (evidence.filter { it.supervisionUser == true }.map { it.id } + cachedPromotionIds).toMutableSet()
+        cachedPromotionIds.clear()
+        val promotedFolds = evidence.filter { it.fold != null }
+        val promotedWork = evidence.filter { it.isWork() }
+        fun retain(item: Item): Item {
+            val keep = promotedIDs.contains(item.id) ||
+                item.isWork() && promotedFolds.any { it.folds(item) } ||
+                item.kind == "fold" && promotedWork.any { item.folds(it) }
+            return if (keep) item.promoted() else item
         }
-        // iOS checks the first existing item before sorting the newly appended older items.
-        val existingFirst = firstSeq
-        new.forEach { if (byId.putIfAbsent(it.id, it) == null) ordered = null }
-        val reachesStart = new.minOfOrNull { it.seq }?.let { it <= (existingFirst ?: new.first().seq) } ?: false
+        byId.clear()
+        for (item in cached.values) byId[item.id] = retain(item)
+        val promoted = LinkedHashMap<String, Item>()
+        new.forEach { promoted[it.id] = retain(it) }
+        val fresh = promoted.values.toList()
+        val batchWork = fresh.filter { it.isWork() && it.kind != "fold" }
+        val incoming = fresh.filter { item ->
+            val previous = opened[item.id]?.fold
+            val current = item.fold
+            val stillOpen = item.kind == "fold" && previous != null && current != null &&
+                (current.throughSeq < previous.throughSeq ||
+                    current.throughSeq == previous.throughSeq && part(current.throughId) <= part(previous.throughId))
+            !stillOpen && !(item.kind == "fold" && batchWork.any { item.folds(it) })
+        }
+        val folds = incoming.filter { it.kind == "fold" && byId[it.id]?.fold != it.fold }
+        for (fold in folds) {
+            for (old in byId.values.toList()) {
+                if (old.kind != "fold" && old.isWork() && fold.folds(old)) {
+                    byId.remove(old.id)
+                    ordered = null
+                }
+            }
+        }
+        for (work in batchWork) {
+            for (old in byId.values.toList()) {
+                if (old.kind == "fold" && old.folds(work)) {
+                    byId.remove(old.id)
+                    ordered = null
+                }
+            }
+        }
+        for (item in incoming) {
+            if (byId[item.id] != item) ordered = null
+            byId[item.id] = item
+        }
+        val existingFirst = cached.values.minOfOrNull { it.seq } ?: incoming.firstOrNull()?.seq
+        val reachesStart = incoming.minOfOrNull { it.seq }?.let { it <= (existingFirst ?: it) } ?: false
         if (hasMore != null && backlog && (!loadedOnce || byId.size <= new.size) && (hasMore || reachesStart)) {
             this.hasMore = hasMore
         }

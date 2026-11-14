@@ -91,9 +91,14 @@ describe("Markdown table copy button", () => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const button = doc.querySelector("button");
     expect(button?.getAttribute("aria-label")).toBe("拷贝表格");
-    expect(button?.className).toContain("opacity-0");
-    expect(button?.className).toContain("group-hover/table:opacity-100");
-    expect(button?.className).toContain("focus-visible:opacity-100");
+    // it shows with the cap it sits on (audit item 77): on hover, and while the button has the keyboard's focus, not
+    // after a click (a clicked button keeps the focus, and the cap would stay over the header taking no clicks)
+    const cap = button?.closest("[data-table-copy]");
+    expect(cap?.className).toContain("opacity-0");
+    expect(cap?.className).toContain("group-hover/table:opacity-100");
+    expect(cap?.className).toContain("has-[:focus-visible]:opacity-100");
+    expect(cap?.className).not.toContain("focus-within");
+    expect(button?.className).toContain("focus-visible:pointer-events-auto");
     expect(doc.querySelector("table button")).toBeNull();
   });
 
@@ -113,11 +118,13 @@ describe("Markdown table copy button", () => {
     const host = document.createElement("div");
     const root = createRoot(host);
     act(() => root.render(createElement(Markdown, { text: md })));
-    const button = host.querySelector<HTMLButtonElement>(".md-table > button")!;
+    const cap = host.querySelector<HTMLElement>(".md-table > [data-table-copy]")!;
     expect(read).not.toHaveBeenCalled();
-    expect(button.style.top).toBe("");
+    expect(cap.style.top).toBe("");
     act(() => reports[0]([], {} as ResizeObserver));
-    expect(button.style.top).toBe("calc(30px + 0.375rem)");
+    // the cap lies on the header row, the button inset in it
+    expect(cap.style.top).toBe("30px");
+    expect(cap.querySelector("button")).not.toBeNull();
     act(() => root.unmount());
   });
 

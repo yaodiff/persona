@@ -83,8 +83,25 @@ export function useAssistantSearch(query: string, on: boolean): { answer?: Assis
   return { answer: current ? state.answer : undefined, searching: Boolean(on && q && state.q !== q) };
 }
 
-/** The snippet cut at its matches: [text, matched] pieces (the ranges sorted, not overlapping, in range). */
-export function markParts(snippet: string, ranges: readonly [number, number][]): [string, boolean][] {
+/** Characters a found chat's line keeps before its first match (#7045). The manager's snippet starts up to 40 before
+ *  it, more than a phone-width row shows, so each client cuts for its own width, as the iPhone does (#6284). */
+export const SNIPPET_LEAD = { phone: 8, wide: 20 } as const;
+
+/** `snippet` from `lead` characters (code points, never half an emoji) before its first match, "…" in front when cut,
+ *  with the ranges (UTF-16) moved to match. A match near the start is left as it is. */
+export function leadSnippet(snippet: string, ranges: readonly [number, number][], lead: number): { snippet: string; ranges: [number, number][] } {
+  const first = Math.min(snippet.length, ...ranges.map((r) => r[0]));
+  const before = first > 0 ? Array.from(snippet.slice(0, first)) : [];
+  if (!ranges.length || before.length <= lead + 1) return { snippet, ranges: ranges.map(([a, b]) => [a, b]) };
+  const kept = before.slice(before.length - lead).join("");
+  const shift = first - kept.length - 1; // "…" is one UTF-16 unit
+  return { snippet: "…" + kept + snippet.slice(first), ranges: ranges.map(([a, b]) => [a - shift, b - shift]) };
+}
+
+/** The snippet cut at its matches: [text, matched] pieces (the ranges sorted, not overlapping, in range). `fit`: the
+ *  row's width, to start the line just before the first match (`SNIPPET_LEAD`); left out, the whole snippet. */
+export function markParts(snippet: string, ranges: readonly [number, number][], fit?: keyof typeof SNIPPET_LEAD): [string, boolean][] {
+  if (fit) ({ snippet, ranges } = leadSnippet(snippet, ranges, SNIPPET_LEAD[fit]));
   const out: [string, boolean][] = [];
   let at = 0;
   for (const [a0, b0] of [...ranges].sort((x, y) => x[0] - y[0])) {

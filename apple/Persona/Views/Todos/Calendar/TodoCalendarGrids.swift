@@ -76,11 +76,17 @@ struct CalendarEntryBlock: View {
                     CalendarEntryMarks(entry: entry)
                         .font(Theme.Font.label)
                 }
-                HStack(spacing: Theme.Space.xs) {
-                    Text(entry.stateLabel)
-                        .foregroundStyle(look.text)
-                    Text(verbatim: "· \(look.time)")
+                // by the block's width: state and time, else the time alone, else nothing (never a cut-off state and time)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: Theme.Space.xs) {
+                        Text(entry.stateLabel)
+                            .foregroundStyle(look.text)
+                        Text(verbatim: "· \(look.time)")
+                            .foregroundStyle(entry.overdue ? Theme.danger : Color.secondary)
+                    }
+                    Text(verbatim: look.time)
                         .foregroundStyle(entry.overdue ? Theme.danger : Color.secondary)
+                    EmptyView()
                 }
                 .font(Theme.Font.label)
                 .lineLimit(1)
@@ -145,19 +151,11 @@ struct CalendarEntryChip: View {
 
     var body: some View {
         let look = CalendarEntryLook(entry: entry)
-        HStack(spacing: Theme.Space.xs) {
-            if showsTime && !entry.allDay {
-                Text(entry.start.formatted(date: .omitted, time: .shortened))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            Text(entry.title)
-                .foregroundStyle(entry.overdue ? Theme.danger : Color.primary)
-                .strikethrough(entry.done)
-                .lineLimit(1)
-            if !compact {
-                CalendarEntryMarks(entry: entry)
-            }
+        // the time goes first only while it and the whole title fit the cell; otherwise the title alone (a time wrapped over
+        // three lines beside a cut title told neither)
+        ViewThatFits(in: .horizontal) {
+            if showsTime && !entry.allDay { row(look: look, time: true) }
+            row(look: look, time: false)
         }
         .font(compact ? Theme.Font.label : Theme.Font.caption)
         .padding(.leading, compact ? Theme.Space.xs : Theme.Space.s)
@@ -173,6 +171,24 @@ struct CalendarEntryChip: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(look.spoken)
         .accessibilityIdentifier("todo.calendar.entry")
+    }
+
+    private func row(look: CalendarEntryLook, time: Bool) -> some View {
+        HStack(spacing: Theme.Space.xs) {
+            if time {
+                Text(entry.start.formatted(date: .omitted, time: .shortened))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            Text(entry.title)
+                .foregroundStyle(entry.overdue ? Theme.danger : Color.primary)
+                .strikethrough(entry.done)
+                .lineLimit(1)
+            if !compact {
+                CalendarEntryMarks(entry: entry)
+            }
+        }
     }
 }
 
@@ -256,6 +272,8 @@ struct TodoCalendarTimeline: View {
     /// One device pixel: the grid's lines (0.5 pt is nothing on a 1x screen).
     private var pixel: CGFloat { 1 / displayScale }
     private var gutter: CGFloat { narrow ? Theme.CalendarGrid.gutterNarrow : Theme.CalendarGrid.gutter }
+    /// 1 at the default text size: the minutes an hour's label gives way around the now line grow with its height.
+    @ScaledMetric(relativeTo: .caption) private var labelRoomScale = 1.0
     /// How long a to-do's block is on the axis.
     private var blockMinutes: Double { Double(Theme.Size.tapTarget / hour) * 60 }
 
@@ -407,10 +425,13 @@ struct TodoCalendarTimeline: View {
 
     private var allDayRow: some View {
         HStack(alignment: .top, spacing: Theme.Space.flush) {
+            // "All" over "Day" when the column is too narrow for the one line at this text size
             Text("All Day")
                 .font(Theme.Font.label)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+                .minimumScaleFactor(0.6)
                 .padding(.trailing, Theme.Space.sm)
                 .frame(width: gutter, alignment: .trailing)
                 .padding(.top, Theme.Space.xs)
@@ -451,7 +472,7 @@ struct TodoCalendarTimeline: View {
         let dropAt = landed.flatMap { $0.allDay ? nil : $0.start }
         let dropMinutes = dropAt.map { TodoCalendar.minutes($0, in: $0, calendar: calendar) }
         func near(_ minutes: Double?, _ h: Int) -> Bool {
-            minutes.map { abs(Double(h * 60) - $0) < Double(TodoCalendar.nowLabelRoom) } ?? false
+            minutes.map { abs(Double(h * 60) - $0) < Double(TodoCalendar.nowLabelRoom) * labelRoomScale } ?? false
         }
         return ZStack(alignment: .topLeading) {
             VStack(spacing: Theme.Space.flush) {
@@ -472,7 +493,7 @@ struct TodoCalendarTimeline: View {
         // over the axis, so its height (half above the line) moves nothing under it
         .overlay(alignment: .topLeading) {
             // a dragged to-do's time near it takes its place
-            if todayShown && !(dropMinutes.map { abs($0 - nowMinutes) < Double(TodoCalendar.nowLabelRoom) } ?? false) {
+            if todayShown && !(dropMinutes.map { abs($0 - nowMinutes) < Double(TodoCalendar.nowLabelRoom) * labelRoomScale } ?? false) {
                 gutterLabel(now, color: Theme.danger)
                     .offset(y: y(nowMinutes))
             }
@@ -488,10 +509,12 @@ struct TodoCalendarTimeline: View {
 
     /// A moment's time in the hours' column, centered on its line: the now line's, a dragged to-do's.
     private func gutterLabel(_ date: Date, color: Color) -> some View {
-        Text(date.formatted(date: .omitted, time: .shortened))
+        // a phone's week keeps to the axis's 24-hour numbers ("15:02"), which fit the column; the day view has room for the 12-hour form
+        Text(narrow ? clock(date) : date.formatted(date: .omitted, time: .shortened))
             .font(Theme.Font.labelHeavy)
             .foregroundStyle(color)
             .lineLimit(1)
+            .minimumScaleFactor(0.6)
             .padding(.trailing, Theme.Space.xs)
             .frame(width: gutter, alignment: .trailing)
             .alignmentGuide(.top) { d in d[VerticalAlignment.center] }
@@ -514,11 +537,17 @@ struct TodoCalendarTimeline: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                         .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                         .padding(.trailing, Theme.Space.sm)
                         .frame(width: gutter, alignment: .trailing)
                         .alignmentGuide(.top) { d in d[VerticalAlignment.center] }
                 }
             }
+    }
+
+    private func clock(_ date: Date) -> String {
+        let c = calendar.dateComponents([.hour, .minute], from: date)
+        return String(format: "%d:%02d", c.hour ?? 0, c.minute ?? 0)
     }
 
     private func hourLabel(_ h: Int) -> String {

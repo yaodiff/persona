@@ -5,5 +5,8 @@
   "main": "",
   "author": "",
   "license": "",
-  "dependencies": { "libpersona_ssh.so": "file:./src/main/cpp/types/libpersona_ssh" }
+  "dependencies": {
+    "libpersona_ssh.so": "file:./src/main/cpp/types/libpersona_ssh",
+    "libpersona_core_ohos.so": "file:./src/main/cpp/types/libpersona_core"
+  }
 }

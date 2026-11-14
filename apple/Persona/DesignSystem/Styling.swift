@@ -156,15 +156,83 @@ extension View {
             // visionOS has no .glassProminent: its windows are glass already, and the system's prominent style is the filled one.
             if prominent { buttonStyle(.borderedProminent).modifier(DimWhenDisabled()) } else { buttonStyle(.bordered) }
             #else
-            if prominent { buttonStyle(.glassProminent).modifier(DimWhenDisabled()) } else { buttonStyle(.glass) }
+            if prominent {
+                buttonStyle(.glassProminent).modifier(DimWhenDisabled())
+            } else {
+                buttonStyle(RedWhenDestructive()).buttonStyle(.glass).menuStyle(SystemStyleMenu()).modifier(LabelOffItsFill())
+            }
             #endif
         case .bordered:
-            if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
+            #if os(iOS)
+            if prominent {
+                buttonStyle(.borderedProminent)
+            } else {
+                buttonStyle(RedWhenDestructive()).buttonStyle(.bordered).menuStyle(SystemStyleMenu(bordered: true)).modifier(LabelOffItsFill())
+            }
+            #else
+            if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered).modifier(LabelOffItsFill()) }
+            #endif
         case .soft:
             buttonStyle(SoftButtonStyle(prominent: prominent))
         }
     }
 }
+
+/// A secondary glass or bordered button's label, pushed away from the fill under it (#6157): blended with it, lighter in
+/// dark (screen), darker in light (multiply), and the more so the lighter that fill is. The glass's fill is the system's
+/// and turns lighter in a sheet in dark; Lark's is a wash of the label's own color. In the plain tint the label read at
+/// 2.0:1 on a panel in a dark sheet and 2.7:1 for coral in light Lark, under the 3:1 `StyleSpecTests` holds the accent
+/// to. `ButtonContrastUITests` measures it on every fill the app puts one on. Disabled buttons keep the system's look; the
+/// Mac (frozen) and visionOS draw theirs unchanged.
+private struct LabelOffItsFill: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.isEnabled) private var enabled
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if enabled {
+            content.foregroundStyle(.tint.blendMode(scheme == .dark ? .screen : .multiply))
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+/// A secondary button with the destructive role draws in `Theme.danger` in every style (#7042). The system's glass and
+/// bordered styles take the app's tint over the role (the accent: a Delete looked like any other button), so this style,
+/// placed under theirs, gives such a button the danger tint and leaves every other button as it is. `Button(configuration)`
+/// draws the style above this one, as Apple's documented way to adjust the current style; re-styling it inside a
+/// PrimitiveButtonStyle is what recursed before (see `draftDecisionButton`). Clay / Island read the role in `SoftButtonStyle`.
+private struct RedWhenDestructive: PrimitiveButtonStyle {
+    @ViewBuilder func makeBody(configuration: Configuration) -> some View {
+        if configuration.role == .destructive {
+            Button(configuration).tint(Theme.danger)
+        } else {
+            Button(configuration)
+        }
+    }
+}
+
+#if os(iOS)
+/// A `Menu` styled as a secondary button, drawn with the system's glass or bordered style itself (#7214). Drawn through
+/// `RedWhenDestructive` like a button, its label lost the style's background: the ⋯ and clipboard menus of the live
+/// screen floated on the page beside capsule buttons. A menu has no destructive role to color, so it skips that style.
+/// `Menu(configuration)` draws the menu style below this one, as Apple documents for styles that adjust the current one.
+private struct SystemStyleMenu: MenuStyle {
+    var bordered = false
+
+    @ViewBuilder func makeBody(configuration: Configuration) -> some View {
+        if bordered {
+            Menu(configuration).buttonStyle(.bordered)
+        } else {
+            Menu(configuration).buttonStyle(.glass)
+        }
+    }
+}
+#endif
 
 /// Fades a control whose style does not show "disabled" by itself.
 private struct DimWhenDisabled: ViewModifier {
@@ -177,7 +245,8 @@ private struct DimWhenDisabled: ViewModifier {
 
 /// A raised pill for the clay / island styles, at least 44 pt tall (it was 34). Colored by the current tint, as the
 /// system styles are: the accent, or what the call site sets — Interrupt and Close Agent are red here too (they were the
-/// accent: purple in Clay, teal in Island).
+/// accent: purple in Clay, teal in Island). A secondary one with the destructive role is `Theme.danger`, as in the other
+/// styles (#7042).
 private struct SoftButtonStyle: ButtonStyle {
     var prominent: Bool
     @Environment(\.isEnabled) private var enabled
@@ -187,7 +256,7 @@ private struct SoftButtonStyle: ButtonStyle {
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Space.s)
             .scaledFrame(minHeight: Theme.Size.tapTarget)
-            .foregroundStyle(prominent ? AnyShapeStyle(Color.white) : AnyShapeStyle(.tint))
+            .foregroundStyle(labelStyle(configuration))
             .background {
                 ZStack {
                     if prominent {
@@ -205,6 +274,14 @@ private struct SoftButtonStyle: ButtonStyle {
             .opacity(enabled ? 1 : 0.45)
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.snappy(duration: 0.15), value: configuration.isPressed)
+    }
+
+    private func labelStyle(_ configuration: Configuration) -> AnyShapeStyle {
+        if prominent { return AnyShapeStyle(Color.white) }
+        #if os(iOS)
+        if configuration.role == .destructive { return AnyShapeStyle(Theme.danger) }
+        #endif
+        return AnyShapeStyle(.tint)
     }
 }
 

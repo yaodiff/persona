@@ -28,7 +28,7 @@ nonisolated enum LarkTime {
 
     /// Today, yesterday, two to six days back (a weekday), earlier this year, or before that. Days are calendar
     /// days in `calendar`'s time zone; a time after today counts as this year or older.
-    static func tier(of d: Date, now: Date = .now, calendar cal: Calendar = .current) -> Tier {
+    static func tier(of d: Date, now: Date = AppClock.now, calendar cal: Calendar = .current) -> Tier {
         let days = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: now)).day ?? 0
         switch days {
         case 0: return .today
@@ -39,7 +39,7 @@ nonisolated enum LarkTime {
     }
 
     /// Feishu's feed times: 05:59, Yesterday, Wednesday, Oct 21, 2025/10/21.
-    static func short(_ d: Date?, now: Date = .now, calendar: Calendar = .current) -> String {
+    static func short(_ d: Date?, now: Date = AppClock.now, calendar: Calendar = .current) -> String {
         guard let d, d.isMeaningful else { return "" }
         return switch tier(of: d, now: now, calendar: calendar) {
         case .today: d.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))

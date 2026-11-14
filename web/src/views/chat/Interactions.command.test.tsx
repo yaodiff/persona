@@ -5,7 +5,7 @@
 // fields: the card stays the terminal's question with its numbered options. The hub is faked (apiOp).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
@@ -16,6 +16,11 @@ vi.mock("../../lib/ops", () => ({
     return {};
   }),
 }));
+// A slow real chunk makes the old fixed 100 ms body wait fail deterministically.
+vi.mock("./CommandScreenCard", async (importOriginal) => {
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  return await importOriginal<typeof import("./CommandScreenCard")>();
+});
 import { InteractionCard } from "./Interactions";
 import { getState } from "../../lib/store";
 import { t } from "../../i18n";
@@ -44,9 +49,10 @@ const card = (deadlineIn: number): Interaction => ({
 });
 
 /** The plain words' own chunk (lazyPage) is in and drawn. */
-const body = async () => {
-  for (let i = 0; i < 20 && !host.querySelector("[data-screen-command]"); i++) await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
-};
+const body = () => vi.waitFor(async () => {
+  await act(async () => {});
+  expect(host.querySelector("[data-screen-command]")).not.toBeNull();
+}, { timeout: 3000 });
 
 const button = (label: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
 
@@ -65,8 +71,12 @@ afterEach(() => {
 });
 
 describe("a command's permission prompt", () => {
+  beforeAll(async () => {
+    await import("./CommandScreenCard"); // before any test installs fake timers
+  }, 60_000);
+
   it("says what is asked in plain words, with Claude Code's own words one tap away", async () => {
-    act(() => root.render(<InteractionCard ix={card(104)} />));
+    await act(async () => root.render(<InteractionCard ix={card(104)} />));
     await body();
     expect(host.textContent).toContain(t("chat-commandask.title", { agent: "Claude" }));
     expect(host.textContent).not.toContain("Do you want to proceed?");
@@ -83,7 +93,6 @@ describe("a command's permission prompt", () => {
   });
 
   it("counts down, then says what happens", async () => {
-    await act(async () => { await import("./CommandScreenCard"); }); // its chunk in before the clock is faked
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     act(() => root.render(<InteractionCard ix={card(104)} />));
     await flush();

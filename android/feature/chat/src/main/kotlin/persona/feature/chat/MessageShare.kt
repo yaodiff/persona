@@ -50,6 +50,7 @@ import persona.core.contracts.Session
 import persona.core.designsystem.AgentMarkSpec
 import persona.core.designsystem.agentMark
 import persona.core.domain.sort.slotLabel
+import persona.core.domain.views.AssistantFences
 import persona.core.designsystem.ContentTokens
 import persona.core.designsystem.FeedbackNotice
 import persona.core.designsystem.FeedbackStyle
@@ -115,10 +116,13 @@ internal fun shareCardSource(session: Session?, persona: String): ShareCardSourc
 /** The most of a message a card draws (iOS `MessageShareCard.maxChars`). */
 internal const val SHARE_CARD_MAX_CHARS = 3000
 
-/** [text] trimmed, and past [SHARE_CARD_MAX_CHARS] cut with "…" after a blank line. */
+/** [text] trimmed, and past [SHARE_CARD_MAX_CHARS] cut with "…" after a blank line, never inside a card (#7261). */
 internal fun shareCardText(text: String): String {
     val trimmed = text.trim()
-    return if (trimmed.length > SHARE_CARD_MAX_CHARS) trimmed.take(SHARE_CARD_MAX_CHARS) + "\n\n…" else trimmed
+    if (trimmed.length <= SHARE_CARD_MAX_CHARS) return trimmed
+    // A card the cut would split goes whole: half its JSON is no card, only its source.
+    val split = if (AssistantFences.mentions(trimmed)) AssistantFences.blocks(trimmed).firstOrNull { SHARE_CARD_MAX_CHARS in it.start + 1 until it.end } else null
+    return (if (split == null) trimmed.take(SHARE_CARD_MAX_CHARS) else trimmed.take(split.start).trimEnd()) + "\n\n…"
 }
 
 /**
@@ -161,7 +165,8 @@ internal object ShareCardBlocks {
             if (fence != null) {
                 var j = i + 1
                 while (j < lines.size && !closes(fence, lines[j].trim())) j++
-                out += lines.subList(i, min(j, lines.size - 1) + 1).joinToString("\n")
+                // A card is drawn as a card, as wide as the picture: its JSON never widens it (#7261).
+                if (!isCard(trimmed)) out += lines.subList(i, min(j, lines.size - 1) + 1).joinToString("\n")
                 i = j + 1
             } else if ('|' in trimmed && i + 1 < lines.size && isDelimiter(lines[i + 1])) {
                 var j = i + 2
@@ -171,6 +176,12 @@ internal object ShareCardBlocks {
             } else i++
         }
         return out
+    }
+
+    /** A fence line that opens a card: its language (the info's first word) is persona-view or persona-card. */
+    fun isCard(fenceLine: String): Boolean {
+        val language = fenceLine.trimStart('`', '~').trim().split(' ', '\t').first().lowercase()
+        return language == AssistantFences.View || language == AssistantFences.Card
     }
 
     /** `| --- | :-: |`, `---|---`: a table's second line (with a pipe: a lone `---` is a rule). */

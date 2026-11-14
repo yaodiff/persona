@@ -61,11 +61,20 @@ nonisolated struct RecordingUpload: Encodable, Sendable {
     /// Where Persona spoke in the meeting (#5905, docs/assistant/meeting-minutes.md「Persona's echo」): only to a hub that
     /// lists `meeting_echo`, and only when it spoke, so every other upload is exactly as before.
     var spoken: [Spoken]?
+    /// The transcription mode the meeting asked for as it started (#3862 phase 5, docs/assistant/meeting-minutes.md
+    /// 「Choosing the mode」): only on the uploads of a meeting started while the hub listed `meeting_transcription`, so
+    /// every other upload is exactly as before. The hub takes the first upload's and ignores the rest: sent on each, so
+    /// an upload lost on its way changes nothing.
+    var transcription: String?
+    /// In hub mode, the meeting's role changes and the stretches Persona spoke in (`MeetingTimeline`), whole, on every
+    /// upload, the `complete: true` one included.
+    var timeline: MeetingTimeline?
     /// The hub takes echo lines marked (`meeting_echo`): they go with `echo: true`; else they are left out, as before.
     private let marksEcho: Bool
 
     enum CodingKeys: String, CodingKey {
         case revision, duration, language, device, title, bookmarks, segments, complete, kind, calendar, attendance, room, spoken
+        case transcription, timeline
         case startedAt = "started_at", endedAt = "ended_at", attendingSession = "attending_session", privateMark = "private"
     }
 
@@ -98,6 +107,10 @@ nonisolated struct RecordingUpload: Encodable, Sendable {
             if a.room {
                 room = RoomUpload(attendance: a.role.rawValue)
                 privateMark = a.privateMark ?? false
+                if let mode = a.transcription {
+                    transcription = mode.rawValue
+                    if mode == .hub { timeline = MeetingTimeline(a) }
+                }
             } else {
                 // Never an attending role without an explicit target (#3862, the owner's rule after a real meeting): the hub
                 // reads `attending_session` left out as the main chat, so with no session named and the main chat not
@@ -194,6 +207,9 @@ final class RecordingSync {
     @ObservationIgnored var onAttendanceStored: ((UUID) -> Void)?
     /// The `room` (and `private`, when there) of every upload `200` of a room meeting (`MeetingConversation.start`).
     @ObservationIgnored var onRoom: ((UUID, MeetingRoom, Bool?) -> Void)?
+    /// The `transcription` (and `transcription_problem`) of every upload `200` of a meeting that named a mode (#3862 phase
+    /// 5, `MeetingTranscription.start`), before the attendance it carried counts as stored: in hub mode no live line goes.
+    @ObservationIgnored var onTranscription: ((RecordingEntry, MeetingTranscriptionRule.Answer) -> Void)?
     /// Every save of a recording, after this sync's own reaction to it (the live log of a meeting Persona attends).
     @ObservationIgnored var onChange: ((UUID) -> Void)?
     /// What a recording may send changed: a save (its role, Meeting / Note, the phone stopping attending: `stopped`) or
@@ -538,6 +554,16 @@ final class RecordingSync {
                 privateMark = try? c.decodeIfPresent(Bool.self, forKey: .privateMark)
             }
         }
+        /// The mode in effect (#3862 phase 5), read on its own: a field of another shape reads as absent.
+        struct TranscriptionAnswer: Decodable {
+            var transcription: String?; var problem: String?
+            enum CodingKeys: String, CodingKey { case transcription, problem = "transcription_problem" }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                transcription = try? c.decodeIfPresent(String.self, forKey: .transcription)
+                problem = try? c.decodeIfPresent(String.self, forKey: .problem)
+            }
+        }
         uploading = entry.id
         defer { uploading = nil }
         var body = RecordingUpload(entry, hubEcho: hubEcho())
@@ -563,6 +589,12 @@ final class RecordingSync {
             store.rejected[entry.id] = nil
             save()
             if body.endedAt != nil, !endedStored.contains(entry.id) { endedStored.insert(entry.id) }
+            if body.transcription != nil {
+                // Absent from the answer (or no answer to read): an older manager, which transcribes nothing.
+                let mode = try? JSON.decoder.decode(TranscriptionAnswer.self, from: data)
+                onTranscription?(library.entry(entry.id) ?? entry,
+                                 MeetingTranscriptionRule.Answer(mode: mode?.transcription, problem: mode?.problem))
+            }
             if body.room != nil {
                 let room = try? JSON.decoder.decode(RoomAnswer.self, from: data)
                 roomAnswered(entry, sent: body, answer?.attendance, problem: answer?.attendanceProblem, room: room?.room,

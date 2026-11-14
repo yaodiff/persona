@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -303,7 +304,8 @@ func TestMinutesFailures(t *testing.T) {
 }
 
 // A long transcript is read in chunks, each cited line checked against its chunk, then merged; the merge may cite only
-// lines that were read.
+// lines that were read. The parts' notes carry their topics (#6563), untagged ones too, but not a part's headline or
+// conclusions; the merge writes the meeting's, and a conclusion citing a line no note carries goes.
 func TestMinutesChunked(t *testing.T) {
 	var texts []string
 	for i := range 300 {
@@ -311,18 +313,22 @@ func TestMinutesChunked(t *testing.T) {
 	}
 	model := &funcModel{f: func(n int, system, user string) (string, error) {
 		if strings.Contains(system, "已经分段整理过") {
-			if !strings.Contains(user, "## 第 1 段") || !strings.Contains(user, "[1] 开场") || strings.Contains(user, "[9999]") {
+			if !strings.Contains(user, "## 第 1 段") || !strings.Contains(user, "[1]〈开场〉 开场") || strings.Contains(user, "[9999]") ||
+				!strings.Contains(user, "[300] 收尾") || strings.Contains(user, "段落概括") || strings.Contains(user, "段落结论") || strings.Contains(user, "**") {
 				return "", fmt.Errorf("merge input:\n%s", user)
 			}
 			// 150 is a line of the transcript, but no part's notes cite it: the merge can't have read it.
-			return `{"title":"长会","points":[{"text":"开场","line":1},{"text":"收尾","line":300},{"text":"没读到的","line":301}],"decisions":[{"text":"定了","line":150}]}`, nil
+			return `{"title":"长会","headline":"整场会的概括","conclusions":[{"text":"开场**定了**","line":1},{"text":"没读到的结论","line":150}],
+			  "topics":[{"title":"开场","points":[{"text":"开场","line":1}]},
+			            {"title":"收尾","points":[{"text":"收尾","line":300},{"text":"没读到的","line":301}],"decisions":[{"text":"定了","line":150}]}]}`, nil
 		}
 		first := strings.SplitN(strings.SplitN(user, "转写：\n", 2)[1], " ", 2)[0] // "[N]"
 		last := ""
 		if strings.Contains(user, "[300] ") {
-			last = `,{"text":"收尾","line":300}`
+			last = `,"points":[{"text":"收尾","line":300}]`
 		}
-		return fmt.Sprintf(`{"points":[{"text":"开场","line":%q},{"text":"不在这段","line":9999}%s]}`, first, last), nil
+		return fmt.Sprintf(`{"headline":"段落概括","conclusions":[{"text":"段落结论","line":%q}],`+
+			`"topics":[{"title":"**开场**","points":[{"text":"**开场**","line":%q},{"text":"不在这段","line":9999}]}]%s}`, first, first, last), nil
 	}}
 	e := goldenEngine(t, model)
 	now := time.Date(2026, 11, 10, 18, 0, 0, 0, goldenZone)
@@ -341,6 +347,11 @@ func TestMinutesChunked(t *testing.T) {
 	if mm == nil || len(mm.Points) != 2 || mm.Points[1].At != 2990 || len(mm.Decisions) != 0 || mm.Partial {
 		t.Fatalf("minutes %+v", mm)
 	}
+	if o := mm.Overview; o == nil || o.Headline != "整场会的概括" || len(o.Conclusions) != 1 || o.Conclusions[0].Text != "开场定了" ||
+		!slices.Equal(groupsOf(o), []string{": 开场, 收尾"}) {
+		t.Fatalf("overview %+v", mm.Overview)
+	}
+	checkOverview(t, mm)
 	chunks, partial := chunkLines([]minutesLine{{N: 1, Text: "aaaa"}, {N: 2, Text: "bbbb"}, {N: 3, Text: "cccc"}}, 10, 25, 2)
 	if len(chunks) != 2 || !partial {
 		t.Errorf("chunks %v partial %v", chunks, partial)
@@ -348,7 +359,8 @@ func TestMinutesChunked(t *testing.T) {
 }
 
 // Deleted while the model was writing: the minutes don't bring the directory back. A new revision keeps the old
-// minutes showing (pending) until new ones are written; confirmed to-dos are recorded for their version only.
+// minutes showing (pending) until new ones are written; confirmed to-dos are recorded for their version only, the
+// overview and the Markdown kept as they are.
 func TestMinutesDeleteRevisionAndTodos(t *testing.T) {
 	var e *Engine
 	deleteDuring := false
@@ -358,12 +370,17 @@ func TestMinutesDeleteRevisionAndTodos(t *testing.T) {
 				return "", err
 			}
 		}
-		return `{"title":"t","actions":[{"what":"写计划","line":1},{"what":"发邮件","line":2}]}`, nil
+		return `{"title":"t","topics":[{"title":"计划","points":[{"text":"计划**写好**","line":1}]}],` +
+			`"actions":[{"what":"写计划","line":1},{"what":"发邮件","line":2}]}`, nil
 	}}
 	e = goldenEngine(t, model)
 	now := time.Now()
 	putRecording(t, e, recID, meetingUpload(1, now.Add(-time.Hour), "写计划", "发邮件"), now)
 	e.WriteMinutes(context.Background(), 2)
+	before, err := e.Store.ReadMinutes(recID)
+	if err != nil || before.Overview == nil {
+		t.Fatalf("written: %+v %v", before, err)
+	}
 	if _, err := e.SetMinutesTodos(recID, 2, map[string]string{"a1": "todo_x"}, nil); !errors.Is(err, ErrMinutesStale) {
 		t.Fatalf("stale version: %v", err)
 	}
@@ -371,8 +388,9 @@ func TestMinutesDeleteRevisionAndTodos(t *testing.T) {
 	if err != nil || mm.Actions[0].TodoID != "todo_x" || mm.Actions[1].TodoID != "" {
 		t.Fatalf("set: %v %+v", err, mm)
 	}
-	if again, _ := e.Store.ReadMinutes(recID); again.Actions[0].TodoID != "todo_x" {
-		t.Fatal("not stored")
+	if again, _ := e.Store.ReadMinutes(recID); again.Actions[0].TodoID != "todo_x" || !jsonEqual[MinutesOverview](t, again.Overview, before.Overview) ||
+		again.Markdown != before.Markdown || readFile(t, e, recID, "minutes.md") != before.Markdown+"\n" {
+		t.Fatalf("not stored as it was: %+v", again)
 	}
 	// Confirmed from version 1 while version 2 was written: linked by task in version 2.
 	mm.Version, mm.Actions[0].TodoID = 2, ""
@@ -437,7 +455,8 @@ func TestRecordingUploadKindAndCalendar(t *testing.T) {
 	}
 }
 
-// The merging call of a long meeting: the parts' notes, each item at its cited line.
+// The merging call of a long meeting: the parts' notes, each item at its cited line, a point or decision of a topic
+// after its topic (#6563).
 func TestGoldenMinutesMerge(t *testing.T) {
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	in := prompts.KBMinutesMergeInput{
@@ -445,10 +464,11 @@ func TestGoldenMinutesMerge(t *testing.T) {
 			Minutes: 120, Language: "zh-CN", Attendees: []string{"Ada", "Bo"}, Location: "三号会议室"},
 		Parts: []prompts.KBMinutesPart{
 			{Part: 1, From: "14:00:00", To: "14:59:50", Attendees: []string{"Ada"},
-				Points:    []prompts.KBMinutesNote{{Line: 3, Text: "导出超过 4 MB 的条目会被丢掉", Who: "Ada"}},
-				Decisions: []prompts.KBMinutesNote{{Line: 40, Text: "这一版先保留上限"}}},
+				Points: []prompts.KBMinutesNote{{Line: 3, Text: "导出超过 4 MB 的条目会被丢掉", Who: "Ada", Topic: "导出"},
+					{Line: 12, Text: "回归测试覆盖不到老版本"}},
+				Decisions: []prompts.KBMinutesNote{{Line: 40, Text: "这一版先保留上限", Topic: "导出"}}},
 			{Part: 2, From: "15:00:00", To: "15:59:50", Where: "三号会议室",
-				Decisions: []prompts.KBMinutesNote{{Photo: 2, Text: "白板上的排期照此执行"}},
+				Decisions: []prompts.KBMinutesNote{{Photo: 2, Text: "白板上的排期照此执行", Topic: "发布排期"}},
 				Actions:   []prompts.KBMinutesNote{{Line: 410, Text: "补上回归测试", Who: "Bo", By: "周五前", DueDate: "2026-11-13"}},
 				Open:      []prompts.KBMinutesNote{{Line: 700, Text: "上限按条还是按录音"}}},
 		},
@@ -563,7 +583,8 @@ func TestMinutesAnswerRules(t *testing.T) {
 		}
 		return e.buildMinutes(r, a, read, goldenZone, i18n.ZhHans)
 	}
-	for _, empty := range []string{`{}`, `{"title":"无法总结"}`, `{"points":[{"text":"","line":1}]}`} {
+	for _, empty := range []string{`{}`, `{"title":"无法总结"}`, `{"points":[{"text":"","line":1}]}`,
+		`{"headline":"只有结论","conclusions":[{"text":"定了","line":1}],"topics":[{"title":"空的"}]}`} {
 		if _, err := build(empty); !errors.Is(err, errMinutesUnusable) {
 			t.Errorf("%s: %v", empty, err)
 		}

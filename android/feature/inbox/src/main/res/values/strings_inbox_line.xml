@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="inbox_line_title">Thread</string>
+    <string name="inbox_line_kind_inbox">Event</string>
+    <string name="inbox_line_kind_todo">To-dos</string>
+    <string name="inbox_line_kind_session">Agent Session</string>
+    <string name="inbox_line_next">Next</string>
+    <string name="inbox_line_gone">No longer in the Inbox</string>
+    <string name="inbox_line_not_same">Not the same matter</string>
+    <string name="inbox_line_not_same_done">Marked as not the same matter</string>
+    <string name="inbox_line_same">Same matter as…</string>
+    <string name="inbox_line_linked">Linked to “%1$s”</string>
+    <string name="inbox_line_search_placeholder">Search titles and places</string>
+    <string name="inbox_line_empty">No open matters match</string>
+    <string name="inbox_line_legacy_meta">%1$s: %2$s</string>
+    <string name="inbox_line_say">Say something</string>
+    <string name="inbox_line_retry">Try again</string>
+    <string name="inbox_line_retry_text">Please try again.</string>
+    <string name="inbox_line_instructed">Sent to the AI for a new suggestion</string>
+    <string name="inbox_line_link_conflict">This link isn\'t possible. Choose something else.</string>
+</resources>

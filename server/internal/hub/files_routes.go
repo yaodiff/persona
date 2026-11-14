@@ -47,4 +47,5 @@ func (h *Hub) fileRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/v1/machines/{mid}/files/zip", h.fileEdit("zip"))
 	api.HandleFunc("POST /api/v1/machines/{mid}/files/copy", h.fileEdit("copy"))   // #5830: copy and duplicate
 	api.HandleFunc("POST /api/v1/machines/{mid}/files/chmod", h.fileEdit("chmod")) // #5831: permissions
+	// #6113: GET files/operations/{oid} is relayed through the device manager (devicewire.Routes).
 }

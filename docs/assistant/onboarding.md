@@ -166,9 +166,9 @@ This round's goal: **"Add computer" in the app is enough**, without `/admin`, en
 4. **Visible receipts**: when a device generates a computer code, a new device redeems an app code, or a new computer connects, notify other paired devices with "Not you? Revoke" (revocation endpoint already exists). Today this only appears in hub logs (`pairing.go:187`).
 5. Send the link to that computer, with a screen for its OS:
    - **Linux**: a single command containing the link (`install.sh --node --pair '<link>'`, already exists), "Copy" + "Open a terminal on that computer, paste, and press Enter."
-   - **Mac**: "Download Persona Link" (before decision 1, link to `docs/operations/persona-link-install.md` and honestly say "Currently requires building it yourself") + "Send this link to that computer" (system share). Persona Link registers both `persona` and `persona` URL schemes; opening a link shows and prefills the pairing window (today `apple/PersonaLink/Info.plist` has no URL scheme). Hub still sends `persona://link?…` (`pairing.go:57`), recognized by old Persona Link and node.
-   - **Windows**: provide commands from `docs/operations/windows.md`; explain the tray app is still in development (#299).
-6. `personad hub pair --machine <id>`: if the machine does not exist, `--add [--name]` adds it automatically; without it, ask "Add --add," rather than returning 400 `hub.json has no machine …`. Update Persona Link's pairing window and `install.sh` instructions accordingly.
+   - **Mac**: "Install Persona Link" ([installation guide](../operations/persona-link-install.md), which honestly says when a local build is required) + "Send this link to that computer" (system share). The independent Link service is paired with the optional desktop setup or the `persona-link pair` command; the old menu bar pairing window is retired. Hub still sends `persona://link?…` (`pairing.go:57`), recognized by Persona Link and node.
+   - **Windows**: provide commands from `docs/operations/windows.md`; the independent scheduled task does not require a tray app.
+6. `personad hub pair --machine <id>`: if the machine does not exist, `--add [--name]` adds it automatically; without it, ask "Add --add," rather than returning 400 `hub.json has no machine …`. Update the independent Link pairing flow and `install.sh` instructions accordingly.
 7. Old hubs without TLS: 409 `tls_required` + action `enable_tls`; the app says "Hub has not enabled secure connections, so computers cannot join." If managed, enable and restart in one tap.
 8. **Member hubs in linked hubs**: app codes are currently forwarded to the primary hub (`pairing.go:161-164`); the computer flow is undecided. This round, adding a computer from a member-hub device returns 409 `mesh_member`, "Add it on the primary hub." New users will not reach this.
 
@@ -670,7 +670,7 @@ Separate P1 issues: "Chat only" mode (after decision 9), node `claude.install`, 
 ### 7.3 iOS / macOS work assigned to a Mac
 
 Each issue references the protocol in section 5 and states "The Linux development machine cannot compile Swift; note in the PR if Xcode 26.0 was not verified." UI uses only the design system (`.surface`, `EmptyStateView(action:)`, `Theme.*`); do not raise the `TokenRatchetTests` baseline. Single-line buttons; light and dark screenshots.
-The native Mac app is frozen ([mac.md](../apple/mac.md)): in M1–M4 and M6, the Mac gets only what the shared iOS code brings, with no Mac-only work and no Mac screenshots or acceptance beyond keeping an existing Mac flow working (M2's paste-link pairing). M5 is Persona Link, which is not frozen.
+The retired native Mac app was frozen ([mac.md](../archive/apple/mac.md)): in M1–M4 and M6, it received only what the shared iOS code brought. M5 is Persona Link, which remains independently installable and is not frozen ([desktop.md](../desktop/desktop.md)).
 
 | # | Title | Changes | Acceptance |
 | --- | --- | --- | --- |

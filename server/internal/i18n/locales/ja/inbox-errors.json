@@ -16,6 +16,12 @@
   "bulk_limit": "一度に指定した項目が多すぎます。分けて操作してください。",
   "bulk_done_required": "処理状態と項目一覧を指定してください。",
   "bulk_action": "アーカイブ、無視、再度開くのいずれかを選択してください。",
+  "todo_read_only": "この端末ではToDoを変更できません。",
+  "merge_too_few_rows": "まとめるには2件以上を選んでください。",
+  "merge_none": "まとめられる項目がありません。すでに削除またはまとめ済みです。",
+  "merge_failed": "まとめを保存できませんでした。変更はありません。",
+  "todo_targets": "ToDoに追加する項目を選んでください。",
+  "todo_suggestion": "ToDoにはタイトルと、読み取れる期限が必要です。",
   "bulk_targets": "項目のID一覧またはフィルターを指定してください。",
   "bulk_filter": "フィルターでアーカイブするには一覧の時刻が必要です。再度開くには項目IDを指定してください。",
   "document_only": "状態を変更できるのはドキュメント項目のみです。",
@@ -37,5 +43,8 @@
   "history_limit": "limit は1〜{max}の数値にしてください。",
   "history_cursor": "before はRFC 3339形式の時刻にしてください。before_id は before と一緒に指定します。",
   "history_zone": "tz にはタイムゾーン名（例: Europe/Berlin）を指定してください。",
-  "bad_folder": "フォルダのパスには少なくとも 1 つの名前が必要です。"
+  "bad_folder": "フォルダのパスには少なくとも 1 つの名前が必要です。",
+  "session_ref_required": "session には machine_id と session_id が必要です。",
+  "handoff_kind": "kind は agent または conversation にしてください。",
+  "handoff_record_text": "session を指定する場合は text を空にしてください。"
 }

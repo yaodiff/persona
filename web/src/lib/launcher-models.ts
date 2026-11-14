@@ -10,7 +10,7 @@ import type { ModelBinding } from "./model-config";
 import type { PanelPrice } from "./model-panel";
 import { EFFORTS } from "./session-actions";
 import { launcherTitle, type Named } from "./provider-names";
-import type { Launcher } from "./types";
+import type { Launcher, Session } from "./types";
 
 export interface AgentModel {
   /** What a start sends as `model` (Claude Code's aliases too: opus, sonnet…). */
@@ -24,11 +24,18 @@ export interface AgentModel {
   /** Thinking efforts it takes, weakest first; none: no effort setting. */
   efforts?: string[];
   default_effort?: string;
+  /** Native speed choices (Codex serviceTiers), preserved rather than inferred from the model name. */
+  service_tiers?: Session["service_tiers"];
   /** An ID the user typed before that ran here, remembered on the hub for this computer and launcher (#1644): listed
    *  after the agent's own, most recent first, with no efforts (not known). It can be forgotten. */
   custom?: boolean;
   /** Exact catalog reference price in USD per one million tokens, when the hub knows it. */
   price?: PanelPrice;
+}
+
+/** Whether this catalog row natively offers Codex's Fast tier. */
+export function modelSupportsFast(m: AgentModel | undefined): boolean {
+  return Boolean(m?.service_tiers?.some((tier) => tier.id === "priority"));
 }
 
 export interface LauncherModels {
@@ -185,6 +192,14 @@ export function launcherAgent(name: string, launchers: Launcher[], list?: Launch
   if (list?.agent) return list.agent;
   const l = launchers.find((x) => x.name === name);
   return l?.agent_type || l?.agent || "claude";
+}
+
+/** A known terminal-compatible CLI takes text with creation. Pin its alias and host together with its kind;
+ * attachments, unknown launchers and runtime/desktop starts keep their existing negotiation. */
+export function inlineTextStart(launcher: Launcher | undefined, host: string, text: string, attachments: number) {
+  if (!launcher || launcher.source || (launcher.agent_type || launcher.agent) !== "traex"
+    || (host !== "herdr" && host !== "herdr-core") || !text.trim() || attachments !== 0) return undefined;
+  return { launcher: launcher.name, host, agentType: "traex", inlinePrompt: true } as const;
 }
 
 /** Claude Code and Antigravity start with a thinking effort and permission mode; Codex and the rest keep their own. */

@@ -140,5 +140,111 @@ class NodeCacheTests(unittest.TestCase):
             self.assertTrue(any(args[0] == 'publisher' for args in calls))
 
 
+class FailureBackoffTests(unittest.TestCase):
+    """A red main must not turn every timer firing into a full rebuild of the newest head (#7288)."""
+
+    def setUp(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        self.json = json
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.state = self.root / 'state'
+        self.config = self.root / 'config.json'
+        self.config.write_text(json.dumps({'checkout': self.directory.name, 'state_dir': str(self.state),
+                                           'repository': 'example/project', 'update_url': 'file:///example',
+                                           'publish_command': ['publisher']}))
+
+    def attempt(self, sha, fails, *flags, now=None):
+        """Run the worker against head sha; returns the build commands it ran."""
+        import subprocess
+        import time
+        from unittest.mock import patch
+        import hub_release
+        calls = []
+        clock = time.time if now is None else (lambda: now)
+
+        def run(argv, cwd, **kwargs):
+            calls.append(argv)
+            if fails and 'scripts/release/build_hub_release.py' in argv:
+                raise subprocess.CalledProcessError(1, argv)
+
+        def output(argv, cwd):
+            return sha if argv[1] == 'rev-parse' else (
+                'https://github.com/example/project.git' if argv[1] == 'remote' else '')
+        with patch('sys.argv', ['hub_release', '--config', str(self.config), *flags]), \
+                patch.object(hub_release, 'output', output), patch.object(hub_release, 'run', run), \
+                patch.object(hub_release.time, 'time', clock):
+            try:
+                hub_release.main()
+            except subprocess.CalledProcessError:
+                pass
+        return [c for c in calls if 'scripts/release/build_hub_release.py' in c]
+
+    def last(self):
+        return self.json.loads((self.state / 'last.json').read_text())
+
+    def test_backoff_grows_across_new_heads_and_caps(self):
+        from hub_release import failure_backoff
+        self.assertEqual([failure_backoff(n) // 60 for n in range(1, 7)], [15, 30, 60, 120, 120, 120])
+        start = 2_000_000_000
+        self.assertEqual(len(self.attempt('a' * 40, True, now=start)), 1)
+        self.assertEqual((self.last()['failures'], self.last()['retry_after']), (1, start + 15 * 60))
+        # A new head 12 minutes later waits instead of rebuilding.
+        self.assertEqual(self.attempt('b' * 40, True, now=start + 12 * 60), [])
+        self.assertEqual(self.last()['sha'], 'a' * 40)
+        # Once the backoff has passed the newest head is built, and the next wait doubles.
+        self.assertEqual(len(self.attempt('b' * 40, True, now=start + 16 * 60)), 1)
+        self.assertEqual((self.last()['sha'], self.last()['failures']), ('b' * 40, 2))
+        self.assertEqual(self.last()['retry_after'], start + 16 * 60 + 30 * 60)
+        self.assertEqual(self.attempt('c' * 40, False, now=start + 40 * 60), [])
+
+    def test_retry_runs_now_and_success_resets_the_count(self):
+        start = 2_000_000_000
+        self.attempt('a' * 40, True, now=start)
+        self.assertEqual(len(self.attempt('b' * 40, False, '--retry', now=start + 60)), 1)
+        self.assertEqual((self.last()['result'], self.last()['failures']), ('success', 0))
+        self.assertEqual(len(self.attempt('c' * 40, True, now=start + 120)), 1)
+        self.assertEqual((self.last()['failures'], self.last()['retry_after']), (1, start + 120 + 15 * 60))
+
+    def test_interrupted_attempt_keeps_the_count(self):
+        start = 2_000_000_000
+        self.state.mkdir()
+        (self.state / 'last.json').write_text(self.json.dumps({
+            'repository': 'example/project', 'source_branch': 'main', 'update_url': 'file:///example',
+            'sha': 'a' * 40, 'build': '202611070001', 'result': 'pending', 'failures': 3}))
+        self.assertEqual(len(self.attempt('b' * 40, True, now=start)), 1)
+        self.assertEqual((self.last()['failures'], self.last()['retry_after']), (4, start + 2 * 60 * 60))
+
+    def test_failed_attempts_are_pruned(self):
+        for index in range(8):
+            self.attempt(f'{index:x}' * 40, True, '--retry')
+        attempts = sorted(p.name for p in self.state.iterdir() if p.is_dir())
+        self.assertEqual(len(attempts), 5)
+        self.assertTrue(attempts[-1].endswith('7' * 12))
+
+    def test_go_cache_over_the_limit_is_cleaned(self):
+        from unittest.mock import patch
+        import hub_release
+        cache = self.root / 'go-build'
+        (cache / 'aa').mkdir(parents=True)
+        with (cache / 'aa' / 'entry-d').open('wb') as entry:
+            entry.truncate(3 * 2 ** 20)
+        for limit, cleaned in ((1 / 1024, True), (4 / 1024, False)):
+            calls = []
+            with patch.object(hub_release, 'output', lambda argv, cwd: str(cache)), \
+                    patch.object(hub_release, 'run', lambda argv, cwd, **kwargs: calls.append(argv)):
+                hub_release.trim_go_cache(self.root, limit)
+            self.assertEqual(calls, [['go', 'clean', '-cache']] if cleaned else [])
+
+    def test_go_cache_limit_must_be_positive(self):
+        config = self.json.loads(self.config.read_text())
+        self.config.write_text(self.json.dumps(dict(config, go_cache_limit_gib=0)))
+        with self.assertRaises(ValueError):
+            self.attempt('a' * 40, False)
+
+
 if __name__ == '__main__':
     unittest.main()

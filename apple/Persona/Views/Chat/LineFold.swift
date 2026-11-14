@@ -28,8 +28,11 @@ struct LineFold<Words: View>: View {
             measured
                 .frame(height: folds && !open ? cut : nil, alignment: .top)
                 .clipped()
-                .mask { if folds && !open { fade } else { Rectangle() } }
-                .background(alignment: .top) { probe }
+                // What is folded away takes no touches: the words run on past the fold, and the chat's upside-down list
+                // draws this row over the one below it, whose taps they took (#6645: a work line there never opened).
+                .contentShape(.rect)
+                .mask { if folds && !open { FoldFadeMask(line: cut / CGFloat(max(lines, 1))) } else { Rectangle() } }
+                .background(alignment: .top) { FoldLinesProbe(lines: lines, font: Theme.Font.body, level: .body) { cut = $0 } }
             if folds { FoldToggle(open: open, prefix: "message", action: { flip(open) }) }
         }
     }
@@ -41,28 +44,42 @@ struct LineFold<Words: View>: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full = $0 }
     }
 
-    /// `lines` lines of body text, unseen: the height the words are cut at (a paragraph has the body's line height).
-    private var probe: some View {
-        Text(verbatim: Array(repeating: "X", count: lines).joined(separator: "\n"))
-            .font(Theme.Font.body)
-            .lineHeight(.body)
-            .fixedSize(horizontal: false, vertical: true)
-            .hidden()
-            .accessibilityHidden(true)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cut = $0 }
-    }
-
-    /// Opaque down to the last line shown, which fades out.
-    private var fade: some View {
-        VStack(spacing: 0) {
-            Rectangle()
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                .frame(height: cut / CGFloat(max(lines, 1)))
-        }
-    }
-
     private func flip(_ open: Bool) {
         Haptics.tap()
         toggleInPlace(pin, id, animation: Theme.Motion.state, closing: open) { OpenReports.shared.set(key, !open) }
+    }
+}
+
+/// `lines` lines of the words' type, unseen and measured: the height a fold cuts its words at (`LineFold`, `CardFold`).
+struct FoldLinesProbe: View {
+    var lines: Int
+    var font: Font
+    /// The line height the words are drawn with (`lineHeight(_:)`); nil: the font's own (code).
+    var level: Theme.Level?
+    var measured: (CGFloat) -> Void
+
+    var body: some View {
+        spaced(Text(verbatim: Array(repeating: "X", count: max(lines, 1)).joined(separator: "\n")).font(font))
+            .fixedSize(horizontal: false, vertical: true)
+            .hidden()
+            .accessibilityHidden(true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measured($0) }
+    }
+
+    @ViewBuilder private func spaced(_ text: some View) -> some View {
+        if let level { text.lineHeight(level) } else { text }
+    }
+}
+
+/// A fold's mask: opaque down to the last line shown, which fades out (`LineFold`, `CardFold`).
+struct FoldFadeMask: View {
+    /// One line's height: the fade.
+    var line: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: line)
+        }
     }
 }

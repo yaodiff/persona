@@ -1,14 +1,14 @@
 #!/bin/bash
 # Public, local-runnable Apple checks. Requires macOS 26, Xcode 26.0.x,
 # XcodeGen, Python 3 and rsync. No developer account, hub or personal config.
-# Usage: scripts/ci/apple.sh [all|ios|macos|packages]
+# Usage: scripts/ci/apple.sh [all|ios|packages]
 # CI: macos-26, DEVELOPER_DIR=/Applications/Xcode_26.0.1.app/Contents/Developer.
 # Cache CI_SPM_CACHE (default ~/Library/Caches/persona-ci/spm); keep the printed
 # output directory's *.xcresult bundles when investigating failures.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 LANE="${1:-all}"
-case "$LANE" in all|ios|macos|packages) ;; *) printf 'Usage: %s [all|ios|macos|packages]\n' "$0" >&2; exit 2 ;; esac
+case "$LANE" in all|ios|packages) ;; *) printf 'Usage: %s [all|ios|packages]\n' "$0" >&2; exit 2 ;; esac
 [ "$#" -le 1 ] || { printf 'apple-ci: too many arguments\n' >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { printf 'apple-ci: FAIL requires macOS 26 and Xcode 26.0.x\n' >&2; exit 1; }
 for tool in python3 xcodebuild xcrun xcodegen rsync git; do
@@ -85,6 +85,7 @@ PY
 # These are explicitly public synthetic values; persona_config never opens the
 # developer's config. DEVELOPER_DIR already selected above wins in its env helper.
 export PERSONA_META_WEARABLES=NO
+ci_run 'Build PersonaCore XCFramework before package resolution' 1200 "$SOURCE/native/app-core/scripts/build-apple.sh"
 ci_run 'Generate public unsigned Apple config' 60 python3 "$SOURCE/scripts/persona_config.py" xcconfig
 ci_run 'Generate Apple project' 120 xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"
 [ -s "$SOURCE/apple/PersonaTests/TokenBaseline.json" ] || { printf 'apple-ci: FAIL committed token baseline missing\n' >&2; exit 1; }
@@ -104,9 +105,24 @@ result() {
 }
 
 if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
+  ci_run 'PersonaCore strict-concurrency tests and C-binding fixture replay' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaCore" --scratch-path "$SPM/PersonaCore" -Xswiftc -warnings-as-errors
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
-  # The Persona Link menu bar app's package (apple/PersonaLink): its own SwiftPM package, outside apple/project.yml.
-  ci_run 'Persona Link unit tests' 600 xcrun swift test --package-path "$SOURCE/apple/PersonaLink" --scratch-path "$SPM/PersonaLink" -Xswiftc -warnings-as-errors
+  # The live screen's video codec and capture decisions (#3954), shared by Persona Link's helper and the iOS app.
+  ci_run 'PersonaScreenKit unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaScreenKit" --scratch-path "$SPM/PersonaScreenKit" -Xswiftc -warnings-as-errors
+  # The pixel scroll record (#7775), shared by Persona Input and the iOS app, and Persona Input itself, a package apart
+  # from Persona Screen's.
+  ci_run 'PersonaInputKit unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaInputKit" --scratch-path "$SPM/PersonaInputKit" -Xswiftc -warnings-as-errors
+  ci_run 'Persona Input build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink/Input" --scratch-path "$SPM/PersonaInput" -Xswiftc -warnings-as-errors
+  # The independent Link package contains only Persona Screen; PersonaScreenKit's tests cover its capture decisions.
+  # There is no menu-bar app or separate Link UI test target to build.
+  # Blocking calls on the main actor (docs/apple/performance.md, "Automated checks"). The lint is built in a fixed
+  # folder beside its build output: the snapshot above moves on every run, and a package whose folder moved is rebuilt
+  # from scratch, swift-syntax included (seen with Xcode 27.2). Unchanged files keep their times (no -t), so an
+  # unchanged lint is not rebuilt at all. One release build serves the tests and the check (no testable imports).
+  mkdir -p "$SPM/IsolationLint/package"
+  ci_run 'Stage isolation lint package' 60 rsync -rlp --checksum --delete "$SOURCE/scripts/test/isolation-lint/" "$SPM/IsolationLint/package/"
+  ci_run 'Isolation lint unit tests' 900 xcrun swift test -c release --disable-testable-imports --package-path "$SPM/IsolationLint/package" --scratch-path "$SPM/IsolationLint/build"
+  ci_run 'Blocking calls on the main actor (isolation lint)' 300 "$SPM/IsolationLint/build/release/isolation-lint" --root "$SOURCE" --baseline "$SOURCE/scripts/test/apple_isolation_baseline.json"
 fi
 if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
@@ -135,6 +151,10 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
     -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-device" \
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  # A phone's main thread has a 1 MB stack, the simulator's 8 MB: view functions with big fixed frames in this Debug
+  # device build fail here (#6735; MainPagesStackTests measures the run-time part in the simulator).
+  ci_run 'Debug view stack frames (device build)' 300 python3 "$CI_ROOT/scripts/ci/apple_stack_frames.py" \
+    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"
 
   IOS_COMMON=("${XCODE[@]}" -scheme Persona -derivedDataPath "$OUTPUT/ios-tests" \
     -parallel-testing-enabled NO -disableAutomaticPackageResolution "${TEST_SIGNING[@]}")
@@ -216,27 +236,4 @@ PY
     -resultBundlePath "$OUTPUT/ios-html-security.xcresult" test
   result ios-html-security AssistantHTMLSecurityTests
   ci_run 'Verify token baseline was not rewritten' 60 cmp "$CI_ROOT/apple/PersonaTests/TokenBaseline.json" "$SOURCE/apple/PersonaTests/TokenBaseline.json"
-fi
-if [ "$LANE" = all ] || [ "$LANE" = macos ]; then
-  ci_run 'Require macOS SDK' 60 xcrun --sdk macosx --show-sdk-version
-  resolve PersonaMac
-  ci_run 'Unsigned macOS app and notification extension build' 1800 "${XCODE[@]}" -scheme PersonaMac \
-    -destination 'generic/platform=macOS' -derivedDataPath "$OUTPUT/macos-build" \
-    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
-  # The real unsigned build above keeps all shipping entitlements. A Mac ad-hoc
-  # test host cannot claim profile-authorized push or shared Keychain groups:
-  # AMFI rejects it before main, even when codesign --verify succeeds. Prepare
-  # only the disposable snapshot for offline execution; retain its sandbox,
-  # other permissions, hardened-runtime settings and ad-hoc signatures.
-  ci_run 'Prepare profile-free Mac offline test entitlements' 60 python3 "$CI_ROOT/scripts/ci/apple_entitlements.py" \
-    "$SOURCE/apple/Mac/Resources/PersonaMac.entitlements" \
-    "$SOURCE/apple/PersonaNotify/PersonaMacNotify.entitlements"
-  printf '%s\n' 'apple-ci: excluded Mac integration suites: ExtensionStreamSnapshotTests (5 live extension/hub cases requiring PERSONA_STREAM_TEST_PAIR); OldHubCompatibilityIntegrationTests (old-hub lab requiring PERSONA_COMPAT_TEST_URL, excluded on iOS too). Mac UI/screenshot tests are a separate lane.'
-  ci_run 'macOS offline unit tests' 1800 "${XCODE[@]}" -scheme PersonaMac \
-    -destination 'platform=macOS' -derivedDataPath "$OUTPUT/macos-tests" -parallel-testing-enabled NO \
-    -disableAutomaticPackageResolution "${TEST_SIGNING[@]}" \
-    -only-testing:PersonaMacTests -skip-testing:PersonaMacTests/ExtensionStreamSnapshotTests \
-    -skip-testing:PersonaMacTests/OldHubCompatibilityIntegrationTests \
-    -resultBundlePath "$OUTPUT/macos-unit.xcresult" test
-  result macos-unit
 fi

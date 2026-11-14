@@ -7,7 +7,9 @@ import kotlinx.serialization.Serializable
 import persona.core.contracts.InboxChainEntry
 import persona.core.contracts.InboxHandling
 import persona.core.contracts.InboxSuggestion
+import persona.core.contracts.SessionKey
 import persona.core.designsystem.LocalizedFormats
+import persona.core.designsystem.Status
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.ChatRoute
@@ -17,16 +19,24 @@ import java.time.ZoneId
 import java.util.Locale
 
 // Inbox phase 1 (docs/assistant/inbox.md"Events, handling chains, and suggestions", docs/android/android.md"Inbox: events, suggestions, and handling chains"): the pure parts of
-// how an event reads in the list and on its page. An item from an older hub has no event fields and none of this applies:
-// its row and its page are what they were.
+// how an event reads in the list and on its page. Older items have no event sections; chat and mail still open the detail
+// so their originals stay unmounted until an explicit source action.
 
-/** An event's own page: Summary, Recap, the suggestion with its buttons, the Handling chain; "View original" opens the item's source page. */
+/** An item's detail page: event sections when present, with "View original" opening the source above it. */
 @Serializable @SerialName("persona.feature.inbox.InboxEventRoute")
 data class InboxEventRoute(val itemId: String) : NavKey
 
-/** Opening [record] from the list: its event page when the hub sent event fields, else its own page as before. */
-fun inboxRowPage(record: InboxRecord, pages: InboxItemPages): NavKey =
-    if (record.event.present) InboxEventRoute(record.item.id) else pages.open(record)
+/**
+ * Opening [record] from the list: its detail for event fields or a chat/mail original, so merely opening it cannot
+ * acknowledge the source. Other legacy items retain their own pages. Explicit source links still use [pages] directly.
+ */
+fun inboxRowPage(record: InboxRecord, pages: InboxItemPages): NavKey {
+    if (record.event.present) return InboxEventRoute(record.item.id)
+    return when (inboxItemPage(record)) {
+        is LarkRoute, is MailRoute -> InboxEventRoute(record.item.id)
+        else -> pages.open(record)
+    }
+}
 
 /** The words for a processing conversation that is on it (In progress): AI is reviewing, Agent is working, Waiting for reply. */
 @StringRes
@@ -47,6 +57,21 @@ internal sealed interface EventMark {
     data class Suggests(@StringRes val kind: Int, val line: String) : EventMark
     /** The manager failed or timed out: back in Needs you without a suggestion. */
     data class Failed(val reason: String?) : EventMark
+    /** The shared `now` words; an unknown key never reaches this variant and keeps the old mark. */
+    data class Now(val text: String, val status: Status, val problem: Boolean = false, val key: String? = null) : EventMark
+}
+
+/** The processing conversation, from the handling record or its handling-chain entry, when the hub gave both ids. */
+internal fun inboxProcessingSession(record: InboxRecord): SessionKey? {
+    record.event.handling?.let {
+        if (!it.machineId.isNullOrBlank() && !it.sessionId.isNullOrBlank()) return SessionKey(it.machineId!!, it.sessionId!!)
+    }
+    val entry = record.event.chain.lastOrNull {
+        it.kind == "handling" && it.link?.let { link ->
+            link.type == "session" && !link.machineId.isNullOrBlank() && !link.sessionId.isNullOrBlank()
+        } == true
+    } ?: return null
+    return SessionKey(entry.link!!.machineId!!, entry.link!!.sessionId!!)
 }
 
 internal fun eventMark(record: InboxRecord): EventMark? {
@@ -94,9 +119,9 @@ internal fun suggestionButtons(suggestion: InboxSuggestion): SuggestionButtons =
 internal fun confirmText(suggestion: InboxSuggestion, edited: String?): String? =
     edited?.trim()?.takeIf { it.isNotEmpty() && it != suggestion.text.trim() }
 
-/** The chain as shown: only the newest entry while collapsed, else all of it, oldest first. */
+/** The chain as shown: the three newest entries while collapsed, else all of it, oldest of the shown entries first. */
 internal fun shownChain(chain: List<InboxChainEntry>, expanded: Boolean): List<InboxChainEntry> =
-    if (expanded || chain.size <= 1) chain else chain.takeLast(1)
+    if (expanded || chain.size <= 3) chain else chain.takeLast(3)
 
 /** What tapping a chain entry does. */
 internal sealed interface ChainTarget {
@@ -155,9 +180,9 @@ internal fun chainIcon(kind: String, record: InboxRecord): PhIcon = when (kind) 
     else -> PhIcons.Info
 }
 
-/** A chain entry's time: the clock today, the date and the clock before. */
+/** A chain entry's time: the 24-hour clock today, the localized short date and 24-hour clock before. */
 internal fun chainTime(value: String?, locale: Locale, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
     val at = value?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return ""
     val today = at.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()
-    return LocalizedFormats.format(at, if (today) LocalizedFormats.TIME else LocalizedFormats.MONTH_DAY_TIME, locale, zone)
+    return LocalizedFormats.format24(at, if (today) LocalizedFormats.TIME_24 else LocalizedFormats.MONTH_DAY_TIME_24, locale, zone)
 }

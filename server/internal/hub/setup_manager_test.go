@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // setupSteps are the step lines of a --json run, by step.
@@ -378,6 +379,7 @@ func TestSetupBuiltinManagerProblems(t *testing.T) {
 
 func TestSetupFlagsConflict(t *testing.T) {
 	setupTestHome(t)
+	pinSetupLang(t, i18n.ZhHans)
 	var out, errOut bytes.Buffer
 	if err := SetupCommand(context.Background(), []string{"--no-service", "--manager-service"}, &out, &errOut); err == nil || !strings.Contains(err.Error(), "--manager-service") {
 		t.Fatalf("%v", err)

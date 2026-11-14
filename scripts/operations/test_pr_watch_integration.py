@@ -72,8 +72,12 @@ sys.exit(code)
 FAKE_REVIEWER = r'''
 import json, os, sys
 findings = json.loads(os.environ.get("FAKE_REVIEW_FINDINGS", "[]"))
+prompt = sys.stdin.read()
+assert "independent code reviewer" in prompt
+assert "fix.py" in prompt
+assert "diff --git" in prompt
 with open(os.environ["FAKE_GH_LOG"], "a") as log:
-    log.write(json.dumps({"reviewer": sys.argv[1:], "cwd": os.getcwd(), "findings": findings}) + "\n")
+    log.write(json.dumps({"reviewer": sys.argv[1:], "cwd": os.getcwd(), "prompt": prompt, "findings": findings}) + "\n")
 result = {"subtype": "success", "is_error": False, "permission_denials": [],
           "structured_output": {"findings": findings}}
 print(json.dumps(result))

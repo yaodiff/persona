@@ -211,6 +211,39 @@ func TestMachineCallGatesAssistantConfigDir(t *testing.T) {
 	}
 }
 
+func TestMachineCallGatesAssistantServiceTier(t *testing.T) {
+	d := newTestDevices(t)
+	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
+	without := current("old")
+	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == nodeproto.AssistantServiceTier })
+	for _, info := range []proto.NodeInfo{current("new"), without, {Version: "pre-handshake", ModelConfiguration: true}} {
+		m.mu.Lock()
+		m.info, m.online = info, true
+		m.mu.Unlock()
+		for _, tier := range []string{"", "priority"} {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // no peer: a call the gate lets through cannot start anything
+			var re *rpc.Error
+			err := m.call(ctx, "assistant.send", map[string]any{"service_tier": tier}, nil)
+			refused := errors.As(err, &re) && re.Code == proto.CodeNodeOutdated
+			want := tier != "" && !nodeHas(info, nodeproto.AssistantServiceTier)
+			if refused != want {
+				t.Fatalf("%s service_tier=%q: refused=%v want=%v: %v", info.Version, tier, refused, want, err)
+			}
+		}
+	}
+	// The new field is not a session.send option; that established path is unchanged.
+	m.mu.Lock()
+	m.info = without
+	m.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var re *rpc.Error
+	if err := m.call(ctx, "session.send", map[string]any{"service_tier": "priority"}, nil); errors.As(err, &re) && re.Code == proto.CodeNodeOutdated {
+		t.Fatal("an unrelated session.send gained the assistant-start gate")
+	}
+}
+
 func TestNodeInfoHandshakeIsOptionalOnTheWire(t *testing.T) {
 	// An old node's node.info (no handshake fields) still decodes, and an old manager's decoder ignores the new ones.
 	var info proto.NodeInfo

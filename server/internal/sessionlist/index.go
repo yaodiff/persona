@@ -38,9 +38,10 @@ type Item struct {
 	// Private: a row a reader with Options.NoPrivate is never shown, in its rows, totals or counts (a health-space
 	// conversation, which an extension's token does not see).
 	Private bool
-	// Fold is the item's place in the session hierarchy (#5120); nil for an item folded under none that shows its own
-	// State and BackgroundWaiting, as every item without children does. It sits behind a pointer to keep Item in its
-	// allocation size class: an adapter builds a whole batch as one []Item, as the hub does on every pass.
+	// Fold is the item's optional per-row metadata: its place in the session hierarchy (#5120) and its open to-do
+	// (#6662). Nil for an item with neither, which shows its own State and BackgroundWaiting. It sits behind a pointer
+	// to keep Item in its allocation size class: an adapter builds a whole batch as one []Item, as the hub does on every
+	// pass.
 	Fold       *Fold
 	UpdatedAt  time.Time
 	SearchText string
@@ -48,15 +49,16 @@ type Item struct {
 	Full       any
 }
 
-// Fold is how an Item folds. Root is the session id (as parent_session_id names it, not the composite ID) of the item
-// on the same Machine this one is folded under (a child session under its topmost listed ancestor), only when that
-// item is in the same batch; State is the state the item shows with the items folded under it ("" for its own);
-// BackgroundWaiting is Item.BackgroundWaiting for Options.Roots: none of the items folded under it works or needs the
-// user either. Options.Roots leaves out the items with a Root and filters and counts the others by their folded state;
-// Options.Under selects the items folded under one. Like the rest of an Item it is immutable once handed to Replace:
-// copies of the item share it.
+// Fold is how an Item folds and the open to-do it is on. Root is the session id (as parent_session_id names it, not the
+// composite ID) of the item on the same Machine this one is folded under (a child session under its topmost listed
+// ancestor), only when that item is in the same batch; State is the state the item shows with the items folded under it
+// ("" for its own); BackgroundWaiting is Item.BackgroundWaiting for Options.Roots: none of the items folded under it
+// works or needs the user either. Todo is the id of the open to-do the row is on ("" for none): what Options.Todo
+// selects and Counts.Todo counts. The adapter knows which to-dos are open; the index only compares ids. Options.Roots
+// leaves out the items with a Root and filters and counts the others by their folded state; Options.Under selects the
+// items folded under one. Like the rest of an Item it is immutable once handed to Replace: copies of the item share it.
 type Fold struct {
-	Root, State       string
+	Root, State, Todo string
 	BackgroundWaiting bool
 }
 
@@ -68,11 +70,24 @@ func (v *Item) root() string {
 	return v.Fold.Root
 }
 
+// todo is the open to-do v is on ("" for none).
+func (v *Item) todo() string {
+	if v.Fold == nil {
+		return ""
+	}
+	return v.Fold.Todo
+}
+
 // Options selects a filtered full list or an incremental change list. Limit zero
 // means the default. Cursor binds the filters, Summary, and Since, but not Limit.
 // ID is an adapter-supplied exact composite identity, not a public query key;
 // it selects at most one row and cannot be combined with Cursor or Since.
 type Options struct {
+	// Search is the runtime palette's opt-in grammar. Context is captured only on
+	// the first page; AllowedMachines is an adapter-owned authorization boundary.
+	Search                                                                             string
+	SearchContext                                                                      *SearchContext
+	AllowedMachines                                                                    []string
 	Limit                                                                              int
 	ID, Cursor, Since, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
 	// Manager selects the rows of the batches replaced with that owner (ReplaceOwned); like the other filters, a
@@ -96,18 +111,31 @@ type Options struct {
 	// every pair with a machine.
 	Places []Place
 	Spaces []Place
+	// Todo (todo=<id>) selects the items on that to-do; TodoNone (todo=none) the items on none. Both bind a cursor as
+	// the other filters do (#6662).
+	Todo string
+	// Waiting (waiting=1) selects the items that only wait in the background (BackgroundWaiting, by their folded state
+	// with Roots), waiting=0 the others: with state=working, the sidebar's "Waiting in the background" and "Working"
+	// quick filters. ExcludePaneSource (exclude_pane_source=<origin>) leaves out the items of that origin (the
+	// sidebar's hidden botmux sessions). Both bind a cursor as the other filters do (#6662).
+	Waiting           string
+	ExcludePaneSource string
 }
+
+// TodoNone is the todo value that selects the items on no to-do: no to-do id is spelled so ("todo_<hex>").
+const TodoNone = "none"
 
 // Page contains transport values rather than adapter-specific session types.
 // Total is the filtered membership at Revision, not the number of delta events.
 // Sessions and Remove together consume Limit slots in an incremental page.
 type Page struct {
-	Sessions   []any    `json:"sessions"`
-	Remove     []string `json:"remove"`
-	HasMore    bool     `json:"has_more"`
-	NextCursor string   `json:"next_cursor,omitempty"`
-	Revision   string   `json:"revision"`
-	Total      int      `json:"total"`
+	SearchHits map[string]SearchHit `json:"search_hits,omitempty"`
+	Sessions   []any                `json:"sessions"`
+	Remove     []string             `json:"remove"`
+	HasMore    bool                 `json:"has_more"`
+	NextCursor string               `json:"next_cursor,omitempty"`
+	Revision   string               `json:"revision"`
+	Total      int                  `json:"total"`
 }
 
 // Counts describes the complete filtered membership, ignoring page size.
@@ -120,6 +148,8 @@ type Counts struct {
 	Group      map[string]int `json:"group"`
 	State      map[string]int `json:"state"`
 	PaneSource map[string]int `json:"pane_source,omitempty"`
+	// Todo counts the items by Fold.Todo, "" for the items on no to-do (#6662).
+	Todo map[string]int `json:"todo"`
 	// BackgroundWaiting: how many of State["working"] only wait in the background (#6045): a client that shows them
 	// apart takes them out of its Working count.
 	BackgroundWaiting int    `json:"background_waiting,omitempty"`
@@ -145,8 +175,9 @@ func (e *Error) Error() string { return e.Code + ": " + e.message }
 func failure(code, message string) error { return &Error{Code: code, message: message} }
 
 type record struct {
-	item   Item
-	search string
+	searchDocument *searchRecord // lazy immutable projection; Item remains in its allocation class
+	item           Item
+	search         string
 	// owner is the manager its batch was replaced with (ReplaceOwned), "" for none: what filters.Manager selects by.
 	// It is the batch's, not an Item attribute, so the items an adapter builds for every update stay the size they were.
 	owner string
@@ -159,13 +190,14 @@ type journalEntry struct {
 }
 
 type filters struct {
-	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under string
+	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo, Waiting, ExcludePaneSource string
 	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
 	Places, Spaces   string
 	Roots, NoPrivate bool
 }
 
 type binding struct {
+	Search, AllowedMachines string
 	filters
 	Summary bool
 	Since   string
@@ -183,9 +215,10 @@ type event struct {
 }
 
 type result struct {
-	events  []event
-	counts  Counts
-	ordered bool // counts-only views must not be mistaken for an empty ordered list
+	searchHits map[string]SearchHit
+	events     []event
+	counts     Counts
+	ordered    bool // counts-only views must not be mistaken for an empty ordered list
 }
 
 type cacheEntry struct {

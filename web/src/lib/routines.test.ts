@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { initI18n } from "../i18n";
 import {
   taskConversations,
   blankTask, clockLabel, dayLabel, everyLabel, fromLocalInput, fromTemplate, lastRunText, momentLabel, nextHour, nextText, normalizeDays,
@@ -22,14 +23,26 @@ describe("words", () => {
     expect(normalizeDays([3, 1, 9, 1])).toEqual([1, 3]);
   });
 
-  it("says a clock time as Reminders does", () => {
-    expect(clockLabel("09:00")).toBe("上午 9:00");
-    expect(clockLabel("08:45")).toBe("早上 8:45");
-    expect(clockLabel("12:30")).toBe("中午 12:30");
-    expect(clockLabel("17:00")).toBe("下午 5:00");
-    expect(clockLabel("21:30")).toBe("晚上 9:30");
-    expect(clockLabel("00:15")).toBe("凌晨 12:15");
+  it("says a clock time the way the next run says it, 24-hour", () => {
+    expect(clockLabel("09:00")).toBe("09:00");
+    expect(clockLabel("12:30")).toBe("12:30");
+    expect(clockLabel("17:00")).toBe("17:00");
+    expect(clockLabel("00:15")).toBe("00:15");
     expect(clockLabel("9:00")).toBe("9:00"); // not HH:MM: left as it is
+  });
+
+  it("writes a daily rule's time and its next run's time alike, in every language", async () => {
+    const daily = task({ repeat: "daily", time: "17:00", weekdays: [5], next_run: iso(at(6, 17)) });
+    const time = (s: string) => s.match(/\d{1,2}:\d{2}(\s?[AP]M)?/)?.[0];
+    try {
+      for (const lang of ["zh-Hans", "en", "ja"] as const) {
+        await initI18n(lang);
+        expect(time(ruleText(daily)), lang).toBe("17:00");
+        expect(time(nextText(daily, now)), lang).toBe("17:00");
+      }
+    } finally {
+      await initI18n("zh-Hans");
+    }
   });
 
   it("says an interval", () => {
@@ -56,9 +69,9 @@ describe("words", () => {
   });
 
   it("says the rule", () => {
-    expect(ruleText(task({ repeat: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5] }))).toBe("每个工作日 上午 9:00");
-    expect(ruleText(task({ repeat: "daily", time: "22:00", weekdays: [] }))).toBe("每天 晚上 10:00");
-    expect(ruleText(task({ repeat: "daily", time: "17:00", weekdays: [5] }))).toBe("每周五 下午 5:00");
+    expect(ruleText(task({ repeat: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5] }))).toBe("每个工作日 09:00");
+    expect(ruleText(task({ repeat: "daily", time: "22:00", weekdays: [] }))).toBe("每天 22:00");
+    expect(ruleText(task({ repeat: "daily", time: "17:00", weekdays: [5] }))).toBe("每周五 17:00");
     expect(ruleText(task({ repeat: "interval", every_minutes: 30 }))).toBe("每 30 分钟");
     expect(ruleText(task({ repeat: "once", session_id: "s1" }))).toBe("一次 · 接着原来的对话");
     expect(ruleText(task({ repeat: "once" }))).toBe("一次 · 新对话");
@@ -260,7 +273,7 @@ describe("lists", () => {
     ];
     expect(upcoming(list).map((u) => [u.id, u.title, u.detail])).toEqual([
       ["c", "回电话", "跟进 · 新对话"],
-      ["a", "早报", "每个工作日 上午 9:00"],
+      ["a", "早报", "每个工作日 09:00"],
     ]);
   });
 

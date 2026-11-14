@@ -13,14 +13,10 @@ import (
 // presence for unchanged native properties. The input is strict native vocabulary;
 // assistant fields and executable/unknown properties can never be restored.
 func FitNative(raw []byte, slot UISlot, version int, lang i18n.Lang) (json.RawMessage, error) {
-	if err := wire.ValidateJSON("UIStreamView", raw); err != nil {
-		return nil, err
-	}
-	if err := wire.CheckViewJSON(raw); err != nil {
-		return nil, err
-	}
-	var view View
-	if err := json.Unmarshal(raw, &view); err != nil {
+	// Validated as UIStreamView (which holds it to View too), decoded and
+	// checked as CheckViewJSON checks it: that View is the one fitted.
+	view, err := wire.DecodeCheckedStreamViewJSON(raw)
+	if err != nil {
 		return nil, err
 	}
 	before, err := json.Marshal(view)

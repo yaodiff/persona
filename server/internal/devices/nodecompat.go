@@ -49,7 +49,7 @@ func nodeHas(info proto.NodeInfo, cap string) bool {
 		return slices.Contains(info.Capabilities, cap)
 	}
 	switch cap {
-	case nodeproto.AssistantConfigDir, nodeproto.SessionSkills:
+	case nodeproto.AssistantConfigDir, nodeproto.AssistantServiceTier, nodeproto.SessionSkills:
 		return false // these contracts arrived after the handshake
 	case nodeproto.ModelConfiguration:
 		return info.Version == "" || info.ModelConfiguration // "": a test's or a dev node that said nothing

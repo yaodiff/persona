@@ -26,6 +26,12 @@ struct AnsweredTests {
         #expect(partialLines[1].answer == "（未回答）")
     }
 
+    @Test func cancellingAQuestionYieldsTheAndroidWording() {
+        let q = Question(question: "发吗？", header: nil, multiSelect: false, options: [])
+        let ix = Interaction(id: "ix-cancel", machineID: "m", sessionID: "s", kind: .question, questions: [q])
+        #expect(Answered.answerLines(ix, .cancelled) == [AnswerLine(label: "", answer: "已关闭提问，未回复")])
+    }
+
     @Test func planApprovalsAndFeedbacks() {
         let ix = Interaction(id: "ix3", machineID: "m", sessionID: "s", kind: .plan)
         let r1 = Resolution(approve: true, mode: "acceptEdits")

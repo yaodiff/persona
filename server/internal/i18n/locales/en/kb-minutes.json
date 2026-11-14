@@ -8,9 +8,12 @@
   "decisions": "Decisions",
   "actions": "Action items",
   "open": "Open questions",
+  "conclusions": "Core conclusions",
+  "decided": "Decided: ",
   "who": " ({who})",
   "owner": "{who}: ",
   "by": " ({by})",
   "photo": " (photo {n})",
-  "partial": "The transcript was too long: its end is not in these minutes."
+  "partial": "The transcript was too long: its end is not in these minutes.",
+  "ai_note": "AI-generated from the recording. Check anything important."
 }

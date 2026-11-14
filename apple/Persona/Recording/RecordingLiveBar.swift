@@ -3,20 +3,18 @@ import SwiftUI
 
 /// The live sheet's bottom bar (docs/design/proposals/meeting-recording.md section 4C, items 6 and 7): pinned under the
 /// thumb whatever is scrolled. Ask Persona is the only solid control (when Persona attends), with the keyboard button
-/// beside it; Pause or Continue, Stop and Bookmark are three standard buttons, icon over label. At accessibility sizes the
-/// bar stacks Ask Persona and Stop, with a More menu for the rest, every label on one line.
+/// beside it; Pause or Continue, Stop and Bookmark are three standard buttons, icon over label.
 ///
 /// A typed question is written in the bar itself (#4486, DESIGN_SYSTEM.md 4.4): the keyboard button opens a row over Ask
 /// Persona with the composer's field and send button, so the timeline and the answers so far stay in sight above the
 /// keyboard. The keyboard button becomes Cancel while the row is open; while its field has the keyboard, Pause, Stop and
-/// Bookmark step aside (at accessibility sizes Ask Persona too, and the row has its own Cancel).
+/// Bookmark step aside.
 ///
 /// Stop asks first (verb: Stop everywhere): a stopped recording cannot be continued. The Live Activity's Stop stays one tap.
 struct RecordingLiveBar: View {
     var entry: RecordingEntry
     var paused: Bool
 
-    @Environment(\.dynamicTypeSize) private var size
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var capture = RecordingCapture.shared
     @State private var ask = MeetingAsk.shared
@@ -37,7 +35,7 @@ struct RecordingLiveBar: View {
             if attends, typing {
                 questionRow.transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if size.isAccessibilitySize { stacked } else { standard }
+            standard
         }
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
@@ -80,53 +78,12 @@ struct RecordingLiveBar: View {
         }
     }
 
-    /// Accessibility sizes: Ask Persona full width, then Pause or Continue, Stop and More side by side as icons (their names
-    /// are their accessibility labels), so the bar is two rows tall whatever the text size and Pause stays one tap away.
-    @ViewBuilder private var stacked: some View {
-        if !writing { stackedControls.transition(.opacity) }
-    }
-
-    @ViewBuilder private var stackedControls: some View {
-        if attends { askButton }
-        HStack(spacing: Theme.Space.m) {
-            iconButton(paused ? String(localized: "Continue") : String(localized: "Pause"), paused ? Theme.Icon.run : Theme.Icon.pause) { togglePause() }
-                .accessibilityIdentifier("recording-pause")
-            iconButton(String(localized: "Stop [Car Play Voice Screen c7b24e]"), Theme.Icon.interrupt) { confirmingStop = true }
-                .accessibilityIdentifier("recording-stop")
-            Menu {
-                Button { addBookmark() } label: { Label("Bookmark", systemImage: Theme.Icon.pin) }
-                if attends {
-                    Button { openQuestion() } label: { Label("Type a Question", systemImage: Theme.Icon.keyboard) }
-                        .disabled(ask.busy && !typing)
-                        .accessibilityIdentifier("meeting-ask-type")
-                }
-            } label: {
-                ThemedIcon(Theme.Icon.moreMenu).font(Theme.Font.heading)
-                    .frame(maxWidth: .infinity)
-                    .scaledFrame(minHeight: Theme.Size.tapTarget)
-            }
-            .themedButton()
-            .accessibilityLabel(Text("More"))
-            .accessibilityIdentifier("recording-more")
-        }
-    }
-
-    private func iconButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            ThemedIcon(symbol).font(Theme.Font.heading)
-                .frame(maxWidth: .infinity)
-                .scaledFrame(minHeight: Theme.Size.tapTarget)
-        }
-        .themedButton()
-        .accessibilityLabel(Text(title))
-    }
-
     // MARK: Controls
 
     private var askButton: some View {
         Button { askNow() } label: {
             HStack(spacing: Theme.Space.s) {
-                if ask.busy { ProgressView() } else if !size.isAccessibilitySize { ThemedIcon(Theme.Icon.question) }
+                if ask.busy { ProgressView() } else { ThemedIcon(Theme.Icon.question) }
                 Text(ask.busy ? String(localized: "Persona is looking…") : String(localized: "Ask Persona")).lineLimit(1).minimumScaleFactor(0.6)
             }
             .font(Theme.Font.bodyStrong)
@@ -156,29 +113,17 @@ struct RecordingLiveBar: View {
 
     /// The typed question, in the bar (#4486): the hint, then the composer's field (it grows to a few lines) and its round
     /// send button, which waits for words (`MeetingQuestionField`, which the meeting page's bar shares). Return sends too.
-    /// At accessibility sizes the field takes the full width, with Cancel and send under it.
     private var questionRow: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            // At accessibility sizes the hint is several lines: while the keyboard is up it gives the room back to the
-            // timeline (the field's spoken hint keeps it).
-            if !(size.isAccessibilitySize && questionFocused) {
-                Text(questionHint)
-                    .font(Theme.Font.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("meeting-ask-hint")
-            }
+            Text(questionHint)
+                .font(Theme.Font.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("meeting-ask-hint")
             MeetingQuestionField(text: $question, focus: $questionFocused, placeholder: String(localized: "Ask about this meeting"),
-                                 sendLabel: String(localized: "Ask [Meeting Ask]"), canSend: canSend, largeTypeHint: questionHint,
-                                 // Opened by the keyboard button or More: the keyboard comes up with it.
-                                 focusOnAppear: true, send: send) {
-                // At accessibility sizes the row under the field has its own Cancel, the keyboard button being away.
-                Button { closeQuestion() } label: {
-                    Label("Cancel", systemImage: Theme.Icon.close).lineLimit(1)
-                }
-                .themedButton()
-                .accessibilityIdentifier("meeting-ask-cancel")
-            }
+                                 sendLabel: String(localized: "Ask [Meeting Ask]"), canSend: canSend,
+                                 // Opened by the keyboard button: the keyboard comes up with it.
+                                 focusOnAppear: true, send: send)
         }
     }
 

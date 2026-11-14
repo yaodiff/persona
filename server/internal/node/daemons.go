@@ -567,11 +567,12 @@ func (l *daemonLink) fromDaemon(ctx context.Context, method string, params json.
 		// a daemon lists offline is not resumed in a terminal here, a send it refuses is not handed to another runtime
 		// (the link turns that code away), and its sessions are not read from this machine's transcripts, nor are its
 		// Codex threads or its past sessions' transcripts this machine's. launchers, modes and resume need what the link
-		// does not pass on (more launchers than the config's one, caps beyond daemonCaps).
+		// does not pass on (more launchers than the config's one, caps beyond daemonCaps), and so do workspaces (a
+		// daemon's workspaces are another machine's folders).
 		if f, ok := res["features"].([]any); ok {
 			kept := []any{}
 			for _, x := range f {
-				if !slices.Contains([]any{"resume_argv", runtimeHandover, "transcript", "launchers", "modes", "resume", "codex_thread", "unlisted_transcripts"}, x) {
+				if !slices.Contains([]any{"resume_argv", runtimeHandover, "transcript", "launchers", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces"}, x) {
 					kept = append(kept, x)
 				}
 			}

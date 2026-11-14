@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -810,21 +811,40 @@ func TestMeetingAnswerReadsPhotos(t *testing.T) {
 }
 
 // A follow-up made right after a photo's delete was answered has none of its words, though the minutes were not made
-// again yet: the delete took the items citing it out of them. kb_get has none either.
+// again yet: the delete took the items citing it out of them, the summary card's too (#6563). The seed reads the
+// minutes in the card's layout, in their language: the core conclusions, each decision after "Decided:", the action
+// items without a checkbox (the minutes do not know a to-do's state), the AI note. kb_get has none of the photo either.
 func TestMeetingPhotoDeletedBeforeTheFollowup(t *testing.T) {
 	m := newMeetingFixture(t)
 	m.upload(meetingRec, 1, map[string]any{"title": "Design review", "complete": true, "ended_at": time.Now().UTC().Format(time.RFC3339),
 		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
 	m.addPhoto(meetingRec, photoBody(t, photoOne, 5, map[string]any{"text": "PHOTO-ONLY-WORDS"}))
-	m.minutesFor(meetingRec, `{"title":"Design review","points":[{"text":"PHOTO-ONLY-WORDS","photo":1},{"text":"We keep the cap","line":1}]}`)
+	m.minutesFor(meetingRec, `{"title":"Design review","headline":"The cap stays","conclusions":[{"text":"We **keep** the cap","line":1}],`+
+		`"topics":[{"title":"Board","points":[{"text":"PHOTO-ONLY-WORDS","photo":1}]},`+
+		`{"title":"Export","points":[{"text":"Entries over the cap are **dropped**","line":1}],"decisions":[{"text":"We keep the cap","line":1}]}],`+
+		`"actions":[{"what":"Send the release note","line":1}]}`)
 	m.do("DELETE", photosPath(meetingRec)+"/1", "", nil, http.StatusOK)
 	e := m.engine()
 	meeting, rec, err := e.MeetingRead(meetingRec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seed := m.s.followupSeed(context.Background(), e, rec, meeting, "Draft a summary."); strings.Contains(seed, "PHOTO-ONLY") ||
-		!strings.Contains(seed, "We keep the cap") {
+	mins, err := e.Store.ReadMinutes(meetingRec)
+	if err != nil || mins.Overview == nil {
+		t.Fatalf("minutes %+v: %v", mins, err)
+	}
+	lang := i18n.Lang(mins.Language).Or(i18n.ZhHans)
+	seed := m.s.followupSeed(context.Background(), e, rec, meeting, "Draft a summary.")
+	_, block, _ := strings.Cut(seed, "\nMinutes:\n")
+	for _, want := range []string{"The cap stays", "## " + i18n.T(lang, "kb-minutes.conclusions"), "We **keep** the cap",
+		"## Export", "Entries over the cap are **dropped**", i18n.T(lang, "kb-minutes.decided") + "We keep the cap",
+		"## " + i18n.T(lang, "kb-minutes.actions"), "] Send the release note", i18n.T(lang, "kb-minutes.ai_note")} {
+		if !strings.Contains(block, want) {
+			t.Errorf("the seed's minutes lack %q", want)
+		}
+	}
+	if strings.Contains(seed, "PHOTO-ONLY") || strings.Contains(block, "[ ]") || strings.Contains(block, "[x]") || strings.Contains(block, "## Board") ||
+		strings.Contains(block, "## "+i18n.T(lang, "kb-minutes.decisions")) {
 		t.Fatalf("seed:\n%s", seed)
 	}
 	if out, _ := runTool(m.s, "c1", "kb_get", map[string]any{"kind": "recordings", "id": meetingRec}); strings.Contains(out, "PHOTO-ONLY") {

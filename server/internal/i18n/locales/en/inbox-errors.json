@@ -16,6 +16,12 @@
   "bulk_limit": "too many items in one request",
   "bulk_done_required": "done and items are required",
   "bulk_action": "action is done, dismiss or reopen",
+  "todo_read_only": "this device cannot change to-dos",
+  "merge_too_few_rows": "pick at least two rows to merge",
+  "merge_none": "nothing to merge: the rows are gone or already merged",
+  "merge_failed": "the merge could not be saved; nothing changed",
+  "todo_targets": "pick the rows to add to to-dos",
+  "todo_suggestion": "the to-do needs a title and a due day or time that can be read",
   "bulk_targets": "either ids (items) or a filter",
   "bulk_filter": "a filter files open items as of a list: as_of is required, and reopen takes ids",
   "document_only": "only document items have a status to change",
@@ -37,5 +43,8 @@
   "history_limit": "limit must be a number from 1 to {max}",
   "history_cursor": "before must be an RFC 3339 time, and before_id comes with it",
   "history_zone": "tz must be a time zone name, such as Europe/Berlin",
-  "bad_folder": "folder must have at least one name between the slashes"
+  "bad_folder": "folder must have at least one name between the slashes",
+  "session_ref_required": "session requires machine_id and session_id",
+  "handoff_kind": "kind must be agent or conversation",
+  "handoff_record_text": "text must be empty when session is set"
 }

@@ -36,5 +36,16 @@
   "group_recent": "Recently opened",
   "previous": "Previous",
   "previous_chat": "Go back to the previous conversation",
-  "place_terminals": "Open terminals"
+  "place_terminals": "Open terminals",
+  "filter_agents_list": "Filter the Agents list by “{query}”",
+  "agent_conditions": "Agent conditions",
+  "cond_state": "Status",
+  "cond_since": "Updated",
+  "since_24h": "Last 24 hours",
+  "since_7d": "Last 7 days",
+  "since_30d": "Last 30 days",
+  "saved_searches": "Saved searches",
+  "save_search": "Save search",
+  "saved_searches_failed": "Could not load search tools.",
+  "saved_searches_retry": "Retry"
 }

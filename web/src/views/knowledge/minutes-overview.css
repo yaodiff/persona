@@ -1,0 +1,69 @@
+/* The minutes' summary card (#6563, MinutesOverview.tsx; docs/design/DESIGN_SYSTEM.md "Minutes cards (#5026)").
+ * Its tokens and the few rules of its own load with the Knowledge page, not with every first screen
+ * (src/startup-preload.ts FIRST_SCREEN_BUDGET): as Tailwind utilities in styles.css they were 325 B of every language's
+ * first screen for a page most visits never open. Everything else in the card is the design system's utilities.
+ *
+ * A group's topic cards share one of four tints, by the group's position: blue, teal, pink and gray, never a status
+ * color or the AI's. Each tint is its hue at 8% over the surface in light and 10% in dark, written out so the words, the
+ * times and the bold places on it keep 4.5:1 (--ink, --ink-2, --ink-3, --accent-ink; ui/theme-contrast.test.ts); the
+ * topic's glyph is its hue on a surface tile (3:1 at least, as an icon). A topic card is at least --minutes-card-min
+ * wide, which follows the page's text size, and a group's grid has as many columns as fit, never more than three; a
+ * card alone in its row takes the whole row. */
+:root {
+  --topic-1: var(--hue-blue);
+  --topic-2: var(--hue-teal);
+  --topic-3: var(--hue-pink);
+  --topic-4: var(--hue-gray);
+  --topic-1-tint: #ebf5ff;
+  --topic-2-tint: #ecf6f7;
+  --topic-3-tint: #fcf0f5;
+  --topic-4-tint: #f5f5f5;
+  --minutes-card-min: calc(15.5rem * var(--text-scale, 1));
+  --minutes-card-gap: 0.75rem;
+}
+.dark {
+  --topic-1-tint: #26303d;
+  --topic-2-tint: #263337;
+  --topic-3-tint: #372d34;
+  --topic-4-tint: #2f3034;
+}
+
+/* A group's tint (data-minutes-tint, its position): the cards' wash, the glyph's hue and the heading's dot. */
+[data-minutes-tint="1"] { --topic: var(--topic-1); --topic-tint: var(--topic-1-tint); }
+[data-minutes-tint="2"] { --topic: var(--topic-2); --topic-tint: var(--topic-2-tint); }
+[data-minutes-tint="3"] { --topic: var(--topic-3); --topic-tint: var(--topic-3-tint); }
+[data-minutes-tint="4"] { --topic: var(--topic-4); --topic-tint: var(--topic-4-tint); }
+.minutes-topic { background-color: var(--topic-tint); }
+.minutes-group-dot { width: 0.65em; height: 0.65em; background-color: var(--topic); }
+
+/* As many columns as cards of --minutes-card-min fit, never more than three (a card's least share is a third of the
+   row), and a card alone in its row takes the whole row: wrapped rows whose cards grow to fill them. A grid's auto-fit
+   would leave the last of three cards in two columns half a row, beside an empty cell. Cards in a row share its height.
+   The third is a pixel short, so rounding never sends a row's third card to the next row. */
+.minutes-topic-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--minutes-card-gap);
+}
+.minutes-topic-grid > .minutes-topic {
+  flex: 1 1 min(100%, max(var(--minutes-card-min), calc((100% - 2 * var(--minutes-card-gap)) / 3 - 1px)));
+}
+
+/* Marks, tiles and glyphs in em, so they grow with the page's text size as the words do. */
+.minutes-tile { width: 1.85em; height: 1.85em; color: var(--topic); }
+.minutes-glyph { width: 1.1em; height: 1.1em; }
+.minutes-mark { width: 0.95em; }
+.minutes-mark-flag { width: 0.95em; height: 0.95em; }
+.minutes-mark-dot { width: 0.45em; height: 0.45em; }
+/* A line's words keep 12em beside its time or photo; with less room the time goes under them. */
+.minutes-words { flex-basis: 12em; }
+
+/* The core conclusions lie on the AI tint, which in dark is lighter than every page background the theme colors are
+   checked on (ui/look.ts accentTokens, ui/extension-theme.ts meetContrast). There a time that cannot jump (a trimmed
+   recording) takes --ink-2, as the dark user bubble does, and one that can takes its --accent-ink 15% of the way to
+   --ink, which keeps 4.5:1 for every theme color, a persona's and an extension's included (ui/theme-contrast.test.ts). */
+.dark [data-minutes-conclusions] {
+  --ink-3: var(--ink-2);
+  --minutes-ai-accent-ink: color-mix(in srgb, var(--accent-ink) 85%, var(--ink));
+}
+.dark [data-minutes-conclusions] > ul { --accent-ink: var(--minutes-ai-accent-ink); }

@@ -238,11 +238,18 @@ nonisolated struct LarkForwardedMessage: Decodable, Identifiable, Hashable, Send
 }
 
 extension APIClient {
-    struct LarkConversations: Decodable {
+    nonisolated struct LarkConversations: Decodable, Sendable {
         var conversations: [LarkConversation]
         var nextCursor: String?
         var accountID: String? = nil
         enum CodingKeys: String, CodingKey { case conversations; case nextCursor = "next_cursor", accountID = "account_id" }
+
+        /// Filter one generic page without losing its account stamp or the way to older matching chats.
+        func unreadOnly() -> Self {
+            var page = self
+            page.conversations = conversations.filter { $0.badge > 0 }
+            return page
+        }
     }
     nonisolated struct LarkMessages: Decodable, Sendable {
         var messages: [LarkMessage]
@@ -311,9 +318,13 @@ extension APIClient {
         return try await get("/api/v1/lark/conversations", query: ["scope": scope, "cursor": cursor ?? "", "limit": "60"])
     }
     /// The browser opts into account checks without changing inbox or prefetch reads.
-    func larkConversationPage(cursor: String?, accountID: String) async throws -> LarkConversations {
-        if let source = messagingSource { return try await messagingConversations(source, cursor: cursor, pinned: false) }
-        return try await get("/api/v1/lark/conversations", query: ["scope": "chats", "cursor": cursor ?? "", "limit": "60",
+    func larkConversationPage(cursor: String?, accountID: String, scope: String = "chats") async throws -> LarkConversations {
+        if let source = messagingSource {
+            let page = try await messagingConversations(source, cursor: cursor, pinned: false)
+            // The generic messaging contract has no scope parameter. Keep its cursor even on a read-only page.
+            return scope == "unread" ? page.unreadOnly() : page
+        }
+        return try await get("/api/v1/lark/conversations", query: ["scope": scope, "cursor": cursor ?? "", "limit": "60",
             "account_bound": "1", "account_id": accountID])
     }
     func larkPinnedSnapshot() async throws -> LarkConversations {

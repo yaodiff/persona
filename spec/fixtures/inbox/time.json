@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "operation": "inbox_follow_time",
+  "time_zone": "UTC",
+  "description": "How {time} reads in a state line (now.json: look_again): follow.check_at against the current time, both in the device's time zone (UTC here), days counted by calendar day, 24-hour clock. Today: HH:mm. Tomorrow: the word for tomorrow and HH:mm. Any other day: the short month and day (and the year when it is not this year), then HH:mm, as the platform's date formatter writes them for the language.",
+  "cases": [
+    {
+      "name": "same_day",
+      "description": "Later today: the time alone.",
+      "source": [
+        "docs/assistant/inbox.md: Following up"
+      ],
+      "derived": true,
+      "input": {
+        "now": "2026-01-01T12:00:00Z",
+        "at": "2026-01-01T18:30:00Z"
+      },
+      "expected": {
+        "en": "18:30",
+        "zh-Hans": "18:30",
+        "ja": "18:30"
+      }
+    },
+    {
+      "name": "tomorrow",
+      "description": "Tomorrow: the word for tomorrow, then the time.",
+      "source": [
+        "docs/assistant/inbox.md: Following up"
+      ],
+      "derived": true,
+      "input": {
+        "now": "2026-01-01T12:00:00Z",
+        "at": "2026-01-02T09:00:00Z"
+      },
+      "expected": {
+        "en": "tomorrow 09:00",
+        "zh-Hans": "明天 09:00",
+        "ja": "明日 09:00"
+      }
+    },
+    {
+      "name": "later_this_year",
+      "description": "A later day this year: month and day, then the time.",
+      "source": [
+        "docs/assistant/inbox.md: Following up"
+      ],
+      "derived": true,
+      "input": {
+        "now": "2026-01-01T12:00:00Z",
+        "at": "2026-01-05T09:00:00Z"
+      },
+      "expected": {
+        "en": "Jan 5 09:00",
+        "zh-Hans": "1月5日 09:00",
+        "ja": "1月5日 09:00"
+      }
+    },
+    {
+      "name": "earlier_day",
+      "description": "A day already gone this year (a look-again time that has passed): month and day, then the time.",
+      "source": [
+        "docs/assistant/inbox.md: Following up"
+      ],
+      "derived": true,
+      "input": {
+        "now": "2026-03-10T12:00:00Z",
+        "at": "2026-03-09T09:00:00Z"
+      },
+      "expected": {
+        "en": "Mar 9 09:00",
+        "zh-Hans": "3月9日 09:00",
+        "ja": "3月9日 09:00"
+      }
+    },
+    {
+      "name": "next_year",
+      "description": "Another year: the year too.",
+      "source": [
+        "docs/assistant/inbox.md: Following up"
+      ],
+      "derived": true,
+      "input": {
+        "now": "2026-12-30T12:00:00Z",
+        "at": "2027-01-02T09:00:00Z"
+      },
+      "expected": {
+        "en": "Jan 2, 2027 09:00",
+        "zh-Hans": "2027年1月2日 09:00",
+        "ja": "2027年1月2日 09:00"
+      }
+    }
+  ]
+}

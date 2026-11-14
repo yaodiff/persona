@@ -14,7 +14,6 @@ struct CloseoutCard: View {
     /// pushes the conversation off the screen (as `WorkflowSection`).
     var maxHeight: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.openURL) private var openURL
     @State private var open: Bool
     @State private var detailsHeight: CGFloat = 0
@@ -147,30 +146,17 @@ struct CloseoutCard: View {
     // MARK: Details
 
     @ViewBuilder private var details: some View {
-        // Label beside value; at the accessibility sizes the label goes over its value, where the pair no longer fits.
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                ForEach(fields) { field in
-                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                        label(field.title)
-                        value(field)
-                    }
+        // On the value's first line: a link artifact is a tap target taller than its words, and a label at its
+        // top stood above them.
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Theme.Space.m, verticalSpacing: Theme.Space.sm) {
+            ForEach(fields) { field in
+                GridRow {
+                    label(field.title).gridColumnAlignment(.leading)
+                    value(field).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            // On the value's first line: a link artifact is a tap target taller than its words, and a label at its
-            // top stood above them.
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Theme.Space.m, verticalSpacing: Theme.Space.sm) {
-                ForEach(fields) { field in
-                    GridRow {
-                        label(field.title).gridColumnAlignment(.leading)
-                        value(field).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private enum FieldKind {

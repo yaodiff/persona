@@ -6,14 +6,17 @@
 // (lib/assistant-chat.ts), as before; the new-conversation page's pick goes with the conversation's start. First-screen
 // code: the panel's own data is lib/assistant-panel.ts, loaded with the panel.
 import { agentId } from "./agent-kind";
-import { conversationKey, launcherOffered, NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel } from "./assistant-chat";
-import { modelName } from "./launcher-models";
+import { conversationKey, launcherOffered, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel } from "./assistant-chat";
+import { modelName, modelSupportsFast } from "./launcher-models";
 import { providerTitle } from "./provider-names";
 import { currentModelRow, modelLabel, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
 import type { ModelPick, Session } from "./types";
 
 /** The hub keeps a Persona chat's pick (`model_pick`, PUT / DELETE …/conversations/{id}/model). */
 export const ASSISTANT_MODEL_PICK_FEATURE = "assistant_model_pick";
+
+/** The hub accepts a native service tier with a conversation's first message. */
+export const ASSISTANT_START_SERVICE_TIER_FEATURE = "assistant_start_service_tier";
 
 /** A Persona chat as its pill sees it. */
 export interface AssistantChat {
@@ -35,6 +38,8 @@ export interface AssistantSetup {
   provider: string;
   model?: string;
   effort?: string;
+  /** Fast selected for this start, or acknowledged on the running native thread. */
+  fast?: boolean;
   source: SetupSource;
 }
 
@@ -59,15 +64,16 @@ export function assistantPick(c: AssistantChat): ModelPick | undefined {
 export function assistantSetup(c: AssistantChat, info: AssistantLaunchers | undefined): AssistantSetup {
   const s = c.session;
   const pick = assistantPick(c);
-  if (pick) return { provider: pick.launcher, model: pick.model, effort: pick.effort ?? s?.effort, source: "pick" };
+  const fast = s?.service_tier === "priority" || (!s && pickedFast());
+  if (pick) return { provider: pick.launcher, model: pick.model, effort: pick.effort ?? s?.effort, ...(fast ? { fast: true } : {}), source: "pick" };
   const def = info?.def;
   if (!s || c.isMain) {
     const provider = def?.provider || c.config || s?.launcher || "claude";
-    return { provider, model: def?.model || (s?.launcher === provider ? s.model : undefined), effort: s?.effort ?? (def?.effort || undefined), source: "default" };
+    return { provider, model: def?.model || (s?.launcher === provider ? s.model : undefined), effort: s?.effort ?? (def?.effort || undefined), ...(fast ? { fast: true } : {}), source: "default" };
   }
   // a launcher the list no longer offers is not what the next message runs on: the hub moves the chat to the assistant's
   const own = launcherOffered(info?.launchers ?? null, s.launcher) ? s.launcher : undefined;
-  return { provider: own || c.config || "claude", model: own ? s.model : undefined, effort: s.effort, source: "own" };
+  return { provider: own || c.config || "claude", model: own ? s.model : undefined, effort: s.effort, ...(fast ? { fast: true } : {}), source: "own" };
 }
 
 /** What the pill draws: the launcher (its name for people), the model as its list names it (none set: its default entry,
@@ -85,6 +91,6 @@ export function assistantPillView(c: AssistantChat, setup: AssistantSetup, info:
   const model = row ? modelName(row) : id ? modelLabel(id) : undefined;
   if (model) out.model = model;
   if (setup.effort) out.effort = setup.effort;
-  if (c.session?.service_tier === "priority") out.fast = true;
+  if (setup.fast && (c.session || modelSupportsFast(row))) out.fast = true;
   return out;
 }

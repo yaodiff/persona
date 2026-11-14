@@ -73,7 +73,7 @@ try {
       for (const [index, grant] of fixture().entries()) {
         const row = group.locator("article").nth(index);
         assert.equal(await row.locator("dt").count(), 8);
-        for (const value of [grant.machine_id, grant.directory, grant.quote, grant.source]) assert((await row.textContent()).includes(value));
+        for (const value of [grant.machine_id, grant.directory, grant.quote, s.source_main_chat]) assert((await row.textContent()).includes(value)); // the source as the page words it (#7181)
         assert.equal(await row.locator("time").getAttribute("datetime"), grant.granted_at);
       }
       assert(await group.evaluate(el => el.scrollWidth <= el.clientWidth), "Grant group fits its scroller");
@@ -84,6 +84,9 @@ try {
       await page.screenshot({ path: join(output, `standing-authorizations-${suffix}.png`) });
       await group.getByRole("button", { name: s.revoke, exact: true }).first().click();
       const dialog = page.getByRole("dialog"); await dialog.waitFor();
+      // Measure the dialog once it has opened: during its slide-up the panel is scaled to 0.985, and its 44 px buttons
+      // measure 43.3 px (#7189). Under reduced motion the animation is 1 ms, but its first frame is still drawn.
+      await dialog.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished)));
       assert.equal(writes.length, 0);
       assert((await dialog.textContent()).includes("/code/example"));
       assert(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), "Dialog has no horizontal overflow");

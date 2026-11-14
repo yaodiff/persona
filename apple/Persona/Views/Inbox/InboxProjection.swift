@@ -19,6 +19,7 @@ final class InboxProjection {
             if !kind.isEmpty && !(item.kind == kind || kind == "group" && item.kind == "bot" || kind == "mention" && (item.kind == "doc" || item.kind == "moment" && item.kindLabel == mentionLabel)) { return false }
             if query.isEmpty { return true }
             return item.title.localizedCaseInsensitiveContains(query)
+                || (item.where ?? "").localizedCaseInsensitiveContains(query)
                 || (item.sender ?? "").localizedCaseInsensitiveContains(query)
                 || item.preview.localizedCaseInsensitiveContains(query)
                 || (item.summary ?? "").localizedCaseInsensitiveContains(query)

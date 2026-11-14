@@ -26,6 +26,9 @@ import UIKit
     private(set) var status: String?
     /// The transcript expired on the hub (`trimmed_at`): its minutes stay, and none can be written again.
     private(set) var trimmed = false
+    /// How the hub transcribed it (#3862 phase 5, `detail.meta.transcription`): the mode, and in hub mode how far the hub
+    /// is (the page says "being finished" until `final`) and the stretches it has no audio for. nil: no mode decided.
+    private(set) var transcription: MeetingTranscriptionView?
     /// A write (Regenerate, Add to To-Dos) or the read-back after it is on its way: no other one starts meanwhile.
     private(set) var asking = false
     /// Bumped by Try Again: the page's polling starts over (its task is keyed on it).
@@ -39,7 +42,16 @@ import UIKit
         struct Meta: Decodable {
             var state: String?
             var trimmedAt: String?
-            enum CodingKeys: String, CodingKey { case state = "minutes_state", trimmedAt = "trimmed_at" }
+            var transcription: MeetingTranscriptionView?
+            enum CodingKeys: String, CodingKey { case state = "minutes_state", trimmedAt = "trimmed_at", transcription }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                state = try? c.decodeIfPresent(String.self, forKey: .state)
+                trimmedAt = try? c.decodeIfPresent(String.self, forKey: .trimmedAt)
+                // Read leniently: a `transcription` this app can't read leaves the rest of the page as it was.
+                transcription = MeetingTranscriptionView(try? c.decodeIfPresent(JSONValue.self, forKey: .transcription))
+            }
         }
         struct Detail: Decodable {
             var minutes: RecordingMinutes?
@@ -64,6 +76,7 @@ import UIKit
             state = Self.state(minutes: answer.detail.minutes, status: answer.detail.meta?.state, meeting: meeting, synced: synced)
             status = answer.detail.meta?.state
             trimmed = answer.detail.meta?.trimmedAt?.isEmpty == false
+            if transcription != answer.detail.meta?.transcription { transcription = answer.detail.meta?.transcription }
             #if os(iOS)
             MinutesRelay.shared.note(entry, state: state)
             #endif
@@ -161,10 +174,12 @@ import UIKit
 
     /// Whether to ask again soon: while they are on their way, or newer ones are.
     var waiting: Bool {
+        // The hub is still finishing a hub-mode transcript (#3862 phase 5): the page says so until it is final.
+        if let transcription, transcription.mode == .hub, !transcription.settled { return true }
         switch state {
-        case .writing, .waitingForSync, .waitingForText: true
-        case .ready: status == "pending"
-        default: false
+        case .writing, .waitingForSync, .waitingForText: return true
+        case .ready: return status == "pending"
+        default: return false
         }
     }
 }
@@ -180,7 +195,8 @@ struct RecordingMinutesSections: View {
     /// The hub has this revision of its text (Regenerate needs the whole transcript there).
     var synced: Bool
     var jump: (Double) -> Void
-    @Environment(\.dynamicTypeSize) private var typeSize
+    /// The size its words read at: the row's layout follows them, not the interface's cap.
+    @Environment(\.readingTypeSize) private var reading
 
     var body: some View {
         switch model.state {
@@ -297,10 +313,10 @@ struct RecordingMinutesSections: View {
     }
 
     /// A point, decision, action item or open question: its words, who and by when, its time; `below` under the words (an
-    /// action item's Add to To-Dos). At the accessibility sizes the time goes under the words, which then have the row's
+    /// action item's Add to To-Dos). At the accessibility reading sizes the time goes under the words, which then have the row's
     /// width: beside it they broke every three characters and Add to To-Dos read "+ …" (#4062).
     private func row<Below: View>(_ item: RecordingMinutes.Item, _ symbol: String, @ViewBuilder below: () -> Below) -> some View {
-        let large = typeSize.isAccessibilitySize
+        let large = reading?.isAccessibilitySize == true
         return HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(symbol).font(Theme.Font.secondary).foregroundStyle(Theme.accent)
                 .scaledFrame(width: Theme.Size.iconXS)
@@ -337,18 +353,16 @@ struct RecordingMinutesSections: View {
 
 /// The minutes' Copy and Share: Markdown rendered on the phone (`RecordingMinutes.text`), headed by the minutes' title or
 /// else the recording's name. In the minutes' sections, and on iPhone under the Summary | Transcript switch, where they
-/// stay whichever view shows (#5026). At the accessibility sizes they stack, so neither is cut to "…".
+/// stay whichever view shows (#5026). With the summary card's layout (`summaryCard`, #6563) they send the hub's own
+/// Markdown, which follows that layout (`RecordingMinutes.shareText`).
 struct RecordingMinutesActions: View {
     var entry: RecordingEntry
     var minutes: RecordingMinutes
-    @Environment(\.dynamicTypeSize) private var typeSize
+    /// The Summary shows the summary card (`RecordingMinutesCards.Summary.overview`).
+    var summaryCard = false
 
     var body: some View {
-        // At the accessibility sizes one above the other: side by side, both read "…".
-        let layout = typeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
-            : AnyLayout(HStackLayout(spacing: Theme.Space.m))
-        layout {
+        HStack(spacing: Theme.Space.m) {
             Button { copy() } label: { Label("Copy", systemImage: Theme.Icon.copy).lineLimit(1) }
                 .themedButton()
                 .accessibilityIdentifier("minutes-copy")
@@ -361,7 +375,12 @@ struct RecordingMinutesActions: View {
     }
 
     private var text: String {
-        minutes.text(title: entry.displayTitle)
+        Self.text(minutes, title: entry.displayTitle, summaryCard: summaryCard)
+    }
+
+    /// What Copy and Share send: the hub's Markdown with the summary card, else the phone's own.
+    static func text(_ minutes: RecordingMinutes, title: String, summaryCard: Bool) -> String {
+        summaryCard ? minutes.shareText(title: title) : minutes.text(title: title)
     }
 
     private func copy() {

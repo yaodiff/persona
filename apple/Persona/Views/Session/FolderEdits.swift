@@ -70,55 +70,6 @@ final class FolderEdits {
         }
     }
 
-    /// Copies paths into dir (#5830); a taken name asks, as a move does.
-    func copy(_ paths: [String], into dir: String, cwd: String, machine: MachineRef, model: AppModel, conflict policy: String? = nil,
-              done: @escaping () -> Void) {
-        guard !paths.isEmpty, let api = model.api(machine.group) else { return }
-        run(model) { [weak self] in
-            do {
-                _ = try await api.copyFiles(machine: machine.id, paths: paths, cwd: cwd, dir: dir, conflict: policy)
-            } catch let e as APIError where e.code == "exists" && policy == nil {
-                let name = e.fields["name"] ?? (paths[0] as NSString).lastPathComponent
-                self?.conflictName = name
-                self?.conflict = Conflict(name: name) { [weak self] policy in
-                    self?.copy(paths, into: dir, cwd: cwd, machine: machine, model: model, conflict: policy, done: done)
-                }
-                return
-            }
-            Haptics.tap()
-            model.toast = Toast(paths.count == 1
-                ? String(localized: "Copied “\((paths[0] as NSString).lastPathComponent)” to \(Self.folderName(dir))")
-                : String(localized: "Copied \(paths.count) items to \(Self.folderName(dir))"), style: .success)
-            done()
-        }
-    }
-
-    /// Copies paths beside themselves as "name 2.ext" (#5830); made gets the new names.
-    func duplicate(_ paths: [String], cwd: String, machine: MachineRef, model: AppModel, made: @escaping ([String]) -> Void) {
-        guard let first = paths.first, let api = model.api(machine.group) else { return }
-        let dir = (first as NSString).deletingLastPathComponent
-        run(model) {
-            let copied = try await api.copyFiles(machine: machine.id, paths: paths, cwd: cwd, dir: dir, conflict: "keep")
-            Haptics.success()
-            made(copied.map { ($0.to as NSString).lastPathComponent })
-        }
-    }
-
-    /// Zips paths beside the first one (#5830): one item "name.zip", several "Archive.zip", a taken name "… 2.zip".
-    func compress(_ paths: [String], cwd: String, machine: MachineRef, model: AppModel, made: @escaping (String) -> Void) {
-        guard let first = paths.first, let api = model.api(machine.group) else { return }
-        let dir = (first as NSString).deletingLastPathComponent
-        let base = (first as NSString).lastPathComponent
-        let name = paths.count == 1 ? ((base as NSString).deletingPathExtension.isEmpty ? base : (base as NSString).deletingPathExtension) + ".zip"
-            : String(localized: "Archive.zip")
-        run(model) {
-            let zip = try await api.zipFiles(machine: machine.id, paths: paths, cwd: cwd, dir: dir, name: name)
-            Haptics.success()
-            model.toast = Toast(String(localized: "Compressed into “\(zip.name)”"), style: .success)
-            made(zip.name)
-        }
-    }
-
     /// The answer to "already exists": "replace", "keep", or nil for Cancel.
     func answer(_ policy: String?) {
         let c = conflict

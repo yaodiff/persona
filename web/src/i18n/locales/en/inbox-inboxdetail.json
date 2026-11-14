@@ -12,8 +12,13 @@
   "placeholder_hint": "Click an item in the list to see its details here.",
   "mute": "Mute",
   "more": "More",
-  "view_source": "Original",
+  "view_source": "View original",
+  "hide_source": "Hide original",
   "view_event": "Handling",
   "linked_task": "Linked task",
-  "linked_agent": "Linked Agent"
+  "linked_agent": "Linked Agent",
+  "assistant_says": "Assistant says",
+  "say_something": "Say something",
+  "retry": "Try again",
+  "retry_text": "Please try again."
 }

@@ -37,10 +37,13 @@ nonisolated enum BubbleFoldRule: Equatable, Sendable {
 
     /// DEBUG `-showWholeBubbles YES`: every bubble whole, as before #5676 (before / after screenshots and measurements
     /// from one build).
+    /// DEBUG `-showPlainBubbleOpen YES`: opening without the fade-in, as before #6481 (before / after recordings from one build).
     #if DEBUG
     static let whole = UserDefaults.standard.bool(forKey: "showWholeBubbles")
+    static let plainOpen = UserDefaults.standard.bool(forKey: "showPlainBubbleOpen")
     #else
     static let whole = false
+    static let plainOpen = false
     #endif
 
     /// Characters to a line, `base` at the default size, at `size` (the body's point size now).
@@ -133,20 +136,22 @@ struct BubbleFoldKey {
     /// SwiftUI state: a bubble that folds as it appears redraws nothing around it (a `@State` in the row redrew the whole
     /// row once more for every long message scrolled in).
     @MainActor static var folded: Set<String> = []
+    /// Their reveal state, by `openKey`: a long press opens a bubble with the same fade-in as Show More.
+    @MainActor static var unfolds: [String: Binding<Unfolding>] = [:]
 
     /// A long press on the bubble (`messageLongPress(opens:)`): folded, it opens, as Show More does, and takes the press.
     @MainActor func openOnPress(scope: String, pin chat: ChatPin?) -> Bool {
         let key = openKey(scope)
         guard Self.folded.contains(key) else { return false }
-        Self.flip(key, pinKey: pin, open: false, pin: chat)
+        Self.flip(key, pinKey: pin, open: false, pin: chat, unfold: Self.unfolds[key])
         return true
     }
 
     /// Opens or folds it in place (`toggleInPlace`), as Show More / Show Less do: its top stays where it is on screen,
     /// at the newest end too (no rise to the top bar, the owner's ask).
-    @MainActor static func flip(_ key: String, pinKey: String, open: Bool, pin: ChatPin?) {
+    @MainActor static func flip(_ key: String, pinKey: String, open: Bool, pin: ChatPin?, unfold: Binding<Unfolding>? = nil) {
         Haptics.tap()
-        toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: open, rises: false) { OpenReports.shared.set(key, !open) }
+        toggleInPlace(pin, pinKey, animation: Theme.Motion.state, unfold: unfold, closing: open, rises: false) { OpenReports.shared.set(key, !open) }
     }
 }
 
@@ -178,6 +183,10 @@ struct BubbleFold<Words: View>: View {
             let guess = BubbleFoldRule.lines(lengths, perLine: BubbleFoldRule.perLine(BubbleFoldRule.typical, size: bodySize)) > rule.limit
             Folding(text: text, fold: fold, rule: rule, cut: BubbleFoldRule.height(lines: rule.shown, size: typeSize), guess: guess,
                     ems: BubbleFoldRule.wordsWidth.map { $0 / bodySize }, tint: tint, words: words)
+        } else if lifted {
+            // The lifted copy is offered what the chat offered the row (`Offers`): a bubble opened since it was laid out
+            // folded was offered its folded height, and its words were cut to "…" there (#6481). Its own height, always.
+            words(text).fixedSize(horizontal: false, vertical: true)
         } else {
             words(text)
         }
@@ -204,6 +213,8 @@ private struct Folding<Words: View>: View {
     @State private var measured: Bool?
     /// Its start reached no further than the rule's lines (narrow letters at a wide bubble): it is drawn whole.
     @State private var whole = false
+    /// Just opened: what opens fades in under the lines already shown, as a tool's details do (`toggleInPlace`, `.unfolding`).
+    @State private var unfold = Unfolding()
     @Environment(\.rowMemoScope) private var scope
     @Environment(\.chatPin) private var pin
 
@@ -229,14 +240,14 @@ private struct Folding<Words: View>: View {
                 .frame(height: folded ? cut : nil, alignment: .top)
                 .clipped()
                 .contentShape(.rect) // what is folded away takes no touches (the words run on past the fold)
-                .modifier(FoldFade(on: folded, line: cut / CGFloat(max(rule.shown, 1))))
+                .modifier(FoldFade(on: folded, revealing: unfold.revealing, cut: cut, line: cut / CGFloat(max(rule.shown, 1))))
                 // Folded, one element as tall as what shows (its words all read out): the words' own frame runs on past
                 // the fold, and VoiceOver's box with it.
                 .accessibilityElement(children: folded ? .combine : .contain)
                 .accessibilityAddTraits(folded ? .isStaticText : [])
             if long {
                 FoldToggle(open: open, prefix: "bubble", tint: tint, showMore: true) {
-                    BubbleFoldKey.flip(key, pinKey: fold.pin, open: open, pin: pin)
+                    BubbleFoldKey.flip(key, pinKey: fold.pin, open: open, pin: pin, unfold: $unfold)
                 }
                 // Its row spans the words' width: where the next long message's start wraps. Not state: nothing redraws.
                 .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { w in
@@ -246,9 +257,9 @@ private struct Folding<Words: View>: View {
         }
         // Only a bubble that can fold reports where it is as the chat scrolls (what opening and folding keep in place).
         .chatPinned(fold.pin)
-        .onAppear { keep(folded) }
+        .onAppear { keep(folded); BubbleFoldKey.unfolds[key] = $unfold }
         .onChange(of: folded) { _, now in keep(now) }
-        .onDisappear { BubbleFoldKey.folded.remove(key) }
+        .onDisappear { BubbleFoldKey.folded.remove(key); BubbleFoldKey.unfolds[key] = nil }
     }
 
     /// What a long press asks (`BubbleFoldKey.folded`).
@@ -257,23 +268,47 @@ private struct Folding<Words: View>: View {
     }
 }
 
-/// Folded, the words are opaque down to the last line shown, which fades out. Open, no mask at all: a mask is drawn
-/// off screen first, every frame the bubble moves.
+/// Folded, the words are opaque down to the last line shown, which fades out. Just opened, what was shown stays as it
+/// was and the rest fades in over the space it takes (the same `Theme.Motion.reveal` as a tool's details), so the words
+/// do not pop in whole. At rest, open, no mask at all: a mask is drawn off screen first, every frame the bubble moves.
 private struct FoldFade: ViewModifier {
     var on: Bool
+    var revealing: Bool
+    /// The height of the lines shown folded.
+    var cut: CGFloat
     /// One line's height: the fade.
     var line: CGFloat
 
+    /// While `revealing`: false on its first frame, then true (animated): what was folded away starts clear.
+    @State private var grown = false
+    @Environment(\.accessibilityReduceMotion) private var still
+
     func body(content: Content) -> some View {
         if on {
-            content.mask {
-                VStack(spacing: 0) {
-                    Rectangle()
-                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: line)
+            content.mask { fade }
+        } else if revealing, !still, !BubbleFoldRule.plainOpen {
+            content
+                .mask {
+                    ZStack(alignment: .top) {
+                        Rectangle().opacity(grown ? 1 : 0)
+                        fade.frame(height: cut, alignment: .top)
+                    }
                 }
-            }
+                .onAppear { grow() }
+                .onChange(of: revealing) { _, now in if now { grow() } else { grown = false } }
         } else {
             content
         }
+    }
+
+    private var fade: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: line)
+        }
+    }
+
+    private func grow() {
+        withAnimation(Theme.Motion.reveal) { grown = true }
     }
 }

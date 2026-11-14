@@ -14,6 +14,7 @@ struct AppearanceSection: View {
     var settingsHome = true
     #if os(iOS)
     private let layoutDisplay = AgentListDisplayChoice()
+    @StoredValue(NavigationLayout.key) private var navigation: NavigationLayout = .separate
     #endif
     @StoredValue(ComposerGlowPrefs.enabledKey) private var composerGlow = false
 
@@ -45,6 +46,15 @@ struct AppearanceSection: View {
                     .accessibilityIdentifier("settings-language")
                 }
                 #if os(iOS)
+                // Separate or Sidebar (#6332): where the sidebar layout is built (`NavigationLayout.offered`).
+                if NavigationLayout.offered {
+                    NavigationLink(value: SettingsPage.navigation) {
+                        SettingsRow(title: String(localized: "Navigation"), symbol: Theme.Icon.sidebar, tint: Theme.Hue.teal,
+                                    value: navigation.title, look: .oneLine)
+                    }
+                    .settingsListRow(SettingsPage.navigation)
+                    .accessibilityIdentifier("settings-navigation")
+                }
                 // How the Agents list draws its agents on iPhone and iPad (#2530); the Mac and Vision Pro keep their look.
                 NavigationLink(value: SettingsPage.layout) {
                     SettingsRow(title: String(localized: "Agents List Layout"), symbol: Theme.Icon.listView, tint: Theme.Hue.orange,

@@ -98,6 +98,7 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
 - Files and grep are natural for Claude Code: the assistant, AI twin and Agents in herdr need no new API; `rg keyword ~/.persona/data` searches directly.
 - People can read and edit directly too (an edited `summary.md` is treated as existing context on the next compression).
 - Postgres holds only the index needed for sorting and filtering (`kb_entities`: type, name, importance, relevance, tags, path, updated time); it can be rebuilt from files if lost.
+- The full-text search index is files as well (`.search/` in the data directory, "Search index" below): worked out from the files, built again from them when it is lost, and gone when they go.
 
 ## Directory layout
 
@@ -150,6 +151,10 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     STOP                    # There: nothing is read until a person resumes
     log-YYYY-MM-DD.jsonl    # One line per call, no contents
     log.key                 # The key of the log's chat hashes
+  .search/                  # The search index ("Search index" below): worked out from the files above, never searched itself
+    manifest.json           # Which of the files below make up the index, and what it was built with
+    seg-<n>.idx             # Segments: of each file read, its path, mtime, size and keys
+    log-<n>.log             # The files read since the last segment was written
 ```
 
 Beside the data directory, `kb-backups/kb-YYYYMMDDHHMMSS.tar.gz` are the backups taken before each history import run ("History import", "Backups").
@@ -168,7 +173,7 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
 
 ## Pipeline (manager background, `server/internal/kb`, loop in `assistant/kb.go`)
 
-The loop's work runs in three **lanes** (`assistant/kb_lanes.go`, #4247), each in its own goroutine, so a slow step in one (a meeting's
+The loop's work runs in **lanes** (`assistant/kb_lanes.go`, #4247), each in its own goroutine, so a slow step in one (a meeting's
 minutes, a slow model) no longer holds back the others. Every round (2 minutes, a wake, or 5 seconds after a kick) starts each lane
 that is not still running; a lane that became due while it ran starts again as soon as it ends. The lanes are split by what they write,
 so no two write the same files at once:
@@ -179,6 +184,8 @@ so no two write the same files at once:
 - **topics**: knowledge points (step 3b), two distill calls then two merges, two at a time (topics and their sources' marks, under
   the store's topic lock, a merge applied only while its topic is as it was asked about).
 - **minutes**: meeting minutes from recordings ([meeting-minutes.md](meeting-minutes.md)), whose calls can take many minutes.
+- **index**: the search index ("Search index" below; `.search/`, which only this lane writes). A run reads the files changed since the
+  last one and calls no model; its first run on an existing archive reads every file, which is why it does not share a lane.
 
 Before starting lanes a round only checks, quickly, that the knowledge base is writable and the user's zone readable;
 moving the archive into the user's zone ("Time zones") is the archive lane's first step, so the loop never waits behind a
@@ -451,9 +458,9 @@ The driver runs in its own goroutine (`kbHistoryLoop`, never inside the knowledg
 3. the owner approved the source's plan in the assistant chat (`kb_history_resume` records `approved_at` and what the selection reads of every chat then). Listing
    a plan or changing the selection never starts anything; a change that reads more than was approved takes the approval back ("Plans");
 4. there is no `history/STOP`;
-5. the source does not wait for the search index: `needs_search_index` (default `true`) holds a source back while `kb.SearchIndexed` is false. Search reads every archived line
-   today, which a benchmark showed is too slow at millions of lines; the persistent index (#1273) flips that one constant. A source with modest history sets
-   `needs_search_index: false` to run before it;
+5. the source does not wait for the search index: `needs_search_index` (default `true`) holds a source back until the archive has one (`Store.SearchIndexReady`: the index
+   lane has been through every file once, minutes at most on an existing archive, and no check of the index has failed since; "Search index"). Without it a search reads every
+   archived line, which a benchmark showed is too slow at millions of lines (#1273). A source with modest history sets `needs_search_index: false` to run before it;
 6. the connector archives into the knowledge base now and declares `history` (`connectors.archives`).
 
 Sources run one at a time, in the order `kb.history.sources` lists them. Everything is on disk, so a redeploy at any time loses nothing: a restart takes the lock again, backs up,
@@ -591,7 +598,7 @@ configuration" is `kb.history.enabled: false`: it stops the run before its next 
 
 The import rewrites day files, so before every run (every time it takes the lock) the data directory is archived to `<parent of the data directory>/kb-backups/kb-YYYYMMDDHHMMSS.tar.gz`
 (UTC; written to a temporary name and renamed; the file 0600, the directory 0700). Every `attachments/` directory is left out (never rewritten by the import, and possibly tens
-of gigabytes), and so are the lock files and anything that is not a regular file or a directory. A data directory that is a link is archived where it leads, and a
+of gigabytes), and so are the search index (`.search/`: built again from the files wherever they are restored), the lock files and anything that is not a regular file or a directory. A data directory that is a link is archived where it leads, and a
 backup that would hold no file fails (the import's own plan is there at least), so an empty archive never counts as one of the three. If the backup fails, the run does not
 start. Then only the newest three are kept: the oldest by the time in the name are deleted, and only regular files named `kb-<14 digits>[-n].tar.gz` in that directory are ever considered.
 
@@ -707,7 +714,7 @@ no more updates, snapshots or prompts; the app groups them under **Not projects*
 
 ## Deleting a project
 
-A project can be deleted from the web knowledge list (#4412). The delete is soft (`kb/project_trash.go`):
+A project can be deleted from the knowledge list on the web (#4412) and on the iPhone and iPad (#7077: a project row's swipe or context menu); both ask first and then offer Undo. The delete is soft (`kb/project_trash.go`):
 
 - The project's directory moves to `.trash/<id>/project` in the data dir, so it drops out of lists, search, prompts and the pipeline, which only read `projects/`. Its index rows go.
 - The chats, people and items that named it stop naming it. `.trash/<id>/trash.json` records which ones (`unlinked`, as `<kind>/<id>`), with the slug, the name and `deleted_at`.
@@ -745,12 +752,13 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
 - **Pinned facts and hand edits**: `pinned` on a topic is read-only input to the merge, which drops points contradicting it. By hand (`kb_update`, `PUT /api/v1/kb/topics/<id>`) a topic's
   name, `note` (its one line), aliases, tags and pinned facts change and lock as for other kinds; its summary cannot be replaced (it is written from the points).
 - **Failures** wait like a project rewrite's (`retryWait`, in memory) per source and per topic. Both steps use the model use `kb.topics`.
-- **Switch**: `assistant.kb_topics`, on by default (Settings › Knowledge on the web, and Persona's settings tool after the user confirms). Off, neither step calls the model; the topics
+- **Switch**: `assistant.kb_topics`, on by default (Settings › Knowledge on the web, Settings › Knowledge Selection on the iPhone and iPad, and Persona's settings tool after the user confirms). Off, neither step calls the model; the topics
   already written stay readable, and turning it back on continues from the marks.
 - **Reading**: topics list (the most points first), open (`points` in the detail, `links` to the projects and chats they came from), search (`summary.md` and `meta.json`) and change
   events (`kb.changed` with kind `topics`) like the other kinds, through the app API, the assistant's `kb_list` / `kb_get` / `kb_search` and the extension `kb.*` RPC. `kb.recent`
-  does not include them by default (it is what came in, and topics are derived). The web shows them under Knowledge › Topics and in the knowledge map (`docs/web/web.md`); the iOS
-  and Android apps do not show the kind yet and skip it.
+  does not include them by default (it is what came in, and topics are derived). The web shows them under Knowledge › Topics and in the knowledge map (`docs/web/web.md`); the iPhone
+  and iPad too (#7251: Knowledge › Topics, a topic's points by subtopic, a point in a sheet, and the map as an outline, with a detail
+  column where there is room; `docs/design/DESIGN_SYSTEM.md` "Knowledge map outline"). The Android app does not show the kind yet and skips it.
 - **Deleting a source** removes the points that came only from it ("Deleting a connector's saved knowledge" above).
 
 ## Who uses it
@@ -949,11 +957,206 @@ Reworked after feedback on 2026-10-31: "I find results but can't locate them aft
 - Find keeps of each file only what a result can show: its first 3 distinct matching lines and a count up to 99 (`hitsPerResult`, `foundCap`); a file whose text folds to itself has its lines matched as written instead of folded one by one. `kb_search` (`Search`) takes the data dir's files from the same cached walk instead of walking the whole directory on every call, so all of `history/` is skipped (its `messages/` too) and a data dir that is a symlink is searched. Results are otherwise identical to the previous code (`find_hits_test.go`, `search_walk_test.go`; `BenchmarkFind/every`, `BenchmarkSearch`).
 - `kb_search` with `kind` (`SearchKind`) reads only that kind's files from the same walk: by entry, those whose name has every word first, then in `kb_list`'s order, and with `messages` only the chats' message days. It never reads the notes directories or the Moments posts. Without `kind`, `Search` keeps its order.
 - Opening a chat from a search (`Matches`) checks each day for all the words through the same cache and reads only the days that have them, instead of reading and folding every day until it has 40 hits. In a 365-day chat of the synthetic archive, a rare word takes ~9 ms → 2 ms right after a Find; a new engine pays one more `stat` per day (~+10-20%, ~9 ms → 10 ms), and a common word that fills the limit within a few days stays ~0.5 ms (`BenchmarkMatches`; results identical to reading every file, `matches_test.go`).
+- Since #1273 a persistent index says which files cannot hold the words ("Search index" below). `Find`, `kb_search` and `Matches` `stat` every file and read only those it leaves. `Find` reads them entry by entry in rounds (16 files, then four times as many) and stops reading an entry that has its 99 lines and the three it shows, which no later file can change: a chat with the word on every day costs its newest days. The timings above are from before the index; on the same synthetic archive (37k files, a 32-CPU Linux machine) a warm Find went ~37 ms → 13–19 ms, a cold one ~196 ms → 76 ms, `kb_search` for a word no file has ~113 ms → 11 ms, and a cold `Matches` for a rare word ~6.2 ms → 1.1 ms; `Matches` for a common word pays ~0.06 ms for asking the index (`go test -bench 'BenchmarkFind|BenchmarkSearch|BenchmarkMatches' ./internal/kb`, which build the index first; `BenchmarkSearchIndex` times the first index, 1.1 s, and a run with nothing changed, 25 ms).
 - Find only counts lines in the files opening an entry shows (`Matches`): profile, timeline and metadata (`summary.md`, `log.md`, `meta.json`; a recording's `transcript.md`), a chat's day files, a doc's JSON. Bookkeeping under an entry (`moments-judged.json`, `handles.json`, any other file) is not searched, so every result with hits shows them once opened (`TestFindAgreesWithMatches`). A limit of zero or less gives no results.
 - Opening an entry shows **Search "term"** at the top: every hit in this entry, with one message before and after each message hit. Tapping opens that day (`KBDayView`), scrolls to and highlights the message, and allows paging to adjacent days.
 - Going back no longer errors: the Knowledge page itself is pushed by `navigationDestination(isPresented:)`; using `NavigationLink(value:)` inside to push an entry
   inserts the new page beneath it (`docs/lessons/ios.md` ("Navigation")), making the tap appear ineffective and exposing the entry page's yellow warning only on Back. Knowledge links now all use view-based navigation.
   Returning reruns `.task(id: query)`; do not search again if the same term already has results, and cancellation is not an error.
+
+## Search index (#1273)
+
+A search used to open and read every file. That was fine at the ~420k lines search was written for, not at the millions a history import brings: on a
+synthetic archive of that size (3,982,000 lines in 362,000 day files of 2,000 chats, every message a text of its own; `kb/search_scale_test.go`),
+the first search of a new engine took ~2 s and ~1 GB of memory (4.3–4.6 s with `GOMAXPROCS=2`), and `kb_search` for a word no file has 7.6 s.
+The 64 MB content cache cannot hold an archive of that size, so every search read most of it again.
+
+**What it is.** `.search/` in the data directory holds, for each file it has read, the path, mtime and size the file had then and the file's
+*keys* (below). It is asked one thing only: "can this file, as it is now, hold every word of the query?", and it may answer no only for a
+file whose path, mtime and size are exactly the ones it read. `Find`, `Search`, `SearchKind` and `Matches` `stat` every file, pass over those the
+index rules out, and read the others with the code that read them all before. The index never says what a result is, only which files need not
+be opened, so results, their order and the limits are the scan's.
+
+**An index that is missing, half built, behind or damaged costs time and nothing else.** A file added, changed or renamed since the index read it has
+no entry with its path, mtime and size, and is read; a deleted one is not there to `stat`. A segment, key block or list that fails its checksum, a
+manifest that was read and is not one (it does not decode, whatever the decoder minds: not JSON, a value of another type, a time that is not a
+time; or it names a file under a name the index gives none of its files), a manifest that names a missing file, an index written with other
+Unicode tables (the keys are taken from `fold`'s output, so the manifest records `unicode.Version` and `norm.Version`) or in another format: the
+search goes on without the index (one log line), and the next update starts it again from the files. Only a manifest that cannot be read at all
+(the disk, a permission) is tried again as it is. A failed check is held against the index it was made of and no other: by the time a search or
+an update reports it, another index may be in use (built again, or read again from disk), and that one is asked instead. A segment file that is
+not the one a search read its file table from ("A name is never used twice" below) is not read either: the search asks the index as it is on
+disk now. `rm -r <data dir>/.search` is always safe, also while the manager runs, searches or updates the index
+(`TestSearchesWhileTheIndexIsUpdatedAndRemoved`, which every `-race` run of the package includes).
+
+Tests: `kb/search_index_query_test.go` compares `Find`, `Search`, `SearchKind` and `Matches` with the scan over generated archives (Chinese and
+English mixed) and random queries, at several limits, with the index absent, half built, built, behind (files changed, added, renamed and deleted
+since), up to date and damaged in each of its parts; `kb/search_index_test.go` covers the update itself, with a hook at the moments where
+another process or search can act and no test could time it (after an update's look at the files, around its read of one, between a search's
+failed check and its report), and flips every bit of the manifest. A search opens every entry's files
+whatever the index says, and on some machines a file open costs most of a millisecond, so every run of the package does a light comparison: small
+archives, the scan's answers worked out once for each state of an archive, each query at one limit and on one of the two engines by turns, and
+the tests that flip every byte of a segment and of a log do it in memory. `PERSONA_KB_DIFF_DEPTH=2` does the whole grid (larger archives, every
+query at every limit on both engines, in every state), each step above 2 adds as many random queries again, and `PERSONA_KB_DIFF_SEED` draws other
+archives and queries.
+For the review fixes of 2026-11-13 the whole grid ran at depth 2 with the default seed and with seed 7 (36 s each on the Linux machine of the
+numbers below), at depth 4 with seed 20261113 (51 s) and at depth 2 on the benchmarks' 37,000-file archive (`PERSONA_KB_BENCH_ARCHIVE=1`, 87 s),
+without a difference from the scan; the light comparison takes 3.5 s there.
+
+**Keys.** A search finds a file when every word of the query is a *substring* of the file's folded text (`fold`: lowercase, then NFC; the words are
+the query split at white space), and then looks for the lines. So the index answers "which files can hold this substring", never "which files
+hold this word": `uild` finds `build`, `#127` finds `#1273`. A word index for Latin text, as the issue first proposed, would lose those. Instead
+every character of the folded text that is not white space gives one key, made of itself and what follows:
+
+- a wide character (U+2E80 and up: CJK, kana, Hangul, full-width forms, emoji), or a narrow one followed by a wide one: the pair of the two;
+- a narrow character followed by a narrow one: the three (the third may be wide, or the end of the token);
+- the last character before white space or the end of the file: the pair of it and "end".
+
+Pairs for CJK because most words are two characters: with triples a two-character query, the usual one, could not be answered. Triples for
+Latin text because nearly every file has every common pair of letters. A word of the query gives the keys inside it, and a file is read only if
+it has them all; several words are several such conditions, anywhere in the file (the scan's whole-file check).
+
+| Query | What the index does |
+| --- | --- |
+| One CJK character (`周`), one letter or digit, or two narrow characters (`ab`) | No key lies inside the word, but every key that *starts* with it is next to the others in the sorted keys: the files of any of them are candidates. Exact for one character; ~3 ms at 4M lines for a single letter, the slowest case |
+| Mixed scripts (`v2版本`, `周报draft`) | The pair at each boundary links the two sides, so the word's keys run through it without a gap |
+| Punctuation (`#1273`, `foo.go`, `a-b`) | A character like any other, as it is to the scan: no word boundaries, stemming or stop words |
+| Case and normalization (`Café`, decomposed `é`) | Both the files' keys and the query's come from `fold`, the scan's own folding. Nothing else is folded: a full-width `Ａ` is not `a` to the scan, nor to the index |
+| White space | `unicode.IsSpace`, where `strings.Fields` splits the query: no word holds any and no key spans it |
+
+A file can have all the keys of a word without the word (the keys come from different places): it is read and the scan says no. The other way
+round cannot happen: `TestGramsNeverRuleOutAFileThatHoldsTheWords` and its fuzz target check that a file holding the words is never ruled out.
+
+**On disk** (`kb/search_index_segment.go`): immutable segments (`seg-<n>-<id>.idx`: the files' paths, mtimes and sizes, the sorted keys in blocks
+of 64 with a checksum each, and for every key the list of its files as a bitmap, gaps or "all"), a log of the files read since the last segment
+(`log-<n>-<id>.log`, appended to, a checksum per entry, a torn tail ignored) and `manifest.json`, replaced by rename, which names the files that
+make up the index. A file's newest entry wins. Of a segment only the file table and one entry per key block stay in memory; the lists are read
+per query. The directory is 0700 and the files 0600, like the rest of the data directory. A segment is synced before the manifest that names it
+is written, and the manifest before it is renamed into place; the directory is not synced and the log never is. After a power loss the manifest
+can therefore be the one before, or name a segment that is not there: both are found when it is read, and the index is built again.
+
+**A name is never used twice.** A key's list is numbers into its own segment's file table, and a reader keeps that table in memory while it opens
+the file again for every query. A list read through another segment's table rules out the wrong files with every checksum passing, which is the
+one way this index could lose a result. So no file of the index ever gets a name another had: `<id>` is 64 bits drawn at random for each file
+(`<n>` only orders them for someone reading the directory), whether the index goes on, is built again after a failed check, starts over because
+`.search` was removed, or is put back from a copy. A counter alone would start again with the index, and a second `seg-000001.idx` of the same
+size is what a read-only store once read through the first one's table. As a second guard a segment's footer carries a random id of its own, and
+whoever holds a segment's table compares the footer on disk with the one it read every time it opens the file, for a query or a merge: when
+they differ a search reads the index from disk again and asks that, and a merge stops. An update makes the same check of every segment before
+it goes on from what it has in memory. This also holds inside the writing process: a search that began before a rebuild holds the snapshot from
+before, finds its segment gone or not the one it read, and asks the index that is there now. The manifest's `format` is 2 since then; an index
+in another format is built again.
+
+**Why beside the files and not in Postgres.** Server state lives in Postgres, and the entries' own index is there (`kb_entities`), so this one
+was measured there first: the same 4M-line archive (366,521 files, 286 MB of folded text, 97 million pairs of a key and a file) in a disposable
+`postgres:18` container with its default settings.
+
+| Where | First build | On disk | WAL the build writes | What it does not do |
+| --- | --- | --- | --- | --- |
+| `.search/` | 30 s | 155 MB | none | |
+| Each file's folded text in a table, `pg_trgm` GIN | 310 s | 1.45 GB, 329 MB of it a second copy of the text | 1.1 GB | A word under three characters reads the whole table (`周报` 0.26 s, `周` 0.73 s); needs an extension the hub's database does not use today |
+| The keys above as one `bigint[]` per file, GIN | 175 s | 1.14 GB | 1.3 GB | One character or two letters (a range of keys) cannot be asked; a word nearly every file has reads the whole table (2.7 s); an import's 36,000 changed files take 93 s and 3.2 GB of WAL |
+| One row per key and file, B-tree (measured at 396,000 lines, times ten) | ~140 s | ~8 GB | ~9 GB | Every query can be asked, in under 20 ms at that size; the size rules it out |
+
+None of them saves what a search still pays: people and Agents edit the files directly, so a search `stat`s every file whichever index it
+asks, and asking this one takes milliseconds. In the database the index would also be a second thing to keep in step with the files (a data
+directory restored without the database, or the other way round), and its writes would go through the WAL and the commits that "Disk writes"
+in `docs/operations/docker.md` is about; here a run that found changes syncs one small manifest (at most once a minute while it follows the
+files), a first build, an import's batch or a merge one segment and the manifest each time, and the log is not synced at all, since what a
+crash loses is read again. SQLite was not measured: every release binary is built with
+`CGO_ENABLED=0` for its platform, so it would be a new pure-Go database dependency, and its trigram tokenizer cannot answer a word under three
+characters either. This was decided for #1273 on 2026-11-13 on these measurements (the index stays in files beside the knowledge base, a cache
+of what the files say that can be removed at any time), and what would reopen it is the index having to hold something that cannot be worked out
+from the files again: that would be state, which belongs in Postgres.
+
+**Updates** (`Engine.UpdateSearchIndex`, the manager's **index** lane). A run `stat`s every file and reads those that are new or changed, once
+their mtime is 10 seconds old (`indexSettle`; a file still being appended to is read by searches, as before) and if they are no larger than 4 MB
+(`indexMaxFile`; larger files are always read). The look and the read are two moments, and in a first build the look at every file lies between
+them. An entry says that the bytes which had this mtime and size have these keys, so a run keeps a file's keys only when that is what it saw: it
+opens the file, asks the open file for its mtime and size, reads through the same handle and asks it again, and both answers have to be the ones
+the look got. A file that is another one by then (replaced, even by text of the same size, and even if the first is back under its own mtime
+later) or that changes while it is read is left out of that run and counted as waiting: searches read it, and the next run looks again. Asking
+the path a second time would not do, since by then it can name the first file again while the bytes read were the other's. Nothing else in the
+index pairs the `stat` of a file of the archive with bytes read at another moment: the log, a merge and a purge carry entries as they were
+written and read no file of the archive. The index's own manifest is the one other file looked at and read at two moments, in the order that
+is safe: its mtime and size are taken before it is read, so one replaced in between is read again at the next look, and no result depends on
+it. A few changed files go to the log; more than 4,096 (a first build, an import) are written
+as segments of at most 2 million keys, each published as it is finished, so a run that is cut short loses one batch and searches use what is
+done. More than 8 segments are merged into one, streaming. The lane runs at most once a minute while it only follows the files (a run looks at
+every file, and live messages kick a round every few seconds), and at once for a first build, an index that failed a check or a deletion (below).
+A run that fails (a full disk, a directory the manager may not write) is not tried again at the next kick, since every try looks at all the files
+and reads a batch first: the next run is no sooner than 15 seconds later, then twice as long after each failure in a row, up to 5 minutes
+(`kbIndexRetry`, `kbIndexRetryMax`). Nothing starts it when the wait is over: it starts at the first round after that (a kick, or the loop's
+tick every two minutes), which is what the log line says. The log has a failure once while the runs fail the same way, and a line when updating
+works again; searches read the files meanwhile. Failures are told apart by the operation, the kind of index file (its name without the number,
+id or temporary ending that is new at every try) and the system's error, so `permission denied` when the directory is made and
+`permission denied` when the manifest is written are two failures, and the second is logged after the first was put right. A run told to stop
+(the manager ends) returns within a moment while it looks at the files or merges, and after the batch in hand while it reads them. A read-only
+knowledge base (`kb.read_only`) never writes the index: it uses the one the writing process keeps, and looks every 30 seconds whether the
+manifest is still the one it read. That look does not depend on what the store holds: one that holds no index (none was there, or the one it
+read failed a check) reads what is on disk at its next look, so a read-only process never stays without an index while a whole one is there.
+
+**One writer, and what two would cost.** The process that holds the data directory's lock writes the index, one run at a time; a search in that
+process that has to read the index from disk again (it was removed) does not touch what a run under way works with. The lock is let go when the
+manager's service ends, without waiting for a run under way, so at a hand-over the old process's run can overlap the new one's until it notices
+it was told to stop. Two writers cannot make a search wrong: every entry, in a segment or in the log, says only that the file with this path,
+mtime and size has these keys, each under a checksum, and no list is read through another segment's table (above). What they can do is undo each
+other's work: one's clean-up removes a segment the other is about to name, one manifest replaces the other's, or both append to the log at the
+same place. Each of these is a manifest that names a missing file, a segment that is not the one read, or a log that ends at an entry failing its
+checksum. Searches read the files meanwhile, and the next update reads the index again and, when it does not check out, builds it again. The
+worst case is one more first build.
+
+**The first build of an existing archive** runs in the index lane, in its own goroutine: the manager's start does not wait for it, and neither
+does a search, which reads the files the index has not reached yet (what every search did before) and gets faster as segments are published. At
+4M lines it takes ~30 s with four readers and ~43 s with `GOMAXPROCS=2` (one reader), and holds ~500 MB at most (numbers below); a search
+meanwhile takes what it took before the index (up to ~2 s for Find and ~7 s for `kb_search` of an absent word there, 6–8 s with `GOMAXPROCS=2`). The history import
+waits for it (`needs_search_index`).
+
+**Deletions.** An entry of a file that is gone is never used, but its keys would stay on disk until the next merge. So after text is deleted on
+purpose (a source forgotten, with its topics; retention pruning days, Moments posts or recordings; a recording, one of its photos or a project
+deleted) the next index run, within one round, writes the index again without it; entries of files that went another way are dropped within
+10 minutes (`indexPurgeEvery`), and the older versions of files that changed within 24 hours (`indexMergeEvery`) or as soon as they are a quarter
+of the index. Both are counted from the last merge, whose time is in the manifest; a time that is yet to come (the clock was set back, or the
+manifest's time is not the one written) counts as long ago, not as a reason to wait for it. The index holds no text,
+only keys of two or three characters next to paths, mtimes and sizes; it is in the data directory, so it has the same owner and modes and goes when the
+directory goes, and the history import's backups leave it out.
+
+**Limits.** A file's content is known by its mtime and size, as in the content cache, but the index outlives the process. A file whose text
+changed while both stayed the same is searched by what it said before, and there are three ways to get there, none of them something Persona
+does (nothing in it sets a file's mtime) and none of them the index's own doing (it keeps a file's keys only under the mtime and size the open
+file had before and after it was read, "Updates" above):
+
+- the file is rewritten to the same size and its mtime set back to what it was (`os.Chtimes`, `touch -d`), which is also the one thing an
+  update's two looks at the open file cannot see when all of it happens within that file's read;
+- a copy that keeps times puts other text of the same size under the mtime the index read (`cp -p`, `rsync -t`, `touch -r`): two versions of a
+  file with the same mtime and size, one of them indexed and the other copied over it;
+- the clock is set back by more than the 10 seconds an update waits for a file to settle, on a filesystem that keeps mtimes to the second, and the
+  file is rewritten to the same size within the very second (by the clock as set back) that its mtime already said.
+
+A new process does not heal any of them: it reads the same index. Removing `.search` does (the next run builds it again), and so does anything
+that gives the file another mtime or size. Notes directories (`kb.extra_dirs`) are outside the data directory and read on every search, as before,
+and so are a recording's `meta.json` and `transcript.md` (searched from the committed snapshot, not the disk). What a cold search still costs is
+listing the directories and one `stat` per file.
+
+**Numbers** (`PERSONA_KB_SCALE_LINES=4000000 PERSONA_KB_SCALE_TEXT=varied go test ./internal/kb -run '^TestSearchScale$' -v -timeout 0`; a 32-CPU Linux
+machine shared with other work, files in the OS page cache; median of 5, of 3 for `kb_search`; cold is a new engine and a new store, the index
+read from disk):
+
+| 3,982,000 lines, 362,000 day files | Before | With the index |
+| --- | --- | --- |
+| Cold Find: rare word / word on every line / absent word | 1.85 s / 1.97 s / 2.33 s | 0.89 s / 1.09 s / 0.90 s |
+| The same with `GOMAXPROCS=2` | 4.62 s / 4.53 s / 4.26 s | 1.27 s / 1.63 s / 1.18 s |
+| Warm Find (the same engine again) | 0.94 s / 1.02 s / 1.22 s | 0.20 s / 0.28 s / 0.15 s |
+| The same with `GOMAXPROCS=2` | 3.10 s / 3.27 s / 2.96 s | 0.55 s / 0.61 s / 0.52 s |
+| Cold `kb_search`: rare word / absent word | 0.78 s / 7.63 s | 0.76 s / 0.93 s |
+| The same with `GOMAXPROCS=2` | 0.75 s / 6.92 s | 0.78 s / 1.21 s |
+| Peak memory of the process: Find / `kb_search` | 974 MB / 481 MB (1,123 MB / 528 MB with `GOMAXPROCS=2`) | 499 MB / 356 MB (493 MB / 364 MB) |
+| First index: time, size on disk, peak memory | | 30 s, 155 MB, 493 MB (42 s and 505 MB with `GOMAXPROCS=2`) |
+| An index run with nothing changed | | 0.5–0.8 s (0.95 s with `GOMAXPROCS=2`) |
+
+At 396,000 lines (36,000 day files): cold Find 0.25 s → 0.15 s for a rare or absent word and unchanged, 0.27 s, for a word on every line (a chat
+has 18 days there, fewer than the first round reads); `kb_search` for an absent word 0.74 s → 0.10 s; the first index takes 2 s and 27 MB. With
+the one repeated line the benchmarks used before, the 4M index is 22 MB and builds in 14 s: measure an index on text that varies.
 
 ## Pages (checked with real data 2026-10-31)
 

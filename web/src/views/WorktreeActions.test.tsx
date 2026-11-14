@@ -120,7 +120,7 @@ it("passes a real same-host cross-project parent to the leader callback and call
 });
 it("fails closed on restricted device roles and preserves copy navigation", async () => {
   deny = true; await open(); expect((item("New agent") as HTMLButtonElement).disabled).toBe(true);
-  expect(body()).toContain("Full device access"); expect((item("Copy path") as HTMLButtonElement).disabled).toBe(false); expect(requests).toHaveLength(0);
+  expect(body()).toContain("Full device access"); expect((item("Copy folder path") as HTMLButtonElement).disabled).toBe(false); expect(requests).toHaveLength(0);
 });
 it("does not show workspace removal for a generic runtime", async () => {
   target = { ...target, host: "future" }; mock.catalog.workspaces[0].source = "future"; await render(); await open();

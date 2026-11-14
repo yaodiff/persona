@@ -404,6 +404,8 @@ func TestMeetingTranscriptionCardsAndNoDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Finish the readiness check before replacing the store it reads.
+	s.hubTr.wg.Wait()
 	s.store = func() Store { return nil }
 	if _, err := change.apply(ctx); err == nil {
 		t.Fatal("applied after database disappeared")

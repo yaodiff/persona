@@ -99,8 +99,10 @@ func (s *Service) modelPicksSet() (map[string]modelPick, bool) {
 	return maps.Clone(b.m), true
 }
 
-// modelPickOf is conversation sid's pick on machine; false when it has none (or the book can't be read: the message
-// then runs as if there were none, as a pick that is not known can't be honored or refused).
+// modelPickOf is the main conversation's pick on machine; false when it has none, when sid is another conversation
+// (#6911: only the main conversation has a per-conversation pick; ones an older build kept for a leader, the
+// supervisor or another assistant conversation stay in the book but are never applied), or when the book can't be
+// read (a message then runs as if there were none: a pick that is not known can't be honored or refused).
 func (s *Service) modelPickOf(ctx context.Context, machine, sid string) (modelPick, bool) {
 	b := &s.modelPicks
 	b.mu.Lock()
@@ -109,7 +111,7 @@ func (s *Service) modelPickOf(ctx context.Context, machine, sid string) (modelPi
 		return modelPick{}, false
 	}
 	p, ok := b.m[sid]
-	return p, ok && p.MachineID == machine
+	return p, ok && p.MachineID == machine && s.isMain(ctx, sid)
 }
 
 // setModelPick keeps p as conversation sid's pick (nil: drops it) and tells the apps. Dropping a pick that isn't there
@@ -203,10 +205,11 @@ func (s *Service) applyPick(ctx context.Context, p map[string]any, pick modelPic
 	return s.applyPickedModel(ctx, p)
 }
 
-// pickEffortSet makes effort the pick's effort of conversation sid on machine, when it has a pick: the apps set it
-// through POST …/modes (#2416), and the next message would otherwise put the pick's back.
+// pickEffortSet makes effort the pick's effort of the main conversation on machine, when it has a pick: the apps set
+// it through POST …/modes (#2416), and the next message would otherwise put the pick's back. Other conversations have
+// no pick (#6911), so their modes change nothing here.
 func (s *Service) pickEffortSet(ctx context.Context, machine, sid, effort string) {
-	if !slices.Contains(pickEfforts, effort) {
+	if !slices.Contains(pickEfforts, effort) || !s.isMain(ctx, sid) {
 		return
 	}
 	err := s.updateModelPick(ctx, sid, func(p modelPick, had bool) (*modelPick, bool) {
@@ -287,18 +290,14 @@ func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.M
 		return modelPick{}, refusePick(http.StatusBadRequest, err)
 	}
 	machine = s.conversationMachine(ctx, sid, machine)
-	d, ok := s.device(ctx, machine)
-	if !ok {
+	if _, ok := s.device(ctx, machine); !ok {
 		return modelPick{}, refusePick(http.StatusNotFound, errUnknownMachine)
 	}
+	// Only the main conversation may keep a per-conversation pick (#6911): a leader, the background supervisor or
+	// another assistant conversation follows Model configuration › Main chat or what it started with, so the picker
+	// is not offered for them and the hub neither accepts nor applies one. The main one may not have run yet.
 	if cfg := s.settings(ctx); cfg.Main == "" || cfg.Main != sid || cfg.mainRouteMachine() != machine {
-		// Not the main conversation (which may not have run yet): one of the assistant's that its machine lists.
-		if c, known := s.session(ctx, machine, sid); !known || !c.Assistant {
-			return modelPick{}, refusePick(http.StatusNotFound, i18n.Err("assistant-model_pick.err_no_conversation", i18n.Args{"machine": firstNonEmpty(d.Name, machine)}))
-		}
-	}
-	if s.isGuest(ctx, machine, sid) { // it keeps what it started on (sendParams)
-		return modelPick{}, refusePick(http.StatusConflict, i18n.Err("assistant-model_pick.err_guest"))
+		return modelPick{}, refusePick(http.StatusBadRequest, i18n.Err("assistant-model_pick.err_main_only"))
 	}
 	if err := s.modelPickRefusal(ctx, machine, in.Launcher, lang, false); err != nil {
 		return modelPick{}, err
@@ -368,14 +367,17 @@ func (s *Service) pickedModelRefusal(ctx context.Context, machine, launcher, mod
 	return nil
 }
 
-// keepStartPick keeps the launcher / model / effort a new conversation was started with (POST
-// /api/v1/assistant/conversations) as its pick, so its later messages keep them, and shows it on sess. Nothing is kept
-// when neither a launcher nor a model was named, or when the start fell back to another launcher than the one named (or than the one the model
-// was for); an effort a pick can't carry is left out.
-func (s *Service) keepStartPick(ctx context.Context, sess *proto.Session, launcher, model, effort string) {
+// keepStartPick keeps the launcher / model / effort a new main conversation was started with (POST
+// /api/v1/assistant/conversations, Main: true) as its pick, so its later messages keep them, and shows it on sess.
+// Only the main conversation keeps a pick (#6911): main is passed explicitly because a carried start
+// (startMain) calls this before settings name the new conversation as the main one. Another conversation's start
+// runs on what it named but keeps nothing. Nothing is kept when neither a launcher nor a model was named, or when
+// the start fell back to another launcher than the one named (or than the one the model was for); an effort a pick
+// can't carry is left out.
+func (s *Service) keepStartPick(ctx context.Context, sess *proto.Session, launcher, model, effort string, main bool) {
 	launcher, effort = strings.TrimSpace(launcher), strings.TrimSpace(effort)
 	switch {
-	case launcher == "" && model == "", sess.Launcher == "":
+	case !main, launcher == "" && model == "", sess.Launcher == "":
 		return // an effort alone (iOS sends its last one with every start) is no pick: Model configuration still holds
 	case launcher != "" && launcher != sess.Launcher, model != "" && model != sess.Model:
 		return // it fell back: the pick is not what runs
@@ -444,6 +446,11 @@ func (s *Service) modelPickRoutes() {
 		id := r.PathValue("id")
 		if !validSessionID(id) {
 			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-model_pick.err_invalid_id"))
+			return
+		}
+		// Only the main conversation has a pick (#6911): answer ok without touching an older build's stored side pick.
+		if !s.isMain(r.Context(), id) {
+			apierr.WriteJSON(w, map[string]any{"ok": true})
 			return
 		}
 		if err := s.setModelPick(r.Context(), id, nil); err != nil {

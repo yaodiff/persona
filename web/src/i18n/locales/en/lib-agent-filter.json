@@ -5,7 +5,6 @@
   "botmux": "botmux",
   "botmux_show": "Show botmux sessions",
   "botmux_hide": "Hide botmux sessions",
-  "search_placeholder": "Search name, project, model, or machine:…",
   "search_in": "Search in",
   "scope_all": "Full text",
   "scope_title": "Title",
@@ -28,5 +27,6 @@
   "role_title": "Title:",
   "filter": "Filter",
   "remove_filter": "Remove {name}",
-  "search_as_code_off": "Turn off Search as Code"
+  "search_as_code_off": "Turn off Search as Code",
+  "query_chip": "Search"
 }

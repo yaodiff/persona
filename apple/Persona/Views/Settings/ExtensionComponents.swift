@@ -13,19 +13,16 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
     var chevron: Bool
     @ViewBuilder var trailing: Trailing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let stacked = typeSize.isAccessibilitySize
         HStack(spacing: Theme.Space.m) {
             leading
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(row.title).font(Theme.Font.body).lineLimit(stacked ? 3 : 1).minimumScaleFactor(stacked ? 1 : 0.8)
-                if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(stacked ? 4 : 2) }
-                if stacked { details(lines: 2) }
+                Text(row.title).font(Theme.Font.body).lineLimit(1).minimumScaleFactor(0.8)
+                if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2) }
             }
             Spacer(minLength: Theme.Space.s)
-            if !stacked { details(lines: 1) }
+            details(lines: 1)
             if let action = row.action, model?.selected(action.id) == true {
                 ThemedIcon(Theme.Icon.success).font(Theme.Font.labelStrong).foregroundStyle(Theme.positive)
                     .accessibilityLabel("Selected [Extension Components 7ecf1c]")
@@ -41,8 +38,7 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
         .contentShape(.rect)
     }
 
-    /// The trend (UI version 6), the value and the badge: after the title's column, or under the title at the
-    /// accessibility sizes.
+    /// The trend (UI version 6), the value and the badge: after the title's column.
     @ViewBuilder private func details(lines: Int) -> some View {
         // UI version 6: its trend before its value.
         if let spark = row.spark { ExtensionSparkLine(spark: spark) }
@@ -184,10 +180,12 @@ struct ExtensionLogo: View {
 struct ExtensionMarkdown: View {
     var text: String
     @Binding var link: LinkTarget?
+    @Environment(\.extensionPicture) private var picture
 
     var body: some View {
         Markdown(text)
-            .markdownTheme(.persona)
+            // In a picture the share card's theme: its code blocks wrap (`ImageRenderer` draws no scroll views).
+            .markdownTheme(picture ? .card : .persona)
             .markdownImageProvider(NoImages())
             .markdownInlineImageProvider(NoImages())
             .textSelection(.enabled)
@@ -207,39 +205,49 @@ struct ExtensionMarkdown: View {
 }
 
 /// An extension's `table`: its columns' titles, its rows, a cell on one line each; wider than the screen it scrolls
-/// sideways. Its caption under it.
+/// sideways. Its caption under it. In a picture (`extensionPicture`) it fits the width and its cells wrap: a picture
+/// cannot scroll, and `ImageRenderer` draws no scroll views at all.
 struct ExtensionTable: View {
     var table: ExtensionTableComponent
+    @Environment(\.extensionPicture) private var picture
 
     var body: some View {
         let columns = Array(table.columns.prefix(8))
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            ScrollView(.horizontal) {
-                Grid(alignment: .leading, horizontalSpacing: Theme.Space.l, verticalSpacing: Theme.Space.s) {
-                    GridRow {
-                        ForEach(Array(columns.enumerated()), id: \.offset) { _, c in
-                            Text(c.title).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(1)
-                                .gridColumnAlignment(c.align == ExtensionTableAlign.end ? .trailing : .leading)
-                        }
-                    }
-                    Divider().gridCellUnsizedAxes(.horizontal)
-                    ForEach(Array(table.rows.prefix(100).enumerated()), id: \.offset) { _, row in
-                        GridRow {
-                            ForEach(Array(columns.indices), id: \.self) { i in
-                                Text(i < row.count ? row[i] : "")
-                                    .font(columns[i].align == ExtensionTableAlign.end ? Theme.Font.secondary.monospacedDigit() : Theme.Font.secondary)
-                                    .lineLimit(1)
-                                    .fixedSize()
-                            }
-                        }
-                    }
+            if picture {
+                grid(columns)
+            } else {
+                ScrollView(.horizontal) {
+                    grid(columns)
                 }
-                .padding(.vertical, Theme.Space.xs)
+                .textSelection(.enabled)
             }
-            .textSelection(.enabled)
             if let c = table.caption, !c.isEmpty { Text(c).font(Theme.Font.label).foregroundStyle(.secondary) }
         }
         .accessibilityIdentifier("plugin-ui-table")
+    }
+
+    private func grid(_ columns: [ExtensionTableColumn]) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: Theme.Space.l, verticalSpacing: Theme.Space.s) {
+            GridRow {
+                ForEach(Array(columns.enumerated()), id: \.offset) { _, c in
+                    Text(c.title).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(picture ? nil : 1)
+                        .gridColumnAlignment(c.align == ExtensionTableAlign.end ? .trailing : .leading)
+                }
+            }
+            Divider().gridCellUnsizedAxes(.horizontal)
+            ForEach(Array(table.rows.prefix(100).enumerated()), id: \.offset) { _, row in
+                GridRow {
+                    ForEach(Array(columns.indices), id: \.self) { i in
+                        Text(i < row.count ? row[i] : "")
+                            .font(columns[i].align == ExtensionTableAlign.end ? Theme.Font.secondary.monospacedDigit() : Theme.Font.secondary)
+                            .lineLimit(picture ? nil : 1)
+                            .fixedSize(horizontal: !picture, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, Theme.Space.xs)
     }
 }
 

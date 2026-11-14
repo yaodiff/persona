@@ -1,0 +1,2107 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "legacy_only",
+      "description": "Minutes without an overview (before #6563, or the hub left it out): the layout as before, and the Markdown byte for byte as before.",
+      "source": "docs/assistant/meeting-minutes.md \"Markdown\"; server/internal/kb/minutes.go renderMinutes",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sprint review",
+          "when": "2026-11-10 14:00–15:10",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T15:10:00+08:00",
+          "where": "Room 3",
+          "attendees": [
+            "Ada",
+            "Bo",
+            "Cy"
+          ],
+          "points": [
+            {
+              "text": "Export drops entries over 4 MB",
+              "at": 312.0,
+              "who": "Ada"
+            },
+            {
+              "text": "The export size-limit message is done",
+              "at": 655.0
+            },
+            {
+              "text": "The release on the 20th is at risk",
+              "at": 1810.0
+            },
+            {
+              "text": "Load-test QPS raised to 40K",
+              "at": 1830.0,
+              "who": "Bo"
+            },
+            {
+              "text": "The cache bug reproduced once on a weak network",
+              "at": 1950.0,
+              "photo": 2
+            }
+          ],
+          "decisions": [
+            {
+              "text": "Export keeps the cap, with a warning when an entry is skipped",
+              "at": 1504.5
+            },
+            {
+              "text": "The release moves a week unless the cache bug is fixed by Wednesday",
+              "at": 2290.0
+            }
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "who": "Bo",
+              "what": "Add the warning text and the regression test",
+              "by": "Friday",
+              "due_date": "2026-11-13",
+              "at": 2100.0
+            },
+            {
+              "id": "a2",
+              "who": "Cy",
+              "what": "Share the load-test report",
+              "at": 2350.0
+            }
+          ],
+          "open": [
+            {
+              "text": "Whether the cap is per entry or per recording",
+              "at": 2408.0
+            }
+          ],
+          "language": "en"
+        }
+      },
+      "expected": {
+        "layout": "legacy",
+        "overview": null,
+        "markdown": "# Sprint review\n\n- When: 2026-11-10 14:00–15:10\n- Location: Room 3\n- Attendees: Ada, Bo, Cy\n\n## Key points\n\n- [14:05:12] Export drops entries over 4 MB (Ada)\n- [14:10:55] The export size-limit message is done\n- [14:30:10] The release on the 20th is at risk\n- [14:30:30] Load-test QPS raised to 40K (Bo)\n- [14:32:30] The cache bug reproduced once on a weak network (photo 2)\n\n## Decisions\n\n- [14:25:04] Export keeps the cap, with a warning when an entry is skipped\n- [14:38:10] The release moves a week unless the cache bug is fixed by Wednesday\n\n## Action items\n\n- [14:35:00] Bo: Add the warning text and the regression test (Friday)\n- [14:39:10] Cy: Share the load-test report\n\n## Open questions\n\n- [14:40:08] Whether the cap is per entry or per recording"
+      }
+    },
+    {
+      "name": "rich",
+      "description": "The contract's example: a headline, three conclusions, two titled groups of two topics, a photo, decisions, action items and an open question; the Markdown is the contract's example.",
+      "source": "docs/assistant/meeting-minutes.md \"The `overview` field\", \"Markdown\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sprint review",
+          "when": "2026-11-10 14:00–15:10",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T15:10:00+08:00",
+          "where": "Room 3",
+          "attendees": [
+            "Ada",
+            "Bo",
+            "Cy"
+          ],
+          "points": [
+            {
+              "text": "Export drops entries over 4 MB",
+              "at": 312.0,
+              "who": "Ada"
+            },
+            {
+              "text": "The export size-limit message is done",
+              "at": 655.0
+            },
+            {
+              "text": "The release on the 20th is at risk",
+              "at": 1810.0
+            },
+            {
+              "text": "Load-test QPS raised to 40K",
+              "at": 1830.0,
+              "who": "Bo"
+            },
+            {
+              "text": "The cache bug reproduced once on a weak network",
+              "at": 1950.0,
+              "photo": 2
+            }
+          ],
+          "decisions": [
+            {
+              "text": "Export keeps the cap, with a warning when an entry is skipped",
+              "at": 1504.5
+            },
+            {
+              "text": "The release moves a week unless the cache bug is fixed by Wednesday",
+              "at": 2290.0
+            }
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "who": "Bo",
+              "what": "Add the warning text and the regression test",
+              "by": "Friday",
+              "due_date": "2026-11-13",
+              "at": 2100.0
+            },
+            {
+              "id": "a2",
+              "who": "Cy",
+              "what": "Share the load-test report",
+              "at": 2350.0
+            }
+          ],
+          "open": [
+            {
+              "text": "Whether the cap is per entry or per recording",
+              "at": 2408.0
+            }
+          ],
+          "overview": {
+            "headline": "Export ships with the size cap; the release date waits on the cache fix",
+            "conclusions": [
+              {
+                "text": "Export ships with the 4 MB cap and a warning",
+                "strong": [
+                  "4 MB"
+                ],
+                "at": 1504.5
+              },
+              {
+                "text": "The release date hangs on the cache fix by Wednesday",
+                "strong": [
+                  "Wednesday"
+                ],
+                "at": 2290.0
+              },
+              {
+                "text": "Load target raised to 40K QPS",
+                "strong": [
+                  "40K"
+                ],
+                "at": 1830.0
+              }
+            ],
+            "groups": [
+              {
+                "title": "Project progress",
+                "topics": [
+                  {
+                    "title": "Export",
+                    "icon": "progress",
+                    "bullets": [
+                      {
+                        "text": "Export drops entries over 4 MB",
+                        "strong": [
+                          "4 MB"
+                        ],
+                        "at": 312.0,
+                        "who": "Ada"
+                      },
+                      {
+                        "text": "The export size-limit message is done",
+                        "strong": [
+                          "done"
+                        ],
+                        "at": 655.0
+                      },
+                      {
+                        "text": "Export keeps the cap, with a warning when an entry is skipped",
+                        "strong": [
+                          "keeps the cap"
+                        ],
+                        "at": 1504.5,
+                        "decision": true
+                      }
+                    ]
+                  },
+                  {
+                    "title": "Release date",
+                    "icon": "schedule",
+                    "bullets": [
+                      {
+                        "text": "The release on the 20th is at risk",
+                        "strong": [
+                          "at risk"
+                        ],
+                        "at": 1810.0
+                      },
+                      {
+                        "text": "The release moves a week unless the cache bug is fixed by Wednesday",
+                        "strong": [
+                          "a week"
+                        ],
+                        "at": 2290.0,
+                        "decision": true
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Tooling and performance",
+                "topics": [
+                  {
+                    "title": "Load testing",
+                    "icon": "performance",
+                    "bullets": [
+                      {
+                        "text": "Load-test QPS raised to 40K",
+                        "strong": [
+                          "40K"
+                        ],
+                        "at": 1830.0,
+                        "who": "Bo"
+                      }
+                    ]
+                  },
+                  {
+                    "title": "Cache bug",
+                    "icon": "quality",
+                    "bullets": [
+                      {
+                        "text": "The cache bug reproduced once on a weak network",
+                        "strong": [
+                          "once"
+                        ],
+                        "at": 1950.0,
+                        "photo": 2
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "language": "en"
+        }
+      },
+      "expected": {
+        "layout": "overview",
+        "overview": {
+          "headline": "Export ships with the size cap; the release date waits on the cache fix",
+          "conclusions": [
+            {
+              "segments": [
+                {
+                  "text": "Export ships with the ",
+                  "bold": false
+                },
+                {
+                  "text": "4 MB",
+                  "bold": true
+                },
+                {
+                  "text": " cap and a warning",
+                  "bold": false
+                }
+              ],
+              "at": 1504.5,
+              "photo": null
+            },
+            {
+              "segments": [
+                {
+                  "text": "The release date hangs on the cache fix by ",
+                  "bold": false
+                },
+                {
+                  "text": "Wednesday",
+                  "bold": true
+                }
+              ],
+              "at": 2290.0,
+              "photo": null
+            },
+            {
+              "segments": [
+                {
+                  "text": "Load target raised to ",
+                  "bold": false
+                },
+                {
+                  "text": "40K",
+                  "bold": true
+                },
+                {
+                  "text": " QPS",
+                  "bold": false
+                }
+              ],
+              "at": 1830.0,
+              "photo": null
+            }
+          ],
+          "groups": [
+            {
+              "title": "Project progress",
+              "topics": [
+                {
+                  "title": "Export",
+                  "icon": "progress",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Export drops entries over ",
+                          "bold": false
+                        },
+                        {
+                          "text": "4 MB",
+                          "bold": true
+                        }
+                      ],
+                      "at": 312.0,
+                      "photo": null,
+                      "who": "Ada",
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "The export size-limit message is ",
+                          "bold": false
+                        },
+                        {
+                          "text": "done",
+                          "bold": true
+                        }
+                      ],
+                      "at": 655.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "Export ",
+                          "bold": false
+                        },
+                        {
+                          "text": "keeps the cap",
+                          "bold": true
+                        },
+                        {
+                          "text": ", with a warning when an entry is skipped",
+                          "bold": false
+                        }
+                      ],
+                      "at": 1504.5,
+                      "photo": null,
+                      "who": null,
+                      "decision": true
+                    }
+                  ]
+                },
+                {
+                  "title": "Release date",
+                  "icon": "schedule",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "The release on the 20th is ",
+                          "bold": false
+                        },
+                        {
+                          "text": "at risk",
+                          "bold": true
+                        }
+                      ],
+                      "at": 1810.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "The release moves ",
+                          "bold": false
+                        },
+                        {
+                          "text": "a week",
+                          "bold": true
+                        },
+                        {
+                          "text": " unless the cache bug is fixed by Wednesday",
+                          "bold": false
+                        }
+                      ],
+                      "at": 2290.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": true
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Tooling and performance",
+              "topics": [
+                {
+                  "title": "Load testing",
+                  "icon": "performance",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Load-test QPS raised to ",
+                          "bold": false
+                        },
+                        {
+                          "text": "40K",
+                          "bold": true
+                        }
+                      ],
+                      "at": 1830.0,
+                      "photo": null,
+                      "who": "Bo",
+                      "decision": false
+                    }
+                  ]
+                },
+                {
+                  "title": "Cache bug",
+                  "icon": "quality",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "The cache bug reproduced ",
+                          "bold": false
+                        },
+                        {
+                          "text": "once",
+                          "bold": true
+                        },
+                        {
+                          "text": " on a weak network",
+                          "bold": false
+                        }
+                      ],
+                      "at": 1950.0,
+                      "photo": 2,
+                      "who": null,
+                      "decision": false
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "markdown": "# Sprint review\n\n- When: 2026-11-10 14:00–15:10\n- Location: Room 3\n- Attendees: Ada, Bo, Cy\n\nExport ships with the size cap; the release date waits on the cache fix\n\n## Core conclusions\n\n- [14:25:04] Export ships with the **4 MB** cap and a warning\n- [14:38:10] The release date hangs on the cache fix by **Wednesday**\n- [14:30:30] Load target raised to **40K** QPS\n\n## Project progress\n\n### Export\n\n- [14:05:12] Export drops entries over **4 MB** (Ada)\n- [14:10:55] The export size-limit message is **done**\n- [14:25:04] Decided: Export **keeps the cap**, with a warning when an entry is skipped\n\n### Release date\n\n- [14:30:10] The release on the 20th is **at risk**\n- [14:38:10] Decided: The release moves **a week** unless the cache bug is fixed by Wednesday\n\n## Tooling and performance\n\n### Load testing\n\n- [14:30:30] Load-test QPS raised to **40K** (Bo)\n\n### Cache bug\n\n- [14:32:30] The cache bug reproduced **once** on a weak network (photo 2)\n\n## Action items\n\n- [14:35:00] Bo: Add the warning text and the regression test (Friday)\n- [14:39:10] Cy: Share the load-test report\n\n## Open questions\n\n- [14:40:08] Whether the cap is per entry or per recording\n\n*AI-generated from the recording. Check anything important.*"
+      }
+    },
+    {
+      "name": "one_group",
+      "description": "One untitled group in Chinese, no headline, a literal * in a text, a to-do already added and a partial transcript: no group heading (each topic a ## heading in the Markdown), * escaped, the partial note before the AI note.",
+      "source": "docs/assistant/meeting-minutes.md \"The `overview` field\" (Groups), \"Markdown\"",
+      "input": {
+        "minutes": {
+          "version": 2,
+          "revision": 3,
+          "generated_at": "2026-11-10T06:40:00Z",
+          "title": "周会",
+          "when": "2026-11-10 14:00–14:30",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:30:00+08:00",
+          "attendees": [
+            "Ada",
+            "Bo"
+          ],
+          "points": [
+            {
+              "text": "导出模块已完成",
+              "at": 60.0,
+              "who": "Ada"
+            },
+            {
+              "text": "缓存命中率按 a*b 算是 92%",
+              "at": 300.0
+            }
+          ],
+          "decisions": [
+            {
+              "text": "发布推迟一周",
+              "at": 600.0
+            }
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "who": "Bo",
+              "what": "整理发布说明",
+              "by": "周五前",
+              "at": 900.0,
+              "todo_id": "todo_mtg_0123456789abcdef"
+            }
+          ],
+          "overview": {
+            "conclusions": [
+              {
+                "text": "发布推迟一周",
+                "strong": [
+                  "推迟一周"
+                ],
+                "at": 600.0
+              }
+            ],
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "导出",
+                    "icon": "progress",
+                    "bullets": [
+                      {
+                        "text": "导出模块已完成",
+                        "strong": [
+                          "已完成"
+                        ],
+                        "at": 60.0,
+                        "who": "Ada"
+                      }
+                    ]
+                  },
+                  {
+                    "title": "缓存",
+                    "icon": "performance",
+                    "bullets": [
+                      {
+                        "text": "缓存命中率按 a*b 算是 92%",
+                        "strong": [
+                          "92%"
+                        ],
+                        "at": 300.0
+                      }
+                    ]
+                  },
+                  {
+                    "title": "发布",
+                    "icon": "release",
+                    "bullets": [
+                      {
+                        "text": "发布推迟一周",
+                        "strong": [
+                          "推迟一周"
+                        ],
+                        "at": 600.0,
+                        "decision": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "partial": true,
+          "language": "zh-Hans"
+        }
+      },
+      "expected": {
+        "layout": "overview",
+        "overview": {
+          "headline": null,
+          "conclusions": [
+            {
+              "segments": [
+                {
+                  "text": "发布",
+                  "bold": false
+                },
+                {
+                  "text": "推迟一周",
+                  "bold": true
+                }
+              ],
+              "at": 600.0,
+              "photo": null
+            }
+          ],
+          "groups": [
+            {
+              "title": "",
+              "topics": [
+                {
+                  "title": "导出",
+                  "icon": "progress",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "导出模块",
+                          "bold": false
+                        },
+                        {
+                          "text": "已完成",
+                          "bold": true
+                        }
+                      ],
+                      "at": 60.0,
+                      "photo": null,
+                      "who": "Ada",
+                      "decision": false
+                    }
+                  ]
+                },
+                {
+                  "title": "缓存",
+                  "icon": "performance",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "缓存命中率按 a*b 算是 ",
+                          "bold": false
+                        },
+                        {
+                          "text": "92%",
+                          "bold": true
+                        }
+                      ],
+                      "at": 300.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    }
+                  ]
+                },
+                {
+                  "title": "发布",
+                  "icon": "release",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "发布",
+                          "bold": false
+                        },
+                        {
+                          "text": "推迟一周",
+                          "bold": true
+                        }
+                      ],
+                      "at": 600.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "markdown": "# 周会\n\n- 时间：2026-11-10 14:00–14:30\n- 参会：Ada、Bo\n\n## 核心结论\n\n- [14:10:00] 发布**推迟一周**\n\n## 导出\n\n- [14:01:00] 导出模块**已完成**（Ada）\n\n## 缓存\n\n- [14:05:00] 缓存命中率按 a\\*b 算是 **92%**\n\n## 发布\n\n- [14:10:00] 已决定：发布**推迟一周**\n\n## 待办\n\n- [14:15:00] Bo：整理发布说明（周五前）\n\n> 转写太长，结尾部分没有整理进纪要。\n\n*由 AI 根据录音生成，重要内容请核对。*"
+      }
+    },
+    {
+      "name": "repeated_figure",
+      "description": "A figure that appears twice: each entry is the first occurrence at or after the end of the one before, so the second 40K bolds the first 40K after 20K; an entry found only before that point is skipped.",
+      "source": "docs/assistant/meeting-minutes.md \"Bold (`strong`)\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Load target moved from 20K to 40K; 40K holds on staging",
+              "at": 30.0
+            },
+            {
+              "text": "40K now, 20K last week",
+              "at": 60.0
+            },
+            {
+              "text": "The 40K target and the 40K ceiling",
+              "at": 90.0
+            }
+          ],
+          "language": "en",
+          "overview": {
+            "headline": "The load target is 40K",
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Load testing",
+                    "icon": "performance",
+                    "bullets": [
+                      {
+                        "text": "Load target moved from 20K to 40K; 40K holds on staging",
+                        "strong": [
+                          "20K",
+                          "40K"
+                        ],
+                        "at": 30.0
+                      },
+                      {
+                        "text": "40K now, 20K last week",
+                        "strong": [
+                          "20K",
+                          "40K"
+                        ],
+                        "at": 60.0
+                      },
+                      {
+                        "text": "The 40K target and the 40K ceiling",
+                        "strong": [
+                          "40K",
+                          "40K"
+                        ],
+                        "at": 90.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "layout": "overview",
+        "overview": {
+          "headline": "The load target is 40K",
+          "conclusions": [],
+          "groups": [
+            {
+              "title": "",
+              "topics": [
+                {
+                  "title": "Load testing",
+                  "icon": "performance",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Load target moved from ",
+                          "bold": false
+                        },
+                        {
+                          "text": "20K",
+                          "bold": true
+                        },
+                        {
+                          "text": " to ",
+                          "bold": false
+                        },
+                        {
+                          "text": "40K",
+                          "bold": true
+                        },
+                        {
+                          "text": "; 40K holds on staging",
+                          "bold": false
+                        }
+                      ],
+                      "at": 30.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "40K now, ",
+                          "bold": false
+                        },
+                        {
+                          "text": "20K",
+                          "bold": true
+                        },
+                        {
+                          "text": " last week",
+                          "bold": false
+                        }
+                      ],
+                      "at": 60.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "The ",
+                          "bold": false
+                        },
+                        {
+                          "text": "40K",
+                          "bold": true
+                        },
+                        {
+                          "text": " target and the ",
+                          "bold": false
+                        },
+                        {
+                          "text": "40K",
+                          "bold": true
+                        },
+                        {
+                          "text": " ceiling",
+                          "bold": false
+                        }
+                      ],
+                      "at": 90.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\nThe load target is 40K\n\n## Load testing\n\n- [14:00:30] Load target moved from **20K** to **40K**; 40K holds on staging\n- [14:01:00] 40K now, **20K** last week\n- [14:01:30] The **40K** target and the **40K** ceiling\n\n*AI-generated from the recording. Check anything important.*"
+      }
+    },
+    {
+      "name": "unknown_icon",
+      "description": "An icon not in the list, a missing one, and one in another case are all general: icons are compared exactly, and the Markdown has no icons.",
+      "source": "docs/assistant/meeting-minutes.md \"The `overview` field\" (Icons), \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is done",
+              "at": 30.0
+            },
+            {
+              "text": "Rollout starts Monday",
+              "at": 60.0
+            },
+            {
+              "text": "Beta feedback is positive",
+              "at": 90.0
+            }
+          ],
+          "language": "en",
+          "overview": {
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Export",
+                    "icon": "rocket",
+                    "bullets": [
+                      {
+                        "text": "Export is done",
+                        "strong": [
+                          "done"
+                        ],
+                        "at": 30.0
+                      }
+                    ]
+                  },
+                  {
+                    "title": "Rollout",
+                    "bullets": [
+                      {
+                        "text": "Rollout starts Monday",
+                        "strong": [
+                          "Monday"
+                        ],
+                        "at": 60.0
+                      }
+                    ]
+                  },
+                  {
+                    "title": "Beta",
+                    "icon": "Progress",
+                    "bullets": [
+                      {
+                        "text": "Beta feedback is positive",
+                        "strong": [
+                          "positive"
+                        ],
+                        "at": 90.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "layout": "overview",
+        "overview": {
+          "headline": null,
+          "conclusions": [],
+          "groups": [
+            {
+              "title": "",
+              "topics": [
+                {
+                  "title": "Export",
+                  "icon": "general",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Export is ",
+                          "bold": false
+                        },
+                        {
+                          "text": "done",
+                          "bold": true
+                        }
+                      ],
+                      "at": 30.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    }
+                  ]
+                },
+                {
+                  "title": "Rollout",
+                  "icon": "general",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Rollout starts ",
+                          "bold": false
+                        },
+                        {
+                          "text": "Monday",
+                          "bold": true
+                        }
+                      ],
+                      "at": 60.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    }
+                  ]
+                },
+                {
+                  "title": "Beta",
+                  "icon": "general",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Beta feedback is ",
+                          "bold": false
+                        },
+                        {
+                          "text": "positive",
+                          "bold": true
+                        }
+                      ],
+                      "at": 90.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Export\n\n- [14:00:30] Export is **done**\n\n## Rollout\n\n- [14:01:00] Rollout starts **Monday**\n\n## Beta\n\n- [14:01:30] Beta feedback is **positive**\n\n*AI-generated from the recording. Check anything important.*"
+      }
+    },
+    {
+      "name": "strong_not_found",
+      "description": "Entries that are not in the text bold nothing and leave the cursor where it was: a figure not said, an empty entry, another case (no case folding), and a precomposed \u00e9 against e plus a combining accent (no normalization).",
+      "source": "docs/assistant/meeting-minutes.md \"Bold (`strong`)\", \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export drops entries over 4 MB",
+              "at": 30.0
+            },
+            {
+              "text": "The size-limit message is done",
+              "at": 60.0
+            },
+            {
+              "text": "Cafe\u0301 menu is final",
+              "at": 90.0
+            }
+          ],
+          "language": "en",
+          "overview": {
+            "conclusions": [
+              {
+                "text": "Export keeps its cap",
+                "strong": [
+                  "8 MB"
+                ],
+                "at": 30.0
+              }
+            ],
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Export",
+                    "icon": "progress",
+                    "bullets": [
+                      {
+                        "text": "Export drops entries over 4 MB",
+                        "strong": [
+                          "5 MB"
+                        ],
+                        "at": 30.0
+                      },
+                      {
+                        "text": "The size-limit message is done",
+                        "strong": [
+                          "",
+                          "Done",
+                          "done"
+                        ],
+                        "at": 60.0
+                      },
+                      {
+                        "text": "Cafe\u0301 menu is final",
+                        "strong": [
+                          "Caf\u00e9",
+                          "final"
+                        ],
+                        "at": 90.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "layout": "overview",
+        "overview": {
+          "headline": null,
+          "conclusions": [
+            {
+              "segments": [
+                {
+                  "text": "Export keeps its cap",
+                  "bold": false
+                }
+              ],
+              "at": 30.0,
+              "photo": null
+            }
+          ],
+          "groups": [
+            {
+              "title": "",
+              "topics": [
+                {
+                  "title": "Export",
+                  "icon": "progress",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Export drops entries over 4 MB",
+                          "bold": false
+                        }
+                      ],
+                      "at": 30.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "The size-limit message is ",
+                          "bold": false
+                        },
+                        {
+                          "text": "done",
+                          "bold": true
+                        }
+                      ],
+                      "at": 60.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "Cafe\u0301 menu is ",
+                          "bold": false
+                        },
+                        {
+                          "text": "final",
+                          "bold": true
+                        }
+                      ],
+                      "at": 90.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Core conclusions\n\n- [14:00:30] Export keeps its cap\n\n## Export\n\n- [14:00:30] Export drops entries over 4 MB\n- [14:01:00] The size-limit message is **done**\n- [14:01:30] Cafe\u0301 menu is **final**\n\n*AI-generated from the recording. Check anything important.*"
+      }
+    },
+    {
+      "name": "empty_topic",
+      "description": "Topics without a bullet, or whose bullets are all blank, are dropped, then a group left without topics: one titled group with one topic is left, and a client shows its heading.",
+      "source": "docs/assistant/meeting-minutes.md \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is done",
+              "at": 30.0
+            }
+          ],
+          "language": "en",
+          "overview": {
+            "groups": [
+              {
+                "title": "Alpha",
+                "topics": [
+                  {
+                    "title": "Nothing",
+                    "icon": "general",
+                    "bullets": []
+                  },
+                  {
+                    "title": "Blank",
+                    "icon": "general",
+                    "bullets": [
+                      {
+                        "text": "   ",
+                        "at": 10.0
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Beta",
+                "topics": [
+                  {
+                    "title": "Export",
+                    "icon": "progress",
+                    "bullets": [
+                      {
+                        "text": "Export is done",
+                        "strong": [
+                          "done"
+                        ],
+                        "at": 30.0
+                      }
+                    ]
+                  },
+                  {
+                    "title": "Empty too",
+                    "icon": "general",
+                    "bullets": []
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "layout": "overview",
+        "overview": {
+          "headline": null,
+          "conclusions": [],
+          "groups": [
+            {
+              "title": "Beta",
+              "topics": [
+                {
+                  "title": "Export",
+                  "icon": "progress",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Export is ",
+                          "bold": false
+                        },
+                        {
+                          "text": "done",
+                          "bold": true
+                        }
+                      ],
+                      "at": 30.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "markdown": null
+      }
+    },
+    {
+      "name": "overview_empty_object",
+      "description": "An overview without groups is no overview: the minutes as before (the hub reads it as none too).",
+      "source": "docs/assistant/meeting-minutes.md \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is done",
+              "at": 30.0
+            }
+          ],
+          "language": "en",
+          "overview": {}
+        }
+      },
+      "expected": {
+        "layout": "legacy",
+        "overview": null,
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Key points\n\n- [14:00:30] Export is done"
+      }
+    },
+    {
+      "name": "overview_string",
+      "description": "An overview that is not an object is no overview; the rest of the minutes still decodes.",
+      "source": "docs/assistant/meeting-minutes.md \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is done",
+              "at": 30.0
+            }
+          ],
+          "language": "en",
+          "overview": "x"
+        }
+      },
+      "expected": {
+        "layout": "legacy",
+        "overview": null,
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Key points\n\n- [14:00:30] Export is done"
+      }
+    },
+    {
+      "name": "overview_null",
+      "description": "A null overview is no overview.",
+      "source": "docs/assistant/meeting-minutes.md \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is done",
+              "at": 30.0
+            }
+          ],
+          "language": "en",
+          "overview": null
+        }
+      },
+      "expected": {
+        "layout": "legacy",
+        "overview": null,
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Key points\n\n- [14:00:30] Export is done"
+      }
+    },
+    {
+      "name": "groups_not_array",
+      "description": "An overview whose groups is not an array is no overview, whatever else it holds.",
+      "source": "docs/assistant/meeting-minutes.md \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is done",
+              "at": 30.0
+            }
+          ],
+          "language": "en",
+          "overview": {
+            "headline": "Export ships",
+            "groups": "x"
+          }
+        }
+      },
+      "expected": {
+        "layout": "legacy",
+        "overview": null,
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Key points\n\n- [14:00:30] Export is done"
+      }
+    },
+    {
+      "name": "nothing_left",
+      "description": "An overview whose only bullet is blank has nothing left after cleaning: the minutes as before.",
+      "source": "docs/assistant/meeting-minutes.md \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is done",
+              "at": 30.0
+            }
+          ],
+          "language": "en",
+          "overview": {
+            "headline": "Export ships",
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Export",
+                    "icon": "progress",
+                    "bullets": [
+                      {
+                        "text": " \n ",
+                        "at": 30.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "layout": "legacy",
+        "overview": null,
+        "markdown": null
+      }
+    },
+    {
+      "name": "malformed_members",
+      "description": "The decoding policy member by member: members that are not objects are dropped, a group without an array topics and a topic without an array bullets or a non-blank string title are dropped, a group title that is not a string is \"\", texts must be non-blank strings, wrong-typed headline, strong and who count as absent and invalid strong entries are dropped, an unknown icon is general, an at that is not a non-negative number shows no time, a photo that is not a positive whole number is absent, and only true marks a decision.",
+      "source": "docs/assistant/meeting-minutes.md \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Odd fields",
+              "at": 0.0
+            }
+          ],
+          "language": "en",
+          "decisions": [
+            {
+              "text": "Decision kept",
+              "at": 30.0,
+              "photo": 2
+            }
+          ],
+          "overview": {
+            "headline": 7,
+            "conclusions": [
+              "x",
+              null,
+              {
+                "text": 3,
+                "at": 10.0
+              },
+              {
+                "text": "  ",
+                "at": 10.0
+              },
+              {
+                "at": 10.0
+              },
+              {
+                "text": "Kept conclusion",
+                "strong": "Kept",
+                "at": "10",
+                "photo": 0
+              },
+              {
+                "text": "Second conclusion",
+                "strong": [
+                  "Second",
+                  2,
+                  null,
+                  {
+                    "x": 1
+                  }
+                ],
+                "at": 0,
+                "photo": "2"
+              }
+            ],
+            "groups": [
+              3,
+              null,
+              "x",
+              {
+                "title": "No topics"
+              },
+              {
+                "title": "Topics not a list",
+                "topics": {
+                  "title": "x"
+                }
+              },
+              {
+                "title": 5,
+                "topics": [
+                  "x",
+                  null,
+                  [],
+                  {
+                    "bullets": [
+                      {
+                        "text": "No title",
+                        "at": 1.0
+                      }
+                    ]
+                  },
+                  {
+                    "title": "   ",
+                    "bullets": [
+                      {
+                        "text": "Blank title",
+                        "at": 1.0
+                      }
+                    ]
+                  },
+                  {
+                    "title": 9,
+                    "bullets": [
+                      {
+                        "text": "Numeric title",
+                        "at": 1.0
+                      }
+                    ]
+                  },
+                  {
+                    "title": "No bullets"
+                  },
+                  {
+                    "title": "Bullets not a list",
+                    "bullets": {
+                      "text": "x",
+                      "at": 1.0
+                    }
+                  },
+                  {
+                    "title": "Mixed",
+                    "icon": 7,
+                    "bullets": [
+                      4,
+                      null,
+                      "Plain string",
+                      {
+                        "text": 4,
+                        "at": 1.0
+                      },
+                      {
+                        "at": 2.0
+                      },
+                      {
+                        "text": "Odd fields",
+                        "strong": [
+                          "Odd",
+                          3,
+                          null,
+                          "fields"
+                        ],
+                        "at": -1,
+                        "photo": 1.5,
+                        "who": 5,
+                        "decision": "true"
+                      },
+                      {
+                        "text": "Decision kept",
+                        "strong": "kept",
+                        "at": 30.0,
+                        "photo": 2,
+                        "decision": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "layout": "overview",
+        "overview": {
+          "headline": null,
+          "conclusions": [
+            {
+              "segments": [
+                {
+                  "text": "Kept conclusion",
+                  "bold": false
+                }
+              ],
+              "at": null,
+              "photo": null
+            },
+            {
+              "segments": [
+                {
+                  "text": "Second",
+                  "bold": true
+                },
+                {
+                  "text": " conclusion",
+                  "bold": false
+                }
+              ],
+              "at": 0,
+              "photo": null
+            }
+          ],
+          "groups": [
+            {
+              "title": "",
+              "topics": [
+                {
+                  "title": "Mixed",
+                  "icon": "general",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Odd",
+                          "bold": true
+                        },
+                        {
+                          "text": " ",
+                          "bold": false
+                        },
+                        {
+                          "text": "fields",
+                          "bold": true
+                        }
+                      ],
+                      "at": null,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "Decision kept",
+                          "bold": false
+                        }
+                      ],
+                      "at": 30.0,
+                      "photo": 2,
+                      "who": null,
+                      "decision": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "markdown": null
+      }
+    },
+    {
+      "name": "figure_signs",
+      "description": "Bold entries keep the signs a figure or a name holds (%, #, @, -): the clients bold the entry as it is, with no trimming of their own, and the Markdown wraps it whole.",
+      "source": "docs/assistant/meeting-minutes.md \"Bold (`strong`)\", \"Markdown\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Load review",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Cache hit rate is 92% after ticket #42",
+              "at": 60.0
+            },
+            {
+              "text": "Latency is -5% on @Ada's build",
+              "at": 120.0
+            }
+          ],
+          "decisions": [
+            {
+              "text": "Load target raised to 40%",
+              "at": 300.0
+            }
+          ],
+          "overview": {
+            "headline": "Load target raised to 40% after the cache fix",
+            "conclusions": [
+              {
+                "text": "Load target raised to 40%",
+                "strong": [
+                  "40%"
+                ],
+                "at": 300.0
+              }
+            ],
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Load",
+                    "icon": "performance",
+                    "bullets": [
+                      {
+                        "text": "Cache hit rate is 92% after ticket #42",
+                        "strong": [
+                          "92%",
+                          "#42"
+                        ],
+                        "at": 60.0
+                      },
+                      {
+                        "text": "Latency is -5% on @Ada's build",
+                        "strong": [
+                          "-5%",
+                          "@Ada"
+                        ],
+                        "at": 120.0
+                      },
+                      {
+                        "text": "Load target raised to 40%",
+                        "strong": [
+                          "40%"
+                        ],
+                        "at": 300.0,
+                        "decision": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "language": "en"
+        }
+      },
+      "expected": {
+        "layout": "overview",
+        "overview": {
+          "headline": "Load target raised to 40% after the cache fix",
+          "conclusions": [
+            {
+              "segments": [
+                {
+                  "text": "Load target raised to ",
+                  "bold": false
+                },
+                {
+                  "text": "40%",
+                  "bold": true
+                }
+              ],
+              "at": 300.0,
+              "photo": null
+            }
+          ],
+          "groups": [
+            {
+              "title": "",
+              "topics": [
+                {
+                  "title": "Load",
+                  "icon": "performance",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Cache hit rate is ",
+                          "bold": false
+                        },
+                        {
+                          "text": "92%",
+                          "bold": true
+                        },
+                        {
+                          "text": " after ticket ",
+                          "bold": false
+                        },
+                        {
+                          "text": "#42",
+                          "bold": true
+                        }
+                      ],
+                      "at": 60.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "Latency is ",
+                          "bold": false
+                        },
+                        {
+                          "text": "-5%",
+                          "bold": true
+                        },
+                        {
+                          "text": " on ",
+                          "bold": false
+                        },
+                        {
+                          "text": "@Ada",
+                          "bold": true
+                        },
+                        {
+                          "text": "'s build",
+                          "bold": false
+                        }
+                      ],
+                      "at": 120.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "Load target raised to ",
+                          "bold": false
+                        },
+                        {
+                          "text": "40%",
+                          "bold": true
+                        }
+                      ],
+                      "at": 300.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "markdown": "# Load review\n\n- When: 2026-11-10 14:00–14:20\n\nLoad target raised to 40% after the cache fix\n\n## Core conclusions\n\n- [14:05:00] Load target raised to **40%**\n\n## Load\n\n- [14:01:00] Cache hit rate is **92%** after ticket **#42**\n- [14:02:00] Latency is **-5%** on **@Ada**'s build\n- [14:05:00] Decided: Load target raised to **40%**\n\n*AI-generated from the recording. Check anything important.*"
+      }
+    },
+    {
+      "name": "photo_numbers",
+      "description": "A photo is a positive whole number however JSON writes it: 2.0 is photo 2, as 3 is photo 3; a fraction, true, false, a negative or zero whole number is no photo. The same for conclusions.",
+      "source": "docs/assistant/meeting-minutes.md \"Clients\"",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T06:30:00Z",
+          "title": "Board review",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Whole float photo",
+              "at": 10.0,
+              "photo": 2
+            },
+            {
+              "text": "Integer photo",
+              "at": 50.0,
+              "photo": 3
+            }
+          ],
+          "overview": {
+            "conclusions": [
+              {
+                "text": "Conclusion with photo 2.0",
+                "at": 10.0,
+                "photo": 2.0
+              },
+              {
+                "text": "Conclusion with photo true",
+                "at": 20.0,
+                "photo": true
+              }
+            ],
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Board",
+                    "icon": "design",
+                    "bullets": [
+                      {
+                        "text": "Whole float photo",
+                        "at": 10.0,
+                        "photo": 2.0
+                      },
+                      {
+                        "text": "Fractional photo",
+                        "at": 20.0,
+                        "photo": 2.5
+                      },
+                      {
+                        "text": "True photo",
+                        "at": 30.0,
+                        "photo": true
+                      },
+                      {
+                        "text": "False photo",
+                        "at": 40.0,
+                        "photo": false
+                      },
+                      {
+                        "text": "Integer photo",
+                        "at": 50.0,
+                        "photo": 3
+                      },
+                      {
+                        "text": "Negative whole photo",
+                        "at": 60.0,
+                        "photo": -1.0
+                      },
+                      {
+                        "text": "Zero photo",
+                        "at": 70.0,
+                        "photo": 0.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "language": "en"
+        }
+      },
+      "expected": {
+        "layout": "overview",
+        "overview": {
+          "headline": null,
+          "conclusions": [
+            {
+              "segments": [
+                {
+                  "text": "Conclusion with photo 2.0",
+                  "bold": false
+                }
+              ],
+              "at": 10.0,
+              "photo": 2
+            },
+            {
+              "segments": [
+                {
+                  "text": "Conclusion with photo true",
+                  "bold": false
+                }
+              ],
+              "at": 20.0,
+              "photo": null
+            }
+          ],
+          "groups": [
+            {
+              "title": "",
+              "topics": [
+                {
+                  "title": "Board",
+                  "icon": "design",
+                  "bullets": [
+                    {
+                      "segments": [
+                        {
+                          "text": "Whole float photo",
+                          "bold": false
+                        }
+                      ],
+                      "at": 10.0,
+                      "photo": 2,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "Fractional photo",
+                          "bold": false
+                        }
+                      ],
+                      "at": 20.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "True photo",
+                          "bold": false
+                        }
+                      ],
+                      "at": 30.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "False photo",
+                          "bold": false
+                        }
+                      ],
+                      "at": 40.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "Integer photo",
+                          "bold": false
+                        }
+                      ],
+                      "at": 50.0,
+                      "photo": 3,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "Negative whole photo",
+                          "bold": false
+                        }
+                      ],
+                      "at": 60.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    },
+                    {
+                      "segments": [
+                        {
+                          "text": "Zero photo",
+                          "bold": false
+                        }
+                      ],
+                      "at": 70.0,
+                      "photo": null,
+                      "who": null,
+                      "decision": false
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "markdown": null
+      }
+    }
+  ]
+}

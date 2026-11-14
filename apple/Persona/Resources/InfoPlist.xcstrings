@@ -231,6 +231,29 @@
         }
       }
     },
+    "NSLocalNetworkUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona connects straight to your computer when it's on the same Wi-Fi, to show its screen faster."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同じ Wi-Fi にあるコンピュータに直接つないで、その画面をより速く表示します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 在你和电脑连着同一个 Wi-Fi 时直接连到电脑，让电脑屏幕显示得更快。"
+          }
+        }
+      }
+    },
     "NSLocationWhenInUseUsageDescription": {
       "extractionState": "manual",
       "localizations": {
@@ -260,19 +283,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona records audio when you start a recording or dictate a message, for example a meeting or a spoken note. Recordings are transcribed on your iPhone and only the text is saved to the knowledge base on your hub; the audio stays on your iPhone. In a voice conversation you start — on the phone or in CarPlay — your voice is streamed through your hub to the realtime speech service it is set up with, only while the conversation is open."
+            "value": "Persona records audio when you start a recording or dictate a message, for example a meeting or a spoken note. Recordings are transcribed on your iPhone and only the text is saved to the knowledge base on your hub; the audio stays on your iPhone, except while you hold Talk in a meeting: what is said then goes to the voice service. A meeting you choose to transcribe on the hub sends its audio, Talk included, through your hub to the speech service it is set up with, and the hub deletes it once the meeting's minutes are written. In a voice conversation you start — on the phone or in CarPlay — your voice is streamed through your hub to the realtime speech service it is set up with, only while the conversation is open."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "録音や音声入力を始めたときにPersonaが録音します。たとえば会議や口頭のメモです。録音はiPhone上で文字起こしされ、テキストだけがハブのナレッジに保存されます。音声はiPhoneに残ります。あなたが始めた音声会話では（iPhoneでもCarPlayでも）、会話中に限り、あなたの声がハブを経由して、ハブに設定されたリアルタイム音声サービスに送られます。"
+            "value": "録音や音声入力を始めたときにPersonaが録音します。たとえば会議や口頭のメモです。録音はiPhone上で文字起こしされ、テキストだけがハブのナレッジに保存されます。音声はiPhoneに残ります。ただし会議で「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。ハブで文字起こしすることを選んだ会議は、その音声（「話す」を含む）をハブ経由で、ハブに設定された音声サービスに送ります。ハブは会議の議事録ができた時点でその音声を削除します。あなたが始めた音声会話では（iPhoneでもCarPlayでも）、会話中に限り、あなたの声がハブを経由して、ハブに設定されたリアルタイム音声サービスに送られます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "你开始录音或语音输入时，Persona 会录音，比如录一场会议或一段口述笔记。录音在 iPhone 上转成文字，只有文字存进 hub 上的知识库，音频留在 iPhone 上。你发起语音对话时（在手机上或 CarPlay 里），只在对话进行中把你的声音经 hub 传给它配置的实时语音服务。"
+            "value": "你开始录音或语音输入时，Persona 会录音，比如录一场会议或一段口述笔记。录音在 iPhone 上转成文字，只有文字存进 hub 上的知识库，音频留在 iPhone 上；只有在会议里按住“说话”时例外：那时说的内容会发送到语音服务。你选择在 hub 上转写的会议，会把它的音频（包括“说话”）经 hub 传给它配置的语音服务，会议纪要写好后 hub 就删除这段音频。你发起语音对话时（在手机上或 CarPlay 里），只在对话进行中把你的声音经 hub 传给它配置的实时语音服务。"
           }
         }
       }

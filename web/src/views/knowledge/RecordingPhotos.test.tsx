@@ -380,6 +380,33 @@ describe("a recorded meeting's photos", () => {
     expect(cites.map((c) => c.textContent)).toEqual(["14:00:30", "Photo removed"]);
   });
 
+  it("shows a summary-card line's cited photo as the items do: a kept one opens under Photos after the trim, a deleted one is removed (#6563)", async () => {
+    const minutes = {
+      version: 1, revision: 2, generated_at: "2026-11-10T07:00:00Z", title: "Design review", when: "2026-11-10 14:00–14:30",
+      points: [{ text: "The budget", at: 30, photo: 1 }], decisions: [{ text: "Cut travel", at: 60, photo: 2 }], markdown: "# Design review",
+      overview: {
+        conclusions: [{ text: "The budget is on the board", strong: ["board"], at: 30, photo: 1 }],
+        groups: [{ title: "", topics: [{ title: "Budget", icon: "budget", bullets: [
+          { text: "The budget", strong: [], at: 30, photo: 1 },
+          { text: "Cut travel", strong: ["travel"], at: 60, photo: 2, decision: true },
+        ] }] }],
+      },
+    };
+    render();
+    await reply(pending(detailPath)[0], fixture({ complete: true, ended_at: started, trimmed_at: new Date().toISOString(), room: { state: "deleted" } }, minutes));
+    await reply(pending(livePath)[0], live({ room: { state: "deleted" } }));
+    await reply(pending(photosPath)[0], { photos: [photo(1, { cited: true })] });
+    const card = minutesSection().querySelector<HTMLElement>("[data-minutes-overview]")!;
+    const cites = [...card.querySelectorAll<HTMLElement>("[data-minutes-photo]")];
+    expect(cites.map((c) => [c.tagName, c.textContent])).toEqual([["BUTTON", "14:00:30"], ["BUTTON", "14:00:30"], ["SPAN", "Photo removed"]]);
+    const jump = cites[1] as HTMLButtonElement;
+    expect(jump.getAttribute("aria-controls")).toBe("recording-photo-1");
+    act(() => jump.click());
+    expect(document.activeElement).toBe(document.getElementById("recording-photo-1"));
+    // The trim left no transcript: no line to jump to.
+    expect(card.querySelector("[aria-label^='Go to transcript']")).toBeNull();
+  });
+
   it("reads no photos on a hub without meeting_photos, or of a recording that is not a meeting", async () => {
     Object.assign(getState(), { features: ["meeting_attendance", "meeting_conversation"] });
     render();

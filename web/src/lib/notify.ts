@@ -1,11 +1,13 @@
 // Settings › Notifications of this browser (#2971, the app's NotificationSettingsView): what the hub keeps per device (GET / PUT
-// /devices/{id}/prefs, hub/notify.go NotifyPrefs), and the browser's system notifications that follow it. The hub does
-// not push to a browser: while the page is open it watches its own session list (lib/attention-signals.ts) and posts a
-// notification when it is not in front, as the Mac app does (MacAttention.swift). The prefs also decide the sounds.
+// /devices/{id}/prefs, hub/notify.go NotifyPrefs), and the browser's system notifications that follow it. While a page is
+// open it watches its own session list (lib/attention-signals.ts) and posts a notification when it is not in front, as
+// the Mac app does (MacAttention.swift); the hub pushes to a browser only while no page of it is open, once it turned
+// Web Push on (lib/web-push.ts, #7459), by the same prefs. The prefs also decide the sounds.
 import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, credentialOwner, enc, onCredentialChange } from "./api";
 import { isDelegating } from "./delegate";
+import { deviceId } from "./device-id";
 import { sessionTitle } from "./format";
 import { interactionAsk } from "./inbox";
 import { plainMarkdown } from "./plain-markdown";
@@ -97,31 +99,11 @@ export function durationText(seconds: number | undefined, units: { s: (n: number
 
 // ── this browser's device id and its prefs ───────────────
 
-const DEVICE_KEY = "persona.notifyDevice";
 const PREFS_KEY = "persona.notifyPrefs";
 
 const randomId = () => crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
 
-/**
- * The id this browser's prefs go by on the hub: made once, kept in this browser (`kept`). The hub ties the row to the
- * device token that wrote it, so revoking this browser in Settings › Devices removes it. Without storage the id would be new
- * on every load: it is this page's own and nothing is sent (`kept: false`), so no browser leaves rows behind or shares
- * one id with another.
- */
-let pageId: string | undefined;
-export function deviceId(): { id: string; kept: boolean } {
-  try {
-    let id = localStorage.getItem(DEVICE_KEY);
-    if (!id) {
-      id = `web-${randomId()}`;
-      localStorage.setItem(DEVICE_KEY, id);
-    }
-    return { id, kept: true };
-  } catch {
-    pageId ??= `web-${randomId()}`;
-    return { id: pageId, kept: false };
-  }
-}
+export { deviceId };
 
 function readCached(): NotifyPrefs {
   try {
@@ -325,6 +307,7 @@ export function useNotifyPrefsGeneration() {
 export type Permission = "unsupported" | "default" | "granted" | "denied";
 
 export function permission(): Permission {
+  if (typeof window !== "undefined" && window.personaDesktop) return window.personaDesktop.notificationPermission() as Permission;
   if (typeof Notification === "undefined") return "unsupported";
   return Notification.permission;
 }
@@ -358,13 +341,17 @@ export async function setSystemNotify(on: boolean): Promise<Permission> {
     return permission();
   }
   let p = permission();
-  if (p === "default") p = await Notification.requestPermission();
+  if (p === "default") {
+    if (typeof window !== "undefined" && window.personaDesktop) p = "granted"; // Electron main owns the OS notification permission.
+    else p = await Notification.requestPermission();
+  }
   setSystemFlag(p === "granted");
   return p;
 }
 
 /** Notifications go out: the switch is on and the browser allows them. */
 export function systemNotifyActive(): boolean {
+  if (typeof window !== "undefined" && window.personaDesktop?.desktopPresence?.().notifies === false) return false;
   return systemNotifyOn() && permission() === "granted";
 }
 
@@ -409,6 +396,8 @@ function subscribeSystem(l: () => void) {
     window.removeEventListener("focus", l);
   };
 }
+
+export function onSystemNotifyChange(listener: () => void): () => void { return subscribeSystem(listener); }
 
 const snapshot = () => `${systemNotifyOn() ? 1 : 0}|${permission()}|${systemNotifyAlways() ? 1 : 0}`;
 
@@ -550,6 +539,7 @@ function buttonsOnNotifications(): boolean {
  */
 export function postNotification(n: { title: string; body: string; tag: string; url: string; icon?: string; ix?: string; silent?: boolean }, open: () => void): void {
   if (!systemNotifyActive()) return;
+  if (typeof window !== "undefined" && !(n.ix && buttonsOnNotifications()) && window.personaDesktop?.notify({ title: n.title, body: n.body, tag: n.tag, route: n.url, silent: n.silent, ix: n.ix })) return;
   if (n.ix && buttonsOnNotifications()) {
     // Chrome doesn't let the worker's notification replace the page's under the same tag: take the page's back first
     closePageNotification(n.tag);
@@ -601,6 +591,7 @@ export function dismissNotification(tag: string): void {
 }
 
 function closePageNotification(tag: string): void {
+  if (typeof window !== "undefined") window.personaDesktop?.closeNotification(tag);
   const note = posted.get(tag);
   if (!note) return;
   posted.delete(tag);

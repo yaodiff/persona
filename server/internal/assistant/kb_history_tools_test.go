@@ -345,3 +345,49 @@ func TestHistoryToolsWaitForTheSelection(t *testing.T) {
 		t.Fatal("the selection was stored")
 	}
 }
+
+// A source that waits for the search index (needs_search_index, the default) waits until the knowledge base has
+// one: status and resume say so until the index lane (kb_lanes.go) has built it, and no longer afterwards. Without
+// the lane, or with an index that failed a check, the import would write into an archive search cannot keep up with.
+func TestHistoryWaitsForTheSearchIndexTheLaneBuilds(t *testing.T) {
+	cfg := &assistantwire.KBHistory{Enabled: true, Sources: []assistantwire.KBHistorySource{{Name: "chat"}}}
+	s, _, data := historyToolService(t, cfg, []connectorwire.HistoryChat{{ID: "d1", Name: "Direct One", Kind: "dm", Estimate: 10}})
+	ctx := context.Background()
+	e, l := kbEng(t, s), s.lang(ctx)
+	waits := i18n.T(l, "assistant-kb_history.needs_index")
+	state := i18n.T(l, "assistant-kb_history.state_needs_search_index")
+	runHistoryTool(t, s, "kb_history_plan", `{}`)
+
+	if e.Store.SearchIndexReady() || s.historyDriver(data).indexed() {
+		t.Fatal("a new archive says it has a search index")
+	}
+	if out := runHistoryTool(t, s, "kb_history_status", `{}`); !strings.Contains(out, waits) || !strings.Contains(out, state) {
+		t.Fatalf("status before the index:\n%s", out)
+	}
+	if out := runHistoryTool(t, s, "kb_history_resume", `{"source":"chat"}`); !strings.Contains(out, waits) {
+		t.Fatalf("resume before the index:\n%s", out)
+	}
+
+	var lane *kbLane
+	for _, k := range s.kbLaneSet(&kbRounds{}).lanes {
+		if k.name == "index" {
+			lane = k
+		}
+	}
+	if lane == nil {
+		t.Fatal("the knowledge base has no index lane")
+	}
+	s.kbRunLane(ctx, e, lane)
+	if !e.Store.SearchIndexReady() || !s.historyDriver(data).indexed() {
+		t.Fatal("no search index after the index lane ran")
+	}
+	if out := runHistoryTool(t, s, "kb_history_status", `{}`); strings.Contains(out, waits) || strings.Contains(out, state) {
+		t.Fatalf("status with the index:\n%s", out)
+	}
+	if out := runHistoryTool(t, s, "kb_history_resume", `{"source":"chat"}`); strings.Contains(out, waits) {
+		t.Fatalf("resume with the index:\n%s", out)
+	}
+	if historyIndexed(nil) { // not open: nothing says it has one
+		t.Fatal("no knowledge base, yet indexed")
+	}
+}

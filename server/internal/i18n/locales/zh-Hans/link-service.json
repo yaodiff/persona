@@ -1,0 +1,15 @@
+{
+  "systemd_user_unavailable": "连不上你的 systemd 用户实例",
+  "running_before_purge": "还有一个 persona-link 在运行（不是这个服务起的，或者你自己跑的）：先停掉它，再 --purge",
+  "node_install_failed": "常驻 node 没装好：{error}",
+  "binary_install_failed": "放不进 {path}：{error}",
+  "binary_installed": "装好了 {path}。",
+  "bootstrap_failed": "launchctl bootstrap 失败：{detail}",
+  "installed": "装好了 launchd 用户代理 {label}（{path}），已启动，登录 Mac 时自动启动。",
+  "not_installed": "没装 launchd 用户代理 {label}。",
+  "uninstalled": "停掉并删掉了 launchd 用户代理 {label}。",
+  "passive_mac_next": "接下来：persona-link install --listen（装成登录时启动的 launchd 用户代理，一直监听），或者前台跑 persona-link run。",
+  "status_missing": "后台服务：没装（persona-link install）",
+  "status_loaded": "后台服务：launchd 用户代理 {label} · {state} · 登录时启动",
+  "status_not_loaded": "后台服务：launchd 用户代理 {label} 已装但未加载（{path}）：persona-link install"
+}

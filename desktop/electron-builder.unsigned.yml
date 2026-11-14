@@ -1,0 +1,8 @@
+extends: ./electron-builder.yml
+appId: com.example.persona.desktop
+mac:
+  identity: null
+  hardenedRuntime: false
+  notarize: false
+forceCodeSigning: false
+publish: null

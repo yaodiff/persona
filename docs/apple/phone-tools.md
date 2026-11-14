@@ -16,7 +16,7 @@ Mail tools `mail_*` use the same `personad mcp`, but execute on the hub without 
 | Entry | Purpose |
 | --- | --- |
 | `PhoneToolRegistry.all` | All tools (ignoring toggles), used by tests and settings |
-| `PhoneToolRegistry.enabledSpecs()` | Only user-enabled data sources; sent in `register_phone` after connecting to the hub |
+| `PhoneToolRegistry.enabledSpecs()` | Only data sources that are on and allowed, or on and not asked yet where the first use asks (`PhoneDataSource.offered`); sent in `register_phone` after connecting to the hub and after a call asked iOS |
 | `PhoneToolRegistry.call(name:args:confirm:)` | Executes one call, never throws: failure becomes `isError=true` + explanation |
 | `PhoneToolRegistry.authorizationStatus(_:)` / `requestAccess(_:)` | Displays status and requests permission in settings |
 
@@ -24,6 +24,8 @@ Each data source (contacts / calendar / reminders / location / health / photos /
 integrations alarms / messages / calls / shortcuts / media / home) can be disabled individually in settings. Disabled sources
 no longer appear in `enabledSpecs()`, so the model cannot see their tools, and calls are rejected too (preventing old sessions from continuing to call them).
 The iPhone integrations act outside Persona, so they start **off** (`PhoneDataSource.iPhoneOnly`): the user turns each one on; the older sources start on.
+A source that is on but refused is not offered either. One that iOS hasn't asked about yet is offered when its first use asks
+(see "Permissions"), so the switch in Settings shows it on: the switch always says what the hub is offered.
 
 The table above is for iOS (Mac uses the same code). **Android** uses `PhoneToolRegistry.kt` in `android/platform/phonetools/`, also with `all`, `enabledSpecs()`, and `call(…)`; all calls pass through this single gate:
 
@@ -62,8 +64,10 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_maps_search_nearby {query, latitude?, longitude?, radius_meters?, limit?}` | Location | No | Places around the current fix (or the given point), nearest first: name, address, coordinates, distance, category, phone, website and the source (#2281). MapKit gives apps no opening hours; the result says so |
 | `phone_maps_navigate {latitude, longitude, name?, mode?}` | None (foreground) | No | Opens directions in Apple Maps (`driving` / `walking` / `transit`) and returns `opened: maps`: navigation runs in Maps, not in Persona |
 | `phone_maps_route {latitude, longitude, name?, mode?, from_latitude?, from_longitude?}` | Location | No | Works out a route with `MKDirections` and opens nothing (#5544): from Maps' own idea of where the phone is (`MKMapItem.forCurrentLocation()`) or the start given, to the destination, by `driving` / `walking` / `transit`. Returns the distance in meters, the expected time in seconds, the route's name and its line simplified to at most 48 points (`RouteLine`, Douglas–Peucker); transit has the time and distance only, as Apple Maps gives apps no transit line. The prompt asks for it on "how far / how long" and keeps `phone_maps_navigate` for when the user wants to go |
-| `phone_health_summary {metrics?, days?}` | Health (read) | No | Defaults to steps over the last 7 days; metrics steps / distance / active_energy / heart_rate / resting_heart_rate / sleep / weight |
+| `phone_health_summary {metrics?, days?}` | Health (read) | No | Defaults to steps over the last 7 days; steps / distance (m) / active_energy, resting_energy, dietary_energy (kcal) / protein, carbs, fat (g) / heart_rate, resting_heart_rate (bpm) / sleep (hours) / weight (kg). Energy and nutrients are daily sums; today is partial. See "Daily health summaries" below |
 | `phone_health_write_sample {metric, value?, start, end?}` | Health (write) | **Yes** | Writes one sample: steps (integer) / distance (meters) / active_energy (kilocalories) / weight (kilograms, one instant) / sleep (an asleep interval, no value); intervals at most 24 hours, not in the future; one sample at a time, no bulk import or deletion |
+| `phone_workouts_recent {days?, activity?, limit?}` | Health (read) | No | iPhone (and Vision Pro). Recent workouts from Apple Health, newest first (default 30 days, max 365; default 20, max 50), of one activity if given. Each row has the id, activity, source app, start and end, duration, distance, active energy, elevation gain, average and maximum heart rate, and pace for runs, walks, hikes and rides. See "Workouts" below |
+| `phone_workout_detail {id}` | Health (read) | No | One workout by id: the same row plus per-kilometre splits (pauses left out) and minute-average heart rate |
 | `phone_photos_recent {limit?, days?, screenshots_only?}` | Photos (read) | No | Recent photo/video metadata: local id, time, type, dimensions, screenshot/favorite flags, duration, latitude/longitude |
 | `phone_photo_get {id, max_size?}` | Photos (read) | No | Returns the JPEG image itself (default longest edge 1280, quality 0.7) + metadata |
 | `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`; the app carries no commit) |
@@ -100,6 +104,42 @@ reminders of the lists the user leaves on (all of them at first) to the hub, whi
 (`RemindersImport`, `RemindersImporter`; `docs/assistant/todos.md`, "Imported from Reminders"). It runs on launch, on
 return to the foreground and when the Reminders database changes while the app is in front, and sends nothing when the
 batch is the same as the last one the hub took.
+
+### Workouts
+
+`phone_workouts_recent` and `phone_workout_detail` (#2526) read workouts that the Workout app or any other app saved to Apple Health.
+They let a workout report compare a workout with recent ones of the same activity (`docs/assistant/health.md`, "Automatic workout
+reports (iOS)"), and let later questions ("how was last week's run?") use the same data. `WorkoutReader` holds the queries that the
+reports share.
+
+- **What is read**: the workout itself and its heart rate, distance (on foot or by bike) and active energy samples. No route or
+  location is read.
+- **Activity names**: a report's activity names (`Running`, `Strength training`, …), lowercased with `_` for spaces, are the
+  tool's `activity` values. Other HealthKit activities are listed but cannot be filtered on.
+- **Splits**: whole kilometres in order (`WorkoutSplits`). Each distance sample's meters are spread evenly over its own interval.
+  The pauses from the workout's events (the user's own, and the Watch's automatic ones) are left out, as the Workout app does.
+  The last part kilometre is dropped. Samples that cannot give a sensible split (a kilometre in no time, a sample outside the
+  workout) give no splits at all, since the hub refuses a whole report over one bad split. Swimming and other activities have
+  none.
+- **Elevation gain** comes from the workout's `HKMetadataKeyElevationAscended`. The average and maximum heart rate come from the
+  workout's own statistics. Values outside sensible bounds are left out.
+- **Pace** is the duration over the distance, for a run, walk, hike or ride of at least 500 m.
+- **Permission**: workouts and cycling distance join `HealthTool.readTypes`. Someone who allowed Health before these types
+  existed is asked again by the tools and the reports, through `statusForAuthorizationRequest`. That happens only while Persona
+  is in front, where the Health sheet can show. Health never says what was allowed, so a refused type reads as no data.
+
+### Daily health summaries
+
+`phone_health_summary` reads the requested metrics and returns one row per phone-local day; `days: 1` starts at midnight today and ends at the query time. The default is `metrics: ["steps"]`, `days: 7`; the maximum is 90 days. Days or metrics without data are omitted, never filled with zero.
+
+- `dietary_energy` is energy consumed (kcal); `protein`, `carbs`, and `fat` are grams consumed. Each is summed over the day. The result contains daily totals, not foods or meals.
+- `resting_energy` is resting energy burned (kcal), summed over the day; `active_energy` remains the separate activity-energy total (kcal).
+- iOS reads `.dietaryEnergyConsumed`, `.dietaryProtein`, `.dietaryCarbohydrates`, `.dietaryFatTotal`, and `.basalEnergyBurned` through `HealthTool.quantityIdentifiers`. These join `HealthTool.readTypes`, so the Health authorization request includes them. People who allowed Health before these types were added must also grant the new read permissions.
+- The hub advertises the app's registered description and metric enum. Open/reconnect the updated phone app so its new catalog reaches the hub; a hub update alone cannot add metrics to an older phone app.
+- HealthKit does not reveal read authorization status: an empty result can mean no source data or denied read access. Check that the source app wrote today's entries and that Persona may read those categories.
+- **Locked phone (#7677)**: while the iPhone is locked, HealthKit's database is closed and every query fails with `HKError.errorDatabaseInaccessible`. The app then never starts a query: it answers from a snapshot of every metric over 90 days, written to Application Support with `completeFileProtectionUntilFirstUserAuthentication` while the app was in the foreground (refreshed on foreground and after successful live reads, throttled to 15 minutes). A snapshot answer keeps every field of the live answer and adds `"source": "snapshot"` plus `"as_of"`; the hub prepends a plain-text note with the same `as_of`. When no snapshot exists yet, the tool fails with a bilingual `device_locked` message instead of putting the English HealthKit error into the day fields.
+
+For the iPhone acceptance steps using 薄荷健康, see `docs/assistant/health.md` ("How to verify").
 
 ### Reminders by place (#6564)
 
@@ -279,10 +319,24 @@ If no rule matches, the default is confirm: the hub sends an approval card to th
 
 ## Permissions
 
-System permissions are requested at two points: when the user taps "Authorize" in settings (`PhoneToolRegistry.requestAccess`), or on the first actual use of a tool.
-Notifications are an exception: `phone_notify` displays its own permission prompt on the first call. Other tools encountering "Not requested" only return an error and tell the model to ask the user to authorize;
-they do not show system dialogs mid-execution (health only requests read permission again after a grant, to add newly introduced types). Previously denied permissions can only
-be changed in iOS Settings.
+System permissions are requested at two points: when the user turns a source on in Settings (`PhoneToolRegistry.requestAccess`), or on the first
+actual use of a tool (#7659).
+
+- **First use asks** for contacts, calendar, reminders, location, photos and notifications (`PhoneDataSource.asksWhenUsed`, iOS only). Their
+  tools are offered while the source is on and iOS hasn't asked yet, so "remind me to buy milk when I get home" works for someone who never
+  opened Settings. Before 2026-11-14 they were offered only once allowed: the model never saw them and could only guess that something was off.
+  - `PhoneToolRegistry.call` checks the switch, then shows a write's confirmation card, then iOS's own permission dialog
+    (`askOnFirstUse`), then runs the tool. A write the user turned down never asks iOS.
+  - Allowed, the call goes on. Refused, it fails with where to allow it ("Permission denied … iOS Settings › Persona").
+  - iOS shows the dialog only for the app in front. While Persona is not, the call fails with "open Persona on the iPhone and try again"
+    and nothing is asked.
+  - Calls that arrive together wait for one dialog.
+  - Either answer posts `phoneAccessAnswered`, and `AppModel` registers again, so a refused source leaves the hub's list.
+- **Settings only** for Health and the iPhone integrations. Health's sheet lists every type, and iOS never says which reads were allowed
+  (see below). The integrations act outside Persona and start off. Health only requests read permission again after a grant, to add newly
+  introduced types. Their tools that meet "Not requested" return an error and tell the model to ask the user to turn them on.
+- The Mac app (frozen) and Vision Pro keep asking from Settings only. Android has its own rules (above).
+- Previously denied permissions can only be changed in iOS Settings.
 
 | Data source | Info.plist key | Authorization |
 | --- | --- | --- |

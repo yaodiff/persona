@@ -338,6 +338,39 @@ func TestRenameSpaceFollowsTheNameTheNodeShows(t *testing.T) {
 	})
 }
 
+// A Paseo session's space is its project; Android names it by the session's workspace (#6297): the todo linked to the
+// project's name follows the name the node says, as for the project's own id.
+func TestRenameSpaceByARuntimeSessionsWorkspace(t *testing.T) {
+	h := newTestHub(t)
+	var asked []string
+	m := capturingNode(t, h, "macbook", func(method string, params json.RawMessage) any {
+		if method == "space.rename" {
+			asked = append(asked, string(params))
+			return map[string]any{"ok": true, "name": "renamed app"}
+		}
+		return map[string]any{"ok": true}
+	})
+	m.mu.Lock()
+	m.sessions = []proto.Session{{MachineID: "macbook", SessionID: "paseo-1", Title: "Agent 1", SourceKind: "runtime", SpaceKind: "paseo",
+		SpaceID: "prj_0000000000000001", SpaceName: "app", WorkspaceID: "wks_0000000000000001", Status: proto.StatusWorking}}
+	m.mu.Unlock()
+	connectAssistant(t, h)
+	todo := plainTodo(t, h, "Rename Paseo Space")
+	if w := hubCall(h, "PUT", "/api/v1/todos/"+todo.ID+"/spaces/macbook/app", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"linked":1`) {
+		t.Fatalf("PUT space: %d %s", w.Code, w.Body)
+	}
+	if w := hubCall(h, "POST", "/api/v1/machines/macbook/spaces/wks_0000000000000001/rename", `{"name":"renamed app"}`); w.Code != http.StatusOK {
+		t.Fatalf("rename: %d %s", w.Code, w.Body)
+	}
+	if len(asked) != 1 || !strings.Contains(asked[0], `"workspace_id":"wks_0000000000000001"`) {
+		t.Fatalf("the node was asked %q", asked)
+	}
+	waitFor(t, "the todo to follow", func() bool {
+		got := todoNow(h, todo.ID)
+		return len(got.Spaces) == 1 && got.Spaces[0].Space == "renamed app"
+	})
+}
+
 // closingTag is any closing context tag (either name, #3182), as the apps match it.
 var closingTag = regexp.MustCompile(`(?i)<\s*/\s*persona-context\s*>`)
 

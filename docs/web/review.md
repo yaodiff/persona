@@ -135,7 +135,7 @@ branch, unrelated histories, no commit yet, guarded files and files too big for 
 
 ## iOS: the review page
 
-`apple/Persona/Views/Session/ReviewPage.swift`, logic in `ReviewModel.swift` (`ReviewLogic`), API in `apple/Shared/GitReview.swift`. iPhone and iPad only: the Mac app is frozen (`docs/apple/mac.md`).
+`apple/Persona/Views/Session/ReviewPage.swift`, logic in `ReviewModel.swift` (`ReviewLogic`), API in `apple/Shared/GitReview.swift`. iPhone and iPad only: the native Mac app was frozen (`docs/archive/apple/mac.md`).
 
 - **Opening it:** ⋯ › **Review Changes** in an Agent's chat (the scope the session last used), or **Review** over the Git pane's change list (Uncommitted). Both only when the hub has `git_review` and the session has a folder. It is a sheet over the chat.
 - **What it draws:** every file's diff in one page with the extension code page's parts (`CodeDiffFileHeader`, `CodeHunkHeader`, `CodeDiffRow`). Generated and big files start folded; a big file waits for **Load Diff** and is asked for on its own with the base pinned (one `path`, so a renamed big file shows as added). Secrets, binaries, empty files and mode-only changes say so.

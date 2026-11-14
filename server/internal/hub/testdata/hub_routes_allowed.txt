@@ -5,6 +5,8 @@
 /api/
 /api/v1/admin/
 /api/v1/admin/cli/
+/api/v1/admin/plugins # legacy admin relay to the manager (before #1844)
+/api/v1/admin/plugins/ # legacy admin relay to the manager (before #1844)
 DELETE /api/v1/admin/devices/{id}
 DELETE /api/v1/admin/machines/{id}
 DELETE /api/v1/admin/peers/{hub_id}
@@ -24,6 +26,7 @@ GET /api/v1/admin/network
 GET /api/v1/admin/overview
 GET /api/v1/admin/peers
 GET /api/v1/admin/routes
+GET /api/v1/admin/sessions/{mid}/{sid}/ownership-inspection
 GET /api/v1/admin/state
 GET /api/v1/app/android/apk
 GET /api/v1/app/android/latest
@@ -105,6 +108,7 @@ POST /api/v1/admin/peers/{hub_id}/center
 POST /api/v1/admin/peers/probe
 POST /api/v1/admin/reload
 POST /api/v1/admin/restart
+POST /api/v1/admin/sessions/{mid}/{sid}/owner
 POST /api/v1/admin/setup
 POST /api/v1/admin/setup-code
 POST /api/v1/auth/pair-codes
@@ -198,10 +202,22 @@ PUT /api/v1/machines/{mid}/codex-settings
 PUT /api/v1/machines/{mid}/omp-settings
 PUT /api/v1/mutes
 PUT /api/v1/pins
+PUT /api/v1/push/ln-mode # ln mode switch (lnmode.go)
 
 # Phone write delivery receipts (full credentials only).
 GET /api/v1/phone/write-queue
 POST /api/v1/phone/write-queue/{id}/cancel
+
+# Web Push to browsers (#7459): push delivery, the hub's own (hub/webpush_routes.go).
+DELETE /api/v1/push/web/{device}
+GET /api/v1/push/intercepts # ln mode held pushes, read-only (lnmode.go)
+GET /api/v1/push/ln-mode # ln mode switch (lnmode.go)
+GET /api/v1/push/stats/daily # push grading delivered/held counts per day, read-only (lnmode.go)
+GET /api/v1/push/web
+GET /api/v1/push/web/{device}
+POST /api/v1/push/web/{device}/test
+PUT /api/v1/push/web/{device}
+
 /api/v1/auth/password/
 GET /api/v1/auth/password/state
 POST /api/v1/auth/password/start

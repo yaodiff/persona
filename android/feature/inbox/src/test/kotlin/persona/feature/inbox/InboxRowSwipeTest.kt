@@ -52,8 +52,8 @@ import kotlin.math.abs
 /**
  * The Inbox's rows swipe as iOS's do (`InboxView`, #4210 T1): one swipe, from the end, Done in the positive tone or Move Back
  * with the undo arrow in the accent tone on a done item; none while a write for the row is out or items are being picked;
- * nothing towards the start, and never the hand-off. Both kinds of row, one item's and a conversation's, in each state.
- * A screen reader reaches the same action from the row's Actions menu.
+ * nothing towards the start, and never the hand-off. The item row in each state. A screen reader reaches the same action
+ * from the row's Actions menu.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -61,7 +61,7 @@ import kotlin.math.abs
 class InboxRowSwipeTest {
     @get:Rule val rule = createComposeRule()
 
-    private enum class Kind(val title: String) { Item("Synthetic item"), Conversation("Synthetic conversation") }
+    private enum class Kind(val title: String) { Item("Synthetic item") }
 
     private val repository = Proxy.newProxyInstance(InboxRepository::class.java.classLoader, arrayOf(InboxRepository::class.java)) { proxy, method, args ->
         when (method.name) {
@@ -89,23 +89,16 @@ class InboxRowSwipeTest {
 
     private val item = InboxRecord(InboxItem("lark:f1:7", kind = "dm", title = Kind.Item.title, sender = "Alex Example", preview = "Synthetic preview",
         tier = "action", version = "v1"), source = "lark", feedId = "f1", isGroup = false)
-    private val conversation = InboxRecord(InboxItem("lark:room:9", account = "demo", title = Kind.Conversation.title, preview = "Synthetic preview",
-        kind = "dm", tier = "action", version = "v2"), source = "lark", feedId = "room", read = true)
 
-    private fun mount(kind: Kind) {
+    private fun mount() {
         val selection = { InboxRowSelection(checked = false, selectable = true, onToggle = { opened++ }, onStart = {}) }
         rule.setContent {
             PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
                 palette = PersonaTheme.palette
                 Box(Modifier.testTag("row").width(400.dp).background(PersonaTheme.palette.background)) {
                     val chosen = if (picking) selection() else null
-                    when (kind) {
-                        Kind.Item -> InboxItemRow(item, repository, navigator, ReplyComposers(repository, rememberCoroutineScope()), GroupPosition.Single,
-                            done = done, busy = busy, onlineSince = null, onDone = { dones++ }, onHandOff = { handOffs++ }, selection = chosen)
-                        Kind.Conversation -> InboxConversationItemRow(
-                            buildInboxConversations("scope", InboxSnapshot(records = listOf(conversation))).rows.single(),
-                            navigator, GroupPosition.Single, null, done = done, busy = busy, onDone = { dones++ }, onHandOff = { handOffs++ }, selection = chosen)
-                    }
+                    InboxItemRow(item, repository, navigator, ReplyComposers(repository, rememberCoroutineScope()), GroupPosition.Single,
+                        done = done, busy = busy, onlineSince = null, onDone = { dones++ }, onHandOff = { handOffs++ }, selection = chosen)
                 }
             }
         }
@@ -170,7 +163,7 @@ class InboxRowSwipeTest {
     // ---- the gesture, on both kinds of row ------------------------------------------------------------------------
 
     private fun anOpenRowSwipesDoneFromTheEndAndNothingTowardsTheStart(kind: Kind) {
-        mount(kind)
+        mount()
         swipeStart(kind)
         assertEquals("nothing towards the start", 0, dones)
         rule.onNodeWithText("Done").assertDoesNotExist()
@@ -190,11 +183,10 @@ class InboxRowSwipeTest {
     }
 
     @Test fun anOpenItemSwipesDoneFromTheEndOnly() = anOpenRowSwipesDoneFromTheEndAndNothingTowardsTheStart(Kind.Item)
-    @Test fun anOpenConversationSwipesDoneFromTheEndOnly() = anOpenRowSwipesDoneFromTheEndAndNothingTowardsTheStart(Kind.Conversation)
 
     private fun aDoneRowSwipesMoveBackOnTheSameSwipe(kind: Kind) {
         done = true
-        mount(kind)
+        mount()
         swipeStart(kind)
         assertEquals(0, dones)
         hold(kind)
@@ -207,11 +199,10 @@ class InboxRowSwipeTest {
     }
 
     @Test fun aDoneItemSwipesMoveBackOnTheSameSwipe() = aDoneRowSwipesMoveBackOnTheSameSwipe(Kind.Item)
-    @Test fun aDoneConversationSwipesMoveBackOnTheSameSwipe() = aDoneRowSwipesMoveBackOnTheSameSwipe(Kind.Conversation)
 
     private fun aBusyRowAndOnePickedFromHaveNoSwipe(kind: Kind) {
         busy = true
-        mount(kind)
+        mount()
         for (toward in listOf(true, false)) {
             hold(kind, towardsTheEnd = toward)
             rule.onNodeWithText("Done").assertDoesNotExist()
@@ -242,12 +233,11 @@ class InboxRowSwipeTest {
     }
 
     @Test fun aBusyItemAndOnePickedFromHaveNoSwipe() = aBusyRowAndOnePickedFromHaveNoSwipe(Kind.Item)
-    @Test fun aBusyConversationAndOnePickedFromHaveNoSwipe() = aBusyRowAndOnePickedFromHaveNoSwipe(Kind.Conversation)
 
     // ---- a screen reader --------------------------------------------------------------------------------------------
 
     private fun aScreenReaderGetsTheSameActionOnTheRow(kind: Kind) {
-        mount(kind)
+        mount()
         assertEquals(listOf("Done"), actionLabels(kind))
         row(kind).fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions)!!.single().action()
         rule.waitForIdle()
@@ -266,7 +256,6 @@ class InboxRowSwipeTest {
     }
 
     @Test fun aScreenReaderGetsTheItemsAction() = aScreenReaderGetsTheSameActionOnTheRow(Kind.Item)
-    @Test fun aScreenReaderGetsTheConversationsAction() = aScreenReaderGetsTheSameActionOnTheRow(Kind.Conversation)
 
     // ---- the colours, on Glass only -----------------------------------------------------------------------------
 
@@ -287,7 +276,7 @@ class InboxRowSwipeTest {
     }
 
     private fun glassFillsWithTheTint(kind: Kind) {
-        mount(kind)
+        mount()
         for (night in listOf(false, true)) {
             dark = night
             done = false
@@ -301,7 +290,7 @@ class InboxRowSwipeTest {
 
     private fun theOtherStylesKeepTheNeutralBacking(kind: Kind, appearance: AppStyle) {
         style = appearance
-        mount(kind)
+        mount()
         for (night in listOf(false, true)) {
             dark = night
             done = false
@@ -314,9 +303,6 @@ class InboxRowSwipeTest {
     }
 
     @Test fun glassFillsAnItemsSwipeWithTheTint() = glassFillsWithTheTint(Kind.Item)
-    @Test fun glassFillsAConversationsSwipeWithTheTint() = glassFillsWithTheTint(Kind.Conversation)
     @Test fun briefKeepsAnItemsNeutralBacking() = theOtherStylesKeepTheNeutralBacking(Kind.Item, AppStyle.Brief)
-    @Test fun boardKeepsAConversationsNeutralBacking() = theOtherStylesKeepTheNeutralBacking(Kind.Conversation, AppStyle.Board)
     @Test fun boardKeepsAnItemsNeutralBacking() = theOtherStylesKeepTheNeutralBacking(Kind.Item, AppStyle.Board)
-    @Test fun briefKeepsAConversationsNeutralBacking() = theOtherStylesKeepTheNeutralBacking(Kind.Conversation, AppStyle.Brief)
 }

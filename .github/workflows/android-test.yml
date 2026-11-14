@@ -32,7 +32,9 @@ jobs:
           # The default also installs the legacy `tools` package, which the SDK repository no longer has.
           packages: platform-tools
       - name: Install Android SDK
-        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0'
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
+      - name: Install Rust Android targets
+        run: rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android
       - uses: gradle/actions/setup-gradle@v4
         with:
           # Only a manual main run may populate caches; PRs and other refs only restore.

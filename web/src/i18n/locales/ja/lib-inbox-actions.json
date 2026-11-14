@@ -1,0 +1,12 @@
+{
+  "merged": "{count}件を1件にまとめました",
+  "merge_failed": "まとめられませんでした：{error}",
+  "unmerged": "元の項目に戻しました",
+  "unmerge_failed": "まとめの取り消しに失敗しました：{error}",
+  "todo_added": "ToDoに追加しました（{count}件）",
+  "todo_partly": "{count}件を追加後、失敗しました：{error}",
+  "todo_failed": "ToDoに追加できませんでした：{error}",
+  "todo_undone": "ToDoから外しました",
+  "todo_undo_failed": "取り消せませんでした：{error}",
+  "undo": "元に戻す"
+}

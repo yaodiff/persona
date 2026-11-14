@@ -76,7 +76,7 @@ final class MessageMenu {
         }
     }
     #else
-    /// The Mac's secondary click (LongPressAt in apple/Mac/Media/MessageGestures.swift) reports the same phases.
+    /// The watch's secondary click reports the same phases.
     func pressChanged(_ state: PressPhase) {
         switch state {
         case .began: pressing = true
@@ -484,7 +484,6 @@ struct MessageActionBar: View {
     /// Only on this phone (`messageActionBar(delete:)`): Delete last, in the danger color.
     var delete: MessageBarDelete?
     var itemWidth: CGFloat = Self.item
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     static let height: CGFloat = 62
     static let item: CGFloat = 58
@@ -492,11 +491,6 @@ struct MessageActionBar: View {
     /// there fits at every size up to the accessibility ones; a long press shows an item's name large (Large Content
     /// Viewer, #5019).
     static let barTypeSize: DynamicTypeSize = .large
-    /// At the accessibility sizes the actions are a list instead, one a row with its icon and whole name
-    /// (DESIGN_SYSTEM.md 1.2 rule 3), whose words grow up to this.
-    static let listTypeSize: DynamicTypeSize = .xxxLarge
-    /// The actions as a list (`listTypeSize`) rather than a bar; the page places it by its measured size.
-    static func stacks(_ size: DynamicTypeSize) -> Bool { size.isAccessibilitySize }
     static func width(isUser: Bool, more: Bool = false) -> CGFloat { width(count: (isUser ? 5 : 4) + (more ? 1 : 0)) }
     static func width(count: Int) -> CGFloat { item * CGFloat(count) + 12 }
     /// Each action's width when the bar is `width` wide.
@@ -584,24 +578,10 @@ struct MessageActionBar: View {
     }
 
     var body: some View {
-        Group {
-            if Self.stacks(typeSize) {
-                // As wide as its longest row, every row that wide.
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                        if i > 0 { Divider() }
-                        action(item)
-                    }
-                }
-                .fixedSize()
-                .dynamicTypeSize(...Self.listTypeSize)
-            } else {
-                HStack(spacing: 0) { ForEach(items) { action($0) } }
-                    .padding(.horizontal, Theme.Space.sm)
-                    .frame(height: Self.height)
-                    .dynamicTypeSize(...Self.barTypeSize)
-            }
-        }
+        HStack(spacing: 0) { ForEach(items) { action($0) } }
+            .padding(.horizontal, Theme.Space.sm)
+            .frame(height: Self.height)
+            .dynamicTypeSize(...Self.barTypeSize)
         .background(Theme.Lift.bar, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         // Its edge over the dimmed chat.
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
@@ -619,25 +599,12 @@ struct MessageActionBar: View {
     }
 
     @ViewBuilder private func label(_ item: Item) -> some View {
-        Group {
-            if Self.stacks(typeSize) {
-                // A row: the icon in a fixed box, so the names line up, then the whole name.
-                HStack(spacing: Theme.Space.m) {
-                    ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                    Text(item.title).font(Theme.Font.body).lineLimit(1)
-                }
-                .padding(.horizontal, Theme.Space.l)
-                .scaledFrame(minHeight: Theme.Size.tapTarget)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                VStack(spacing: Theme.Space.xs) {
-                    // Symbols differ in height: a fixed box keeps every label on one line.
-                    ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
-                    Text(item.title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
-                }
-                .frame(width: itemWidth, height: Self.height)
-            }
+        VStack(spacing: Theme.Space.xs) {
+            // Symbols differ in height: a fixed box keeps every label on one line.
+            ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
+            Text(item.title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
         }
+        .frame(width: itemWidth, height: Self.height)
         .foregroundStyle(item.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(HierarchicalShapeStyle.primary))
         .contentShape(.rect)
     }

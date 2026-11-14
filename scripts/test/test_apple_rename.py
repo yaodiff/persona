@@ -34,14 +34,15 @@ def load_tests(loader, tests, pattern):
 
 class AppleRenameTests(unittest.TestCase):
     def test_sources_use_only_canonical_directories_and_project(self):
-        for suffix in ('', 'Watch', 'Widgets', 'Notify', 'Tests', 'MacTests', 'UITests'):
+        for suffix in ('', 'Watch', 'Widgets', 'Notify', 'Tests', 'UITests'):
             with self.subTest(directory=suffix):
                 self.assertFalse((APPLE / (FORMER_NAME + suffix)).exists())
                 self.assertTrue((APPLE / ('Persona' + suffix)).is_dir())
         self.assertFalse((APPLE / 'PersonaLink/Sources' / (FORMER_NAME + 'Link')).exists())
-        self.assertTrue((APPLE / 'PersonaLink/Sources/PersonaLink').is_dir())
+        self.assertFalse((APPLE / 'PersonaLink/Sources/PersonaLink').exists())
+        self.assertTrue((APPLE / 'PersonaLink/Sources/PersonaScreen').is_dir())
         tracked = subprocess.run(['git', 'ls-files', '--', 'mac'], cwd=ROOT, capture_output=True, text=True, check=True).stdout
-        self.assertEqual(tracked, '', 'the menu bar app is apple/PersonaLink/')
+        self.assertEqual(tracked, '', 'the independent Link helper package is apple/PersonaLink/')
         self.assertIn('name: Persona\n', PROJECT)
         if (APPLE / 'Persona.xcodeproj').exists():
             self.assertTrue((APPLE / 'Persona.xcodeproj').is_dir())
@@ -52,20 +53,18 @@ class AppleRenameTests(unittest.TestCase):
     def test_targets_use_canonical_product_modules(self):
         targets = blocks(TARGETS)
         expected = {
-            'Persona': 'Persona', 'PersonaMac': 'Persona', 'PersonaWatch': 'Persona', 'PersonaVision': 'Persona',
-            'PersonaWidgets': 'PersonaWidgets', 'PersonaNotify': 'PersonaNotify', 'PersonaMacNotify': 'PersonaNotify', 'PersonaVisionNotify': 'PersonaNotify',
+            'Persona': 'Persona', 'PersonaWatch': 'Persona', 'PersonaVision': 'Persona',
+            'PersonaWidgets': 'PersonaWidgets', 'PersonaNotify': 'PersonaNotify', 'PersonaVisionNotify': 'PersonaNotify',
             'PersonaShare': 'PersonaShare', 'PersonaVisionShare': 'PersonaShare',
             'PersonaWatchWidgets': 'PersonaWatchWidgets', 'PersonaVisionWidgets': 'PersonaWidgets',
         }
-        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaMacTests', 'PersonaUITests', 'PersonaMacUITests'})
+        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaUITests'})
         for target, module in expected.items():
             with self.subTest(target=target):
                 self.assertIn('PRODUCT_MODULE_NAME: ' + module + '\n', targets[target])
                 self.assertIn('PRODUCT_NAME: Persona', targets[target])
         self.assertIn('TEST_TARGET_NAME: Persona\n', targets['PersonaUITests'])
-        self.assertIn('TEST_TARGET_NAME: PersonaMac\n', targets['PersonaMacUITests'])
         self.assertIn('Persona.app/Persona"', targets['PersonaTests'])
-        self.assertIn('Persona.app/Contents/MacOS/Persona"', targets['PersonaMacTests'])
 
     def test_vision_target_uses_canonical_source_and_scheme(self):
         target = blocks(TARGETS)['PersonaVision']
@@ -77,11 +76,10 @@ class AppleRenameTests(unittest.TestCase):
 
     def test_only_canonical_schemes_build_existing_targets(self):
         schemes = blocks(SCHEMES)
-        self.assertEqual(set(schemes), {'Persona', 'PersonaMac', 'PersonaWatch', 'PersonaVision', 'PersonaMacExtensionUI'})
+        self.assertEqual(set(schemes), {'Persona', 'PersonaWatch', 'PersonaVision'})
         for name, scheme in schemes.items():
-            target = 'PersonaMac' if name == 'PersonaMacExtensionUI' else name
-            self.assertIn(target + ': all\n', scheme)
-        self.assertIn('PersonaMacUITests: [test]', schemes['PersonaMacExtensionUI'])
+            self.assertIn(name + ': all\n', scheme)
+        self.assertNotIn('PersonaMac', schemes)
         self.assertFalse((APPLE / (FORMER_NAME + '.xcodeproj')).is_symlink())
 
     def test_intent_control_activity_and_info_keys_use_canonical_identity(self):
@@ -107,7 +105,7 @@ class AppleRenameTests(unittest.TestCase):
         for key in ('PushKeychainGroup', 'PushRelay', 'AppGroup'):
             self.assertIn('Persona' + key + ':', PROJECT)
             self.assertNotIn(FORMER_NAME + key + ':', PROJECT)
-        for relative in ('Persona/Resources/Info.plist', 'Mac/Resources/Info.plist'):
+        for relative in ('Persona/Resources/Info.plist', 'Vision/Resources/Info.plist'):
             info = plistlib.loads((APPLE / relative).read_bytes())
             self.assertEqual(info['CFBundleURLTypes'][0]['CFBundleURLSchemes'], ['persona', FORMER_NAME.lower()])
 
@@ -148,8 +146,11 @@ class AppleRenameTests(unittest.TestCase):
         self.assertRegex(selection, r'#if os\(visionOS\)[\s\S]*?return false')
         # Active compact width still selects the shell; #2836 holds that width while iOS snapshots the app away.
         self.assertRegex(selection, r'#elseif os\(iOS\)\s+return \(heldWidthClass \?\? widthClass\) == \.compact \|\| flipped\s+#else\s+return false')
-        self.assertIn('if usesShell { ShellView()', root)
-        self.assertIn('} else { RootTabs()', root)
+        # The Sidebar layout when it is chosen, at every width (#6332: the drawer on a phone, the column at regular width);
+        # otherwise the shell at compact width, else the tabs. Separate stays the default.
+        self.assertIn('@StoredValue(NavigationLayout.key) private var navigation: NavigationLayout = .separate', root)
+        self.assertRegex(root, r'if usesSidebar \{ SidebarRoot\(\)[^\n]*\n\s+else if usesShell \{ ShellView\(\)[^\n]*\n'
+                               r'\s+else \{ RootTabs\(\)')
         self.assertIn('RootTabs().visionShell()', root)
         tabs = root.split('private struct RootTabs: View {', 1)[1].split('\n#if os(iOS)', 1)[0]
         self.assertIn('TabView(selection: Binding(get: { model.selectedTab }, set: { model.selectHomeTab($0) }))', tabs)
@@ -160,7 +161,9 @@ class AppleRenameTests(unittest.TestCase):
         for name in ('Assistant', 'Agents', 'Inbox', 'Settings'):
             self.assertRegex(root, r'private struct ' + name + r'RootTab: TabContent')
         routes = root.split('final class PadRouter: TabRouter {', 1)[1].split('private struct PadRoutes:', 1)[0]
-        self.assertRegex(routes, r'func route\(_ t: AppTab, in model: AppModel\)\s*\{\s*switch t')
+        # While the router sets the tab itself it only notes which is in front (#6939).
+        self.assertRegex(routes, r'func route\(_ t: AppTab, in model: AppModel\)\s*\{\s*'
+                                 r'if settingTab \{ front = t; return \}\s*switch t')
         self.assertIn('show(.inbox)', routes)
         self.assertIn('model.shellSettings = true', routes)
 
@@ -180,16 +183,17 @@ class AppleRenameTests(unittest.TestCase):
         # Capture controls can select style/color, but cannot choose a different navigation tree.
         self.assertEqual(set(re.findall(r'"(-ui\.[^"]+)"', fresh)), {'-ui.style', '-ui.color'})
 
-    def test_menu_bar_package_uses_canonical_process_name(self):
+    def test_independent_link_package_contains_only_persona_screen(self):
         package = (APPLE / 'PersonaLink/Package.swift').read_text()
-        self.assertIn('name: "PersonaLink"', package)
-        self.assertIn('path: "Sources/PersonaLink"', package)
-        info = plistlib.loads((APPLE / 'PersonaLink/Info.plist').read_bytes())
-        self.assertEqual(info['CFBundleExecutable'], 'PersonaLink')
+        self.assertIn('name: "PersonaScreen"', package)
+        self.assertIn('path: "Sources/PersonaScreen"', package)
+        self.assertNotIn('path: "Sources/PersonaLink"', package)
+        self.assertFalse((APPLE / 'PersonaLink/Info.plist').exists())
         script = (ROOT / 'scripts/app/mac-link.sh').read_text()
-        self.assertIn('-scheme PersonaLink', script)
-        self.assertIn('cp "$bin" "$APP/Contents/MacOS/PersonaLink"', script)
-        self.assertIn('pkill -x PersonaLink', script)
+        self.assertIn('-scheme PersonaScreen', script)
+        self.assertNotIn('-scheme PersonaLink', script)
+        self.assertIn('persona-link" install --node-bin', script)
+        self.assertNotIn('open "/Applications/Persona Link.app"', script)
 
     def test_entitlement_checker_accepts_only_the_canonical_product(self):
         spec = importlib.util.spec_from_file_location('entitlements', ROOT / 'scripts/release/entitlements.py')

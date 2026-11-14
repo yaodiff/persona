@@ -37,15 +37,13 @@ type env struct {
 	wait time.Duration
 	// sshBin overrides the system ssh executable in tests; "" uses "ssh" from PATH.
 	sshBin string
-	// tray is the Windows tray's registry entries and process (tray.go).
-	tray trayControl
 }
 
 func newEnv() *env {
 	home, _ := os.UserHomeDir()
 	e := &env{home: home, goos: runtime.GOOS, uid: os.Getuid(), stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		getenv: identity.Getenv, exe: os.Executable, lookPath: exec.LookPath, now: time.Now, sleep: time.Sleep,
-		exists: func(p string) bool { _, err := os.Stat(p); return err == nil }, wait: 20 * time.Second, tray: systemTray()}
+		exists: func(p string) bool { _, err := os.Stat(p); return err == nil }, wait: 20 * time.Second}
 	if u, err := user.Current(); err == nil {
 		e.user = u.Username
 	}

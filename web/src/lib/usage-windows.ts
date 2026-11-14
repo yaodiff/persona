@@ -75,7 +75,8 @@ export const PACE_LABEL: Record<PaceState, string> = { over: tr("usage.pace_over
 
 type Countdown = { kind: "due" | "clock" | "span"; text: string };
 
-/** When a window starts over: the span ("45m", "2d 3h"), the local clock time when that is today, or "due". null without a time. */
+/** When a window starts over: the span ("45m", "2d 3h", "5d" with no hours left over; each language's own units, "2 天 3 小时"),
+ *  the local clock time when that is today, or "due". null without a time. */
 function countdownOf(resetsAt: string | undefined, now: number): Countdown | null {
   const at = resetsAt ? Date.parse(resetsAt) : NaN;
   if (!Number.isFinite(at)) return null;
@@ -86,11 +87,12 @@ function countdownOf(resetsAt: string | undefined, now: number): Countdown | nul
   if (new Date(at).toDateString() === new Date(now).toDateString()) return { kind: "clock", text: formatDate(at, { timeStyle: "short" }) };
   const hours = Math.floor(mins / 60);
   const d = Math.floor(hours / 24);
-  return { kind: "span", text: d > 0 ? tr("usage.days_hours", { d, h: hours % 24 }) : tr("usage.hours", { h: hours }) };
+  const h = hours % 24;
+  return { kind: "span", text: d === 0 ? tr("usage.hours", { h: hours }) : h === 0 ? tr("usage.days", { d }) : tr("usage.days_hours", { d, h }) };
 }
 
 /** When a window starts over, as it reads in the popover: "45m" within the hour, the clock time when it is today,
- *  otherwise "2d 3h" (days and hours). "" without a time; "Resets soon" when it is due. */
+ *  otherwise "2d 3h" (days and hours, "5d" without a zero hour). "" without a time; "Resets soon" when it is due. */
 export function countdown(resetsAt: string | undefined, now = Date.now()): string {
   return countdownOf(resetsAt, now)?.text ?? "";
 }

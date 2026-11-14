@@ -3,7 +3,7 @@
 A self-hosted hub doesn't have the APNs key of the Apple Team that owns the App, so it can't send pushes. The push relay is a `personad relay` run by the App's publisher:
 it holds the APNs key and hands pushes to APNs on behalf of every hub. The hub encrypts the notification content with the phone's public key, the relay only forwards ciphertext,
 and the phone decrypts it in the Notification Service Extension before showing it. A hub that has its own APNs key (`~/.persona/apns.json`) keeps talking to APNs directly and never goes through the relay.
-The Mac version works the same way: its Notification Service Extension target is `PersonaMacNotify` (product `PersonaNotify.appex`; the module and principal notification class still use `PersonaNotify`, `docs/apple/mac.md` ("Remote push (Mac)"), #432), and the private key lives in the data protection keychain, shared with the extension. Apple Vision Pro builds the same extension as `PersonaVisionNotify` (#1981, `docs/apple/vision.md`).
+The retired native Mac version worked the same way: its Notification Service Extension target was `PersonaMacNotify` (product `PersonaNotify.appex`; the module and principal notification class still use `PersonaNotify`, #432), and the private key lived in the data protection keychain, shared with the extension. The Electron desktop posts local notifications through its web bridge rather than that retired target. Apple Vision Pro builds the same extension as `PersonaVisionNotify` (#1981, `docs/apple/vision.md`).
 
 ```
 hub ──(HPKE ciphertext + grant)──▶ relay ──(APNs key)──▶ APNs ──▶ phone: Notification Service Extension decrypts → shows

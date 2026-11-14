@@ -17,17 +17,13 @@ nonisolated struct CommandAsk: Equatable, Sendable {
     var deadline: String?
     var deadlineAllows: Bool
     var deadlineAt: Date?
-    /// About how many rows of a phone's card the command takes, by a rough count: past the rows a card shows of it
-    /// (`foldedLines`), it folds, with Show All (`folds(at:)`).
-    var rows: Int
 
-    /// The rows the card shows of a long command until Show All: few, so its answers stay in the panel's view.
-    static let foldedLines = 3
+    /// The lines the card shows of a long command until Show All N Lines opens it whole (#6605): fewer when the card is
+    /// short, its answers staying in view under it (the card measures where it folds).
+    static let foldedLines = 8
     /// Beautiful UI's card shows fewer: its choice rows and Send under the command take more room than two buttons,
     /// and Send stays in the half-page panel's view.
     static let compactFoldedLines = 2
-    /// About how many characters of code type fit a row of the card on a phone.
-    private static let rowChars = 38
 
     init?(command: String?, description: String? = nil, warning: String? = nil, risk: String? = nil, deadline: String? = nil,
           deadlineAction: String? = nil, deadlineAt: Date? = nil) {
@@ -43,12 +39,7 @@ nonisolated struct CommandAsk: Equatable, Sendable {
         self.deadline = text(deadline)
         self.deadlineAllows = deadlineAction == "allow"
         self.deadlineAt = deadlineAt
-        rows = command.split(separator: "\n", omittingEmptySubsequences: false)
-            .reduce(0) { $0 + max(1, ($1.count + Self.rowChars - 1) / Self.rowChars) }
     }
-
-    /// Longer than `lines` rows: a card showing that many folds it.
-    func folds(at lines: Int) -> Bool { rows > lines }
 
     /// The card's heading, in place of the terminal's "Do you want to proceed?".
     static func title(agent: String) -> String { String(localized: "\(agent) Wants to Run a Command") }

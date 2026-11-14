@@ -1,6 +1,12 @@
 import XCTest
 
 final class LarkEncryptionFlowTests: XCTestCase {
+    @MainActor private func expandSource(_ app: XCUIApplication) {
+        let source = app.buttons["inbox.detail.source"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 20), "the original source control did not appear")
+        source.tapCenter()
+    }
+
     @MainActor func testEncryptedBodyPublicCoverAndKeyHandout() throws {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs OLK mock Hub") }
         continueAfterFailure = false
@@ -10,6 +16,7 @@ final class LarkEncryptionFlowTests: XCTestCase {
         app.launchPinned()
         let chat = app.staticTexts["设计评审"].firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 20)); chat.tapCenter()
+        expandSource(app)
         XCTAssertTrue(app.staticTexts["评审文档已更新，请看第二页。"].firstMatch.waitForExistence(timeout: 20))
         XCTAssertTrue(app.staticTexts["午饭后再聊"].exists)
         XCTAssertTrue(app.staticTexts["加密消息 · 对外展示"].firstMatch.exists)

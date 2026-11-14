@@ -8,6 +8,7 @@
   "confirm_script": "在「{machine}」上运行脚本：{line}",
   "confirm_steps": "在「{machine}」上依次执行：{steps}",
   "list_sep": "、",
+  "session_stopped": "{machine} 上的操作在屏幕上被停止了，我先停下了。要继续吗？",
   "err_outdated_lcu": "这台电脑上的 personad 太旧，还不认识 LCU：重新部署它",
   "err_unknown_action": "未知操作",
   "err_bad_body": "请求正文无效：{err}",

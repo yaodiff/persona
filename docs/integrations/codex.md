@@ -243,6 +243,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   The trust dialog is known by its question asking about trust, the option by what it says ("Trust and continue", "Yes, continue"), not by its number or the other option
   (0.167 has "Back to Agent Command Center" where 0.163 had "Quit"); the cursor is walked to it, then Enter.
   A rollout's `session_meta` is kept only once its first line is all written: 0.167 creates the file empty and writes the line milliseconds later, and a meta read in between, kept, hid the thread from the start for good.
+- **A daemon without its socket**: a shared daemon (0.163 and later) that still runs while its control socket under `/tmp/codex-daemon-<uid>` is gone takes no new client, and every plain `codex` exits with "failed to connect to …/app-server-control.sock" after printing the tail of the daemon's own old log. Before opening a tab, a start of a launcher that runs on the shared daemon checks for that (`codexDaemonSocketGone`: the control alias points at a missing socket and `app-server-daemon/daemon.pid` names a live process of the user) and fails at once with `codex_daemon_socket_gone`, naming `codex app-server daemon restart`. `launchers.check` does the same for such a launcher: its `codex exec` runs in its own process and passed while every start failed (2026-11-14). A stopped daemon, a managed launcher and a launcher with `-c` or `--remote` are not affected.
 - **No match**: the node waits at most 60 seconds (hub 100 seconds, App 110 seconds), then reports "Codex has opened in a new tab on the computer, but its session was not identified within 60 seconds…",
   followed by the last screen lines of that tab (falling back to the visible screen when the bottom rows are blank). If the launcher cannot run (command not found), fail as soon as a `personad codex-start:` line appears, without waiting the full timeout. codex-start's notes that it goes on after (the agent sandbox not wrapping the start) say `personad codex-start (note):` instead, so the Codex after them is not taken for a failure.
   If the terminal still reports Codex running, the error carries `agent_start_stalled`: the hub neither counts it as a broken launcher nor retries or reroutes the task automatically.
@@ -567,3 +568,17 @@ connections return errors without retaining a next-turn speed override. `thread/
 provide the current speed. A native null means Standard. Missing speed stays unknown because `thread/read` does not
 currently report it. Refreshes preserve acknowledged state, and reconnects start with unknown state until native
 settings arrive. Terminal-only panes, subagents and models without advertised tiers have no speed control.
+
+A new Persona conversation can carry the same native tier in `POST /api/v1/assistant/conversations` while the default
+manager names `assistant_start_service_tier` in `manager.hello` and the hub lists that feature. Launcher model discovery
+preserves `serviceTiers` as `service_tiers`; the web offers Fast only for a row that advertises `priority`, never from a
+model name, and only while using the default manager. The node uses the same acknowledged `thread/settings/update`
+after `thread/start` (or warm-thread adoption) and before the first `turn/start`, so effort and speed stay independent.
+Omission sends no override and keeps the configured native default. A native refusal prevents the first turn, stops the
+cold or adopted process, and saves no conversation, mode or recovery state. Validation and native failures use coded,
+localized refusals (`assistant_service_tier_start_only`, `assistant_service_tier_unsupported` and
+`assistant_service_tier_refused`) without exposing the native diagnostic as person-facing detail. A manager without the
+capability gets 501 `assistant_service_tier_manager_outdated` before relaying; a node without `assistant_service_tier`
+returns 409 `node_outdated`. An older hub ignores the unknown field, so the web neither offers nor sends it there. The
+start choice is one-shot, not execution-fingerprint or recovery state; later changes still use `session.speed`.
+New Agent starts have no speed setting.

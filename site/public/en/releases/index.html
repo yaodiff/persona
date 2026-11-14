@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Downloads · Persona</title>
+<meta name="description" content="Download the latest version of Persona for iPhone and Apple Watch, Android, Mac, Windows, Linux, and the web. Download installers directly from GitHub and see what changed in each release.">
+<meta property="og:title" content="Download Persona">
+<meta property="og:description" content="Start on your phone, watch, or computer. Download installers directly from GitHub.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://personaside.com/en/releases/">
+<meta property="og:image" content="https://personaside.com/img/recording-en.webp">
+<link rel="canonical" href="https://personaside.com/en/releases/">
+<link rel="alternate" hreflang="zh-CN" href="https://personaside.com/releases/">
+<link rel="alternate" hreflang="en" href="https://personaside.com/en/releases/">
+<link rel="alternate" hreflang="x-default" href="https://personaside.com/releases/">
+<meta name="theme-color" content="#EFE4D6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131217" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon.png" media="(prefers-color-scheme: light)">
+<link rel="icon" href="/favicon-dark.png" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+<link rel="preload" href="/fonts/unbounded-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/releases/data.json" as="fetch" crossorigin="anonymous">
+<script>document.documentElement.classList.add('js')</script>
+<style>
+@font-face{font-family:"Persona Serif";src:url(/fonts/persona-serif.woff) format("woff");font-weight:700;font-display:swap}
+@font-face{font-family:"JetBrains Mono";src:url(/fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"JetBrains Mono";src:url(/fonts/jetbrains-mono-latin-600-normal.woff2) format("woff2");font-weight:600;font-display:swap}
+@font-face{font-family:"Unbounded";src:url(/fonts/unbounded-latin-800-normal.woff2) format("woff2");font-weight:800;font-display:swap}
+
+/* The home page's palette and type (site/public/index.html) with the extensions page's night set. Every color is a
+   variable with both values; never a literal in a rule. */
+:root{
+  color-scheme:light dark;
+  --sky:#EFE4D6;
+  --sky-line:#DCCBB6;
+  --sky-tint:#F6EEE4;
+  --ink:#17161D;
+  --paper:#FFFFFF;
+  --mist:#6A5A4C;
+  --body:#3A322C;
+  --cheek:#EF6A3A;
+  --cheek-text:#B23E14;
+  --cheek-tint:#FDE6DC;
+  --amber:#E5A132;
+  --amber-text:#8A5A0B;
+  --amber-tint:#FBEBC9;
+  --go:#1E9C5F;
+  --go-text:#146B41;
+  --go-tint:#D8EFE2;
+  --on-color:#17161D;   /* text on orange, amber and green, both schemes */
+  --slab:var(--ink);    /* the block under a lifted card or button */
+  --stub:#F8F1E8;       /* the ticket's stub */
+  --perf:#C9B59D;       /* the ticket's perforation */
+  --sk-a:#EDE3D7;--sk-b:#F8F2EA;
+
+  --serif:"Persona Serif","Noto Serif CJK SC","Source Han Serif SC","Songti SC",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  --mono:"JetBrains Mono","Noto Sans Mono CJK SC",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --mark:"Unbounded",var(--sans);
+
+  --bw:2.5px;
+  --stroke:var(--bw) solid var(--ink);
+  --lift:0 22px 34px -22px rgba(23,22,29,.45);
+  --r:22px;
+  --page:min(1180px, calc(100vw - 48px));
+}
+html[lang="en"]{--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif}
+@media (prefers-color-scheme:dark){
+  :root{
+    --sky:#131217;
+    --sky-line:#2E2B35;
+    --sky-tint:#25232C;
+    --ink:#EEE7DD;
+    --paper:#1D1B23;
+    --mist:#A99E92;
+    --body:#D3CBC1;
+    --cheek-text:#FF8F63;
+    --cheek-tint:#4A2A21;
+    --amber-text:#F2C46E;
+    --amber-tint:#463619;
+    --go-text:#6FDDA4;
+    --go-tint:#1D3A2B;
+    --slab:#4A4553;
+    --stub:#24222A;
+    --perf:#4A4553;
+    --sk-a:#24222A;--sk-b:#2E2B34;
+    --lift:0 22px 34px -22px rgba(0,0,0,.7);
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{margin:0;background:var(--sky);color:var(--ink);font:400 17px/1.75 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit}
+img{display:block;max-width:100%;height:auto}
+code{font-family:var(--mono)}
+button{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--ink);outline-offset:3px;border-radius:6px}
+[hidden]{display:none !important}
+.wrap{width:var(--page);margin:0 auto}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---------- top bar (as on the home page) ---------- */
+.top{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none}
+.brand img{width:34px;height:34px;border-radius:9px;border:2px solid var(--ink)}
+.brand span{font:800 19px/1 var(--mark);letter-spacing:-.01em}
+.top nav{display:flex;align-items:center;gap:4px}
+.top nav a{display:inline-flex;align-items:center;min-height:44px;font-size:15px;text-decoration:none;padding:0 13px;border-radius:999px;white-space:nowrap}
+.top nav a:hover{background:var(--sky-tint)}
+.top nav a[aria-current]{font-weight:600;background:var(--sky-tint)}
+.top nav a.go{border:2px solid var(--ink);background:var(--paper);margin-left:6px}
+
+/* ---------- buttons ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;white-space:nowrap;font:600 16px/1 var(--sans);text-decoration:none;
+  min-height:52px;padding:0 22px;border:var(--stroke);border-radius:999px;transition:transform .15s ease,box-shadow .15s ease;cursor:pointer}
+.btn:hover{transform:translateY(-2px);box-shadow:0 6px 0 var(--slab)}
+.btn:active{transform:none;box-shadow:none}
+.btn-cheek{background:var(--cheek);color:var(--on-color)}
+.btn-paper{background:var(--paper);color:var(--ink)}
+.btn svg{width:19px;height:19px;flex:none}
+.btn small{font:500 13px/1 var(--mono);opacity:.72}
+.link{display:inline-flex;align-items:center;gap:6px;font-weight:600;text-decoration:none;border-bottom:2px solid var(--sky-line);padding-bottom:1px}
+.link:hover{border-color:var(--ink)}
+
+/* ---------- type ---------- */
+h1,h2{font-family:var(--serif);font-weight:700;font-feature-settings:"palt";letter-spacing:-.01em;margin:0}
+h1{font-size:clamp(34px,4.6vw,58px);line-height:1.22;text-wrap:balance}
+h2{font-size:clamp(28px,3.4vw,42px);line-height:1.2;text-wrap:balance}
+h3{margin:0;font-size:19px;line-height:1.35}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;margin:0 0 18px;font:500 14px/1 var(--mono);color:var(--mist)}
+.eyebrow i{width:9px;height:9px;border-radius:50%;background:var(--go);box-shadow:0 0 0 2px var(--ink)}
+.lede{max-width:34em;margin:18px 0 0;font-size:18px;color:var(--body)}
+.sec-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 24px;margin-bottom:28px}
+.sec-head p{margin:8px 0 0;color:var(--body);max-width:36em}
+section.block{padding:76px 0;border-top:2px solid var(--sky-line)}
+
+/* ---------- intro ---------- */
+.intro{padding:30px 0 40px}
+
+/* ---------- the ticket: the latest version and its download ---------- */
+.ticket{--notch:22px;position:relative;display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);
+  background:var(--paper);border:var(--stroke);border-radius:30px;box-shadow:10px 10px 0 var(--slab);margin-bottom:96px}
+.stub{position:relative;padding:34px 38px 32px;background:var(--stub);border-radius:28px 0 0 28px;border-right:var(--bw) dashed var(--perf)}
+/* the two notches where the stub tears off: half-discs of the page's ground, outlined, on the top and bottom edges */
+.stub::before,.stub::after{content:"";position:absolute;right:calc(-1 * var(--notch) - var(--bw) / 2);width:calc(var(--notch) * 2);height:calc(var(--notch) * 2);
+  border-radius:50%;background:var(--sky);border:var(--stroke);z-index:1}
+.stub::before{top:calc(-1 * var(--notch) - var(--bw));clip-path:inset(50% -4px -4px -4px)}
+.stub::after{bottom:calc(-1 * var(--notch) - var(--bw));clip-path:inset(-4px -4px 50% -4px)}
+.tk-label{display:flex;align-items:center;gap:8px;margin:0;font:600 13px/1 var(--mono);letter-spacing:.06em;color:var(--mist);text-transform:uppercase}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font:600 12.5px/1 var(--sans);white-space:nowrap;letter-spacing:0;text-transform:none}
+.chip i{width:7px;height:7px;border-radius:50%;background:currentColor}
+.chip-go{background:var(--go-tint);color:var(--go-text)}
+.chip-amber{background:var(--amber-tint);color:var(--amber-text)}
+.chip-cheek{background:var(--cheek-tint);color:var(--cheek-text)}
+.tk-ver{margin:18px 0 0;font:800 clamp(58px,8.4vw,104px)/.95 var(--mark);letter-spacing:-.04em;white-space:nowrap}
+.tk-ver span{font-size:.5em;letter-spacing:-.02em;vertical-align:.62em;margin-right:.06em;color:var(--mist)}
+.tk-date{margin:14px 0 0;font-size:15px;color:var(--mist)}
+.tk-stats{display:flex;gap:28px;margin:26px 0 0;padding:20px 0 0;border-top:2px solid var(--sky-line)}
+.tk-stats div{display:flex;flex-direction:column-reverse}
+.tk-stats dt{font-size:13.5px;color:var(--mist)}
+.tk-stats dd{margin:0;font:800 30px/1.1 var(--mark);letter-spacing:-.02em}
+.tk-main{display:flex;flex-direction:column;justify-content:center;padding:34px 36px 32px 48px;min-width:0}
+.tk-for{display:flex;align-items:center;gap:12px;margin:0;font-size:15px;color:var(--mist)}
+.tk-for svg{width:22px;height:22px;flex:none;color:var(--ink)}
+.tk-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-top:16px}
+.tab{display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:0 11px;border:2px solid var(--sky-line);border-radius:999px;background:var(--paper);
+  font:600 13.5px/1 var(--sans);white-space:nowrap;cursor:pointer;transition:border-color .15s ease,background .15s ease}
+.tab svg{width:16px;height:16px;flex:none}
+.tab:hover{border-color:var(--ink)}
+.tab[aria-pressed="true"]{border-color:var(--ink);background:var(--ink);color:var(--paper)}
+.tk-title{margin:20px 0 0;font:700 clamp(23px,2.4vw,30px)/1.3 var(--sans);letter-spacing:-.01em}
+.tk-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
+.tk-meta{margin:16px 0 0;font:400 13px/1.7 var(--mono);color:var(--mist);overflow-wrap:anywhere;white-space:pre-line}
+.tk-other{margin-top:22px;padding-top:18px;border-top:2px solid var(--sky-line);display:flex;flex-wrap:wrap;gap:8px 22px;font-size:15px}
+.notice{display:flex;gap:10px;align-items:flex-start;margin:20px 0 0;padding:12px 14px;border-radius:14px;font-size:14.5px;line-height:1.6}
+.notice i{flex:none;width:9px;height:9px;margin-top:7px;border-radius:50%;background:currentColor}
+.notice-amber{background:var(--amber-tint);color:var(--amber-text)}
+.notice-cheek{background:var(--cheek-tint);color:var(--cheek-text)}
+.notice a{color:inherit;font-weight:600}
+/* loading: soft bars where text will go */
+.sk{display:block;border-radius:8px;background:linear-gradient(90deg,var(--sk-a) 0,var(--sk-b) 50%,var(--sk-a) 100%) 0 0/200% 100%;animation:sheen 1.4s linear infinite}
+@keyframes sheen{to{background-position:-200% 0}}
+.loading .tk-ver,.loading .tk-date,.loading .tk-title{color:transparent}
+.loading .tk-ver{width:3.2em;border-radius:14px}
+.loading .tk-date{width:11em}
+.loading .tk-title{width:9em}
+.loading .tk-ver,.loading .tk-date,.loading .tk-title{background:linear-gradient(90deg,var(--sk-a) 0,var(--sk-b) 50%,var(--sk-a) 100%) 0 0/200% 100%;animation:sheen 1.4s linear infinite;border-radius:10px}
+
+/* ---------- devices ---------- */
+.devices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.dev{position:relative;display:flex;flex-direction:column;padding:24px;background:var(--paper);border:var(--stroke);border-radius:var(--r);box-shadow:var(--lift);scroll-margin-top:24px}
+.dev.you{box-shadow:0 0 0 5px var(--cheek-tint),var(--lift)}
+.dev-head{display:flex;align-items:center;gap:14px}
+.dev-ico{display:grid;place-items:center;width:52px;height:52px;flex:none;border:2px solid var(--ink);border-radius:15px;background:var(--sky-tint)}
+.dev-ico svg{width:26px;height:26px}
+.dev.you .dev-ico{background:var(--cheek)}
+.dev.you .dev-ico svg{color:var(--on-color)}
+.dev-head p{margin:2px 0 0;font-size:13.5px;line-height:1.4;color:var(--mist)}
+.you-chip{position:absolute;top:-13px;right:18px;border:2px solid var(--ink);background:var(--cheek);color:var(--on-color)}
+.dev-what{margin:18px 0 0;font-size:15px;line-height:1.65;color:var(--body);flex:1}
+.dev-caveat{margin:12px 0 0;font-size:13px;line-height:1.6;color:var(--mist)}
+.dev-dl{display:flex;flex-direction:column;gap:10px;margin-top:20px}
+.dl{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:50px;padding:0 16px;border:2px solid var(--ink);border-radius:14px;
+  text-decoration:none;font-weight:600;font-size:15.5px;background:var(--paper);transition:transform .15s ease,box-shadow .15s ease}
+.dl:hover{transform:translateY(-2px);box-shadow:0 4px 0 var(--slab)}
+.dl:active{transform:none;box-shadow:none}
+.dl .l{display:flex;align-items:center;gap:10px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dl .l svg{width:18px;height:18px;flex:none}
+.dl .r{font:500 13px/1 var(--mono);color:var(--mist);white-space:nowrap}
+.dl.primary{background:var(--cheek);color:var(--on-color)}
+.dl.primary .r{color:var(--on-color);opacity:.75}
+.dl.off{border-style:dashed;border-color:var(--sky-line);color:var(--mist);pointer-events:none}
+.dev-sub-link{margin-top:12px;font-size:14px}
+
+/* the web app's steps: numbered, in the ticket and on its card */
+.tk-guide,.dev-guide{counter-reset:step;margin:0;padding:0;list-style:none;display:grid;gap:14px}
+.tk-guide{width:100%}
+.tk-guide li,.dev-guide li{position:relative;padding-left:40px;counter-increment:step}
+.tk-guide li::before,.dev-guide li::before{content:counter(step);position:absolute;left:0;top:1px;display:grid;place-items:center;width:26px;height:26px;
+  border:2px solid var(--ink);border-radius:50%;background:var(--paper);font:600 13px/1 var(--mono)}
+.tk-guide li:first-child::before,.dev-guide li:first-child::before{background:var(--cheek);color:var(--on-color)}
+.tk-guide b,.dev-guide b{display:block;font-size:15.5px;line-height:1.5}
+.tk-guide span,.dev-guide span{display:block;font-size:14px;line-height:1.65;color:var(--body);overflow-wrap:anywhere}
+.tk-guide code,.dev-guide code{display:inline-block;margin:2px 0 0;padding:1px 7px;border-radius:6px;background:var(--sky-tint);color:var(--ink);font-size:.92em;white-space:nowrap}
+.dev.guide .dev-what{flex:none}
+.dev-guide{flex:1;margin-top:14px;gap:12px}
+.dev-guide b{font-size:14.5px}
+.dev-guide span{font-size:13.5px}
+
+/* ---------- components (disclosure) ---------- */
+.parts{background:var(--paper);border:var(--stroke);border-radius:var(--r);box-shadow:var(--lift)}
+.parts > summary{position:relative;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;list-style:none;cursor:pointer;padding:22px 64px 22px 26px;border-radius:20px}
+.parts > summary::-webkit-details-marker{display:none}
+.parts > summary b{font-size:18px}
+.parts > summary span{font-size:14.5px;color:var(--mist)}
+.chev{position:absolute;right:26px;top:50%;width:11px;height:11px;margin-top:-9px;border-right:2.5px solid var(--ink);border-bottom:2.5px solid var(--ink);transform:rotate(45deg);transition:transform .25s ease,margin .25s ease}
+details[open] > summary .chev{transform:rotate(-135deg);margin-top:-3px}
+.parts-body{padding:0 26px 26px}
+.comp{display:grid;grid-template-columns:minmax(180px,2fr) minmax(0,5fr);gap:8px 24px;padding:16px 0;border-top:2px solid var(--sky-line)}
+.comp b{font:600 15px/1.3 var(--mono)}
+.comp p{margin:4px 0 0;font-size:13.5px;line-height:1.5;color:var(--mist)}
+.files{display:flex;flex-wrap:wrap;gap:8px;align-content:flex-start}
+.file{display:inline-flex;align-items:center;gap:8px;min-height:38px;padding:0 12px;border:1.5px solid var(--sky-line);border-radius:10px;text-decoration:none;font-size:14px;white-space:nowrap;background:var(--paper)}
+.file:hover{border-color:var(--ink)}
+.file small{font:500 12px/1 var(--mono);color:var(--mist)}
+.file svg{width:15px;height:15px;flex:none;color:var(--mist)}
+.verify{margin:18px 0 0;font-size:13.5px;line-height:1.7;color:var(--mist)}
+.verify code{font-size:12.5px;padding:1px 6px;border-radius:6px;background:var(--sky-tint);color:var(--ink)}
+
+/* ---------- history ---------- */
+.history{position:relative;margin:0;padding:0;list-style:none}
+.history::before{content:"";position:absolute;left:11px;top:30px;bottom:30px;width:2.5px;background:var(--sky-line);border-radius:2px}
+.rel{position:relative;padding-left:46px}
+.rel + .rel{margin-top:14px}
+.rel::before{content:"";position:absolute;left:3px;top:24px;width:19px;height:19px;border-radius:50%;border:var(--stroke);background:var(--paper);z-index:1}
+.rel.latest::before{background:var(--go)}
+.rel.pre::before{background:var(--amber)}
+.rel.pending::before{background:var(--sky-tint);border-style:dashed}
+.rel > details{background:var(--paper);border:2px solid var(--ink);border-radius:18px}
+.rel > details[open]{box-shadow:var(--lift)}
+.rel summary{position:relative;display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;gap:4px 16px;list-style:none;cursor:pointer;padding:16px 60px 16px 20px;border-radius:16px}
+.rel summary::-webkit-details-marker{display:none}
+.rel summary:hover{background:var(--sky-tint)}
+.rel-ver{font:800 22px/1.2 var(--mark);letter-spacing:-.02em;white-space:nowrap}
+.rel-tags{display:flex;gap:6px}
+.rel-meta{font-size:14px;color:var(--mist);text-align:right}
+.rel-body{padding:4px 20px 22px}
+.rel-hl{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+.rel-hl li{display:flex;gap:10px;font-size:15px;line-height:1.6;color:var(--body)}
+.rel-hl li::before{content:"";flex:none;width:7px;height:7px;margin-top:9px;border-radius:50%;background:var(--cheek)}
+.rel-hl .area{flex:none;font-size:13px;line-height:1.85;color:var(--mist)}
+.rel-files{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.rel-foot{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:18px;font-size:14.5px}
+.history-more{margin-top:26px;padding-left:46px}
+
+/* ---------- failure ---------- */
+.fail{text-align:left}
+.fail .tk-actions{margin-top:20px}
+
+/* ---------- signature and footer (as on the home page) ---------- */
+.sign{display:grid;grid-template-columns:170px minmax(0,1fr);gap:32px;align-items:center;padding:64px 0 40px;border-top:2px solid var(--sky-line)}
+.sign img{width:170px;animation:wave 3.6s ease-in-out infinite;transform-origin:50% 90%}
+@keyframes wave{0%,50%,100%{transform:translateY(0) rotate(0)}25%{transform:translateY(-7px) rotate(0)}62%{transform:rotate(-4deg)}74%{transform:rotate(3deg)}86%{transform:rotate(-2deg)}}
+.sign .hello{margin:0;font:700 clamp(26px,3vw,38px)/1.3 var(--serif);font-feature-settings:"palt"}
+.sign .hello-sub{margin:10px 0 0;max-width:32em;font-size:17px;color:var(--body)}
+.sign .btn{margin-top:18px;min-height:46px;font-size:15px;padding:0 18px}
+.foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 24px;padding:22px 0 40px;border-top:2px solid var(--sky-line);font-size:13.5px;color:var(--mist)}
+.foot nav{display:flex;flex-wrap:wrap;gap:6px 20px}
+.foot a{text-decoration:none}
+.foot a:hover{text-decoration:underline;text-underline-offset:3px}
+
+/* ---------- motion ---------- */
+@keyframes rise{from{opacity:0;transform:translateY(16px)}}
+.js .ready .tk-ver,.js .ready .tk-title,.js .ready .tk-actions{animation:rise .5s cubic-bezier(.2,.8,.2,1) both}
+.js .ready .tk-title{animation-delay:.06s}
+.js .ready .tk-actions{animation-delay:.12s}
+details[open] > .rel-body,details[open] > .parts-body{animation:drop .28s ease both}
+@keyframes drop{from{opacity:0;transform:translateY(-6px)}}
+
+/* ---------- smaller screens ---------- */
+@media (max-width:1080px){
+  .devices{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:860px){
+  .ticket{grid-template-columns:minmax(0,1fr);box-shadow:7px 7px 0 var(--slab)}
+  .stub{border-radius:28px 28px 0 0;border-right:0;border-bottom:var(--bw) dashed var(--perf)}
+  .stub::before,.stub::after{right:auto;top:auto;bottom:calc(-1 * var(--notch) - var(--bw) / 2)}
+  .stub::before{left:calc(-1 * var(--notch) - var(--bw));clip-path:inset(-4px -4px -4px 50%)}
+  .stub::after{right:calc(-1 * var(--notch) - var(--bw));clip-path:inset(-4px 50% -4px -4px)}
+  .tk-main{padding:34px 30px 30px}
+  .comp{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:640px){
+  :root{--page:calc(100vw - 32px)}
+  body{font-size:16px}
+  .top nav a:not(.go):not(.lang){display:none}
+  .intro{padding:14px 0 30px}
+  .lede{font-size:16.5px}
+  .ticket{margin-bottom:64px;margin-right:7px;border-radius:24px}
+  .stub{padding:26px 24px 24px;border-radius:22px 22px 0 0}
+  .tk-main{padding:28px 22px 24px}
+  .tk-actions .btn{width:100%}
+  section.block{padding:56px 0}
+  .devices{grid-template-columns:minmax(0,1fr)}
+  .rel{padding-left:36px}
+  .history::before{left:8px}
+  .rel::before{left:0}
+  .rel summary{grid-template-columns:auto minmax(0,1fr);padding:14px 48px 14px 16px}
+  .rel-meta{grid-column:1 / -1;text-align:left}
+  .rel-body{padding:2px 16px 18px}
+  .chev{right:20px}
+  .history-more{padding-left:36px}
+  .sign{grid-template-columns:minmax(0,1fr);gap:16px}
+  .sign img{width:130px}
+  .foot{flex-direction:column;align-items:flex-start}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none !important;transition:none !important}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <a class="brand" href="/en/" aria-label="Persona home"><img src="/img/apple-touch-icon.png" alt="" width="34" height="34"><span>Persona</span></a>
+  <nav aria-label="Main navigation">
+    <a href="/en/">Home</a>
+    <a href="/en/extensions/">Extensions</a>
+    <a href="/en/releases/" aria-current="page">Downloads</a>
+    <a href="https://github.com/nwverse/persona" target="_blank" rel="noopener">GitHub</a>
+    <a class="go" href="/en/#start">Get started</a>
+    <a class="lang" href="/releases/?lang=zh" hreflang="zh-CN" lang="zh-CN" aria-label="查看中文版本">中文</a>
+  </nav>
+</header>
+
+<main>
+  <section class="intro">
+    <p class="eyebrow"><i aria-hidden="true"></i>Downloads and releases</p>
+    <h1>Get Persona on all your devices</h1>
+    <p class="lede">Start with your phone, watch, or computer. Download installers directly from GitHub, and browse what changed in each release.</p>
+  </section>
+
+  <article class="ticket loading" id="ticket" aria-labelledby="tk-label" aria-busy="true">
+    <div class="stub">
+      <p class="tk-label" id="tk-label"><span>Latest release</span><span class="chip chip-go" id="tk-chip" hidden><i aria-hidden="true"></i>Stable</span></p>
+      <p class="tk-ver" id="tk-ver"><span>v</span>0.0.0</p>
+      <p class="tk-date" id="tk-date">Loading release information</p>
+      <dl class="tk-stats" id="tk-stats" hidden>
+        <div><dt>New features</dt><dd id="tk-feat"></dd></div>
+        <div><dt>Fixes</dt><dd id="tk-fix"></dd></div>
+      </dl>
+    </div>
+    <div class="tk-main" id="tk-main">
+      <p class="tk-for" id="tk-for">Detecting your device</p>
+      <div class="tk-tabs" id="tk-tabs" role="group" aria-label="Choose a device" hidden></div>
+      <p class="tk-title" id="tk-title">Download Persona</p>
+      <div class="tk-actions" id="tk-actions">
+        <a class="btn btn-paper" href="https://github.com/nwverse/persona/releases/latest" target="_blank" rel="noopener">Download on GitHub</a>
+      </div>
+      <p class="tk-meta" id="tk-meta"></p>
+      <div id="tk-notices"></div>
+      <div class="tk-other" id="tk-other">
+        <a class="link" href="#devices">Other devices</a>
+        <a class="link" href="#history">Release history</a>
+      </div>
+    </div>
+  </article>
+  <noscript><p class="notice notice-amber"><i aria-hidden="true"></i><span>This page needs JavaScript to list the installers. You can also download one from <a href="https://github.com/nwverse/persona/releases/latest">the latest release page on GitHub</a>.</span></p></noscript>
+
+  <section class="block" id="devices">
+    <div class="sec-head">
+      <div>
+        <h2>Choose your device</h2>
+        <p>Install the app on your phone and watch; the components on your computer store data and run Agents. Not sure where to start? Install the phone app first.</p>
+      </div>
+    </div>
+    <div class="devices" id="devices-grid"></div>
+  </section>
+
+  <section class="block" id="parts-sec" hidden>
+    <details class="parts" id="parts">
+      <summary><b>Individual components and checksum files</b><span id="parts-sub">For people deploying Persona themselves. The computer installers above already include these components.</span><i class="chev" aria-hidden="true"></i></summary>
+      <div class="parts-body" id="parts-body"></div>
+    </details>
+  </section>
+
+  <section class="block" id="history">
+    <div class="sec-head">
+      <div>
+        <h2>Release history</h2>
+        <p>Newest first. Open a release to see its highlights and all installers.</p>
+      </div>
+    </div>
+    <ol class="history" id="history-list"></ol>
+    <p class="history-more"><a class="link" href="https://github.com/nwverse/persona/releases" target="_blank" rel="noopener">View all releases on GitHub</a></p>
+  </section>
+</main>
+
+<footer>
+  <div class="sign">
+    <img src="/img/paper.webp" width="480" height="356" alt="Paper, the Persona mascot, waving" loading="lazy">
+    <div>
+      <p class="hello">Questions? Open an issue.</p>
+      <p class="hello-sub">Trouble installing or can't find the right installer? Let us know on GitHub.</p>
+      <a class="btn btn-paper" href="https://github.com/nwverse/persona/issues/new/choose" target="_blank" rel="noopener">Open an issue</a>
+    </div>
+  </div>
+  <div class="foot">
+    <span>© 2026 personaside.com · Persona is open source under the MIT license</span>
+    <nav aria-label="Footer">
+      <a href="/en/">Home</a>
+      <a href="/en/extensions/">Extensions</a>
+      <a href="https://github.com/nwverse/persona" target="_blank" rel="noopener">GitHub</a>
+      <a href="/en/privacy/">Privacy policy</a>
+      <a href="/en/terms/">Terms of service</a>
+      <a href="mailto:hi@personaside.com">Contact us</a>
+    </nav>
+  </div>
+</footer>
+</div>
+
+<script type="module" src="/releases/page.js"></script>
+</body>
+</html>

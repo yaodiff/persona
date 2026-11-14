@@ -92,6 +92,7 @@ struct ReplyQuote: View {
             }
             .frame(maxHeight: folded ? fold : nil, alignment: .top)
             .clipped()
+            .contentShape(.rect) // what is folded away takes no touches: it runs on over the rows below (#6645)
             .mask {
                 if folded {
                     VStack(spacing: 0) {

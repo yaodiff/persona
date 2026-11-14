@@ -298,6 +298,7 @@ extension Session {
         row.ultracode = old.ultracode
         row.launcher = old.launcher
         row.suggestion = old.suggestion
+        row.suggestionRisky = old.suggestionRisky
         row.codexRoute = old.codexRoute
         row.codexRouteNote = old.codexRouteNote
         row.runtime = old.runtime

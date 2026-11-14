@@ -32,6 +32,7 @@ type composerDeletion struct {
 	node       *Node
 	workspace  orcart.Worktree
 	herdr      *herdrWorkspaceDeletion
+	runtime    *runtimeWorkspaceDeletion // an engine runtime's worktree (runtimeworkspaces_manage.go)
 	pathInfo   os.FileInfo
 	gitInfo    os.FileInfo
 	dirtyState string
@@ -59,6 +60,9 @@ func (n *Node) worktreeDelete(ctx context.Context, kind, id string, raw json.Raw
 	if kind == "herdr" {
 		return n.herdrWorktreeDelete(ctx, id, in)
 	}
+	if _, _, runtime := n.runtimeEngine(kind); runtime && kind != "" { // Paseo's (runtimeworkspaces_manage.go)
+		return n.runtimeWorktreeDelete(ctx, kind, id, in)
+	}
 	if in.CloseOnly {
 		return nil, composerError(ctx, "close_unsupported")
 	}
@@ -68,7 +72,7 @@ func (n *Node) worktreeDelete(ctx context.Context, kind, id string, raw json.Raw
 		prior = composerDeletions.previews[in.Token]
 		dispatched := prior != nil && prior.dispatched
 		composerDeletions.Unlock()
-		if prior == nil || prior.node != n || prior.herdr != nil || kind != "orca" || prior.workspace.WorktreeID != id || time.Since(prior.created) > 24*time.Hour {
+		if prior == nil || prior.node != n || prior.herdr != nil || prior.runtime != nil || kind != "orca" || prior.workspace.WorktreeID != id || time.Since(prior.created) > 24*time.Hour {
 			return nil, composerError(ctx, "preview_required")
 		}
 		if in.Reconcile {

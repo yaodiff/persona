@@ -271,6 +271,12 @@
     <string name="agents_new_parent">上の階層へ</string>
     <string name="agents_new_no_subdirectories">このディレクトリにはサブフォルダがありません</string>
     <string name="agents_new_git_repo">Gitリポジトリ</string>
+    <string name="agents_workspace_title">ワークスペース</string>
+    <string name="agents_workspace_main">メインのチェックアウト</string>
+    <string name="agents_workspace_folder">フォルダ</string>
+    <string name="agents_workspace_other">その他のワークスペース</string>
+    <string name="agents_workspace_choose_folder">フォルダで選ぶ</string>
+    <string name="agents_workspace_kind_branch">%1$s · %2$s</string>
     <string name="agents_new_retry_open">もう一度開く</string>
     <string name="agents_new_tab_in">「%1$s」に新しいタブ</string>
     <string name="agents_new_online">オンライン</string>

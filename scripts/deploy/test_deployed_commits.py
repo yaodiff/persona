@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -7,6 +8,7 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "deployed_commits.py"
+GIT = shutil.which("git")
 
 
 class DeployedCommitsTest(unittest.TestCase):
@@ -22,7 +24,8 @@ class DeployedCommitsTest(unittest.TestCase):
         self.bin.mkdir()
         home = self.base / "home"
         home.mkdir()
-        self.env = {"GIT_CONFIG_NOSYSTEM": "1", "HOME": str(home), "PATH": f"{self.bin}:/usr/bin:/bin"}
+        self.env = {"GIT_CONFIG_NOSYSTEM": "1", "HOME": str(home),
+                    "PATH": f"{self.bin}:{Path(GIT).parent}:/usr/bin:/bin"}
         self.git("init", "-q", "--initial-branch=main", str(self.repo), cwd=self.base)
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.com")
@@ -39,12 +42,12 @@ class DeployedCommitsTest(unittest.TestCase):
         self.deployed = self.git("rev-parse", "HEAD")
 
     def git(self, *args, cwd=None):
-        run = subprocess.run(["git", *args], cwd=cwd or self.repo, env=self.env, capture_output=True, text=True, check=True)
+        run = subprocess.run([GIT, *args], cwd=cwd or self.repo, env=self.env, capture_output=True, text=True, check=True)
         return run.stdout.strip()
 
     def commit(self, subject, date=None):
         env = dict(self.env, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date) if date else self.env
-        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", subject], cwd=self.repo, env=env, check=True)
+        subprocess.run([GIT, "commit", "-q", "--allow-empty", "-m", subject], cwd=self.repo, env=env, check=True)
         return self.git("rev-parse", "HEAD")
 
     def run_script(self, *args):

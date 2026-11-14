@@ -23,7 +23,6 @@ struct MeetingPage: View {
     var opensRecording = false
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var size
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var capture = RecordingCapture.shared
@@ -58,12 +57,7 @@ struct MeetingPage: View {
     /// The composer's field has the keyboard: the top of the page steps aside as the bar's controls do, so the thread
     /// keeps its height.
     @FocusState private var writing: Bool
-    /// At accessibility sizes, why the composer takes no words (`MeetingPageBar`): shown at the end of what scrolls, so
-    /// the bar stays two rows. Likewise that some picked photos couldn't be read (#3862 phase 3), beside it.
-    @State private var notice: String?
-    @State private var photoNotice: String?
-    /// The transcript a highlight's time pushed (phase 2b): the page's, so it stays while the page is open, across the
-    /// switch between the regular and the accessibility layouts.
+    /// The transcript a highlight's time pushed (phase 2b): the page's, so it stays while the page is open.
     @State private var transcriptAt: MeetingTranscriptFocus?
 
     private var paused: Bool { capture.state == .paused }
@@ -117,8 +111,7 @@ struct MeetingPage: View {
             .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) {
                 VStack(spacing: Theme.Space.flush) {
                     if showsStopSpeaking { stopSpeaking }
-                    MeetingPageBar(entry: entry, mode: .live, paused: paused, justMe: $justMe, focus: $writing, notice: $notice,
-                                   photoNotice: $photoNotice)
+                    MeetingPageBar(entry: entry, mode: .live, paused: paused, justMe: $justMe, focus: $writing)
                 }
             }
             .onChange(of: exchanges.compactMap(\.answer)) { old, new in
@@ -126,88 +119,37 @@ struct MeetingPage: View {
                 // answers never are: VoiceOver would say them out loud to the room.
                 if new.count > old.count, let latest = new.last { AccessibilityNotification.Announcement(latest).post() }
             }
-            // On the page, not the card: one host in either layout, kept while the card turns into the Live box under it.
+            // On the page, not the card: one host, kept while the card turns into the Live box under it.
             .navigationDestination(item: $transcriptAt) { focus in
                 MeetingTranscriptPage(id: id, exchanges: exchanges, focus: focus)
             }
     }
 
     @ViewBuilder private func liveLayout(_ entry: RecordingEntry) -> some View {
-        if size.isAccessibilitySize {
-            // A fixed one-line header (the mark, the time, the menu and Hide) stays above whatever scrolls, so the state
-            // and the time are on screen at any text size; the rest scrolls as one.
-            VStack(spacing: Theme.Space.s) {
-                compactHeader(entry)
-                scroller {
-                    VStack(alignment: .leading, spacing: Theme.Space.m) {
-                        VStack(alignment: .leading, spacing: Theme.Space.s) {
-                            titleRow(entry)
-                            stateLine(clock: false)
-                            subtitle(entry)
-                        }
-                        problems(entry)
-                        topics(entry)
-                        topCard(entry, writing: false)
-                        threadHeader(entry)
-                        thread(entry)
-                        noticeBanner
-                    }
+        // While the field has the keyboard the subtitle steps aside and the top card keeps only its newest line or
+        // highlight, or its waiting line: the keyboard takes about half the screen, and the thread under them would get
+        // none of it. The structure stays the same, so the thread's scroll view keeps its place.
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                titleRow(entry)
+                stateLine()
+                if !writing { subtitle(entry) }
+            }
+            .padding(.horizontal, Theme.Space.page)
+            .padding(.top, Theme.Space.s)
+            problems(entry)
+            if !writing { topics(entry) }
+            topCard(entry, writing: writing)
+                .padding(.horizontal, Theme.Space.page)
+            threadHeader(entry)
+                .padding(.horizontal, Theme.Space.page)
+            scroller {
+                thread(entry)
                     .padding(.horizontal, Theme.Space.page)
                     .padding(.vertical, Theme.Space.s)
-                }
             }
-        } else {
-            // While the field has the keyboard the subtitle steps aside and the top card keeps only its newest line or
-            // highlight, or its waiting line: the keyboard takes about half the screen, and the thread under them would get
-            // none of it. The structure stays the same, so the thread's scroll view keeps its place.
-            VStack(alignment: .leading, spacing: Theme.Space.m) {
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    titleRow(entry)
-                    stateLine(clock: true)
-                    if !writing { subtitle(entry) }
-                }
-                .padding(.horizontal, Theme.Space.page)
-                .padding(.top, Theme.Space.s)
-                problems(entry)
-                if !writing { topics(entry) }
-                topCard(entry, writing: writing)
-                    .padding(.horizontal, Theme.Space.page)
-                threadHeader(entry)
-                    .padding(.horizontal, Theme.Space.page)
-                scroller {
-                    thread(entry)
-                        .padding(.horizontal, Theme.Space.page)
-                        .padding(.vertical, Theme.Space.s)
-                }
-            }
-            .animation(reduceMotion ? nil : Theme.Motion.state, value: writing)
         }
-    }
-
-    /// Why the composer takes no words, and picked photos that couldn't be read, at accessibility sizes (the bar says
-    /// them at the others).
-    @ViewBuilder private var noticeBanner: some View {
-        if let notice {
-            NoticeBanner(text: notice, tone: .neutral)
-                .accessibilityIdentifier("meeting-ask-notice")
-        }
-        if let photoNotice {
-            NoticeBanner(text: photoNotice, tone: .danger)
-                .accessibilityIdentifier("meeting-photo-problem")
-        }
-    }
-
-    /// The accessibility-size header: the mark, the time, the menu and Hide, on one line.
-    private func compactHeader(_ entry: RecordingEntry) -> some View {
-        HStack(spacing: Theme.Space.m) {
-            RecordingStateDot(paused: paused)
-            timer(font: Theme.Font.title)
-            Spacer(minLength: Theme.Space.s)
-            pageMenu(entry)
-            hideButton
-        }
-        .padding(.horizontal, Theme.Space.page)
-        .padding(.top, Theme.Space.s)
+        .animation(reduceMotion ? nil : Theme.Motion.state, value: writing)
     }
 
     private func titleRow(_ entry: RecordingEntry) -> some View {
@@ -216,10 +158,8 @@ struct MeetingPage: View {
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("recording-now-title")
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if !size.isAccessibilitySize {
-                pageMenu(entry)
-                hideButton
-            }
+            pageMenu(entry)
+            hideButton
         }
     }
 
@@ -230,13 +170,11 @@ struct MeetingPage: View {
     }
 
     /// The mark, the time and the state in words: never the color alone (the dot becomes a pause glyph, the word changes).
-    private func stateLine(clock: Bool) -> some View {
+    private func stateLine() -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.s) {
-                if clock {
-                    RecordingStateDot(paused: paused)
-                    timer(font: Theme.Font.bodyStrong)
-                }
+                RecordingStateDot(paused: paused)
+                timer(font: Theme.Font.bodyStrong)
                 Text(stateWord)
                     .font(Theme.Font.secondaryStrong)
                     .foregroundStyle(paused ? Color.secondary : Palette.recordingRed)
@@ -272,13 +210,9 @@ struct MeetingPage: View {
     }
 
     /// "Persona takes part · On this iPhone · Private": the role (or that Persona can't take part now), where it records,
-    /// and the private mark when it is on.
+    /// in hub mode that the hub transcribes it (#3862 phase 5), and the private mark when it is on.
     private func subtitle(_ entry: RecordingEntry) -> some View {
-        let parts = [personaWords(entry), String(localized: "On this iPhone"), isPrivate(entry) ? String(localized: "Private") : nil]
-        return Text(parts.compactMap { $0 }.joined(separator: " · "))
-            .font(Theme.Font.secondary).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("meeting-page-subtitle")
+        MeetingPageSubtitle(id: entry.id, persona: personaWords(entry), privateMark: isPrivate(entry))
     }
 
     /// The role's words, unless it attends and the hub took the meeting without its room (an older manager,
@@ -308,7 +242,7 @@ struct MeetingPage: View {
     @ViewBuilder private func topics(_ entry: RecordingEntry) -> some View {
         let topics = conversation.meeting(id).topics
         if entry.attendance?.liveView == true, !topics.isEmpty {
-            MeetingTopicsRow(topics: topics, inset: size.isAccessibilitySize ? Theme.Space.flush : Theme.Space.page)
+            MeetingTopicsRow(topics: topics, inset: Theme.Space.page)
         }
     }
 
@@ -349,7 +283,7 @@ struct MeetingPage: View {
                         .accessibilityIdentifier("meeting-private-problem")
                 }
             }
-            .padding(.horizontal, size.isAccessibilitySize ? Theme.Space.flush : Theme.Space.page)
+            .padding(.horizontal, Theme.Space.page)
         }
     }
 
@@ -398,16 +332,10 @@ struct MeetingPage: View {
         let caption = Text(justMe ? String(localized: "Only on this screen, never said aloud")
                            : unreachable(entry, role) ? String(localized: "Persona can't take part right now") : Self.audience(role))
             .font(Theme.Font.caption).foregroundStyle(.secondary)
-        return Group {
-            if size.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) { title; caption }
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                    title
-                    Spacer(minLength: Theme.Space.s)
-                    caption.multilineTextAlignment(.trailing)
-                }
-            }
+        return HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+            title
+            Spacer(minLength: Theme.Space.s)
+            caption.multilineTextAlignment(.trailing)
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
@@ -539,10 +467,10 @@ struct MeetingPage: View {
 
     @ViewBuilder private func afterPage(_ entry: RecordingEntry) -> some View {
         // The minutes' state stays above the thread, which follows its end (DESIGN_SYSTEM 3.6: the end of a recording shows
-        // its follow-through): the card, or one line at accessibility sizes and while the keyboard is up, as the live
-        // page keeps its header fixed. The structure stays the same, so the thread's scroll view keeps its place.
+        // its follow-through): the card, or one line while the keyboard is up. The structure stays the same, so the
+        // thread's scroll view keeps its place.
         VStack(spacing: Theme.Space.s) {
-            if size.isAccessibilitySize || writing {
+            if writing {
                 statusLine(entry)
             } else {
                 statusCard(entry)
@@ -551,13 +479,11 @@ struct MeetingPage: View {
             }
             scroller {
                 VStack(alignment: .leading, spacing: Theme.Space.l) {
-                    if size.isAccessibilitySize { afterTitle(entry) }
                     if let captureError {
                         NoticeBanner(text: captureError, tone: .danger)
                             .accessibilityIdentifier("meeting-capture-error")
                     }
                     thread(entry)
-                    noticeBanner
                 }
                 .padding(.horizontal, Theme.Space.page)
                 .padding(.vertical, Theme.Space.s)
@@ -613,7 +539,7 @@ struct MeetingPage: View {
                     .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
                     .transition(.opacity)
             } else {
-                MeetingPageBar(entry: entry, mode: .after, justMe: .constant(false), focus: $writing, notice: $notice,
+                MeetingPageBar(entry: entry, mode: .after, justMe: .constant(false), focus: $writing,
                                voice: voiceStart(key, entry: entry))
             }
         }
@@ -652,7 +578,6 @@ struct MeetingPage: View {
     }
 
     /// The card's one-line form: where the minutes are (when the meeting ran, before the hub says), and Open as an icon.
-    /// The title scrolls with the thread at accessibility sizes.
     private func statusLine(_ entry: RecordingEntry) -> some View {
         HStack(spacing: Theme.Space.m) {
             Group {
@@ -753,31 +678,70 @@ struct MeetingPage: View {
     }
 }
 
+/// The subtitle under the meeting page's state line: the role, where it records, hub mode (#3862 phase 5) and the private
+/// mark. A view of its own, so the transcription store's changes (a caption a second in hub mode) redraw only it (P5).
+private struct MeetingPageSubtitle: View {
+    var id: UUID
+    var persona: String
+    var privateMark: Bool
+    @State private var transcription = MeetingTranscription.shared
+
+    var body: some View {
+        let parts = [persona, String(localized: "On this iPhone"),
+                     transcription.hubTranscribes(id) ? String(localized: "Transcribed on the hub") : nil,
+                     privateMark ? String(localized: "Private") : nil]
+        Text(parts.compactMap { $0 }.joined(separator: " · "))
+            .font(Theme.Font.secondary).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("meeting-page-subtitle")
+    }
+}
+
 /// The Live box: the newest transcript lines, how far the text is behind the room, and the whole transcript one tap away.
 /// A view of its own, so its lines are taken from the transcript (every segment sorted and filtered, `entry.sentences`)
 /// only when the recording changes, not on every pass of the page (P4). `folded` (the keyboard is up): only the newest
 /// line, so the thread under it keeps its height. The top card (`MeetingTopCard`) shows it where there can be no
 /// highlights (phase 2b).
+///
+/// In hub mode (#3862 phase 5) it shows what `MeetingTranscription.shown` says: the hub's lines and its caption being
+/// said now while the audio socket is up and no problem but `no_interim` stands; else the phone's own lines with a notice
+/// that transcription has fallen back to this iPhone; with Persona off, the hub's caption under the phone's own lines.
 struct MeetingLiveBox: View {
     var entry: RecordingEntry
     var exchanges: [MeetingAsk.Exchange]
     var folded: Bool
 
-    @Environment(\.dynamicTypeSize) private var size
     @State private var capture = RecordingCapture.shared
+    @State private var transcription = MeetingTranscription.shared
     @State private var rows: [LiveRow] = []
 
     private var paused: Bool { capture.state == .paused }
 
     var body: some View {
+        let hub = transcription.meeting(entry.id)
+        let shown = transcription.shown(entry.id, role: entry.attendance?.role ?? .off)
+        // The hub's newest lines, keyed by their place in its live log (never renumbered): three, so cheap here.
+        let lines = shown.hubLines ? hub.lines.suffix(Theme.Recording.liveLines).map {
+            LiveRow(id: "hub-\($0.n)", start: $0.start, end: $0.end, text: $0.text)
+        } : rows
+        let caption = shown.hubInterim ? hub.interim.flatMap { $0.text.isEmpty ? nil : $0 } : nil
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 Text("Live").font(Theme.Font.captionStrong).foregroundStyle(.secondary)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: Theme.Space.s)
-                behind(rows.last)
+                // A caption is what is said now: nothing is behind.
+                if caption == nil { behind(lines.last) }
             }
-            ForEach(folded ? Array(rows.suffix(1)) : rows) { row in liveRow(row) }
+            if shown.fellBack { MeetingTranscriptionFallbackNotice(words: MeetingTranscriptionWords.fallback(hub)) }
+            // Folded, only the newest: the caption when there is one, else the last line.
+            ForEach(folded ? (caption == nil ? Array(lines.suffix(1)) : []) : lines) { row in
+                liveRow(row).accessibilityIdentifier(shown.hubLines ? "meeting-live-hub-line" : "meeting-live-line")
+            }
+            if let caption {
+                MeetingCaptionRow(caption: caption, lineLimit: Theme.Recording.liveLineLength)
+                    .accessibilityIdentifier("meeting-live-interim")
+            }
             if !folded {
                 HStack {
                     Spacer(minLength: Theme.Space.flush)
@@ -808,13 +772,7 @@ struct MeetingLiveBox: View {
     private func liveRow(_ row: LiveRow) -> some View {
         let stamp = Text(RecordingFormat.clock(row.start)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
         let words = Text(row.text).font(Theme.Font.body).lineLimit(Theme.Recording.liveLineLength)
-        return Group {
-            if size.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) { stamp; words }
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) { stamp; words }
-            }
-        }
+        return HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) { stamp; words }
         .accessibilityElement(children: .combine)
     }
 
@@ -974,8 +932,15 @@ nonisolated struct MeetingTranscriptFocus: Identifiable, Hashable, Sendable {
 }
 
 /// The whole transcript of the meeting being recorded, with its bookmarks and questions: the live view's timeline, one
-/// tap from the Live box. Opened at a highlight's time (`focus`), it scrolls to the first of the phone's lines in its
-/// minute and lights them all for two seconds (`RecordingTimeline.focus`), as the recording's page lights a line.
+/// tap from the Live box or the Highlights card. Opened at a highlight's time (`focus`), it scrolls to the first of the
+/// lines in its minute and lights them all for two seconds (`RecordingTimeline.focus`), as the recording's page lights a
+/// line.
+///
+/// In hub mode (#3862 phase 5) its lines are what `MeetingTranscription.shown` says, as in the Live box: the hub's lines
+/// with its caption being said now under them while the audio socket is up and no problem but `no_interim` stands; else
+/// the phone's own, under the notice that transcription fell back; with Persona off, the phone's own and the hub's
+/// caption. The page reads none of the store itself: a feed hands it the hub's lines only when they change, and the caption
+/// and the notice are views of their own, so a caption a second redraws only its row (P5).
 struct MeetingTranscriptPage: View {
     var id: UUID
     var exchanges: [MeetingAsk.Exchange]
@@ -985,15 +950,23 @@ struct MeetingTranscriptPage: View {
     @State private var capture = RecordingCapture.shared
     @State private var items: [RecordingTimeline.Item] = []
     @State private var lit: Set<RecordingTimeline.Item.ID> = []
+    /// The hub's lines while the page shows them (`MeetingTranscriptHubFeed`); nil: the phone's own.
+    @State private var hubLines: [MeetingHubLine]?
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 if let entry = library.entry(id) {
-                    RecordingTimelineRows(entry: entry, exchanges: exchanges, paused: capture.state == .paused, items: $items,
-                                          lit: lit)
-                        .padding(.horizontal, Theme.Space.page)
-                        .padding(.vertical, Theme.Space.s)
+                    let role = entry.attendance?.role ?? .off
+                    VStack(alignment: .leading, spacing: Theme.Space.m) {
+                        MeetingTranscriptionFallbackRow(id: id)
+                        RecordingTimelineRows(entry: entry, exchanges: exchanges, paused: capture.state == .paused, items: $items,
+                                              lit: lit, hubLines: hubLines)
+                        MeetingTranscriptCaption(id: id, role: role)
+                    }
+                    .padding(.horizontal, Theme.Space.page)
+                    .padding(.vertical, Theme.Space.s)
+                    .background { MeetingTranscriptHubFeed(id: id, role: role, lines: $hubLines) }
                 }
             }
             .task(id: focus) { await jump(proxy) }

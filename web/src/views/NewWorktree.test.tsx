@@ -74,6 +74,39 @@ it("creates without an Agent by default and opens the explicit M3 stage using ac
   expect(creates()).toHaveLength(1); expect(closes).toHaveBeenCalledOnce(); stop();
 });
 
+it("a Paseo workspace: the basic form in Paseo's folder, the source as its own parent, and an Agent is what opens the result", async () => {
+  const paseoRow = { id: "qualified-paseo", machine_id: "computer", source: "paseo", source_id: "wks_0000000000000001", cwd: "/projects/demo", title: "main",
+    project_id: "prj_demo", project_name: "Demo", workspace_kind: "git", is_main: true };
+  const paseoCreated = { workspace_id: "wks_0000000000000002", path: "/paseo/worktrees/abcd1234/feature-child", branch: "feature/child" };
+  Object.assign(getState(), { machines: [{ id: "computer", name: "Development computer", online: true, engine_hosts: ["paseo"], engine_default: "paseo" }] });
+  const original = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url, init) => {
+    if (String(url).endsWith("/workspaces")) return Promise.resolve(response({ workspaces: [paseoRow] }));
+    if (String(url).endsWith("/worktree/prepare")) {
+      calls.push({ url: String(url), body: JSON.parse(init.body), headers: new Headers(init.headers) });
+      return Promise.resolve(response({ root: "/projects/demo", repoName: "Demo", branch: "main", path: "/paseo/worktrees/abcd1234", automatic_name: true }));
+    }
+    if (String(url).endsWith("/worktree/create")) {
+      calls.push({ url: String(url), body: JSON.parse(init.body), headers: new Headers(init.headers) });
+      return Promise.resolve(response(paseoCreated));
+    }
+    return original(url, init);
+  });
+  const source = { machineId: "computer", workspaceId: paseoRow.source_id, host: "paseo", cwd: "/projects/demo", label: "main", owner: credentialOwner(), manager: "assistant" };
+  request = { target: { mid: "computer", workspaceId: paseoRow.source_id, host: "paseo", cwd: "/projects/demo", label: "main", owner: credentialOwner(), manager: "assistant" },
+    source, parent: source, changed: vi.fn(), onCreated: vi.fn() };
+  const launch = vi.fn(); const stop = onOpenNewAgent(launch); await mount();
+  expect(calls.find((c) => c.url.endsWith("/worktree/prepare"))?.body).toEqual({ workspace_id: paseoRow.source_id, kind: "paseo" });
+  expect(document.body.textContent).not.toContain(t("worktree-composer.legacy")); // Orca's update notice is not Paseo's
+  await input(t("worktree.branch_label"), "feature/child"); await click(t("worktree-composer.create"));
+  expect(creates()[0].body).toEqual({ workspace_id: paseoRow.source_id, kind: "paseo", branch: "feature/child", path: "/paseo/worktrees/abcd1234/feature-child" });
+  expect(document.body.textContent).toContain(paseoCreated.path);
+  expect(button(t("worktree-composer.open"))).toBeUndefined();
+  await click(t("worktree-composer.start_agent"));
+  expect(launch).toHaveBeenCalledWith({ workspace: expect.objectContaining({ workspaceId: paseoCreated.workspace_id, cwd: paseoCreated.path, host: "paseo" }) });
+  stop();
+});
+
 it("close/reopen during a create retains its result and never overwrites a separate new draft", async () => {
   let answer!: (value: Response) => void;
   const original = fetcher.getMockImplementation()!;
@@ -140,6 +173,7 @@ it("keeps the basic old-node branch/path fallback and exposes no advanced contro
   const original = fetcher.getMockImplementation()!;
   fetcher.mockImplementation((url, init) => String(url).endsWith("/worktree/prepare") ? Promise.resolve(response({ root: "/projects/demo", repoName: "Demo", branch: "main", path: "/worktrees" })) : original(url, init));
   await mount(); expect(document.body.textContent).not.toContain(t("worktree-composer.github"));
+  expect(document.body.textContent).toContain(t("worktree-composer.legacy")); // an Orca adapter an update would make advanced
   await input(t("worktree.branch_label"), "feature/basic"); await click(t("worktree-composer.create"));
   expect(creates()[0].body).toEqual({ workspace_id: "source-a", kind: "orca", branch: "feature/basic", path: "/worktrees/feature-basic" });
 });

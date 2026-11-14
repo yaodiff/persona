@@ -48,6 +48,12 @@ nonisolated enum ReplyMetrics {
     static let inlineCode: CGFloat = 0.88
     static let quiet: CGFloat = 0.88
 
+    /// A list item's marker: its room, at least 1.5 em (MarkdownUI's markers, right-aligned in it), then the system
+    /// `Label`'s gap before the words, the same at every text size (34, 41 and 80 pt to the words at the default size,
+    /// xxxLarge and AX5, #6552).
+    static func markerRoom(of size: CGFloat) -> CGFloat { points(1.5, of: size) }
+    static let markerGap: CGFloat = 8
+
     /// A size in em as the chat draws it: MarkdownUI sets every run's font at a whole point (`round(size × scale)`),
     /// so inline code at 0.88 em of 17 is 15, not 14.96. Over a line of code the difference came to most of a point (#3188).
     static func points(_ em: CGFloat, of size: CGFloat) -> CGFloat { (em * size).rounded() }
@@ -618,7 +624,14 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
     /// A moved line can start inside the one before it (a table picture's, taller here than the chat's table), where the
     /// layout manager's lookup takes the earlier line too.
     override func closestPosition(to point: CGPoint) -> UITextPosition? {
-        guard storage.length > 0, let container = layout.textContainers.first else { return super.closestPosition(to: point) }
+        guard let place = place(nearest: point) else { return super.closestPosition(to: point) }
+        return position(from: beginningOfDocument, offset: place.offset)
+    }
+
+    /// `closestPosition(to:)`'s place, and the side of it the point is on: `before` when the point is on the character
+    /// before it (left of the place, not in front of its line's first word) or past its line's last word.
+    private func place(nearest point: CGPoint) -> (offset: Int, before: Bool)? {
+        guard storage.length > 0, let container = layout.textContainers.first else { return nil }
         let p = CGPoint(x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
         // Not the first line holding the point: the lines are in order, but one can start above the end of the one before.
         var line: (rect: CGRect, used: CGRect, glyphs: NSRange)?
@@ -626,18 +639,18 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
             guard !self.snapper.hidden.contains(glyphs.location), line == nil || rect.minY <= p.y else { return }
             line = (rect, used, glyphs)
         }
-        guard let line else { return super.closestPosition(to: point) }
+        guard let line else { return nil }
         let text = storage.string as NSString
         let chars = layout.characterRange(forGlyphRange: line.glyphs, actualGlyphRange: nil)
         var end = NSMaxRange(chars)
         if end > chars.location, UnicodeScalar(text.character(at: end - 1)).map(CharacterSet.newlines.contains) == true { end -= 1 }
-        var best = chars.location, distance = CGFloat.infinity, at = chars.location
+        var best = chars.location, bestX = CGFloat.infinity, distance = CGFloat.infinity, at = chars.location
         while at <= end {
             let x = at < end ? line.rect.minX + layout.location(forGlyphAt: layout.glyphIndexForCharacter(at: at)).x : line.used.maxX
-            if abs(x - p.x) < distance { (best, distance) = (at, abs(x - p.x)) }
+            if abs(x - p.x) < distance { (best, bestX, distance) = (at, x, abs(x - p.x)) }
             at = at < end ? min(NSMaxRange(text.rangeOfComposedCharacterSequence(at: at)), end) : end + 1
         }
-        return position(from: beginningOfDocument, offset: best)
+        return (best, best == end ? best > chars.location : best > chars.location && bestX > p.x)
     }
 
     override func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? {
@@ -735,10 +748,15 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         }
     }
 
-    /// The word under a point in the window; where there is none (a space, a mark), the character there.
+    /// The word under a point in the window; where there is none (a space, a mark), the character there. The word on
+    /// the point's side of the nearest place: a press on the right half of a word's last character found the place
+    /// after it and took the next word, which Chinese has with no space between (#6552).
     private func word(at point: CGPoint) -> UITextRange? {
-        guard let pos = closestPosition(to: convert(point, from: nil)) else { return nil }
-        for direction in [UITextStorageDirection.forward, .backward] {
+        let local = convert(point, from: nil), near = place(nearest: local)
+        guard let pos = near.flatMap({ position(from: beginningOfDocument, offset: $0.offset) }) ?? closestPosition(to: local) else {
+            return nil
+        }
+        for direction in near?.before == true ? [UITextStorageDirection.backward, .forward] : [.forward, .backward] {
             if let w = tokenizer.rangeEnclosingPosition(pos, with: .word, inDirection: UITextDirection(rawValue: direction.rawValue)) {
                 return w
             }
@@ -1119,11 +1137,14 @@ enum ReplyText {
 
         init(_ words: LiftWords, design: UIFontDescriptor.SystemDesign = .default, traits: UITraitCollection) {
             self.design = design
-            let base = Self.designed(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits), design)
+            var base = Self.designed(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits), design)
             var quiet = false
             switch words {
-            case .plain(let c): color = UIColor(c)
-            case .reply(let q): quiet = q; color = q ? .secondaryLabel : .label
+            case .plain(let c): color = UIColor(c) // your bubble: the body style
+            case .reply(let q):
+                quiet = q
+                color = q ? .secondaryLabel : .label
+                base = base.withSize(Self.replySize(traits)) // MarkdownUI's size, not the body style's (#6552)
             }
             body = quiet ? base.withSize(ReplyMetrics.points(ReplyMetrics.quiet, of: base.pointSize)) : base
             code = .monospacedSystemFont(ofSize: ReplyMetrics.points(Theme.Level.code.size / Theme.Level.body.size, of: body.pointSize), weight: .regular)
@@ -1135,6 +1156,15 @@ enum ReplyText {
         }
 
         var size: CGFloat { body.pointSize }
+
+        /// The size of a reply's words in the chat at these traits: MarkdownUI scales the theme's size as `@ScaledMetric`
+        /// relative to body does (`UIFontMetrics`), and draws it at a whole point. That is not the body text style's
+        /// size past the default: 22 pt where body is 23 at xxxLarge, 48 where it is 53 at AX5. A text view in the body
+        /// style wrapped the words onto more lines than the chat, and a press near the end of a long answer picked words
+        /// lines above it (#6552).
+        static func replySize(_ traits: UITraitCollection) -> CGFloat {
+            UIFontMetrics(forTextStyle: .body).scaledValue(for: Theme.Level.body.size * Theme.Font.scale, compatibleWith: traits).rounded()
+        }
 
         /// `font` at weight `w`, in the words' design (code stays monospaced).
         func weight(_ font: UIFont, _ w: UIFont.Weight) -> UIFont {
@@ -1261,8 +1291,8 @@ enum ReplyText {
             self.parts = parts
         }
 
-        private var markerWidth: CGFloat { look.size * 1.5 }
-        private var markerGap: CGFloat { look.size * 0.5 } // the words at 2 em, as the chat's lists
+        private var markerWidth: CGFloat { ReplyMetrics.markerRoom(of: look.size) }
+        private var markerGap: CGFloat { ReplyMetrics.markerGap } // the words where the chat's lists put them (#6552)
 
         func read(_ markdown: String) {
             // Bold next to CJK punctuation is read as the chat reads it (`CJKEmphasis`, line for line); a table still

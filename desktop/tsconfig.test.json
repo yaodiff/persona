@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "rootDir": ".",
+    "declaration": false
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["src/preload.cts", "src/setup-preload.cts"]
+}

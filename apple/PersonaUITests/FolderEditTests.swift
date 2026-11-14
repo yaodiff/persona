@@ -105,6 +105,101 @@ final class FolderEditTests: XCTestCase {
         shot("edit-restored")
     }
 
+    func testRemoteCopyProgressLight() {
+        remoteProgress("light", copying: true)
+    }
+
+    func testRemoteCompressProgressDark() {
+        remoteProgress("dark", copying: false)
+    }
+
+    func testRemoteCopyProgressLightLargestText() {
+        remoteProgress("light", copying: true, largestText: true)
+    }
+
+    func testRemoteCompressProgressDarkLargestText() {
+        remoteProgress("dark", copying: false, largestText: true)
+    }
+
+    func testRemoteCopyProgressResumesAfterEarlyReturn() {
+        openHome()
+        app.staticTexts["notes.txt"].press(forDuration: 1.2)
+        let action = app.buttons["创建副本"]
+        XCTAssertTrue(action.waitForExistence(timeout: 5), "no Duplicate in the row menu")
+        action.tap()
+
+        // Leave before the first one-second poll can make the row visible. Returning must resume the POST's polling
+        // even though there is no transfers bar whose onAppear could do it.
+        let back = app.navigationBars.buttons.firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "no way back to the machine")
+        back.tap()
+        XCTAssertTrue(app.buttons["machine.files"].waitForExistence(timeout: 10), "the machine page did not return")
+        sleep(2)
+        openHome()
+
+        let cancel = app.buttons["取消复制 notes.txt"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 8), "the running copy did not regain progress and Cancel")
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5), "the cancelled operation stayed in the transfer bar")
+        XCTAssertFalse(app.staticTexts["notes 2.txt"].waitForExistence(timeout: 2), "the cancelled copy left its output")
+    }
+
+    /// The app switcher, Control Center or a call only pause the browser's progress polling (#6113): the system's Save to
+    /// Files (.fileMover) and the downloaded file it moves are still there after the app goes to the background and back.
+    func testSaveToFilesSurvivesTheAppGoingToTheBackground() {
+        openHome()
+        app.staticTexts["notes.txt"].press(forDuration: 1.2)
+        let save = app.buttons["存到「文件」"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5), "no 存到「文件」 in the menu")
+        save.tap()
+        // The place picker runs in another process: its buttons are not in this app's tree, but it covers the browser.
+        let upload = app.buttons["files.upload"]
+        let covered = expectation(for: NSPredicate(format: "hittable == false"), evaluatedWith: upload)
+        wait(for: [covered], timeout: 30)
+        sleep(2)
+        shot("save-picker")
+
+        XCUIDevice.shared.press(.home) // active → inactive → background
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10) || app.wait(for: .runningBackgroundSuspended, timeout: 10),
+                      "the app did not go to the background")
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "the app did not come back")
+        sleep(3)
+        shot("save-picker-after-background")
+        XCTAssertTrue(upload.exists, "the browser went away")
+        XCTAssertFalse(upload.isHittable, "going to the background closed Save to Files and dropped the download")
+
+        // Save into On My iPhone (the picker's Save, top right). On My iPhone must not hold a notes.txt already, or the
+        // picker asks to replace it: the run script removes it first and checks afterwards that the file arrived.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.876, dy: 0.126)).tap()
+        let saved = expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: upload)
+        wait(for: [saved], timeout: 20)
+        shot("save-picker-saved")
+    }
+
+    /// MOCK_FILE_OP_DELAY keeps the original POST open: the bar appears after one second and Cancel leaves no output.
+    private func remoteProgress(_ scheme: String, copying: Bool, largestText: Bool = false) {
+        app.terminate()
+        app.launchArguments += ["-ui.scheme", scheme]
+        if largestText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        app.launchPinned()
+        openHome()
+
+        app.staticTexts["notes.txt"].press(forDuration: 1.2)
+        let action = app.buttons[copying ? "创建副本" : "压缩"]
+        if largestText { for _ in 0..<4 where !action.exists { app.swipeUp() } }
+        XCTAssertTrue(action.waitForExistence(timeout: 5), "no remote operation in the row menu:\n\(app.debugDescription)")
+        action.tap()
+        let cancel = app.buttons[copying ? "取消复制 notes.txt" : "取消压缩 notes.txt"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10), "no progress bar with Cancel:\n\(app.debugDescription)")
+        sleep(2) // past the one-second threshold, with a polled byte count on screen
+        shot((copying ? "copy-progress" : "compress-progress") + (largestText ? "-ax" : ""))
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5), "the cancelled operation stayed in the transfer bar")
+        XCTAssertFalse(app.staticTexts[copying ? "notes 2.txt" : "notes.zip"].waitForExistence(timeout: 2),
+                       "the cancelled operation left its output behind")
+    }
+
     /// iPad: files dragged in from another app outline the folder (the DEBUG `-showFilesDrop`; a drag from another
     /// app can't be driven from here).
     func testDropOutlinesTheFolder() throws {

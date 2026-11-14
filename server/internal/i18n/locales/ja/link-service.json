@@ -1,0 +1,15 @@
+{
+  "systemd_user_unavailable": "systemd ユーザーインスタンスに接続できません",
+  "running_before_purge": "別の persona-link が実行中です（このサービス以外、または手動で起動したもの）。--purge の前に停止してください",
+  "node_install_failed": "常駐 node をインストールできませんでした：{error}",
+  "binary_install_failed": "{path} を配置できません：{error}",
+  "binary_installed": "{path} をインストールしました。",
+  "bootstrap_failed": "launchctl bootstrap に失敗しました：{detail}",
+  "installed": "launchd ユーザーエージェント {label}（{path}）をインストールして起動しました。この Mac へのログイン時にも起動します。",
+  "not_installed": "launchd ユーザーエージェント {label} はインストールされていません。",
+  "uninstalled": "launchd ユーザーエージェント {label} を停止して削除しました。",
+  "passive_mac_next": "次に persona-link install --listen を実行してログイン時に起動する launchd ユーザーエージェントをインストールするか、フォアグラウンドで persona-link run を実行してください。",
+  "status_missing": "バックグラウンドサービス：未インストール（persona-link install）",
+  "status_loaded": "バックグラウンドサービス：launchd ユーザーエージェント {label} · {state} · ログイン時に起動",
+  "status_not_loaded": "バックグラウンドサービス：launchd ユーザーエージェント {label} はインストール済みですが未ロードです（{path}）：persona-link install"
+}

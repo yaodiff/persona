@@ -35,6 +35,7 @@ import persona.core.domain.sort.source
 import persona.core.domain.sort.sourceSubtitle
 import persona.core.domain.sort.TerminalResume
 import persona.core.domain.sort.terminalResume
+import persona.core.domain.sort.worktreeKind
 
 @Composable
 internal fun ChatHeader(
@@ -243,14 +244,14 @@ internal fun ChatHeader(
             val confirmation = if (closing) target.closeConfirmation(machine?.displayName) else target.deleteConfirmation(machine?.displayName)
             val service = remember(worktrees) { worktrees?.invoke() }
             val rawMachine = persona.core.contracts.GroupKeys.raw(target.machineId)
-            val worktree = rememberOurWorktree(service, rawMachine, target.cwd, machine?.online == true)
+            val worktree = rememberOurWorktree(service, rawMachine, target.cwd, machine?.online == true, target.worktreeKind)
             var cleanup by remember(target.key) { mutableStateOf(WorktreeCleanup()) }
             val res = androidx.compose.ui.platform.LocalResources.current
             JDialog(onDismiss = { dialog = null }, title = confirmation.title.text(), text = confirmation.message.text(),
                 confirm = stringResource(if (closing) R.string.chat_chrome_close_agent else R.string.chat_chrome_delete) to {
                     dialog = null
                     state.run(target, if (closing) ChatAction.Close else ChatAction.Delete) { done -> if (done && service != null && worktree != null)
-                        WorktreeCleanups.cleanUp(service, rawMachine, worktree, cleanup, feedback, res) }
+                        WorktreeCleanups.cleanUp(service, rawMachine, worktree, cleanup, feedback, res, target.worktreeKind) }
                 }, destructive = true, confirmEnabled = canAct && WorktreeCleanups.ready(worktree, cleanup),
                 content = worktree?.let { st -> { WorktreeCleanupSection(st, cleanup, { cleanup = it }, machine?.home) } })
         }

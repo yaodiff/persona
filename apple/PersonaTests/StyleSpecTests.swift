@@ -84,6 +84,25 @@ struct StyleSpecTests {
         #expect(found.isEmpty, "the accent on the page under 3:1: \(found)")
     }
 
+    /// A secondary soft button (Clay, Island) draws its label in the tint on `card` (`SoftButtonStyle`, #6157): the accent
+    /// and the danger color ≥ 3:1 on it. The glass and bordered buttons' fills are the system's, not tokens:
+    /// `ButtonContrastUITests` measures those on screen.
+    @Test func secondarySoftButtonsRead() {
+        var found: [String] = []
+        for style in AppStyle.allCases where style.component.buttons == .soft {
+            for (name, colors) in Self.colors {
+                let spec = StyleSpec(style.component, colors)
+                for (look, ui) in Self.appearances {
+                    for (what, ink) in [("accent", spec.accent), ("danger", spec.extensionColors?.danger ?? Theme.Role.dangerColor)] {
+                        let c = Self.contrast(ink, spec.card, ui)
+                        if c < 3 { found.append("\(style.rawValue)+\(name) \(look) \(what): \(String(format: "%.2f", c))") }
+                    }
+                }
+            }
+        }
+        #expect(found.isEmpty, "a soft secondary button's label under 3:1 on the card: \(found)")
+    }
+
     /// What sits in the user's own message (#5204): its words, and the blocks it opens with (quotes, forwards, text to
     /// change, comments), whose rule, heading and words are the words' color, ≥ 4.5:1 on the block's fill laid over the
     /// bubble; a path linked in the words ≥ 3:1. On Persona's main conversation's box and on the style's bubble, at its
@@ -155,6 +174,49 @@ struct StyleSpecTests {
             }
         }
         #expect(found.isEmpty, "the Mac chrome under its floors: \(found)")
+    }
+
+    /// The minutes' summary card (#6563), on every style's card and the system's grouped cell, in light and dark: a topic
+    /// tint as a mark (a group's dot, a bullet's mark) ≥ 3:1 on the card and as a glyph on its soft tile ≥ 3:1; on the
+    /// Core Conclusions box (the AI tint over the card) the AI color as its lightbulb ≥ 3:1, and every word ≥ 4.5:1, a
+    /// conclusion's time on its chip (the AI's fill over the box) included: the AI color as words falls to 4.1:1 there,
+    /// so the box's title and the time's words are primary (`MinutesConclusions.chip`). The tints are never a state's
+    /// colors or the AI's.
+    @Test func theSummaryCardsTintsRead() {
+        let cell = Color(light: 0xFFFFFF, dark: 0x1C1C1E)
+        var found: [String] = []
+        for style in AppStyle.allCases {
+            for (name, colors) in Self.colors {
+                let spec = StyleSpec(style.component, colors)
+                for (look, ui) in Self.appearances {
+                    for (under, card) in [("card", spec.card), ("cell", cell)] {
+                        let at = "\(style.rawValue)+\(name) \(look) \(under)"
+                        let ground = Self.rgb(card, ui)
+                        func check(_ what: String, _ a: (Double, Double, Double), _ b: (Double, Double, Double), _ floor: Double) {
+                            let c = Self.contrast(a, b)
+                            if c < floor { found.append("\(at) \(what): \(String(format: "%.2f", c))") }
+                        }
+                        for (i, tint) in Theme.Hue.minutesGroups.enumerated() {
+                            let ink = Self.rgb(tint, ui)
+                            check("tint \(i) on the card", ink, ground, 3)
+                            check("tint \(i) on its tile", ink, Self.over(Theme.softTint(tint), ground, ui), 3)
+                        }
+                        let well = Self.over(Theme.aiTint, ground, ui)
+                        let ai = Self.rgb(Theme.ai, ui)
+                        check("AI mark on the well", ai, well, 3)
+                        check("words on the well", Self.rgb(Theme.primaryText, ui), well, 4.5)
+                        check("time on its chip on the well", Self.rgb(Theme.primaryText, ui), Self.over(Theme.aiTint, well, ui), 4.5)
+                    }
+                }
+            }
+        }
+        #expect(found.isEmpty, "the summary card under its floors: \(found)")
+        let kept: [Color] = [Theme.Role.danger.color, Theme.Role.positive.color, Theme.Role.caution.color, Theme.Hue.orange,
+                             Theme.Hue.green, Theme.Hue.red, Theme.Hue.amber, Theme.Hue.yellow, Theme.Role.aiColor]
+        for tint in Theme.Hue.minutesGroups {
+            #expect(!kept.contains { Self.hex($0) == Self.hex(tint) && Self.hex($0, .dark) == Self.hex(tint, .dark) })
+        }
+        #expect(Set(Theme.Hue.minutesGroups.map { Self.hex($0) }).count == Theme.Hue.minutesGroups.count)
     }
 
     /// The colored canvases stay darker than the system's grouped cells in dark (#1C1C1E): Clay's at #1D1A23 was one

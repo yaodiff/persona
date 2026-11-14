@@ -25,6 +25,9 @@ import (
 // the desktops event too.
 const featureDesktopsLink = "desktops_link"
 
+// featureDesktopUnregister says this hub withdraws a connection's desktop presence without closing its app socket.
+const featureDesktopUnregister = "desktop_unregister"
+
 // desktopView is one connected desktop as the apps see it.
 type desktopView struct {
 	// Device is its device token's id (what "Sign out" revokes); empty when it connected with the pairing token, and
@@ -295,6 +298,25 @@ func (h *Hub) registerDesktop(c *client, name, pushDevice string) {
 	h.mu.Unlock()
 	go h.fleetClientsChanged() // Phone Muted holds back a phone's MCP form pushes now (fleet_link.go)
 	h.logf("desktop %q connected (device %s)", name, c.device)
+}
+
+// unregisterDesktop withdraws only this connection's desktop presence. The web app keeps its socket and other work.
+// Older hubs ignore the unknown message; the existing socket-close path remains the compatibility fallback.
+func (h *Hub) unregisterDesktop(c *client) {
+	if c.role != roleFull {
+		return
+	}
+	h.mu.Lock()
+	if !c.desktop && c.pushDevice == "" {
+		h.mu.Unlock()
+		return
+	}
+	name := c.name
+	c.desktop, c.pushDevice = false, ""
+	h.announceDesktopsLocked(false)
+	h.mu.Unlock()
+	go h.fleetClientsChanged()
+	h.logf("desktop %q unregistered (device %s)", name, c.device)
 }
 
 // dropClient forgets a client whose connection ended (also as one the shutdown has to close); a desktop's going is

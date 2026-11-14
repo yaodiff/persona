@@ -39,6 +39,14 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
         }
     }
 
+    /// The sentence-form Needs you used by the shared inbox state table. The title-form `needsYou.text` is unchanged.
+    /// InboxNow resolves this once per language; an explicit locale also lets the shared fixtures check all three.
+    static func needsYouSentence(for locale: Locale) -> String {
+        var resource: LocalizedStringResource = "Needs you [State Names]"
+        resource.locale = locale
+        return String(localized: resource)
+    }
+
     /// The states a list counts in its headers and summaries: "3 need you".
     enum Counted: Sendable { case needsYou, working, unread }
 

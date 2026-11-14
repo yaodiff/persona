@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
-  AGENT_ARCHIVE_CLOSE_FEATURE, AGENT_ARCHIVES_FEATURE, archiveAgent, archiveOffers, deleteInsteadOfArchive, restoreAgent,
+  AGENT_ARCHIVE_CLOSE_FEATURE, AGENT_ARCHIVES_FEATURE, archiveAgent, archiveOffers, closeBusyReason, closeOffer, deleteInsteadOfArchive, restoreAgent,
   type ArchiveDeps, type CloseResult,
 } from "./agent-archives";
 import { t } from "../i18n";
@@ -56,6 +56,39 @@ describe("what the menus offer", () => {
   });
 });
 
+describe("what Close… does (#7125)", () => {
+  it("archives and closes where the hub can, and only closes where it can't", () => {
+    expect(closeOffer(open, both)).toBe("archive");
+    expect(closeOffer(open, [AGENT_ARCHIVES_FEATURE])).toBe("close"); // an older manager
+    expect(closeOffer(open, [])).toBe("close"); // an older hub
+    expect(closeOffer({ ...open, agent: "codex" }, both)).toBe("close"); // a Codex session Persona did not start
+    expect(closeOffer({ ...open, archived: true }, both)).toBe("close");
+  });
+  it("closes a busy agent too, without archiving it (the hub refuses that)", () => {
+    for (const busy of [{ status: "working", state: "working" }, { status: "blocked", state: "needs_you" }, { loop: { prompt: "check" } }, { ports: [{ port: 3000 }] }] as Partial<Session>[]) {
+      expect(closeOffer({ ...open, ...busy }, both), JSON.stringify(busy)).toBe("close");
+    }
+  });
+  it("is disabled only for a busy agent whose node offers no plain close, and absent where nothing closes it", () => {
+    const noPlainClose = { ...open, capabilities: { read: true, send: true, terminal: false } } as Session;
+    expect(closeOffer({ ...noPlainClose, status: "working", state: "working" }, both)).toBe("busy");
+    expect(closeOffer(noPlainClose, both)).toBe("archive");
+    expect(closeOffer({ ...open, status: "offline", state: "offline" }, both)).toBe("no");
+    expect(closeOffer({ ...open, assistant: true }, both)).toBe("no");
+  });
+  it("names what closing a busy agent interrupts: an answer it waits for first, then its work, a loop, a server", () => {
+    expect(closeBusyReason(open)).toBeUndefined();
+    expect(closeBusyReason({ ...open, awaits_reply: true })).toBeUndefined(); // a finished turn is not busy
+    expect(closeBusyReason({ ...open, status: "blocked", state: "needs_you", loop: { prompt: "check" } } as Session)).toBe("waiting");
+    expect(closeBusyReason({ ...open, pending_interactions: 1 })).toBe("waiting");
+    expect(closeBusyReason({ ...open, status: "working", state: "working", ports: [{ port: 3000 }] } as Session)).toBe("working");
+    expect(closeBusyReason({ ...open, queued: ["next"] })).toBe("working");
+    expect(closeBusyReason({ ...open, running_subagents: 1 })).toBe("working");
+    expect(closeBusyReason({ ...open, loop: { prompt: "check" }, ports: [{ port: 3000 }] } as Session)).toBe("loop");
+    expect(closeBusyReason({ ...open, ports: [{ port: 3000 }] } as Session)).toBe("server");
+  });
+});
+
 function deps(over: Partial<ArchiveDeps> = {}) {
   const notes: { text: string; tone: string; action?: { label: string; run: () => void } }[] = [];
   const d: ArchiveDeps = {
@@ -90,13 +123,14 @@ describe("archiving", () => {
     expect(vi.mocked(d.restore).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(d.refresh).mock.invocationCallOrder[0]);
     expect(d.refresh).toHaveBeenCalled();
     const close = deps({ archive: vi.fn().mockRejectedValue(new ApiError(409, "busy", { code: "agent_busy" })) });
-    await archiveAgent(open, true, close.d);
+    // "Close…" then offers to close it anyway (#7125)
+    expect(await archiveAgent(open, true, close.d)).toEqual({ ok: false, busy: true });
     expect(close.notes[0].text).toBe(t("lib-agent-archives.close_busy"));
   });
 
   it("asks for an update when the manager cannot archive and close (501)", async () => {
     const { d, notes } = deps({ archive: vi.fn().mockRejectedValue(new ApiError(501, "old", { code: "agent_archive_close_unsupported" })) });
-    await archiveAgent(open, true, d);
+    expect(await archiveAgent(open, true, d)).toEqual({ ok: false });
     expect(notes[0]).toMatchObject({ tone: "error", text: t("lib-agent-archives.close_upgrade") });
   });
 

@@ -123,32 +123,50 @@ nonisolated enum AgentWorktree: Sendable {
     }
 
     static func isInUse(_ error: Error) -> Bool { (error as? APIError)?.code == "worktree_in_use" }
+
+    /// The engines that make a session's own worktree, as `worktree/status` and `worktree/remove` take them (`kind`).
+    static let engines: Set<String> = ["herdr", "herdr-core", "orca", "tern", "paseo", "cindy"]
+
+    /// The engine a session runs in, which made its own worktree (Paseo makes its own): its terminal's host, else the
+    /// runtime engine its space is; nil when it names neither, and the computer's default decides.
+    static func engine(of s: Session) -> String? {
+        if let host = s.hostKind, engines.contains(host) { return host }
+        if let kind = s.spaceKind, engines.contains(kind) { return kind }
+        return nil
+    }
 }
 
 extension APIClient {
-    /// nil when the computer cannot say (an older node, offline, an error): no switch and no cleanup then.
-    func worktreeStatus(machine: String, cwd: String, timeout: TimeInterval = 15) async -> WorktreeStatus? {
-        try? await post("/api/v1/machines/\(machine)/worktree/status", body: ["cwd": cwd], timeout: timeout, as: WorktreeStatus.self)
+    /// nil when the computer cannot say (an older node, offline, an error): no switch and no cleanup then. `kind`: the
+    /// engine the agent ran in (`AgentWorktree.engine(of:)`); nil, the computer's default.
+    func worktreeStatus(machine: String, cwd: String, kind: String? = nil, timeout: TimeInterval = 15) async -> WorktreeStatus? {
+        var body = ["cwd": cwd]
+        if let kind { body["kind"] = kind }
+        return try? await post("/api/v1/machines/\(machine)/worktree/status", body: body, timeout: timeout, as: WorktreeStatus.self)
     }
 
-    /// A worktree for a new agent from the repository `cwd` is in; an empty `branch` is the node's own pick.
-    func addAgentWorktree(machine: String, cwd: String, nameHint: String, branch: String) async throws -> WorktreeAdded {
+    /// A worktree for a new agent from the repository `cwd` is in; an empty `branch` is the node's own pick. `kind`: the
+    /// engine the agent opens in, which makes it; nil, the computer's default.
+    func addAgentWorktree(machine: String, cwd: String, nameHint: String, branch: String, kind: String? = nil) async throws -> WorktreeAdded {
         var body = ["cwd": cwd]
         if !nameHint.isEmpty { body["name_hint"] = nameHint }
         let b = branch.trimmingCharacters(in: .whitespacesAndNewlines)
         if !b.isEmpty { body["branch"] = b }
+        if let kind { body["kind"] = kind }
         return try await post("/api/v1/machines/\(machine)/worktree/add", body: body, timeout: 60, as: WorktreeAdded.self)
     }
 
-    /// Removes it once its agent is gone, a few tries a second apart while the node still lists the agent.
-    func removeAgentWorktree(machine: String, path: String, deleteBranch: Bool, force: Bool,
+    /// Removes it once its agent is gone, a few tries a second apart while the node still lists the agent; by the
+    /// engine the agent ran in (`kind`).
+    func removeAgentWorktree(machine: String, path: String, deleteBranch: Bool, force: Bool, kind: String? = nil,
                              tries: Int = AgentWorktree.removeTries, wait: Duration = .seconds(1)) async throws -> WorktreeRemoved {
         struct Body: Encodable {
             var path: String
             var delete_branch: Bool?
             var force: Bool?
+            var kind: String?
         }
-        let body = Body(path: path, delete_branch: deleteBranch ? true : nil, force: force ? true : nil)
+        let body = Body(path: path, delete_branch: deleteBranch ? true : nil, force: force ? true : nil, kind: kind)
         var attempt = 1
         while true {
             do {
@@ -166,15 +184,17 @@ extension AppModel {
     /// offline or cannot say).
     func ourWorktree(_ s: Session, timeout: TimeInterval = 15) async -> WorktreeStatus? {
         guard !s.cwd.isEmpty, machine(s.machineRef)?.online == true, let api = api(s.key.group) else { return nil }
-        return AgentWorktree.cleanupOffered(await api.worktreeStatus(machine: s.machineID, cwd: s.cwd, timeout: timeout))
+        return AgentWorktree.cleanupOffered(await api.worktreeStatus(machine: s.machineID, cwd: s.cwd, kind: AgentWorktree.engine(of: s),
+                                                                     timeout: timeout))
     }
 
-    /// After its agent was closed or its chat deleted: removes the worktree when the user asked, and says how it went.
-    func cleanUpWorktree(_ machine: MachineRef, _ st: WorktreeStatus, _ c: AgentWorktree.Cleanup) async {
+    /// After its agent was closed or its chat deleted: removes the worktree when the user asked, by the engine the agent
+    /// ran in (`kind`, `AgentWorktree.engine(of:)`), and says how it went.
+    func cleanUpWorktree(_ machine: MachineRef, _ st: WorktreeStatus, _ c: AgentWorktree.Cleanup, kind: String? = nil) async {
         guard c.remove, !st.path.isEmpty, let api = api(machine.group) else { return }
         do {
             let r = try await api.removeAgentWorktree(machine: machine.id, path: st.path, deleteBranch: c.deleteBranch,
-                                                      force: AgentWorktree.force(st, c))
+                                                      force: AgentWorktree.force(st, c), kind: kind)
             toast = Toast(r.branchDeleted ? String(localized: "Worktree and branch removed [Agent Worktree]")
                                           : String(localized: "Worktree removed [Agent Worktree]"), style: .success)
         } catch {

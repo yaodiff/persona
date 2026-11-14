@@ -81,7 +81,7 @@ WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/
 
 `server/internal/hub/architecture_guard_test.go` pins down what the hub looks like now and fails if it grows in the wrong direction:
 
-- **Routes the hub answers itself** = `testdata/hub_routes_allowed.txt` (registered with literals in the hub package and not in the three forwarding tables above). New business endpoints go in a manager,
+- **Routes the hub answers itself** = `testdata/hub_routes_allowed.txt` (registered in the hub package with a string literal, or a loop over a literal string list, and not in the forwarding tables: the three above, plus `assistantwire.InboxRoutes`, `assistantwire.SocketRoutes`, `devicewire.ShareRoutes`, `devicewire.MetricsRoutes`, `devicewire.TransferRoutes`, `devicewire.UsageRoutes` and `devicewire.AdminUsageRoutes`). A loop over any other name fails the guard. New business endpoints go in a manager,
   and the route is added to the matching forwarding table; only routes that truly belong to the hub (connections, pairing / auth, admin, push delivery, relays) get a line added to the list by hand. Removing a route means removing its line too (extra lines fail as well).
   While a piece of business logic is being moved into a manager, its line can be marked `# moving to the manager` at the end, and the line is removed once the move is done (usage windows `docs/server/usage-windows.md` ("Who owns this") and the workspace board `docs/web/workspace-board.md` ("Who owns the board") have both been moved).
 - **Dependencies**: the hub's dependencies must not include manager packages (`assistant`, `assistantskills`, `devices`, `extmgr`, `extension/host`, `agents`, `mail`, `office`, `feishubot`, `wechat`, `node`, `mcpserver`),

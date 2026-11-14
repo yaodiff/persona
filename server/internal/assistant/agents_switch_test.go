@@ -248,3 +248,18 @@ func TestAgentsSwitchStoppedAndFailed(t *testing.T) {
 		t.Fatalf("stopped while queued: %v", got)
 	}
 }
+
+// The queue's loaded flag is read under its lock when a session list arrives while the queue is being loaded (#7303);
+// the reader and the loader run together, so only a -race run tells it from a read outside the lock.
+func TestSwitchQueueListedReadsLoadedUnderItsLock(t *testing.T) {
+	for range 500 {
+		s := &Service{} // no store: nothing to start, the flag is all there is
+		loaded := make(chan struct{})
+		go func() {
+			s.loadSwitchQueue(context.Background())
+			close(loaded)
+		}()
+		s.switchQueueListed("mac")
+		<-loaded
+	}
+}

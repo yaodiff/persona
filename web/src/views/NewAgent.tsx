@@ -16,10 +16,13 @@ import { lazyPage } from "../lib/lazy-page";
 import { browserStartKeys, launchAgent, presetPrompt, type NewAgentPreset } from "../lib/new-agent";
 import { whenStarted } from "../lib/new-agent-started";
 import type { WorkspaceTarget } from "../lib/workspace-target";
+import { useWorkspaceCatalog, workspaceTarget, type HostWorkspace } from "../lib/workspace-catalog";
+import { startChoices, startGroups } from "../lib/workspace-start";
+import { WorkspaceChoices } from "./NewAgentWorkspaces";
 import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import {
-  effortChoices, fitEffort, followedBinding, launcherAgent, machineLaunchers, pickerLauncher, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
+  effortChoices, fitEffort, followedBinding, inlineTextStart, launcherAgent, machineLaunchers, pickerLauncher, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
 } from "../lib/launcher-models";
 import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
 import { readModels } from "../lib/session-models";
@@ -100,6 +103,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // a new folder is being named for a desktop-app start, in the folder browsed (NewAgentDesktop.tsx)
   const [naming, setNaming] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceTarget | null>(null);
+  // the workspace was chosen from this sheet's list (#7259), not handed in by a space or row menu: another computer, a
+  // recent setup or a folder may still replace it
+  const [workspacePicked, setWorkspacePicked] = useState(false);
   const [launcher, setLauncher] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
   // the model configuration's providers' names (#5029): titles for a launcher ID this computer's list doesn't have (a
@@ -152,6 +158,13 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const targetOnline = online.some((m) => m.id === mid);
   const workspaceCurrent = !workspace || (workspace.owner === credential && workspace.manager === manager
     && workspace.machineId === mid && workspace.cwd === cwd && Boolean(workspace.host.trim() && workspace.workspaceId.trim()));
+  // The chosen computer's Orca and Paseo workspaces, by project (#7259): the catalog the sidebar shares, read while the
+  // sheet is open; only its own assistant's (a computer of another one has none listed here).
+  const catalog = useWorkspaceCatalog(open);
+  const workspaceGroups = useMemo(
+    () => (catalog.owner === credential && catalog.manager === manager ? startGroups(startChoices(catalog.workspaces, mid)) : []),
+    [catalog, credential, manager, mid],
+  );
   const retirePreparation = () => {
     const previous = preparation.current;
     preparation.current = null;
@@ -225,16 +238,39 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const dir = cwd.trim();
     if (!open || !mid || !dir || workspace) return;
     const c = new AbortController();
-    const timer = setTimeout(() => void worktreeStatus(mid, dir, c.signal).then((st) => { if (!c.signal.aborted) setRepo(st); }), 400);
+    // the engine it opens in says where its worktree goes (Paseo makes its own)
+    const timer = setTimeout(() => void worktreeStatus(mid, dir, c.signal, host || undefined).then((st) => { if (!c.signal.aborted) setRepo(st); }), 400);
     return () => {
       clearTimeout(timer);
       c.abort();
     };
-  }, [open, mid, cwd, workspace, manager, credential]);
+  }, [open, mid, cwd, workspace, manager, credential, host]);
   const worktreeOffered = !workspace && Boolean(repo?.path);
+  // Back to a folder: typed, browsed or a recent one, on the computer's default engine.
+  const clearWorkspace = () => {
+    retirePreparation();
+    presetCwd.current = null;
+    setWorkspace(null);
+    setWorkspacePicked(false);
+    setHost("");
+    setInWorktree(false);
+    setRepo(null);
+  };
+  // A workspace from the list (#7259): the start opens in it, on its own engine, in its folder.
+  const pickWorkspace = (w: HostWorkspace) => {
+    retirePreparation();
+    presetCwd.current = null;
+    setWorkspace(workspaceTarget(w, catalog.owner, catalog.manager));
+    setWorkspacePicked(true);
+    pickCwd(w.cwd);
+    setHost("");
+    setInWorktree(false);
+    setRepo(null);
+  };
   useEffect(() => {
     if (!open) return;
     presetCwd.current = null;
+    setWorkspacePicked(false);
     if (!preset) {
       setWorkspace(null);
       return;
@@ -486,6 +522,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     carrying.current = null;
     setEffort(setup.agent_type === "claude" ? setup.effort : "");
     pendingSetup.current = null;
+    if (workspacePicked) clearWorkspace();
     if (setup.machine !== mid) {
       pendingSetup.current = setup;
       setMid(setup.machine);
@@ -544,8 +581,11 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
       const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
       rememberSetup({ ...setup, at: setupTime() });
+      const inline = !workspace && !desktopStart && launchersOf === mid && agent === "traex"
+        ? inlineTextStart(launchers.find((l) => l.name === listLauncher), opensIn ?? hostDefault, snapshot.text, snapshot.attachments.length)
+        : undefined;
       const id = launchAgent({ machineId: mid, cwd: dir, workspaceId: workspace?.workspaceId, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: snapshot.text, attachments: sent,
-        ...(codex ? { agentType: "codex", inlinePrompt: true } : {}) });
+        ...(codex ? { agentType: "codex", inlinePrompt: true } : inline) });
       if (onStarted) whenStarted(id, onStarted);
       const ids = new Set(snapshot.attachments.map((a) => a.id));
       releaseAttachments(attachmentsRef.current.filter((a) => ids.has(a.id)));
@@ -555,11 +595,11 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setForwards([]);
       dismiss();
     };
-    // in a worktree of its own (#6115): made first; a failure says why here, and nothing starts
+    // in a worktree of its own (#6115): made first, by the engine it opens in; a failure says why here, and nothing starts
     if (!workspace && inWorktree && worktreeOffered && !desktopScratch) {
       setWtBusy(true);
       setWtError("");
-      void addAgentWorktree(mid, cwd.trim(), agentNameHint(prompt, cwd), wtBranch, { signal: controller.signal, token, tokenOwner: owner })
+      void addAgentWorktree(mid, cwd.trim(), agentNameHint(prompt, cwd), wtBranch, { signal: controller.signal, token, tokenOwner: owner }, opensIn)
         .then(
           (wt) => launch(wt.path),
           (e) => {
@@ -658,11 +698,15 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                 <button
                   key={m.id}
                   type="button"
-                  disabled={Boolean(workspace) || !m.online}
-                  onClick={() => setMid(m.id)}
+                  disabled={(Boolean(workspace) && !workspacePicked) || !m.online}
+                  onClick={() => {
+                    if (m.id === mid) return;
+                    if (workspacePicked) clearWorkspace();
+                    setMid(m.id);
+                  }}
                   className={cx(
                     "flex h-8 items-center gap-1.5 rounded-control px-2.5 text-[12.5px] whitespace-nowrap transition-[background-color,box-shadow,color]",
-                    workspace && mid === m.id ? "disabled:opacity-100" : "disabled:opacity-40",
+                    workspace && !workspacePicked && mid === m.id ? "disabled:opacity-100" : "disabled:opacity-40",
                     mid === m.id ? "bg-ink font-medium text-surface" : "bg-surface text-ink-2 shadow-btn enabled:hover:bg-hover enabled:hover:text-ink",
                   )}
                 >
@@ -681,16 +725,13 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               <span className="text-ink-2 [overflow-wrap:anywhere]">{engineName(workspace.host, picked)}</span>
               <p className="text-[11.5px] text-ink-3">{t("newagent-workspace.existing_hint")}</p>
               {!workspaceCurrent && <p role="alert" className="text-red">{t("newagent-workspace.owner_changed")}</p>}
-              <Button tone="quiet" onClick={() => {
-                retirePreparation();
-                presetCwd.current = null;
-                setWorkspace(null);
-                setHost("");
-                setInWorktree(false);
-                setRepo(null);
-              }}>{t("newagent-workspace.choose_folder")}</Button>
+              <Button tone="quiet" onClick={clearWorkspace}>{t("newagent-workspace.choose_folder")}</Button>
             </div>
-          </Field> : <Field label={t("newagent.folder")}>
+          </Field> : <>
+          {workspaceGroups.length > 0 && <Field label={t("newagent-workspace.destination")}>
+            <WorkspaceChoices groups={workspaceGroups} onPick={pickWorkspace} />
+          </Field>}
+          <Field label={t("newagent.folder")}>
             {desktopScratch && <Suspense fallback={null}><DesktopTemporaryRow codex={codexApp} /></Suspense>}
             <input
               value={desktopScratch ? "" : cwd}
@@ -728,7 +769,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               ))}
             </div>
             {desktopStart && <Suspense fallback={null}><DesktopFolderNote codex={codexApp} scratch={desktopScratch} onUseTemporary={() => setCwdPicked(false)} /></Suspense>}
-          </Field>}
+          </Field></>}
           {worktreeOffered && !desktopScratch && (
             <div data-testid="new-agent-worktree" className="-mt-2 rounded-control bg-surface px-3 py-2 shadow-hairline">
               <div className="flex items-center gap-2">

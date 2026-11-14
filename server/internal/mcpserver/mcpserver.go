@@ -97,7 +97,11 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			stopProgress := keepAlive(rctx, progressToken(req), func(n notification) {
+			token := progressToken(req)
+			if token != nil {
+				rctx = withMCPWait(rctx)
+			}
+			stopProgress := keepAlive(rctx, token, func(n notification) {
 				mu.Lock()
 				defer mu.Unlock()
 				if err := enc.Encode(n); err != nil && werr == nil {
@@ -167,8 +171,22 @@ const CallTimeout = 2*time.Hour + 10*time.Minute
 
 // progressEvery is how often a tool call still waiting sends progress (keepAlive). Claude Code gives up on a stdio
 // MCP call that sends "no response or progress" for 30 minutes (CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT); progress
-// restarts that clock, and a minute leaves room for a shorter setting. Swapped out by tests.
+// restarts that clock, and a minute leaves room for a shorter setting.
 var progressEvery = time.Minute
+
+type progressTicker interface {
+	ticks() <-chan time.Time
+	Stop()
+}
+
+type wallProgressTicker struct{ *time.Ticker }
+
+func (t wallProgressTicker) ticks() <-chan time.Time { return t.C }
+
+// newProgressTicker is swapped for a manual ticker by tests.
+var newProgressTicker = func(every time.Duration) progressTicker {
+	return wallProgressTicker{time.NewTicker(every)}
+}
 
 // progressToken is the token a tools/call asks for progress under (MCP: params._meta.progressToken, a string or a
 // number), or nil when it asks for none: progress may only be sent for a token the client gave.
@@ -209,7 +227,7 @@ func keepAlive(ctx context.Context, token json.RawMessage, send func(notificatio
 	quit, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
-		tick := time.NewTicker(progressEvery)
+		tick := newProgressTicker(progressEvery)
 		defer tick.Stop()
 		for beat := 1; ; beat++ {
 			select {
@@ -217,7 +235,7 @@ func keepAlive(ctx context.Context, token json.RawMessage, send func(notificatio
 				return
 			case <-quit:
 				return
-			case <-tick.C:
+			case <-tick.ticks():
 				// Whichever ended while the tick was due wins over it.
 				select {
 				case <-ctx.Done():
@@ -227,7 +245,7 @@ func keepAlive(ctx context.Context, token json.RawMessage, send func(notificatio
 				default:
 				}
 				send(notification{JSONRPC: "2.0", Method: "notifications/progress", Params: map[string]any{
-					"progressToken": token, "progress": beat, "message": "still waiting",
+					"progressToken": token, "progress": beat, "message": mcpWaitMessage(ctx),
 				}})
 			}
 		}
@@ -301,8 +319,12 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		defer cancel()
 		// pane: an agent's MCP server has no session id of its own; the node knows the session in its pane
 		// (report_to_supervisor and the todo tools need to know whose call it is: node callerTools).
-		line, err := callNode(ctx, map[string]any{"kind": "mcp.call", "away_ok": true, "name": p.Name, "args": p.Arguments,
-			"session_id": sessionID(), "assistant": isAssistant(), "guest": isGuest(), "pane": nodeclient.HookPane(os.Getenv)})
+		call := map[string]any{"kind": "mcp.call", "away_ok": true, "name": p.Name, "args": p.Arguments,
+			"session_id": sessionID(), "assistant": isAssistant(), "guest": isGuest(), "pane": nodeclient.HookPane(os.Getenv)}
+		if mcpWaitFrom(ctx) != nil {
+			call["wait_updates"] = true // an older node ignores this and returns only its final line
+		}
+		line, err := callNode(ctx, call)
 		if err != nil {
 			return toolResult(proto.TextResult(callFailure(ctx, err), true)), nil
 		}

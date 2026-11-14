@@ -148,7 +148,6 @@ struct ExtensionMarketView: View {
 private struct MarketExtensionRow: View {
     var item: ExtensionCatalogItem
     var showsMarket: Bool
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
@@ -160,17 +159,11 @@ private struct MarketExtensionRow: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            if typeSize.isAccessibilitySize {
-                Text(item.name).font(Theme.Font.bodyStrong).fixedSize(horizontal: false, vertical: true)
-                Text(item.version).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary)
+            HStack(spacing: Theme.Space.s) {
+                Text(item.name).font(Theme.Font.bodyStrong).lineLimit(1)
+                Text(item.version).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
                 MarketStateChip(item: item)
-            } else {
-                HStack(spacing: Theme.Space.s) {
-                    Text(item.name).font(Theme.Font.bodyStrong).lineLimit(1)
-                    Text(item.version).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: Theme.Space.s)
-                    MarketStateChip(item: item)
-                }
             }
             if let d = item.description, !d.isEmpty {
                 Text(d).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
@@ -220,7 +213,6 @@ private struct MarketStateChip: View {
 /// new version asks for in addition), or remove when it came from this market.
 struct MarketExtensionDetailView: View {
     @Environment(AppModel.self) private var app
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var page: MarketExtensionModel
     @State private var confirmRemove = false
     /// The install ended waiting for a sign-in: the extension's page opens over this one.
@@ -329,22 +321,18 @@ struct MarketExtensionDetailView: View {
 
     @ViewBuilder private func header(_ p: ExtensionCatalogItem) -> some View {
         Section {
-            // At the accessibility sizes the name and its line wrap and the state goes under them, or the chip beside them
-            // left "Ex…" (#4058).
-            let large = typeSize.isAccessibilitySize
             HStack(spacing: Theme.Space.m) {
                 ExtensionLogo(url: p.iconURL)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(p.name).font(Theme.Font.heading).lineLimit(large ? nil : 1)
+                    Text(p.name).font(Theme.Font.heading).lineLimit(1)
                     Text([p.version, p.publisher, p.marketName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(large ? nil : 1)
+                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                     if let downloads = p.downloads, downloads >= 0 {
                         Text("Downloads: \(downloads)").font(Theme.Font.label).foregroundStyle(.secondary)
                     }
-                    if large { MarketStateChip(item: p) }
                 }
                 Spacer(minLength: Theme.Space.s)
-                if !large { MarketStateChip(item: p) }
+                MarketStateChip(item: p)
             }
             .padding(.vertical, Theme.Space.xs)
             if let d = p.description, !d.isEmpty { Text(d).font(Theme.Font.secondary).foregroundStyle(.secondary) }
@@ -482,15 +470,13 @@ private struct PermissionLine: View {
 /// market under the id of one not installed). The lines wrap at the accessibility sizes.
 struct ExtensionPackMemberRow: View {
     var line: ExtensionPackMemberLine
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let large = typeSize.isAccessibilitySize
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            Text(line.title).font(Theme.Font.body).lineLimit(large ? nil : 1)
+            Text(line.title).font(Theme.Font.body).lineLimit(1)
             if let detail = line.detail {
                 Text(detail).font(Theme.Font.label).foregroundStyle(.secondary)
-                    .lineLimit(large ? nil : 1).truncationMode(.middle)
+                    .lineLimit(1).truncationMode(.middle)
             }
         }
         .accessibilityElement(children: .combine)

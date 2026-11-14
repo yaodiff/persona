@@ -26,9 +26,9 @@
   "mark_all_seen_body_other": "未確認のセッション{count}件を確認済みにしますか？スマートフォンやほかのブラウザーでも確認済みになります。",
   "open_space": "スペースページを開く",
   "archive": "アーカイブ",
-  "archive_close": "アーカイブして閉じる…",
+  "close": "閉じる…",
   "archive_busy": "処理中：終わってからアーカイブしてください",
-  "archive_close_busy": "処理中：作業中、待機中、ループやサーバーの実行中は閉じられません",
+  "close_busy": "処理中：作業中、待機中、ループやサーバーの実行中は閉じられません",
   "archived_agents": "アーカイブしたエージェント",
   "worktree_source_unavailable": "このリポジトリをワークツリー対応のターミナルワークスペースで開いてください。"
 }

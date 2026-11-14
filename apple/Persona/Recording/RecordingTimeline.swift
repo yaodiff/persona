@@ -15,6 +15,9 @@ nonisolated enum RecordingTimeline {
         var segment: Int
         var start: Double
         var text: String
+        /// A line of the hub's live log (#3862 phase 5, hub mode): its position there, never renumbered, which is its
+        /// row's id; nil for the phone's own sentences.
+        var line: Int? = nil
     }
 
     /// A question asked of Persona, at its time on the recording's clock. The row looks the exchange up by `id`.
@@ -29,6 +32,8 @@ nonisolated enum RecordingTimeline {
         nonisolated enum ID: Hashable, Sendable {
             /// `occurrence`: the nth sentence with the same segment and start (0 for the first), so two never share an id.
             case sentence(segment: Int, millis: Int, occurrence: Int = 0)
+            /// A line of the hub's live log, by its position (#3862 phase 5).
+            case line(Int)
             case bookmark(Int)
             case exchange(UUID)
             case gap
@@ -55,6 +60,10 @@ nonisolated enum RecordingTimeline {
         items.reserveCapacity(sentences.count + marks.count + asks.count + 1)
         var seen: [SentenceKey: Int] = [:]
         for s in sentences {
+            if let n = s.line {
+                items.append(Item(id: .line(n), at: s.start, kind: .sentence(s.text)))
+                continue
+            }
             let key = SentenceKey(segment: s.segment, millis: millis(s.start))
             let occurrence = seen[key, default: 0]
             seen[key] = occurrence + 1
@@ -90,6 +99,15 @@ nonisolated enum RecordingTimeline {
                 if let attendance = entry.attendance, !attendance.spoken.isEmpty, attendance.echo(line) { return nil }
                 return Sentence(segment: segment.index, start: line.start, text: line.text)
             }
+        }
+    }
+
+    /// The hub's lines in place of the phone's sentences (#3862 phase 5: the meeting's transcript while the page shows the
+    /// hub's, `MeetingTranscription.shown`), in the live log's order; a placeholder position (no words) is skipped, as
+    /// every client skips it.
+    static func sentences(hub lines: [MeetingHubLine]) -> [Sentence] {
+        lines.sorted { $0.n < $1.n }.compactMap { line in
+            line.text.isEmpty ? nil : Sentence(segment: 0, start: line.start, text: line.text, line: line.n)
         }
     }
 

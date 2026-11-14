@@ -51,6 +51,16 @@ class InjectedMessagesTest {
             """{"id":"1","role":"user","kind":"text","text":"x","injected":{"kind":"followup","state":"daily","title":"早报","line":"定时任务「早报」开始运行"}}""")
         assertEquals("daily", (item.injected?.state).zhAny())
     }
+
+    @Test fun decodesTheSupervisionLevel() {
+        // The hub marks user-visible supervision with level="user" (server/internal/prompts/injected.go); older hubs omit it.
+        val marked = JsonCodec.decodeFromString(Item.serializer(),
+            """{"id":"1","role":"user","kind":"text","text":"x","injected":{"kind":"system","state":"supervise","level":"user","line":"督办：2 个派出去的任务要处理"}}""")
+        assertEquals("user", marked.injected?.level)
+        val oldHub = JsonCodec.decodeFromString(Item.serializer(),
+            """{"id":"1","role":"user","kind":"text","text":"x","injected":{"kind":"system","state":"supervise","line":"督办"}}""")
+        assertNull(oldHub.injected?.level)
+    }
 }
 
 class InjectedTaskTest {

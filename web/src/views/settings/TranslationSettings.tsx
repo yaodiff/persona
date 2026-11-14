@@ -37,10 +37,10 @@ export function TranslationSettings({ onConfigure }: { onConfigure: () => void }
     <>
       <h2 className="mb-3 px-1 text-[15px] font-semibold text-ink">{t("settings-nav.tab_translate")}</h2>
       <Group footer={other ? `${t("settings-translationsettings.footer")} ${t("settings-translationsettings.model_default_note", { name: defaultName })}` : t("settings-translationsettings.footer")}>
-        <Row label={<span className="flex items-center gap-2"><Icon name="translate" size={14} className="text-ink-3" />{t("settings-translationsettings.auto")}</span>}>
+        <Row label={<span className="flex items-center gap-2"><Icon name="translate" size={14} className="text-ink-3" />{t("settings-translationsettings.auto")}</span>} anchor="translate-auto">
           <Switch on={prefs.enabled} onChange={(on) => setTranslatePrefs({ enabled: on })} label={t("settings-translationsettings.auto")} />
         </Row>
-        <Row label={t("settings-translationsettings.model")} hint={model ? modelSummary(model.purpose, model.providers) : undefined} onClick={other ? undefined : onConfigure} />
+        <Row label={t("settings-translationsettings.model")} anchor="translate-model" hint={model ? modelSummary(model.purpose, model.providers) : undefined} onClick={other ? undefined : onConfigure} />
       </Group>
       {prefs.enabled && (
         <>
@@ -72,7 +72,7 @@ export function TranslationSettings({ onConfigure }: { onConfigure: () => void }
           )}
         </>
       )}
-      <p className="px-1 text-[11.5px] leading-relaxed text-ink-3">
+      <p className="mb-6 px-1 text-[11.5px] leading-relaxed text-ink-3">
         {t("settings-translationsettings.local_note")}
       </p>
       {lark && picking && <ChatPicker selected={prefs.chats} onClose={() => setPicking(false)} onSave={(chats) => setTranslatePrefs({ chats })} />}

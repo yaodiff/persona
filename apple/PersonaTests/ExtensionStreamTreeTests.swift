@@ -104,11 +104,16 @@ import Testing
         #expect(try raw("1000e-5").numeric?.integer == false)
     }
 
-    @Test func declarationsDoNotAdvertiseUndrawnMediaOrHTML() {
+    @Test func declarationsAdvertiseOnlyWhatTheAppDraws() {
         #expect(!ExtensionPageStream.components.contains("html"))
-        #expect(!ExtensionPageStream.components.contains("image"))
-        #expect(!ExtensionPageStream.components.contains("grid"))
-        #expect(!ExtensionPageStream.components.contains("carousel"))
+        // UI version 6's pictures and tiles: drawn on iOS (#827); the frozen Mac app keeps its earlier list.
+        for media in ["image", "grid", "carousel"] {
+            #if os(macOS)
+            #expect(!ExtensionPageStream.components.contains(media))
+            #else
+            #expect(ExtensionPageStream.components.contains(media))
+            #endif
+        }
         let watchFeatures = LiveConnection.queryItems(EventCursor()).first?.value ?? ""
         #expect(!watchFeatures.contains(ExtensionPageStream.feature))
         let appFeatures = LiveConnection.queryItems(EventCursor(), extensionStream: true).first?.value ?? ""

@@ -38,7 +38,6 @@ var hardcodedDirs = []string{
 	"internal/extmgr",
 	"internal/feishubot",
 	"internal/hub",
-	"internal/linktray", // the Windows tray: everything it shows goes through link-tray.json
 	"internal/mail",
 	"internal/quota",
 	"internal/update",
@@ -49,13 +48,6 @@ var hardcodedDirs = []string{
 
 // hardcodedSkip are files in those packages that only write for a terminal or must keep the original, with why.
 var hardcodedSkip = map[string]string{
-	"internal/hub/doctor.go":             "personad hub doctor's terminal output",
-	"internal/hub/setup.go":              "personad hub setup's terminal output",
-	"internal/hub/setup_config.go":       "personad hub setup's terminal output",
-	"internal/hub/setup_database.go":     "personad hub setup's terminal output",
-	"internal/hub/setup_finish.go":       "personad hub setup's terminal output",
-	"internal/hub/setup_service.go":      "personad hub setup's terminal output",
-	"internal/hub/setup_manager.go":      "personad hub setup's terminal output",
 	"internal/hub/transcript_text.go":    "node's original text, matched to rewrite it",
 	"internal/extmgr/extension_build.go": "personad extension build's terminal output",
 }

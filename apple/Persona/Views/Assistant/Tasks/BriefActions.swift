@@ -125,6 +125,9 @@ import SwiftUI
         case .superviseModel:
             path.append(SettingsPage.modelConfiguration)
             path.append(ModelPurposeRoute(id: ModelConfigurationModel.supervise))
+        case .standingAuthorizations:
+            path.append(SettingsPage.assistant)
+            path.append(SettingsPage.standingAuthorizations)
         }
         return path
     }

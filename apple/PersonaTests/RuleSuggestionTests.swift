@@ -99,7 +99,7 @@ struct RuleSuggestionTests {
     @Test func theResultSaysWhatWasMadeAndWhereItIsRemoved() throws {
         let merge = try suggestion(Self.merge), start = try suggestion(Self.start), delegate = try suggestion(Self.delegate)
         let trust = String(localized: "Rule added: these tasks start without asking first. It is listed, and removed, in the assistant's profile under Auto-Start Tasks.")
-        let standing = String(localized: "Standing authorization added. It is listed, and removed, in the web app's settings for Persona, under Standing authorizations.")
+        let standing = String(localized: "Standing authorization added. It is listed, and revoked, in the assistant's profile under Standing Authorizations.")
         #expect(RuleSuggestionMade(kind: "plan_start", creates: "tasks.trust").text(asked: start) == trust)
         #expect(RuleSuggestionMade(kind: "standing_authorization", creates: "standing_authorization").text(asked: merge) == standing)
         #expect(RuleSuggestionMade(kind: "delegate", creates: "", setting: "agents.delegate").text(asked: delegate)

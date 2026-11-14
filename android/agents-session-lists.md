@@ -33,6 +33,16 @@ Paging remains available for callers whose membership is expressible. The follow
 
 The single-session `info` contract does not include full background/subagent/workflow/port arrays. Existing hydrated arrays are retained, and list activity uses scalar summaries. Reconstructing complete fresh detail arrays needs a dedicated server detail contract, not a full-list request.
 
+## Status and grouping capsule (#7034)
+
+Audience: people monitoring and collaborating with Agents. The shared home uses the maintainer-approved final E capsule instead of separate status chips and a grouping pill. This is an explicitly requested presentation change, not a new style or preference. Other list entry points retain their existing controls.
+
+`JAgentFilterCapsule` owns the interaction in `core/designsystem`; `AgentFilterTokens` owns its geometry. The capsule has a 42dp visual frame within a 48dp touch row, full circular corners, a horizontally scrolling status region and a fixed trailing three-line `PersonaIcons.filter` separated by a hairline. The icon opens an anchored `JMenu` containing only `offeredGroupings`, with the current choice checked; the former grouping pill and sheet are removed from the home. Status choices still come from `AgentQuickFilter.shown`, with the same conditional availability and count projection. Glass keeps its existing count-free All choice; Brief and Board keep All's actual count.
+
+Unfocused labels show two Unicode characters and an ellipsis. The selected label and the choice nearest the viewport's central focus expand through a width animation; the number stays outside that label width. Initial scroll position expands only the selected choice. Focus resolves after scrolling settles, avoiding a feedback loop from animated item widths. Tapping selects locally and centers the selected choice; Reduce Motion uses final widths without animation. TalkBack reads complete labels and counts even when visually abbreviated, plus selection and the grouping's current value.
+
+`AgentsFilterCapsuleShotsTest` drives the production Agents page through initial, centrally expanded, selected and grouping-menu states in all three styles and both appearances. `AgentFilterCapsuleTest` checks Unicode abbreviation, intermediate animation geometry and Reduce Motion. These are Native JVM Compose renders, not physical-device or transport/performance validation.
+
 ## Verification
 
 `PagedSessionsRepositoryTest` covers 8,000 invented rows, bounded first-page/window loading, cursor continuation/backloading, multi-page revision updates, field-only changes, deletions, unloaded-row exclusion, newer rows joining page one and a burst reloading it, frozen-page catch-up, filter changes, expiry, reconnect and legacy fallback. `HttpSessionListsTest` covers the wire URLs/envelopes and errors. `AgentsPaginationScreenTest` drives the real `AgentsScreen` through scrolling, checks that an offscreen row is not composed, checks server filter forwarding and saves all three styles in light and dark using Robolectric native rendering.

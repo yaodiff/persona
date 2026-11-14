@@ -13,6 +13,11 @@ final class PerfInboxTests: PerfTestCase {
 
     @MainActor private func openItem(_ id: String) {
         launch(["-dev.openChat", "", "-tab", "mail", "-inbox.kind", "", "-inbox.source", "", "-openInboxItem", id] + lark)
+        expandSource()
+    }
+
+    @MainActor private func expandSource() {
+        see(app.buttons["inbox.detail.source"].firstMatch, "the original source control", timeout: 30).tapCenter()
     }
 
     // MARK: Inbox
@@ -48,6 +53,7 @@ final class PerfInboxTests: PerfTestCase {
                       timeout: 20)
         measureTransition {
             row.tap()
+            expandSource()
             wait(app.textFields["lark.box"], timeout: 15)
             sleep(2)
             back()
@@ -151,6 +157,7 @@ final class PerfInboxTests: PerfTestCase {
                       timeout: 20)
         measureTransition {
             row.tap()
+            expandSource()
             sleep(3)
             back()
             wait(row)

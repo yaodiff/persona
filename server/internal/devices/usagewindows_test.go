@@ -62,6 +62,28 @@ func TestMergeUsageAccountsDedupesTheSameAccountAcrossMachines(t *testing.T) {
 	}
 }
 
+// A local sample is not a bridge between two different accounts of one gateway (#7324).
+func TestMergeUsageAccountsDoesNotBridgeGatewayAccounts(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	resets := now.Add(3 * 24 * time.Hour)
+	in := []proto.UsageAccount{
+		{Provider: "codex", Name: "Codex Pro", Local: true, Origin: "mac/0", SampledAt: now, Windows: []proto.UsageWindow{uw("7d", 10080, 10, resets)}},
+		{Provider: "codex", Name: "Seat A", Ref: "s1:a", Origin: "s1:a", Sources: []string{"Relay"}, SampledAt: now, Windows: []proto.UsageWindow{uw("7d", 10080, 20, resets)}},
+		{Provider: "codex", Name: "Seat B", Ref: "s1:b", Origin: "s1:b", Sources: []string{"Relay"}, SampledAt: now, Windows: []proto.UsageWindow{uw("7d", 10080, 30, resets)}},
+	}
+	got := mergeUsageAccounts(in, now)
+	if len(got) != 2 {
+		t.Fatalf("two gateway seats merged through a local sample: got %d account(s), want 2: %+v", len(got), got)
+	}
+	used := map[string]float64{}
+	for _, a := range got {
+		used[a.Ref] = mostUsed(a)
+	}
+	if used["s1:a"] != 10 || used["s1:b"] != 30 {
+		t.Fatalf("a gateway seat or its usage disappeared: %+v", got)
+	}
+}
+
 func TestMergeUsageAccountsDropsResetStaleAndOld(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	in := []proto.UsageAccount{

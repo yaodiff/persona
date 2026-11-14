@@ -51,6 +51,19 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
   so when it disappears (`/End`, a crash, or a kill), its children disappear too.
 - A running `.exe` cannot be overwritten or deleted. Before reinstalling, `/End` the task and wait for persona-link to release the run lock; during uninstall, the daemon file may take a moment to become deletable.
 
+## Updating a running program (node updates)
+
+`server/internal/nodeupdate`; see [windows.md](../operations/windows.md) ("Updates through the hub"). Found on a physical Windows 11 machine on 2026-11-12:
+
+- **A running program's file cannot be replaced, but can be renamed**: `os.Rename(new, running.exe)` fails with access denied, while renaming `running.exe` away works. Move the old file aside, then put the new one in place; delete the aside file once its process is gone (deleting it earlier fails the same way).
+- **Go's `os.Open` does not share delete**: a rename over a file this process (or any other) holds open fails with access denied. Close the file before renaming over it.
+- **Only files ending in `.exe` start**: `exec.Command` on a staged `.node-update-stage-123` reports "executable file not found". Anything that is run (the staged build's self-check, the watchdog's backup copy) needs the suffix.
+- **`FlushFileBuffers` needs a handle that may write**: `f.Sync()` on a file opened with `os.Open`, or on a directory, returns access denied. Open the file read-write to flush it; a directory cannot be flushed: use `MoveFileEx` with `MOVEFILE_WRITE_THROUGH` for a durable rename instead.
+- **No inherited descriptors**: `exec.Cmd.ExtraFiles` is not supported, so a child cannot report readiness on fd 3. Report through a file both sides read.
+- **A program runs from the file a process has open**: the watchdog runs from the backup it may restore, so the backup can only be moved aside, not deleted, until the watchdog exits.
+- **A restart is a new process**: with exec the new program keeps the pid the rollback watchdog recorded; on Windows it does not, so a target build that never records itself (one from before Windows updates) kept running after a rollback put the old file back (found 2026-11-13 updating a node to a release without this support). Record the supervisor and find its children.
+- **The image path follows a rename**: `QueryFullProcessImageName` returns where the program's file is now (the moved-aside name), while `Get-Process` / `Win32_Process.ExecutablePath` show the path it was started from. Match both.
+
 ## Claude Code's peer inbox (desktop app, other terminals)
 
 Measured 2026-11-07 with Claude Code 2.1.308 / 2.1.291; see [claude-integration.md](../integrations/claude-integration.md) ("Claude outside Persona's terminals").
@@ -64,9 +77,9 @@ Measured 2026-11-07 with Claude Code 2.1.308 / 2.1.291; see [claude-integration.
 - **An interactive claude under a pseudo console needs its std handles to be the console's**: a `CreatePseudoConsole` child that inherits the parent's redirected stdout decides it is not on a terminal and runs as `--print` ("Input must be provided … when using --print"). Set `STARTF_USESTDHANDLES` with null handles.
 - **Testing on a dev machine**: start a throwaway `claude` with its own `CLAUDE_CONFIG_DIR` (copy `settings.json`, write a `.claude.json` with `hasCompletedOnboarding` and the test directory trusted) and an empty working directory; never send into a session the user has open. The first failed start renamed the test `.claude.json` into `backups/`: write it again before the next try.
 
-## Tray (WebView2, notification area)
+## Historical tray (WebView2, notification area)
 
-`internal/linktray`; see [windows.md](../operations/windows.md) ("Tray"). Found on a physical Windows 11 machine on 2026-11-07:
+Retired with the independent Link service (#6770); the implementation notes are in [windows-records.md](../archive/operations/windows-records.md) and [link-menu-tray.md](../archive/operations/link-menu-tray.md). These findings are historical, not a reason to restore a tray UI. Found on a physical Windows 11 machine on 2026-11-07:
 
 - **WebView2 holds back its callbacks while one of them runs**: creating a WebView inside a `WebMessageReceived` handler gets the environment back, but the controller's completion waits until the handler returns.
   go-webview2's `Embed` spins a nested message loop until then, so it never returned: the pairing window stayed hidden, and the tray's thread stayed inside that loop (which also swallowed the quit message). Handle page messages after the event has returned (`app.fromPage` queues them).

@@ -2,7 +2,8 @@
 // items, its providers → launchers, a permission request ↔ an interaction and its answer. No I/O: the bridge
 // (bridge.js) hands in what the daemon said; the tests feed recorded shapes.
 
-import { basename } from 'node:path'
+import { createHash } from 'node:crypto'
+import { basename, join } from 'node:path'
 import { appToolName, clipInput, interactionId, snippet, summaryOf } from '../../runtime-sdk/index.js'
 
 /** The runtime id: the engine's (proto.EnginePaseo), the space kind, the agent of sessions the apps do not know. */
@@ -13,6 +14,13 @@ export const SESSION_LABEL = 'persona.session'
 export const PARENT_LABEL = 'paseo.parent-agent-id'
 /** The label on the agent a launcher check runs (bridge.js check): never a session, deleted once it answered. */
 export const CHECK_LABEL = 'persona.check'
+/**
+ * The label beside SESSION_LABEL when the bridge kept the id itself on an agent Persona neither started nor took over
+ * (Paseo moved it to another Claude session: a fork, a rewind): the id is the session's, the agent is not Persona's own.
+ */
+export const KEPT_LABEL = 'persona.kept'
+/** Where the bridge's copy of an agent holds the id it keeps for it before Paseo's record has the label (bridge.js keptIdOf). */
+export const KEPT = Symbol('persona.kept')
 /** Persona's effort levels, weakest first (proto.EffortLevels). */
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** Persona's permission modes (proto.PermissionModes): Claude Code's, which Paseo's Claude providers take as they are. */
@@ -35,6 +43,21 @@ export function personaMode(root, mode) {
   if (root === 'claude') return MODES.includes(mode) ? mode : undefined
   if (root === 'codex') return Object.keys(CODEX_MODES).find((ours) => CODEX_MODES[ours] === mode)
   return undefined
+}
+
+/** Paseo's feature that answers every permission prompt of an agent with allow: Persona's bypassPermissions there. */
+export const AUTO_ACCEPT = 'auto_accept'
+/**
+ * The built-in providers whose approval is Paseo's Auto Accept (AUTO_ACCEPT), a switch, rather than a mode: the ones it
+ * runs over ACP (`acp`, which a custom provider such as Grok's `grok agent stdio` extends, Copilot, Cursor) and OpenCode.
+ * Grok has no permission modes at all.
+ */
+export const AUTO_ACCEPT_ROOTS = new Set(['acp', 'copilot', 'cursor', 'opencode'])
+
+/** Whether an agent's Auto Accept is on; undefined when Paseo lists no such switch for it (another provider, not loaded). */
+export function autoAcceptOf(agent) {
+  const f = (agent?.features ?? []).find((x) => x?.id === AUTO_ACCEPT && x.type === 'toggle')
+  return f ? f.value === true : undefined
 }
 /** A launcher name (the node's nameRe: what a shell function may be called). */
 export const LAUNCHER_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/
@@ -124,14 +147,15 @@ export function defaultProvider(entries = [], roots = {}) {
 
 /**
  * The id a Paseo agent has in Persona, undefined while it has none: the label Persona left on it (it started or took
- * the session over); else, for Claude Code, its Claude session id — the id the same conversation has everywhere in
- * Persona ("Offline", herdr) — once Paseo has one; else paseo-<agent id>.
+ * the session over, or the bridge kept the id); else, for Claude Code, the id the bridge keeps for it (KEPT: the session
+ * it was listed under before Paseo moved it to a fork), else its Claude session id — the id the same conversation has
+ * everywhere in Persona ("Offline", herdr) — once Paseo has one; else paseo-<agent id>.
  */
 export function sessionIdOf(agent, roots = {}) {
   const l = agent?.labels?.[SESSION_LABEL]
   if (typeof l === 'string' && SESSION_ID.test(l)) return l
   if (agentRoot(agent, roots) === 'claude') {
-    const c = claudeId(agent)
+    const c = agent?.[KEPT] ?? claudeId(agent)
     return c && SESSION_ID.test(c) ? c : undefined
   }
   return typeof agent?.id === 'string' && agent.id ? `${RUNTIME}-${agent.id}` : undefined
@@ -280,7 +304,7 @@ export function slotNameOf(project, cwd) {
 }
 
 /** The repository a placement belongs to: the main checkout's directory for a worktree, else its own. */
-function repoRootOf(project) {
+export function repoRootOf(project) {
   const c = project?.checkout
   const root = linkedWorktree(project) ? c.mainRepoRoot : (c?.worktreeRoot ?? c?.cwd)
   return typeof root === 'string' && root ? root : undefined
@@ -370,6 +394,9 @@ export function agentRow(agent, o = {}) {
   // by its agent; one that stopped running "replaced" by another there). A workspace's agents are conversations of
   // their own, as in Paseo's own tabs (#4493).
   if (space && typeof agent.workspaceId === 'string' && agent.workspaceId) row.slot_name = slotNameOf(p, cwd)
+  // The workspace itself, by id: the node keeps it on the row of the engine's runtime, and the apps tie the session to
+  // that workspace's row in the catalog (runtime.workspaces, workspaceRow), agents in it or not.
+  if (typeof agent.workspaceId === 'string' && SESSION_ID.test(agent.workspaceId)) row.workspace_id = agent.workspaceId
   // Its repository, for "By repo" (#2840): Paseo keeps its worktrees under its own folder, where the path names none.
   // By its physical directory (#4492), as the node names the working tree: a repository whose sessions write its path
   // two ways (a home behind a symbolic link) is two projects in the apps.
@@ -378,7 +405,8 @@ export function agentRow(agent, o = {}) {
   if (row.agent === RUNTIME && o.labels?.[agent.provider]) row.agent_label = o.labels[agent.provider]
   const model = agent.model ?? agent.runtimeInfo?.model
   if (typeof model === 'string' && model) row.model = model
-  const mode = personaMode(root, agent.currentModeId)
+  // Auto Accept on is Allow all; off says nothing, since the agent's own settings may still approve everything (Grok's can).
+  const mode = personaMode(root, agent.currentModeId) ?? (autoAcceptOf(agent) ? 'bypassPermissions' : undefined)
   if (mode) row.permission_mode = mode
   const effort = agent.effectiveThinkingOptionId ?? agent.thinkingOptionId
   if (EFFORTS.includes(effort)) row.effort = effort
@@ -414,6 +442,53 @@ export function backgroundOf(agent) {
   }
 }
 
+// ---- workspaces ----
+
+/** A Paseo workspace id (its workspace-registry-model generateWorkspaceId). */
+export const WORKSPACE_ID = /^wks_[0-9a-f]{16}$/
+
+/**
+ * A Paseo workspace (a WorkspaceDescriptorPayload) as a runtime.workspaces row (docs/protocol/protocol.md "Runtime ↔
+ * node"): its id, its name (its title, else its branch or folder), its folder and kind, its branch, the space its agents'
+ * rows name (o.spaceId: projectSpaces, which files a worktree's own project record under its repository's), its
+ * repository's main checkout, and whether Paseo made the checkout (owned: archiving the workspace removes it).
+ * Undefined for one being archived, or without a folder.
+ * @param {object} d
+ * @param {{ spaceId?: string, spaceName?: string, canon?: (path: string) => string }} [o]
+ */
+export function workspaceRow(d, o = {}) {
+  const p = d?.project
+  const cwd = (typeof d?.workspaceDirectory === 'string' && d.workspaceDirectory) || p?.checkout?.cwd || ''
+  if (typeof d?.id !== 'string' || !SESSION_ID.test(d.id) || !cwd || d.archivingAt) return undefined
+  const kind = d.workspaceKind === 'worktree' ? 'worktree' : d.workspaceKind === 'local_checkout' || d.workspaceKind === 'checkout' ? 'checkout' : 'folder'
+  const row = { workspace_id: d.id, title: (typeof d.name === 'string' && d.name.trim()) || basename(cwd), cwd, kind }
+  const branch = d.gitRuntime?.currentBranch ?? p?.checkout?.currentBranch
+  if (kind !== 'folder' && typeof branch === 'string' && branch && branch !== 'HEAD') row.branch = branch
+  const space = o.spaceId ?? spaceIdOf(p) ?? (typeof d.projectId === 'string' ? d.projectId : undefined)
+  if (space) row.space_id = space
+  const name = o.spaceName ?? p?.projectName ?? d.projectDisplayName
+  if (typeof name === 'string' && name) row.space_name = name
+  const repo = kind === 'folder' ? undefined : (repoRootOf(p) ?? d.projectRootPath)
+  if (typeof repo === 'string' && repo) row.repo_root = o.canon ? o.canon(repo) : repo
+  if (kind === 'worktree' && (Boolean(d.worktreeSlug) || d.gitRuntime?.isPaseoOwnedWorktree === true || p?.checkout?.isPaseoOwnedWorktree === true)) {
+    row.owned = true
+  }
+  return row
+}
+
+/**
+ * Where Paseo puts the worktrees of a repository (its utils/worktree.js getPaseoWorktreesRoot): <worktrees
+ * root>/<project hash>, the hash of the main checkout's physical path, eight base-36 characters.
+ * @param {string} base - the worktrees root (Paseo's worktrees.root, else <Paseo home>/worktrees)
+ * @param {string} repoRoot - the repository's main checkout, symbolic links resolved
+ */
+export function paseoCheckouts(base, repoRoot) {
+  const digest = createHash('sha256').update(repoRoot).digest()
+  let value = 0n
+  for (let i = 0; i < 8; i++) value = (value << 8n) | BigInt(digest[i])
+  return join(base, value.toString(36).padStart(13, '0').slice(0, 8))
+}
+
 // ---- the timeline ----
 
 const ts = (t) => new Date(Date.parse(t) || Date.now()).toISOString()
@@ -446,9 +521,65 @@ export function toolCall(name, detail) {
       return { name: appToolName(name || d.label || 'tool'), input: clipInput(dropEmpty({ text: d.text, label: d.label })) }
     default: {
       const input = d.input && typeof d.input === 'object' && !Array.isArray(d.input) ? d.input : d.input === undefined || d.input === null ? {} : { input: d.input }
+      if (typeof input.variant === 'string' && input.variant) return variantCall(input)
       return { name: appToolName(name || 'tool'), input: clipInput(input) }
     }
   }
+}
+
+/**
+ * A tool Grok CLI names in its ACP input (`variant`), which Paseo passes on as an unknown detail named `other` or after
+ * the ACP title (``List `/w` ``): drawn as the apps' tool for it, else under its own name without that argument. A
+ * listing is LS; a background task's output and its stop are Claude Code's TaskOutput and TaskStop (Monitor is Claude
+ * Code's name already); an MCP call (UseTool, `<server>__<tool>`) is the tool itself, as Claude Code names it.
+ */
+function variantCall({ variant, ...input }) {
+  switch (variant) {
+    case 'ListDir':
+      return { name: 'LS', input: dropEmpty({ path: input.target_directory }) }
+    case 'TaskOutput': {
+      const ids = Array.isArray(input.task_ids) ? input.task_ids.filter((x) => typeof x === 'string' && x) : []
+      return { name: 'TaskOutput', input: dropEmpty({ task_id: ids.join(', ') || input.task_id }) }
+    }
+    case 'KillTask':
+      return { name: 'TaskStop', input: dropEmpty({ task_id: input.task_id }) }
+    case 'UseTool': {
+      const args = input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : {}
+      if (typeof input.tool_name === 'string' && input.tool_name) return { name: `mcp__${input.tool_name}`, input: clipInput(args) }
+      break
+    }
+  }
+  return { name: appToolName(variant), input: clipInput(input) }
+}
+
+/**
+ * What a tool Grok CLI names (variantCall) gave back, as text: a listing's tree, a background task's output with its
+ * exit code after it as a command's, a stop's message, an MCP tool's text; otherwise its fields, a `key: value` line each.
+ */
+function variantOutput(o) {
+  if (o === undefined || o === null) return ''
+  if (typeof o !== 'object') return String(o)
+  if (typeof o.Content?.content === 'string') return o.Content.content
+  if (typeof o.output === 'string') return o.output
+  const r = o.Result
+  if (r && typeof r === 'object' && !Array.isArray(r)) {
+    if (typeof r.output === 'string') return r.output + exitNote(r.exit_code, r.output)
+    return typeof r.message === 'string' ? r.message : fieldLines(r)
+  }
+  // An MCP tool's answer holds one text under the outcome's name ({ OkayOutput: '…' }).
+  const texts = o.output && typeof o.output === 'object' ? Object.values(o.output).filter((v) => typeof v === 'string') : []
+  return texts.length === 1 ? texts[0] : fieldLines(o)
+}
+
+/** An object's fields but its `type`, a `key: value` line each (a nested one as JSON). */
+function fieldLines(o) {
+  return Object.entries(o).filter(([k, v]) => k !== 'type' && v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n')
+}
+
+/** A command's exit code after its output, when it failed. */
+function exitNote(code, out) {
+  return typeof code === 'number' && code !== 0 ? `${out ? '\n' : ''}（退出码 ${code}）` : ''
 }
 
 /** What a finished tool call gave back, as the text of its result. */
@@ -458,7 +589,7 @@ export function toolOutput(item) {
   switch (d.type) {
     case 'shell':
       out = d.output ?? ''
-      if (typeof d.exitCode === 'number' && d.exitCode !== 0) out += `${out ? '\n' : ''}（退出码 ${d.exitCode}）`
+      out += exitNote(d.exitCode, out)
       break
     case 'read':
     case 'write':
@@ -487,7 +618,8 @@ export function toolOutput(item) {
       out = ''
       break
     default:
-      out = d.output === undefined || d.output === null ? '' : typeof d.output === 'string' ? d.output : JSON.stringify(d.output, null, 2)
+      if (typeof d.input?.variant === 'string' && d.input.variant) out = variantOutput(d.output)
+      else out = d.output === undefined || d.output === null ? '' : typeof d.output === 'string' ? d.output : JSON.stringify(d.output, null, 2)
   }
   if (item?.status === 'failed' && item.error) {
     const e = typeof item.error === 'string' ? item.error : item.error?.message ?? JSON.stringify(item.error)

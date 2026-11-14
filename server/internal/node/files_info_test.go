@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -22,6 +23,10 @@ func linkFixture(t *testing.T, home string) string {
 		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello world"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	// WriteFile applies the umask; TestStatDetail expects 0640 under any umask (077 on the PR watcher's host).
+	if err := os.Chmod(filepath.Join(dir, "a.txt"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(home, ".ssh", "id_ed25519"), []byte("key"), 0o600); err != nil {
@@ -84,7 +89,11 @@ func TestStatDetail(t *testing.T) {
 
 	f := by["a.txt"]
 	if f.Kind != "file" || f.Size != 11 || f.Mode == nil || *f.Mode != 0o640 || f.ModTime == nil || f.Symlink {
-		t.Fatalf("a.txt = %+v", f)
+		mode := "none"
+		if f.Mode != nil {
+			mode = fmt.Sprintf("%04o", *f.Mode)
+		}
+		t.Fatalf("a.txt: mode %s, want 0640; %+v", mode, f)
 	}
 	if runtime.GOOS != "windows" {
 		if me != nil && f.Owner != me.Username {

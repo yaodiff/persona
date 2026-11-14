@@ -43,8 +43,6 @@ nonisolated extension Theme {
         /// The typed question's field in the live bar (#4486): it grows to this many lines, then scrolls, so the
         /// timeline above keeps most of the room the keyboard leaves.
         static let askLines = 5
-        /// The same at accessibility text sizes, where a line is several times taller.
-        static let askLinesLargeType = 2
         /// Its send button while there are no words to send: there, so the row does not jump, and plainly unavailable.
         static let askSendIdle: Double = dimmed
         /// A row arriving in the timeline starts this far below its place (the `reveal` curve brings it up).
@@ -101,6 +99,15 @@ nonisolated extension Theme {
         /// stamped as its sentence begins. Few enough that the card stays a summary.
         static let contextBefore = 1
         static let contextAfter = 2
+        /// A topic card of the summary card (#6563) shows this many bullets, then Show N More opens the rest in place: a
+        /// card stays a glance, and the hub's topics have two to four lines.
+        static let topicBulletsShown = 4
+        /// A summary-card item keeps its time and disclosure beside its words while the words have at least this many
+        /// times their line's height of width (about eight Chinese characters a line), else they go on the line under
+        /// the words (`MinutesItemLayout`): by the room the words have, which keep growing past the interface's cap.
+        static let itemWordsColumn: CGFloat = 7
+        /// How many tints the summary card's groups take in turn (`Theme.Hue.minutesGroups`).
+        static let topicTints = Theme.Hue.minutesGroups.count
         /// How much the meeting page's Talk grows while it is held (#3862 phase 4): the finger covers it, so the change
         /// that says "Persona hears you" is its color and the words over the field; the size only confirms the touch.
         /// None under Reduce Motion.

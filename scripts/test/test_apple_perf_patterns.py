@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Calls that block the thread they run on, or cost milliseconds each time a view redraws, may not grow in the Apple
-sources (docs/apple/performance.md, "Automated checks").
+"""Calls that cost milliseconds each time a view redraws, or that are never right, may not grow in the Apple sources
+(docs/apple/performance.md, "Automated checks"): localization lookups with an explicit locale (P4), frame-rate
+timelines that never pause (P9) and `UserDefaults.synchronize()` (P2).
 
-App targets default to MainActor (`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor` in apple/project.yml), so a Photos fetch, a
-keychain read, a synchronous file read or a full image decode written in a view, a model or an app-target helper runs on
-the main thread unless its function is `nonisolated` / `@concurrent` or inside `Task.detached`. Telling those apart
-needs the compiler, so this is a ratchet: each file has a committed count per pattern (apple_perf_baseline.json) that
-may stay the same or go down, never up, and a file with no entry starts at zero.
+This is a ratchet: each file has a committed count per pattern (apple_perf_baseline.json) that may stay the same or go
+down, never up, and a file with no entry starts at zero. A call that is known to be fine does not count when its line
+carries `// perf-ok: <reason>` (the reason must be non-empty), for example
+`// perf-ok: resolved once per locale`. Comments are ignored.
 
-A call that is known to run off the main thread does not count when its line carries `// perf-ok: <reason>` (the reason
-must be non-empty), for example `// perf-ok: nonisolated, called from the loader's Task.detached`. Comments are ignored.
+The calls that block the thread they run on (Photos fetches, keychain reads, file reads, directory listings, image
+decodes) were counted here wherever they were written, because telling the main actor from a background task needs
+more than a regex. scripts/test/isolation-lint.sh now reads the isolation of the code around each of them and counts
+a call only on the main actor or where it cannot tell (#4262); `// perf-ok:` means nothing to it.
 
   python3 scripts/test/test_apple_perf_patterns.py            run the check (unittest)
   python3 scripts/test/test_apple_perf_patterns.py --update   rewrite the baseline downward after removing calls
@@ -31,23 +33,20 @@ ESCAPE = re.compile(r"//\s*perf-ok:\s*\S")
 
 # Rule ids match docs/apple/performance.md.
 PATTERNS = {
-    # P1: system-framework and disk IO.
-    "photos-fetch": re.compile(r"\bPH(?:Asset|AssetCollection|CollectionList)\s*\.\s*fetch\w*\s*\("),
-    "keychain-read": re.compile(r"\bSecItemCopyMatching\s*\("),
-    "file-read": re.compile(r"\b(?:Data|String|NSData|NSString)\s*\(\s*contentsOf(?:File)?\s*:"),
-    "directory-listing": re.compile(r"\.\s*(?:contentsOfDirectory|subpathsOfDirectory|enumerator)\s*\(\s*(?:at|atPath)\s*:"),
+    # P2: never needed, and it blocks on the defaults daemon.
     "defaults-synchronize": re.compile(r"\bUserDefaults\b[^\n]*\.\s*synchronize\s*\(\s*\)"),
     # P4: a localization lookup with an explicit locale reads the string tables on every call (1-2 ms; #5438).
     # `interfaceText(_:)` is one; its declaration is not a call.
     "localized-lookup": re.compile(r"(?<!func )\binterfaceText\s*\(|\bString\s*\(\s*localized:[^\n]*\blocale\s*:"),
-    # P8: a full decode of an encoded picture.
-    "image-decode": re.compile(r"\b(?:UIImage|NSImage)\s*\(\s*(?:data|contentsOfFile)\s*:"),
+    # P7: a view's frame in the window changes on every frame its page slides (the shell's strip, a sheet, a drag), so
+    # state written from one is written, and its readers drawn, on each of them (#5438).
+    "window-frame": re.compile(r"\.\s*frame\s*\(\s*in\s*:\s*\.global\s*\)"),
     # P9: a frame-rate timeline that never pauses.
     "unpaused-animation": re.compile(r"\bTimelineView\s*\(\s*\.animation(?:\s*\((?![^()\n]*\bpaused\s*:)[^()\n]*\))?\s*\)"),
 }
 
 # Test targets and tooling: they run on purpose where they run and ship nothing.
-SKIP_PARTS = {"PersonaTests", "PersonaUITests", "PersonaMacTests", "PersonaWatchTests", "Tests", "verify"}
+SKIP_PARTS = {"PersonaTests", "PersonaUITests", "PersonaWatchTests", "Tests", "verify"}
 
 
 def blank_comments(src):
@@ -115,7 +114,7 @@ def update():
     baseline = load_baseline()
     grown, _ = compare(counts, baseline)
     if grown:
-        print("refusing to raise the baseline (move the call off the main actor, or mark a verified one `// perf-ok: <reason>`):")
+        print("refusing to raise the baseline (take the call out, or mark a verified one `// perf-ok: <reason>`):")
         print("\n".join(grown))
         return 1
     BASELINE.write_text(json.dumps(counts, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -124,28 +123,24 @@ def update():
 
 
 class ApplePerfPatternTests(unittest.TestCase):
-    def test_no_file_grows_its_blocking_calls(self):
+    def test_no_file_grows_its_counted_calls(self):
         counts, _ = scan()
         grown, shrunk = compare(counts, load_baseline())
-        self.assertEqual(grown, [], "a blocking call or a per-call localization lookup was added (docs/apple/performance.md, "
-                         "rules P1, P4, P8, P9): move it off the main actor or out of the redraw path (cache a lookup per "
-                         "locale), or mark a verified call `// perf-ok: <reason>`")
-        self.assertEqual(shrunk, [], "fewer blocking calls than the baseline: run "
+        self.assertEqual(grown, [], "a per-call localization lookup, a read of a window frame, an unpaused animation "
+                         "timeline or a UserDefaults.synchronize() was added (docs/apple/performance.md, rules P2, P4, "
+                         "P7, P9): cache the lookup per locale, measure in the page's own space or keep the frame "
+                         "unobserved, pause the timeline, drop the call, or mark a verified one `// perf-ok: <reason>`")
+        self.assertEqual(shrunk, [], "fewer counted calls than the baseline: run "
                          "python3 scripts/test/test_apple_perf_patterns.py --update and commit the baseline")
 
     def test_what_counts(self):
-        self.assertEqual(calls("let r = PHAsset.fetchAssets(with: o)"), [("photos-fetch", 1)])
-        self.assertEqual(calls("// PHAsset.fetchAssets(with: o)\n/* SecItemCopyMatching(q, &o) */"), [])
-        self.assertEqual(calls("let r = PHAsset.fetchAssets(with: o) // perf-ok: nonisolated loader"), [])
-        self.assertEqual(calls("let r = PHAsset.fetchAssets(with: o) // perf-ok:"), [("photos-fetch", 1)])
-        self.assertEqual(calls("x\nlet d = try Data(contentsOf: url)"), [("file-read", 2)])
-        self.assertEqual(calls("let s = try String(contentsOfFile: p, encoding: .utf8)"), [("file-read", 1)])
-        self.assertEqual(calls("let i = UIImage(data: d)\nlet j = UIImage(contentsOfFile: p)"),
-                         [("image-decode", 1), ("image-decode", 2)])
-        self.assertEqual(calls("let i = UIImage(named: \"a\")"), [])
-        self.assertEqual(calls("try fm.contentsOfDirectory(at: u, includingPropertiesForKeys: nil)"), [("directory-listing", 1)])
-        self.assertEqual(calls("SecItemCopyMatching(q as CFDictionary, &out)"), [("keychain-read", 1)])
         self.assertEqual(calls("UserDefaults.standard.synchronize()"), [("defaults-synchronize", 1)])
+        self.assertEqual(calls("x\nUserDefaults.standard.synchronize()"), [("defaults-synchronize", 2)])
+        self.assertEqual(calls('// UserDefaults.standard.synchronize()\n/* interfaceText("Done") */'), [])
+        self.assertEqual(calls(".onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in }"), [("window-frame", 1)])
+        self.assertEqual(calls("let f = g.frame( in: .global )"), [("window-frame", 1)])
+        self.assertEqual(calls("$0.frame(in: .named(space))\n$0.frame(in: .local)"), [])
+        self.assertEqual(calls("$0.frame(in: .global).minY // perf-ok: only y, and the box is unobserved"), [])
         self.assertEqual(calls("TimelineView(.animation) { c in }"), [("unpaused-animation", 1)])
         self.assertEqual(calls("TimelineView(.animation(minimumInterval: 1 / 30)) { c in }"), [("unpaused-animation", 1)])
         self.assertEqual(calls("TimelineView(.animation(minimumInterval: 1 / 60, paused: still)) { c in }"), [])
@@ -155,6 +150,15 @@ class ApplePerfPatternTests(unittest.TestCase):
         self.assertEqual(calls('let s = String(localized: "Done", locale: .interface)'), [("localized-lookup", 1)])
         self.assertEqual(calls('let s = String(localized: "Done")'), [])
         self.assertEqual(calls('let s = interfaceText("Done") // perf-ok: resolved once per locale, StateName.text'), [])
+        self.assertEqual(calls('let s = interfaceText("Done") // perf-ok:'), [("localized-lookup", 1)])
+
+    def test_thread_dependent_calls_belong_to_the_isolation_lint(self):
+        # Counted by scripts/test/isolation-lint.sh from the isolation of the code around them, not here; what counts
+        # as one is pinned in scripts/test/isolation-lint/Tests/IsolationLintTests/RuleAndProjectTests.swift.
+        self.assertEqual(calls("let r = PHAsset.fetchAssets(with: o)\nlet d = try Data(contentsOf: url)\n"
+                               "let i = UIImage(data: d)\nSecItemCopyMatching(q as CFDictionary, &out)\n"
+                               "try fm.contentsOfDirectory(at: u, includingPropertiesForKeys: nil)"), [])
+        self.assertEqual(set(PATTERNS), {"defaults-synchronize", "localized-lookup", "unpaused-animation", "window-frame"})
 
     def test_compare(self):
         self.assertEqual(compare({"a": {"x": 2}}, {"a": {"x": 1}}), (["a: x 1 -> 2"], []))

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "operation": "inbox_showcase",
-  "description": "One scenario every client draws for the side-by-side screenshots: the list, then sc-1's detail with its timeline folded and expanded. Items are as the hub lists them (wire JSON), made up, in Chinese because the screenshots are read in zh-Hans; the chain's text is what a zh-Hans hub writes. Clock: 2026-01-01T12:00:00Z; zh-Hans first, en once for the state words; light and dark.",
+  "description": "One scenario every client draws for the side-by-side screenshots: the list, then sc-1's detail with its timeline folded and expanded. sessions are the Agent and processing conversations its chain links to, as the app's session list has them (the Agent finished and its result is unread; the processing conversation is idle). Items are as the hub lists them (wire JSON), made up, in Chinese because the screenshots are read in zh-Hans; the chain's text is what a zh-Hans hub writes. Clock: 2026-01-01T12:00:00Z; zh-Hans first, en once for the state words; light and dark.",
   "now_clock": "2026-01-01T12:00:00Z",
   "detail": "sc-1",
   "items": [
@@ -88,8 +88,9 @@
           "id": "c5",
           "at": "2026-01-01T11:20:00Z",
           "kind": "reported",
-          "text": "发了邮件：报价单更正",
-          "via": "agent"
+          "text": "助手说：发了邮件：报价单更正",
+          "via": "agent",
+          "detail": "发了邮件：报价单更正"
         },
         {
           "id": "c6",
@@ -210,6 +211,26 @@
       "done_at": "2026-01-01T07:31:00Z",
       "done_by": "replied",
       "now": "done_replied"
+    }
+  ],
+  "sessions": [
+    {
+      "machine_id": "m1",
+      "session_id": "s-agent",
+      "title": "核对报价单",
+      "cwd": "/home/user/orders",
+      "state": "unread",
+      "updated_at": "2026-01-01T11:19:00Z",
+      "state_since": "2026-01-01T11:19:00Z"
+    },
+    {
+      "machine_id": "m1",
+      "session_id": "s-handling",
+      "title": "春季订单的报价",
+      "cwd": "/home/user",
+      "state": "idle",
+      "updated_at": "2026-01-01T11:20:30Z",
+      "state_since": "2026-01-01T11:20:30Z"
     }
   ]
 }

@@ -1,12 +1,14 @@
 // node --test site/worker.test.mjs site/releases.test.mjs
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import worker from "./worker.mjs";
 import { RELEASES_API, FRESH_MS, classifyAsset, compareTags, slimReleases, summarizeNotes } from "./releases.mjs";
 import {
-  detectPlatform, downloadFor, formatSize, isDirectDownload, latestRelease, countsLine, areaLabel,
+  COMPONENTS, DEVICES, WEB_GUIDE, archLabel, areaLabel, componentsFor, countsLine, detectPlatform, deviceFor, devicesFor,
+  downloadFor, formatAge, formatDate, formatSize, isDirectDownload, latestRelease, webGuideFor,
 } from "./public/releases/model.js";
+import { EN_COMPONENTS, EN_DEVICES, EN_WEB_GUIDE, PAGE_TEXT, pageText } from "./public/releases/text.js";
 
 const DL = "https://github.com/nwverse/persona/releases/download/";
 const asset = (tag, name, size = 1000, extra = {}) => ({ name, size, state: "uploaded", browser_download_url: `${DL}${tag}/${name}`, ...extra });
@@ -211,7 +213,54 @@ test("the route is GET / HEAD only, and no package path is served by the Worker"
   assert.equal(edge.calls.length, before);
   const wrangler = await readFile(new URL("./wrangler.jsonc", import.meta.url), "utf8");
   const first = /"run_worker_first":\s*\[([^\]]*)\]/.exec(wrangler)[1];
-  assert.deepEqual(first.match(/"\/releases[^"]*"/g), ['"/releases/data.json"']);
+  // Localized 404s require every non-excluded path to reach the Worker. Static assets bypass it; metadata never does.
+  assert.deepEqual(JSON.parse(`[${first}]`), [
+    "/*", "!/img/*", "!/fonts/*", "!/favicon.png", "!/favicon-dark.png", "!/style.css",
+    "!/releases/*.js", "!/install.sh",
+  ]);
+});
+
+function excludedBy(patterns, path) {
+  return patterns.some((pattern) => {
+    if (!pattern.startsWith("!")) return false;
+    const route = pattern.slice(1);
+    if (route.endsWith("/*")) return path.startsWith(route.slice(0, -1));
+    if (route.includes("*")) {
+      const source = route.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*");
+      return new RegExp(`^${source}$`).test(path);
+    }
+    return path === route;
+  });
+}
+
+async function publicFiles(directory, prefix = "") {
+  const found = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) found.push(...await publicFiles(new URL(entry.name + "/", directory), `${prefix}${entry.name}/`));
+    else found.push("/" + prefix + entry.name);
+  }
+  return found;
+}
+
+test("every static asset has a Worker exclusion, and no exclusion covers a page or dynamic route", async () => {
+  const wrangler = await readFile(new URL("./wrangler.jsonc", import.meta.url), "utf8");
+  const first = /"run_worker_first":\s*\[([^\]]*)\]/.exec(wrangler)[1];
+  const patterns = JSON.parse(`[${first}]`);
+  const dynamic = [/^\/dl\//, /^\/relay\//, /^\/extensions\/catalog\.json$/, /^\/extensions\/icons\//, /^\/releases\/data\.json$/];
+  const files = await publicFiles(new URL("./public/", import.meta.url));
+  assert.ok(files.length > 10);
+  for (const path of files) {
+    if (path.endsWith(".html") || dynamic.some((pattern) => pattern.test(path))) continue;
+    assert.ok(excludedBy(patterns, path), `${path} must bypass the Worker; add its negative run_worker_first pattern`);
+  }
+  assert.ok(excludedBy(patterns, "/install.sh"), "publish-time install.sh bypasses the Worker");
+  for (const path of [
+    "/", "/en/", "/missing", "/releases/", "/en/releases/",
+    "/dl/VERSION", "/dl/personad-linux-amd64.gz", "/dl/v1/manifest.json", "/relay/v1/health",
+    "/extensions/catalog.json", "/extensions/icons/github", "/releases/data.json",
+  ]) {
+    assert.equal(excludedBy(patterns, path), false, `${path} must still reach the Worker`);
+  }
 });
 
 // ---------- the page's logic ----------
@@ -275,8 +324,95 @@ test("sizes and counts read plainly", () => {
   assert.equal(countsLine({ features: 0, fixes: 0, other: 3 }), "3 项改动");
 });
 
+test("dates, ages and counts have natural English forms and unchanged Chinese defaults", () => {
+  const iso = new Date(2026, 10, 13, 12).toISOString();
+  assert.equal(formatDate(iso), "2026 年 11 月 13 日");
+  assert.equal(formatDate(iso, "zh"), "2026 年 11 月 13 日");
+  assert.equal(formatDate(iso, "en"), "November 13, 2026");
+  assert.equal(formatDate("not a date", "en"), "");
+
+  const now = Date.parse("2026-11-13T06:00:00Z");
+  const ago = (minutes) => new Date(now - minutes * 60000).toISOString();
+  assert.equal(formatAge(ago(5), now), "5 分钟前");
+  assert.equal(formatAge(ago(60), now), "1 小时前");
+  assert.equal(formatAge(ago(1440), now), "24 小时前");
+  assert.equal(formatAge(ago(2880), now), "2 天前");
+  assert.equal(formatAge(ago(0), now, "en"), "just now");
+  assert.equal(formatAge(ago(1), now, "en"), "1 minute ago");
+  assert.equal(formatAge(ago(2), now, "en"), "2 minutes ago");
+  assert.equal(formatAge(ago(60), now, "en"), "1 hour ago");
+  assert.equal(formatAge(ago(120), now, "en"), "2 hours ago");
+  assert.equal(formatAge(ago(1440), now, "en"), "24 hours ago");
+  assert.equal(formatAge(ago(2880), now, "en"), "2 days ago");
+
+  assert.equal(countsLine({ features: 1, fixes: 1, other: 4 }, "en"), "1 new feature · 1 fix");
+  assert.equal(countsLine({ features: 2, fixes: 3, other: 4 }, "en"), "2 new features · 3 fixes");
+  assert.equal(countsLine({ features: 0, fixes: 0, other: 1 }, "en"), "1 change");
+  assert.equal(countsLine({ features: 0, fixes: 0, other: 3 }, "en"), "3 changes");
+  assert.equal(countsLine(null, "en"), "");
+});
+
+test("device, guide, component, architecture and area copy is language-aware", () => {
+  assert.equal(devicesFor(), DEVICES);
+  assert.equal(devicesFor("zh"), DEVICES);
+  assert.equal(devicesFor("en"), EN_DEVICES);
+  assert.deepEqual(EN_DEVICES.map((device) => device.id), DEVICES.map((device) => device.id));
+  assert.equal(deviceFor("web"), DEVICES.find((device) => device.id === "web"));
+  assert.equal(deviceFor("web", "en").name, "Web app");
+  assert.equal(deviceFor("harmony", "en").name, "HarmonyOS");
+  assert.equal(deviceFor("ios", "en").sub, "Public TestFlight beta · Requires iOS 26");
+  assert.equal(webGuideFor(), WEB_GUIDE);
+  assert.equal(webGuideFor("en"), EN_WEB_GUIDE);
+  assert.equal(componentsFor(), COMPONENTS);
+  assert.equal(componentsFor("en"), EN_COMPONENTS);
+  assert.equal(componentsFor("en").find((component) => component.id === "personad").what, "All in one: the hub, assistant services and computer runtime");
+
+  assert.equal(archLabel("macos", "arm64"), "Apple 芯片");
+  assert.equal(archLabel("macos", "amd64"), "Intel 芯片");
+  assert.equal(archLabel("macos", "arm64", "en"), "Apple silicon");
+  assert.equal(archLabel("macos", "amd64", "en"), "Intel");
+  assert.equal(archLabel("linux", "arm64", "en"), "ARM64");
+  assert.equal(archLabel("macos", "unknown", "en"), "");
+  assert.equal(areaLabel("web"), "网页版");
+  assert.equal(areaLabel("assistant"), "助手");
+  assert.equal(areaLabel("WEB", "en"), "Web");
+  assert.equal(areaLabel("knowledge", "en"), "Knowledge base");
+  assert.equal(areaLabel("harmony", "en"), "HarmonyOS");
+  assert.equal(areaLabel("unknown", "en"), "");
+});
+
+test("the page text catalogs have matching keys and preserve Chinese phrasing", () => {
+  assert.deepEqual(Object.keys(PAGE_TEXT.en).sort(), Object.keys(PAGE_TEXT.zh).sort());
+  for (const key of Object.keys(PAGE_TEXT.zh)) assert.equal(typeof PAGE_TEXT.en[key], typeof PAGE_TEXT.zh[key], key);
+  assert.equal(pageText(), PAGE_TEXT.zh);
+  assert.equal(pageText("zh"), PAGE_TEXT.zh);
+  assert.equal(pageText("en-US"), PAGE_TEXT.zh);
+  assert.equal(pageText("en"), PAGE_TEXT.en);
+
+  const mac = { id: "macos", name: "Mac" };
+  assert.equal(PAGE_TEXT.zh.releasedOn("2026 年 11 月 13 日"), "2026 年 11 月 13 日发布");
+  assert.equal(PAGE_TEXT.zh.detected(mac), "看起来你在用 Mac");
+  assert.equal(PAGE_TEXT.zh.downloadTitle(mac), "下载 Mac 版");
+  assert.equal(PAGE_TEXT.zh.directMeta("Persona.tar.gz", "提示"), "Persona.tar.gz · 从 GitHub 直接下载\n提示");
+  assert.equal(PAGE_TEXT.zh.fullNotes(1), "GitHub 上的完整说明和另外 1 个文件");
+  assert.equal(PAGE_TEXT.zh.fullNotes(0), "GitHub 上的完整说明");
+  assert.equal(PAGE_TEXT.zh.showEarlier(2), "显示更早的 2 个版本");
+  assert.equal(PAGE_TEXT.zh.downloadHAP, "下载 HAP");
+  assert.equal(PAGE_TEXT.zh.buildFromSource, "从源码构建");
+  assert.equal(PAGE_TEXT.en.downloadHAP, "Download HAP");
+  assert.equal(PAGE_TEXT.en.buildFromSource, "Build from source");
+  assert.equal(PAGE_TEXT.en.fullNotes(1), "Full release notes and 1 more file on GitHub");
+  assert.equal(PAGE_TEXT.en.fullNotes(2), "Full release notes and 2 more files on GitHub");
+  assert.equal(PAGE_TEXT.en.fullNotes(0), "Full release notes on GitHub");
+  assert.equal(PAGE_TEXT.en.showEarlier(1), "Show 1 earlier release");
+  assert.equal(PAGE_TEXT.en.showEarlier(2), "Show 2 earlier releases");
+});
+
 test("the page draws data as text and never links packages through this site", async () => {
   const page = await readFile(new URL("./public/releases/page.js", import.meta.url), "utf8");
+  assert.match(page, /document\.documentElement\.lang === "en"/, "English requires the exact html lang value");
+  assert.doesNotMatch(page, /[㐀-鿿]/, "all Chinese presentation copy lives in the catalogs");
+  for (const key of Object.keys(PAGE_TEXT.zh)) assert.ok(page.includes(`T.${key}`), `page uses catalog key ${key}`);
   assert.doesNotMatch(page, /\.innerHTML\s*=(?!\s*`<svg)/, "innerHTML only for the fixed icon markup");
   assert.doesNotMatch(page, /insertAdjacentHTML|outerHTML|document\.write/);
   assert.doesNotMatch(page, /\/dl\//);

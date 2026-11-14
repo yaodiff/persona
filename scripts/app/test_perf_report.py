@@ -18,6 +18,8 @@ reporter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reporter)
 TEST = "PerfExampleTests/testScroll()"
 OTHER = "PerfExampleTests/testOther()"
+COLD = "PerfLaunchTests/testColdLaunch()"
+WARM = "PerfLaunchTests/testWarmLaunch()"
 
 
 def sample(fps=60, warm_up=False, run_id="measured", **changes):
@@ -90,6 +92,35 @@ class FakeExporter:
             (path / "manifest.json").write_text(json.dumps(manifest))
             return subprocess.CompletedProcess(command, 0, "", "")
         return subprocess.CompletedProcess(command, 0, json.dumps(data), "")
+
+
+class LaunchExporter(FakeExporter):
+    """XCTest launch metrics and screenshots, deliberately with no frames.json attachments."""
+    def __init__(self, rows, unit="ms", result="Passed", with_glide=False):
+        super().__init__(values={TEST: samples()} if with_glide else {}, result=result)
+        self.rows = rows
+        self.results = {ident: result for ident in rows}
+        if with_glide:
+            self.results[TEST] = "Passed"
+        self.unit = unit
+        self.with_glide = with_glide
+
+    def __call__(self, command, **kwargs):
+        kind = "attachments" if "export" in command else command[4]
+        if kind != "metrics" or self.errors.get(kind):
+            return super().__call__(command, **kwargs)
+        rows = []
+        for ident, values in self.rows.items():
+            runs = [] if values is None else (values if values and isinstance(values[0], list) else [values])
+            test_runs = [{"device": {"deviceName": f"Example Simulator {index}"}, "testPlanConfiguration": "Example",
+                          "metrics": [{"displayName": "App Launch Duration (ApplicationLaunch)",
+                                       "identifier": "com.apple.dt.XCTMetric_ApplicationLaunch-ApplicationLaunch.duration",
+                                       "unitOfMeasurement": self.unit, "measurements": measurements}]}
+                         for index, measurements in enumerate(runs, 1)]
+            rows.append({"testIdentifier": ident, "testRuns": test_runs})
+        if self.with_glide:
+            rows.append({"testIdentifier": TEST, "testRuns": self.metric_runs})
+        return subprocess.CompletedProcess(command, 0, json.dumps(rows), "")
 
 
 class ProbeTests(unittest.TestCase):
@@ -403,6 +434,118 @@ class CollectionTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(reporter.main([str(self.root)]), 2)
         self.assertEqual(path.read_text(), "original")
+
+
+class LaunchReportTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="perf-launch-reporter-tests-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = pathlib.Path(self.temp.name)
+        (self.root / "launch.xcresult").mkdir()
+
+    def collect(self, fake, **kwargs):
+        return reporter.collect(self.root, runner=fake, **kwargs)
+
+    def test_cold_and_warm_launch_metrics_need_no_frame_probe(self):
+        fake = LaunchExporter({COLD: [100, 140, 180], WARM: [80, 100, 140]})
+        result = self.collect(fake, expected_iterations=3)
+        self.assertTrue(result["complete"])
+        self.assertFalse(result["acceptance_eligible"], "launch-only final acceptance remains glide-only")
+        self.assertFalse(result["tests"][COLD]["acceptance_eligible"])
+        cold = result["tests"][COLD]
+        warm = result["tests"][WARM]
+        self.assertEqual(cold["measurement_kind"], "launch")
+        self.assertEqual(cold["probe"]["source"], "xcresult_launch_metric")
+        self.assertEqual(cold["probe"]["raw_samples"], [])
+        self.assertEqual(cold["launch"]["values"], [100, 140, 180])
+        self.assertEqual(cold["launch"]["median"], 140)
+        self.assertEqual(cold["launch"]["minimum"], 100)
+        self.assertEqual(cold["launch"]["maximum"], 180)
+        self.assertEqual(cold["launch"]["spread"], 80)
+        self.assertEqual(warm["launch"]["spread"], 60)
+        text = reporter.markdown(result)
+        self.assertIn("Launch median ms", text)
+        self.assertIn("100.0–180.0", text)
+        self.assertIn("no 400 ms device-budget gate", text)
+        self.assertIn("xcresult_launch_metric / xctest_measurements", text)
+
+    def test_launch_seconds_convert_to_ms_without_a_simulator_budget_failure(self):
+        result = self.collect(LaunchExporter({COLD: [0.4, 0.8, 1.2]}, unit="s"), expected_iterations=3)
+        self.assertTrue(result["complete"])
+        launch = result["tests"][COLD]["launch"]
+        self.assertEqual(launch["values"], [400, 800, 1200])
+        self.assertEqual(launch["median"], 800)
+        self.assertEqual(launch["spread"], 800)
+        self.assertIn("none", launch["budget_gate"])
+
+    def test_missing_metric_and_incomplete_iterations_fail(self):
+        missing = self.collect(LaunchExporter({COLD: None}), expected_iterations=3)
+        self.assertFalse(missing["complete"])
+        self.assertIn("no XCTApplicationLaunchMetric", " ".join(missing["tests"][COLD]["probe"]["issues"]))
+        incomplete = self.collect(LaunchExporter({COLD: [100, 140, 180]}), expected_iterations=4)
+        self.assertFalse(incomplete["complete"])
+        self.assertIn("expected 4, got 3", " ".join(incomplete["tests"][COLD]["probe"]["issues"]))
+        unsupported = self.collect(LaunchExporter({COLD: [1, 2, 3]}, unit="ticks"), expected_iterations=3)
+        self.assertFalse(unsupported["complete"])
+        self.assertIn("unsupported launch metric unit", " ".join(unsupported["tests"][COLD]["probe"]["issues"]))
+
+    def test_invalid_launch_values_fail(self):
+        for values in ([0, 100, 200], [-100, 100, 200], [100, float("nan"), 200], [100, None, 200]):
+            with self.subTest(values=values):
+                result = self.collect(LaunchExporter({COLD: values}), expected_iterations=3)
+                self.assertFalse(result["complete"])
+                self.assertFalse(result["tests"][COLD]["acceptance_eligible"])
+
+    def test_launch_rejects_non_string_units_and_non_finite_conversions(self):
+        for unit in (None, 7):
+            with self.subTest(unit=unit):
+                result = self.collect(LaunchExporter({COLD: [100]}, unit=unit), expected_iterations=1)
+                self.assertFalse(result["complete"])
+                self.assertIn("unsupported launch metric unit", " ".join(result["tests"][COLD]["probe"]["issues"]))
+        overflow = self.collect(LaunchExporter({COLD: [1e308, 1e308]}, unit="s"), expected_iterations=2)
+        self.assertFalse(overflow["complete"])
+        self.assertNotIn("launch", overflow["tests"][COLD])
+        self.assertIn("not finite after milliseconds conversion", " ".join(overflow["tests"][COLD]["probe"]["issues"]))
+
+    def test_launch_counts_are_checked_per_test_run(self):
+        complete = self.collect(LaunchExporter({COLD: [[100, 140, 180], [200, 240, 280]]}), expected_iterations=3)
+        self.assertTrue(complete["complete"])
+        self.assertEqual(complete["tests"][COLD]["launch"]["values"], [100, 140, 180, 200, 240, 280])
+        self.assertEqual(complete["tests"][COLD]["launch"]["median"], 190)
+        incomplete = self.collect(LaunchExporter({COLD: [[100, 140, 180], [200, 240]]}), expected_iterations=3)
+        self.assertFalse(incomplete["complete"])
+        self.assertIn("launch run 2 count: expected 3, got 2",
+                      " ".join(incomplete["tests"][COLD]["probe"]["issues"]))
+
+    def test_launch_requires_a_verifiable_iteration_count(self):
+        one = LaunchExporter({COLD: [100]})
+        unknown = self.collect(one)
+        self.assertFalse(unknown["complete"])
+        self.assertIn("expected_iterations unknown", " ".join(unknown["tests"][COLD]["probe"]["issues"]))
+        self.assertTrue(self.collect(one, expected_iterations=1)["complete"])
+        out = self.root / "main-output"
+        original_collect = reporter.collect
+        def collect(root, expected=None):
+            return original_collect(root, expected, runner=one)
+        with mock.patch.object(reporter, "collect", side_effect=collect), mock.patch.dict(os.environ, {}, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = reporter.main([str(self.root), "--output-dir", str(out)])
+        self.assertEqual(code, 1)
+        self.assertFalse(json.loads((out / "report.json").read_text())["complete"])
+
+    def test_combined_final_acceptance_still_uses_the_glide(self):
+        fake = LaunchExporter({COLD: [100, 140]}, with_glide=True)
+        result = self.collect(fake, expected_iterations=2)
+        self.assertTrue(result["complete"])
+        self.assertTrue(result["acceptance_eligible"])
+        self.assertTrue(result["tests"][TEST]["acceptance_eligible"])
+        self.assertFalse(result["tests"][COLD]["acceptance_eligible"])
+
+    def test_failed_launch_does_not_become_a_pass(self):
+        result = self.collect(LaunchExporter({COLD: [100, 140, 180]}, result="Failed"), expected_iterations=3)
+        self.assertFalse(result["complete"])
+        self.assertFalse(result["acceptance_eligible"])
+        self.assertIn("test did not pass: Failed", result["tests"][COLD]["issues"])
 
 
 if __name__ == "__main__":

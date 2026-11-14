@@ -3,15 +3,13 @@ import SwiftUI
 
 /// What the live sheet shows while a meeting records (docs/design/proposals/meeting-recording.md section 4C): the title, the
 /// page menu (Meeting / Note, #5243) and the state, the time, a level meter, Persona's part, and one timeline of what is
-/// heard, bookmarked and asked, with the bar that keeps Ask Persona, Pause, Stop and Bookmark under the thumb. At
-/// accessibility sizes everything above the bar scrolls as one view and the bar stays pinned.
+/// heard, bookmarked and asked, with the bar that keeps Ask Persona, Pause, Stop and Bookmark under the thumb.
 struct RecordingLiveView: View {
     var id: UUID
     var exchanges: [MeetingAsk.Exchange]
     var hide: () -> Void
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var size
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var capture = RecordingCapture.shared
     @State private var library = RecordingLibrary.shared
@@ -51,51 +49,12 @@ struct RecordingLiveView: View {
 
     // MARK: Layout
 
-    @ViewBuilder private func layout(_ entry: RecordingEntry) -> some View {
-        if size.isAccessibilitySize {
-            // A fixed one-line header (the mark, the time, the menu and Hide) stays above whatever scrolls, so the state
-            // and the time are on screen at any text size.
-            VStack(spacing: Theme.Space.s) {
-                compactHeader(entry)
-                scroller {
-                    VStack(alignment: .leading, spacing: Theme.Space.m) {
-                        VStack(alignment: .leading, spacing: Theme.Space.s) {
-                            titleRow(entry)
-                            stateLine(entry)
-                            interruptedNote
-                        }
-                        .padding(.horizontal, Theme.Space.page)
-                        strip(entry)
-                        rows(entry)
-                    }
-                }
-            }
-        } else {
-            VStack(spacing: Theme.Space.m) {
-                head(entry)
-                strip(entry)
-                scroller { rows(entry) }
-            }
+    private func layout(_ entry: RecordingEntry) -> some View {
+        VStack(spacing: Theme.Space.m) {
+            head(entry)
+            strip(entry)
+            scroller { rows(entry) }
         }
-    }
-
-    /// The accessibility-size header: the mark, the time, the menu and Hide, on one line.
-    private func compactHeader(_ entry: RecordingEntry) -> some View {
-        HStack(spacing: Theme.Space.m) {
-            RecordingStateDot(paused: paused)
-            RecordingClock(running: capture.state == .recording, font: Theme.Font.title)
-                .foregroundStyle(paused ? Color.secondary : Color.primary)
-                .dynamicTypeSize(...Theme.Recording.timerLargestSize)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text("Recording time"))
-                .accessibilityValue(RecordingClock.spoken(capture.timeline))
-                .accessibilityIdentifier("recording-live-timer")
-            Spacer(minLength: Theme.Space.s)
-            pageMenu(entry)
-            RecordingSheetCloseButton(title: String(localized: "Hide"), identifier: "recording-live-hide") { hide() }
-        }
-        .padding(.horizontal, Theme.Space.page)
-        .padding(.top, Theme.Space.s)
     }
 
     @ViewBuilder private var interruptedNote: some View {
@@ -132,10 +91,8 @@ struct RecordingLiveView: View {
             .accessibilityIdentifier("recording-now-title")
         return HStack(alignment: .center, spacing: Theme.Space.m) {
             title.frame(maxWidth: .infinity, alignment: .leading)
-            if !size.isAccessibilitySize {
-                pageMenu(entry)
-                RecordingSheetCloseButton(title: String(localized: "Hide"), identifier: "recording-live-hide") { hide() }
-            }
+            pageMenu(entry)
+            RecordingSheetCloseButton(title: String(localized: "Hide"), identifier: "recording-live-hide") { hide() }
         }
     }
 
@@ -165,18 +122,9 @@ struct RecordingLiveView: View {
         let state = HStack(spacing: Theme.Space.s) { RecordingStateDot(paused: paused); word }
             .accessibilityElement(children: .combine)
         let chip = Chip(text: String(localized: "Meeting"), symbol: Theme.Icon.meeting, look: .tint(Theme.accent))
-        return Group {
-            if size.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    if entry.isMeeting { chip }
-                    state
-                }
-            } else {
-                HStack(spacing: Theme.Space.m) {
-                    if entry.isMeeting { chip }
-                    state
-                }
-            }
+        return HStack(spacing: Theme.Space.m) {
+            if entry.isMeeting { chip }
+            state
         }
         .recordingMotion(reduced: reduceMotion, value: paused)
     }
@@ -242,7 +190,6 @@ struct RecordingPersonaStrip: View {
     @Binding var showAttendee: Bool
     /// The role to turn on once the picker names who attends.
     @Binding var pendingRole: MeetingAttendance?
-    @Environment(\.dynamicTypeSize) private var size
     @State private var live = MeetingLive.shared
     @State private var sync = RecordingSync.shared
 
@@ -272,7 +219,7 @@ struct RecordingPersonaStrip: View {
     /// Off is an invitation, not a status: tapping it turns Persona on as a listener.
     @ViewBuilder private var label: some View {
         let content = Label {
-            Text(word).font(Theme.Font.bodyStrong).lineLimit(size.isAccessibilitySize ? 3 : 2)
+            Text(word).font(Theme.Font.bodyStrong).lineLimit(2)
         } icon: {
             ThemedIcon(role.attends ? Theme.Icon.voiceListening : Theme.Icon.attendanceOff).foregroundStyle(Theme.ai)
         }

@@ -114,3 +114,38 @@ describe("groups from a counts read", () => {
     expect(countGroups(null, "group")).toEqual([]);
   });
 });
+
+describe("the sidebar's lists by to-do and by state (#6662)", () => {
+  const todos = { order: ["todo_b", "todo_a"], title: (id: string) => ({ todo_a: "Ship 1.3", todo_b: "Review" } as Record<string, string>)[id] };
+
+  it("has a section per open to-do in the To-dos page's order, those needing the user first, then Not on a to-do", () => {
+    const by = counts({ todo: { todo_a: 2, todo_b: 1, todo_c: 4, "": 5, todo_gone: 0 } });
+    const plain = countGroups(by, "todo", { todos });
+    expect(plain.map((g) => [g.name, g.count, g.filters, Boolean(g.rest)])).toEqual([
+      ["Review", 1, { todo: "todo_b" }, false],
+      ["Ship 1.3", 2, { todo: "todo_a" }, false],
+      // one the page does not know (another assistant's): after the known ones, by the word for a to-do
+      [t("lib-agent-groups.seg_todo"), 4, { todo: "todo_c" }, false],
+      [t("lib-todos.unassigned"), 5, { todo: "none" }, true],
+    ]);
+    const needing = countGroups(by, "todo", { todos, needs: counts({ todo: { todo_a: 1 } }) });
+    expect(needing.map((g) => [g.filters.todo, g.needs])).toEqual([["todo_a", 1], ["todo_b", 0], ["todo_c", 0], ["none", 0]]);
+    // an older hub counts no to-dos
+    expect(countGroups(counts({}), "todo", { todos })).toEqual([]);
+  });
+
+  it("has a section per state with sessions, in the quick filters' order", () => {
+    const groups = countGroups(counts({ state: { idle: 3, needs_you: 1, working: 2, offline: 0 } }), "state");
+    expect(groups.map((g) => [g.key, g.count, g.filters, g.needs])).toEqual([["needs_you", 1, { state: "needs_you" }, 0], ["working", 2, { state: "working" }, 0], ["idle", 3, { state: "idle" }, 0]]);
+  });
+
+  it("finds the open session's section by its to-do and its state", () => {
+    const [review, none] = countGroups(counts({ todo: { todo_b: 1, "": 1 } }), "todo", { todos });
+    const place = { machine: "mac", project: "/code", group: "w1", todo: "todo_b", state: "working" };
+    expect(holdsPlace(review, "todo", place)).toBe(true);
+    expect(holdsPlace(none, "todo", place)).toBe(false);
+    expect(holdsPlace(none, "todo", { ...place, todo: "" })).toBe(true);
+    const [working] = countGroups(counts({ state: { working: 1 } }), "state");
+    expect(holdsPlace(working, "state", place)).toBe(true);
+  });
+});

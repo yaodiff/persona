@@ -1,0 +1,190 @@
+name: Desktop CI
+
+on:
+  # Signing belongs only to the administrator-gated release workflow. Development and pull-request checks build
+  # unsigned artifacts, so this workflow never receives a certificate or a notarization key.
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Desktop checks
+        run: scripts/ci/desktop.sh
+      # The acceptance smoke loads the built web client the way the hub serves it. It is built once here (its sign-in
+      # module needs Go) and handed to the macOS and Windows jobs, which need neither Go nor the web's dependencies.
+      - name: Build the web client for the desktop smoke
+        run: scripts/ci/desktop-web.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: persona-desktop-web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+      - name: Linux Electron acceptance smoke (headless)
+        run: scripts/ci/desktop-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-desktop-linux-smoke
+          path: desktop/release/smoke
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: macOS universal package
+    needs: linux
+    # Runs even when the Linux smoke failed, so each platform reports its own verdict; without the web client its
+    # download step fails.
+    if: ${{ !cancelled() }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Desktop checks
+        run: scripts/ci/desktop.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: persona-desktop-web-dist
+          path: web/dist
+      - name: macOS Electron acceptance smoke
+        run: scripts/ci/desktop-smoke.sh
+      - name: Build universal macOS packages
+        if: ${{ !cancelled() }} # the package and the smoke report separately
+        env:
+          PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
+        run: scripts/ci/desktop-package.sh mac
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-desktop-macos-smoke
+          path: desktop/release/smoke
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: persona-desktop-macos-unsigned
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*-mac.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows package and smoke test
+    needs: linux
+    if: ${{ !cancelled() }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Desktop checks
+        shell: bash
+        run: scripts/ci/desktop.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: persona-desktop-web-dist
+          path: web/dist
+      - name: Windows Electron acceptance smoke
+        shell: bash
+        run: scripts/ci/desktop-smoke.sh
+      - name: Build Windows NSIS
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
+        run: scripts/ci/desktop-package.sh win
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-desktop-windows-smoke
+          path: desktop/release/smoke
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: persona-desktop-windows-unsigned
+          path: |
+            desktop/release/*.exe
+            desktop/release/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  # A real update with no certificate and no published release: the packaged old version finds, downloads and
+  # verifies a new one from a feed served on the runner (desktop/scripts/update-test.mjs).
+  update:
+    name: Update from a local feed (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+          - name: Linux
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install desktop dependencies
+        shell: bash
+        run: npm --prefix desktop ci --ignore-scripts
+      - name: Update test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a node desktop/scripts/update-test.mjs desktop/release/update-test/result
+          else
+            node desktop/scripts/update-test.mjs desktop/release/update-test/result
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-desktop-update-test-${{ matrix.name }}
+          path: desktop/release/update-test/result
+          if-no-files-found: error
+          retention-days: 7

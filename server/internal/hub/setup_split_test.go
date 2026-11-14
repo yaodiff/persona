@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // splitSetup is a systemd setup with <root>/bin/persona-hub beside personad answering `version -v` with build
@@ -279,7 +280,7 @@ func TestSetupMacAgentRunsPersonaHub(t *testing.T) {
 	report = setup("")
 	optedOut := hubPlist(e.home, e.root, bin, "", true)
 	if agentText(t, e) != optedOut || !strings.Contains(optedOut, "<key>PERSONA_SPLIT_PROGRAMS</key><string>0</string>") ||
-		!strings.Contains(report, "服务改成运行 personad，重启了 hub") || !strings.Contains(report, macSwitchNote(bin)) {
+		!strings.Contains(report, "服务改成运行 personad，重启了 hub") || !strings.Contains(report, macSwitchNote(i18n.ZhHans, bin)) {
 		t.Fatalf("opted out:\n%s\n%s", agentText(t, e), report)
 	}
 	for _, c := range cmds.calls {
@@ -311,7 +312,7 @@ func TestSetupMacAgentKeepsPersonadForAnotherBuild(t *testing.T) {
 func TestSetupMacInstalledAgentStaysOnPersonad(t *testing.T) {
 	e, cmds, bin, setup := macSetup(t, "persona 1.0 abc\n")
 	personad := hubPlist(e.home, e.root, bin, "", false)
-	if report := setup(personad); !strings.HasSuffix(report, macStaysNote) || strings.Contains(report, "改成运行") ||
+	if report := setup(personad); !strings.HasSuffix(report, macStaysNote(i18n.ZhHans)) || strings.Contains(report, "改成运行") ||
 		strings.Contains(report, "现在看") || agentText(t, e) != personad {
 		t.Fatalf("report: %s", report)
 	}
@@ -322,7 +323,7 @@ func TestSetupMacInstalledAgentStaysOnPersonad(t *testing.T) {
 	}
 	delete(cmds.replies, "launchctl print")
 	cmds.calls = nil
-	if report := setup(""); !strings.HasSuffix(report, "没动它（launchd "+hubLaunchdLabel+"）"+macStaysNote) || cmds.called("launchctl kickstart") {
+	if report := setup(""); !strings.HasSuffix(report, "没动它（launchd "+hubLaunchdLabel+"）"+macStaysNote(i18n.ZhHans)) || cmds.called("launchctl kickstart") {
 		t.Fatalf("as it was: %v\n%s", cmds.calls, report)
 	}
 

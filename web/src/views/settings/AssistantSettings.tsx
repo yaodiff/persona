@@ -9,6 +9,7 @@ import { settingsHref } from "./nav";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
+import { mainRuntimeDetails, type MainExecution } from "../../lib/main-runtime";
 import { PERMISSION_MODES } from "../../lib/session-actions";
 import { ConfigurationManager } from "./ConfigurationManager";
 import { AgentAutoNaming, supportsAgentAutoNaming, type AgentAutoNamingState } from "./AgentAutoNaming";
@@ -36,6 +37,9 @@ interface AssistantState extends AgentAutoNamingState {
   manager?: string;
   default_permission_mode?: string;
   machine_id?: string;
+  /** The main chat and the node it is routed through (not where it runs: `MainExecution`'s location). */
+  main?: string;
+  main_machine_id?: string;
   launcher?: string;
   cwd?: string;
   timezone?: string;
@@ -100,6 +104,9 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const persona = usePersona();
   const machines = useStore((s) => s.machines);
   const [info, setInfo] = useState<AssistantState | null>(null);
+  // where and with what the main chat runs (docs/assistant/assistant.md "Main conversation execution on the web"): kept
+  // here, out of the Assistant screen's line (audit item 80); nothing when the hub does not report it
+  const [execution, setExecution] = useState<MainExecution | null>(null);
   const [error, setError] = useState("");
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [files, setFiles] = useState<MemoryFile[] | null>(null);
@@ -248,6 +255,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const load = () => {
     setError("");
     scopedApi<AssistantState>("/assistant").then(setInfo, (e) => setError(errorText(e)));
+    scopedApi<MainExecution>("/assistant?view=main-runtime").then(setExecution, () => setExecution(null));
     scopedApi<{ tasks: Task[] }>("/assistant/tasks").then((r) => setTasks(r.tasks ?? []), () => setTasks([]));
     void loadMemory();
   };
@@ -255,6 +263,9 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
 
   const machine = machines.find((m) => m.id === info?.machine_id);
   const machineName = machine?.name || info?.machine_id || "";
+  // a report routed through another node than the main chat's is not this main chat's (MainRuntimeBadge's rule)
+  const routed = info?.main_machine_id && execution?.machine_id && execution.machine_id !== info.main_machine_id;
+  const runtime = routed ? {} : mainRuntimeDetails(info?.main, execution ?? undefined);
   const entries = useMemo(() => memoryEntries(files ?? []), [files]);
   const index = files?.find((f) => f.name === MEMORY_INDEX);
   const on = tasks?.filter((task) => task.enabled).length ?? 0;
@@ -286,6 +297,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
 
       <Group title={t("settings-assistantsettings.proactive_title")} footer={t("settings-assistantsettings.proactive_footer")}>
         <Row
+          anchor="routines"
           label={t("settings-assistantsettings.routines")}
           hint={tasks === null ? undefined : next ? t("settings-assistantsettings.next_task", { when: momentLabel(next.at, new Date()), title: next.title }) : t("settings-assistantsettings.nothing_scheduled")}
           onClick={() => navigate({ name: "routines" })}
@@ -295,7 +307,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       </Group>
 
       <Group title={t("settings-assistantsettings.notifications_title")} footer={t("settings-assistantsettings.notifications_footer")}>
-        <Row label={t("settings-assistantsettings.quiet_tasks")}>
+        <Row label={t("settings-assistantsettings.quiet_tasks")} anchor="quiet-tasks">
           <Switch on={info?.main_tasks_quiet ?? true} onChange={(on) => void setQuiet(on)} disabled={!info || quietBusy} label={t("settings-assistantsettings.quiet_tasks")} />
         </Row>
       </Group>
@@ -316,10 +328,10 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       )}
 
       <Group title={t("settings-assistantsettings.start_title")} footer={t("settings-assistantsettings.start_footer")}>
-        <Row label={t("settings-assistantsettings.start_requested")}>
+        <Row label={t("settings-assistantsettings.start_requested")} anchor="start-requested">
           <Switch on={info?.start_requested_tasks ?? true} onChange={(on) => void setStartRequested(on)} disabled={!info || startBusy} label={t("settings-assistantsettings.start_requested")} />
         </Row>
-        <Row label={t("settings-assistantsettings.workspace_preference")} hint={t("settings-assistantsettings.workspace_hint")} wrapHint stackOnNarrow>
+        <Row label={t("settings-assistantsettings.workspace_preference")} hint={t("settings-assistantsettings.workspace_hint")} wrapHint stackOnNarrow anchor="workspace-preference">
           <select aria-label={t("settings-assistantsettings.workspace_preference")} value={info?.task_workspace_preference ?? "prefer-existing"}
             disabled={!info || info.manager !== manager || workspaceBusy}
             className="w-full min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-[13px] text-ink shadow-inset-field sm:w-auto [@media(pointer:coarse)]:min-h-11"
@@ -382,7 +394,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       </Group>
 
       <Group title={t("settings-assistantsettings.default_permissions")} footer={t("settings-assistantsettings.default_permissions_hint")}>
-        <Row label={t("settings-assistantsettings.default_permissions")}>
+        <Row label={t("settings-assistantsettings.default_permissions")} anchor="default-permissions">
           <select aria-label={t("settings-assistantsettings.default_permissions")} value={info?.default_permission_mode ?? ""} disabled={!info || info.manager !== manager || permissionBusy}
             className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-[13px] text-ink shadow-inset-field"
             onChange={(e) => void setPermission(e.target.value)}>
@@ -424,7 +436,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Group>
       )}
 
-      <Group title={t("settings-assistantsettings.knows_title")} footer={t("settings-assistantsettings.knows_footer")}>
+      <Group anchor="knows" title={t("settings-assistantsettings.knows_title")} footer={t("settings-assistantsettings.knows_footer")}>
         {info && <AboutMe notesSaves={notesSaves} info={info} onSaved={(notes) => setInfo((i) => (i ? { ...i, notes, notes_effective: notes.trim() } : i))} />}
         <div className="flex items-center gap-2 px-4 pt-3 pb-1.5">
           <span className="flex-1 text-[13px] font-medium text-ink">{t("settings-assistantsettings.memory")}</span>
@@ -460,13 +472,24 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       <SkillsGroup manager={manager} />
 
       <Group
+        anchor="runs-on"
         title={t("settings-assistantsettings.runs_on_title")}
         footer={machineName ? t("settings-assistantsettings.runs_on_footer", { machine: machineName }) : t("settings-assistantsettings.runs_on_none")}
       >
-        <Row label={t("settings-assistantsettings.machine")}>
+        <Row label={t("settings-assistantsettings.machine")} anchor="runs-on-machine">
           <span className="max-w-[220px] truncate">{machineName || t("settings-assistantsettings.machine_none")}</span>
         </Row>
-        <Row label={t("settings-assistantsettings.cwd")} mono>
+        {runtime.place && (
+          <Row label={t("settings-assistantsettings.main_place")}>
+            <span data-main-runtime-place className="max-w-[220px] truncate" title={runtime.place}>{runtime.place}</span>
+          </Row>
+        )}
+        {runtime.runtime && (
+          <Row label={t("settings-assistantsettings.main_runtime")}>
+            <span data-main-runtime-tool className="max-w-[220px] truncate">{runtime.runtime}</span>
+          </Row>
+        )}
+        <Row label={t("settings-assistantsettings.cwd")} mono anchor="runs-on-cwd">
           <span className="max-w-[300px] truncate" title={info?.cwd}>{info?.cwd || "~/.persona/assistant"}</span>
         </Row>
         {info?.timezone && <Row label={t("settings-assistantsettings.timezone")}>{info.timezone}</Row>}

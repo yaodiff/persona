@@ -1,0 +1,8 @@
+到了再看这件事的时间。现在在等对方回复。这是连续第 1 次到点回看。
+
+这一轮不能自己开 Agent，不能发送任何消息，也不能直接做任何会被别人看到的动作；查看和调查只用只读工具，建议只在小明确认后由程序执行。先读这件事现在的状态（来源里的新消息、相关任务或 Agent 的进展），不要只照旧 recap 判断。然后调 inbox_suggest，下面三种结果只选一个：
+- 已经有结论：交 kind conclusion；事情处理完了用 outcome done，只需让小明知道用 fyi。
+- 需要小明确认一个动作：交一条建议，比如 kind reply 的催促。
+- 还要继续等：不带 kind、text 等建议字段，给 recap 和 follow（title、summary 仍按原要求写）；follow 必须带新的 check_at 或 check_in，who、next 按现在的情况写。
+
+无论选哪一种都更新 recap，然后结束这一轮。

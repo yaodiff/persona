@@ -1,0 +1,46 @@
+appId: ${env.PERSONA_DESKTOP_APP_ID}
+productName: Persona
+directories:
+  output: release
+  buildResources: build
+artifactName: Persona-${version}-${os}-${arch}.${ext}
+npmRebuild: false
+asar: true
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
+files:
+  - dist/**
+  - package.json
+  - package-lock.json
+mac:
+  category: public.app-category.productivity
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  hardenedRuntime: true
+  notarize: true
+  target:
+    - target: dmg
+      arch: [universal]
+    - target: zip
+      arch: [universal]
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+publish:
+  provider: github
+  owner: nwverse
+  repo: persona
+  private: false
+  releaseType: release
+  vPrefixedTagName: true

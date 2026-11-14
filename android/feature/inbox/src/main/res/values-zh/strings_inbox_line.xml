@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="inbox_line_title">线索</string>
+    <string name="inbox_line_kind_inbox">事件</string>
+    <string name="inbox_line_kind_todo">待办</string>
+    <string name="inbox_line_kind_session">Agent 会话</string>
+    <string name="inbox_line_next">下一步</string>
+    <string name="inbox_line_gone">已不在收件箱里</string>
+    <string name="inbox_line_not_same">不是同一件事</string>
+    <string name="inbox_line_not_same_done">已标为不是同一件事</string>
+    <string name="inbox_line_same">是同一件事…</string>
+    <string name="inbox_line_linked">已连到「%1$s」</string>
+    <string name="inbox_line_search_placeholder">搜索标题和位置</string>
+    <string name="inbox_line_empty">没有符合的未处理事项</string>
+    <string name="inbox_line_legacy_meta">%1$s：%2$s</string>
+    <string name="inbox_line_say">说一句</string>
+    <string name="inbox_line_retry">再试一次</string>
+    <string name="inbox_line_retry_text">请再试一次。</string>
+    <string name="inbox_line_instructed">已交给 AI，等它重新出建议</string>
+    <string name="inbox_line_link_conflict">这个关联不成立，请选择其他内容。</string>
+</resources>

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'">
+  <title>Persona</title>
+  <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">P</div>
+    <h1 data-i18n="welcome"></h1>
+    <section aria-labelledby="hub-heading">
+      <h2 id="hub-heading" data-i18n="your_hub"></h2>
+      <p data-i18n="hub_help"></p>
+      <form id="connect">
+        <label for="hub" data-i18n="hub_address"></label>
+        <input id="hub" name="hub" type="url" placeholder="https://hub.example.com" autocomplete="url" required autofocus>
+        <p class="hint" data-i18n="hub_hint"></p>
+        <button type="submit" data-i18n="continue"></button>
+      </form>
+    </section>
+    <section aria-labelledby="desktop-heading">
+      <h2 id="desktop-heading" data-i18n="desktop_options"></h2>
+      <label class="choice" for="launch-at-login"><input id="launch-at-login" type="checkbox"> <span data-i18n="launch_at_login"></span></label>
+      <p id="launch-at-login-status" class="hint" role="status"></p>
+    </section>
+    <details>
+      <summary data-i18n="link_section"></summary>
+      <p data-i18n="link_intro"></p>
+      <div id="link-state" role="status" data-i18n="link_checking"></div>
+      <div class="actions">
+        <button id="link-refresh" type="button" data-i18n="refresh"></button>
+        <button id="link-reconnect" type="button" data-i18n="reconnect"></button>
+        <button id="node-install" type="button" data-i18n="install_node"></button>
+      </div>
+      <p id="link-install-guide" data-i18n="link_install_guide" hidden></p>
+      <div class="actions"><button id="link-install" type="button" data-i18n="link_install" hidden></button></div>
+      <form id="pair">
+        <label for="pair-link" data-i18n="pair_computer"></label>
+        <input id="pair-link" type="text" placeholder="persona://link?…" autocomplete="off" spellcheck="false">
+        <button type="submit" data-i18n="pair"></button>
+      </form>
+      <p id="link-result" role="status"></p>
+      <p class="hint" data-i18n="link_footer"></p>
+    </details>
+    <p id="error" role="alert" hidden></p>
+  </main>
+  <script src="setup.cjs"></script>
+</body>
+</html>

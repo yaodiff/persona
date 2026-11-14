@@ -23,6 +23,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.toggleableState
@@ -40,10 +41,40 @@ import persona.core.designsystem.icons.PhIcons
 
 enum class MessageSource { Lark, Mail, Other }
 
+private const val STACK_TITLE_TIME_AT_FONT_SCALE = 1.5f
+
+/** An Inbox row's optional source-specific latest line, with its current state on a separate line below. */
+@Immutable
+data class MessageItemMeta(
+    val text: String,
+    val state: String? = null,
+    val status: Status = Status.Idle,
+    val problem: Boolean = false,
+    val key: String? = null,
+)
+
+@Composable
+private fun MessageItemState(meta: MessageItemMeta) {
+    val palette = PersonaTheme.palette
+    val icon = inboxNowIcon(meta.key)
+    when {
+        icon.icon != null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            JIcon(icon.icon, null, size = Tokens.Space.m, tint = palette.ink2, decorative = true)
+            Text(meta.state.orEmpty(), style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+        }
+        icon.tone == InlineTone.Busy -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            JSpinner(Modifier.size(Tokens.Space.m))
+            Text(meta.state.orEmpty(), style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+        }
+        else -> JStateLabel(meta.state.orEmpty(), meta.status, modifier = Modifier.fillMaxWidth(), problem = meta.problem)
+    }
+}
+
 /**
  * An inbox item. Items that need a reply ([status] NeedsYou) are cards of their own in glass and strips with
  * an amber holder on the board; the rest are rows of a group. [extra] holds the draft and its actions. [avatar] is the
- * chat's or sender's picture once it has loaded; until then (and without one) the avatar shows the initial.
+ * chat's or sender's picture once it has loaded; until then (and without one) the avatar shows the initial. With [meta],
+ * the content follows the event row: title, AI summary, then where and who without repeating either one.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -70,12 +101,16 @@ fun MessageItem(
     /** A small mark after the title (the translate icon on a translated mail); none draws the title as always. */
     titleIcon: PhIcon? = null,
     titleIconLabel: String? = null,
+    /** A small kind tag beside the title (a direct chat's "DM"), never a row of source and count chips. */
+    titleTag: String? = null,
     /** An event heading above the sender and source conversation. Other message rows keep their layout. */
     heading: String? = null,
     /** In a selection (#2576): picked or not, drawn as a check before the avatar; null outside one. */
     checked: Boolean? = null,
     /** In a selection, a row that can't be picked (an agent's card, a done item): faded. */
     dimmed: Boolean = false,
+    /** The event row's third content line; absent, every line keeps its existing meaning and placement. */
+    meta: MessageItemMeta? = null,
     extra: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -97,26 +132,75 @@ fun MessageItem(
             JAvatar(group ?: sender, size = if (prominent) 42.dp else 38.dp, icon = avatarIcon, badge = badge, badgeColor = badgeColor, image = avatar)
             Spacer(Modifier.width(12.dp.dense))
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(heading ?: group ?: sender, style = type.headline, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                    sourceLabel?.let { Spacer(Modifier.width(6.dp.dense)); Text(it, style = type.caption, color = palette.ink3, maxLines = 1) }
+                val followed = meta != null
+                val prioritizeTitle = followed || heading != null
+                val titleText = if (followed) heading ?: title else heading ?: group ?: sender
+                val stackTitleTime = prioritizeTitle && time != null && LocalDensity.current.fontScale >= STACK_TITLE_TIME_AT_FONT_SCALE
+                if (stackTitleTime) {
+                    Column {
+                        Row(verticalAlignment = Alignment.Top) {
+                            Text(titleText, style = type.headline, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f))
+                            if (titleIcon != null) {
+                                Spacer(Modifier.width(Tokens.Space.xs))
+                                JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
+                            }
+                            titleTag?.let { Spacer(Modifier.width(Tokens.Space.xs)); JTag(it) }
+                            if (unread > 0) { Spacer(Modifier.width(6.dp.dense)); JBadge(unread) }
+                        }
+                        time?.let {
+                            Spacer(Modifier.height(Tokens.Space.xs))
+                            Text(it, style = type.micro, color = palette.ink3, maxLines = 1)
+                        }
+                    }
+                } else Row(verticalAlignment = if (prioritizeTitle) Alignment.Top else Alignment.CenterVertically) {
+                    Text(titleText, style = type.headline, color = palette.ink, maxLines = if (prioritizeTitle) 2 else 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = prioritizeTitle))
+                    if (prioritizeTitle && titleIcon != null) {
+                        Spacer(Modifier.width(Tokens.Space.xs))
+                        JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
+                    }
+                    titleTag?.let { Spacer(Modifier.width(Tokens.Space.xs)); JTag(it) }
+                    // The source already has its avatar mark and tag; it never squeezes an event title off its own row.
+                    if (!prioritizeTitle) sourceLabel?.let { Spacer(Modifier.width(6.dp.dense)); Text(it, style = type.caption, color = palette.ink3, maxLines = 1) }
                     if (unread > 0) { Spacer(Modifier.width(6.dp.dense)); JBadge(unread) }
-                    Spacer(Modifier.weight(1f))
+                    if (!prioritizeTitle) Spacer(Modifier.weight(1f))
                     time?.let { Spacer(Modifier.width(8.dp.dense)); Text(it, style = type.micro, color = palette.ink3, maxLines = 1) }
                 }
-                if (group != null || heading != null) Text(sender, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 1)
-                Spacer(Modifier.height(2.dp.dense))
-                if (titleIcon == null) Text(title, style = if (prominent) type.bodyStrong else type.body, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                else Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, Modifier.weight(1f, fill = false), style = if (prominent) type.bodyStrong else type.body, color = palette.ink,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.width(Tokens.Space.xs))
-                    JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
+                if (!followed && (group != null || heading != null)) Text(sender, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 1)
+                if (!followed) {
+                    Spacer(Modifier.height(2.dp.dense))
+                    if (titleIcon == null) Text(title, style = if (prominent) type.bodyStrong else type.body, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    else Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(title, Modifier.weight(1f, fill = false), style = if (prominent) type.bodyStrong else type.body, color = palette.ink,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.width(Tokens.Space.xs))
+                        JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
+                    }
                 }
+                if (followed) Spacer(Modifier.height(Tokens.Space.xs))
                 preview?.let {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (status == Status.Working) { JSpinner(Modifier.size(12.dp), stroke = 1.6.dp); Spacer(Modifier.width(6.dp.dense)) }
-                        Text(it, style = type.callout, color = if (status == Status.Working && style != AppStyle.Brief) palette.working.text else palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        if (followed) {
+                            JIcon(PhIcons.Sparkle, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
+                            Spacer(Modifier.width(Tokens.Space.xs))
+                        } else if (status == Status.Working) {
+                            JSpinner(Modifier.size(12.dp), stroke = 1.6.dp)
+                            Spacer(Modifier.width(6.dp.dense))
+                        }
+                        Text(it, style = type.callout, color = if (!followed && status == Status.Working && style != AppStyle.Brief) palette.working.text
+                            else if (followed) palette.ink else palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                meta?.let { line ->
+                    if (line.text.isNotBlank()) {
+                        if (preview != null) Spacer(Modifier.height(Tokens.Space.xs))
+                        Text(line.text, Modifier.fillMaxWidth(), style = if (preview == null) type.callout else type.caption,
+                            color = palette.ink2, maxLines = if (preview == null) 2 else 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    line.state?.let {
+                        Spacer(Modifier.height(Tokens.Space.xs))
+                        MessageItemState(line)
                     }
                 }
                 if (attachment != null || tags.isNotEmpty()) {

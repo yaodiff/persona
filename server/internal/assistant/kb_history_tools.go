@@ -531,7 +531,7 @@ func (s *Service) historyResume(ctx context.Context, l i18n.Lang, e *kb.Engine, 
 		key = "assistant-kb_history.resume_done_slow"
 	}
 	out := i18n.T(l, key, i18n.Args{"source": src.Name})
-	if src.SearchIndexNeeded() && !historySearchIndexed {
+	if src.SearchIndexNeeded() && !historyIndexed(e) {
 		out += "\n" + i18n.T(l, "assistant-kb_history.needs_index")
 	}
 	return out, nil
@@ -568,7 +568,7 @@ func (s *Service) historyStatusText(ctx context.Context, l i18n.Lang, e *kb.Engi
 			continue
 		}
 		st := statuses[src.Name]
-		d := &historyDriver{data: data, indexed: func() bool { return historySearchIndexed }}
+		d := &historyDriver{data: data, indexed: func() bool { return historyIndexed(e) }}
 		why, p := d.historyBlock(src, nil, sel, ret)
 		state := st.State
 		switch why {

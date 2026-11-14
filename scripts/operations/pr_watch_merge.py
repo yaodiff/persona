@@ -68,12 +68,15 @@ def merge(repo, number, root, privacy=None, timeout=300, expected_head=None, exp
         subject = "%s (#%s)" % (pr["title"], number)
         message.write_text(subject + "\n\n" + pr["body"], encoding="utf-8")
         body.write_text(pr["body"], encoding="utf-8")
-        checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=root, timeout=timeout)
-        fetched_base = checked(["git", "rev-parse", "FETCH_HEAD"], cwd=root).strip()
+        head_ref = "refs/pr-watch/heads/%s" % number
+        base_ref = "refs/pr-watch/bases/%s" % number
+        checked(["git", "fetch", "-q", "origin", "+refs/heads/" + pr["baseRefName"] + ":" + base_ref],
+                cwd=root, timeout=timeout)
+        fetched_base = checked(["git", "rev-parse", base_ref], cwd=root).strip()
         if fetched_base != pr["baseRefOid"]:
             raise WatchError("the PR base moved; review and merge it again")
-        checked(["git", "fetch", "-q", "origin", "pull/%s/head" % number], cwd=root, timeout=timeout)
-        fetched_head = checked(["git", "rev-parse", "FETCH_HEAD"], cwd=root).strip()
+        checked(["git", "fetch", "-q", "origin", "+pull/%s/head:%s" % (number, head_ref)], cwd=root, timeout=timeout)
+        fetched_head = checked(["git", "rev-parse", head_ref], cwd=root).strip()
         if fetched_head != head:
             raise WatchError("the PR head moved while fetching; not merged")
         if privacy:

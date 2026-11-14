@@ -1,3 +1,4 @@
 {
-  "offline": "助手暂时连不上，稍后再试"
+  "offline": "助手暂时连不上，稍后再试",
+  "service_tier_manager_outdated": "处理你对话的助手还不支持从第一条消息起使用 Fast，请更新后再试"
 }

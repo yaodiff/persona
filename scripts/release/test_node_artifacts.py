@@ -74,9 +74,10 @@ class NodeArtifactTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name) / 'runtime'
+        base = Path(self.temporary.name).resolve()  # on macOS the temp directory is under a symlink
+        self.root = base / 'runtime'
         (self.root / 'bin').mkdir(parents=True)
-        self.staged = Path(self.temporary.name) / 'staged'
+        self.staged = base / 'staged'
         self.manifest = release(self.staged)
         self.hub = copy.deepcopy(self.manifest)
         self.hub['files'] = {'linux-amd64': self.hub['files']['linux-amd64']}

@@ -1,7 +1,7 @@
 // The "Personal agents" list is pulled again on every {"type":"agents"} event: one that arrives while a pull is on the way
 // may announce a change that pull was answered before, so it must still lead to another pull.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, togglePin, updateAgentPrefs, useAgentList, useAgentPrefs, type AgentPrefs, type AgentSession } from "./agents";
+import { SOURCES_FRESH_MS, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, togglePin, updateAgentPrefs, useAgentList, useAgentPrefs, type AgentPrefs, type AgentSession } from "./agents";
 
 vi.mock("react", async (orig) => ({
   ...(await orig<typeof import("react")>()),
@@ -15,16 +15,21 @@ let answers: Answer[] = [];
 type PrefsAnswer = (pins: string[]) => void;
 let prefsGets: PrefsAnswer[] = [];
 let prefsPuts: PrefsAnswer[] = [];
+let statusReads = 0;
 
 beforeEach(() => {
   answers = [];
+  statusReads = 0;
   prefsGets = [];
   prefsPuts = [];
   vi.stubGlobal("localStorage", { getItem: () => "tok", setItem: () => {}, removeItem: () => {} });
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string, init?: RequestInit) => {
-      if (String(url).endsWith("/agents")) return Promise.resolve(new Response(JSON.stringify({ sources: [] })));
+      if (String(url).endsWith("/agents")) {
+        statusReads++;
+        return Promise.resolve(new Response(JSON.stringify({ sources: [] })));
+      }
       if (String(url).endsWith("/agents/prefs")) {
         const out = (init?.method ?? "GET").toUpperCase() === "PUT" ? prefsPuts : prefsGets;
         return new Promise<Response>((done) => out.push((pins) => done(new Response(JSON.stringify({ pins, view: {}, sections: [], assign: {} } satisfies AgentPrefs)))));
@@ -69,6 +74,74 @@ describe("refreshAgentSessions", () => {
     await flush();
     expect(answers.length).toBe(2);
     expect(useAgentList().sessions.map((s) => s.unreadCount)).toEqual([3]);
+  });
+});
+
+// GET /api/v1/agents asks every source's extension in turn; a session's new message does not change it (#7681).
+describe("the sources' status", () => {
+  const settle = async (n: number) => {
+    await flush();
+    answers[n]?.([session("a", n)]);
+    await flush();
+    await flush();
+  };
+
+  it("is read with the first pull and again for an event that says the list changed", async () => {
+    void refreshAgentSessions();
+    await settle(0);
+    expect(statusReads).toBe(1);
+    agentsChanged([]);
+    await settle(1);
+    expect(answers.length).toBe(2);
+    expect(statusReads).toBe(2);
+  });
+
+  it("is not read again for events naming sessions while it is fresh", async () => {
+    void refreshAgentSessions();
+    await settle(0);
+    for (let i = 1; i <= 3; i++) {
+      agentsChanged(["lark-bridge:a"]);
+      await settle(i);
+    }
+    expect(answers.length).toBe(4);
+    expect(statusReads).toBe(1);
+    expect(useAgentList().sessions.map((s) => s.unreadCount)).toEqual([3]);
+  });
+
+  it("is read again with an event naming sessions once it is a minute old", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    void refreshAgentSessions();
+    await settle(0);
+    now.mockReturnValue(1_000_000 + SOURCES_FRESH_MS - 1);
+    agentsChanged(["lark-bridge:a"]);
+    await settle(1);
+    expect(statusReads).toBe(1);
+    now.mockReturnValue(1_000_000 + SOURCES_FRESH_MS);
+    agentsChanged(["lark-bridge:a"]);
+    await settle(2);
+    expect(statusReads).toBe(2);
+    now.mockRestore();
+  });
+
+  it("is read by the follow-up pull when one of the events it stands for said the list changed", async () => {
+    void refreshAgentSessions();
+    await flush();
+    agentsChanged(["lark-bridge:a"]);
+    agentsChanged([]);
+    agentsChanged(["lark-bridge:a"]);
+    await settle(0);
+    await settle(1);
+    expect(answers.length).toBe(2);
+    expect(statusReads).toBe(2);
+  });
+
+  it("is read by the next login's first pull", async () => {
+    void refreshAgentSessions();
+    await settle(0);
+    resetAgents();
+    agentsChanged(["lark-bridge:a"]);
+    await settle(1);
+    expect(statusReads).toBe(2);
   });
 });
 

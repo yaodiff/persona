@@ -251,19 +251,23 @@ export function agentNameHint(prompt: string, cwd: string): string {
   return branchSlug(p) ? p : (cwd.trim().replace(/\/+$/, "").split("/").pop() ?? "");
 }
 
-/** Null when the computer cannot say (an older node, offline): the switch and the cleanup then stay out of the way. */
-export async function worktreeStatus(mid: string, cwd: string, signal?: AbortSignal): Promise<WorktreeStatus | null> {
+/** Null when the computer cannot say (an older node, offline): the switch and the cleanup then stay out of the way.
+ *  kind: the engine the agent opens in (New Agent) or ran in (closing it: its `host`, which made its worktree; Paseo
+ *  makes its own); none, the computer's default. */
+export async function worktreeStatus(mid: string, cwd: string, signal?: AbortSignal, kind?: string): Promise<WorktreeStatus | null> {
   try {
-    return await api<WorktreeStatus>(`/machines/${enc(mid)}/worktree/status`, { method: "POST", json: { cwd }, signal });
+    return await api<WorktreeStatus>(`/machines/${enc(mid)}/worktree/status`, { method: "POST", json: { cwd, ...(kind ? { kind } : {}) }, signal });
   } catch {
     return null;
   }
 }
 
-export function addAgentWorktree(mid: string, cwd: string, nameHint: string, branch = "", owner: Pick<NonNullable<Parameters<typeof api>[1]>, "signal" | "token" | "tokenOwner"> = {}): Promise<WorktreeAdded> {
+/** kind: the engine the agent opens in, which makes the worktree (Paseo, as a workspace of its own); none, the
+ *  computer's default. */
+export function addAgentWorktree(mid: string, cwd: string, nameHint: string, branch = "", owner: Pick<NonNullable<Parameters<typeof api>[1]>, "signal" | "token" | "tokenOwner"> = {}, kind?: string): Promise<WorktreeAdded> {
   return api<WorktreeAdded>(`/machines/${enc(mid)}/worktree/add`, {
     method: "POST",
-    json: { cwd, ...(nameHint ? { name_hint: nameHint } : {}), ...(branch.trim() ? { branch: branch.trim() } : {}) },
+    json: { cwd, ...(nameHint ? { name_hint: nameHint } : {}), ...(branch.trim() ? { branch: branch.trim() } : {}), ...(kind ? { kind } : {}) },
     ...owner,
   });
 }
@@ -274,13 +278,14 @@ export function worktreeLoss(st: WorktreeStatus, deleteBranch: boolean): { dirty
 }
 
 /** Removes it once its agent is closed: the node may still list the agent for a moment (worktree_in_use), so a few
- *  tries a second apart. `force` only when the user confirmed what is lost. */
-export async function removeAgentWorktree(mid: string, path: string, o: { deleteBranch: boolean; force: boolean }, tries = 6, wait = 1000): Promise<{ removed: boolean; branch_deleted: boolean }> {
+ *  tries a second apart. `force` only when the user confirmed what is lost; `kind` the engine the agent ran in (its
+ *  `host`). */
+export async function removeAgentWorktree(mid: string, path: string, o: { deleteBranch: boolean; force: boolean; kind?: string }, tries = 6, wait = 1000): Promise<{ removed: boolean; branch_deleted: boolean }> {
   for (let i = 1; ; i++) {
     try {
       return await api<{ removed: boolean; branch_deleted: boolean }>(`/machines/${enc(mid)}/worktree/remove`, {
         method: "POST",
-        json: { path, ...(o.deleteBranch ? { delete_branch: true } : {}), ...(o.force ? { force: true } : {}) },
+        json: { path, ...(o.deleteBranch ? { delete_branch: true } : {}), ...(o.force ? { force: true } : {}), ...(o.kind ? { kind: o.kind } : {}) },
       });
     } catch (e) {
       if (i >= tries || !(e instanceof ApiError) || e.code !== "worktree_in_use") throw e;

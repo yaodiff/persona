@@ -1,3 +1,4 @@
 {
-  "offline": "Can’t reach the assistant right now. Try again later"
+  "offline": "Can’t reach the assistant right now. Try again later",
+  "service_tier_manager_outdated": "The assistant handling your chats can’t apply Fast from the first message yet. Update it, then try again"
 }

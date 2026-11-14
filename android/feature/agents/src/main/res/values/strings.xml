@@ -287,6 +287,12 @@
     <string name="agents_new_parent">Up one level</string>
     <string name="agents_new_no_subdirectories">No folders in this directory</string>
     <string name="agents_new_git_repo">Git repository</string>
+    <string name="agents_workspace_title">Workspace</string>
+    <string name="agents_workspace_main">Main checkout</string>
+    <string name="agents_workspace_folder">Folder</string>
+    <string name="agents_workspace_other">Other workspaces</string>
+    <string name="agents_workspace_choose_folder">Choose by folder</string>
+    <string name="agents_workspace_kind_branch">%1$s · %2$s</string>
     <string name="agents_new_retry_open">Try again</string>
     <string name="agents_new_tab_in">New tab in “%1$s”</string>
     <string name="agents_new_online">Online</string>

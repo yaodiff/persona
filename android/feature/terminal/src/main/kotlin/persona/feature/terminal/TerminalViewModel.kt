@@ -21,10 +21,12 @@ enum class TerminalNote(@StringRes val text: Int) {
 
 /**
  * Brings back a session that isn't running ("Resume session", #4345): a Claude Code session in a terminal engine resumes
- * in a new tab with what it ran with, as iOS does (#4328). Others resume with their next message.
+ * in the shell it left, or a new tab when that shell is gone, with what it ran with.
  */
 interface TerminalResumer {
     fun canResume(key: SessionKey): Boolean
+    /** A stopped Agent can resume even while its retained shell streams successfully. */
+    fun isStopped(key: SessionKey): Boolean = false
     /** Returns once the agent is up; throws [TerminalResumeFailed] with the hub's words, or anything else when it can't tell. */
     suspend fun resume(key: SessionKey)
 }
@@ -102,7 +104,7 @@ class TerminalViewModel(val key: SessionKey, private val transport: TerminalTran
             while (isActive) {
                 val online = transport.connection.value == ConnectionState.Online
                 _state.update { it.copy(online = online, wheel = "terminal_scroll" in transport.features.value,
-                    resumable = it.note == TerminalNote.NoTerminal && resumer?.canResume(key) == true) }
+                    resumable = online && (it.note == TerminalNote.NoTerminal || resumer?.isStopped(key) == true) && resumer?.canResume(key) == true) }
                 if (!online) {
                     subscribed = false
                     _state.update { it.copy(control = TerminalControl.Watching, note = TerminalNote.Offline) }

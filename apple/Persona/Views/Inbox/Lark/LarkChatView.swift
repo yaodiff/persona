@@ -57,6 +57,7 @@ extension AppModel {
 /// Jump to Latest / You Were Mentioned jumps.
 struct LarkChatView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.pushInboxChat) private var pushChat
     /// Polled and reported only while its page is in front: a hidden chat reports nothing to Feishu (TabActivity.swift).
     @Environment(\.tabIsActive) private var tabActive
     @Environment(\.scenePhase) private var scenePhase
@@ -1453,6 +1454,16 @@ struct LarkChatView: View {
         }
     }
 
+    /// The new summary goes over an inbox source page when that stack offers the route; elsewhere it opens as before.
+    @MainActor static func openSummary(_ key: SessionKey, owner: String?, model: AppModel,
+                                       push: ((InboxChatRoute) -> Void)? = nil) {
+        if let push {
+            push(InboxChatRoute(key: model.inHub(key), manager: owner))
+        } else {
+            model.openAssistantConversation(key)
+        }
+    }
+
     private func askPersona() async {
         guard let api = chatAPI else { return }
         let prompt = String(localized: "Read the recent messages in my Lark chat “\(conversation.name)” (Lark gateway feedId \(conversation.id)), summarize the key points, list what I need to reply to or handle, and suggest replies.")
@@ -1461,7 +1472,7 @@ struct LarkChatView: View {
                 try await api.showing(nil).startConversation(prompt: prompt, opID: op) // the chat's manager's; the default's names none, whichever page shows
             }
             model.began(s, text: prompt)
-            model.openAssistantConversation(s.key)
+            Self.openSummary(s.key, owner: manager, model: model, push: pushChat)
         } catch {
             model.show(error)
         }

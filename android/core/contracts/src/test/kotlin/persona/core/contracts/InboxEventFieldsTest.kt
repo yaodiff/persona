@@ -28,6 +28,7 @@ class InboxEventFieldsTest {
             assertEquals(listOf("received", "triaged", "handling"), it.chain.map { e -> e.kind })
             assertEquals(3, it.chain.first().messages.size)
             assertEquals(100L, it.chain.first().link?.positionValue)
+            assertNull(it.chain.first().via)
             assertEquals("s-demo1", it.chain.last().link?.sessionId)
             assertTrue(it.present)
         }
@@ -65,16 +66,46 @@ class InboxEventFieldsTest {
         assertEquals(6, listed.items[2].chain.size)
     }
 
+    @Test fun followUpFieldsAndChainViaAreReadWithoutOpeningAnEvent() {
+        val item = JsonCodec.parseToJsonElement("""{
+            "id":"x","where":"Launch group",
+            "follow":{"who":"Alex to confirm","next":"Ask about Friday","check_at":"2026-01-02T09:00:00Z","checks":2},
+            "now":"a_future_state",
+            "chain":[{"id":"c","kind":"received","text":"New","via":"connector:reviews"}]
+        }""").jsonObject
+        val fields = inboxEventFields(item)
+        assertEquals("Launch group", fields.where)
+        assertEquals("Alex to confirm", fields.follow?.who)
+        assertEquals("Ask about Friday", fields.follow?.next)
+        assertEquals("2026-01-02T09:00:00Z", fields.follow?.checkAt)
+        assertEquals("a_future_state", fields.now)
+        assertEquals("connector:reviews", fields.chain.single().via)
+        // Display metadata alone never turns an item without phase-1 fields into an event.
+        assertFalse(inboxEventFields(JsonObject(item - "chain")).present)
+
+        // The wire model exposes the same fields and keeps an arbitrary source id in via.
+        val wire = JsonCodec.decodeFromJsonElement<InboxItem>(item)
+        assertEquals("Launch group", wire.where)
+        assertEquals(fields.follow, wire.follow)
+        assertEquals("a_future_state", wire.now)
+        assertEquals("connector:reviews", wire.chain.single().via)
+    }
+
     @Test fun anOlderHubsItemHasNone() {
         val old = JsonCodec.parseToJsonElement("""{"id":"lark:x:1","tier":"action","agent":{"state":"drafted","draft":"好"}}""").jsonObject
         assertEquals(InboxEventFields.None, inboxEventFields(old))
         assertEquals("manager", inboxEventFields(JsonCodec.parseToJsonElement("""{"id":"x","done_by":"manager"}""").jsonObject).doneBy)
         assertFalse(inboxEventFields(old).present)
+        val wire = JsonCodec.decodeFromJsonElement<InboxItem>(old)
+        assertNull(wire.where)
+        assertNull(wire.follow)
+        assertNull(wire.now)
     }
 
     @Test fun oddValuesAreLeftOutAndUnknownKindsKept() {
         val odd = JsonCodec.parseToJsonElement("""{
             "id":"x","status":"later","urgent":"yes","recap":"  ",
+            "where":"  ","follow":"later","now":"  ",
             "handling":{"state":"thinking"},
             "suggestion":{"version":"2","kind":"reply","text":"好"},
             "chain":[{"id":"a","kind":"from_the_future","text":"新动作","link":{"type":"source","position":12}},
@@ -85,6 +116,9 @@ class InboxEventFieldsTest {
         assertNull(fields.status)
         assertFalse(fields.urgent)
         assertNull(fields.recap)
+        assertNull(fields.where)
+        assertNull(fields.follow)
+        assertNull(fields.now)
         assertEquals("unknown", fields.handling?.state)
         // A version that is not a number is dropped: the suggestion confirms with 0 and the hub says it is stale.
         assertEquals(0L, fields.suggestion?.version)
@@ -92,5 +126,19 @@ class InboxEventFieldsTest {
         assertEquals(12L, fields.chain.first().link?.positionValue)
         assertNull(fields.chain[1].count)
         assertEquals(listOf("y"), fields.related.map { it.id })
+    }
+
+    @Test fun malformedFollowUpMembersKeepTheirValidSiblings() {
+        val fields = inboxEventFields(JsonCodec.parseToJsonElement("""{
+            "id":"x","recap":"Keep this","where":7,
+            "follow":{"who":7,"next":"Ask about Friday","check_at":"not a time"},
+            "now":"waiting"
+        }""").jsonObject)
+        assertEquals("Keep this", fields.recap)
+        assertNull(fields.where)
+        assertNull(fields.follow?.who)
+        assertEquals("Ask about Friday", fields.follow?.next)
+        assertNull(fields.follow?.checkAt)
+        assertEquals("waiting", fields.now)
     }
 }

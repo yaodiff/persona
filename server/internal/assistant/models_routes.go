@@ -72,7 +72,7 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 	} else if !slices.Contains(p.ProviderIDs, p.Effective.Provider) {
 		p.Status = mc(l, "status_provider_incompatible")
 		if p.Kind == "api" && strings.HasPrefix(p.Effective.Provider, "legacy.") && s.legacyModelConfig(ctx, p.Effective.Provider).BaseURL == "" {
-			p.Status = mc(l, modelNoAPIStatus)
+			p.Status = mc(l, s.noAPIStatus(ctx))
 		}
 	} else if p.Kind == "api" {
 		config, e := s.apiConfig(ctx, p.Effective)

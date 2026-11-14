@@ -21,12 +21,18 @@ __pycache__/
 florak/
 /apple/Config.xcconfig
 # Generated when config.json app.carplay_voice is on: the app's entitlements plus the CarPlay voice one (docs/apple/carplay.md).
+/apple/PersonaOptIn.entitlements
 /apple/PersonaCarPlay.entitlements
 # Personal notes for coding agents working in this checkout (machines, accounts); see CLAUDE.md.
 /CLAUDE.local.md
 /apple/PersonaLink/.build/
+/apple/PersonaLink/Input/.build/
 # swift test in a local package (apple/Packages/PersonaKit, #2095): its build output, never committed.
+/apple/Packages/PersonaCore/build/
+/apple/Packages/PersonaCore/Inputs.stamp
 /apple/Packages/*/.build/
+# The isolation lint is built into /build/isolation-lint (scripts/test/isolation-lint.sh); an editor's index lands here.
+/scripts/test/isolation-lint/.build/
 /apple/PersonaLink/build/
 /build-publish/
 /build-publish-site/

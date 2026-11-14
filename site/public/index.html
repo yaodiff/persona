@@ -11,6 +11,9 @@
 <meta property="og:url" content="https://personaside.com/">
 <meta property="og:image" content="https://personaside.com/img/recording.webp">
 <link rel="canonical" href="https://personaside.com/">
+<link rel="alternate" hreflang="zh-CN" href="https://personaside.com/">
+<link rel="alternate" hreflang="en" href="https://personaside.com/en/">
+<link rel="alternate" hreflang="x-default" href="https://personaside.com/">
 <meta name="theme-color" content="#EFE4D6">
 <link rel="icon" href="/favicon.png" media="(prefers-color-scheme: light)">
 <link rel="icon" href="/favicon-dark.png" media="(prefers-color-scheme: dark)">
@@ -156,7 +159,7 @@ h1 .say path{fill:none;stroke:var(--cheek);stroke-width:7;stroke-linecap:round}
   -webkit-mask-image:linear-gradient(transparent,#000 28px);mask-image:linear-gradient(transparent,#000 28px)}
 .chat > *{flex:none;animation:in .3s ease both}
 @keyframes in{from{opacity:0;transform:translateY(6px)}}
-.mine{align-self:flex-end;max-width:88%;padding:8px 12px;border-radius:16px 16px 4px 16px;background:var(--sky-tint)}
+.chat .mine{align-self:flex-end;max-width:88%;padding:8px 12px;border-radius:16px 16px 4px 16px;background:var(--sky-tint)}
 .say-p{margin:0}
 .dimp{margin:0;font-size:12px;color:var(--gray)}
 .ctx{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
@@ -452,7 +455,7 @@ html:not(.js) .sw::after,.ext.in .sw::after{transform:translateX(16px)}
 @media (max-width:640px){
   :root{--page:calc(100vw - 32px)}
   body{font-size:16px}
-  .top nav a:not(.go){display:none}
+  .top nav a:not(.go):not(.lang){display:none}
   .hero{padding:16px 0 56px}
   .lede{font-size:17px}
   .stage{height:auto;display:flex;flex-direction:column;align-items:center}
@@ -499,6 +502,7 @@ html:not(.js) .sw::after,.ext.in .sw::after{transform:translateX(16px)}
     <a href="#privacy">隐私</a>
     <a class="ver" id="ver" href="/releases/" hidden><i aria-hidden="true"></i><span>最新版本</span></a>
     <a class="go" href="#start">开始用</a>
+    <a class="lang" href="/en/?lang=en" hreflang="en" lang="en" aria-label="View in English">EN</a>
   </nav>
 </header>
 

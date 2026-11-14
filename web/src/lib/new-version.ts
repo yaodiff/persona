@@ -18,7 +18,7 @@ export const CHECK_EVERY_MS = 5 * 60_000;
 /** A check asked for within this long of the last one is skipped (focus flapping, several reconnects). */
 export const CHECK_GAP_MS = 20_000;
 /** While a new build waits for a quiet moment, how often the page looks again. */
-const WAIT_TICK_MS = 15_000;
+export const WAIT_TICK_MS = 15_000;
 
 /** The entry script a shell loads (its `<script type="module" src="./assets/…">`), null when it has none: not the
  *  app's shell (a sign-in page of a layer in front of the hub) or a dev server. */
@@ -79,6 +79,23 @@ export function hasDraft(doc: Document): boolean {
 
 export function hasOverlay(doc: Document): boolean {
   return doc.querySelector(OVERLAY) !== null;
+}
+
+let lastInput: number | undefined;
+
+/** Milliseconds since the page's last key, pointer or wheel; the first call starts counting, from then. */
+export function quietMs(): number {
+  if (lastInput === undefined) {
+    lastInput = Date.now();
+    for (const ev of ["keydown", "pointerdown", "wheel", "touchstart"]) addEventListener(ev, () => (lastInput = Date.now()), { capture: true, passive: true });
+  }
+  return Date.now() - lastInput;
+}
+
+/** This page's calm now: whether it may reload itself (mayReload) for a new build or a language another tab picked
+ *  (lib/language-sync.ts). */
+export function pageCalm(): Calm {
+  return { hidden: document.visibilityState === "hidden", draft: hasDraft(document), overlay: hasOverlay(document), quietMs: quietMs() };
 }
 
 /** What the checker needs from the world; tests swap it. */
@@ -147,8 +164,7 @@ function begin(notify: (reloadNow: () => void) => void) {
   if (!import.meta.env.PROD || typeof document === "undefined") return;
   const running = runningEntry(document);
   if (!running) return;
-  let lastInput = Date.now();
-  for (const ev of ["keydown", "pointerdown", "wheel", "touchstart"]) addEventListener(ev, () => (lastInput = Date.now()), { capture: true, passive: true });
+  quietMs(); // the page's quiet counts from here
   const checker = newVersionChecker({
     running: () => running,
     fetchShell: async () => {
@@ -156,7 +172,7 @@ function begin(notify: (reloadNow: () => void) => void) {
       if (!r.ok || r.redirected) throw new Error(String(r.status));
       return r.text();
     },
-    calm: () => ({ hidden: document.visibilityState === "hidden", draft: hasDraft(document), overlay: hasOverlay(document), quietMs: Date.now() - lastInput }),
+    calm: pageCalm,
     reload: () => {
       // the worker fetches the new shell and its files first, so the reload is quick and the next start offline is new too
       const sw = navigator.serviceWorker;

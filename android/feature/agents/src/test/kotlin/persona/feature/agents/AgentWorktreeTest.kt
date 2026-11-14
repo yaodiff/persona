@@ -102,13 +102,13 @@ class AgentWorktreeTest {
             return AgentStartResult.Created(Session(machineId = request.machineId, sessionId = "s1", cwd = request.cwd))
         }
         override suspend fun operation(operationId: String) = AgentStartResult.Unknown
-        override suspend fun worktreeStatus(machineId: String, cwd: String): WorktreeStatus? {
-            asked += "$machineId:$cwd"
+        override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?): WorktreeStatus? {
+            asked += "$machineId:$cwd" + (kind?.let { ":$it" } ?: "")
             return if (cwd.startsWith("/code/")) WorktreeStatus(path = cwd, checkouts = "/wt") else WorktreeStatus()
         }
-        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String): WorktreeAdded {
+        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?): WorktreeAdded {
             if (failAdd) throw java.io.IOException("worktree_failed")
-            added += "$machineId:$cwd:$nameHint:$branch"
+            added += "$machineId:$cwd:$nameHint:$branch" + (kind?.let { ":$it" } ?: "")
             return WorktreeAdded("/wt/" + AgentWorktree.slug(branch), branch.trim())
         }
     }

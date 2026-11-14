@@ -62,6 +62,9 @@ func newerDone(at1 *time.Time, id1 string, at2 *time.Time, id2 string) int {
 
 // inboxShows says whether a list of all (or not) made with cutoff and cut shows the item.
 func inboxShows(it *InboxItem, cutoff time.Time, cut inboxDoneCut, all bool) bool {
+	if it.MergedInto != "" { // a member of a merged row: its survivor shows
+		return false
+	}
 	if !all && it.Connector != nil {
 		return false
 	}

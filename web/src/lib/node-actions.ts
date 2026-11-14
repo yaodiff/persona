@@ -13,6 +13,7 @@ import { openNewWorktree } from "./worktree";
 import type { MenuItem } from "../ui/menu-model";
 import { launcherBlock, usableFirst } from "./launcher-health";
 import { providerIdNote, providerTitle } from "./provider-names";
+import { closeListedAgent } from "./close-agent";
 
 export type NodeKind = "machine" | "workspace" | "tab" | "pane";
 
@@ -64,6 +65,10 @@ export interface NodeActionDeps {
   notify: (text: string, tone: "ok" | "error" | "info") => void;
   /** The tree changed on the computer: read it again. */
   changed: () => void;
+  /** "Close pane" on a pane an agent runs in (#7125): the agent's "Close…" (lib/close-agent.ts), which says what
+   *  closing interrupts, instead of the menu's second click. Undefined (a session this page doesn't list, or nothing
+   *  to close it with): the pane closes as a shell's does. */
+  closeAgent?: (mid: string, sid: string) => Pick<MenuItem, "onSelect" | "disabled" | "detail"> | undefined;
 }
 
 export function defaultNodeDeps(changed: () => void = () => {}): NodeActionDeps {
@@ -81,6 +86,7 @@ export function defaultNodeDeps(changed: () => void = () => {}): NodeActionDeps 
     copy: (text) => void copyText(text),
     notify: (text, tone) => toast(text, tone),
     changed,
+    closeAgent: closeListedAgent,
   };
 }
 
@@ -131,7 +137,8 @@ export function gitOutcomeText(res: PaneGitResult | undefined): string {
   return res?.message || t("lib-node-actions.git_done_fallback");
 }
 
-/** The menu items of a node, in groups (a hairline between them): fold and open, rename, make and run, copy, close. */
+/** The menu items of a node, in groups (a hairline between them): fold and open, rename, make, run and close a pane, copy,
+ *  close a tab. */
 export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActionOptions = {}): MenuItem[] {
   const { mid } = node;
   const online = node.online !== false;
@@ -198,7 +205,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
     },
   );
 
-  // ── make and run: split, an agent here, git ──
+  // ── make, run and close: a worktree, split, close the pane, an agent here, git ──
   const split = (direction: "right" | "down", label: string, accel: string): MenuItem => ({
     key: `node-split-${direction}`,
     label,
@@ -250,6 +257,25 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   };
   const gitMenu = writes && node.kind !== "machine" && Boolean(gitTarget);
   const newWorktree = deps.newWorktree;
+  // a pane closes with the pane's own actions, next to New pane (#7125); one an agent runs in asks as the agent's
+  // Close… does, so a busy agent is never closed by the menu's second click alone
+  const agentClose = node.kind === "pane" && node.sessionId ? deps.closeAgent?.(mid, node.sessionId) : undefined;
+  const closePane: MenuItem = {
+    key: "node-close-pane",
+    label: t("lib-node-actions.close_pane"),
+    icon: "x",
+    danger: true,
+    closes: true,
+    ...(agentClose ?? {
+      confirm: t("lib-node-actions.close_confirm"),
+      inline: true,
+      onSelect: async () => {
+        await deps.post(mid, "panes/close", { pane: node.paneId }).catch((e) => Promise.reject(fail("lib-node-actions.close_failed", e)));
+        deps.notify(t("lib-node-actions.pane_closed"), "ok");
+        deps.changed();
+      },
+    }),
+  };
   group(
     node.kind === "workspace" && writes && node.canWorktree && Boolean(node.workspaceId) && newWorktree && {
       key: "node-worktree",
@@ -266,6 +292,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
       onSelect: noop,
       children: [split("right", t("lib-node-actions.split_right"), "r"), split("down", t("lib-node-actions.split_down"), "d")],
     },
+    node.kind === "pane" && writes && Boolean(node.paneId) && closePane,
     writes && isShell && Boolean(node.paneId) && {
       key: "node-agent",
       label: t("lib-node-actions.run_agent_here"),
@@ -286,16 +313,19 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   );
 
   // ── copy ──
-  const herdrId = node.kind === "pane" ? node.paneId : node.kind === "tab" ? node.tabId : node.kind === "workspace" ? node.workspaceId : undefined;
+  // the engine's own id of the space, tab or pane, named by what it is: a menu never says the engine's name
+  const [engineId, engineIdLabel] = node.kind === "pane" ? [node.paneId, t("lib-node-actions.copy_pane_id")]
+    : node.kind === "tab" ? [node.tabId, t("lib-node-actions.copy_tab_id")]
+    : node.kind === "workspace" ? [node.workspaceId, t("lib-node-actions.copy_workspace_id")] : [undefined, ""];
   group(
     node.kind !== "machine" && copy("node-copy-path", t("lib-node-actions.copy_path"), "c", node.cwd),
     node.kind !== "machine" && node.kind !== "workspace" && copy("node-copy-session", t("lib-node-actions.copy_session_id"), "s", node.sessionId),
-    node.kind !== "machine" && copy("node-copy-id", t("lib-node-actions.copy_herdr_id"), "i", herdrId),
+    node.kind !== "machine" && copy("node-copy-id", engineIdLabel, "i", engineId),
     node.kind !== "machine" && !gitMenu && copy("node-copy-branch", t("lib-node-actions.copy_branch"), "b", node.branch),
     node.kind === "machine" && copy("node-copy-machine", t("lib-node-actions.copy_machine_id"), "i", mid),
   );
 
-  // ── close ──
+  // ── close the tab ──
   group(
     node.kind === "tab" && writes && Boolean(node.tabId) && {
       key: "node-close-tab",
@@ -308,20 +338,6 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
       onSelect: async () => {
         await deps.post(mid, "tabs/close", { tab_id: node.tabId, ...kind }).catch((e) => Promise.reject(fail("lib-node-actions.close_failed", e)));
         deps.notify(t("lib-node-actions.tab_closed"), "ok");
-        deps.changed();
-      },
-    },
-    node.kind === "pane" && writes && Boolean(node.paneId) && {
-      key: "node-close-pane",
-      label: t("lib-node-actions.close_pane"),
-      icon: "x",
-      danger: true,
-      closes: true,
-      confirm: t("lib-node-actions.close_confirm"),
-      inline: true,
-      onSelect: async () => {
-        await deps.post(mid, "panes/close", { pane: node.paneId }).catch((e) => Promise.reject(fail("lib-node-actions.close_failed", e)));
-        deps.notify(t("lib-node-actions.pane_closed"), "ok");
         deps.changed();
       },
     },

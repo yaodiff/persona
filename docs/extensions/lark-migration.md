@@ -11,7 +11,7 @@ Build on Persona's native Inbox, hub authentication, chat page, outbox and live 
 Reuse **Settings → Connectors → Lark**, and while the account is connected add a **Show Messages on Home** switch, off by default.
 When on, the top of the iPhone home screen shows **Assistant / Agents / Messages**; when off, it goes back to the original two pages. The setting is stored on the device and survives restarts.
 The regular-width iPad gets a matching **Messages** tab; it shares the hub's Lark account, so no second sign-in is needed.
-On the Mac, the same switch adds a **Messages** section above the Inbox in the sidebar: chat list on the left, chat on the right (#3162, `docs/apple/mac.md` ("Main window")).
+On the retired native Mac, the same switch added a **Messages** section above the Inbox in the sidebar: chat list on the left, chat on the right (#3162, [mac.md](../archive/apple/mac.md), "Main window").
 
 - The Inbox keeps doing cross-source aggregation, AI triage, drafts and to-dos; the Lark filter keeps its original purpose.
 - **Messages** browses all direct and group chats; tapping one reuses `LarkChatView`. Swiping right in a chat returns to the message list; the list and the neighboring home pages switch with a horizontal swipe.

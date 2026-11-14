@@ -280,7 +280,8 @@ func photoAt(r *Recording, at float64, now time.Time) float64 {
 	return min(at, span)
 }
 
-// minutesPhotos are the photos m cites (all four sections); empty without minutes.
+// minutesPhotos are the photos m cites (all four sections, and the overview's bullets and conclusions, which cite only
+// photos an item cites too); empty without minutes.
 func minutesPhotos(m *Minutes) map[int]bool {
 	out := map[int]bool{}
 	if m == nil {
@@ -302,6 +303,18 @@ func minutesPhotos(m *Minutes) map[int]bool {
 	}
 	for _, o := range m.Open {
 		add(o.Photo)
+	}
+	if o := m.Overview; o != nil {
+		for _, c := range o.Conclusions {
+			add(c.Photo)
+		}
+		for _, g := range o.Groups {
+			for _, t := range g.Topics {
+				for _, b := range t.Bullets {
+					add(b.Photo)
+				}
+			}
+		}
 	}
 	return out
 }
@@ -579,6 +592,9 @@ func (e *Engine) photoDelete(id string, n int) (bool, error) {
 	case st.ReadOnly():
 		return false, ErrReadOnly
 	}
+	// The photo's words (its line of photos.md, the minutes' items citing it) leave the search index at its next
+	// update, as any text deleted on purpose.
+	defer st.SearchIndexPurge()
 	// The minutes first, then the entry (photos.json, photos.md), then the file: a repeat (its answer lost, or a crash
 	// or a failure part of the way) finds the photo deleted and finishes what is left before it answers false.
 	if err := e.photoUncite(r, n, i >= 0); err != nil {
@@ -947,14 +963,16 @@ func dropUnlistedPhotos(m *Minutes, b photoBook) {
 	dropPhotos(m, func(n int) bool { return b.index(n) < 0 })
 }
 
-// dropPhotos takes out of m the items citing a photo gone says goes (all four sections); the actions are numbered
-// again, each keeping its to-do.
+// dropPhotos takes out of m the items citing a photo gone says goes (all four sections), and the overview's bullets
+// and conclusions citing it (an empty topic and group go with them, the overview once no topic is left); the actions
+// are numbered again, each keeping its to-do. Not for a trimmed recording, whose minutes stay as they are.
 func dropPhotos(m *Minutes, gone func(n int) bool) {
 	cites := func(n int) bool { return n > 0 && gone(n) }
 	m.Points = slices.DeleteFunc(m.Points, func(x MinutesPoint) bool { return cites(x.Photo) })
 	m.Decisions = slices.DeleteFunc(m.Decisions, func(x MinutesItem) bool { return cites(x.Photo) })
 	m.Actions = slices.DeleteFunc(m.Actions, func(x MinutesAction) bool { return cites(x.Photo) })
 	m.Open = slices.DeleteFunc(m.Open, func(x MinutesItem) bool { return cites(x.Photo) })
+	dropOverviewPhotos(m, cites)
 	for i := range m.Actions {
 		m.Actions[i].ID = "a" + strconv.Itoa(i+1)
 	}

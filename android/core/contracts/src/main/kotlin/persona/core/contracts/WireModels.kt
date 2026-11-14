@@ -188,6 +188,9 @@ data class InboxItem(
     val suggestion: InboxSuggestion? = null,
     val chain: List<InboxChainEntry> = emptyList(),
     val related: List<InboxRelated> = emptyList(),
+    val where: String? = null,
+    val follow: InboxFollow? = null,
+    val now: String? = null,
 )
 
 @KeepGeneratedSerializer

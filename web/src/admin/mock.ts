@@ -320,6 +320,12 @@ export function installMock(scenario: string) {
             { level: "ok", item: "明文 listen", detail: ":18660；仅供内网或 VPN 使用" },
             { level: "ok", item: "public.tls_listen", detail: ":18662（配置值，尚未验证 TLS 监听）" },
             { level: "ok", item: "TLS 证书", detail: "SPKI SHA-256 钉扎值 Xk3v9QeR2mT8…；到期时间 2027-10-01T00:00:00Z" },
+            {
+              level: "ok",
+              item: "候选地址",
+              detail:
+                "已读取运行中的 hub 当前发布列表（不代表外部可达）\nhttps://[2001:db8::2]:18662（ipv6，端口 18662，发现时间 2026-11-13T08:00:00Z）\nhttps://192.0.2.10:18662（lan，端口 18662，发现时间 2026-11-13T08:00:00Z）",
+            },
             { level: "problem", item: "本机 IPv6", detail: "没有可确认稳定的全局 IPv6；请检查运营商 IPv6 和网卡地址" },
             { level: "info", item: "外部可达性", detail: "未验证。本机连自己的地址走环回，不能证明公网可达。" },
           ],

@@ -285,6 +285,25 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 	}
 }
 
+func TestAssistantServiceTierFailuresWithholdNativeDiagnostics(t *testing.T) {
+	for _, code := range []string{"assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			rec := httptest.NewRecorder()
+			raw := &rpc.Error{Code: code, Message: "native English diagnostic", Data: json.RawMessage(`{"delivered":"none","retryable":false}`)}
+			body := call(t, langWriter{rec, lang}, rec, raw)
+			if rec.Code != http.StatusConflict || body["code"] != code || body["error"] != i18n.T(lang, "rpc-errors."+code) {
+				t.Fatalf("%s %s: %d %v", code, lang, rec.Code, body)
+			}
+			if _, exists := body["detail"]; exists {
+				t.Fatalf("%s %s exposed the native diagnostic: %v", code, lang, body)
+			}
+			if body["delivered"] != "none" || body["retryable"] != false {
+				t.Fatalf("%s %s changed delivery: %v", code, lang, body)
+			}
+		}
+	}
+}
+
 // The node's Git pull / push / fetch refusals (#1888) are 409s in the request's language, the node's words (git's
 // included) as the detail; a failure git itself explains carries git's words in the summary too.
 func TestGitOpRefusalsSpeakTheClientsLanguage(t *testing.T) {

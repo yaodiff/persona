@@ -9,6 +9,7 @@ import nativeFontTests from '../test/NativeFont.test';
 import nativeSshTests from '../test/NativeSsh.test';
 import nativeRecordingTests from '../test/NativeRecording.test';
 import nativePhoneTests from '../test/NativePhone.test';
+import nativeCoreTests from '../test/NativeCore.test';
 import { bindNativeTestContext } from '../test/NativeContext';
 
 export default class TestAbility extends UIAbility {
@@ -20,7 +21,8 @@ export default class TestAbility extends UIAbility {
     if (fixtureArgument('recordingFixtureId')) testArguments.parameters['-s timeout'] = '120000';
     if (fixtureArgument('phoneCheck')) testArguments.parameters['-s timeout'] = '90000';
     Hypium.hypiumTest(abilityDelegatorRegistry.getAbilityDelegator(), testArguments, (): void => {
-      if (fixtureArgument('fontScale')) nativeFontTests();
+      if (fixtureArgument('coreReplay')) nativeCoreTests();
+      else if (fixtureArgument('fontScale')) nativeFontTests();
       else if (fixtureArgument('sshFixtureFile')) nativeSshTests();
       else if (fixtureArgument('recordingFixtureId')) nativeRecordingTests();
       else if (fixtureArgument('phoneCheck')) nativePhoneTests();

@@ -52,7 +52,8 @@ import Foundation
         MeetingAttendanceDefaults.remember(conversation: conversation,
                                            photos: conversation && features.contains(MeetingAttendanceDefaults.photosFeature),
                                            liveView: liveView,
-                                           highlights: liveView && features.contains(MeetingAttendanceDefaults.highlightsFeature))
+                                           highlights: liveView && features.contains(MeetingAttendanceDefaults.highlightsFeature),
+                                           transcription: liveView && features.contains(MeetingAttendanceDefaults.transcriptionFeature))
         return conversation
     }
 
@@ -78,6 +79,40 @@ import Foundation
         let features = model.hubFeatures
         guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.highlightsKey) }
         return features.contains(MeetingAttendanceDefaults.highlightsFeature)
+    }
+
+    /// …and hub transcription (phase 5), which comes only with the conversation and the live view: a meeting started now
+    /// names a transcription mode.
+    static func transcription(_ model: AppModel) -> Bool {
+        guard liveView(model) else { return false }
+        let features = model.hubFeatures
+        guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.transcriptionKey) }
+        return features.contains(MeetingAttendanceDefaults.transcriptionFeature)
+    }
+
+    /// The hub's `meeting_transcription_default` and whether its transcription is ready (`meeting_transcription_ready`),
+    /// from its settings when they are in, else as last read (`device` and not ready before that).
+    static func transcriptionSettings(_ model: AppModel, store: UserDefaults = .standard) -> (mode: MeetingTranscriptionMode, ready: Bool) {
+        if let config = model.assistantConfig, let mode = config.meetingTranscriptionDefault {
+            let read = (MeetingTranscriptionMode(rawValue: mode) ?? .device, config.meetingTranscriptionReady ?? false)
+            MeetingAttendanceDefaults.remember(transcriptionDefault: read.0, ready: read.1, store)
+            return read
+        }
+        let mode = store.string(forKey: MeetingAttendanceDefaults.transcriptionDefaultKey).flatMap(MeetingTranscriptionMode.init(rawValue:))
+        return (mode ?? .device, store.bool(forKey: MeetingAttendanceDefaults.transcriptionReadyKey))
+    }
+
+    /// The start sheet offers **On the hub** (phase 5): the hub lists `meeting_transcription` and its transcription is ready.
+    static func offersHub(_ model: AppModel) -> Bool {
+        transcription(model) && transcriptionSettings(model).ready
+    }
+
+    /// The transcription mode a meeting started now asks for (`MeetingAttendanceDefaults.startMode`): nil without the
+    /// flag; `picked` on the start sheet (hub only while ready); else the hub's default, `device` while it isn't ready.
+    static func startTranscription(_ model: AppModel, picked: MeetingTranscriptionMode? = nil) -> MeetingTranscriptionMode? {
+        guard transcription(model) else { return nil }
+        let settings = transcriptionSettings(model)
+        return MeetingAttendanceDefaults.startMode(listed: true, hubDefault: settings.mode, ready: settings.ready, picked: picked)
     }
 
     // MARK: Sessions
@@ -179,17 +214,19 @@ import Foundation
     }
 
     /// What a meeting recording started with nothing picked begins with (`MeetingRecorder.startMeeting`): with the meeting
-    /// conversation a room meeting in the default role, not private (the one-tap rule, #3862); else `defaultAttendance`.
+    /// conversation a room meeting in the default role, not private (the one-tap rule, #3862), in the hub's default
+    /// transcription mode (`device` while the hub isn't ready, phase 5); else `defaultAttendance`.
     static func startAttendance(_ model: AppModel) -> RecordingAttendance {
         guard conversation(model) else { return defaultAttendance(model) }
         return .room(defaultRole(model), private: false, photos: photos(model), liveView: liveView(model),
-                     highlights: highlights(model))
+                     highlights: highlights(model), transcription: startTranscription(model))
     }
 
     /// A recording's attendance once it becomes a meeting again mid-recording, at `at` on its clock (a note turned into a
     /// meeting, #5243): `start`'s role and attendee from then on. One it had as a meeting before keeps what came with it:
     /// the live log the hub already has, the stretches Persona spoke in, and a room meeting its room (a meeting never
-    /// moves from its room). Nothing said before `at` is attended.
+    /// moves from its room). Nothing said before `at` is attended, and in hub mode (phase 5) its hub-mode time starts
+    /// again at `at`: what was recorded as a Note never leaves the phone.
     static func resumed(_ attendance: RecordingAttendance?, start: RecordingAttendance, at: Double) -> RecordingAttendance {
         var a: RecordingAttendance
         if var kept = attendance {
@@ -199,8 +236,13 @@ import Foundation
             a = start
             a.role = .off
             a.periods = []
+            // Its timeline (phase 5) starts here too: the role from `at`, not from the recording's start, and its hub-mode
+            // time from `at` (a start's would hold the Note before it).
+            a.roles = []
+            a.hubTime = []
         }
         a.set(start.role, at: at)
+        a.openHubTime(at: at)
         return a
     }
 

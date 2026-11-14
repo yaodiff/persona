@@ -14,7 +14,7 @@ import { NodeMenu } from "./NodeMenu";
 import { t } from "../i18n";
 import { markAllSeenLabel } from "../lib/state-labels";
 import { refreshWorkspaceCatalog, useWorkspaceCatalog } from "../lib/workspace-catalog";
-import { spaceWorktreeSources, worktreeActionKey } from "../lib/worktree-actions-context";
+import { renamesRuntimeSpace, spaceWorktreeSources, worktreeActionKey } from "../lib/worktree-actions-context";
 import type { WorkspaceTarget } from "../lib/workspace-target";
 
 export function SpaceMenu({
@@ -69,7 +69,7 @@ export function SpaceMenu({
   const items: MenuItem[] = [
     ...(openPage && first?.space_id ? [{ key: "open", label: t("agentmenus.open_space"), icon: "layers" as const, onSelect: () => navigate(page) }] : []),
     ...(unread.length ? [{ key: "seen", label: markAllSeenLabel(unread.length), icon: "check" as const, onSelect: () => onMarkSeen(unread) }] : []),
-    ...(first?.space_id && !first.source_kind ? [{ key: "rename", label: t("agentmenus.rename_space"), icon: "pencil" as const, onSelect: () => onRename(first) }] : []),
+    ...(first?.space_id && (!first.source_kind || renamesRuntimeSpace(first, catalog)) ? [{ key: "rename", label: t("agentmenus.rename_space"), icon: "pencil" as const, onSelect: () => onRename(first) }] : []),
     ...(supportSpaces
       ? linkedTodo
         ? [
@@ -117,7 +117,9 @@ export function SpaceMenu({
         detail: `${source.host} · ${source.cwd}`, onSelect: () => newWorktree(source) })) } : {}),
     }] : []),
   ];
-  const node: MenuNode = { kind: "workspace", mid: sp.machineId, online, host: first?.space_kind, label: sp.name, workspaceId: first?.workspace_id ?? first?.space_id, paneId: first?.pane_id, cwd: first?.cwd, fold };
+  // A runtime's space (Paseo's project, a runtime's folder) is no terminal host's workspace: no herdr ID to copy.
+  const node: MenuNode = { kind: "workspace", mid: sp.machineId, online, host: first?.space_kind, label: sp.name,
+    workspaceId: first?.source_kind ? undefined : first?.workspace_id ?? first?.space_id, paneId: first?.pane_id, cwd: first?.cwd, fold };
   return <NodeMenu node={node} at={at ?? { anchor }} onClose={onClose} header={t("agentmenus.space_header", { name: sp.name })} before={items} omit={["node-rename", "node-worktree"]} />;
 }
 

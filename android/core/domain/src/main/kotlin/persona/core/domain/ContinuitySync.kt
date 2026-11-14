@@ -10,8 +10,6 @@ import persona.core.domain.ContinuityReducer.Gap
  */
 class ContinuitySync(val reducer: ContinuityReducer) {
     sealed interface Action {
-        /** Configured settling delay, not a measured latency. */
-        data class ScheduleFill(val delayMillis: Long = 1_500) : Action
         data class FetchAfter(val afterSeq: Int) : Action
         data class FetchLatest(val foldWork: Boolean = true) : Action
         data class Subscribe(val sinceSeq: Int?, val foldWork: Boolean = true) : Action
@@ -42,13 +40,13 @@ class ContinuitySync(val reducer: ContinuityReducer) {
         Gap.None -> emptyList()
         Gap.Fill -> {
             heard++
-            listOf(Action.ScheduleFill())
+            continueFill()
         }
         Gap.Reload -> listOf(Action.FetchLatest())
     }
 
-    /** Reads current coverage when the timer fires, even if a backlog already closed the gap. */
-    fun fillTimer(): List<Action> {
+    /** iOS fetches at once. An existing fill is not duplicated and re-reads current coverage on every page. */
+    fun continueFill(): List<Action> {
         if (filling) return emptyList()
         filling = true
         fillPages = 0
@@ -58,13 +56,15 @@ class ContinuitySync(val reducer: ContinuityReducer) {
 
     /** Catch-up pages never supply older-history pagination information to the reducer. */
     fun after(items: List<Item>, history: String?, fromSeq: Int?, toSeq: Int?, moreAfter: Boolean = false): Result {
+        val before = reducer.covered
         val gap = reducer.apply(items, history, fromSeq, toSeq, moreAfter = moreAfter)
         fillPages++
+        val progressed = reducer.covered > before || toSeq != null && toSeq > before
         // A move heard while this page was on its way may be past it: one more page reads it.
         val again = gap == Gap.None && behind
         val actions = when {
             gap == Gap.Reload || (gap == Gap.Fill || again) && fillPages >= 8 -> listOf(Action.FetchLatest())
-            gap == Gap.Fill || again -> listOf(Action.FetchAfter(reducer.covered))
+            gap == Gap.Fill && progressed || again -> listOf(Action.FetchAfter(reducer.covered))
             else -> {
                 finishFill()
                 emptyList()

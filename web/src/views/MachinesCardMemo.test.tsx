@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Machines: a sessions push re-renders only the card of the computer it is about. Every card reads its own computer's agent
-// counts from the store and is memoized (MachineCard), so a push about another computer leaves it alone.
+// Machines: a sessions push re-renders only the card of the computer it is about. Every card gets its own computer's agent
+// counts as numbers from the page and is memoized (MachineCard), so a push about another computer leaves it alone.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

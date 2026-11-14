@@ -4,7 +4,10 @@
 // to Paseo. It starts a session from the "phone", watches it, sends to it, answers a permission, a question and a
 // plan, switches the mode, interrupts, renames, switches the model, rewinds, has a card answered in Paseo's own app, lives through Paseo
 // restarting, closes the session (archived in Paseo, it stays listed under its id) and sends to it again, archives it
-// once more across a restart of the bridge and continues it, and checks agents started or archived in Paseo itself.
+// once more across a restart of the bridge and continues it, and checks agents started or archived in Paseo itself, then
+// Paseo's workspaces: one with no agents in the catalog, a worktree Paseo makes from it, a session in it, renaming the
+// worktree and its project, deleting the worktree (refused while its Agent is at work), and a new Agent's own worktree
+// Paseo makes, removed through Paseo once the Agent is closed (#6295, #6297).
 //
 //   PERSONAD=<personad binary, built after go generate> CLAUDE_BIN=<a Claude Code binary> [PASEO_BIN=paseo] \
 //     node integrations/paseo/e2e/run.mjs
@@ -13,10 +16,11 @@
 // Code runs with, so its transcripts and its own config live there) and the workspace. The daemon listens on a free
 // port; the bridge reaches it only through its home's paseo.pid.
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checks, startNode, until } from '../../runtime-sdk/testing/node-harness.mjs'
 import { daemonTarget } from '../lib/discover.js'
@@ -31,7 +35,7 @@ if (!personad || !claudeBin) {
   process.exit(2)
 }
 const keep = process.env.KEEP === '1'
-const root = mkdtempSync(join('/tmp', 'jpaseo-e2e-'))
+const root = mkdtempSync(join(tmpdir(), 'jpaseo-e2e-'))
 const paseoHome = join(root, 'paseo')
 const home = join(root, 'home') // the node's and Claude Code's HOME
 const claudeDir = join(home, '.claude')
@@ -365,6 +369,142 @@ await until('its rewound conversation', async () => !(await texts(forked?.claude
 check("a Paseo agent's rewind: Claude Code's fork, under the same session in Persona", fork && fork.persistence?.sessionId !== forked?.claude &&
   fork.labels?.['persona.session'] === forked?.claude && row(forked, true) && !node.sessions().some((s) => s.session_id === fork.persistence?.sessionId) &&
   !(await texts(forked?.claude)).some((i) => i.role === 'user' && i.text === 'Now E2E_HELLO again'), JSON.stringify(fork?.labels))
+
+// ---- Paseo's workspaces (#6295): the catalog, a worktree Paseo makes, a session started in it ----
+
+const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Sample Dev',
+  GIT_AUTHOR_EMAIL: 'dev@example.com', GIT_COMMITTER_NAME: 'Sample Dev', GIT_COMMITTER_EMAIL: 'dev@example.com' }
+const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { env: gitEnv, encoding: 'utf8' }).trim()
+mkdirSync(join(root, 'repo'))
+const repo = realpathSync(join(root, 'repo'))
+git(repo, 'init', '--initial-branch=main')
+writeFileSync(join(repo, 'app.txt'), 'one\n')
+git(repo, 'add', 'app.txt')
+git(repo, 'commit', '-m', 'first')
+// Paseo's own app opens the folder: a workspace with no agent in it.
+const opened = await paseo.request('workspace.create.request', { source: { kind: 'directory', path: repo } }, { timeoutMs: 60_000 }).catch((e) => ({ error: e.message }))
+const repoWs = opened?.workspace?.id
+const catalog = async () => (await tryCall('workspaces.list', {}))?.workspaces ?? []
+const inCatalog = (id) => until('in the catalog', async () => (await catalog()).find((w) => w.source_id === id), 30_000).catch(() => undefined)
+const repoRow = repoWs && await inCatalog(repoWs)
+check('a Paseo workspace with no agents is in the node\'s catalog, as its main checkout', repoRow?.source === 'paseo' && repoRow.cwd === repo &&
+  repoRow.is_main === true && repoRow.workspace_kind === 'git' && repoRow.branch === 'main', JSON.stringify(repoRow ?? opened))
+const prep = await tryCall('worktree.prepare', { workspace_id: repoWs, kind: 'paseo' })
+check('New worktree on it: Paseo\'s worktrees folder of the repository', prep?.path?.startsWith(`${join(paseoHome, 'worktrees')}/`) &&
+  prep.root === repo && prep.branch === 'main' && prep.automatic_name === true, JSON.stringify(prep))
+const wt = prep && await tryCall('worktree.create', { workspace_id: repoWs, kind: 'paseo', branch: 'e2e/feature', path: join(prep.path, 'e2e-feature') }, 150_000)
+const paseoWs = async (id) => ((await paseo.request('fetch_workspaces_request', { filter: { query: id } }).catch(() => undefined))?.entries ?? []).find((w) => w.id === id)
+const madeWs = wt && await paseoWs(wt.workspace_id)
+check('a worktree made by Paseo, on the new branch from the workspace\'s HEAD, in its folder', wt?.path === join(prep.path, 'e2e-feature') &&
+  existsSync(join(wt.path, 'app.txt')) && git(wt.path, 'branch', '--show-current') === 'e2e/feature' &&
+  git(wt.path, 'rev-parse', 'HEAD') === git(repo, 'rev-parse', 'HEAD') && madeWs?.workspaceKind === 'worktree', JSON.stringify(wt ?? {}) + JSON.stringify(madeWs?.workspaceKind))
+const wtRow = wt && await inCatalog(wt.workspace_id)
+check('…and in the catalog at once, a worktree of the same project', wtRow?.is_main === false && wtRow.project_id === repoRow?.project_id && wtRow.branch === 'e2e/feature',
+  JSON.stringify(wtRow))
+const inWt = wt && await tryCall('session.start', { cwd: wt.path, workspace_id: wt.workspace_id, prompt: 'Please E2E_HELLO', launcher: 'e2e-claude' }, 60_000)
+const wtSid = inWt?.session?.session_id
+const wtAgent = wtSid && await until('its agent', async () => (await paseo.request('fetch_agent_request', { agentId: wtSid.slice('paseo-'.length) })).agent, 30_000).catch(() => undefined)
+await until('listed in its workspace', () => node.sessions().find((s) => s.session_id === wtSid)?.workspace_id, 30_000).catch(() => {})
+check('a session started in it: Paseo\'s agent is in that workspace, and its row names it', wtAgent?.workspaceId === wt?.workspace_id &&
+  node.sessions().find((s) => s.session_id === wtSid)?.workspace_id === wt?.workspace_id, JSON.stringify({ ws: wtAgent?.workspaceId, row: node.sessions().find((s) => s.session_id === wtSid)?.workspace_id }))
+
+// ---- renaming and deleting Paseo's workspaces (#6297) ----
+
+// The worktree's title, then its project's name: set in Paseo, and said by the rows at once.
+await tryCall('worktree.rename', { workspace_id: wt?.workspace_id, kind: 'paseo', name: 'E2E work' })
+const titled = wt && await until('titled in Paseo', async () => {
+  const d = await paseoWs(wt.workspace_id)
+  return d?.title === 'E2E work' ? d : undefined
+}, 30_000).catch(() => undefined)
+const titledRow = wt && await until('titled in the catalog', async () => (await catalog()).find((w) => w.source_id === wt.workspace_id && w.title === 'E2E work'), 30_000).catch(() => undefined)
+check('a Paseo workspace renamed from Persona: its title in Paseo and in the catalog', titled?.title === 'E2E work' && titledRow?.title === 'E2E work',
+  JSON.stringify({ paseo: titled?.title, row: titledRow?.title }))
+const renamedSpace = await tryCall('space.rename', { workspace_id: repoRow?.project_id, name: 'E2E project' })
+const project = repoWs && await until('the project renamed in Paseo', async () => {
+  const d = await paseoWs(repoWs)
+  return d?.projectDisplayName === 'E2E project' ? d : undefined
+}, 30_000).catch(() => undefined)
+const spaceOf = () => node.sessions().find((s) => s.session_id === wtSid)?.space_name
+await until("the session's space", () => spaceOf() === 'E2E project', 30_000).catch(() => {})
+check("its project renamed from Persona: Paseo's project, the name the node answers, the session's space", renamedSpace?.name === 'E2E project' &&
+  project?.projectDisplayName === 'E2E project' && spaceOf() === 'E2E project', JSON.stringify({ answer: renamedSpace, paseo: project?.projectDisplayName, row: spaceOf() }))
+
+// Not while its Agent is at work: Paseo's archive would end the turn and remove the folder under it.
+const wtRowNow = () => node.sessions().find((s) => s.session_id === wtSid)
+await until('its first turn over', () => ['idle', 'done'].includes(wtRowNow()?.status), 60_000).catch(() => {})
+await tryCall('session.send', { session_id: wtSid, text: 'Please E2E_SLOW', client_msg_id: 'cm-e2e-wt-slow' }, 60_000)
+await until('at work in the worktree', () => wtRowNow()?.status === 'working', 30_000).catch(() => {})
+const busy = wt && await node.call('worktree.delete', { workspace_id: wt.workspace_id, kind: 'paseo', preview: true, locale: 'en' })
+  .then(() => 'previewed', (e) => e.message)
+check('…a deletion refused while its Agent is at work, the folder kept', /still working/.test(busy ?? '') && existsSync(wt.path), busy)
+await until('its turn over', () => ['idle', 'done'].includes(wtRowNow()?.status), 60_000).catch(() => {})
+
+// Deleting the worktree: a preview, its confirmation; Paseo archives the workspace and removes the folder, the branch stays.
+const preview = wt && await tryCall('worktree.delete', { workspace_id: wt.workspace_id, kind: 'paseo', preview: true })
+const deleted = preview?.preview_token && await tryCall('worktree.delete', { workspace_id: wt.workspace_id, kind: 'paseo', preview_token: preview.preview_token,
+  ...(preview.dirty > 0 ? { force: true } : {}) }, 150_000)
+check('a Paseo worktree deleted from Persona: previewed, archived by Paseo; its folder is gone, its branch stays', preview?.path === wt?.path &&
+  preview?.branch === 'e2e/feature' && deleted?.removed === true && deleted?.state === 'removed' && !existsSync(wt.path) &&
+  git(repo, 'branch', '--list', 'e2e/feature') !== '' && !(await paseoWs(wt.workspace_id)) && !(await catalog()).some((w) => w.source_id === wt.workspace_id),
+  JSON.stringify({ preview, deleted }))
+
+// A new Agent's own worktree (#6115) made by Paseo: once the Agent is closed it is Persona's to remove, which has Paseo
+// archive the workspace (removing the folder); never while the Agent runs. Its branch goes too when asked.
+const own = await tryCall('worktree.add', { cwd: repo, kind: 'paseo', name_hint: 'E2E own' }, 150_000)
+const ownStarted = own?.workspace_id && await tryCall('session.start', { cwd: own.path, workspace_id: own.workspace_id, prompt: 'Please E2E_HELLO', launcher: 'e2e-claude' }, 60_000)
+const ownSid = ownStarted?.session?.session_id
+const ownRow = () => node.sessions().find((s) => s.session_id === ownSid)
+await until('its turn over', () => ['idle', 'done'].includes(ownRow()?.status), 60_000).catch(() => {})
+const inUse = ownSid && await node.call('worktree.remove', { path: own.path, kind: 'paseo' }).then(() => 'removed', (e) => e.code)
+await tryCall('session.close', { session_id: ownSid })
+await until('closed', () => ownRow()?.status === 'offline', 30_000).catch(() => {})
+const ownSt = own && await tryCall('worktree.status', { cwd: own.path, kind: 'paseo' })
+const ownRemoved = ownSt?.ours && await tryCall('worktree.remove', { path: own.path, kind: 'paseo', delete_branch: true }, 90_000)
+check("a closed Agent's own worktree Paseo made: Persona's, removed through Paseo with its branch, not while the Agent ran",
+  inUse === 'worktree_in_use' && ownSt?.ours === true && ownRemoved?.removed === true && ownRemoved.branch_deleted === true &&
+  !existsSync(own.path) && !(await paseoWs(own.workspace_id)) && git(repo, 'branch', '--list', own.branch) === '',
+  JSON.stringify({ own, inUse, ownSt, ownRemoved }))
+
+// Paseo forking an agent's session itself, as its app does to go on after an API error (it rewinds the failed turn
+// first): an agent started in Paseo stays the session it was listed under (#6709). Seen by the bridge, its id is pinned
+// on the agent as kept; not seen (the bridge was not running), the line of its transcripts gives the same id back.
+const twoTurns = async () => {
+  const a = await inPaseo()
+  await paseo.request('send_agent_message_request', { agentId: a?.id, text: 'Now E2E_HELLO again', messageId: randomUUID() }, { timeoutMs: 60_000 }).catch(() => {})
+  await until('its second turn over', async () => {
+    const now = (await paseo.request('fetch_agent_request', { agentId: a?.id })).agent
+    const tl = await paseo.request('fetch_agent_timeline_request', { agentId: a?.id, direction: 'tail', limit: 0 })
+    return now?.status === 'idle' && (tl.entries ?? []).filter((e) => e.item?.type === 'assistant_message').length >= 2
+  }, 60_000).catch(() => {})
+  return a
+}
+const paseoRewind = async (a) => {
+  const tl = await paseo.request('fetch_agent_timeline_request', { agentId: a?.id, direction: 'tail', limit: 0 })
+  const target = (tl.entries ?? []).map((e) => e.item).find((it) => it?.type === 'user_message' && it.text === 'Now E2E_HELLO again')
+  await paseo.request('agent.rewind.request', { agentId: a?.id, messageId: target?.messageId, mode: 'conversation' }, { timeoutMs: 120_000 }).catch(() => {})
+  return until('forked', async () => {
+    const now = (await paseo.request('fetch_agent_request', { agentId: a?.id })).agent
+    return now?.persistence?.sessionId && now.persistence.sessionId !== a?.claude ? now : undefined
+  }, 30_000).catch(() => undefined)
+}
+const seen = await twoTurns()
+const seenFork = await paseoRewind(seen)
+const seenNow = await until('its id pinned', async () => {
+  const now = (await paseo.request('fetch_agent_request', { agentId: seen?.id })).agent
+  return now?.labels?.['persona.session'] ? now : undefined
+}, 20_000).catch(() => undefined)
+check("Paseo's own fork of an agent started there: the same session in Persona, its id pinned as kept", Boolean(seenFork) &&
+  seenNow?.labels?.['persona.session'] === seen?.claude && seenNow?.labels?.['persona.kept'] === '1' && row(seen, true) &&
+  !node.sessions().some((s) => s.session_id === seenFork.persistence.sessionId), JSON.stringify(seenNow?.labels))
+const unseen = await twoTurns()
+await node.call('engine.use', { engine: 'herdr' })
+await until('the bridge gone', () => !row(unseen, true), 30_000).catch(() => {})
+const unseenFork = await paseoRewind(unseen)
+await node.call('engine.use', { engine: 'paseo' })
+await until('listed again', () => row(unseen, true), 60_000).catch(() => {})
+check('a fork the bridge did not see: listed under the first session of its line, never under the fork', Boolean(unseenFork) && row(unseen, true) &&
+  !node.sessions().some((s) => s.session_id === unseenFork.persistence.sessionId) && row(seen, true),
+  `${unseen?.claude} → ${unseenFork?.persistence?.sessionId}: ${node.sessions().filter((s) => s.cwd === work).map((s) => s.session_id).join(',')}`)
 
 // ---- the engine changed: the bridge stops ----
 

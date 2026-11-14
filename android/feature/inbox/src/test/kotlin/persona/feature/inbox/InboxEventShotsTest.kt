@@ -150,7 +150,7 @@ class InboxEventShotsTest {
             style = s; dark = d; shown = id; run++
             rule.waitForIdle()
             rule.onNodeWithText("看原文").assertExists()
-            if (name == "waiting") rule.onNodeWithText("展开全部（6）").performClick()
+            if (name == "waiting") rule.onNodeWithText("处理链条").performClick()
             capture("inbox-event-$name-${s.name.lowercase()}-${mode(d)}")
         }
     }

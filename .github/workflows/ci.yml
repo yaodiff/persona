@@ -7,7 +7,7 @@ on:
         type: boolean
         default: true
       lanes:
-        description: 'When full is false: all, auto (diff against origin/main), or comma-separated server,web,android,apple,runtimes,scripts'
+        description: 'When full is false: all, auto (diff against origin/main), or comma-separated server,web,android,apple,core,runtimes,desktop,scripts'
         type: string
         default: auto
       base:
@@ -29,7 +29,9 @@ jobs:
       web: ${{ steps.paths.outputs.web }}
       android: ${{ steps.paths.outputs.android }}
       apple: ${{ steps.paths.outputs.apple }}
+      core: ${{ steps.paths.outputs.core }}
       runtimes: ${{ steps.paths.outputs.runtimes }}
+      desktop: ${{ steps.paths.outputs.desktop }}
       scripts: ${{ steps.paths.outputs.scripts }}
     steps:
       - uses: actions/checkout@v4
@@ -76,26 +78,26 @@ jobs:
     uses: ./.github/workflows/apple-test.yml
     with:
       lane: ios
-  apple_macos:
-    name: Mac (non-blocking)
+  core:
     needs: changes
-    if: needs.changes.outputs.apple == 'true'
-    uses: ./.github/workflows/apple-test.yml
-    with:
-      lane: macos
+    if: needs.changes.outputs.core == 'true'
+    uses: ./.github/workflows/core-test.yml
   runtimes:
     needs: changes
     if: needs.changes.outputs.runtimes == 'true'
     uses: ./.github/workflows/runtimes-test.yml
+  desktop:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    uses: ./.github/workflows/desktop-test.yml
   scripts:
     needs: changes
     if: needs.changes.outputs.scripts == 'true'
     uses: ./.github/workflows/scripts-tests.yml
   # An unselected manual lane is never represented as a passed platform test.
-  # Mac has a visible independent result but does not block CI required.
   required:
     name: CI required
-    needs: [changes, server, web, android, apple, runtimes, scripts]
+    needs: [changes, server, web, android, apple, core, runtimes, desktop, scripts]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 12

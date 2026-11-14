@@ -4,12 +4,15 @@ import SwiftUI
 /// Settings › Meetings (#2981, docs/assistant/meeting-minutes.md「Attendance fields」): the role every meeting recording
 /// starts with, kept on the hub (`meeting_attendance_default`, Off until changed), and what Persona may say in front of
 /// others. Each recording can still pick its own role and session (the Recordings page). Shown only by a hub that offers
-/// attending.
+/// attending. A hub with hub transcription (#3862 phase 5) adds how meetings are transcribed, its speech service, the
+/// glossary and this iPhone's Wi-Fi rule (`MeetingTranscriptionSettingsSections`).
 struct MeetingSettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var capturedAPI: APIClient?
     @State private var role: MeetingAttendance?
     @State private var saving = false
+    /// Hub transcription's settings, made once the page shows (its model reads this phone's Wi-Fi rule: P3).
+    @State private var transcription: MeetingTranscriptionSettings?
 
     var body: some View {
         SettingsForm {
@@ -31,6 +34,9 @@ struct MeetingSettingsView: View {
                     Text("Each meeting recording starts with this. To change it for one meeting, pick another on the Recordings page before you start.")
                 }
             }
+            if let transcription, transcription.offered, let values = transcription.values {
+                MeetingTranscriptionSettingsSections(settings: transcription, values: values)
+            }
             Section {
                 Label("Answers only from meeting material: earlier minutes, project progress and who owns a to-do.", systemImage: Theme.Icon.meeting)
                 Label("Never brings up private chats, mail, health or other personal data.", systemImage: Theme.Icon.privacy)
@@ -45,7 +51,11 @@ struct MeetingSettingsView: View {
         .themedPage()
         .navigationTitle(String(localized: "Meetings"))
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
+        .task {
+            await load()
+            if transcription == nil { transcription = MeetingTranscriptionSettings(deps: .live) }
+            await transcription?.load()
+        }
     }
 
     private func load() async {

@@ -24,10 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pr_watch_common import WatchError, atomic_json, bounded, checked, fingerprint, gh_json, pr_snapshot, repository, run, SHA, verification_env
 from pr_watch_merge import linked_issue, merge as generic_merge
 import pr_watch_merge
+import pr_watch_common
+import pr_watch_repair
 from pr_watch_review import review as semantic_review
 from pr_watch_verify import verify
 
 FORMAT_VERSION = 1
+VERIFICATION_POLICY_VERSION = 2
 
 
 def load_config(path):
@@ -107,6 +110,20 @@ class State:
             return dict(item)
 
 
+def public_base_evidence(evidence):
+    """Keep failure identity and reason, never local paths or raw command output."""
+    if not isinstance(evidence, dict):
+        return str(evidence)
+    def clean(item):
+        if isinstance(item, dict):
+            return {key: clean(value) for key, value in item.items()
+                    if key in ("reproduced", "reason", "packages", "tests", "lanes")}
+        if isinstance(item, list):
+            return [clean(value) for value in item]
+        return str(item)
+    return json.dumps(clean(evidence), ensure_ascii=False)
+
+
 class Watcher:
     def __init__(self, config, dry_run=False, verbose=True):
         self.config = config
@@ -114,7 +131,8 @@ class Watcher:
         self.dry_run = dry_run
         self.verbose = verbose
         self.state = State(config["state"])
-        self.tasks = queue.Queue()
+        self.tasks = queue.PriorityQueue()
+        self.queue_sequence = 0
         self.pending = {}
         self.active = {}
         self.wake = threading.Event()
@@ -167,8 +185,6 @@ class Watcher:
                         raise WatchError("invalid PR discovery entry")
                     if item.get("isDraft") or item.get("baseRefName") != config["base"]:
                         continue
-                    if item.get("mergeable") == "CONFLICTING":
-                        continue
                     if not isinstance(item.get("headRefOid"), str) or not SHA.fullmatch(item["headRefOid"]):
                         raise WatchError("PR discovery entry has no valid head SHA")
                     self.enqueue(repo, item["number"], item["headRefOid"], "poll")
@@ -177,6 +193,21 @@ class Watcher:
             self.fatal = error
             self.wake.set()
             raise
+
+    def queue_priority(self, repo, number, sha):
+        """Prioritize only a migration that process() will actually attempt."""
+        old = self.state.get(repo, number)
+        evidence_key = repo + "#" + str(number) + "@" + str(old.get("base", "")) + ".." + sha
+        if (old.get("head") == sha and old.get("evidence_key") == evidence_key
+                and old.get("retry_after", 0) <= time.time()
+                and old.get("outcome") != "merge_failed"
+                and old.get("format") == FORMAT_VERSION
+                and old.get("verification_policy") != VERIFICATION_POLICY_VERSION
+                and old.get("verification") not in ("passed", "base_failure")
+                and not old.get("repair_exhausted")
+                and old.get("outcome") not in ("merged", "continuation", "findings")):
+            return 0
+        return 1
 
     def enqueue(self, repo, number, sha, source):
         if repo not in self.repositories or not isinstance(number, int) or number < 1:
@@ -190,7 +221,10 @@ class Watcher:
                     self.log("%s#%s: newer head noticed while busy" % (repo, number))
                 return
             self.active[key] = {"started": time.monotonic(), "phase": "queued", "source": source}
-        self.tasks.put(key)
+            priority = self.queue_priority(repo, number, sha)
+            sequence = self.queue_sequence
+            self.queue_sequence += 1
+            self.tasks.put((priority, sequence, key))
         self.log("%s#%s queued (%s)" % (repo, number, source))
 
     def phase(self, key, phase):
@@ -271,11 +305,18 @@ class Watcher:
         if result.returncode:
             raise WatchError("could not post PR comment: " + bounded(result.stderr, 1000))
 
-    def success_review(self, repo, number, pr, results):
-        body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
-                "Local checks completed successfully:\n%s\n\n"
-                "This records only the checks listed above; it does not claim unrun device or visual acceptance.") % (
-            pr["headRefOid"][:9], "\n".join("- `%s`" % r["name"] for r in results))
+    def success_review(self, repo, number, pr, results, base_failures=None):
+        if base_failures:
+            body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
+                    "Some failed checks were independently reproduced on clean main and are not attributed to this PR. They are not claimed as passing tests:\n\n```text\n%s\n```\n\n"
+                    "Checks that actually passed:\n%s") % (
+                pr["headRefOid"][:9], bounded(public_base_evidence(base_failures), 6000),
+                "\n".join("- `%s`" % r["name"] for r in results if r.get("ok")) or "- No additional successful lanes")
+        else:
+            body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
+                    "Local checks completed successfully:\n%s\n\n"
+                    "This records only the checks listed above; it does not claim unrun device or visual acceptance.") % (
+                pr["headRefOid"][:9], "\n".join("- `%s`" % r["name"] for r in results))
         result = run(["gh", "pr", "review", str(number), "--repo", repo, "--comment", "--body", body], timeout=90)
         if result.returncode:
             raise WatchError("could not post successful review: " + bounded(result.stderr, 1000))
@@ -312,6 +353,81 @@ class Watcher:
         self.log("%s#%s merged at %s" % (repo, number, pr["headRefOid"][:9]))
         return True
 
+    def repair_verification(self, config, pr, worktree, error):
+        """Attribute a failure, update a stale base, or perform one repair round."""
+        repo, number = config["name"], pr["number"]
+        old = self.state.get(repo, number)
+        rounds = int(old.get("repair_rounds", 0))
+        if rounds >= 2:
+            self.comment(repo, number, "Automatic verification repair stopped after two rounds.\n\n```text\n%s\n```" %
+                         bounded(str(error), 12000))
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           outcome="repair_exhausted", repair_exhausted=True, failure=str(error))
+            return False
+        comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), getattr(error, "output", "") or str(error),
+                                                             git_root=config["checkout"], command=getattr(error, "command", None),
+                                                             failures=getattr(error, "failures", None), environ=verification_env())
+        if comparison.get("reproduced"):
+            self.log("%s#%s failure also reproduces on clean main; continue the remaining gates" % (repo, number))
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           base_failures=comparison, verification="base_failure", checks=getattr(error, "checks", []),
+                           outcome="passed_with_base_failures", failure=str(error))
+            try:
+                self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
+                             bounded(str(error), 6000))
+            except WatchError as comment_error:
+                self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                               outcome="base_comment_pending", failure=str(error),
+                               comment_failure=str(comment_error),
+                               base_failures=comparison, verification="base_failure",
+                               checks=getattr(error, "checks", []))
+                return False
+            return "base_failure"
+        updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
+        if updated_head:
+            merged_pr = dict(pr, headRefOid=updated_head)
+            results = verify(repo, merged_pr, str(worktree), config["verify"], environ=verification_env())
+            scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
+            checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
+                    cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
+            if pr.get("isCrossRepository"):
+                new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], str(error), config["verify"], allow_merge_only=True, original_pr=pr)
+                self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                               outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
+                self.comment(repo, number, "The stale fork PR was updated in an isolated checkout; continuation PR #%d was opened." % new_number)
+            else:
+                pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
+                updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
+                self.state.put(repo, number, updated_head, evidence_key=updated_key,
+                               repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
+                self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
+            return False
+        latest = pr_snapshot(repo, number)
+        if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           outcome="head_moved", repair_rounds=rounds, failure=str(error))
+            self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
+            return False
+        self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                       outcome="repairing", repair_rounds=rounds + 1, failure=str(error))
+        if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           outcome="head_moved", repair_rounds=rounds, failure=str(error))
+            self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
+            return False
+        checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
+        pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
+        new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
+        self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                       repair_rounds=rounds + 1, outcome="repair_published", failure=str(error),
+                       checks=repair_checks)
+        self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
+        if new_number != number:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           outcome="continuation", continuation=new_number)
+            self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
+        return False
+
     def mergeable(self, pr):
         if pr["state"] != "OPEN" or pr["isDraft"]:
             return False
@@ -342,10 +458,40 @@ class Watcher:
         old = self.state.get(repo, number)
         evidence_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + head
         if old.get("evidence_key") != evidence_key:
-            old = {}
+            previous = old
+            old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
+        if (old.get("head") == head and old.get("format") == FORMAT_VERSION
+                and old.get("verification_policy") != VERIFICATION_POLICY_VERSION
+                and old.get("verification") not in ("passed", "base_failure")
+                and not old.get("repair_exhausted")
+                and old.get("outcome") not in ("merged", "continuation", "findings")):
+            # A prerequisite failure is not evidence against this exact head.
+            # Retry only its verification under the new policy. Completed gates,
+            # published findings and exhausted repair budgets keep their meaning.
+            old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                 verification_policy=VERIFICATION_POLICY_VERSION,
+                                 outcome="retry", retry_after=0,
+                                 repair_rounds=int(old.get("repair_rounds", 0)),
+                                 repair_attempts=0, review_attempts=0,
+                                 semantic=old.get("semantic"), findings=old.get("findings", []),
+                                 review_fingerprint=old.get("review_fingerprint"),
+                                 review_posted=old.get("review_posted", False),
+                                 base=pr["baseRefOid"], format=FORMAT_VERSION)
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
-        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed"):
+        if old.get("outcome") == "continuation":
+            return
+        if old.get("outcome") == "base_comment_pending":
+            if not self.dry_run:
+                self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
+                             bounded(old.get("failure", ""), 6000))
+            old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                 outcome="passed_with_base_failures", review_posted=False,
+                                 verification=old.get("verification"), checks=old.get("checks", []),
+                                 base_failures=old.get("base_failures"), base_comment_posted=True)
+        if old.get("repair_exhausted") and old.get("evidence_key") == evidence_key:
+            return
+        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):
             if self.dry_run or old.get("review_posted") or old.get("outcome") == "merged":
                 return
             # A dry run keeps semantic/test evidence but has no external side
@@ -354,12 +500,58 @@ class Watcher:
                 self.comment_findings(repo, number, pr, old.get("findings", []))
                 self.state.put(repo, number, head, evidence_key=evidence_key, review_posted=True)
                 return
+            if old.get("outcome") == "passed_with_base_failures" and old.get("semantic") == "passed" and not old.get("review_posted"):
+                old = dict(old, outcome="passed", review_posted=False)
             if old.get("outcome") == "failed":
+                if old.get("failure_posted"):
+                    return
                 self.comment(repo, number, "Automated review at `%s` did not pass. Not merged.\n\n```text\n%s\n```" %
-                             (head[:9], bounded(old.get("failure", "verification failed"), 4500)))
+                             (head[:9], bounded(old.get("failure", "verification failed"), 14000)))
                 self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)
                 return
         if not self.mergeable(pr):
+            if pr["mergeable"] == "CONFLICTING" and not self.dry_run:
+                worktree = None
+                try:
+                    rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
+                    if rounds >= 2:
+                        if not self.state.get(repo, number).get("repair_exhausted"):
+                            self.state.put(repo, number, head, evidence_key=evidence_key,
+                                           repair_exhausted=True, outcome="repair_exhausted")
+                            self.comment(repo, number, "The automatic repair limit was reached while updating the base; no merge was attempted.")
+                        return
+                    worktree = self.worktree(repo, number, pr)
+                    updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
+                    if updated_head:
+                        merged_pr = dict(pr, headRefOid=updated_head)
+                        results = verify(repo, merged_pr, str(worktree), config["verify"], environ=verification_env())
+                        scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
+                        checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
+                                cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
+                        if pr.get("isCrossRepository"):
+                            new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], "conflicting base", config["verify"], allow_merge_only=True, original_pr=pr)
+                            self.state.put(repo, number, head, evidence_key=evidence_key,
+                                           outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
+                            self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
+                        else:
+                            pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
+                            updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
+                            self.state.put(repo, number, updated_head, evidence_key=updated_key,
+                                           repair_rounds=rounds + 1, outcome="base_updated")
+                            self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
+                except WatchError as error:
+                    attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + 1
+                    if attempts >= 3:
+                        self.comment(repo, number, "Automatic base update failed after three attempts. No merge was attempted.\n\n```text\n%s\n```" % bounded(str(error), 6000))
+                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                                       outcome="failed", review_attempts=attempts, failure=str(error))
+                    else:
+                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                                       outcome="retry", review_attempts=attempts,
+                                       retry_after=time.time() + 60 * attempts, failure=str(error))
+                    self.log("%s#%s automatic base update failed: %s" % (repo, number, bounded(error, 500)))
+                finally:
+                    self.remove_worktree(repo, worktree)
             return
         phase = "merge"
         if old.get("head") == head and old.get("outcome") == "merge_failed":
@@ -383,13 +575,17 @@ class Watcher:
             phase = "semantic"
             current = self.state.get(repo, number)
             if current.get("evidence_key") != evidence_key or current.get("format") != FORMAT_VERSION:
+                rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                         base=pr["baseRefOid"], format=FORMAT_VERSION, outcome="reviewing")
+                                         base=pr["baseRefOid"], format=FORMAT_VERSION, outcome="reviewing",
+                                         verification_policy=VERIFICATION_POLICY_VERSION,
+                                         repair_rounds=rounds)
             if current.get("semantic") != "passed" and current.get("semantic") != "findings":
                 self.phase(key, "independent semantic review")
                 findings = semantic_review(repo, pr, str(worktree), self.config["reviewer"])
                 semantic = "findings" if findings else "passed"
-                current = self.state.put(repo, number, head, semantic=semantic, findings=findings,
+                current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                         semantic=semantic, findings=findings,
                                          review_fingerprint=fingerprint(repo, number, head, "semantic", findings))
             findings = current.get("findings", [])
             if current.get("semantic") == "findings":
@@ -401,12 +597,36 @@ class Watcher:
                                              review_posted=not self.dry_run, outcome="findings")
                 self.log("%s#%s has %d semantic finding(s); not merged" % (repo, number, len(findings)))
                 return
-            if current.get("verification") != "passed":
+            if current.get("verification") not in ("passed", "base_failure"):
                 self.phase(key, "repository verification")
                 phase = "verification"
-                results = verify(repo, pr, str(worktree), config["verify"], environ=verification_env())
-                current = self.state.put(repo, number, head, verification="passed", checks=results)
+                try:
+                    results = verify(repo, pr, str(worktree), config["verify"], environ=verification_env())
+                except pr_watch_common.VerificationError as error:
+                    if self.dry_run:
+                        raise
+                    if self.state.get(repo, number).get("repair_rounds", 0) >= 2:
+                        self.comment(repo, number, "Automatic verification repair stopped after two rounds.\n\n```text\n%s\n```" % bounded(str(error), 12000))
+                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                                       outcome="repair_exhausted", repair_exhausted=True, failure=str(error))
+                        return
+                    repaired = self.repair_verification(config, pr, worktree, error)
+                    if repaired != "base_failure":
+                        return
+                    current = self.state.get(repo, number)
+                    base_evidence = current.get("base_failures")
+                    current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                             verification="base_failure", checks=error.checks,
+                                             verification_policy=VERIFICATION_POLICY_VERSION,
+                                             base_failures=base_evidence)
+                else:
+                    current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                             verification="passed", checks=results,
+                                             verification_policy=VERIFICATION_POLICY_VERSION)
+            if current.get("verification") == "base_failure":
+                self.phase(key, "continuing after a clean-main failure")
             with self.merging(repo):
+                phase = "merge"
                 self.phase(key, "rechecking exact head")
                 current_pr = pr_snapshot(repo, number)
                 if (current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"]
@@ -418,25 +638,41 @@ class Watcher:
                 if not current.get("review_posted"):
                     self.phase(key, "posting successful review")
                     if not self.dry_run:
-                        self.success_review(repo, number, current_pr, current.get("checks", []))
+                        self.success_review(repo, number, current_pr, current.get("checks", []),
+                                            current.get("base_failures"))
                     current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                              review_posted=not self.dry_run)
                 self.finish_merge(config, current_pr, current)
         except WatchError as error:
+            if phase == "verification":
+                attempts = int(self.state.get(repo, number).get("repair_attempts", 0)) + 1
+                latest = self.state.get(repo, number)
+                self.state.put(repo, number, head, evidence_key=evidence_key,
+                               outcome="retry" if attempts < 3 else "failed",
+                               review_attempts=attempts,
+                               repair_attempts=attempts,
+                               repair_rounds=int(latest.get("repair_rounds", 0)),
+                               verification=latest.get("verification"), checks=latest.get("checks", []),
+                               base_failures=latest.get("base_failures"),
+                               retry_after=time.time() + 300, failure=str(error))
+                if not self.dry_run:
+                    self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
+                                 bounded(str(error), 12000))
+                return
             # A missing semantic answer never becomes approval. Verification
-            # failures are durable for this head; infrastructure errors get a
-            # bounded retry before one concise public failure comment.
+            # Infrastructure failures remain retryable with capped backoff;
+            # verification failures and semantic findings stay terminal for
+            # this exact base/head until the PR changes.
             attempts = int(old.get("review_attempts", 0)) + 1
-            retry = (phase in ("preparing", "semantic", "merge") and attempts < 3
-                     and old.get("verification") != "passed" and phase != "merge")
+            retry = phase in ("preparing", "semantic") and old.get("verification") != "passed"
             outcome = "retry" if retry else ("merge_failed" if phase == "merge" else "failed")
             self.state.put(repo, number, head, evidence_key=evidence_key, outcome=outcome,
-                           review_attempts=attempts, retry_after=time.time() + min(300, 30 * (2 ** (attempts - 1))),
+                           review_attempts=attempts, retry_after=time.time() + min(1800, 30 * (2 ** min(attempts - 1, 6))),
                            failure=str(error))
             if not retry and not old.get("failure_posted"):
                 if not self.dry_run:
                     self.comment(repo, number, "Automated review at `%s` could not complete. Not merged.\n\n```text\n%s\n```" %
-                                 (head[:9], bounded(error, 4500)))
+                                 (head[:9], bounded(error, 14000)))
                 self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)
             self.log("%s#%s %s failed: %s" % (repo, number, phase, bounded(error, 700)))
         finally:
@@ -447,21 +683,23 @@ class Watcher:
         try:
             merged = self.merge(config, pr)
             outcome = "merged" if merged else "passed"
-            self.state.put(repo, number, head, outcome=outcome, merged=merged)
+            self.state.put(repo, number, head, evidence_key=current.get("evidence_key"),
+                           outcome=outcome, merged=merged)
             if not self.dry_run:
                 self.notify(config, number, head, outcome)
         except WatchError as error:
             blocking = "not mergeable" in str(error) or "conflict" in str(error) or "issue" in str(error)
             retry = 0 if blocking else time.time() + min(900, 60 * (2 ** min(int(current.get("merge_attempts", 0)), 4)))
-            self.state.put(repo, number, head, outcome="merge_failed", blocking=blocking,
+            self.state.put(repo, number, head, evidence_key=current.get("evidence_key"),
+                           outcome="merge_failed", blocking=blocking,
                            merge_attempts=int(current.get("merge_attempts", 0)) + 1,
                            retry_after=retry, failure=str(error))
             self.log("%s#%s merge blocked: %s" % (repo, number, bounded(error, 700)))
 
     def worker(self):
         while True:
-            key = self.tasks.get()
-            if key is None:
+            priority, _, key = self.tasks.get()
+            if priority == 2:
                 self.tasks.task_done()
                 return
             repo, number = key
@@ -526,7 +764,7 @@ class Watcher:
         finally:
             self.stopping.set()
             for _ in self.workers:
-                self.tasks.put(None)
+                self.tasks.put((2, -1, ("", 0)))
             for worker in self.workers:
                 worker.join(timeout=30)
             if self.events:

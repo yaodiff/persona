@@ -20,7 +20,6 @@ require (
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55
 	github.com/tailscale/tailcat v0.7.0
 	github.com/tdewolff/parse/v2 v2.8.20
-	github.com/wailsapp/go-webview2 v1.0.23
 	github.com/yuin/goldmark v1.8.5
 	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.41.0
@@ -59,7 +58,6 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
 	github.com/jsimonetti/rtnetlink v1.4.1 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/kr/fs v0.1.0 // indirect

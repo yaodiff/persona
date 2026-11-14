@@ -188,7 +188,7 @@ func (e *env) installNodeBinary(from string) error {
 
 // installTask is install's Windows part, after the pairing: stop the task if it runs (the programs it runs cannot be
 // replaced while they run), put the programs in place, register the task and start it, then wait for the link.
-func installTask(e *env, withNode, withTray bool, from string, invite *link.PairInvite) error {
+func installTask(e *env, withNode bool, from string, invite *link.PairInvite) error {
 	if e.user == "" {
 		return errors.New("不知道当前的 Windows 用户是谁，装不了计划任务")
 	}
@@ -197,7 +197,6 @@ func installTask(e *env, withNode, withTray bool, from string, invite *link.Pair
 		oldPID = st.PID
 	}
 	e.stopTask()
-	stopTray(e) // it runs from the console-less copy replaced below
 	if link.Running(e.configPath()) {
 		fmt.Fprintln(e.stdout, "注意：还有一个 persona-link 在运行（不是这个计划任务起的，比如前台的 persona-link run）：停掉它，计划任务里的那个会接上。")
 	}
@@ -238,7 +237,6 @@ func installTask(e *env, withNode, withTray bool, from string, invite *link.Pair
 	}
 	fmt.Fprintf(e.stdout, "装好了计划任务「%s」（%s），已启动：登录 Windows 时启动，%s退出了几秒内重启，不弹窗口；日志在 %s。\n",
 		taskName, file, what, e.personaDir())
-	startTray(e, withTray)
 	return waitStarted(e, started, oldPID, invite)
 }
 
@@ -249,7 +247,6 @@ func uninstallTask(e *env) {
 		fmt.Fprintf(e.stdout, "没装计划任务「%s」。\n", taskName)
 		return
 	}
-	removeTray(e)
 	if registered {
 		e.stopTask()
 		if out, err := e.schtasks("/Delete", "/TN", taskName, "/F"); err != nil {

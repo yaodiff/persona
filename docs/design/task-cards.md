@@ -218,6 +218,7 @@ Waited 2 h · 来自 Agent「…」
 | 行标题 | `secondaryMedium` | 15 medium | `text-[14.5px] font-semibold` | `text-row-title` |
 | 元信息（时间、地点） | `caption` | 13 | `text-[12px]` / `[12.5px]` / `[13px]` 混用 | `text-meta`（13）；12 / 12.5 并入 |
 | chip / 标签 / 计数 | `label` | 12 | `text-[12px]` | `text-label`（12） |
+| Secondary meta (the Inbox event page's state lines, times and section labels) | `label` / `caption` | 12 / 13 | `text-[11.5px]` | `text-submeta` (11.5; font size only, no line height) |
 | 强调的小字（按钮式链接） | `captionStrong` | 13 semibold | `font-semibold text-[12.5px]` | `text-meta font-semibold` |
 | 代码 / 路径 | `code` | 13 | `font-mono` | 沿用 |
 

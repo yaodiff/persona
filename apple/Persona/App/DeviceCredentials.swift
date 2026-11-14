@@ -164,7 +164,6 @@ nonisolated enum DeviceCredentialTrade {
 /// Settings › Devices: every device with its own credential, revocable one by one.
 struct DevicesView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var tokens: [APIClient.DeviceToken] = []
     @State private var current: String?
     /// Per credential, how the hub pushes to its device (#5998); empty from an older hub.
@@ -244,12 +243,9 @@ struct DevicesView: View {
                 }
                 Text(detail(t)).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                 if t.revokedAt == nil, let route = push[t.id] { DevicePushLine(route: route) }
-                // At the accessibility text sizes under the words: beside them, a chip and Revoke made the watch's row
-                // wider than its card (#1796).
-                if t.revokedAt == nil, typeSize.isAccessibilitySize { revokeButton(t) }
             }
             Spacer(minLength: 0)
-            if t.revokedAt == nil, !typeSize.isAccessibilitySize { revokeButton(t) }
+            if t.revokedAt == nil { revokeButton(t) }
         }
     }
 

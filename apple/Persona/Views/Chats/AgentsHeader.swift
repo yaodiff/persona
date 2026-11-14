@@ -239,19 +239,32 @@ private struct AgentsFoldingField: View {
 
 /// The bar across the page, its field on the page's edges whatever the row's own insets are (an inset grouped list's
 /// row starts `Theme.Space.page` in, a plain one at the screen's edge).
-private struct AgentsFieldPlace: ViewModifier {
+struct AgentsFieldPlace: ViewModifier {
+    nonisolated private struct Widths: Equatable, Sendable { var row: CGFloat, page: CGFloat }
+    @Environment(\.shell) private var shell
     @State private var minX: CGFloat = 0
     @State private var screen: CGFloat = 0
 
     func body(content: Content) -> some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("AgentsFieldPlace")
+        #endif
         let outside = Theme.Space.page
         content
             .frame(width: max(0, screen - 2 * outside))
             .offset(x: outside - minX)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in
-                minX = r.minX
-                screen = r.maxX + r.minX // the row is centered on the screen
+            // The row's own width and the page's, neither of which a slide of the page changes. From the row's frame
+            // in the window, this state was written on every frame the shell's strip slid (about 60 a switch), and the
+            // row, the filters under it included, was laid out again each time (#5438).
+            .onGeometryChange(for: Widths.self) { [shell] g in
+                // The shell's page is as wide as its strip measured it (unobserved, read as the row is laid out).
+                if let page = shell?.pager.width { return Widths(row: g.size.width, page: page) }
+                let r = g.frame(in: .global) // perf-ok: only outside the shell, where no strip slides the row
+                return Widths(row: r.width, page: r.maxX + r.minX)
+            } action: { w in
+                minX = (w.page - w.row) / 2 // the row is centered on the page
+                screen = w.page
             }
     }
 }
@@ -541,6 +554,29 @@ struct SystemCloseButton: UIViewRepresentable {
     }
 }
 
+#endif
+
+#if os(iOS) || os(visionOS)
+/// The shell's bar over the Agents list: reports where it is drawn to the header and fades as the field rises, reading
+/// the header itself. `ChatsView`'s body read `up`, `bar` and `listTop` for this; the bar is put back each time the
+/// strip comes to rest on Agents and reports its place again, so the page's body, and with it the list's over every row,
+/// ran on each switch from Assistant (#5438, docs/apple/performance.md P5).
+struct AgentsTopBarPlace: ViewModifier {
+    let header: AgentsHeader
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: ClosedRange<CGFloat>.self) { g in
+                let f = g.frame(in: .global) // perf-ok: only its top and bottom, which a slide sideways leaves alone
+                return f.minY...f.maxY
+            } action: { [header] y in
+                if header.bar != y { header.bar = y }
+            }
+            // The field on its way up into the bar's row, animated (`AgentsHeader.up`).
+            .modifier(AgentsTopBarFade(progress: header.up ? 1 : 0,
+                                       gone: AgentsTopBarFade.gone(bar: header.bar, field: header.listTop + AgentsHeader.room(shell: true))))
+    }
+}
 #endif
 
 /// The shell's top bar while the field comes up into its row: gone before the field gets to it, back only once the

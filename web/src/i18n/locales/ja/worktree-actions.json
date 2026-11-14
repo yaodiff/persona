@@ -7,7 +7,7 @@
   "new_child": "子ワークツリーを作成…",
   "rename": "ワークツリー名を変更…",
   "copy_name": "ワークツリー名をコピー",
-  "copy_path": "パスをコピー",
+  "copy_path": "フォルダーのパスをコピー",
   "open_parent": "親ワークツリーを開く",
   "delete": "ワークツリーを削除…",
   "delete_title": "ワークツリーを削除",

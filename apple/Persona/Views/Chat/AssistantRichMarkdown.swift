@@ -93,7 +93,8 @@ struct AssistantRichMarkdown: View {
                 case .field(let field) where field.kind == "secret": return false
                 case .html: continue
                 default:
-                    guard (ExtensionComponent.since[item.type] ?? Int.max) <= ExtensionUIContext.version else { return false }
+                    // Drawn by the app's renderer, as a card is (`ExtensionUIContext.cardVersion`).
+                    guard (ExtensionComponent.since[item.type] ?? Int.max) <= ExtensionUIContext.cardVersion else { return false }
                 }
             }
         }

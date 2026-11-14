@@ -50,12 +50,15 @@ object WorktreeCleanups {
     /** The status a close or delete offers the cleanup for: one Persona made; null otherwise. */
     fun offered(st: WorktreeStatus?): WorktreeStatus? = st?.takeIf { it.ours && it.path.isNotEmpty() }
 
-    /** Removes it once its agent is gone, a few tries [wait] ms apart while the node still lists the agent. */
+    /**
+     * Removes it once its agent is gone, a few tries [wait] ms apart while the node still lists the agent; by the engine
+     * the agent ran in ([kind], `Session.worktreeKind`).
+     */
     suspend fun remove(service: AgentCreationService, machineId: String, st: WorktreeStatus, c: WorktreeCleanup,
-                       tries: Int = REMOVE_TRIES, wait: Long = 1000): WorktreeRemoved {
+                       kind: String? = null, tries: Int = REMOVE_TRIES, wait: Long = 1000): WorktreeRemoved {
         var attempt = 1
         while (true) {
-            try { return service.removeWorktree(machineId, st.path, c.deleteBranch, force(st, c)) }
+            try { return service.removeWorktree(machineId, st.path, c.deleteBranch, force(st, c), kind) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 if (attempt >= tries || hubCodedFailure(e)?.code != "worktree_in_use") throw e
@@ -69,13 +72,13 @@ object WorktreeCleanups {
     // network at most. Move it to an app-level owner if more such follow-ups appear.
     private val scope = MainScope()
 
-    /** After its agent was closed or its chat deleted: removes it when asked, and says how it went app-wide. */
+    /** After its agent was closed or its chat deleted: removes it when asked ([kind]: as [remove]), and says how it went app-wide. */
     fun cleanUp(service: AgentCreationService, machineId: String, st: WorktreeStatus, c: WorktreeCleanup,
-                feedback: AppFeedback?, resources: Resources) {
+                feedback: AppFeedback?, resources: Resources, kind: String? = null) {
         if (!c.remove || st.path.isEmpty()) return
         scope.launch {
             val message = try {
-                val r = remove(service, machineId, st, c)
+                val r = remove(service, machineId, st, c, kind)
                 resources.getString(if (r.branchDeleted) R.string.chat_worktree_removed_branch else R.string.chat_worktree_removed)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
@@ -87,13 +90,16 @@ object WorktreeCleanups {
     }
 }
 
-/** The worktree Persona made that [session] works in, asked when the dialog opens; null while asking or otherwise. */
+/**
+ * The worktree Persona made that [session] works in, asked when the dialog opens of the engine it ran in ([kind],
+ * `Session.worktreeKind`); null while asking or otherwise.
+ */
 @Composable
-fun rememberOurWorktree(service: AgentCreationService?, machineId: String, cwd: String, online: Boolean): WorktreeStatus? {
-    var status by remember(machineId, cwd) { mutableStateOf<WorktreeStatus?>(null) }
-    LaunchedEffect(service, machineId, cwd, online) {
+fun rememberOurWorktree(service: AgentCreationService?, machineId: String, cwd: String, online: Boolean, kind: String? = null): WorktreeStatus? {
+    var status by remember(machineId, cwd, kind) { mutableStateOf<WorktreeStatus?>(null) }
+    LaunchedEffect(service, machineId, cwd, online, kind) {
         if (service == null || !online || cwd.isBlank()) return@LaunchedEffect
-        status = WorktreeCleanups.offered(service.worktreeStatus(machineId, cwd))
+        status = WorktreeCleanups.offered(service.worktreeStatus(machineId, cwd, kind))
     }
     return status
 }

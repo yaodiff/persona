@@ -153,3 +153,15 @@ func TestPaneSourceParameters(t *testing.T) {
 	_, err = i.Counts(Options{PaneSource: "runtime"})
 	requireCode(t, err, "invalid_query")
 }
+
+func TestParseTodo(t *testing.T) {
+	o, err := Parse(url.Values{"todo": {"todo_a1"}})
+	if err != nil || o.Todo != "todo_a1" || !Enabled(url.Values{"todo": {"none"}}) {
+		t.Fatalf("todo: %+v %v", o, err)
+	}
+	for _, v := range []url.Values{{"todo": {""}}, {"todo": {"a", "b"}}} {
+		if _, err := Parse(v); err == nil {
+			t.Fatalf("accepted %v", v)
+		}
+	}
+}

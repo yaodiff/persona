@@ -13,7 +13,7 @@
 
 **扩展市场：[Persona Extensions](https://github.com/nwverse/persona-extensions)。** 接入数据源，给助手加工具和技能，给 App 加界面。[一行就能加上](#扩展)
 
-[![client: iPhone](docs/assets/readme/badge-iphone.svg)](docs/apple/ios.md) [![client: iPad](docs/assets/readme/badge-ipad.svg)](docs/apple/ios.md) [![client: Web](docs/assets/readme/badge-web.svg)](docs/web/web.md) [![client: Android](docs/assets/readme/badge-android.svg)](docs/android/android.md) [![client: Apple Watch](docs/assets/readme/badge-apple-watch.svg)](docs/apple/ios.md) [![client: Vision Pro](docs/assets/readme/badge-vision-pro.svg)](docs/apple/vision.md) [![client: Mac](docs/assets/readme/badge-mac.svg)](docs/apple/mac.md) [![client: CarPlay voice](docs/assets/readme/badge-carplay.svg)](docs/apple/carplay.md)<br>
+[![client: iPhone](docs/assets/readme/badge-iphone.svg)](docs/apple/ios.md) [![client: iPad](docs/assets/readme/badge-ipad.svg)](docs/apple/ios.md) [![client: Web](docs/assets/readme/badge-web.svg)](docs/web/web.md) [![client: Android](docs/assets/readme/badge-android.svg)](docs/android/android.md) [![client: Apple Watch](docs/assets/readme/badge-apple-watch.svg)](docs/apple/ios.md) [![client: Vision Pro](docs/assets/readme/badge-vision-pro.svg)](docs/apple/vision.md) [![client: Mac](docs/assets/readme/badge-mac.svg)](docs/desktop/desktop.md) [![client: CarPlay voice](docs/assets/readme/badge-carplay.svg)](docs/apple/carplay.md)<br>
 [![agent: Claude Code](docs/assets/readme/badge-claude-code.svg)](docs/integrations/claude-integration.md) [![agent: Codex](docs/assets/readme/badge-codex.svg)](docs/integrations/codex.md) [![agent: opencode](docs/assets/readme/badge-opencode.svg)](docs/integrations/opencode.md) [![agent: pi](docs/assets/readme/badge-pi.svg)](docs/integrations/pi.md) [![agent: DSH](docs/assets/readme/badge-dsh.svg)](docs/integrations/dsh.md) [![agent: Antigravity CLI](docs/assets/readme/badge-antigravity.svg)](docs/integrations/runtimes.md#antigravity-cli)<br>
 [![engine: herdr](docs/assets/readme/badge-herdr.svg)](docs/integrations/engines.md) [![engine: Orca](docs/assets/readme/badge-orca.svg)](docs/integrations/engines.md) [![engine: Herdr App](docs/assets/readme/badge-herdr-app.svg)](docs/integrations/engines.md) [![engine: Paseo](docs/assets/readme/badge-paseo.svg)](docs/integrations/paseo.md) [![engine: Cindy](docs/assets/readme/badge-cindy.svg)](docs/integrations/engines.md)
 
@@ -82,7 +82,7 @@ github:nwverse/persona-extensions
 
 ## 文档
 
-[开始使用](docs/operations/getting-started.md) · [架构](docs/server/architecture.md) · [协议](docs/protocol/protocol.md) · [Docker](docs/operations/docker.md) · [iPhone / iPad / Watch](docs/apple/ios.md) · [网页](docs/web/web.md) · [Android](docs/android/android.md) · [HarmonyOS](docs/harmony/harmony.md) · [Vision Pro](docs/apple/vision.md) · [Mac](docs/apple/mac.md) · [CarPlay 语音](docs/apple/carplay.md) · [引擎](docs/integrations/engines.md) · [Agent 运行时](docs/integrations/runtimes.md) · [全部文档](CLAUDE.md#docs-index)
+[开始使用](docs/operations/getting-started.md) · [架构](docs/server/architecture.md) · [协议](docs/protocol/protocol.md) · [Docker](docs/operations/docker.md) · [iPhone / iPad / Watch](docs/apple/ios.md) · [网页](docs/web/web.md) · [Android](docs/android/android.md) · [HarmonyOS](docs/harmony/harmony.md) · [Vision Pro](docs/apple/vision.md) · [桌面](docs/desktop/desktop.md) · [CarPlay 语音](docs/apple/carplay.md) · [引擎](docs/integrations/engines.md) · [Agent 运行时](docs/integrations/runtimes.md) · [全部文档](CLAUDE.md#docs-index)
 
 ## Star History
 

@@ -30,6 +30,10 @@ const (
 	// featureAgentsPageCounts: the same for a paged GET /api/v1/agents/sessions, the personal Agents the extension
 	// manager serves (extmgr/agents.go, #6496).
 	featureAgentsPageCounts = "agents_page_counts"
+	// featureSessionsListChanges: an app that lists it in the WebSocket URL's ?features= gets, on a sessions_list hint
+	// that follows a change of the index, the revision before the change (`since`) and the ids changed after it
+	// (`changed`), so an open chat does not read its row again for another session's change (sessionListHint, #6685).
+	featureSessionsListChanges = "sessions_list_changes"
 	// featureSessionsHierarchy: a paged GET /api/v1/sessions takes roots=1 (the child sessions folded under a listed
 	// parent left out of the rows and counts, the parents counted by their folded state) and parent_session_id=<sid>
 	// with machine_id (the children folded under that session), docs/protocol/protocol.md "Session hierarchy" (#5120).
@@ -41,6 +45,15 @@ const (
 	// directories, in those spaces), docs/protocol/protocol.md "Projects and spaces". An older hub reads none of the
 	// keys, so an app sends them only to a hub that says this.
 	featureSessionsCatalog = "sessions_catalog"
+	// featureSessionsTodo: a paged GET /api/v1/sessions takes todo=<id> (the sessions on that open to-do) and
+	// todo=none (on none), and its counts have a todo map (by to-do id, "" for none), docs/protocol/protocol.md
+	// "Sessions by to-do" (#6662). An older hub ignores the key and lists every session, so an app sends it only to a
+	// hub that says this.
+	featureSessionsTodo = "sessions_todo"
+	// featureSessionsQuickFilters: a paged GET /api/v1/sessions takes waiting=0|1 (working rows that only wait in the
+	// background, or the others) and exclude_pane_source=<origin> (all but that origin's rows): the web sidebar's quick
+	// filters on the paged list, docs/protocol/protocol.md "Quick filters" (#6662). An older hub ignores both keys.
+	featureSessionsQuickFilters = "sessions_quick_filters"
 )
 
 // runtimeList is a transport cache of the manager's already-decorated rows. It
@@ -162,10 +175,15 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 		group = row.WorkspaceID
 	}
 	pane := sessionorigin.Of(*row)
+	// the open to-do it is on: the manager sets row.Todo for an active link only (a done one is completed_todo)
+	todo := ""
+	if row.Todo != nil {
+		todo = row.Todo.ID
+	}
 	item := sessionlist.Item{
 		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane,
 		State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
-		Fold: indexedFold(row, root, indexed.Fold), Private: healthSession(row),
+		Fold: indexedFold(row, root, todo, indexed.Fold), Private: healthSession(row),
 	}
 	// What q finds a row by: the fields the apps' own searches read, the branch too (#4770).
 	text := [...]string{row.Title, row.Cwd, row.RepoRoot, row.Branch, row.SpaceName, row.SlotName, row.AgentName, row.LastText}
@@ -190,12 +208,12 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 	return item
 }
 
-// indexedFold is row's sessionlist.Fold folded under root: nil when it folds under none and shows its own state and
-// background wait (a row without children), else was when that is the same fold, else a new one. Folds are shared
-// between copies of an item and never written in place.
-func indexedFold(row *proto.Session, root string, was *sessionlist.Fold) *sessionlist.Fold {
+// indexedFold is row's optional sessionlist.Fold: its fold under root and open to-do, nil when it has neither and shows
+// its own state and background wait (a row without children or a to-do), else was when that is the same metadata, else a
+// new one. Folds are shared between copies of an item and never written in place.
+func indexedFold(row *proto.Session, root, todo string, was *sessionlist.Fold) *sessionlist.Fold {
 	kids := row.Children()
-	fold := sessionlist.Fold{Root: root, State: row.FoldedState(), BackgroundWaiting: row.BackgroundWaiting && kids.Working == 0 && kids.NeedsYou == 0}
+	fold := sessionlist.Fold{Root: root, State: row.FoldedState(), Todo: todo, BackgroundWaiting: row.BackgroundWaiting && kids.Working == 0 && kids.NeedsYou == 0}
 	switch {
 	case fold == sessionlist.Fold{State: row.State, BackgroundWaiting: row.BackgroundWaiting}:
 		return nil
@@ -497,6 +515,32 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		}
 		limited = opts.Machine == ""
 	}
+	if opts.Search != "" {
+		// Search authorizes before matching and freezing totals/evidence. Never
+		// apply ownPage after pagination: foreign hits would already be counted.
+		if em := extensionManager(r); em != "" {
+			opts.Manager = em
+			opts.AllowedMachines = append([]string{}, own...)
+		}
+		if opts.Cursor == "" {
+			opts.SearchContext, err = h.runtimeSearchContext(r, opts.Search)
+			if err != nil {
+				writeErr(w, http.StatusServiceUnavailable, err)
+				return
+			}
+		}
+		page, err := index.Query(opts)
+		if err != nil {
+			sessionListErr(w, err)
+			return
+		}
+		// A successful empty search still identifies this contract to new clients.
+		writeJSON(w, struct {
+			sessionlist.Page
+			Hits map[string]sessionlist.SearchHit `json:"search_hits"`
+		}{page, page.SearchHits})
+		return
+	}
 	if limited && opts.PaneSource != "" {
 		// The legacy ownership projection recomputes totals outside the frozen view.
 		// Require one authorized machine for this stricter origin contract.
@@ -657,13 +701,53 @@ func (h *Hub) reindexSessions(m *Machine) {
 	if revision == before {
 		return
 	}
+	hint := h.sessionListHint(before, revision)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c := range h.clients {
 		if c.listMode {
-			c.sendJSON(map[string]any{"type": "sessions_list", "revision": revision})
+			hint.send(c)
 		}
 	}
+}
+
+// sessionListChangedMax bounds a hint's `changed`: past it the hint goes without, and an app reads as if it did not
+// know which rows changed.
+const sessionListChangedMax = 64
+
+// listHint is one sessions_list hint, encoded once for every app it goes to: plain, and with `since` and `changed`
+// (nil when the index's journal cannot say which ids changed, or there are too many).
+type listHint struct{ plain, detailed []byte }
+
+// sessionListHint is the hint for the index's change from revision before to revision: `changed` holds the ids changed
+// after before up to revision, the ["<machine>","<session>"] tuples a page's `remove` holds. A change made by
+// another pass in between is in it too, which only makes an app read once more.
+func (h *Hub) sessionListHint(before, revision string) listHint {
+	plain, _ := json.Marshal(map[string]any{"type": "sessions_list", "revision": revision})
+	hint := listHint{plain: plain}
+	ids, ok := h.listCache.index.Changed(before, revision, sessionListChangedMax)
+	if !ok {
+		return hint
+	}
+	changed := make([]json.RawMessage, len(ids))
+	for i, id := range ids {
+		if !json.Valid([]byte(id)) {
+			return hint
+		}
+		changed[i] = json.RawMessage(id)
+	}
+	hint.detailed, _ = json.Marshal(map[string]any{"type": "sessions_list", "revision": revision, "since": before, "changed": changed})
+	return hint
+}
+
+// send queues the hint for c: with since and changed when c asked for them in its URL and is not an extension's token
+// (which never sees a health conversation, and so must not see its id change either).
+func (hint listHint) send(c *client) {
+	if hint.detailed != nil && c.urlFeatures[featureSessionsListChanges] && c.role != roleExtension {
+		c.queue(hint.detailed)
+		return
+	}
+	c.queue(hint.plain)
 }
 
 func (h *Hub) broadcastSessionListNotice() {

@@ -37,18 +37,19 @@ const (
 const zipTempMaxAge = time.Hour
 
 type fileMakeParams struct {
-	Path     string   `json:"path"`
-	Paths    []string `json:"paths"`
-	Cwd      string   `json:"cwd"`
-	Dir      string   `json:"dir"`
-	Name     string   `json:"name"`
-	Text     *string  `json:"text"`
-	Create   bool     `json:"create"`
-	Revision string   `json:"revision"`
-	SHA256   string   `json:"sha256"`
-	Force    bool     `json:"force"`
-	Conflict string   `json:"conflict"`
-	Mode     *int     `json:"mode"`
+	Path        string   `json:"path"`
+	Paths       []string `json:"paths"`
+	Cwd         string   `json:"cwd"`
+	Dir         string   `json:"dir"`
+	Name        string   `json:"name"`
+	Text        *string  `json:"text"`
+	Create      bool     `json:"create"`
+	Revision    string   `json:"revision"`
+	SHA256      string   `json:"sha256"`
+	Force       bool     `json:"force"`
+	Conflict    string   `json:"conflict"`
+	OperationID string   `json:"operation_id"`
+	Mode        *int     `json:"mode"`
 }
 
 func (n *Node) fileMake(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -66,9 +67,25 @@ func (n *Node) fileMake(ctx context.Context, method string, params json.RawMessa
 	case "file.write":
 		return n.writeText(p)
 	case "file.zip":
-		return n.zipPaths(ctx, p.Paths, p.Cwd, p.Dir, p.Name)
+		if p.OperationID == "" {
+			return n.zipPaths(ctx, p.Paths, p.Cwd, p.Dir, p.Name, nil)
+		}
+		return n.runFileOperation(p.OperationID, "zip", func(report *fileOperationReporter) (any, error) {
+			return n.zipPaths(ctx, p.Paths, p.Cwd, p.Dir, p.Name, report)
+		})
 	case "file.copy": // filecopy.go
-		return n.copyFiles(ctx, p.Paths, p.Cwd, p.Dir, p.Conflict)
+		if p.OperationID == "" {
+			return n.copyFiles(ctx, p.Paths, p.Cwd, p.Dir, p.Conflict, nil)
+		}
+		return n.runFileOperation(p.OperationID, "copy", func(report *fileOperationReporter) (any, error) {
+			return n.copyFiles(ctx, p.Paths, p.Cwd, p.Dir, p.Conflict, report)
+		})
+	case "file.operation":
+		op, ok := n.fileOps.get(p.OperationID)
+		if !ok {
+			return nil, &rpc.Error{Code: proto.CodeNotFound, Message: "file operation not found"}
+		}
+		return op, nil
 	case "file.chmod": // #5831
 		return n.changeMode(p.Path, p.Cwd, p.Mode)
 	}
@@ -252,7 +269,7 @@ type fileZipped struct {
 // zipPaths zips paths (files and folders, each under its own name) into dir as name (a taken name gets " 2"…, as
 // Finder names a copy), or with no dir into a temporary file for a download (removed after an hour). Links are stored
 // as links, never followed; what the read guard refuses (keys, credentials) is left out.
-func (n *Node) zipPaths(ctx context.Context, paths []string, cwd, dir, name string) (*fileZipped, error) {
+func (n *Node) zipPaths(ctx context.Context, paths []string, cwd, dir, name string, report *fileOperationReporter) (*fileZipped, error) {
 	if len(paths) == 0 {
 		return nil, errors.New("paths is required")
 	}
@@ -277,6 +294,58 @@ func (n *Node) zipPaths(ctx context.Context, paths []string, cwd, dir, name stri
 		}
 		items = append(items, item{real: e, name: filepath.Base(e)})
 	}
+
+	// Count source metadata before writing so progress has a real total and cancellation checks the scan too.
+	scanFiles, scanBytes := 0, int64(0)
+	scan := func(real string, d fs.DirEntry) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if n.offLimitsResolved(real) != nil {
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := os.Lstat(real)
+		if err != nil {
+			return nil // gone meanwhile
+		}
+		if scanFiles++; scanFiles > maxZipFiles {
+			return &rpc.Error{Code: proto.CodeTooLarge, Message: fmt.Sprintf("more than %d files to zip", maxZipFiles)}
+		}
+		if info.Mode().IsRegular() {
+			if scanBytes += info.Size(); scanBytes > maxZipBytes {
+				return &rpc.Error{Code: proto.CodeTooLarge, Message: fmt.Sprintf("more than %d GB to zip", maxZipBytes>>30)}
+			}
+		}
+		return nil
+	}
+	for _, it := range items {
+		info, err := os.Lstat(it.real)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			if err := scan(it.real, nil); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		err = filepath.WalkDir(it.real, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if d != nil && d.IsDir() && path != it.real {
+					return filepath.SkipDir
+				}
+				return err
+			}
+			return scan(path, d)
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	report.totals(scanFiles, scanBytes)
 
 	var outDir, shown string
 	if strings.TrimSpace(dir) == "" {
@@ -313,7 +382,7 @@ func (n *Node) zipPaths(ctx context.Context, paths []string, cwd, dir, name stri
 	defer os.Remove(tmp.Name())
 	zw := zip.NewWriter(tmp)
 	files, total := 0, int64(0)
-	add := func(real, inZip string, d fs.DirEntry) error {
+	add := func(real, inZip string, d fs.DirEntry) (err error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -323,6 +392,11 @@ func (n *Node) zipPaths(ctx context.Context, paths []string, cwd, dir, name stri
 			}
 			return nil
 		}
+		defer func() {
+			if err == nil {
+				report.fileDone()
+			}
+		}()
 		info, err := os.Lstat(real)
 		if err != nil {
 			return nil // gone meanwhile
@@ -366,7 +440,7 @@ func (n *Node) zipPaths(ctx context.Context, paths []string, cwd, dir, name stri
 			return nil // unreadable: left out
 		}
 		defer f.Close()
-		_, err = io.Copy(w, f)
+		_, err = copyFileContents(ctx, w, f, report)
 		return err
 	}
 	for _, it := range items {

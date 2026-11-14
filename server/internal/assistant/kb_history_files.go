@@ -320,8 +320,9 @@ var historyBackupName = lazyre.New(`^kb-(\d{14})(?:-(\d+))?\.tar\.gz$`)
 
 // backupKB archives the data directory into kb-backups/kb-YYYYMMDDHHMMSS.tar.gz (UTC; written to a temporary name
 // and renamed, 0600, the directory 0700), leaving out every attachments/ directory (never rewritten by the import, and
-// it can be tens of gigabytes), the lock files and anything that is not a regular file or a directory. Then only the
-// newest historyBackupsKept are kept.
+// it can be tens of gigabytes), the search index (.search/, worked out from the files and built again where they are
+// restored), the lock files and anything that is not a regular file or a directory. Then only the newest
+// historyBackupsKept are kept.
 func backupKB(data string, now time.Time) (string, error) {
 	data = filepath.Clean(data)
 	dir := historyBackupDir(data)
@@ -371,7 +372,7 @@ func backupKB(data string, now time.Time) (string, error) {
 			return nil
 		}
 		slash := filepath.ToSlash(rel)
-		if d.IsDir() && d.Name() == "attachments" {
+		if d.IsDir() && (d.Name() == "attachments" || slash == kb.SearchIndexDir) {
 			return filepath.SkipDir
 		}
 		if slash == ".lock" || slash == historyDirName+"/"+historyLockName {

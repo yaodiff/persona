@@ -29,6 +29,8 @@ Place necessary historical text under its module directory and list it below.
 | `apple/ios-state-records.md` | iOS redraw work: data flow before it, root causes, staged plan, per-step push costs and the pre-#1046 follow-latest review (2026-11-04) |
 | `apple/live-activity-records.md` | Live Activity: build 92 avatar investigation and battery-investigation push counts (2026-11-02) |
 | `apple/mac-records.md` | Mac acceptance checklist review history and real-window roles and checklist rules (2026-11-01 to 2026-11-03, #403) |
+| `apple/mac.md` | Retired native Mac app: its former frozen scope, implementation and performance records (#6770) |
+| `apple/mac-design.md` | Retired native Mac design language and historical layout conventions (#6770) |
 | `apple/persona-native-6152-acceptance.md` | Apple native naming migration acceptance (#6152) |
 | `apple/persona-native-6152-reversible-acceptance.md` | Apple reversible native-state compatibility acceptance (#6152) |
 | `assistant/assistant-rich-ui-predeployment-2026-11-06.md` | Main chat rich UI: pre-deployment acceptance |
@@ -53,6 +55,7 @@ Place necessary historical text under its module directory and list it below.
 | `operations/plan-hub-mesh.md` | Superseded multi-hub topology proposal; current primary/member behavior is in the mesh guide |
 | `operations/rolling-upgrade-compatibility-verification.md` | Rolling-upgrade verification (#6223) |
 | `operations/windows-records.md` | node on Windows: real-machine checks of Orca, herdr, install, tray, Claude outside Persona's terminals and Codex (2026-11-03 to 2026-11-07) |
+| `operations/link-menu-tray.md` | Retired Mac menu bar and Windows tray implementation and migration record; current independent Link service is in `docs/operations/link.md` (#6770) |
 | `operations/hub-restart-records.md` | Seamless hub restarts: measured results after #1617 and the before-change journal (2026-11-04) |
 | `redesign/android.md` | Android plan |
 | `redesign/flows.md` | Main feature flow diagrams |

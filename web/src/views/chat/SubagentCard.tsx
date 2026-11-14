@@ -113,7 +113,7 @@ export function SubagentResult({ item, fallback, mid, sid }: { item: Item | unde
   const said = item?.kind === "tool_result" ? agentSummary({ ...item, text: full.text }, undefined) : item?.kind === "text" ? full.text.trim() : (item ? item.task?.detail ?? "" : fallback).trim();
   const text = isHandbackText(said) ? said.split("\n").slice(1).join("\n").trim() : said;
   const [whole, setWhole] = useState(false);
-  const clamp = useClamped<HTMLParagraphElement>(whole);
+  const clamp = useClamped<HTMLParagraphElement>(whole, "y", text);
   if (!text) return null;
   return (
     <div className="mb-1" data-subagent-summary data-items={item?.id}>

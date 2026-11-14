@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """End-to-end check of archiving Agent sessions on the web (docs/web/web.md "Archived agents"): a row's menu offers
-Archive and Archive and close… (both disabled, saying why, while the agent works); Archive and close asks first, then
-the row leaves and the toast says it was closed (or why it is still open); a plain archive offers Undo, which brings
-the row back; Archived agents lists the archived ones, searches them, restores one (it is back in the list), and an
+Archive and Close… (#7125). While the agent works, Archive is disabled, saying why, and Close… asks with what closing
+interrupts and "Close anyway", as Close pane on its pane does; on an idle agent Close… archives and closes, then the
+row leaves and the toast says it was closed (or why it is still open); a plain archive offers Undo, which brings the
+row back; Archived agents lists the archived ones, searches them, restores one (it is back in the list), and an
 archived chat says it is archived with Restore.
 
 Needs a running web page against the fake hub with archives on, and Playwright for Python:
 
-    MOCK_AGENT_ARCHIVES=1 PORT=18893 python3 scripts/mock/mock_hub.py &
+    MOCK_AGENT_ARCHIVES=1 MOCK_MANAGERS=1 PORT=18893 python3 scripts/mock/mock_hub.py &
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:18893 npx vite --port 5893 --strictPort --host 127.0.0.1 &)
     python3 scripts/test/web_agent_archives_e2e.py http://127.0.0.1:5893 --hub http://127.0.0.1:18893 [--shots <dir>]
 
@@ -114,29 +115,39 @@ def run(browser, base, hub, token, size, theme, shots, names):
     get(hub, "/mock/reset")
     open_list()
 
-    # a working agent: both shown, disabled, saying why
+    # a working agent: Archive waits, saying why; Close… and Close pane both ask, saying what closing interrupts
     menu(WORKING)
     expect(item(t("agentmenus.archive")).first).to_be_disabled()
-    expect(item(t("agentmenus.archive_close")).first).to_be_disabled()
-    expect(page.get_by_text(t("agentmenus.archive_close_busy")).first).to_be_visible()
+    expect(page.get_by_text(t("agentmenus.archive_busy")).first).to_be_visible()
+    expect(item(t("agentmenus.close")).first).to_be_enabled()
     shot("menu-busy")
-    page.keyboard.press("Escape")
-    ok(f"{tag}: a working agent's Archive / Archive and close are disabled with the reason")
+    for label in (t("agentmenus.close"), t("lib-node-actions.close_pane")):
+        if label != t("agentmenus.close"):
+            menu(WORKING)
+        item(label).first.click()
+        dialog = page.get_by_role("dialog")
+        expect(dialog.get_by_text(t("close-agent.busy_working")).first).to_be_visible()
+        expect(dialog.get_by_role("button", name=t("close-agent.close_anyway"))).to_be_visible()
+        shot("dialog-busy")
+        dialog.get_by_role("button", name=t("common.cancel")).click()
+        expect(dialog).to_have_count(0)
+    expect(row(WORKING)).to_be_visible()
+    ok(f"{tag}: a working agent's Archive waits with the reason; Close… and Close pane ask what closing interrupts")
 
-    # an idle one: Archive and close asks, closes, and the row goes
+    # an idle one: Close… asks, archives and closes, and the row goes
     menu(IDLE)
     expect(item(t("agentmenus.archive")).first).to_be_enabled()
     expect(item(t("agentmenus.delete_chat")).first).to_have_count(0)
     shot("menu")
-    item(t("agentmenus.archive_close")).first.click()
+    item(t("agentmenus.close")).first.click()
     dialog = page.get_by_role("dialog")
-    expect(dialog.get_by_text(t("chat-sessiondialogs.archive_close_title")).first).to_be_visible()
+    expect(dialog.get_by_text(t("chat-chatview.close_agent_title")).first).to_be_visible()
     shot("dialog")
     dialog.get_by_role("button", name=t("chat-sessiondialogs.archive_close")).click()
     expect(page.get_by_text(t("lib-agent-archives.archived_closed", title=names[IDLE])).first).to_be_visible()
     expect(row(IDLE)).to_have_count(0)
     shot("closed")
-    ok(f"{tag}: Archive and close asked, closed the agent and took the row out")
+    ok(f"{tag}: Close… asked, archived and closed the agent and took the row out")
 
     # a plain archive, then Undo
     menu(UNREAD)
@@ -151,7 +162,7 @@ def run(browser, base, hub, token, size, theme, shots, names):
     # the computer leaves it open: archived, and the toast says why
     get(hub, "/mock/agent_archives?close=refuse")
     menu(UNREAD)
-    item(t("agentmenus.archive_close")).first.click()
+    item(t("agentmenus.close")).first.click()
     page.get_by_role("dialog").get_by_role("button", name=t("chat-sessiondialogs.archive_close")).click()
     expect(page.get_by_text(t("lib-agent-archives.archived_still_open", title=names[UNREAD], reason=MOCK_REFUSAL)).first).to_be_visible()
     expect(row(UNREAD)).to_have_count(0)

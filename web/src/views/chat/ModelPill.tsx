@@ -2,7 +2,9 @@
 // docs/web/web.md "Model pill and model panel", docs/design/DESIGN_SYSTEM.md 3.1): at the right of the composer's bottom
 // row, before voice / Stop / Send, `[provider][model][engine][effort][Fast][⌄]`. It opens the unified model panel above
 // it (ui/model-panel/ModelPanel.tsx), and so does `/model` Enter in the composer. The composer card is a container: under
-// 600 px the pill is 148 px wide, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
+// 600 px the pill takes the width its words need (the name at most 108 px, a bracketed qualifier left out but for a
+// context size, `pillShortName`) and gives way
+// only when the row is short, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
 // provider's tile and the chevron (64 px). An agent that can switch neither its model nor its effort gets the same
 // words as a label, not a button. A Persona chat (and the new-chat page) has `AssistantModelPill` (#5033): the same pill
 // over what the assistant's computer can run Persona chats on, its panel saying whether the chat follows the default.
@@ -10,11 +12,12 @@ import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Re
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { onModelPicker, sessionLauncher } from "../../lib/model-switch";
+import { modelSupportsFast } from "../../lib/launcher-models";
 import { effortTitle } from "../../lib/session-actions";
-import { dropPick, launcherOffered, usePickedEffort, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
-import { ASSISTANT_MODEL_PICK_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
+import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
+import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, type PillSetup,
+  assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -37,6 +40,18 @@ export function pillEffort(id: string): string {
 
 // the composer card's widths (Composer.tsx `@container/composer`): narrow < 600, dense < 520, ultra < 420
 const ULTRA_HIDDEN = "@max-[420px]/composer:hidden";
+
+/** The name where the pill is narrow: a trailing qualifier in brackets left out ("Default (recommended)" → "Default",
+ *  "GPT-5 (beta)" → "GPT-5"), except a context size, which names another model and stays as a short mark, as the chat's
+ *  model names have it ("Opus 5.5 (1M context)" and "Opus 5.5 [1m]" → "Opus 5.5 1M"). The tooltip and the accessible
+ *  name keep the whole name. */
+export function pillShortName(name: string): string {
+  const m = /^(.*?)\s*[(（[]([^()（）[\]]*)[)）\]]\s*$/u.exec(name);
+  const base = m?.[1].trim();
+  if (!m || !base) return name;
+  const size = /^(\d+(?:\.\d+)?)\s*([km])(?:\s*(?:context|ctx|tokens?|上下文|コンテキスト))?$/iu.exec(m[2].trim());
+  return size ? `${base} ${size[1]}${size[2].toUpperCase()}` : base;
+}
 
 export function ModelPill({
   current,
@@ -74,6 +89,7 @@ export function ModelPill({
   const title = pending
     ? t("chat-modelpill.current_and_next", { current: describe(current), next: describe(pending) })
     : [describe(current), failed && !unknown ? t("chat-modelpill.failed") : ""].filter(Boolean).join(" · ");
+  const short = pillShortName(name);
   const effort = shown.effort ? effortTitle(shown.effort) : "";
   // what the next message runs on, before its model: the engine when it changes (Cindy's case), else the launcher
   // (Persona's in-session switch, #5035)
@@ -96,7 +112,12 @@ export function ModelPill({
       )}
       {/* the name gives way first (a far larger shrink than the effort's): narrow, the effort truncates only once the
           name has no room left */}
-      <span title={name} className={cx("min-w-0 shrink-[1000] truncate text-ink @max-[600px]/composer:max-w-[108px]", ULTRA_HIDDEN)}>{name}</span>
+      <span title={name} className={cx("min-w-0 shrink-[1000] truncate text-ink @max-[600px]/composer:max-w-[108px]", short !== name && "@max-[600px]/composer:hidden", ULTRA_HIDDEN)}>{name}</span>
+      {/* narrow, the name without its bracketed qualifier, a context size kept short (the tooltip keeps all of it): the
+          108 px would cut it there */}
+      {short !== name && (
+        <span title={name} data-pill-short className={cx("hidden min-w-0 shrink-[1000] truncate text-ink @max-[600px]/composer:block @max-[600px]/composer:max-w-[108px]", ULTRA_HIDDEN)}>{short}</span>
+      )}
       {/* the engine's mark is the separator before the effort: no "·" */}
       <span aria-hidden data-pill-engine={shown.engine} className={cx("ml-1 flex shrink-0 items-center @max-[520px]/composer:scale-[0.917]", ULTRA_HIDDEN)}>
         <AgentMark agent={shown.engine} size={12} decorative className="text-ink-2" />
@@ -116,7 +137,9 @@ export function ModelPill({
   const shell = cx(
     // Cindy's bare toolbar pill: no frame at rest, the capsule shows on hover and while its panel is open
     "flex h-[30px] max-w-[min(320px,100%)] min-w-[72px] shrink items-center rounded-full border border-transparent px-2.5 text-[13px] leading-none whitespace-nowrap transition-colors duration-150",
-    "@max-[600px]/composer:w-[148px] @max-[520px]/composer:text-[12px] @max-[520px]/composer:[--provider-mark:14.2px] @max-[420px]/composer:min-w-[64px]",
+    // narrow, it still takes the width its words need (a fixed width cut "Opus 5.5" to "Opus …" beside free room) and
+    // shrinks, the name first, only when the row is short of room
+    "@max-[520px]/composer:text-[12px] @max-[520px]/composer:[--provider-mark:14.2px] @max-[420px]/composer:min-w-[64px]",
     // under 420 px the tile and the chevron: 64 px, as the pill always was there; only a waiting switch's clock before
     // them makes it grow to hold it
     pending ? "@max-[420px]/composer:w-auto" : "@max-[420px]/composer:w-[64px]",
@@ -217,16 +240,29 @@ const AssistantModelPanel = lazyOverlay(() => import("./AssistantModelPanel").th
  *  new-conversation page, whose pick goes with the start. Persona chats switch whatever their state: the hub applies a
  *  pick from the next message. */
 export const AssistantModelPill = memo(function AssistantModelPill({ session }: { session?: Session }) {
-  useModelLists();
+  const main = useStore((s) => s.assistant?.main);
+  // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
+  // another assistant conversation shows no pill and follows the default or what it started with. No session is the
+  // new-main-chat page, whose pick goes with the main conversation's start. Mounting the inner pill here, rather than
+  // returning from it below, keeps its hook count constant when the hub names another main conversation (#7070).
+  if (session && main !== session.session_id) return null;
+  return <AssistantModelPillInner session={session} />;
+});
+
+function AssistantModelPillInner({ session }: { session?: Session }) {
+  const version = useModelLists();
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
+  const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const mid = session?.machine_id ?? assistant?.machine_id ?? "";
-  const chat: AssistantChat = { session, isMain: Boolean(session && assistant?.main === session.session_id), kept, config: assistant?.launcher };
+  const isMain = Boolean(session && assistant?.main === session.session_id);
+  const chat: AssistantChat = { session, isMain, kept, config: assistant?.launcher };
   const key = assistantPickKey(chat);
   // this page's picks (an older hub, the new-conversation page) draw it again
   const picked = usePickedLauncher(key);
   usePickedModel(key);
   usePickedEffort(key);
+  const tier = usePickedFast();
   const { info } = assistantLaunchers(mid);
   // the computer's default and what can run a Persona chat: once for the pill, again behind it on each opening
   useEffect(() => {
@@ -248,6 +284,18 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
     toast(t("chat-modelpill.pick_dropped", { launcher: picked }), "info");
   }, [key, picked, info, session, kept]);
   const setup = assistantSetup(chat, info);
+  // A hub or native catalog that can't honor Fast disarms the draft even while the lazy panel is closed. A manager
+  // change disarms it in the store, before this pill or its destination catalog answers.
+  useEffect(() => {
+    if (session || !tier) return;
+    if (!startServiceTier) {
+      pickFast(false);
+      return;
+    }
+    const list = modelList(mid, setup.provider).list;
+    if (!list) return;
+    if (!modelSupportsFast(currentModelRow(list.models, setup.model))) pickFast(false);
+  }, [key, mid, session, setup.provider, setup.model, tier, startServiceTier, version]);
   useEffect(() => {
     if (mid) void readModels(mid, setup.provider, { first: true });
   }, [mid, setup.provider]);
@@ -273,4 +321,4 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
       {shown && anchor && <AssistantModelPanel chat={chat} mid={mid} anchor={anchor} onClose={close} />}
     </>
   );
-});
+}

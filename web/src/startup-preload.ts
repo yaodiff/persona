@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import ts from "typescript";
 import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
+import { startupMatcher } from "./i18n/startup-keys";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -251,7 +252,70 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #6753's stopped-Agent dismissal adds 131 B to each language (ja 478,888 B, en 475,191 B, zh-Hans 476,178 B).
 // #6759's Agent skills selection adds 49 B more to ja (478,937 B; en 475,240 B, zh-Hans 476,227 B).
 // The 31 B room covers the hub's small build-environment difference.
-export const FIRST_SCREEN_BUDGET = 478_968;
+// #6295: Paseo's workspaces add 11 B (ja 478,937 B on main at 8919ac022 to 478,948 B; en 475,240 B to 475,251 B,
+// zh-Hans 476,227 B to 476,238 B): New worktree on a Paseo Git row, the engine sent with an agent's worktree status, add
+// and remove, and no herdr ID to copy on a runtime's space. The budget moves by the same 11 B, keeping that 31 B room.
+// #6480: a to-do suggestion kind (its title, button and toast in lib-inbox-events, which the first screen's suggestion
+// rows and toasts name) and a merged row's list of sources raise the first screen to ja 479,163 B (en 475,454 B, zh-Hans 476,439 B), 184 B over the
+// old budget, which moves by 215 B. Merge and to-do texts are in lib-inbox-actions, outside the first screen. The 31 B room stays.
+// #6240: Fast on a new conversation adds 187 B to each language, measured in one environment against main at
+// c1552d2e4 (ja 479,132 B to 479,319 B; en 475,423 B to 475,610 B, zh-Hans 476,408 B to 476,595 B): the draft, its
+// place in the first request, and dropping it when the manager, the hub or the model can no longer honor it, which
+// has to run while the model panel (loaded on intent) is closed. Its 675 B of code compressed to 180 B, 304 B and
+// 187 B against three states of main: the cost follows the code around it. The budget moves by this one's 187 B.
+// #7070: the model pill decides in an outer component whether a conversation gets one, so its hooks no longer follow
+// an early return: 25 B more in each language against main at 57110700a6 (ja 479,319 B to 479,344 B; en 475,610 B to
+// 475,635 B, zh-Hans 476,595 B to 476,620 B). The budget moves by the same 25 B.
+// #6563: the minutes' summary card adds 85 B to each language (ja 478,898 B on fd8c988b6 to 478,983 B; en 475,201 B to
+// 475,286 B, zh-Hans 476,188 B to 476,273 B): the Knowledge page's first stylesheet (the card's tints and grid,
+// views/knowledge/minutes-overview.css) named in the app's preload map, and Button passing aria-controls and aria-label
+// (a topic's Show N more names its topic). The budget moves by the same 85 B, keeping that 31 B room.
+// #6662: the paged Agents list under the complete list's title row, grouping bar and quick filters (By to-do / By
+// status sections, the to-do names, the quick filters' hub keys, the quiet Load more line, the ⋯'s sorts ordering its
+// sections) adds 318 B to ja, measured in one environment against main at eeac9a579 (ja 479,359 B to 479,677 B; en
+// 475,650 B to 475,958 B, zh-Hans 476,635 B to 476,959 B). The budget moves by these 318 B on top of #6563's.
+// #6770's Electron bridge adds 135 B to ja (479,944 B; en 476,225 B, zh-Hans 477,226 B): fixed native notification/badge
+// calls, authenticated register/unregister presence, and clearing notifications on sign-out. The browser has no desktop
+// chunk or eager import. The existing 31 B room covers the hub's small build-environment difference.
+// #6589: the Agents list's Filter on its title row with its count, the chips with the query ⌘K put on the list (its text
+// reopens ⌘K) and the small store the palette sets it through, the paged list's search taken from it in place of its
+// own field, the phone page's search button: ja 480,189 B against 479,848 B on main at d916689d8, +341 B (en 476,485 B
+// against 476,155 B, zh-Hans 477,467 B against 477,133 B; the lists' fields and their strings went; ⌘K's matcher,
+// lib/agent-search.ts, and its Filter's menu load on intent, not here; the idle tier, 43,106 B with ⌘K's Filter button
+// against 41,966 B, stays under its ceiling). main's 96 B of room stay.
+// The Filter menu reads, toggles and drops the search parser's operator aliases (host, repo, status, after and
+// pin), so a valid alias can be switched off instead of duplicated (#7339). Measured: en 476,598 B, ja 480,302 B,
+// zh-Hans 477,580 B. The budget moves by the same 17 B.
+// #7329: saved prompts in every composer's "/" list and "Save as Prompt…" on your own messages add 192 B to ja, measured
+// in one environment against main at ec4c0513f9 (ja 480,302 B to 480,494 B; en 476,598 B to 476,803 B, zh-Hans
+// 477,580 B to 477,783 B; the same code measured +110 B on aa5e1ec43e): the small store the composers read their rows
+// from (lib/saved-prompt-rows.ts) and the Composer's use of it, the page event, the menu item and its words, and the
+// settings tab's name and line. The list, its reads, its words, the editor and the settings page are chunks of their
+// own, loaded the first time a box has the focus, the menu item is picked or the page opens. The budget moves by these
+// 192 B on top of #7339's.
+// A folded-search retry now clears its partial warning only after every requested fold has loaded; real failures and
+// budget caps still show it (#7389). Measured: en 476,854 B, ja 480,545 B, zh-Hans 477,834 B. The budget moves by 51 B.
+// #7375: Export Conversation… in a chat's ⋯ adds 77 B to ja, measured in one environment against main at 47973bbb81 (ja
+// 480,562 B to 480,639 B; en 476,871 B to 476,941 B, zh-Hans 477,851 B to 477,922 B): the menu item, its word and the
+// import of its dialog. Reading the conversation, the Markdown and the dialog's words are a chunk of their own
+// (views/chat/ExportDialog.tsx, lib/chat-export.ts). That main measured 17 B over the 480,545 B budget in this
+// environment before the change; the budget moves to what this change measured, 480,639 B.
+// #7418: the budget stays where #7375 left it and the first screen gives back about 8.5 KB in each language, so the
+// next changes have room again (measured in one environment against main at 85cfde464d: ja 480,639 B to 471,693 B;
+// en 476,941 B to 468,489 B, zh-Hans 477,922 B to 469,339 B). The startup catalog takes just the keys the first screen
+// reads of a namespace it reads a few of (src/i18n/startup-keys.ts: settings, todos, settings-managers, machines and
+// five more), five namespaces no first-screen code names left it, and Tailwind no longer scans test files and e2e
+// scripts (styles.css). Every build prints the room left (firstScreenRoom); when it runs low, take bytes off the
+// first screen before raising this.
+// #7459 (Web Push) takes about 90 B of that room in each language: the client_hello's device_id (lib/device-id.ts), the
+// switch that says Web Push is on here (lib/web-push-flag.ts) and the two imports of lib/web-push.ts, a chunk of its own.
+// #7440 takes 1,356 B of that room in each language, measured in one environment against main at 8ab19cb754 (ja
+// 473,110 B to 474,466 B; en 469,919 B to 471,275 B, zh-Hans 470,752 B to 472,108 B): the sidebar's long groups drawn
+// a part at a time (views/WindowedRows.tsx), the fold-all a group missed while it was not drawn (lib/fold-all.ts) and
+// the headings' heights from one ResizeObserver (views/SidebarSection.tsx). WindowedRows is not a chunk of its own: the
+// sidebar has no error boundary, so a failed download of it would leave the whole app blank.
+export const FIRST_SCREEN_BUDGET = 480_639;
+
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -395,6 +459,23 @@ export async function firstScreenBytes(dir: string, screens: [string, string[]][
   return Promise.all(screens.map(async ([lang, files]): Promise<[string, number]> => [lang, (await Promise.all(files.map(sized))).reduce((sum, n) => sum + n, 0)]));
 }
 
+/** Room under FIRST_SCREEN_BUDGET below which the build warns (firstScreenRoom): about one page's new strings. */
+export const FIRST_SCREEN_LOW_ROOM = 1_024;
+
+/**
+ * The line the build prints under the budget: each language's first screen (firstScreenBytes) and the room left in
+ * the fullest one, `low` when that is under FIRST_SCREEN_LOW_ROOM. The room is what the next first-screen change may
+ * add; a change that needs more takes bytes off the first screen first (docs/web/web.md, "Running it").
+ */
+export function firstScreenRoom(bytes: [string, number][], budget = FIRST_SCREEN_BUDGET): { line: string; low: boolean } {
+  const [fullest, most] = bytes.reduce((a, b) => (b[1] > a[1] ? b : a));
+  const room = budget - most;
+  const n = (v: number) => v.toLocaleString("en-US");
+  const all = bytes.map(([lang, v]) => `${lang} ${n(v)} B`).join(", ");
+  const low = room < FIRST_SCREEN_LOW_ROOM;
+  return { line: `startup-preload: first screen ${all}; ${n(room)} B left under FIRST_SCREEN_BUDGET (${fullest})${low ? ", under FIRST_SCREEN_LOW_ROOM: take bytes off the first screen before adding to it" : ""}`, low };
+}
+
 /** The build's error when any language's first screen (firstScreenBytes) is over `budget`, else undefined. */
 export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_SCREEN_BUDGET): string | undefined {
   const over = bytes.filter(([, n]) => n > budget);
@@ -493,14 +574,30 @@ export function idleImports(code: string): string[] {
 }
 
 /**
- * The client namespaces the first screen's chunks (`code`) name in a key literal ("ns.…", 'ns.…' or `ns.…) that
- * `startup` (src/i18n/startup-namespaces.json) leaves out, sorted. Their keys could be read before the rest of the
- * catalog is in (src/i18n/index.ts startI18n), so the build fails on any. Build time only.
+ * What the first screen's chunks (`code`) read of the client catalog (`keys`, each `namespace.name`) that `startup`
+ * (src/i18n/startup-namespaces.json, src/i18n/startup-keys.ts) leaves to the rest, as the entries to add, sorted. A
+ * key literal ("ns.name", 'ns.name' or `ns.name…) may be completed by a template or a wrapper's suffix, so it reads
+ * every key that begins with it: it asks for `ns.name` when any of those is left out, and for the whole namespace
+ * when it holds no name ("ns." + x). Those keys could be read before the rest of the catalog is in
+ * (src/i18n/index.ts startI18n), so the build fails on any. Build time only.
  */
-export function startupNamespaceGaps(code: string[], namespaces: Iterable<string>, startup: Iterable<string>): string[] {
-  const known = new Set(namespaces);
-  const listed = new Set(startup);
+export function startupGaps(code: string[], keys: Iterable<string>, startup: readonly string[]): string[] {
+  const inStartup = startupMatcher(startup);
+  const byNamespace = new Map<string, string[]>();
+  for (const key of keys) {
+    const ns = key.slice(0, key.indexOf("."));
+    const list = byNamespace.get(ns);
+    if (list) list.push(key);
+    else byNamespace.set(ns, [key]);
+  }
   const gaps = new Set<string>();
-  for (const c of code) for (const [, ns] of c.matchAll(/["'`]([a-z0-9][a-z0-9-]*)\./g)) if (known.has(ns) && !listed.has(ns)) gaps.add(ns);
-  return [...gaps].sort();
+  for (const c of code) {
+    for (const [, ns, name] of c.matchAll(/["'`]([a-z0-9][a-z0-9-]*)\.(\w*)/g)) {
+      const start = `${ns}.${name}`;
+      if (byNamespace.get(ns)?.some((key) => key.startsWith(start) && !inStartup(key))) gaps.add(name ? start : ns);
+    }
+  }
+  // An entry another one already takes ("ns" over "ns.a", "ns.a" over "ns.ab") is left out.
+  const covers = (wider: string, entry: string) => wider !== entry && (wider.includes(".") ? entry.startsWith(wider) : entry.startsWith(`${wider}.`));
+  return [...gaps].filter((entry) => ![...gaps].some((wider) => covers(wider, entry))).sort();
 }

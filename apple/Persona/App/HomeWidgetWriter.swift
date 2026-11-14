@@ -241,7 +241,7 @@ extension AppModel {
         s.inbox = HomeInbox.build(InboxStore.shared)
         let data = HomeWidgetData.shared
         let now = Date()
-        s.today = HomeToday.build(calendar: data.events, hub: HomeToday.hubMeetings(TasksStore.shared, now: now), now: now)
+        s.today = HomeToday.build(calendar: data.events, days: data.days, hub: HomeToday.hubMeetings(TasksStore.shared, now: now), now: now)
         s.todos = HomeTodos.build(TodoStore.shared.todos, ticks: HomeWidgetActions.ticks, now: now)
         let stats = mergedFleet().stats
         s.usage = HomeUsage.build(UsageWindows.live(UsageWindowsStore.shared.accounts, now: now), tokens: stats?.tokens ?? 0,
@@ -254,10 +254,23 @@ extension AppModel {
 /// Today's events: the phone's calendar when Persona may read it, else the hub's meetings on today's card (Feishu's),
 /// else none, which the widget tells how to change.
 enum HomeToday {
-    static func build(calendar: [HomeSnapshot.Event]?, hub: [HomeSnapshot.Event]?, now: Date) -> HomeSnapshot.Today? {
-        if let calendar { return .init(events: calendar, source: .calendar) }
+    /// `days`, the phone's calendar over the weeks around today, goes only with its own events: the hub's meetings are
+    /// today's alone.
+    static func build(calendar: [HomeSnapshot.Event]?, days: HomeSnapshot.Days? = nil, hub: [HomeSnapshot.Event]?, now: Date) -> HomeSnapshot.Today? {
+        if let calendar { return .init(events: calendar, source: .calendar, days: days) }
         if let hub { return .init(events: hub, source: .hub) }
         return .init(events: [], source: nil)
+    }
+
+    /// The rest of today: the events on today not yet over, all-day ones first, then by start, at most `Today.cap`.
+    nonisolated static func rest(_ events: [HomeSnapshot.Event], now: Date, calendar: Calendar = .current) -> [HomeSnapshot.Event] {
+        let start = calendar.startOfDay(for: now).timeIntervalSince1970
+        let end = HomeDays.nextMidnight(after: now, calendar: calendar).timeIntervalSince1970
+        let t = now.timeIntervalSince1970
+        return Array(events
+            .filter { $0.start < end && ($0.end > start || $0.start >= start) && ($0.allDay || $0.end > t) }
+            .sorted { ($0.allDay ? 0 : 1, $0.start) < ($1.allDay ? 0 : 1, $1.start) }
+            .prefix(HomeSnapshot.Today.cap))
     }
 
     /// The meetings on today's card in any conversation's feed (`TodayBody.meetings`); nil when no card is today's.

@@ -1,0 +1,22 @@
+[package]
+name = "persona-core-runtime"
+description = "Runs persona-core on one worker thread: the action queue, timers and the patches the UI pulls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+persona-core.workspace = true
+serde.workspace = true
+bincode.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

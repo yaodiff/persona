@@ -11,6 +11,7 @@ vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 import { t } from "../i18n";
+import { filterAgentList, resetAgentListFilters } from "../lib/agent-list-filters";
 import { connect, refresh, reset } from "../lib/store";
 import type { Todo } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
@@ -74,6 +75,7 @@ const render = async () => {
 beforeEach(() => {
   localStorage.clear();
   reset();
+  resetAgentListFilters();
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
   history.replaceState(null, "", "/");
@@ -86,6 +88,8 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   reset();
+  resetAgentListFilters();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -183,9 +187,10 @@ describe("group controls in every Agents view", () => {
   });
 });
 
-// Collapse all / Expand all act on the list under the controls only (#6447): the grouping tabs, the quick filters, the
-// search and Filter stay on screen while every group folds to its heading; the chat-list view has no groups to fold to,
-// so it has no button (a first fix folded the whole block there, the controls with it).
+// Collapse all / Expand all act on the list under the controls only (#6447): the grouping tabs, the quick filters and
+// the title row's Filter (#6589: the list has no search field of its own) stay on screen while every group folds to its
+// heading; the chat-list view has no groups to fold to, so it has no button (a first fix folded the whole block there,
+// the controls with it).
 describe("the fold-all button keeps the Agents controls", () => {
   /** On screen: not inside an inert box or a closed Collapse (0fr), the two ways the sidebar folds. */
   const onScreen = (el: Element | null | undefined) => {
@@ -197,10 +202,9 @@ describe("the fold-all button keeps the Agents controls", () => {
   const controls = () => ({
     tabs: onScreen(grouping()),
     filters: onScreen(agentsBlock().querySelector(`[role="radiogroup"][aria-label="${t("sidebar.quick_filters")}"]`)),
-    search: onScreen(agentsBlock().querySelector("[data-testid=agent-dimension-filter-bar] input")),
-    filter: onScreen(agentsBlock().querySelector("[data-testid=agent-filter-button]")),
+    filter: onScreen(agentsBlock().querySelector("[data-sidebar-agents-controls] [data-testid=agent-filter-button]")),
   });
-  const everyControl = { tabs: true, filters: true, search: true, filter: true };
+  const everyControl = { tabs: true, filters: true, filter: true };
   /** The agent's title, wherever the grouping draws it. */
   const agentShown = () => {
     const walk = document.createTreeWalker(agentsBlock(), NodeFilter.SHOW_TEXT);
@@ -317,5 +321,30 @@ describe("a hub without todos (GET /todos 404)", () => {
     expect(segments()[0].getAttribute("aria-label")).toBe("按待办");
     expect(checked()).toBe("按待办");
     expect(agentsBlock().textContent).toContain("天气 App 发 1.3 版");
+  });
+});
+
+describe("relative-time Agents filters", () => {
+  it("expires a session as the since window passes", async () => {
+    vi.useFakeTimers();
+    const start = new Date("2026-11-15T12:00:00Z");
+    vi.setSystemTime(start);
+    const aging = { ...agent, updated_at: new Date(start.getTime() - 24 * 60 * 60 * 1000 + 30_000).toISOString() };
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/todos")) return json({ todos: [todo] });
+      if (url.endsWith("/api/v1/sessions")) return json({ sessions: [aging] });
+      if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
+      return json({});
+    }));
+    filterAgentList("since:24h");
+    await refresh();
+    await render();
+    expect(agentsBlock().textContent).toContain(agent.title);
+    expect(agentsBlock().textContent).not.toContain(t("sidebar.no_match"));
+
+    await act(async () => { vi.advanceTimersByTime(61_000); await Promise.resolve(); });
+    await flush();
+    expect(agentsBlock().textContent).not.toContain(agent.title);
+    expect(agentsBlock().textContent).toContain(t("sidebar.no_match"));
   });
 });

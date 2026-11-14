@@ -41,7 +41,7 @@ internal fun nativePageBinding(owner: persona.core.contracts.api.ExtensionStream
 @Composable
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
-                    onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null) {
+                    onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, onAsk: ((String) -> Unit)? = null) {
     // The source subscription pages (#2041) are the manager's, drawn over HTTP only.
     val defaultBinding = extensions?.nativeStream?.collectAsState(initial = null)?.value?.takeUnless { extensionId == SUBSCRIPTIONS_UI }
     val binding = remember(defaultBinding, manager) { nativePageBinding(defaultBinding, manager) }
@@ -71,12 +71,23 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
         return
     }
     val api = rememberPinned(extensions, extensionPrefixes(extensionId), manager)
-    val model = remember(api, extensionId, uiId, initialState) {
-        ExtensionViewModel(api, extensionId, uiId, initialState = initialState)
+    // Inbox Sources (#5278, #5661): these pages alone are told the composer's assistant name, even when it is blank.
+    val assistantName = LocalPersonaName.current
+    val pageContext = if (extensionId == SUBSCRIPTIONS_UI) ExtensionUiContext(assistant = assistantName.ifBlank { "" }) else null
+    val model = remember(api, extensionId, uiId, initialState, pageContext) {
+        ExtensionViewModel(api, extensionId, uiId, context = pageContext, initialState = initialState)
     }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
-    val handle = rememberExtensionView(model, onPush = { push ->
+    val ask = onAsk
+    val handle = rememberExtensionView(model, appLink = { url ->
+        // Set Up with … is only answered here, and only from these pages. Close the page, then hand the text on.
+        val text = ExtensionViewText.askFrom(extensionId, url) ?: return@rememberExtensionView false
+        val send = ask ?: return@rememberExtensionView false
+        onBack()
+        send(text)
+        true
+    }, onPush = { push ->
         ExtensionViewText.pushed(extensionId, uiId, title, depth, push, manager)?.let { model.covered(); onPush(it) }
     }, onPop = onBack)
     LaunchedEffect(model) { model.load() }

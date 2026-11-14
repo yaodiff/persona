@@ -52,6 +52,30 @@ class MockHub:
 
 
 class LarkChatListTests(unittest.TestCase):
+    def test_list_performance_fixture_has_real_pagination(self):
+        hub = MockHub(MOCK_LARK="1", MOCK_LARK_LIST="180")
+        self.addCleanup(hub.stop)
+        first = hub.get("/api/v1/lark/conversations?scope=chats&limit=60")
+        second = hub.get("/api/v1/lark/conversations?scope=chats&limit=60&cursor=" + first["next_cursor"])
+        self.assertEqual(len(first["conversations"]), 60)
+        self.assertEqual(len(second["conversations"]), 60)
+        self.assertTrue(second["next_cursor"])
+        self.assertFalse({c["id"] for c in first["conversations"]} & {c["id"] for c in second["conversations"]})
+
+    def test_unread_fixture_has_matches_beyond_a_read_only_page(self):
+        hub = MockHub(MOCK_LARK="1", MOCK_LARK_UNREAD="1")
+        self.addCleanup(hub.stop)
+        first = hub.get("/api/v1/lark/conversations?scope=chats&limit=60")
+        self.assertEqual(len(first["conversations"]), 60)
+        self.assertFalse(any(c["unread"] or c.get("marked_unread") for c in first["conversations"]))
+        second = hub.get("/api/v1/lark/conversations?scope=chats&limit=60&cursor=" + first["next_cursor"])
+        unread = hub.get("/api/v1/lark/conversations?scope=unread&limit=60")
+        self.assertEqual(unread["conversations"], second["conversations"])
+        self.assertTrue(any(c["unread"] == 0 and c.get("marked_unread") for c in unread["conversations"]))
+        self.assertTrue(any(c.get("pinned") for c in unread["conversations"]))
+        self.assertEqual(unread["next_cursor"], "")
+        self.assertEqual(unread["account_id"], first["account_id"])
+
     def check(self, **env):
         hub = MockHub(**env)
         self.addCleanup(hub.stop)

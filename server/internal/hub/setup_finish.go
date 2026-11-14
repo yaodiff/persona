@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/mdp/qrterminal/v3"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // --- running it ---------------------------------------------------------------------------------------------------
@@ -25,7 +27,7 @@ func (e *setupEnv) health(ctx context.Context, cfg *setupConfig) error {
 	deadline := time.Now().Add(wait)
 	for {
 		if e.hubAnswers(ctx, cfg.Config) {
-			e.report("health", true, "hub 在运行，本机检查 /api/v1/health 通过", "")
+			e.report("health", true, i18n.T(e.l, "hub-setup.health_ok"), "")
 			return nil
 		}
 		if !time.Now().Before(deadline) || ctx.Err() != nil {
@@ -33,14 +35,14 @@ func (e *setupEnv) health(ctx context.Context, cfg *setupConfig) error {
 		}
 		e.sleep(time.Second)
 	}
-	next := "运行 journalctl --user -u personad -n 50 看 hub 的日志"
+	next := i18n.T(e.l, "hub-setup.health_next_journal")
 	switch {
 	case e.o.noService:
-		next = "在另一个终端运行 personad hub run，起来后重跑 personad hub setup --no-service"
+		next = i18n.T(e.l, "hub-setup.health_next_no_service")
 	case e.goos == "darwin":
-		next = "看 " + filepath.Join(e.root, "hub.log") + " 里 hub 的日志"
+		next = i18n.T(e.l, "hub-setup.health_next_log", i18n.Args{"path": filepath.Join(e.root, "hub.log")})
 	}
-	return e.fail("health", fmt.Sprintf("%d 秒内 hub 没有在本机端口 %s 上应答", int(wait.Seconds()), portOf(cfg.Listen)), next)
+	return e.fail("health", i18n.T(e.l, "hub-setup.health_timeout", i18n.Args{"count": int(wait.Seconds()), "port": portOf(cfg.Listen)}), next)
 }
 
 func loopbackClient() (*http.Client, func()) {
@@ -76,11 +78,13 @@ func (e *setupEnv) hubAnswers(ctx context.Context, cfg *Config) bool {
 func (e *setupEnv) finish(ctx context.Context, cfg *setupConfig) error {
 	p, err := cfg.requestPairCode(ctx)
 	if err != nil {
-		return e.fail("health", "hub 在运行，但没拿到配对码："+err.Error(), "运行 personad hub pair 再试")
+		return e.fail("health", i18n.T(e.l, "hub-setup.pair_code_failed", i18n.Args{"error": err.Error()}),
+			i18n.T(e.l, "hub-setup.pair_code_failed_next"))
 	}
 	code, codeExpires, err := e.setupCode(ctx, cfg.Config)
 	if err != nil {
-		return e.fail("health", "hub 在运行，但没拿到管理界面的设置码："+err.Error(), "运行 personad hub admin setup-code 再试")
+		return e.fail("health", i18n.T(e.l, "hub-setup.setup_code_failed", i18n.Args{"error": err.Error()}),
+			i18n.T(e.l, "hub-setup.setup_code_failed_next"))
 	}
 	adminURL, localOnly := e.adminURL(cfg.Config)
 	if code != "" {
@@ -97,24 +101,24 @@ func (e *setupEnv) finish(ctx context.Context, cfg *setupConfig) error {
 		_, _ = e.out.Write(append(b, '\n'))
 		return nil
 	}
-	fmt.Fprintf(e.out, "\nhub 装好了。\n\n1. 用 Persona App 扫这个二维码，配对你的手机（%d 分钟内有效）：\n\n", minutesLeft(p.ExpiresAt))
+	fmt.Fprintf(e.out, "\n%s\n\n%s\n\n", i18n.T(e.l, "hub-setup.done"),
+		i18n.T(e.l, "hub-setup.pair_qr", i18n.Args{"count": minutesLeft(p.ExpiresAt)}))
 	qrterminal.GenerateHalfBlock(p.PairURL, qrterminal.L, e.out)
-	fmt.Fprintf(e.out, "\n   扫不了时，把这条配对链接发到手机上打开：%s\n\n", p.PairURL)
-	browser := "用手机浏览器"
+	fmt.Fprintf(e.out, "\n   %s\n\n", i18n.T(e.l, "hub-setup.pair_link", i18n.Args{"url": p.PairURL}))
+	browser := i18n.T(e.l, "hub-setup.browser_phone")
 	if localOnly {
-		browser = "在这台电脑的浏览器里"
+		browser = i18n.T(e.l, "hub-setup.browser_local")
 	}
 	if code != "" {
-		fmt.Fprintf(e.out, "2. %s打开下面的地址，设一个管理员密码（设置码已经带在地址里，%d 分钟内有效）：\n   %s\n",
-			browser, minutesLeft(codeExpires), adminURL)
+		fmt.Fprintf(e.out, "%s\n   %s\n", i18n.T(e.l, "hub-setup.admin_open", i18n.Args{"browser": browser, "count": minutesLeft(codeExpires)}), adminURL)
 	} else {
-		fmt.Fprintf(e.out, "2. 管理员密码已经设过了，管理界面在：\n   %s\n", adminURL)
+		fmt.Fprintf(e.out, "%s\n   %s\n", i18n.T(e.l, "hub-setup.admin_set"), adminURL)
 	}
 	if localOnly {
-		fmt.Fprintf(e.out, "   hub 现在只在这台电脑上监听（listen 是 %s），这个地址只能在这台电脑上打开；"+
-			"要用手机打开，把 %s 里的 \"listen\" 改成 \":%s\"（让 hub 在所有地址上监听），再运行一次 personad hub setup。\n", cfg.Listen, e.hubJSON(), portOf(cfg.Listen))
+		fmt.Fprintf(e.out, "   %s\n", i18n.T(e.l, "hub-setup.admin_local_only",
+			i18n.Args{"listen": cfg.Listen, "path": e.hubJSON(), "port": portOf(cfg.Listen)}))
 	}
-	fmt.Fprintln(e.out, "\n过期了就再运行一次 personad hub setup（已经装好的不会重做），或者 personad hub pair 只出配对码。")
+	fmt.Fprintln(e.out, "\n"+i18n.T(e.l, "hub-setup.expired_hint"))
 	return nil
 }
 
@@ -124,7 +128,7 @@ func minutesLeft(t time.Time) int { return max(1, int(time.Until(t).Round(time.M
 func (e *setupEnv) setupCode(ctx context.Context, cfg *Config) (string, time.Time, error) {
 	resp, err := adminLoopbackPost(ctx, cfg, "/api/v1/admin/setup-code") // `hub admin setup-code`'s request
 	if err != nil {
-		return "", time.Time{}, errors.New("连不上本机 hub")
+		return "", time.Time{}, errors.New(i18n.T(e.l, "hub-setup.hub_unreachable"))
 	}
 	defer resp.Body.Close()
 	var body struct {
@@ -135,7 +139,7 @@ func (e *setupEnv) setupCode(ctx context.Context, cfg *Config) (string, time.Tim
 	switch resp.StatusCode {
 	case http.StatusOK:
 		if err := json.Unmarshal(raw, &body); err != nil || body.Code == "" {
-			return "", time.Time{}, errors.New("hub 返回的内容无效")
+			return "", time.Time{}, errors.New(i18n.T(e.l, "hub-setup.hub_invalid_reply"))
 		}
 		return body.Code, body.ExpiresAt, nil
 	case http.StatusConflict: // already_set
@@ -167,7 +171,7 @@ func (e *setupEnv) adminURL(cfg *Config) (u string, localOnly bool) {
 		}
 	}
 	if host == "" {
-		host = "<这台电脑的局域网 IP>"
+		host = i18n.T(e.l, "hub-setup.lan_ip_placeholder")
 	}
 	return "http://" + net.JoinHostPort(host, port) + "/admin", false
 }

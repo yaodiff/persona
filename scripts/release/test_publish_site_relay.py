@@ -42,11 +42,14 @@ class Site:
 
     def __init__(self, before, after, deployed):
         self.before, self.after, self.deployed, self.requests = before, list(after), deployed, 0
+        self.request_paths = []
         site = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                site.requests += 1
+                if self.path == "/relay/v1/health":
+                    site.requests += 1
+                    site.request_paths.append((self.path, site.deployed.exists()))
                 if self.path != "/relay/v1/health":
                     status, body = 404, {"error": "not found"}
                 elif not site.deployed.exists():
@@ -75,7 +78,7 @@ class Site:
 
 
 class DeploySiteRelayTests(unittest.TestCase):
-    def deploy(self, before, *after, deploy_fails=False):
+    def deploy(self, before, *after, deploy_fails=False, language_check=True, finish_language=False):
         temp = tempfile.TemporaryDirectory(prefix="persona-publish-relay-")
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
@@ -91,17 +94,22 @@ class DeploySiteRelayTests(unittest.TestCase):
         tools.mkdir()
         (tools / "cf").write_text("#!/bin/sh\nexit 0\n")  # deploy_site refreshes cf's token when cf is there
         (tools / "cf").chmod(0o755)
+        language = root / "language-check"
+        language.write_text("#!/bin/sh\n" + ("exit 0\n" if language_check else "echo wrong language >&2; exit 1\n"))
+        language.chmod(0o755)
         script = "\n".join((
             "set -euo pipefail",
             'WRANGLER="$TEST_WRANGLER"',
+            'SITE_LANGUAGE_CHECK="$TEST_LANGUAGE_CHECK"',
             "sleep() { :; }",  # settled waits ten seconds between tries
             publisher_functions(),
             'deploy_site "$TEST_SITE"',
             "echo deploy_site returned",
+            *(('site_language_result',) if finish_language else ()),
         ))
         env = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ.get("PATH", os.defpath),
                "PERSONA_PUBLISH_URL": site.url, "TEST_WRANGLER": str(wrangler), "TEST_DEPLOYED": str(flag),
-               "TEST_SITE": str(root / "site")}
+               "TEST_SITE": str(root / "site"), "TEST_LANGUAGE_CHECK": str(language)}
         result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
         return result, site
 
@@ -141,7 +149,22 @@ class DeploySiteRelayTests(unittest.TestCase):
         result, site = self.deploy(HEALTHY, deploy_fails=True)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("deploy failed", result.stderr)
-        self.assertEqual(site.requests, 1)  # the check before the deploy only
+        self.assertEqual(site.requests, 1, site.request_paths)  # the check before the deploy only
+
+    def test_a_language_failure_is_loud_but_does_not_skip_the_next_release_step(self):
+        result, _ = self.deploy(HEALTHY, HEALTHY, language_check=False, finish_language=True)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("deploy_site returned", result.stdout)  # the step after deploy_site still ran
+        self.assertIn("SITE LANGUAGE CHECK FAILED", result.stderr)
+        self.assertIn("docs/operations/site.md", result.stderr)
+        self.assertIn("after completing the other release checks", result.stderr)
+
+    def test_the_language_check_also_runs_when_the_relay_was_not_healthy(self):
+        result, _ = self.deploy(NOT_CONFIGURED, NOT_CONFIGURED, language_check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("deploy_site returned", result.stdout)
+        self.assertIn("/relay/v1/health was not healthy", result.stderr)
+        self.assertIn("SITE LANGUAGE CHECK FAILED", result.stderr)
 
 
 if __name__ == "__main__":

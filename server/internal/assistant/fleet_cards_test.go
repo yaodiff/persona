@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -1662,5 +1663,33 @@ func TestCodexCardPromptChangedAskedAgainIsAnnounced(t *testing.T) {
 	listCodex(s, a)
 	if got := ft.pushesOf(assistantwire.NotifyInput, 2, time.Second); len(got) != 2 {
 		t.Fatalf("asked again after prompt_changed: pushed %d times", len(got))
+	}
+}
+
+// Claude Code's Bypass Permissions confirmation on a fresh pane (blank rows under it down to the bottom) is a card
+// with its two choices, answered with the keys that pick each, and nothing is pressed until the user picks one.
+// Before, no dialog was read off that screen, so the card offered nothing to choose.
+func TestScreenCardOffersTheBypassConfirmationsChoices(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "screen", "testdata", "claude-2.1.322-bypass-confirm-160.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft, n := newCardFleet(t, false)
+	n.setScreen(string(b))
+	blockSession(ft, proto.Session{SessionID: "s1"})
+	if got, _ := waitCards(ft.s, 1, 5*time.Second); len(got) != 1 {
+		t.Fatalf("cards %v", got)
+	}
+	ix := ft.s.pendingInteractions()[0]
+	if ix.Kind != proto.IxScreen || ix.Dialog == nil || len(ix.Dialog.Options) != 2 ||
+		ix.Dialog.Options[0].Label != "No, exit" || ix.Dialog.Options[1].Label != "Yes, I accept" {
+		t.Fatalf("card %+v dialog %+v", ix, ix.Dialog)
+	}
+	p, err := screenAnswer("s1", ix.Dialog, proto.Resolution{Option: ix.Dialog.Options[1].Key})
+	if err != nil || !slices.Equal(p["keys"].([]string), []string{"down", "enter"}) {
+		t.Fatalf("answer %v %v", p, err)
+	}
+	if !strings.HasPrefix(ix.ID, "scr_mac_s1_") || ix.Dialog.Rev == "" {
+		t.Errorf("id %s rev %q", ix.ID, ix.Dialog.Rev)
 	}
 }

@@ -67,7 +67,7 @@ class ModelPillShotsTest {
     private val waiting = session("""{"machine_id":"box","session_id":"s1","title":"Tidy the sync worker","agent":"claude","status":"idle",
         "state":"idle","pane_id":"w1:p1","cwd":"/srv/app","launcher":"example","model":"claude-sonnet-4-5","effort":"high",
         "permission_mode":"acceptEdits","pending_switch":{"launcher":"work","model":"glm-5.3","effort":"high","at":"2026-11-12T10:00:00Z"}}""")
-    private val persona = session("""{"machine_id":"box","session_id":"c2","title":"Plan the week","assistant":true,"agent":"claude",
+    private val persona = session("""{"machine_id":"box","session_id":"main","title":"Plan the week","assistant":true,"agent":"claude",
         "status":"idle","state":"idle","launcher":"claude","model":"claude-opus-5-5","effort":"high","permission_mode":"default",
         "model_pick":{"launcher":"team","model":"sonnet"}}""")
 

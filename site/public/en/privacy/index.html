@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Privacy Policy · Persona</title>
+<link rel="alternate" hreflang="zh-CN" href="https://personaside.com/privacy/">
+<link rel="alternate" hreflang="en" href="https://personaside.com/en/privacy/">
+<link rel="alternate" hreflang="x-default" href="https://personaside.com/privacy/">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+  <h1>Privacy Policy</h1>
+  <p class="muted">Updated November 13, 2026</p>
+
+  <p>Persona is a self-hosted personal AI assistant. The app's full functionality requires a connection to a server (hub) that you deploy yourself; no hosted accounts are provided. Before pairing, you can try the built-in demo with fictional data. The demo does not connect to a real hub, send email, or perform operations on your computer. The developer operates only two things: this website and a push relay for hubs that do not have their own push keys (see “Push Relay” below). Otherwise, your data remains solely between your devices and your own hub. The developer does not collect content such as email, photos, or health data from your own hub, does not sell user data, and does not use it for advertising or tracking. The optional push relay processes push identifiers and records technical diagnostic logs (see below); the app contains no advertising or analytics SDKs.</p>
+
+  <h2>Gmail Data</h2>
+  <ul>
+    <li>When you add Gmail, you consent on Google's authorization page to Persona accessing your mailbox (<code>https://mail.google.com/</code>) and email address (<code>openid</code>, <code>email</code>). Persona never sees your Google password.</li>
+    <li>The refresh token obtained through authorization is encrypted with AES-256-GCM and stored only on your self-deployed hub, where it is used to receive and send email via IMAP / SMTP.</li>
+    <li>Email content is retrieved from Gmail in real time when you open or search for it; the server does not store copies of email. The app may cache recently viewed lists on your device so they can be displayed offline.</li>
+    <li>Only when you ask the AI assistant (Claude) in Persona to process email is the relevant email content sent to the model service as conversation content. You must always confirm on your phone before an email is sent.</li>
+    <li>Persona's use of Google user data complies with the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including its “Limited Use” requirements: data is used only to provide email functionality to you, is not used for advertising, is not transferred to others, and is not used to train general-purpose models.</li>
+  </ul>
+
+  <h2>Revoking Access and Deletion</h2>
+  <p>Deleting an email account in Persona also deletes the credentials stored on the server. You can also revoke Persona's access at any time in your Google Account under
+    <a href="https://myaccount.google.com/connections">“Third-party apps &amp; services”</a>.</p>
+
+  <h2>Other Data</h2>
+  <p>With your authorization, Persona can read and write data such as contacts, calendars, reminders, photos, health, and location on your iPhone. It accesses this data only when you actively use the corresponding features, and the data is transmitted only between your device and your self-deployed hub. Only when you ask the AI assistant (Claude) to use this data is the relevant content sent to the model service as conversation content.</p>
+
+  <h2>Push Relay</h2>
+  <ul>
+    <li>iPhone notifications must be sent through Apple's Push Notification service (APNs). If a hub is not configured with its own APNs push key, notifications are sent through the push relay operated by the developer. If you configure your own key or run your own relay, notifications do not pass through the developer's relay.</li>
+    <li>The phone registers its APNs device token with the relay and receives a credential encrypted with the relay's key, which it gives to your own hub; the relay does not store a device list.</li>
+    <li>The content of ordinary notifications, questions, task-completion notices, and background wake-ups is encrypted by the hub using the phone's public key and can be decrypted only by your phone. The relay can see only the ciphertext, the destination device, the time, and the size. If the phone cannot decrypt a notification, it displays only “New message” and never falls back to plaintext.</li>
+    <li>Live Activities on the Lock Screen and Dynamic Island are read directly by iOS from the push content and cannot be encrypted, so when they pass through the relay, the relay can see the content they display: session titles, computer names, progress and counts, and the question currently being asked or a summary of the command. If this concerns you, you can configure your own APNs key on the hub or run your own relay.</li>
+    <li>The relay's technical diagnostic logs record a short hash of the device's push identifier, push type, response status, duration, and size, for troubleshooting and maintaining push functionality. Connection error logs may contain request addresses that include push identifiers; the logs do not record notification content. Diagnostic information can be correlated by device identifier, but is not combined with names, email addresses, or account information and is not used for advertising or cross-app tracking.</li>
+    <li>The relay is used only to forward these pushes and maintain push functionality, and for no other purpose.</li>
+  </ul>
+
+  <h2>Website</h2>
+  <p>This website and the push relay endpoint are hosted on Cloudflare, and access logs are processed by Cloudflare under its own rules. The website stores one language-preference cookie only when you explicitly switch languages, uses it to show the same language on later visits, and does not use it for tracking. The website loads no third-party scripts, fonts, or analytics services.</p>
+
+  <h2>TestFlight</h2>
+  <p>When you test through TestFlight, Apple provides the developer with installation information, crash reports, and feedback you voluntarily submit, under its own rules; the developer uses this information only to improve Persona.</p>
+
+  <h2>Contact</h2>
+  <p><a href="/en/#contact">Contact Persona</a>, or submit feedback on the official website.</p>
+
+  <nav><a href="/en/">Persona</a><a href="/en/terms/">Terms of Service</a><a class="lang" href="/privacy/?lang=zh" hreflang="zh-CN" lang="zh-CN" aria-label="查看中文版本">中文</a></nav>
+</main>
+</body>
+</html>

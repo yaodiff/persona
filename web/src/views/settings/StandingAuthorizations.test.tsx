@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
 import { setToken } from "../../lib/api";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
-import { StandingAuthorizations } from "./StandingAuthorizations";
+import { sourceLabel, StandingAuthorizations } from "./StandingAuthorizations";
 
 const path = "/assistant/standing-authorizations";
 const grant = {
@@ -48,7 +48,7 @@ it("renders every registered scope and audit field, including both action revers
   expect(calls[0].path).toBe(path);
   expect(new Headers(calls[0].init.headers).get(MANAGER_HEADER)).toBe("example-manager");
   expect(host.querySelectorAll("article")).toHaveLength(2);
-  for (const value of [grant.machine_id, grant.directory, grant.quote, grant.source,
+  for (const value of [grant.machine_id, grant.directory, grant.quote, "Main chat",
     "Merge changes", "Deploy to a test environment", "All checks pass", "No merge conflicts", grant.conditions[2],
     "Push changes", "Deploy to production", "Send messages", "Delete data", "Spend money", "future-action", "No conditions recorded"]) expect(text()).toContain(value);
   expect(host.querySelector("time")?.dateTime).toBe(grant.granted_at);
@@ -117,4 +117,17 @@ it("retires late reads and writes when the manager or credential-keyed parent ch
   await render("other-manager", "new-credential");
   await answer(calls.at(-1)!, { revision: 4, authorizations: [{ ...grant, id: "other" }] });
   await answer(oldWrite, { ok: true, revision: 5 }); expect(host.querySelectorAll("article")).toHaveLength(1);
+});
+
+it("words a known source in the page's language, whatever language it was written in, and keeps any other as written", async () => {
+  const suggested = "Suggested rule: the same answer 3 times in 14 days, confirmed with Always.";
+  for (const raw of [suggested, "建议的规则：14 天内 3 次相同的回答，点「总是」确认。", // i18n-ignore: the hub's sentence
+    "提案されたルール：14 日間に同じ回答が 3 回あり、「常に」で確認されました。"]) expect(sourceLabel(raw), raw).toBe(suggested); // i18n-ignore: the hub's sentence
+  for (const raw of ["Main conversation", " main chat. ", "主对话", "メインチャット"]) expect(sourceLabel(raw), raw).toBe("Main chat"); // i18n-ignore: sources as written
+  expect(sourceLabel("Settings")).toBe("Settings");
+  expect(sourceLabel("conversation")).toBe("A chat");
+  expect(sourceLabel("Weekly review with Sam")).toBe("Weekly review with Sam");
+  await initI18n("zh-Hans");
+  expect(sourceLabel("Main conversation")).toBe("主对话"); // i18n-ignore: expected words
+  expect(sourceLabel(suggested)).toBe("建议的规则：14 天内 3 次相同的回答，点「总是」确认。"); // i18n-ignore: expected words
 });

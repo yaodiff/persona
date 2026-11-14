@@ -13,7 +13,12 @@
   "mute": "静音",
   "more": "更多",
   "view_source": "看原文",
+  "hide_source": "收起原文",
   "view_event": "看处理",
   "linked_task": "关联待办",
-  "linked_agent": "关联 Agent"
+  "linked_agent": "关联 Agent",
+  "assistant_says": "助手说",
+  "say_something": "说一句",
+  "retry": "再试一次",
+  "retry_text": "请再试一次。"
 }

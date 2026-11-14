@@ -29,6 +29,8 @@ data class InboxItem(
     val status: String? = null,
     /** Urgent: someone is waiting or a deadline is near (it stays in Needs you while the AI prepares a suggestion). */
     val urgent: Boolean = false,
+    /** Where the item happens, such as a chat or repository; absent from older hubs. */
+    val where: String? = null,
 ) {
     val triage: InboxTier get() = InboxTier.entries.firstOrNull { it.wire == tier } ?: InboxTier.Action
     val isTriaged: Boolean get() = !tier.isNullOrEmpty()
@@ -122,7 +124,7 @@ fun buildInboxList(
         (settings.source.isEmpty() || item.account == settings.source) &&
             (settings.kind.isEmpty() || item.kind == settings.kind || settings.kind == "group" && item.kind == "bot" ||
                 settings.kind == "mention" && item.kind == "moment" && item.notice?.startsWith("atIn") == true) &&
-            matchesText(item.title, item.sender, item.preview, item.summary)
+            matchesText(item.title, item.sender, item.preview, item.summary, item.where)
     }
     val bySession = sessions.associateBy { it.id }
     val waiting = if (settings.source.isEmpty() && settings.kind in setOf("", "agent")) {

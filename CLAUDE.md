@@ -93,7 +93,8 @@ This is a public open-source repository; everyone and every Agent maintains it t
 ### Server and data
 
 - **All server state lives in the Postgres container** `persona-postgres` on the hub machine (`docs/server/server.md`); no JSON state files
-  in `~/.persona/`. The exception is the knowledge base `~/.persona/data`: files first, the database as the index (`docs/assistant/knowledge.md`).
+  in `~/.persona/`. The exception is the knowledge base `~/.persona/data`: files first, the database as the index (`docs/assistant/knowledge.md`);
+  its full-text search index (`.search/`) is a cache built from the files that can be deleted at any time (`docs/assistant/knowledge.md`, "Search index (#1273)").
 - **The hub is only a communication center**: new business logic (endpoints, tables, model calls) goes into the managers
   (`server/internal/assistant`, `server/internal/devices`, `server/internal/extmgr`). `server/internal/hub/architecture_guard_test.go` pins the hub's routes,
   dependencies and Store; when it fails, move the logic as its hint says (`docs/server/architecture.md`).
@@ -114,12 +115,12 @@ This is a public open-source repository; everyone and every Agent maintains it t
   pages never hard-code numbers, system font sizes, SF Symbol names or hex colors. Missing something? Add a token first.
 - **Button text never wraps**: one line (`.lineLimit(1)`, then `.minimumScaleFactor`, shorter text or an icon); what doesn't fit in a row
   of buttons goes into a menu.
-- **Desktop is the web app plus Persona Link**: on computers people use the web app (browser or installed PWA). Persona Link
-  (`apple/PersonaLink/`, `persona-link`, the Windows tray) is reserved for what a browser cannot do, such as notifications while no tab is
-  open, presence and local integrations. The native Mac app (`apple/Mac/`) is frozen: bug fixes, security fixes and keeping it building
-  only; new features skip it. Never start another desktop client (Electron, Tauri, a WebView shell): a desktop need goes into the web app
-  first, and into Persona Link only when the browser cannot meet it (`docs/apple/mac.md`, `docs/operations/link.md`). Why: the web app
-  already is the desktop UI and Persona Link already holds the native connection on computers that run Agents, so a second UI only adds upkeep.
+- **Desktop is the existing web app in the Electron desktop app, plus independently installable Persona Link**: on computers people use
+  `desktop/` for the hub-hosted web UI, native notifications and presence. Persona Link (`persona-link`, the connector's CLI/service)
+  is separately installable only on computers whose Agents the hub should reach; it owns node connectivity and the Persona Screen helper.
+  The PC App does not require a local node or Link and never silently installs one. The local setup window may manage an installed Link
+  through fixed CLI operations. Do not create another desktop UI or a second design system; the old native Mac app and per-OS tray UIs are
+  being replaced, not extended (`docs/desktop/desktop.md`, `docs/operations/link.md`).
 
 ### Design spec for UI changes
 
@@ -145,8 +146,10 @@ This is a public open-source repository; everyone and every Agent maintains it t
 - **A PR that touches `apple/` names the rules it followed** and the reason for any deviation (its review checklist).
   A performance-sensitive change (chat list, composer, Agents list, push handling, launch, images) attaches before and
   after measurements from an optimized build ("Measuring" there).
-- `scripts/test/test_apple_perf_patterns.py` keeps blocking calls (Photos fetches, keychain and file reads, image decodes,
-  unpaused animation timelines) from growing per file; it never takes a raised baseline.
+- `scripts/test/isolation-lint.sh` reads where each blocking call runs (Photos fetches, keychain and file reads, directory
+  listings, image decodes) and counts it only on the main actor or where it cannot tell; no comment clears one.
+  `scripts/test/test_apple_perf_patterns.py` keeps per-call localization lookups and unpaused animation timelines from
+  growing per file. Neither takes a raised baseline.
 
 ## Development workflow
 
@@ -184,8 +187,10 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
   run `python3 scripts/persona_config.py xcconfig`; before a manual `xcodebuild`, `eval "$(python3 scripts/persona_config.py env)"` or an
   old Xcode reports errors that look like someone else's breakage.
 - Android: `scripts/app/android.sh [install|apk|test|lint|shots]` (`docs/android/android.md`).
+- Shared Rust core: `scripts/ci/core.sh` (needs rustup); a change to a wire type regenerates the clients' codecs (`native/app-core/README.md`).
 - HarmonyOS: from `harmony/`, run `node --test tests/*.test.mjs` and `node tests/run-domain.mjs` (Node.js 24+), then `devecocli build --build-mode release` with the API 26 SDK and locked native SSH core. Native device checks and fixture setup: `docs/harmony/harmony.md` ("Verification").
-- Web: `cd web && npm test && npm run build`; deploy with `scripts/deploy/deploy.sh web` (`docs/web/web.md`).
+- Web: `cd web && npm test && npm run build`, the build again after merging the latest `origin/main` (it prints the first screen's room under
+  `FIRST_SCREEN_BUDGET`; changes in flight share it); deploy with `scripts/deploy/deploy.sh web` (`docs/web/web.md`).
 - Docs: `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py`, `python3 scripts/test/test_doc_sections.py`
   (a section name quoted after a doc path names a current heading) and `python3 scripts/test/test_doc_wire.py`
   (every WebSocket type, feature flag, extension point and manifest field has its row). Every change: `python3 scripts/privacy_check.py`.
@@ -264,11 +269,13 @@ Tokens live in `apple/Shared/Design` (also compiled for the watch and widgets); 
 | Path | Contents |
 | --- | --- |
 | `server/` | Go module: `personad` (hub / node / hook / mcp and helper commands), `persona-link`; `docs/server/server.md` |
-| `apple/` | XcodeGen project (`apple/project.yml`): iOS, watchOS, macOS (`Mac/`) and visionOS (`Vision/`) apps, extensions, shared code in `Shared/`, tests; `apple/PersonaLink/` is the separate Mac menu bar app (`docs/operations/link.md`) |
+| `desktop/` | Electron desktop shell around the existing web app; native packaging and independently installed Link controls (`docs/desktop/desktop.md`) |
+| `apple/` | XcodeGen project (`apple/project.yml`): iOS, watchOS and visionOS (`Vision/`) apps, extensions, shared code in `Shared/`, tests; `apple/PersonaLink/` is the independent Link helper package's Persona Screen source, not a desktop UI (`docs/operations/link.md`) |
 | `android/` | Kotlin + Compose: `app`, `core/*`, `feature/*`, `platform/*` (`docs/android/android.md`) |
 | `web/` | Web app (Vite + React + Tailwind) served by the hub (`docs/web/web.md`) |
 | `integrations/` | Agent runtime integrations and the runtime SDK (`docs/integrations/runtimes.md`) |
 | `native/iphone-bridge/` | Optional Rust bridge a node runs to operate a paired iPhone, built on its own (`docs/extensions/iphone-bridge.md`) |
+| `native/app-core/` | The shared Rust core under the iOS, Android and HarmonyOS clients (`docs/plans/plan-rust-core.md`); `scripts/ci/core.sh` |
 | `sdk/`, `schema/`, `spec/` | Extension SDK, extension JSON Schemas, shared behavior specs and fixtures |
 | `scripts/` | Build, test, deploy, release, mock hub and config tools (`scripts/README.md`) |
 | `deploy/docker/`, `Dockerfile` | Docker deployment of the hub (`docs/operations/docker.md`) |
@@ -290,7 +297,8 @@ Every maintained doc under `docs/` (lessons excluded) must be listed here.
 | Assistant | `docs/assistant/assistant.md` main chat · `docs/assistant/managers.md` · `docs/assistant/assistant-views.md` rich UI · `docs/assistant/unified-entry.md` · `docs/assistant/agent-work.md` work state and triage · `docs/assistant/north-star.md` interruption and availability metrics · `docs/assistant/todos.md` · `docs/assistant/todo-status-sop.md` to-do status sections · `docs/assistant/voice.md` · `docs/assistant/health.md` · `docs/assistant/knowledge.md` knowledge base · `docs/assistant/meeting-minutes.md` minutes from recorded meetings · `docs/assistant/day-recap.md` all-day recording and the daily recap · `docs/assistant/inbox.md` · `docs/assistant/model-config.md` · `docs/assistant/model-profiles.md` · `docs/assistant/prompts.md` · `docs/assistant/office.md` Word / PowerPoint / Excel |
 | Extensions and sources | `docs/extensions/extensions.md` extension system · `docs/extensions/extension-settings.md` host-owned settings layout · `docs/extensions/secret-providers.md` secret values from provider extensions (references, resolution, records) · `docs/extensions/connectors.md` · `docs/extensions/subscriptions.md` · `docs/extensions/channels.md` · `docs/extensions/extension-messaging.md` · `docs/extensions/computer-use.md` · `docs/extensions/iphone.md` phone control · `docs/extensions/iphone-bridge.md` operating a paired iPhone · `docs/extensions/iphone-control.md` element numbers, results, limits and approval for the iPhone · `docs/extensions/iphone-pairing.md` iPhone control: pairing and sessions · `docs/extensions/mail.md` · `docs/extensions/wechat.md` · `docs/extensions/bots.md` Lark bot · `docs/extensions/feishu.md` · `docs/extensions/lark-agent.md` · `docs/extensions/lark-migration.md` · `docs/extensions/lark-attachments.md` · `docs/extensions/lark-encryption.md` |
 
-| Apple | `docs/apple/ios.md` iOS / watchOS, design language · `docs/apple/icons.md` icons · `docs/apple/sidebar.md` sidebar rows · `docs/apple/ios-state.md` state and redraws · `docs/apple/performance.md` performance rules, budgets and measuring (read before changing `apple/`) · `docs/apple/shell.md` · `docs/apple/mac.md` (frozen) · `docs/apple/mac-design.md` · `docs/apple/vision.md` · `docs/apple/live-activity.md` · `docs/apple/home-widgets.md` Home Screen and Lock Screen widgets · `docs/apple/intents.md` · `docs/apple/siri.md` · `docs/apple/carplay.md` · `docs/apple/persona.md` avatars · `docs/apple/phone-tools.md` · `docs/apple/recording.md` · `docs/apple/recording-rolling.md` · `docs/apple/meta-glasses.md` |
+| Apple | `docs/apple/ios.md` iOS / watchOS, design language · `docs/apple/icons.md` icons · `docs/apple/sidebar.md` sidebar rows · `docs/apple/ios-state.md` state and redraws · `docs/apple/performance.md` performance rules, budgets and measuring (read before changing `apple/`) · `docs/apple/shell.md` · `docs/apple/vision.md` · `docs/apple/live-activity.md` · `docs/apple/home-widgets.md` Home Screen and Lock Screen widgets · `docs/apple/intents.md` · `docs/apple/siri.md` · `docs/apple/carplay.md` · `docs/apple/persona.md` avatars · `docs/apple/phone-tools.md` · `docs/apple/recording.md` · `docs/apple/recording-rolling.md` · `docs/apple/meta-glasses.md` |
+| Desktop | `docs/desktop/desktop.md` Electron desktop app and independently installable Persona Link: packaging, security, presence and migration boundaries |
 | Design | `docs/design/PRINCIPLES.md` the seven product design principles, how to check each, cases · `docs/design/DESIGN_SYSTEM.md` tokens, components, interaction and content rules (read before any UI change) · `docs/design/HIG_AUDIT.md` Apple HIG audit of the Apple clients, findings by severity · `docs/design/DECISIONS.md` the history of the design rules: what was decided when, and what it replaced · `docs/design/sidebar-navigation.md` the iPhone drawer and iPad sidebar: places keep their stacks, tasks open over the drawer, options compared · `docs/design/proposals/owner-at-a-glance.md` proposal: secretary → leaders (directions) → tasks in one view, New chat as a direction, leaders' reports to a work-log extension, one Needs you · `docs/design/proposals/continuous-improvement-loop.md` proposal: Opus plans and verifies, cheaper execution models by task type, the relay's hybrid mode, cadence and rollback · `docs/design/proposals/meeting-recording.md` proposal: the iPhone meeting recording page, live view, wrap-up, motion, haptics, Live Activity layout · `docs/design/proposals/main-chat-availability.md` proposal: a background supervisor for the main chat's tasks, the owner's message first, `ask_user` without holding the turn, reply-wait metrics, fewer asks · `docs/design/proposals/hub-token-boundary.md` proposal: a token on the hub machine is not the owner's approval; what the hub's account can reach, agent isolation vs a terminal-bound token vs person-confirmed changes · `docs/design/proposals/assistant-instructions.md` proposal: one home for each assistant instruction (shared core, role blocks, tool descriptions, skills), behaviour checks before cuts · `docs/design/proposals/inbox-sources-migration.md` proposal: built-in Inbox sources become an extension's read tools plus a default subscription; what subscription items lack, the per-source switch, rollback and order · `docs/design/proposals/assistant-search.md` proposal: find an assistant chat by what was said in it (a manager-side index of the user's messages and the replies, `GET /api/v1/assistant/search`, opening at the hit) and one rule for search in chat (no hidden tags, quoted contexts, injected lines as shown, folded work) |
 | Android and web | `docs/android/android.md` · `docs/android/android-design.md` · `docs/web/web.md` · `docs/web/workspace-board.md` · `docs/web/review.md` reviewing a session's changes · `docs/web/preview.md` dev server previews · `docs/web/screenshots/task-workspace/README.md` workspace policy browser fixture and captures · `docs/design/task-cards.md` task cards on iOS and Web compared, the merged design, a shared token table and the product calls open (#5569) |
 | HarmonyOS | `docs/harmony/harmony.md` native API 26 phone and foldable client: product, design, interaction, architecture and verification · `docs/harmony/prototype.html` self-contained interactive design projection · `docs/harmony/device-validation.md` environment, measured windows and physical-device procedures; build entry `harmony/README.md` |

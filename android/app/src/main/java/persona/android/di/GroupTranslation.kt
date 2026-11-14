@@ -271,6 +271,11 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun archiveConversation(session: SessionKey) = source.archiveConversation(names.raw(session))
         override suspend fun unarchiveConversation(session: SessionKey) = source.unarchiveConversation(names.raw(session))
         override suspend fun archivedConversations() = source.archivedConversations().map(names::session)
+        override suspend fun searchChats(query: String, limit: Int) = source.searchChats(query, limit)?.let { answer ->
+            answer.copy(results = answer.results.map { result ->
+                result.copy(machineId = result.machineId.takeIf { it.isNotBlank() }?.let(names::machineId).orEmpty())
+            })
+        }
         override suspend fun renameConversation(session: SessionKey, title: String) = source.renameConversation(names.raw(session), title)
         override suspend fun makeDirection(session: SessionKey) = source.makeDirection(names.raw(session))
         override suspend fun endDirection(session: SessionKey) = source.endDirection(names.raw(session))
@@ -366,11 +371,14 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
         override suspend fun newAgentModel() = source.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             source.launcherModels(names.rawMachine(machineId), launcher, refresh)
-        override suspend fun worktreeStatus(machineId: String, cwd: String) = source.worktreeStatus(names.rawMachine(machineId), cwd)
-        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String) =
-            source.addWorktree(names.rawMachine(machineId), cwd, nameHint, branch)
-        override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean) =
-            source.removeWorktree(names.rawMachine(machineId), path, deleteBranch, force)
+        override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?) = source.worktreeStatus(names.rawMachine(machineId), cwd, kind)
+        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?) =
+            source.addWorktree(names.rawMachine(machineId), cwd, nameHint, branch, kind)
+        override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean, kind: String?) =
+            source.removeWorktree(names.rawMachine(machineId), path, deleteBranch, force, kind)
+        // Rows name the hub's own machine id: back in the merged one, so the form's filter by machine keeps them.
+        override suspend fun workspaces(machineId: String) =
+            source.workspaces(names.rawMachine(machineId)).map { it.copy(machineId = names.machineId(it.machineId)) }
     }
 }
 

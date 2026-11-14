@@ -16,8 +16,10 @@ func TestStreamContractsDoNotActivateRuntime(t *testing.T) {
 	if extension.UIVersion != 6 {
 		t.Fatalf("contract-only stage changed runtime UI version: %d", extension.UIVersion)
 	}
-	if !reflect.DeepEqual(extension.HubCapabilities(), []string{extension.HubInboxGroup}) {
-		t.Fatalf("contract-only stage advertised new runtime capabilities: %v", extension.HubCapabilities())
+	// inbox_group_state is intentionally active: the manager accepts grouped read/replied state and fallback
+	// assignments to handled events. Other runtime capabilities remain contract-only.
+	if !reflect.DeepEqual(extension.HubCapabilities(), []string{extension.HubInboxGroup, extension.HubInboxGroupState}) {
+		t.Fatalf("hub capabilities changed without an intentional runtime rollout: %v", extension.HubCapabilities())
 	}
 	for _, dir := range []string{"", "invalid"} {
 		paths, err := filepath.Glob(filepath.Join(schemaDir, "examples", dir, "UIStream*.json"))

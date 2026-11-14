@@ -28,5 +28,6 @@ export function NodeMenu({
   const deps = useMemo(() => defaultNodeDeps(changed ?? (() => void refresh().catch(() => {}))), [changed]);
   const own = nodeActions(node, deps, { omit });
   const items = before?.length && own.length ? [...before, { ...own[0], divider: true }, ...own.slice(1)] : [...(before ?? []), ...own];
-  return <Menu anchor={at.anchor ?? null} point={at.point} onClose={onClose} align="right" width={224} header={header} items={items} />;
+  // the header is the node's name (a space's, a tab's, a pane's): as written, not in a label's capitals
+  return <Menu anchor={at.anchor ?? null} point={at.point} onClose={onClose} align="right" width={224} header={header} headerAsWritten items={items} />;
 }

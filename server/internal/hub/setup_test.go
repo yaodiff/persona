@@ -13,6 +13,7 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,6 +28,16 @@ import (
 )
 
 var updateGolden = flag.Bool("update-hubjson-golden", false, "rewrite testdata/hubjson/*.golden.json")
+
+// pinSetupLang has SetupCommand print in l whatever the machine's locale says: no installer language, a terminal in l.
+func pinSetupLang(t *testing.T, l i18n.Lang) {
+	t.Helper()
+	t.Setenv("PERSONA_INSTALL_LANG", "")
+	for _, k := range i18n.TerminalEnv {
+		t.Setenv(k, "")
+	}
+	t.Setenv("PERSONA_LANG", string(l))
+}
 
 func setupTestHome(t *testing.T) string {
 	t.Helper()
@@ -238,6 +249,7 @@ func testSetupEnv(t *testing.T, home string, o setupOptions, cmds *fakeCommands,
 	var out bytes.Buffer
 	e := &setupEnv{
 		home: home, root: root, goos: "linux", uid: 1000, user: "someone", out: &out, o: o,
+		l:      i18n.ZhHans, // the tests read the zh-Hans wording, which must not change (#5520)
 		run:    cmds.run,
 		runTTY: func(context.Context, string, ...string) error { return errors.New("no terminal") },
 		lookPath: func(name string) (string, error) {
@@ -253,7 +265,7 @@ func testSetupEnv(t *testing.T, home string, o setupOptions, cmds *fakeCommands,
 		portFree:     func(int) bool { return true },
 		exe:          func() (string, error) { return "/nonexistent", nil },
 		pingDB:       func(context.Context, string) error { return nil },
-		doctor:       func(context.Context, string, bool) []string { return nil },
+		doctor:       func(context.Context, string, bool, i18n.Lang) []string { return nil },
 		getenv:       func(string) string { return "" },
 		sleep:        func(time.Duration) {},
 		isContainer:  func() bool { return false },
@@ -637,7 +649,7 @@ func TestSetupLoopbackHubAdminURL(t *testing.T) {
 
 func TestSetupAdminURL(t *testing.T) {
 	lan := ip4(192, 168, 1, 20)
-	e := &setupEnv{lanIPv4: func() string { return lan }}
+	e := &setupEnv{l: i18n.ZhHans, lanIPv4: func() string { return lan }}
 	for _, c := range []struct {
 		listen, public, want string
 		local                bool
@@ -686,7 +698,7 @@ func TestSetupKeptListenNote(t *testing.T) {
 		{"tls off in the file", setupOptions{tls: ":18662", tlsSet: true}, file(`{"token":"x"}`), []string{"public.tls_listen 仍是 空（没开 TLS）（这次给的 --tls :18662）"}},
 		{"other tls host", setupOptions{tls: "127.0.0.1:18662", tlsSet: true}, fresh, []string{"public.tls_listen 仍是 " + lan + ":18662"}},
 	} {
-		e := &setupEnv{o: c.o, lanIPv4: func() string { return lan }}
+		e := &setupEnv{l: i18n.ZhHans, o: c.o, lanIPv4: func() string { return lan }}
 		got := e.keptListenNote(c.raw)
 		if len(c.want) == 0 && got != "" {
 			t.Errorf("%s: note %q", c.name, got)
@@ -794,6 +806,7 @@ func TestSetupRecordsTheInstallLanguage(t *testing.T) {
 	}
 	// An unknown --lang stops before anything is set up; in a temporary home all the same, in case it ever did not.
 	setupTestHome(t)
+	pinSetupLang(t, i18n.ZhHans)
 	var out, errOut bytes.Buffer
 	if err := SetupCommand(context.Background(), []string{"--lang", "fr", "--no-service", "--manager-service"}, &out, &errOut); err == nil || !strings.Contains(err.Error(), "--lang") {
 		t.Fatalf("--lang fr: %v", err)
@@ -1093,5 +1106,181 @@ func TestAddressNotLocal(t *testing.T) {
 	}
 	if _, gone := addressNotLocal(":18662", addrs); gone {
 		t.Fatal("every address taken for gone")
+	}
+}
+
+// The language setup prints in (#5520): --lang, else the installer's (PERSONA_INSTALL_LANG, when it is one), else the
+// terminal's (PERSONA_LANG, LC_ALL, LC_MESSAGES, LANG; C is English).
+func TestSetupLang(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		flag    i18n.Lang
+		install string
+		env     map[string]string // the terminal's
+		want    i18n.Lang
+	}{
+		{"--lang first", i18n.En, "ja", map[string]string{"PERSONA_LANG": "zh-Hans"}, i18n.En},
+		{"the installer's next", "", "ja", map[string]string{"PERSONA_LANG": "zh-Hans"}, i18n.Ja},
+		{"an unknown installer language is none", "", "fr", map[string]string{"PERSONA_LANG": "zh-Hans"}, i18n.ZhHans},
+		{"PERSONA_LANG over the locale", "", "", map[string]string{"PERSONA_LANG": "ja", "LC_ALL": "zh_CN.UTF-8"}, i18n.Ja},
+		{"LC_ALL over LANG", "", "", map[string]string{"LC_ALL": "zh_CN.UTF-8", "LANG": "ja_JP.UTF-8"}, i18n.ZhHans},
+		{"LANG", "", "", map[string]string{"LANG": "ja_JP.UTF-8"}, i18n.Ja},
+		{"C is English", "", "", map[string]string{"LC_ALL": "C", "LANG": "zh_CN.UTF-8"}, i18n.En},
+		{"nothing set is English", "", "", nil, i18n.En},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			for _, k := range i18n.TerminalEnv {
+				t.Setenv(k, c.env[k])
+			}
+			getenv := func(k string) string {
+				if k == "PERSONA_INSTALL_LANG" {
+					return c.install
+				}
+				return ""
+			}
+			if got := setupLang(c.flag, getenv); got != c.want {
+				t.Errorf("setupLang(%q) with PERSONA_INSTALL_LANG=%q, %v: %q, want %q", c.flag, c.install, c.env, got, c.want)
+			}
+		})
+	}
+	// newSetupEnv reads the installer's language from the environment.
+	setupTestHome(t)
+	pinSetupLang(t, i18n.ZhHans)
+	t.Setenv("PERSONA_INSTALL_LANG", "ja")
+	if e, err := newSetupEnv(&bytes.Buffer{}, setupOptions{}); err != nil || e.l != i18n.Ja {
+		t.Fatalf("newSetupEnv: %v, %v", e, err)
+	}
+	if e, err := newSetupEnv(&bytes.Buffer{}, setupOptions{lang: i18n.En}); err != nil || e.l != i18n.En {
+		t.Fatalf("newSetupEnv --lang en: %v, %v", e, err)
+	}
+}
+
+// What SetupCommand says before setup runs: the flags' usage in the terminal's language (it is written before
+// --lang is read), its errors in the language setup prints in.
+func TestSetupCommandWording(t *testing.T) {
+	setupTestHome(t)
+	for _, c := range []struct {
+		terminal i18n.Lang
+		args     []string
+		want     string
+	}{
+		{i18n.En, []string{"--no-service", "--manager-service"}, "--manager-service installs the built-in manager’s own service, so it can’t go with --no-service"},
+		{i18n.ZhHans, []string{"--lang", "ja", "--no-service", "--manager-service"}, "--manager-service は内蔵マネージャーの常駐サービスをインストールするため"},
+		{i18n.Ja, []string{"extra"}, "hub setup は位置引数を受け付けません"},
+		{i18n.ZhHans, []string{"--listen", "nope"}, `"nope" 不是有效的监听地址：写成 :端口 或 地址:端口`},
+		{i18n.En, []string{"--lang", "fr"}, "--lang must be en, zh-Hans or ja"},
+		{i18n.ZhHans, []string{"--lang", "fr"}, "--lang 只能是 en、zh-Hans 或 ja"},
+	} {
+		pinSetupLang(t, c.terminal)
+		var out, errOut bytes.Buffer
+		if err := SetupCommand(context.Background(), c.args, &out, &errOut); err == nil || err.Error() != c.want && !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("%s %v: %v, want %q", c.terminal, c.args, err, c.want)
+		}
+	}
+	for l, want := range map[i18n.Lang]string{
+		i18n.En:     "ask nothing and take every default",
+		i18n.ZhHans: "不问问题，都按默认做",
+		i18n.Ja:     "質問せず、すべて既定値で進めます",
+	} {
+		pinSetupLang(t, l)
+		var out, errOut bytes.Buffer
+		if err := SetupCommand(context.Background(), []string{"-h"}, &out, &errOut); !errors.Is(err, flag.ErrHelp) ||
+			!strings.Contains(errOut.String(), want) || strings.Contains(errOut.String(), "hub-setup.") {
+			t.Errorf("%s usage (%v):\n%s", l, err, errOut.String())
+		}
+	}
+}
+
+var setupCJK = regexp.MustCompile(`[　-〿぀-ヿ㐀-䶿一-鿿！-｠]`)
+
+// A new install prints every line from the catalogs in the language it was given (#5520): English and Japanese
+// in their own words, zh-Hans as before; --json keeps its machine fields (step, ok, the last line's) and words
+// detail and next in that language too.
+func TestSetupPrintsInItsLanguage(t *testing.T) {
+	run := func(t *testing.T, l i18n.Lang, asJSON bool) string {
+		t.Helper()
+		home := setupTestHome(t)
+		var token string
+		port := fakeHub(t, &token, false)
+		cmds := &fakeCommands{replies: map[string]fakeReply{
+			"docker ps -a":               {out: ""},
+			"docker port":                {out: "127.0.0.1:18661\n"},
+			"systemctl --user is-active": {err: true},
+			"loginctl show-user":         {out: "no\n"},
+			"loginctl enable-linger":     {err: true, out: "Access denied"},
+			"docker info":                {out: "27.0\n"},
+		}}
+		o := setupOptions{listen: ":" + strconv.Itoa(port), tls: ":18662", json: asJSON}
+		e, out := testSetupEnv(t, home, o, cmds, "docker", "systemctl", "loginctl", "herdr")
+		e.l = l
+		e.pingDB = func(context.Context, string) error {
+			cfg, _ := readHubJSON(e.root)
+			raw, _ := cfg.Get("token")
+			_ = json.Unmarshal(raw, &token)
+			return nil
+		}
+		if err := e.setup(context.Background()); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if strings.Contains(out.String(), "hub-setup.") {
+			t.Fatalf("%s: a catalog key printed:\n%s", l, out)
+		}
+		return out.String()
+	}
+	for _, c := range []struct {
+		l    i18n.Lang
+		want []string
+	}{
+		{i18n.En, []string{"Setting up the hub (personad hub setup)\nDone | Configuration: Wrote ", "Done | Database: Created Postgres in Docker",
+			"Done | Service: Installed and started the background service", "; linger isn’t on",
+			"  Next: Run sudo loginctl enable-linger someone so the hub keeps running", "Done | Startup: The hub is running",
+			"Done | Manager: The built-in manager is a service of its own", "Done | Self-check: No problems found",
+			"\nThe hub is set up.\n\n1. Scan this QR code with the Persona app to pair your phone (valid for ",
+			"2. Open this address in a browser on your phone and set an administrator password", "\nOnce these expire, run personad hub setup again"}},
+		{i18n.Ja, []string{"ハブのセットアップ（personad hub setup）\n完了｜設定：", "完了｜データベース：Docker に Postgres を作成し",
+			"完了｜常駐サービス：常駐サービスをインストールして起動しました", "。linger が無効です",
+			"  次の手順：sudo loginctl enable-linger someone を実行すると", "完了｜自己診断：問題は見つかりませんでした",
+			"\nハブのセットアップが完了しました。\n\n1. Persona アプリでこの QR コードを読み取り", "2. スマートフォンのブラウザーで次のアドレスを開き"}},
+		{i18n.ZhHans, []string{"安装 hub（personad hub setup）\n完成｜配置：已写好 ", "完成｜数据库：建好了 Docker 里的 Postgres（容器 persona-postgres，数据卷 persona-pgdata），地址写进了 hub.json\n",
+			"完成｜常驻：装好了常驻服务（systemd 用户服务 personad，端口归 personad.socket）并启动；没打开 linger：你退出登录后 hub 会停\n",
+			"  下一步：运行 sudo loginctl enable-linger someone，让 hub 在你退出登录、电脑重启后也接着运行\n",
+			"完成｜启动：hub 在运行，本机检查 /api/v1/health 通过\n", "完成｜自检：没发现问题\n",
+			"\nhub 装好了。\n\n1. 用 Persona App 扫这个二维码，配对你的手机（", "2. 用手机浏览器打开下面的地址，设一个管理员密码（设置码已经带在地址里，",
+			"\n过期了就再运行一次 personad hub setup（已经装好的不会重做），或者 personad hub pair 只出配对码。\n"}},
+	} {
+		t.Run(string(c.l), func(t *testing.T) {
+			text := run(t, c.l, false)
+			for _, w := range c.want {
+				if !strings.Contains(text, w) {
+					t.Errorf("no %q in:\n%s", w, text)
+				}
+			}
+			if c.l == i18n.En && setupCJK.MatchString(text) {
+				t.Errorf("CJK in the English output %q:\n%s", setupCJK.FindString(text), text)
+			}
+			lines := strings.Split(strings.TrimSpace(run(t, c.l, true)), "\n")
+			for _, line := range lines[:len(lines)-1] {
+				var s struct {
+					Step   string `json:"step"`
+					OK     *bool  `json:"ok"`
+					Detail string `json:"detail"`
+					Next   string `json:"next"`
+				}
+				if err := json.Unmarshal([]byte(line), &s); err != nil || setupStepNames[s.Step] == "" || s.OK == nil || s.Detail == "" {
+					t.Fatalf("step line %q", line)
+				}
+				if c.l == i18n.En && setupCJK.MatchString(s.Detail+s.Next) {
+					t.Errorf("CJK in an English step line %q", line)
+				}
+				if c.l != i18n.ZhHans && (strings.Contains(s.Detail, "已") || strings.Contains(s.Next, "运行")) {
+					t.Errorf("zh-Hans in a %s step line %q", c.l, line)
+				}
+			}
+			var done map[string]any
+			if err := json.Unmarshal([]byte(lines[len(lines)-1]), &done); err != nil || done["done"] != true || done["pair_url"] == nil ||
+				done["admin_url"] == nil || done["setup_code"] != "ABCD-EFGH" || done["expires_at"] == nil {
+				t.Fatalf("done line %q", lines[len(lines)-1])
+			}
+		})
 	}
 }

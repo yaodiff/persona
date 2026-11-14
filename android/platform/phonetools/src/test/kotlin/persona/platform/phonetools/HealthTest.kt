@@ -1,5 +1,14 @@
 package persona.platform.phonetools
 
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.aggregate.AggregateMetric
+import androidx.health.connect.client.aggregate.AggregationResult
+import androidx.health.connect.client.aggregate.AggregationResultGroupedByPeriod
+import androidx.health.connect.client.records.BasalMetabolicRateRecord
+import androidx.health.connect.client.records.NutritionRecord
+import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
+import androidx.health.connect.client.time.TimeRangeFilter
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -13,7 +22,10 @@ import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.lang.reflect.Proxy
 import java.time.Instant
+import java.time.LocalDateTime
+import java.time.Period
 import java.time.ZoneId
 
 /** phone_health_summary (Health.kt): the arguments it takes and the sleep arithmetic, as iOS `HealthTool`. */
@@ -47,7 +59,8 @@ class HealthTest {
         val metrics = props["metrics"]!!.jsonObject
         assertEquals("array", metrics["type"]!!.jsonPrimitive.content)
         val names = metrics["items"]!!.jsonObject["enum"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet()
-        assertEquals(setOf("steps", "distance", "active_energy", "heart_rate", "resting_heart_rate", "sleep", "weight"), names)
+        assertEquals(setOf("steps", "distance", "active_energy", "resting_energy", "dietary_energy", "protein", "carbs", "fat",
+            "heart_rate", "resting_heart_rate", "sleep", "weight"), names)
         val days = props["days"]!!.jsonObject
         assertEquals(1, days["minimum"]!!.jsonPrimitive.int)
         assertEquals(90, days["maximum"]!!.jsonPrimitive.int)
@@ -58,6 +71,55 @@ class HealthTest {
         val now = at("2026-11-02T03:30:00Z") // 11:30 in Shanghai
         assertEquals(at("2026-11-01T16:00:00Z") to now, Health.window(1, now, shanghai))
         assertEquals(at("2026-10-26T16:00:00Z"), Health.window(7, now, shanghai).first)
+    }
+
+    @Test fun nutritionAndRestingEnergyUseTheirReadPermissions() {
+        assertEquals(NutritionRecord::class, Health.recordTypes["dietary_energy"])
+        assertEquals(NutritionRecord::class, Health.recordTypes["protein"])
+        assertEquals(NutritionRecord::class, Health.recordTypes["carbs"])
+        assertEquals(NutritionRecord::class, Health.recordTypes["fat"])
+        assertEquals(BasalMetabolicRateRecord::class, Health.recordTypes["resting_energy"])
+        assertTrue("android.permission.health.READ_NUTRITION" in Health.permissions)
+        assertTrue("android.permission.health.READ_BASAL_METABOLIC_RATE" in Health.permissions)
+        assertTrue(Health.permissions.none { "WRITE_" in it })
+    }
+
+    @Test fun nutritionAndRestingEnergyReadDailyTotalsInKcalAndGrams() = runTest {
+        val totals: Map<String, Pair<AggregateMetric<*>, Double>> = linkedMapOf(
+            "dietary_energy" to (NutritionRecord.ENERGY_TOTAL to 1850.26),
+            "protein" to (NutritionRecord.PROTEIN_TOTAL to 84.26),
+            "carbs" to (NutritionRecord.TOTAL_CARBOHYDRATE_TOTAL to 215.36),
+            "fat" to (NutritionRecord.TOTAL_FAT_TOTAL to 65.46),
+            "resting_energy" to (BasalMetabolicRateRecord.BASAL_CALORIES_TOTAL to 1225.56),
+        )
+        val start = at("2026-11-01T16:00:00Z") // 11-02 00:00 local
+        val end = at("2026-11-03T03:30:00Z") // 11-03 11:30 local, today is partial
+        for ((name, total) in totals) {
+            val (metric, amount) = total
+            var requests = 0
+            val client = Proxy.newProxyInstance(HealthConnectClient::class.java.classLoader,
+                arrayOf(HealthConnectClient::class.java)) { _, method, args ->
+                check(method.name == "aggregateGroupByPeriod") { "Unexpected health read: ${method.name}" }
+                val request = args!![0] as AggregateGroupByPeriodRequest
+                requests++
+                assertEquals(AggregateGroupByPeriodRequest(
+                    metrics = setOf(metric),
+                    timeRangeSlicer = Period.ofDays(1),
+                    timeRangeFilter = TimeRangeFilter.between(LocalDateTime.ofInstant(start, shanghai),
+                        LocalDateTime.ofInstant(end, shanghai)),
+                ), request)
+                listOf(
+                    AggregationResultGroupedByPeriod(AggregationResult(emptyMap(), emptyMap(), emptySet()),
+                        LocalDateTime.parse("2026-11-02T00:00:00"), LocalDateTime.parse("2026-11-03T00:00:00")),
+                    AggregationResultGroupedByPeriod(AggregationResult(emptyMap(), mapOf(metric.metricKey to amount), emptySet()),
+                        LocalDateTime.parse("2026-11-03T00:00:00"), LocalDateTime.parse("2026-11-03T11:30:00")),
+                )
+            } as HealthConnectClient
+            // Empty days remain absent; these values are totals, not per-sample averages or kcal/day rates.
+            assertEquals(name, mapOf("2026-11-03" to JsonPrimitive(Health.round1(amount))),
+                Health.quantity(client, name, start, end, shanghai))
+            assertEquals(1, requests)
+        }
     }
 
     @Test fun aNightAcrossMidnightCountsOnBothDays() {

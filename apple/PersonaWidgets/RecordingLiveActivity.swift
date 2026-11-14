@@ -254,8 +254,14 @@ struct RecordingAnswer: View {
                 Label { RecordingRole(persona: persona).lineLimit(1) } icon: { Image(systemName: RecordingSymbol.persona) }
                     .font(.caption.weight(.medium))
             } else if let line = state.line, !line.isEmpty {
-                Label { Text(line).lineLimit(lines) } icon: { Image(systemName: RecordingSymbol.line) }
-                    .font(.caption.weight(.medium))
+                if state.fellBack == true {
+                    // Hub transcription fell back (#3862 phase 5): the line is this iPhone's own, and says so in words.
+                    Label { Text("On iPhone: \(line) [Recording Line]").lineLimit(lines) } icon: { Image(systemName: RecordingSymbol.phone) }
+                        .font(.caption.weight(.medium))
+                } else {
+                    Label { Text(line).lineLimit(lines) } icon: { Image(systemName: RecordingSymbol.line) }
+                        .font(.caption.weight(.medium))
+                }
             }
         }
     }
@@ -324,6 +330,9 @@ enum RecordingSymbol {
     static let persona = "sparkle"
     /// The app's quote (`Theme.Icon.quote`): the meeting's latest line (#3862 phase 2).
     static let line = "text.quote"
+    /// The app's iPhone (`Theme.Icon.phone`): the line is this iPhone's own, hub transcription having fallen back (#3862
+    /// phase 5).
+    static let phone = "iphone"
     /// The app's Talk (`Theme.Icon.talk`, #3862 phase 4): the button that opens a talk window.
     static let talk = "mic.circle"
     /// The talk mark: on the red disc while a talk window is open, and its Done (the bare microphone, as the disc is drawn).

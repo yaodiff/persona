@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, enc, errorText, fileDownloadURL } from "../../lib/api";
 import { bytes } from "../../lib/format";
-import { useStore } from "../../lib/store";
+import { onHubEvent, useStore } from "../../lib/store";
 import { Button, Dialog, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
@@ -29,6 +29,9 @@ export function HealthReports({ version }: { version: number }) {
   useEffect(() => {
     void load();
   }, [load, version]);
+  // read again on every hello, as the page's conversations are: one that failed while the hub was away, or a report
+  // added or deleted from another device meanwhile
+  useEffect(() => onHubEvent("hello", () => void load()), [load]);
 
   return (
     <section className="mt-7" data-testid="health-reports">

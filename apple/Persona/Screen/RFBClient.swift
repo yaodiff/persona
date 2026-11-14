@@ -15,10 +15,20 @@ nonisolated protocol RFBTransport: AnyObject, Sendable {
 nonisolated final class RFBWebSocket: RFBTransport, @unchecked Sendable {
     private let task: URLSessionWebSocketTask
 
-    init(api: APIClient, machine: String) {
-        var comps = URLComponents(url: api.url("/api/v1/machines/\(machine)/ports/5900/connect"), resolvingAgainstBaseURL: false)!
-        comps.scheme = comps.scheme == "https" ? "wss" : "ws"
-        var req = URLRequest(url: comps.url!)
+    /// - Parameter pair: ties this screen-sharing stream to a later video stream of the same Mac (#3954): the node follows
+    ///   Screen Sharing's sign-in on it, and opens video only for a pair that signed in. Hubs and nodes from before the
+    ///   video channel ignore it.
+    convenience init(api: APIClient, machine: String, pair: String? = nil, protocols: [String] = []) {
+        self.init(api: api, path: "/api/v1/machines/\(machine)/ports/5900/connect", pair: pair, protocols: protocols)
+    }
+
+    /// Another of the hub's binary relays the same way: the live screen's video channel (`…/screen/video/connect`, #3954).
+    /// - Parameter protocols: WebSocket subprotocols to offer (the live screen's session, #6398); `subprotocol` says
+    ///   which the hub selected once the socket is open.
+    /// - Parameter attach: rejoin the live screen session of `pair` (#6398) instead of opening a new stream.
+    init(api: APIClient, path: String, pair: String?, protocols: [String] = [], attach: Bool = false) {
+        var req = URLRequest(url: Self.url(api.url(path), pair: pair, attach: attach))
+        if !protocols.isEmpty { req.setValue(protocols.joined(separator: ", "), forHTTPHeaderField: "Sec-WebSocket-Protocol") }
         api.config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         req.timeoutInterval = 15
@@ -26,6 +36,23 @@ nonisolated final class RFBWebSocket: RFBTransport, @unchecked Sendable {
         task.delegate = HubRedirects.shared
         task.maximumMessageSize = 64 << 20
         task.resume()
+    }
+
+    /// The WebSocket URL for the hub's `http(s)` one, with `pair` when there is one.
+    static func url(_ http: URL, pair: String?, attach: Bool = false) -> URL {
+        var comps = URLComponents(url: http, resolvingAgainstBaseURL: false)!
+        comps.scheme = comps.scheme == "https" ? "wss" : "ws"
+        if let pair, !pair.isEmpty {
+            comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "pair", value: pair)]
+                + (attach ? [URLQueryItem(name: "attach", value: "1")] : [])
+        }
+        return comps.url!
+    }
+
+    /// A pair for one connection: 16 random bytes in hex, so no other stream can bind video to it by guessing.
+    static func newPair() -> String {
+        var rng = SystemRandomNumberGenerator()
+        return (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255, using: &rng)) }.joined()
     }
 
     func send(_ bytes: [UInt8]) async throws { try await task.send(.data(Data(bytes))) }
@@ -39,6 +66,11 @@ nonisolated final class RFBWebSocket: RFBTransport, @unchecked Sendable {
     }
 
     func close() { task.cancel(with: .normalClosure, reason: nil) }
+
+    /// The subprotocol the hub selected, once the socket is open (after the first message); nil for none.
+    var subprotocol: String? {
+        (task.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Sec-WebSocket-Protocol")
+    }
 }
 
 /// What came in, read a few bytes at a time.
@@ -213,6 +245,10 @@ nonisolated final class RFBClient: @unchecked Sendable {
     let outbox = RFBOutbox()
     /// Bytes that came from the Mac so far (the page's numbers in DEBUG builds).
     var received: Int { reader.received }
+    /// holdUpdates: whether updates are held, and whether one came while they were (its next request owed).
+    private let updateLock = NSLock()
+    private var held = false
+    private var updateOwed = false
 
     var onState: @Sendable (State) -> Void = { _ in }
     /// After each update: the framebuffer, and the part of it that changed.
@@ -283,6 +319,18 @@ nonisolated final class RFBClient: @unchecked Sendable {
     /// connection that went away without saying so shows up as no frame (#4380).
     func refresh() { send(requestBytes(incremental: false)) }
 
+    /// While held, an update that comes in asks for no next one (#3954: the video channel shows the picture, so Screen
+    /// Sharing encodes nothing meanwhile); released, the request that was held goes out, and the Mac sends what changed
+    /// since its last update. Input, the clipboard and `refresh` go on either way.
+    func holdUpdates(_ on: Bool) {
+        let owed = updateLock.withLock { () -> Bool in
+            held = on
+            defer { if !on { updateOwed = false } }
+            return !on && updateOwed
+        }
+        if owed { send(requestBytes(incremental: true)) }
+    }
+
     /// A FramebufferUpdateRequest for the whole framebuffer as it is now. Never a part of it, even when the views show
     /// less (#3067): macOS's Screen Sharing leaves a request narrower than the screen, or one not starting at its top,
     /// unanswered while the part changes.
@@ -339,9 +387,20 @@ nonisolated final class RFBClient: @unchecked Sendable {
         let generator = try await reader.bytes(2)
         let length = try await reader.u16()
         let prime = try await reader.bytes(length), serverKey = try await reader.bytes(length)
-        let c = try await sign()
-        let r = try RFBAuth.ard(generator: generator, prime: prime, serverKey: serverKey, account: c.account, password: c.password)
-        try await transport.send(r.sealed + r.publicKey)
+        // The key exchange needs no account or password: worked out while the form waits for them, so Connect sends at
+        // once (#7809: a 4096-bit prime took a Debug build 48 s after Connect).
+        let exchange = Task.detached(priority: .userInitiated) {
+            try RFBAuth.exchange(generator: generator, prime: prime, serverKey: serverKey)
+        }
+        let c: Credentials
+        do {
+            c = try await sign()
+        } catch {
+            exchange.cancel()
+            throw error
+        }
+        let k = try await exchange.value
+        try await transport.send(try RFBAuth.seal(account: c.account, password: c.password, key: k.key) + k.publicKey)
     }
 
     private func veNCrypt() async throws {
@@ -439,7 +498,11 @@ nonisolated final class RFBClient: @unchecked Sendable {
             framebufferLock.withLock { damage.add(r) }
         }
         if !dirty.isNull { onFrame(framebuffer, dirty) }
-        try await request(incremental: true)
+        let ask = updateLock.withLock { () -> Bool in
+            if held { updateOwed = true }
+            return !held
+        }
+        if ask { try await request(incremental: true) }
     }
 
     private func resize(width: Int, height: Int) {

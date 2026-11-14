@@ -231,6 +231,8 @@ type Store struct {
 	settled string
 	// ingestWrite is a per-store failure-injection seam; nil uses fsync and atomic replacement.
 	ingestWrite func(string, []byte) error
+	// search is the search index over the files (search_index.go): its own locks, leaves.
+	search searchIndex
 }
 
 func NewStore(dir string) (*Store, error) {

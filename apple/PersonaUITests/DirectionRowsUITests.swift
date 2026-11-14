@@ -80,22 +80,33 @@ final class DirectionRowsUITests: XCTestCase {
     }
 
     @MainActor func testTheToDosPinnedSectionsEndAsTheirRowsDo() {
-        launch(["-todos.grouping", "direction"])
+        // The list view whatever an earlier test left (the calendar keeps itself per device).
+        launch(["-todos.grouping", "direction", "-todos.view", "list"])
         openSidebar()
         app.buttons["sidebar-todos"].firstMatch.tap()
         let header = app.descendants(matching: .any).matching(identifier: "todos.direction").firstMatch
         XCTAssertTrue(header.waitForExistence(timeout: 15), "the To-dos page is not grouped by 常驻:\n\(app.debugDescription)")
         sleep(2)
         shot("todos")
-        let headers = app.descendants(matching: .any).matching(identifier: "todos.direction").allElementsBoundByIndex
-        XCTAssertFalse(headers.isEmpty)
-        for h in headers {
-            XCTAssertFalse(h.label.contains("在做"), "a 常驻 section still says 在做: \(h.label)")
+        // A list builds a row, and its section's header, only once it is on screen, and 「增长」 sits below the fold on a
+        // phone: read the headers while scrolling down to it.
+        var labels: [String] = []
+        let list = app.collectionViews.firstMatch
+        for round in 0..<8 {
+            for h in app.descendants(matching: .any).matching(identifier: "todos.direction").allElementsBoundByIndex where !labels.contains(h.label) {
+                labels.append(h.label)
+            }
+            if labels.contains(where: { $0.hasPrefix("增长") }) || round == 7 { break }
+            list.swipeUp(velocity: .slow)
+        }
+        XCTAssertFalse(labels.isEmpty)
+        for label in labels {
+            XCTAssertFalse(label.contains("在做"), "a 常驻 section still says 在做: \(label)")
         }
         // the spinner exactly where something runs: 「基础设施」 has an Agent at work, 「增长」's working to-do has none
-        let infra = headers.first { $0.label.hasPrefix("基础设施") }
-        XCTAssertTrue(infra?.label.contains("工作中") == true, "基础设施's section does not spin: \(infra?.label ?? "missing")")
-        let growth = headers.first { $0.label.hasPrefix("增长") }
-        XCTAssertTrue(growth.map { !$0.label.contains("工作中") } ?? false, "增长's section spins or is missing: \(growth?.label ?? "missing")")
+        let infra = labels.first { $0.hasPrefix("基础设施") }
+        XCTAssertTrue(infra?.contains("工作中") == true, "基础设施's section does not spin: \(infra ?? "missing")")
+        let growth = labels.first { $0.hasPrefix("增长") }
+        XCTAssertTrue(growth.map { !$0.contains("工作中") } ?? false, "增长's section spins or is missing: \(growth ?? "missing")")
     }
 }

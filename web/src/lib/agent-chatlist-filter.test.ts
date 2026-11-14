@@ -18,6 +18,7 @@ import {
   type AgentDimensionFilters,
   type EvalContext,
 } from "./agent-chatlist-filter";
+import { agentSearchHit, conditionCount, conditionValue, conditionValues, dropConditions, hasSearchOperators, toggleCondition } from "./agent-search";
 import type { Machine, Session } from "./types";
 
 const NOW = Date.parse("2026-11-09T12:00:00Z");
@@ -270,5 +271,67 @@ describe("plain search never adds hidden filters", () => {
     expect(compileSearchAsCode("error handling", { ...DEFAULT_DIMENSION_FILTERS, searchAsCode: true }, buildAgentFacets([s], machines, ctx.pins)).source).toBe("provider");
     registerSearchAsCodeProvider(null);
     expect(applyDimensionFilters([s], { ...DEFAULT_DIMENSION_FILTERS, query: "error handling", searchAsCode: true }, ctx).plan.code).toContain("s.hasErrors");
+  });
+});
+
+// ⌘K's match for an Agent (#6589): the list's operators narrow, then the name, the project or computer, what is inside.
+describe("agentSearchHit", () => {
+  const s = mkSession("a", { title: "Parser rewrite", machine_id: "mac", cwd: "/workspace/orca", repo_root: "/workspace/orca", branch: "fix-timeouts", last_text: "Retry after the socket closed" });
+  const ctx: EvalContext = { ...baseCtx, pins: { spaces: [], sessions: [] } };
+  const hit = (q: string) => agentSearchHit(s, q, ctx);
+
+  it("ranks the name, then the project or computer, then what is inside", () => {
+    expect(hit("parser").score).toBe(100);
+    expect(hit("rewrite").score).toBe(80);
+    expect(hit("orca").score).toBe(60);
+    expect(hit("studio parser").score).toBe(60);
+    expect(hit("socket").score).toBe(40);
+    expect(hit("socket").snippet?.match).toBe("socket");
+    expect(hit("fix-timeouts").score).toBe(40);
+    expect(hit("orca nowhere").score).toBe(0);
+  });
+
+  it("narrows with the operators, which alone match at 30, and nothing typed matches at 1", () => {
+    expect(hit("machine:studio").score).toBe(30);
+    expect(hit("machine:cloud").score).toBe(0);
+    expect(hit("project:orca socket").score).toBe(40);
+    expect(hit("model:opus parser").score).toBe(100);
+    expect(hit("is:pinned parser").score).toBe(0);
+    expect(hit("").score).toBe(1);
+  });
+
+  it("tells a query with operators from plain words", () => {
+    expect(hasSearchOperators("machine:mac")).toBe(true);
+    expect(hasSearchOperators("parser is:error")).toBe(true);
+    expect(hasSearchOperators("error handling")).toBe(false);
+    expect(hasSearchOperators("state:bogus")).toBe(false);
+    expect(hasSearchOperators("")).toBe(false);
+  });
+});
+
+describe("⌘K's Filter writes the list's operators into the query (#6589)", () => {
+  it("adds a condition after the words, takes it out when chosen again, any case", () => {
+    expect(toggleCondition("parser", "machine", "box")).toBe("parser machine:box");
+    expect(toggleCondition("parser machine:box", "machine", "mac")).toBe("parser machine:box machine:mac");
+    expect(toggleCondition("parser Machine:BOX", "machine", "box")).toBe("parser");
+    expect(toggleCondition("", "is", "pinned")).toBe("is:pinned");
+  });
+  it("keeps one time window", () => {
+    expect(toggleCondition("since:24h parser", "since", "7d", true)).toBe("parser since:7d");
+  });
+  it("reads an operator's values and counts the operators, the words apart", () => {
+    expect(conditionValues("parser machine:box project:blog machine:mac machine:", "machine")).toEqual(["box", "mac"]);
+    expect(conditionCount("parser machine:box is:pinned")).toBe(2);
+    expect(conditionCount("ratio 3:2")).toBe(0);
+    expect(hasSearchOperators("since:7d")).toBe(true);
+  });
+  it("drops one operator's values, or every operator and leaves the words", () => {
+    expect(dropConditions("parser machine:box project:blog machine:mac", "machine")).toBe("parser project:blog");
+    expect(dropConditions("parser machine:box is:pinned since:7d crash")).toBe("parser crash");
+  });
+  it("offers only values an operator can spell", () => {
+    expect(conditionValue("persona")).toBe(true);
+    expect(conditionValue("My Project")).toBe(false);
+    expect(conditionValue("")).toBe(false);
   });
 });

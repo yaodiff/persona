@@ -168,8 +168,11 @@ func TestInboxNeedsYouDoesNotWaitForTheHub(t *testing.T) {
 		t.Fatal("telling waited for the hub")
 	}
 	f.mu.Unlock()
-	waitNeedsYou(t, f, 2)
-	got := needsYouTold(t, f)
+	var got []int
+	waitFor(t, "the last inbox count to reach the hub", func() bool {
+		got = needsYouTold(t, f)
+		return len(got) > 0 && got[len(got)-1] == 5
+	})
 	if got[len(got)-1] != 5 {
 		t.Fatalf("the last count told is %v, want 5", got)
 	}

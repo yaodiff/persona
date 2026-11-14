@@ -13,7 +13,7 @@ enum HomeKind: String, CaseIterable, Codable, Sendable {
     var title: LocalizedStringKey {
         switch self {
         case .agents: "Agents [Home Widgets]"
-        case .today: "Today [Home Widgets]"
+        case .today: "Calendar [Home Widgets]"
         case .todos: "To-Dos [Home Widgets]"
         case .usage: "Usage [Home Widgets]"
         case .computers: "Computers [Home Widgets]"
@@ -27,7 +27,7 @@ enum HomeKind: String, CaseIterable, Codable, Sendable {
     var summary: LocalizedStringKey {
         switch self {
         case .agents: "How many agents need you, and the one waiting longest. [Home Widgets]"
-        case .today: "Today's date and what's next on your calendar. [Home Widgets]"
+        case .today: "Today, this week or this month on your calendar. [Home Widgets]"
         case .todos: "Today's to-dos. Tick them off right on the widget. [Home Widgets]"
         case .usage: "How full your subscription windows are, and today's tokens. [Home Widgets]"
         case .computers: "Your computers: how busy they are, and which are offline. [Home Widgets]"
@@ -61,9 +61,17 @@ struct HomeEntry: TimelineEntry {
     var machine: String?
     /// Edit Widget › Account (Usage): nil, the fullest.
     var account: String?
+    /// Edit Widget › View (Calendar): where it starts; what its switch and a tapped day left for it
+    /// (`HomeCalendarState`), and the key they are kept under.
+    var calendarView: HomeCalendarView = .today
+    var calendarSlot: HomeCalendarState.Slot?
+    var calendarKey = ""
     var relevance: TimelineEntryRelevance?
 
-    var context: HomeContext { HomeContext(snapshot: snapshot, date: date, agentKind: agentKind, machine: machine, account: account) }
+    var context: HomeContext {
+        HomeContext(snapshot: snapshot, date: date, agentKind: agentKind, machine: machine, account: account,
+                    calendarView: calendarView, calendarSlot: calendarSlot, calendarKey: calendarKey)
+    }
 }
 
 /// The snapshot as it is at the entry's date, filtered by the widget's settings.
@@ -73,6 +81,9 @@ struct HomeContext {
     var agentKind: HomeSnapshot.AgentKind?
     var machine: String?
     var account: String?
+    var calendarView: HomeCalendarView = .today
+    var calendarSlot: HomeCalendarState.Slot?
+    var calendarKey = ""
 
     var stale: Bool { snapshot.isStale(at: date) }
     var now: Double { date.timeIntervalSince1970 }
@@ -109,7 +120,38 @@ struct HomeContext {
         return all.filter { $0.id == account }
     }
 
-    var events: [HomeSnapshot.Event] { (snapshot.today?.events ?? []).filter { $0.allDay || $0.end > now } }
+    /// The rest of today. The snapshot's list is the day it was written on; after midnight, until the app writes
+    /// again, today's come from its days (none without them: yesterday's are not today's).
+    var events: [HomeSnapshot.Event] {
+        guard let today = snapshot.today else { return [] }
+        let written = Date(timeIntervalSince1970: snapshot.at)
+        let list = snapshot.at > 0 && !Calendar.current.isDate(written, inSameDayAs: date)
+            ? today.days?.byDay[HomeDays.key(date)]?.events ?? []
+            : today.events
+        return list.filter { $0.allDay || $0.end > now }
+    }
+
+    /// The view and the day the Calendar widget shows now.
+    var calendarShown: (view: HomeCalendarView, day: Date) {
+        HomeCalendarState.shown(calendarSlot, configured: calendarView, at: date)
+    }
+
+    /// What the Calendar widget knows of a day: its events (today, the rest of them) and how many there are beyond
+    /// those; nil when the snapshot does not cover it.
+    func day(_ day: Date) -> (events: [HomeSnapshot.Event], more: Int)? {
+        if Calendar.current.isDate(day, inSameDayAs: date) { return (events, 0) }
+        let key = HomeDays.key(day)
+        guard let days = snapshot.today?.days, days.covers(key) else { return nil }
+        let d = days.byDay[key]
+        return (d?.events ?? [], max(0, (d?.count ?? 0) - (d?.events.count ?? 0)))
+    }
+
+    /// A day's dot: it has events (today, also the ones already over).
+    func hasEvents(_ day: Date) -> Bool {
+        if let d = snapshot.today?.days?.byDay[HomeDays.key(day)] { return d.count > 0 }
+        return Calendar.current.isDate(day, inSameDayAs: date) && !events.isEmpty
+    }
+
     var nextEvent: HomeSnapshot.Event? { events.first { !$0.allDay } }
 
     /// The event a recording started now would be named after (MeetingCalendar's: under way, or about to be).
@@ -368,13 +410,15 @@ private struct HomeAgentRowView: View {
 
 // MARK: - Today
 
-/// The calendar's page for today: the date, then what comes next.
+/// The Calendar widget: today's page (the date, then what comes next), or the week or the month
+/// (`HomeCalendarViews`), switched at the top right; the small one is today's page alone.
 private struct HomeTodayWidget: View {
     var c: HomeContext
     var family: WidgetFamily
     var pictures: HomeFacePictures?
 
     var body: some View {
+        let shown = c.calendarShown
         switch family {
         case .systemSmall:
             VStack(alignment: .leading, spacing: 0) {
@@ -382,28 +426,57 @@ private struct HomeTodayWidget: View {
                 Spacer(minLength: HomeWidgetTokens.tight)
                 if let next = c.nextEvent { HomeEventView(event: next, lines: 2) } else { none }
             }
-        case .systemMedium:
-            HStack(alignment: .top, spacing: HomeWidgetTokens.halves) {
-                dateHead(compact: false).frame(width: HomeWidgetTokens.ringHero, alignment: .leading)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                VStack(alignment: .leading, spacing: HomeWidgetTokens.row) {
-                    ForEach(Array(c.events.prefix(3)), id: \.self) { HomeEventView(event: $0, lines: 1) }
-                    if c.events.isEmpty { none }
-                    Spacer(minLength: 0)
-                    if c.events.count > 3 { more(c.events.count - 3) }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                corner
-            }
         default:
-            VStack(alignment: .leading, spacing: HomeWidgetTokens.gap) {
-                HStack(alignment: .top) {
-                    dateHead(compact: false)
-                    Spacer()
+            switch shown.view {
+            case .today: if family == .systemMedium { mediumToday } else { largeToday }
+            case .week: HomeWeekView(c: c, day: shown.day, large: family != .systemMedium, pictures: pictures)
+            case .month: HomeMonthView(c: c, day: shown.day, large: family != .systemMedium, pictures: pictures)
+            }
+        }
+    }
+
+    /// The date, and beside it the switch over the next events, as many as fit.
+    private var mediumToday: some View {
+        HStack(alignment: .top, spacing: HomeWidgetTokens.halves) {
+            dateHead(compact: false).frame(width: HomeWidgetTokens.ringHero, alignment: .leading)
+                .frame(maxHeight: .infinity, alignment: .top)
+            VStack(alignment: .trailing, spacing: HomeWidgetTokens.tight) {
+                HStack(spacing: HomeWidgetTokens.tight) {
+                    Spacer(minLength: 0)
+                    HomeCalendarSwitch(c: c, shown: .today)
                     corner
                 }
-                if c.events.isEmpty { Spacer(); none; Spacer() } else { HomeDayTimeline(c: c) }
+                ViewThatFits(in: .vertical) {
+                    upcoming(3)
+                    upcoming(2)
+                    upcoming(1)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+        }
+    }
+
+    /// The rest of the day as a day view, under the date and the switch.
+    private var largeToday: some View {
+        VStack(alignment: .leading, spacing: HomeWidgetTokens.gap) {
+            HStack(alignment: .top, spacing: HomeWidgetTokens.tight) {
+                dateHead(compact: false)
+                Spacer()
+                HomeCalendarSwitch(c: c, shown: .today)
+                corner
+            }
+            if c.events.isEmpty { Spacer(); none; Spacer() } else { HomeDayTimeline(c: c) }
+        }
+    }
+
+    /// The next `count` events, and how many more there are.
+    private func upcoming(_ count: Int) -> some View {
+        let events = c.events
+        let shown = Array(events.prefix(count))
+        return VStack(alignment: .leading, spacing: HomeWidgetTokens.gap) {
+            ForEach(shown, id: \.self) { HomeEventView(event: $0, lines: 1) }
+            if events.isEmpty { none }
+            if shown.count < events.count { more(events.count - shown.count) }
         }
     }
 

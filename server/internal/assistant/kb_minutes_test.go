@@ -22,16 +22,18 @@ func (m minutesModel) JSONMax(_ context.Context, _, _ string, _ int, out any) er
 	return json.Unmarshal([]byte(m.reply), out)
 }
 
-// A meeting recording through the phone's routes: its minutes are written, pushed once, read back by the detail, the
-// reconciliation and kb_get / kb_list; confirmed action items become to-dos once, however often the app asks.
+// A meeting recording through the phone's routes: its minutes are written, pushed once, read back by the detail (the
+// summary card's overview too, #6563), the reconciliation and kb_get / kb_list; confirmed action items become to-dos
+// once, however often the app asks, the overview kept as it was.
 func TestMinutesHTTP(t *testing.T) {
 	f := newFakeHub()
 	// The push also goes to the Lark bot and the channels from goroutines of their own: they must not log into a
 	// finished test.
 	s := kbServiceOn(t, f, newKBStore(), t.TempDir(), func(string, ...any) {})
 	e := kbEng(t, s)
-	model := minutesModel{reply: `{"title":"发布评审","points":[{"text":"导出丢条目","line":1}],` +
-		`"decisions":[{"text":"先保留上限","line":2}],"actions":[{"who":"Bo","what":"补上回归测试","by":"周五","due_date":"2026-11-13","line":3},{"what":"发邮件","line":3}]}`}
+	model := minutesModel{reply: `{"title":"发布评审","headline":"导出先保留上限","conclusions":[{"text":"先**保留**上限","line":2}],` +
+		`"topics":[{"title":"导出","icon":"progress","points":[{"text":"导出**丢条目**","line":1}],"decisions":[{"text":"先保留上限","line":2}]}],` +
+		`"actions":[{"who":"Bo","what":"补上回归测试","by":"周五","due_date":"2026-11-13","line":3},{"what":"发邮件","line":3}]}`}
 	e.Model, e.ModelFor = model, func(string) kb.Model { return model }
 	server := httptest.NewServer(s)
 	defer server.Close()
@@ -84,10 +86,19 @@ func TestMinutesHTTP(t *testing.T) {
 			Minutes kb.Minutes     `json:"minutes"`
 		} `json:"detail"`
 	}
-	_ = json.Unmarshal([]byte(request("GET", "/api/v1/kb/recordings/"+id, "", nil, 200)), &detail)
+	raw := request("GET", "/api/v1/kb/recordings/"+id, "", nil, 200)
+	_ = json.Unmarshal([]byte(raw), &detail)
 	if detail.Detail.Meta["minutes_state"] != "ready" || detail.Detail.Meta["kind"] != "meeting" || detail.Detail.Minutes.Version != 1 ||
 		len(detail.Detail.Minutes.Actions) != 2 || detail.Detail.Minutes.Actions[0].At != 20 {
 		t.Fatalf("detail %+v", detail.Detail)
+	}
+	// The summary card rides along: the points and decisions are its bullets, plain, their bold places in strong.
+	card := detail.Detail.Minutes.Overview
+	if card == nil || card.Headline != "导出先保留上限" || len(card.Conclusions) != 1 || len(card.Groups) != 1 || len(card.Groups[0].Topics) != 1 ||
+		len(card.Groups[0].Topics[0].Bullets) != 2 || card.Groups[0].Topics[0].Bullets[0].Text != "导出丢条目" ||
+		strings.Join(card.Groups[0].Topics[0].Bullets[0].Strong, ",") != "丢条目" || !card.Groups[0].Topics[0].Bullets[1].Decision ||
+		detail.Detail.Minutes.Points[0].Text != "导出丢条目" || !strings.Contains(raw, `"strong":["丢条目"]`) {
+		t.Fatalf("overview %+v in %s", card, raw)
 	}
 
 	// Confirming: one to-do per action, the same one however often; the minutes say which.
@@ -98,7 +109,8 @@ func TestMinutesHTTP(t *testing.T) {
 	}
 	_ = json.Unmarshal([]byte(request("POST", todosPath, "", map[string]any{"version": 1, "actions": []string{"a1"}}, 200)), &out)
 	if len(out.Todos) != 1 || out.Todos[0].Title != "Bo: 补上回归测试" || out.Todos[0].DueDate != "2026-11-13" ||
-		!strings.Contains(out.Todos[0].Notes, "发布评审") || out.Minutes.Actions[0].TodoID != out.Todos[0].ID || out.Minutes.Actions[1].TodoID != "" {
+		!strings.Contains(out.Todos[0].Notes, "发布评审") || out.Minutes.Actions[0].TodoID != out.Todos[0].ID || out.Minutes.Actions[1].TodoID != "" ||
+		out.Minutes.Overview == nil || out.Minutes.Markdown != detail.Detail.Minutes.Markdown {
 		t.Fatalf("confirmed %+v", out)
 	}
 	first := out.Todos[0].ID
@@ -127,7 +139,8 @@ func TestMinutesHTTP(t *testing.T) {
 
 	// The assistant reads them: kb_get prints the minutes before the transcript, kb_list marks the recording.
 	got, err := s.toolKB(context.Background(), "kb_get", json.RawMessage(`{"kind":"recordings","id":"`+id+`"}`))
-	if err != nil || !strings.Contains(got, "minutes.md:\n# 发布评审") || !strings.Contains(got, "transcript.md:") ||
+	if err != nil || !strings.Contains(got, "minutes.md:\n# 发布评审") || !strings.Contains(got, "## 核心结论") || !strings.Contains(got, "已决定：先保留上限") ||
+		!strings.Contains(got, "transcript.md:") ||
 		strings.Index(got, "minutes.md:") > strings.Index(got, "transcript.md:") {
 		t.Fatalf("kb_get: %v\n%s", err, got)
 	}

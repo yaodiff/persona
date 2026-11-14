@@ -139,7 +139,7 @@ func TestAdoptStartedSessionFilters(t *testing.T) {
 		mk("new", func(s *proto.Session) { s.Cwd = ""; s.WorkspaceCwd = "/code/app" }),
 	} {
 		f.setSessions("box", mk("old", func(*proto.Session) {}), sess)
-		if got, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", known); !ok || got.SessionID != "new" {
+		if got, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", "", known); !ok || got.SessionID != "new" {
 			t.Fatalf("got %+v ok=%v, want new adopted", got, ok)
 		}
 	}
@@ -157,14 +157,14 @@ func TestAdoptStartedSessionFilters(t *testing.T) {
 		{"never seen", func(s *proto.Session) { s.UpdatedAt = time.Time{} }},
 	} {
 		f.setSessions("box", mk("old", func(*proto.Session) {}), mk("new", tc.fn))
-		if _, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", known); ok {
+		if _, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", "", known); ok {
 			t.Fatalf("%s session was adopted", tc.name)
 		}
 	}
 
 	// A pre-start list that failed means no guessing afterwards.
 	f.setSessions("box", mk("new", func(*proto.Session) {}))
-	if _, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", nil); ok {
+	if _, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", "", nil); ok {
 		t.Fatal("adoption happened without a pre-start snapshot")
 	}
 }

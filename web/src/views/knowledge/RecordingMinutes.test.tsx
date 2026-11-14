@@ -7,6 +7,7 @@ import { setToken } from "../../lib/api";
 import { formatAt, formatSpan, minutesKeptUntil, type KBDetailResponse } from "../../lib/kb";
 import { setRosterDefault } from "../../lib/manager-choice";
 import { toast } from "../../ui/atoms";
+import overviewCases from "../../../../spec/fixtures/minutes-overview/cases.json";
 import { EntryDetail } from "./KBDetail";
 
 vi.mock("../../ui/atoms", async (original) => ({ ...await original<typeof import("../../ui/atoms")>(), toast: vi.fn() }));
@@ -320,5 +321,220 @@ describe("recording minutes in Knowledge detail", () => {
     expect(requests).toHaveLength(count);
     expect(saved).not.toHaveBeenCalled();
     expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+// #6563: minutes with an overview read as one summary card (docs/assistant/meeting-minutes.md "Summary card (#6563)").
+describe("the minutes' summary card", () => {
+  const bullets = (n: number) => Array.from({ length: n }, (_, i) => ({ text: `Line ${i + 1}`, at: 12 + i }));
+  type Overview = { headline?: string; conclusions: object[]; groups: { title: string; topics: { title: string; icon: string; bullets: object[] }[] }[] };
+  const overview = (): Overview => ({
+    headline: "Export ships with the cap; the date waits on the cache fix",
+    conclusions: [
+      { text: "Export ships with the 4 MB cap", strong: ["4 MB"], at: 20.5 },
+      { text: "The date hangs on the fix by Wednesday", strong: ["Wednesday", "missing"], at: 60 },
+    ],
+    groups: [
+      { title: "Project progress", topics: [
+        { title: "Export", icon: "progress", bullets: [
+          { text: "Export limit is 4 MB, not 4 MB per file", strong: ["4 MB", "4 MB"], at: 12, who: "Ada" },
+          { text: "Keep the cap", strong: ["the cap"], at: 20.5, decision: true },
+        ] },
+        { title: "Release date", icon: "schedule", bullets: [{ text: "The release is at risk", strong: ["at risk"], at: 60 }] },
+      ] },
+      { title: "Tooling", topics: [{ title: "Cache bug", icon: "rocket", bullets: [{ text: "Reproduced once", strong: ["once"], at: 60 }] }] },
+    ],
+  });
+  const withOverview = (o: unknown = overview()) => { const data = fixture(); data.detail.minutes!.overview = o; return data; };
+  const headings = () => [...section().querySelectorAll("h3, h4, h5")].map((h) => `${h.tagName} ${h.textContent}`);
+  const legacy = ["H3 Design review", "H3 Key points", "H3 Decisions", "H3 Action items", "H3 Open questions"];
+  const card = () => section().querySelector<HTMLElement>("[data-minutes-overview]");
+  const labelOf = (b: { who: string | null; decision: boolean }) => (b.decision ? "Decision" : b.who ?? "");
+
+  it("shows the headline, the conclusions, the topic cards by group, the action items, the open questions and the AI note, in that order", async () => {
+    await load(withOverview());
+    expect(headings()).toEqual([
+      "H3 Export ships with the cap; the date waits on the cache fix",
+      "H4 Core conclusions",
+      "H4 Project progress", "H5 Export", "H5 Release date",
+      "H4 Tooling", "H5 Cache bug",
+      "H4 Action items", "H4 Open questions",
+    ]);
+    // Points and decisions are not shown again in cards of their own.
+    expect(section().textContent).not.toContain("Key points");
+    expect(section().textContent).not.toContain("Export limit ·");
+    // When, where and who on one line under the headline.
+    expect(card()!.querySelector("p")!.textContent).toBe("2026-11-10 14:00–14:30 · Room 3 · Ada · Bo");
+    // A screen reader hears the separators too (nothing in the line is hidden from it), so the facts stay apart.
+    const heard = (el: Element) => { const copy = el.cloneNode(true) as Element; copy.querySelectorAll("[aria-hidden]").forEach((n) => n.remove()); return copy.textContent; };
+    expect(heard(card()!.querySelector("p")!)).toBe("2026-11-10 14:00–14:30 · Room 3 · Ada · Bo");
+    // The bold places as the strong rule finds them (a repeated figure twice, one not found skipped).
+    expect([...card()!.querySelectorAll("[data-minutes-conclusion] strong")].map((s) => s.textContent)).toEqual(["4 MB", "Wednesday"]);
+    const lines = [...card()!.querySelectorAll<HTMLElement>("[data-minutes-bullet]")];
+    expect(lines.map((li) => li.getAttribute("data-minutes-bullet"))).toEqual(["point", "decision", "point", "point"]);
+    expect([...lines[0].querySelectorAll("strong")].map((s) => s.textContent)).toEqual(["4 MB", "4 MB"]);
+    expect(lines[0].querySelector("p")!.textContent).toBe("Export limit is 4 MB, not 4 MB per file Ada");
+    // A point shows its speaker, a decision the word Decision in that place.
+    expect(lines[0].textContent).toContain("Ada");
+    expect(lines[1].textContent).toContain("Decision");
+    expect(lines[1].textContent).not.toContain("Ada");
+    // Each group a section labelled by its heading, each topic an article labelled by its title; tints by position.
+    const groups = [...card()!.querySelectorAll<HTMLElement>("section[aria-labelledby]")];
+    expect(groups.map((g) => document.getElementById(g.getAttribute("aria-labelledby")!)!.textContent)).toEqual(["Project progress", "Tooling"]);
+    const topics = [...card()!.querySelectorAll<HTMLElement>("article[data-minutes-topic]")];
+    expect(topics.map((a) => document.getElementById(a.getAttribute("aria-labelledby")!)!.textContent)).toEqual(["Export", "Release date", "Cache bug"]);
+    expect(topics.map((a) => a.closest("[data-minutes-tint]")!.getAttribute("data-minutes-tint"))).toEqual(["1", "1", "2"]);
+    // Times jump to the transcript as the items' do; the AI note ends the card.
+    expect(lines[1].querySelector("[aria-label^='Go to transcript']")!.getAttribute("aria-controls")).toBe("recording-line-20.5");
+    const parts = [...card()!.parentElement!.children];
+    expect(parts.at(-1)!.textContent).toBe("AI-generated from the recording. Check anything important.");
+    expect(parts.indexOf(card()!)).toBe(0);
+    // The suggested to-dos keep their Added and Add to to-dos.
+    const added = [...section().querySelectorAll("li")].find((li) => li.textContent?.includes("Share notes"))!;
+    expect(added.textContent).toContain("Added");
+    expect(host.textContent!.indexOf("Export ships with the cap")).toBeLessThan(host.textContent!.indexOf("A short profile."));
+  });
+
+  it("has no group heading for the single untitled group: a plain grid, each topic an h4, the title when there is no headline", async () => {
+    const o = overview();
+    delete o.headline;
+    o.conclusions = [];
+    o.groups = [{ title: "", topics: [...o.groups[0].topics, ...o.groups[1].topics] }];
+    await load(withOverview(o));
+    expect(headings()).toEqual(["H3 Design review", "H4 Export", "H4 Release date", "H4 Cache bug", "H4 Action items", "H4 Open questions"]);
+    expect(card()!.querySelector("section")).toBeNull();
+    expect(card()!.querySelector("[data-minutes-conclusions]")).toBeNull();
+    expect([...card()!.querySelectorAll<HTMLElement>("article")].map((a) => a.closest("[data-minutes-tint]")!.getAttribute("data-minutes-tint"))).toEqual(["1", "1", "1"]);
+    expect(card()!.querySelector("[data-minutes-group]")!.tagName).toBe("DIV");
+  });
+
+  it.each([
+    ["a string", "x"],
+    ["null", null],
+    ["an empty object", {}],
+    ["an array", [overview()]],
+    ["groups that are not a list", { headline: "Never shown", groups: "x" }],
+    ["no bullet left", { headline: "Never shown", groups: [{ title: "A", topics: [{ title: "T", bullets: [{ text: " ", at: 1 }, "x"] }, { bullets: [{ text: "No title" }] }] }] }],
+  ])("falls back to the minutes as before for %s", async (_, o) => {
+    await load(withOverview(o));
+    expect(headings()).toEqual(legacy);
+    expect(card()).toBeNull();
+    expect(section().querySelector("[data-minutes-ai-note]")).toBeNull();
+    expect(section().textContent).not.toContain("Never shown");
+    for (const text of ["Ada · Export limit", "Keep the cap", "Per-entry limit?"]) expect(section().textContent).toContain(text);
+  });
+
+  // The cases the hub and the iPhone check too (spec/fixtures/minutes-overview): the layout each gets, and the bold places.
+  it.each(overviewCases.cases.map((c) => [c.name, c] as const))("lays out the shared fixture's %s as it says", async (_, c) => {
+    const data = fixture();
+    data.detail.minutes = { ...(c.input.minutes as object), markdown: c.expected.markdown ?? "" } as typeof data.detail.minutes;
+    await load(data);
+    expect(card() ? "overview" : "legacy").toBe(c.expected.layout);
+    const o = c.expected.overview as { conclusions: { segments: { text: string; bold: boolean }[] }[]; groups: { topics: { bullets: { segments: { text: string; bold: boolean }[] }[] }[] }[] } | null;
+    if (!o) return expect(headings()[0]).toBe(`H3 ${(c.input.minutes as { title: string }).title}`);
+    const lines = [...o.conclusions, ...o.groups.flatMap((g) => g.topics.flatMap((t) => t.bullets.slice(0, 4)))];
+    expect([...card()!.querySelectorAll("strong")].map((b) => b.textContent)).toEqual(lines.flatMap((l) => l.segments.filter((p) => p.bold).map((p) => p.text)));
+    expect([...card()!.querySelectorAll("[data-minutes-conclusion] p, [data-minutes-bullet] p")].map((p) => p.textContent))
+      .toEqual(lines.map((l) => [l.segments.map((p) => p.text).join(""), "decision" in l ? labelOf(l as never) : ""].filter(Boolean).join(" ")));
+  });
+
+  it("folds a topic after 4 bullets and opens the rest in place", async () => {
+    const o = overview();
+    o.groups[0].topics[0].bullets = bullets(6);
+    o.groups[0].topics[1].bullets = bullets(5);
+    await load(withOverview(o));
+    const topic = () => card()!.querySelector<HTMLElement>("article")!;
+    const shown = () => [...topic().querySelectorAll("[data-minutes-bullet] p")].map((p) => p.textContent);
+    const toggle = () => topic().querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    expect(shown()).toEqual(["Line 1", "Line 2", "Line 3", "Line 4"]);
+    expect(toggle().textContent).toBe("Show 2 more");
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    // Its name starts with its words and names its topic; it controls the topic's list.
+    expect(toggle().getAttribute("aria-label")).toBe("Show 2 more in Export");
+    const list = document.getElementById(toggle().getAttribute("aria-controls")!)!;
+    expect(list.tagName).toBe("UL");
+    expect(topic().contains(list)).toBe(true);
+    expect(list.querySelectorAll("[data-minutes-bullet]")).toHaveLength(4);
+    // Two folded topics' buttons have different names.
+    expect(card()!.querySelectorAll("article")[1].querySelector("button[aria-expanded]")!.getAttribute("aria-label")).toBe("Show 1 more in Release date");
+    act(() => toggle().click());
+    expect(shown()).toEqual(["Line 1", "Line 2", "Line 3", "Line 4", "Line 5", "Line 6"]);
+    expect(list.querySelectorAll("[data-minutes-bullet]")).toHaveLength(6);
+    expect(toggle().textContent).toBe("Show less");
+    expect(toggle().getAttribute("aria-label")).toBe("Show less of Export");
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    act(() => toggle().click());
+    expect(shown()).toHaveLength(4);
+    // A topic of 4 or fewer has no toggle.
+    expect(card()!.querySelectorAll("article")[2].querySelector("button[aria-expanded]")).toBeNull();
+  });
+
+  it("keeps a topic open while the minutes keep their version, and closed once they are rewritten", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const o = overview();
+    o.groups[0].topics[0].bullets = bullets(6);
+    const data = withOverview(o); data.detail.minutes!.actions!.push({ id: "a3", what: "Review tests", at: 50 });
+    await load(data);
+    const first = () => card()!.querySelector<HTMLElement>("article")!;
+    const toggle = () => first().querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    act(() => toggle().click());
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    // A confirmed to-do keeps the version: the topic stays open.
+    click("Add to to-dos");
+    await reply(writes()[0], { todos: [{ id: "todo-new" }] });
+    data.detail.minutes!.actions![0].todo_id = "todo-new";
+    await reply(requests.at(-1)!, data);
+    expect(first().querySelectorAll("[data-minutes-bullet]")).toHaveLength(6);
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    // Regenerate writes new minutes (a new version) whose first topic is another one: it starts folded.
+    click("Regenerate");
+    await reply(writes()[1], { state: "pending" }, 202);
+    data.detail.meta!.minutes_state = "pending";
+    await reply(requests.at(-1)!, data);
+    const rewritten = overview();
+    rewritten.groups[0].topics[0] = { title: "Rollout", icon: "release", bullets: bullets(6) };
+    const next = withOverview(rewritten); next.detail.minutes!.version = 3;
+    act(() => vi.advanceTimersByTime(5000));
+    await reply(requests.at(-1)!, next);
+    expect(first().querySelector("h5")!.textContent).toBe("Rollout");
+    expect(first().querySelectorAll("[data-minutes-bullet]")).toHaveLength(4);
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("adds one action and all the remaining ones with the minutes version, as before", async () => {
+    const data = withOverview(); data.detail.minutes!.actions!.push({ id: "a3", what: "Review tests", at: 50 });
+    await load(data);
+    click("Add to to-dos");
+    expect(writes()[0].url).toBe(`${minutesPath}/todos`);
+    expect(JSON.parse(writes()[0].init.body as string)).toEqual({ version: 2, actions: ["a1"] });
+    await reply(writes()[0], { todos: [{ id: "todo-new" }] });
+    await reply(requests.at(-1)!, data);
+    click("Add all");
+    expect(JSON.parse(writes()[1].init.body as string)).toEqual({ version: 2, actions: ["a1", "a3"] });
+  });
+
+  it("copies the stored markdown", async () => {
+    const data = withOverview(); data.detail.minutes!.markdown = "# Design review\n\n## Core conclusions\n\n- [14:00:20] Export ships with the **4 MB** cap";
+    await load(data);
+    await act(async () => button("Copy").click());
+    expect(clipboard).toHaveBeenCalledWith(data.detail.minutes!.markdown);
+  });
+
+  it("disables every time on a trimmed recording, keeps the to-dos, and shows no time for a line whose time did not read", async () => {
+    const data = withOverview();
+    data.detail.meta!.trimmed_at = "2026-11-25T02:00:00Z"; delete data.detail.segments; delete data.detail.summary;
+    const o = overview();
+    o.groups[1].topics[0].bullets.push({ text: "No time", strong: [], at: -3 });
+    data.detail.minutes!.overview = o;
+    await load(data);
+    const times = [...card()!.querySelectorAll<HTMLButtonElement>("[aria-label^='Go to transcript']")];
+    expect(times).toHaveLength(6);
+    expect(times.every((b) => b.disabled)).toBe(true);
+    const last = [...card()!.querySelectorAll<HTMLElement>("[data-minutes-bullet]")].at(-1)!;
+    expect(last.textContent).toBe("No time");
+    expect(section().querySelector<HTMLButtonElement>("[aria-label='Go to transcript at 14:00:25']")!.disabled).toBe(true);
+    click("Add to to-dos");
+    expect(writes().map((w) => w.url)).toEqual([`${minutesPath}/todos`]);
   });
 });

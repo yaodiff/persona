@@ -36,6 +36,8 @@ import UserNotifications
         capture.onStopping = { id in
             MeetingAsk.shared.ended(id)
             MeetingCall.shared.ended(id)
+            // The audio socket says `end` after the last audio, and hub-mode time ends here (#3862 phase 5).
+            MeetingTranscription.shared.ended(id, at: RecordingCapture.shared.timeline)
         }
         MeetingLive.shared.start()
         // The segment length follows what the meeting being recorded may send (#3862 phase 2).
@@ -46,6 +48,8 @@ import UserNotifications
         MeetingPhotos.shared.start()
         // The meeting call and Talk follow the room meeting being recorded (#3862 phase 4).
         MeetingCall.shared.start()
+        // Hub transcription (#3862 phase 5): the mode of every upload's 200, the uplink, the gaps after a meeting.
+        MeetingTranscription.shared.start()
         // A call that ended while the app was away (or never said so): coming back carries on, unless another app's audio
         // (a VoIP call without CallKit, still going) holds the route: taking the session would cut into that call.
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { @Sendable _ in
@@ -203,6 +207,9 @@ import UserNotifications
         guard capture.recordingID == recordingID, library.entry(recordingID)?.isMeeting == !on else { return }
         let start = on ? MeetingAttendees.startAttendance(AppModel.shared) : RecordingAttendance(role: .off)
         let at = capture.timeline
+        // Hub mode (phase 5): the uplink stops at `at` now, in the same step hub-mode time ends there, so no tap buffer of
+        // the Note reaches the hub while the switch's observers catch up.
+        if !on { MeetingTranscription.shared.becameNote(recordingID, at: at) }
         library.change(recordingID) { $0 = Self.switched($0, meeting: on, at: at, named: named, start: start) }
         let speaks = library.entry(recordingID).map { $0.isMeeting && $0.attendance?.sentRole.speaks == true } ?? false
         capture.setPlaysAloud(speaks)
@@ -234,6 +241,8 @@ import UserNotifications
             // in (kept out of the transcript), and a room meeting's room, which it never leaves.
             e.meeting = nil
             e.attendance?.set(.off, at: at)
+            // Hub mode (phase 5): the Note's audio stays on the phone, so hub-mode time ends here.
+            e.attendance?.closeHubTime(at: at)
         }
         return e
     }

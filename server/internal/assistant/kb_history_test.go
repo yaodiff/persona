@@ -1075,8 +1075,8 @@ func countPrefix(list []string, prefix string) int {
 
 // ---- backups ----
 
-// Every run starts with a backup beside the data directory, attachments and lock files left out; three are kept,
-// the oldest by name deleted, nothing else touched; a backup that fails starts nothing.
+// Every run starts with a backup beside the data directory, attachments, the search index and lock files left out;
+// three are kept, the oldest by name deleted, nothing else touched; a backup that fails starts nothing.
 func TestHistoryBackups(t *testing.T) {
 	root := t.TempDir()
 	data := filepath.Join(root, "data")
@@ -1086,6 +1086,8 @@ func TestHistoryBackups(t *testing.T) {
 		".lock":                                  "",
 		"history/run.lock":                       "{}",
 		"history/plan-x.json":                    "{}",
+		kb.SearchIndexDir + "/manifest.json":     "{}",
+		kb.SearchIndexDir + "/seg-1.idx":         "idx",
 	} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(data, p)), 0o700); err != nil {
 			t.Fatal(err)
@@ -1144,7 +1146,8 @@ func TestHistoryBackups(t *testing.T) {
 		t.Fatalf("archived %v", files)
 	}
 	for _, f := range files {
-		if strings.Contains(f, "attachments") || strings.Contains(f, ".pcm") || strings.HasSuffix(f, ".lock") {
+		if strings.Contains(f, "attachments") || strings.Contains(f, ".pcm") || strings.HasSuffix(f, ".lock") ||
+			strings.Contains(f, "/"+kb.SearchIndexDir) {
 			t.Fatalf("archived %s", f)
 		}
 	}

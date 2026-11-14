@@ -17,11 +17,6 @@ import SwiftUI
 /// when it was taken or picked; a picked one's row shows at once, before Photos hands its bytes over. Adding one plays
 /// no haptic: its row is the feedback, and the microphone is open.
 ///
-/// At accessibility sizes the bar is at most two rows, the field and one row of icons: Pause or Continue, Stop, a More
-/// menu (Bookmark, Just Me, the photos, What Was Just Said) and send. Why the field takes no words then shows among what
-/// the page scrolls (`notice`), and with the field as its spoken hint; so do picked photos that couldn't be read
-/// (`photoNotice`).
-///
 /// **Talk** (#3862 phase 4) takes send's place while the field is empty and Persona can be asked (any role that attends):
 /// held while the owner speaks, to the meeting call when it is live, else asked without it. Not with Just Me on (Talk is
 /// the room's: turning it on ends a hold), and not after the meeting. While it is held the caption over the controls says
@@ -38,26 +33,19 @@ struct MeetingPageBar: View {
     @Binding var justMe: Bool
     /// The field has the keyboard: the page steps aside as the bar does (`MeetingPage`).
     var focus: FocusState<Bool>.Binding
-    /// At accessibility sizes, why the field takes no words now, for the page to show (nil at other sizes: the bar says it).
-    @Binding var notice: String?
-    /// At accessibility sizes, that some picked photos couldn't be read, for the page to show (nil at other sizes).
-    @Binding var photoNotice: String?
     /// After the meeting, a voice call bound to the follow-up (#3862 phase 6): set where one can start now; nil, no button.
     var voice: (() -> Void)?
 
     init(entry: RecordingEntry, mode: MeetingPage.Mode, paused: Bool = false, justMe: Binding<Bool>, focus: FocusState<Bool>.Binding,
-         notice: Binding<String?>, photoNotice: Binding<String?> = .constant(nil), voice: (() -> Void)? = nil) {
+         voice: (() -> Void)? = nil) {
         self.entry = entry
         self.mode = mode
         self.paused = paused
         _justMe = justMe
         self.focus = focus
-        _notice = notice
-        _photoNotice = photoNotice
         self.voice = voice
     }
 
-    @Environment(\.dynamicTypeSize) private var size
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.buiTheme) private var theme
     @State private var capture = RecordingCapture.shared
@@ -66,6 +54,8 @@ struct MeetingPageBar: View {
     @State private var sync = RecordingSync.shared
     /// The meeting call and Talk (#3862 phase 4).
     @State private var call = MeetingCall.shared
+    /// Hub transcription (#3862 phase 5): the Talk line says hub mode's words in a meeting the hub transcribes.
+    @State private var transcription = MeetingTranscription.shared
     /// Read for one thing only: how many of the last pick couldn't be read.
     @State private var photos = MeetingPhotos.shared
     @State private var draft = ""
@@ -114,14 +104,11 @@ struct MeetingPageBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if mode == .live, !size.isAccessibilitySize { justMeRow }
+            if mode == .live { justMeRow }
             MeetingQuestionField(text: $draft, focus: focus, placeholder: placeholder, sendLabel: String(localized: "Send"),
-                                 canSend: canSend, disabled: fieldDisabled, largeTypeHint: blocked ?? "", showsInstead: showsTalk,
+                                 canSend: canSend, disabled: fieldDisabled, showsInstead: showsTalk,
                                  send: send) {
                 plus
-                voiceButton
-            } under: {
-                if mode == .live, !writing { largeControls }
                 voiceButton
             } instead: {
                 talkButton
@@ -132,12 +119,12 @@ struct MeetingPageBar: View {
                     .accessibilityIdentifier("meeting-ask-caption")
             }
             if showsPrivacy { privacyLine }
-            if let photoProblem, !size.isAccessibilitySize {
+            if let photoProblem {
                 Text(photoProblem).font(Theme.Font.caption).foregroundStyle(Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("meeting-photo-problem")
             }
-            if mode == .live, !writing, !size.isAccessibilitySize { controls }
+            if mode == .live, !writing { controls }
         }
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
@@ -146,13 +133,6 @@ struct MeetingPageBar: View {
         .animation(reduceMotion ? nil : Theme.Motion.state, value: writing)
         .onChange(of: fieldDisabled) { _, disabled in
             if disabled { focus.wrappedValue = false }
-        }
-        .onChange(of: size.isAccessibilitySize ? blocked : nil, initial: true) { _, now in
-            if notice != now { notice = now }
-        }
-        // At accessibility sizes the line would wrap the bar past its two rows: the page shows it among what scrolls.
-        .onChange(of: size.isAccessibilitySize ? photoProblem : nil, initial: true) { _, now in
-            if photoNotice != now { photoNotice = now }
         }
         .onChange(of: photoProblem) { _, now in
             if let now { AccessibilityNotification.Announcement(now).post() }
@@ -216,11 +196,11 @@ struct MeetingPageBar: View {
         }
     }
 
-    /// The caption under the field: why it takes no words (at accessibility sizes the page shows that), that the words
+    /// The caption under the field: why it takes no words, that the words
     /// are too many to send, or Talk's (#3862 phase 4): Persona hears while it is held, or a word after a span. Where a
     /// span goes to the voice service, the Wording is a line of its own under it (`privacyLine`).
     private var caption: String? {
-        if !size.isAccessibilitySize, let blocked { return blocked }
+        if let blocked { return blocked }
         if overLong { return String(localized: "Too long to send. Shorten it to \(MeetingConversation.maxText.formatted()) characters.") }
         return talkCaption
     }
@@ -245,7 +225,7 @@ struct MeetingPageBar: View {
     /// under it may go to the call and marks it seen (`MeetingCall.showingPrivacy`, `MeetingTalkPrivacy.shown`).
     private var privacyLine: some View {
         let recording = entry.id
-        return Text(Self.talkPrivacy).font(Theme.Font.caption).foregroundStyle(.secondary)
+        return Text(talkPrivacy).font(Theme.Font.caption).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("meeting-talk-privacy")
             .onAppear { call.showingPrivacy(true, recording: recording) }
@@ -253,7 +233,7 @@ struct MeetingPageBar: View {
     }
 
     private var talkButton: some View {
-        MeetingTalkButton(held: talking, hint: talkSendsAudio ? Self.talkPrivacy : String(localized: "Hold while you speak. Persona answers when you let go."),
+        MeetingTalkButton(held: talking, hint: talkSendsAudio ? talkPrivacy : String(localized: "Hold while you speak. Persona answers when you let go."),
                           press: { startTalk() }, release: { call.endTalk() }, window: { openTalkWindow() },
                           gone: { call.endHold(entry.id) })
     }
@@ -273,9 +253,10 @@ struct MeetingPageBar: View {
         }
     }
 
-    /// The contract's Wording for privacy mode (#3862 phase 4), where Talk sends its spans to the voice service.
-    static var talkPrivacy: String {
-        String(localized: "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service.")
+    /// The contract's Wording where Talk sends its spans to the voice service: privacy mode's (#3862 phase 4), or in a
+    /// meeting the hub transcribes hub mode's (phase 5: all of its audio goes through the hub, Talk included).
+    private var talkPrivacy: String {
+        MeetingTranscriptionWords.pagePrivacy(hub: transcription.hubTranscribes(entry.id), service: transcription.service)
     }
 
     private func startTalk() {
@@ -296,7 +277,7 @@ struct MeetingPageBar: View {
 
     /// [+]: what else the composer can send: photos for the meeting's material (a meeting that takes them), and the
     /// question about what was just said, asked of the room; with nothing to offer (Just Me, after the meeting, Persona
-    /// off or not reachable, no photos) the button is not there. At accessibility sizes its items are in More.
+    /// off or not reachable, no photos) the button is not there.
     @ViewBuilder private var plus: some View {
         if canAskHeard || canAddPhotos {
             Menu {
@@ -380,35 +361,6 @@ struct MeetingPageBar: View {
         }
     }
 
-    /// Accessibility sizes, in the row under the field before send: Pause or Continue, Stop and More side by side as icons
-    /// (their names are their accessibility labels), so the bar stays two rows tall whatever the text size and Pause stays
-    /// one tap away. More holds Bookmark, the Just Me switch and the [+] menu's question.
-    @ViewBuilder private var largeControls: some View {
-        iconButton(pauseTitle, paused ? Theme.Icon.run : Theme.Icon.pause) { togglePause() }
-            .accessibilityIdentifier("recording-pause")
-        iconButton(String(localized: "Stop [Car Play Voice Screen c7b24e]"), Theme.Icon.interrupt) { confirmingStop = true }
-            .accessibilityIdentifier("recording-stop")
-        Menu {
-            Button { addBookmark() } label: { Label("Bookmark", systemImage: Theme.Icon.pin) }
-                .accessibilityIdentifier("recording-bookmark")
-            Toggle(isOn: $justMe) {
-                Label("Just Me", systemImage: Theme.Icon.justMe)
-                Text("Only you see it, in the main chat")
-            }
-            .disabled(!entry.active)
-            .accessibilityIdentifier("meeting-just-me")
-            if canAddPhotos { photoButtons }
-            if canAskHeard { heardButton }
-        } label: {
-            ThemedIcon(Theme.Icon.moreMenu).font(Theme.Font.heading)
-                .frame(maxWidth: .infinity)
-                .scaledFrame(minHeight: Theme.Size.tapTarget)
-        }
-        .themedButton()
-        .accessibilityLabel(Text("More"))
-        .accessibilityIdentifier("recording-more")
-    }
-
     private var pauseTitle: String { paused ? String(localized: "Continue") : String(localized: "Pause") }
 
     /// A standard button, its icon over its label, at least a finger tall.
@@ -422,16 +374,6 @@ struct MeetingPageBar: View {
             .scaledFrame(minHeight: Theme.Size.tapTarget)
         }
         .themedButton()
-    }
-
-    private func iconButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            ThemedIcon(symbol).font(Theme.Font.heading)
-                .frame(maxWidth: .infinity)
-                .scaledFrame(minHeight: Theme.Size.tapTarget)
-        }
-        .themedButton()
-        .accessibilityLabel(Text(title))
     }
 
     // MARK: Actions

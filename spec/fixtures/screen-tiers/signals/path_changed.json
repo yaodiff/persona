@@ -1,0 +1,630 @@
+{
+  "description" : "A new route: the delay floor starts over, so a slower route's delay alone isn't queueing.",
+  "name" : "path_changed",
+  "steps" : [
+    {
+      "frame" : {
+        "arrival" : 6020000,
+        "bytes" : 20000,
+        "capture" : 1000000,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6036667,
+        "bytes" : 20000,
+        "capture" : 1016667,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6053334,
+        "bytes" : 20000,
+        "capture" : 1033334,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6070001,
+        "bytes" : 20000,
+        "capture" : 1050001,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6086668,
+        "bytes" : 20000,
+        "capture" : 1066668,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6103335,
+        "bytes" : 20000,
+        "capture" : 1083335,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6120002,
+        "bytes" : 20000,
+        "capture" : 1100002,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6136669,
+        "bytes" : 20000,
+        "capture" : 1116669,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6153336,
+        "bytes" : 20000,
+        "capture" : 1133336,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6170003,
+        "bytes" : 20000,
+        "capture" : 1150003,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6186670,
+        "bytes" : 20000,
+        "capture" : 1166670,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6203337,
+        "bytes" : 20000,
+        "capture" : 1183337,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6220004,
+        "bytes" : 20000,
+        "capture" : 1200004,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6236671,
+        "bytes" : 20000,
+        "capture" : 1216671,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6253338,
+        "bytes" : 20000,
+        "capture" : 1233338,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6270005,
+        "bytes" : 20000,
+        "capture" : 1250005,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6286672,
+        "bytes" : 20000,
+        "capture" : 1266672,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6303339,
+        "bytes" : 20000,
+        "capture" : 1283339,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6320006,
+        "bytes" : 20000,
+        "capture" : 1300006,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6336673,
+        "bytes" : 20000,
+        "capture" : 1316673,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6353340,
+        "bytes" : 20000,
+        "capture" : 1333340,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6370007,
+        "bytes" : 20000,
+        "capture" : 1350007,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6386674,
+        "bytes" : 20000,
+        "capture" : 1366674,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6403341,
+        "bytes" : 20000,
+        "capture" : 1383341,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6420008,
+        "bytes" : 20000,
+        "capture" : 1400008,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6436675,
+        "bytes" : 20000,
+        "capture" : 1416675,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6453342,
+        "bytes" : 20000,
+        "capture" : 1433342,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6470009,
+        "bytes" : 20000,
+        "capture" : 1450009,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6486676,
+        "bytes" : 20000,
+        "capture" : 1466676,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6503343,
+        "bytes" : 20000,
+        "capture" : 1483343,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "pathChanged" : {
+
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6660000,
+        "bytes" : 20000,
+        "capture" : 1600000,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6676667,
+        "bytes" : 20000,
+        "capture" : 1616667,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6693334,
+        "bytes" : 20000,
+        "capture" : 1633334,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6710001,
+        "bytes" : 20000,
+        "capture" : 1650001,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6726668,
+        "bytes" : 20000,
+        "capture" : 1666668,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6743335,
+        "bytes" : 20000,
+        "capture" : 1683335,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6760002,
+        "bytes" : 20000,
+        "capture" : 1700002,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6776669,
+        "bytes" : 20000,
+        "capture" : 1716669,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6793336,
+        "bytes" : 20000,
+        "capture" : 1733336,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6810003,
+        "bytes" : 20000,
+        "capture" : 1750003,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6826670,
+        "bytes" : 20000,
+        "capture" : 1766670,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6843337,
+        "bytes" : 20000,
+        "capture" : 1783337,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6860004,
+        "bytes" : 20000,
+        "capture" : 1800004,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6876671,
+        "bytes" : 20000,
+        "capture" : 1816671,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6893338,
+        "bytes" : 20000,
+        "capture" : 1833338,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6910005,
+        "bytes" : 20000,
+        "capture" : 1850005,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6926672,
+        "bytes" : 20000,
+        "capture" : 1866672,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6943339,
+        "bytes" : 20000,
+        "capture" : 1883339,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6960006,
+        "bytes" : 20000,
+        "capture" : 1900006,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6976673,
+        "bytes" : 20000,
+        "capture" : 1916673,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6993340,
+        "bytes" : 20000,
+        "capture" : 1933340,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7010007,
+        "bytes" : 20000,
+        "capture" : 1950007,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7026674,
+        "bytes" : 20000,
+        "capture" : 1966674,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7043341,
+        "bytes" : 20000,
+        "capture" : 1983341,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7060008,
+        "bytes" : 20000,
+        "capture" : 2000008,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7076675,
+        "bytes" : 20000,
+        "capture" : 2016675,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7093342,
+        "bytes" : 20000,
+        "capture" : 2033342,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7110009,
+        "bytes" : 20000,
+        "capture" : 2050009,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7126676,
+        "bytes" : 20000,
+        "capture" : 2066676,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7143343,
+        "bytes" : 20000,
+        "capture" : 2083343,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "expected" : {
+        "burstKbps" : [
+
+        ],
+        "decodeP95Ms" : null,
+        "deliveredKbps" : 9599.8080038399239,
+        "frames" : 30,
+        "lateShare" : 0,
+        "queueFalling" : false,
+        "queueP50Ms" : 0,
+        "queueP95Ms" : 0,
+        "queueRising" : false,
+        "replacedShare" : null
+      },
+      "take" : {
+        "now" : 7143343
+      }
+    }
+  ]
+}

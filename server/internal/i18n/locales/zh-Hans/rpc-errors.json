@@ -63,5 +63,10 @@
   "rewind_unsupported": "此会话不支持所选的回退操作。",
   "rewind_mismatch": "所选消息的位置发生了变化，请刷新对话后再回退。",
   "rewind_nothing": "没有可以回退到的消息。",
-  "rewind_failed": "尚未确认回退结果，请刷新对话检查当前历史。"
+  "rewind_failed": "尚未确认回退结果，请刷新对话检查当前历史。",
+  "preview_no_terminal": "这台电脑没有启用终端引擎，没法在这里运行服务器。在这台电脑的设置里启用一个后再试。",
+  "space_gone": "这台电脑上已经没有引擎列出这个空间了。刷新后再试。",
+  "assistant_service_tier_start_only": "Fast 只能在新建对话时随第一条消息选择。已有对话请直接调整速度。",
+  "assistant_service_tier_unsupported": "只有提供 Fast 的 Codex 模型才能从第一条消息起使用 Fast。这次没有发送。",
+  "assistant_service_tier_refused": "Codex 没能在第一条消息前启用 Fast。这次没有发送，请重试或改用 Standard。"
 }

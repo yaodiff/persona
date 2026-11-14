@@ -70,9 +70,8 @@ final class AgentsGroupingTests: XCTestCase {
         // than tapping a stale picker coordinate after the interruption.
         for _ in 0..<3 where !item.exists {
             closeSearchIfNeeded()
-            // The menu's element is its whole row (370 pt wide on an iPhone), and its middle is empty space beside the
-            // pill: tap the pill, near the row's leading edge.
-            menu.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 48, dy: 0)).tap()
+            // The grouping icon is now the capsule's fixed trailing control, not a row-wide pill.
+            menu.tap()
             _ = item.waitForExistence(timeout: 2)
         }
         guard item.exists else { return XCTFail("no menu item for \(grouping)") }

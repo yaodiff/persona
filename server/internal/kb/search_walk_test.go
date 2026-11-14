@@ -26,7 +26,7 @@ func searchByWalk(e *Engine, query string, messages bool, limit int) []Hit {
 		if len(hits) >= limit {
 			return
 		}
-		raw, err := os.ReadFile(p)
+		raw, err := scanRead(p)
 		if err != nil || !hasAll(fold(string(raw)), ws) {
 			return
 		}

@@ -1,9 +1,8 @@
 import XCTest
 
-/// The user's report (2026-11-03): from the inbox's Needs You, an agent's row opens its chat in Agents; back from it and
-/// switched about, Assistant showed the inbox under its own switch and took neither drags nor taps, and the Agents chat had
-/// the switch over its title. Every step here: the strip, the switch and the app's tab agree (`ShellFinger`), the page
-/// in front is the one drawn, the switch is never over a pushed page, and the page in front scrolls and takes taps.
+/// The inbox's Needs You Agent rows now push their chats over the inbox on Assistant. These tests keep the original
+/// shell-regression coverage while checking the new destination: edge Back returns to the inbox, the shell's strip,
+/// switch and tab agree, no switch covers a pushed page, and the page in front still scrolls and takes taps.
 final class ShellInboxAgentTests: XCTestCase {
     private var app: XCUIApplication!
     private var finger: ShellFinger!
@@ -88,29 +87,23 @@ final class ShellInboxAgentTests: XCTestCase {
         XCTAssertFalse(lost, "a slide did not end with its animation: \(what) \(app.shellTrace)")
     }
 
-    /// Inbox › Needs You › an agent: its chat in Agents, nothing of the shell over it; back: the Agents list with its
-    /// switch; Assistant: still the inbox, as it was left, with its own bar; back from it: Assistant's root; Agents again.
+    /// Inbox › Needs You › an agent: its chat is pushed over the inbox on Assistant. Edge Back returns to that same
+    /// inbox (not the Agents list); another Back reaches Assistant's root, and Agents still opens its own list.
     @MainActor func testAnAgentFromTheInboxThenBackAndSwitch() {
         openAgentFromInbox()
-        app.expectShell(agents: true, "an agent opened from the inbox", limit: 2.5)
-        roots(chat: false, work: false, "its chat open in Agents, the inbox still on 助手")
+        app.expectShell(agents: false, "an agent pushed over the inbox on Assistant", limit: 2.5)
+        roots(chat: false, "the inbox's agent chat is on Assistant")
         noSwitch("the agent's chat")
-        noLostSettle("Agents slid in for the inbox's agent")
+        noLostSettle("the inbox's agent chat")
         attachScreen("1 chat from the inbox")
 
         swipeBack()
-        roots(work: true, "back at the Agents list")
-        app.expectShell(agents: true, "back from the chat")
-        reachable(app.buttons["agents-new"].firstMatch, "the Agents list's 新建会话 after the chat")
-        attachScreen("2 agents list")
-
-        finger.switchTo(agents: false, "助手 after the chat opened from the inbox")
-        roots(chat: false, "助手 still on the inbox")
+        roots(chat: false, "back at the inbox on Assistant")
+        app.expectShell(agents: false, "back from the chat stays on Assistant")
         let inbox = app.navigationBars["收件箱"].firstMatch
-        reachable(inbox, "the inbox's own bar on 助手")
-        noSwitch("the inbox")
-        noLostSettle("助手 slid back over the inbox")
-        attachScreen("3 inbox on 助手")
+        reachable(inbox, "the inbox after the agent chat")
+        noSwitch("the inbox after the agent chat")
+        attachScreen("2 inbox after the agent chat")
         // It scrolls and takes taps: the list moves under a drag, and its back button goes back.
         let row = app.buttons["inbox.agentRow"].firstMatch
         reachable(row, "the inbox's agent row")
@@ -132,16 +125,16 @@ final class ShellInboxAgentTests: XCTestCase {
         app.terminate()
     }
 
-    /// The same chat, then straight to Assistant with the switch not there: a drag from Agents' left edge goes back in
-    /// the chat (not to Assistant), and the list's switch to Assistant lands on the inbox as it was left.
+    /// The pushed chat consumes the first edge drag. Only after the inbox and then Assistant's root are showing can the
+    /// shell switch to Agents; that page was never replaced by the inbox's Agent chat.
     @MainActor func testAnAgentFromTheInboxThenSwitchFromTheList() {
         openAgentFromInbox()
-        app.expectShell(agents: true, "an agent opened from the inbox", limit: 2.5)
-        roots(work: false, "its chat open")
+        app.expectShell(agents: false, "the agent chat stays on Assistant", limit: 2.5)
+        roots(chat: false, "its chat pushed on Assistant")
+        noSwitch("the pushed agent chat")
         swipeBack()
-        roots(work: true, "back at the list")
-        finger.switchTo(agents: false, "助手 from the list")
-        reachable(app.navigationBars["收件箱"].firstMatch, "the inbox on 助手")
+        roots(chat: false, "the first edge drag returned to the inbox")
+        reachable(app.navigationBars["收件箱"].firstMatch, "the inbox after edge Back")
         noSwitch("the inbox")
         // Back to Agents from the inbox: the inbox goes back first, then the switch.
         app.navigationBars["收件箱"].firstMatch.buttons["BackButton"].firstMatch.tap()

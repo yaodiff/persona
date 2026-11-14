@@ -93,6 +93,9 @@ final class FrameStats: NSObject {
         // The streamed reply's cadence as the reader sees it: the gaps between frames where its text grew.
         let gaps = zip(textChanges, textChanges.dropFirst()).map { ($1.0 - $0.0) * 1000 }.sorted()
         let added = textChanges.map { Double($0.1) }.sorted()
+        // Typed, as `busyMax`: `gaps.last ?? 0` in the literal is `last(where:)`, and JSONSerialization aborts on it.
+        let gapMax: Double = gaps.last ?? 0
+        let addedMax: Double = added.last ?? 0
         func q(_ v: [Double], _ p: Double) -> Double { v.isEmpty ? 0 : v[min(v.count - 1, Int(Double(v.count) * p))] }
         let result: [String: Any] = [
             "label": label,
@@ -117,8 +120,8 @@ final class FrameStats: NSObject {
             "busy_ms_per_s": total > 0 ? busies.reduce(0, +) / total : 0,
             "main_cpu_ms_per_s": total > 0 ? cpu * 1000 / total : 0,
             "text_changes": textChanges.count,
-            "text_gap_p50_ms": q(gaps, 0.5), "text_gap_p95_ms": q(gaps, 0.95), "text_gap_max_ms": gaps.last ?? 0,
-            "text_added_p50": q(added, 0.5), "text_added_p95": q(added, 0.95), "text_added_max": added.last ?? 0,
+            "text_gap_p50_ms": q(gaps, 0.5), "text_gap_p95_ms": q(gaps, 0.95), "text_gap_max_ms": gapMax,
+            "text_added_p50": q(added, 0.5), "text_added_p95": q(added, 0.95), "text_added_max": addedMax,
         ]
         if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
            let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
@@ -162,6 +165,11 @@ import UIKit
     static let start = "com.persona.perf.frames.start"
     static let stop = "com.persona.perf.frames.stop"
     static let glideNotice = "com.persona.perf.frames.glide"
+    /// The other shell page comes to the front, as the switch's tap does it (`AppModel.selectedTab`, the strip slides).
+    /// A UI test's own tap costs main-thread time in the app: XCTest resolves the button from an accessibility snapshot
+    /// before it taps and again for every wait, 55–70 ms each on the `assistant` suite's data, some of them while the
+    /// strip moves (#5438). With this cue the measured frames are the app's.
+    static let switchPages = "com.persona.perf.shell.switch"
 
     static func listenIfAsked() {
         guard UserDefaults.standard.bool(forKey: "showFrameProbe") else { return }
@@ -171,7 +179,7 @@ import UIKit
             let n = name?.rawValue as String?
             DispatchQueue.main.async { MainActor.assumeIsolated { FrameProbe.handle(n) } }
         }
-        for name in [start, stop, glideNotice] {
+        for name in [start, stop, glideNotice, switchPages] {
             CFNotificationCenterAddObserver(center, nil, callback, name as CFString, nil, .deliverImmediately)
         }
     }
@@ -180,6 +188,9 @@ import UIKit
         let stats = FrameStats.shared
         if name == glideNotice {
             Task { await runGlide() }
+        } else if name == switchPages {
+            let model = AppModel.shared
+            model.selectedTab = model.selectedTab == .chats ? .assistant : .chats
         } else if name == start {
             if stats.running { stats.stop(label: "probe") }
             stats.start()

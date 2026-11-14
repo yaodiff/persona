@@ -19,7 +19,8 @@ func muteHub(t *testing.T) *inboxHub {
 	if err := h.inboxReady(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	waitNeedsYouIdle(t, h.Service) // fixture writes start after the initial asynchronous read finishes
+	waitNeedsYouIdle(t, h.Service)  // fixture writes start after the initial asynchronous read finishes
+	t.Cleanup(h.inbox.titling.Wait) // a merge titles its row in the background (inbox_merge_title.go)
 	return h
 }
 

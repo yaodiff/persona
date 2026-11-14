@@ -893,11 +893,12 @@ var HubRoles = []string{"center", "member"}
 
 // Values of HubCapability.
 const (
-	HubCapabilityInboxGroup = "inbox_group"
+	HubCapabilityInboxGroup      = "inbox_group"
+	HubCapabilityInboxGroupState = "inbox_group_state"
 )
 
 // HubCapabilities are the values of HubCapability, in order.
-var HubCapabilities = []string{"inbox_group"}
+var HubCapabilities = []string{"inbox_group", "inbox_group_state"}
 
 // InitializeParams: what the hub sends first. The extension is under extension; hubs before the rename (#1844) send
 // it as plugin, newer hubs send both.
@@ -4841,6 +4842,9 @@ type LeaderReportEvent struct {
 	Doing    string    `json:"doing,omitempty"`
 	NeedsYou string    `json:"needs_you,omitempty"`
 	Links    []string  `json:"links,omitempty"`
+	// set only while the hub's push tiering (low-distraction switch) is on: P1 for progress, reached and stuck (keep it
+	// in the log and the briefing, alert nobody), P0 for a decision
+	Level string `json:"level,omitempty"`
 }
 
 // ModelErrorCode: error.code of model.complete besides permission_denied (data {scope: "models"}): invalid_params;

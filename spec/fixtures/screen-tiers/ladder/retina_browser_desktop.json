@@ -1,0 +1,61 @@
+{
+  "description" : "A desktop browser: no long-edge cap (0), Wi-Fi.",
+  "expected" : [
+    {
+      "fps" : 60,
+      "height" : 1964,
+      "maxKbps" : 12000,
+      "minKbps" : 7127,
+      "scale" : 2,
+      "width" : 3024
+    },
+    {
+      "fps" : 60,
+      "height" : 1472,
+      "maxKbps" : 12000,
+      "minKbps" : 4006,
+      "scale" : 1.5,
+      "width" : 2268
+    },
+    {
+      "fps" : 30,
+      "height" : 1472,
+      "maxKbps" : 8012,
+      "minKbps" : 2003,
+      "scale" : 1.5,
+      "width" : 2268
+    },
+    {
+      "fps" : 30,
+      "height" : 982,
+      "maxKbps" : 3563,
+      "minKbps" : 891,
+      "scale" : 1,
+      "width" : 1512
+    },
+    {
+      "fps" : 15,
+      "height" : 982,
+      "maxKbps" : 1782,
+      "minKbps" : 200,
+      "scale" : 1,
+      "width" : 1512
+    }
+  ],
+  "input" : {
+    "bias" : "auto",
+    "capKbps" : 12000,
+    "codec" : "hevc",
+    "maxFps" : 60,
+    "maxSize" : 0,
+    "pixels" : [
+      3024,
+      1964
+    ],
+    "points" : [
+      1512,
+      982
+    ]
+  },
+  "name" : "retina_browser_desktop"
+}

@@ -2,7 +2,7 @@
 // search found, the Agents on a project, the timeline, the profile, Moments, related entries by kind, code directories,
 // a chat's last 7 days and the folder (docs/apple/ios.md "Information architecture", knowledge base). "Tag" in the header.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { api, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
+import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
 import { MANAGER_HEADER, shownManager, useChosenManager, useKnownDefault } from "../../lib/manager-choice";
 import { ConfirmedFacts } from "./ConfirmedFacts";
 import { RecordingMinutes } from "./RecordingMinutes";
@@ -45,7 +45,7 @@ import { machineWithHub } from "../../lib/mesh";
 import { openPanel } from "../../lib/panel";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { conversationRoute } from "../../lib/inbox";
-import { getState, useStore } from "../../lib/store";
+import { getState, onHubEvent, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { Button, Collapse, copyText, cx, IconButton, Loading, StatePill, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
@@ -56,6 +56,7 @@ import { askPersona } from "../../lib/outbox";
 import { openNewAgent } from "../../lib/new-agent";
 import { DayDialog, MessageView, MomentDialog, TagEditor } from "./KBDialogs";
 import { ErrorBox } from "./KBList";
+import { Empty } from "../session/files/parts";
 import { Badges, Card, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
@@ -111,6 +112,8 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   const request = useRef(0);
   const [resp, setResp] = useState<KBDetailResponse | null>(null);
   const [error, setError] = useState("");
+  // the hub has no such entry (deleted, renamed, or an old link): said plainly, with nothing to retry
+  const [gone, setGone] = useState(false);
   // The page's own read (opening, after a save elsewhere on the page, Retry) failed while an earlier detail is shown:
   // the detail stays and this says it may be out of date. Sections reading it again themselves show their own errors.
   const [reloadError, setReloadError] = useState("");
@@ -151,10 +154,13 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
       remember(r.detail.links ?? []);
       setResp(r);
       setError("");
+      setGone(false);
       setReloadError("");
       return true;
     } catch (err) {
       if (!valid()) return false;
+      const missing = err instanceof ApiError && err.status === 404;
+      setGone(missing);
       if (!isAbort(err)) setError(errorText(err));
       throw err;
     }
@@ -165,10 +171,14 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
     setReloadError("");
     const ac = new AbortController();
     void load(ac.signal).catch((err) => {
-      if (!ac.signal.aborted && !isAbort(err)) setReloadError(errorText(err));
+      if (!ac.signal.aborted && !isAbort(err)) setReloadError(err instanceof ApiError && err.status === 404 ? t("not-found.kb_gone") : errorText(err));
     });
     return () => { ac.abort(); request.current++; };
   }, [load, reloadKey, retry]);
+  // The error the page shows (a failed read while the hub was away) is read again once it is back (its hello), as Retry
+  // would. A section's own detail read that failed (a meeting's photos) keeps its own rules for when to read again.
+  const failed = Boolean(resp ? reloadError : error);
+  useEffect(() => (failed ? onHubEvent("hello", () => setRetry((x) => x + 1)) : undefined), [failed]);
 
   const d = resp?.detail;
 
@@ -203,6 +213,28 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   const recent = d?.kind === "chats" ? parseRecent(d.recent) : [];
   const into = typeof d?.meta?.merged_into === "string" ? d.meta.merged_into : "";
   const moments = d?.moments ?? [];
+
+  // An entry the hub has no such entry for: the shared empty state and the way back, as a page or a personal Agent's
+  // conversation that isn't there (NotFound, AgentsView), not the entry's page with its id, disabled buttons and a red
+  // box (web usability audit item 42). The header names the list it would be in.
+  if (gone && !d)
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-1.5 border-b border-line px-3 sm:px-4">
+          <IconButton icon="sidebar" label={t("knowledge-kbdetail.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
+          <IconButton icon="chevronLeft" label={t("knowledge-kbdetail.back")} onClick={onBack} className="@3xl:hidden" />
+          <span className="min-w-0 flex-1 truncate text-meta font-medium text-ink-2">{isKind(kind) ? kindTitle(kind) : t("app.title_kb")}</span>
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" role="status">
+          <Empty
+            icon="book"
+            title={t("not-found.kb_title")}
+            detail={t("not-found.kb_detail")}
+            action={<Button tone="secondary" icon="arrowLeft" onClick={onBack}>{t("knowledge-kbdetail.back")}</Button>}
+          />
+        </div>
+      </div>
+    );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

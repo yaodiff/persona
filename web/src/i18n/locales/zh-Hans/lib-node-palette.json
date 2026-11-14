@@ -1,4 +1,7 @@
 {
   "name_placeholder": "名称",
-  "close_confirm": "窗格里运行的程序会一起结束。"
+  "close_confirm": "窗格里运行的程序会一起结束。",
+  "section_pane": "窗格 · {name}",
+  "section_tab": "标签页 · {name}",
+  "section_space": "空间 · {name}"
 }

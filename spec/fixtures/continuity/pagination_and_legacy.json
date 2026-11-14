@@ -1537,11 +1537,11 @@
       "from_test": "olderHubsWithoutSpansWorkAsBefore"
     },
     {
-      "name": "same_id_plain_item_keeps_original",
-      "description": "普通 item 同 id 的新版内容被忽略，保持当前 iOS 的去重行为。",
+      "name": "same_id_plain_item_uses_newest_copy",
+      "description": "重复 id 的完整 item 以最新副本为准，保留连续位置。",
       "source": [
         "ios/Shared/ChatStore.swift: merge",
-        "CLAUDE.md：缓存里的旧 item 不会被新页覆盖"
+        "ios/PersonaTests/ChatStoreTests.swift: newestCopies"
       ],
       "input": {
         "initial": {
@@ -1585,7 +1585,7 @@
               "seq": 1,
               "role": "assistant",
               "kind": "text",
-              "text": "旧版示例"
+              "text": "新版示例"
             }
           ],
           "item_ids": [

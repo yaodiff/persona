@@ -1,0 +1,43 @@
+{
+  "description" : "Where this computer last settled over this route.",
+  "init" : {
+    "bias" : "auto",
+    "capKbps" : 12000,
+    "display" : {
+      "maxSize" : 2868,
+      "pixels" : [
+        3024,
+        1964
+      ],
+      "points" : [
+        1512,
+        982
+      ]
+    },
+    "link" : {
+      "kind" : "relay",
+      "minRttMs" : null,
+      "srttMs" : null,
+      "via" : "wifi"
+    },
+    "maxFps" : 60,
+    "maxScale" : null,
+    "now" : 0,
+    "remembered" : 3
+  },
+  "name" : "start_remembered",
+  "start" : {
+    "fps" : 30,
+    "height" : 982,
+    "index" : 3,
+    "maxKbps" : 3563,
+    "minKbps" : 891,
+    "reason" : "start",
+    "scale" : 1,
+    "targetKbps" : 891,
+    "width" : 1512
+  },
+  "steps" : [
+
+  ]
+}

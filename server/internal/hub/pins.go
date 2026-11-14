@@ -149,12 +149,19 @@ func (h *Hub) renameSpace(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	wid, name := r.PathValue("wid"), strings.TrimSpace(in.Name)
-	old := ""
+	old, inWorkspace := "", ""
 	for _, s := range m.sessionList() {
 		if s.SpaceID == wid && s.SpaceName != "" {
 			old = s.SpaceName
 			break
 		}
+		// A runtime session's workspace stands for the space it is in (Paseo's project, which Android names that way).
+		if inWorkspace == "" && s.SourceKind == "runtime" && s.WorkspaceID == wid && s.SpaceName != "" {
+			inWorkspace = s.SpaceName
+		}
+	}
+	if old == "" {
+		old = inWorkspace
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()

@@ -17,6 +17,11 @@ import uuid
 from manager_artifacts import manager_manifest
 from node_artifacts import node_manifest
 
+FAILURE_BACKOFF_SECONDS = 15 * 60
+FAILURE_BACKOFF_MAX_SECONDS = 2 * 60 * 60
+DEFAULT_GO_CACHE_LIMIT_GIB = 20
+KEPT_ATTEMPTS = 5
+
 
 def run(args, cwd, **kwargs):
     return subprocess.run(args, cwd=cwd, check=True, **kwargs)
@@ -24,6 +29,41 @@ def run(args, cwd, **kwargs):
 
 def output(args, cwd):
     return subprocess.check_output(args, cwd=cwd, text=True).strip()
+
+
+def failure_backoff(failures):
+    """Seconds to wait after the given number of consecutive failed attempts: 15 min, doubling, at most 2 h."""
+    return min(FAILURE_BACKOFF_SECONDS * 2 ** (max(failures, 1) - 1), FAILURE_BACKOFF_MAX_SECONDS)
+
+
+def directory_size(path):
+    total = 0
+    for parent, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(parent, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def trim_go_cache(checkout, limit_gib):
+    """Go only drops cache entries unused for five days; a worker validating every new head fills tens of GB a day."""
+    cache = output(['go', 'env', 'GOCACHE'], checkout / 'server')
+    if not cache or not os.path.isabs(cache) or not os.path.isdir(cache):
+        return
+    size = directory_size(cache)
+    if size > limit_gib * 2 ** 30:
+        print(f'Go build cache is {size / 2 ** 30:.1f} GiB, over {limit_gib} GiB; cleaning it', flush=True)
+        run(['go', 'clean', '-cache'], checkout / 'server')
+
+
+def prune_attempts(target_state, keep=KEPT_ATTEMPTS):
+    """Keep recent attempts for diagnosis; installed/rollback binaries live on the Hub."""
+    attempts = sorted((p for p in target_state.iterdir() if p.is_dir() and (p / 'validation.log').exists()),
+                      key=lambda p: p.name)
+    for old in attempts[:-keep]:
+        shutil.rmtree(old)
 
 
 def atomic_json(path, value):
@@ -127,6 +167,9 @@ def main():
     if args.scope == 'manager' and not args.commit:
         parser.error('--scope manager requires --commit with a full source SHA')
     publish_command, target_identity = publication_target(cfg, args.scope, args.manager_id)
+    go_cache_limit = cfg.get('go_cache_limit_gib', DEFAULT_GO_CACHE_LIMIT_GIB)
+    if isinstance(go_cache_limit, bool) or not isinstance(go_cache_limit, (int, float)) or go_cache_limit <= 0:
+        raise ValueError('go_cache_limit_gib must be a positive number')
     publish_nodes = args.scope == 'hub' and cfg.get('publish_nodes', False)
     publish_managers = args.scope == 'manager'
     checkout, state = Path(cfg['checkout']), Path(cfg['state_dir'])
@@ -197,6 +240,16 @@ def main():
                 if publish_managers and not success_ready and not args.validate_only:
                     raise SystemExit(3)
                 return
+        # Consecutive failures in a row, carried through an interrupted (pending) attempt and reset by a success.
+        failures = (previous.get('failures', 1 if previous.get('result') == 'failure' else 0)
+                    if source_matches and previous.get('result') != 'success' else 0)
+        # While main stays red each new head would be a full rebuild; following the head waits out the backoff
+        # of the last failure, whichever commit it was. --retry and a pinned --commit run now.
+        if (args.scope == 'hub' and not args.commit and not args.retry and not same and source_matches
+                and previous.get('result') == 'failure' and time.time() < previous.get('retry_after', 0)):
+            print(f'{sha}: waiting after {failures} consecutive failed attempts '
+                  f'(last {previous.get("sha", "")[:12]}) until {time.ctime(previous["retry_after"])}')
+            return
         if output(['git', 'status', '--porcelain', '--untracked-files=no'], checkout):
             raise RuntimeError('Release checkout has tracked changes')
         run(['git', 'checkout', '--detach', sha], checkout)
@@ -222,7 +275,7 @@ def main():
                   'publish_nodes': publish_nodes, 'scope': args.scope,
                   'report_commit_status': cfg.get('report_commit_status') is True,
                   'run_id': uuid.uuid4().hex,
-                  'manifest_source': sha}
+                  'manifest_source': sha, 'failures': failures}
         if publish_managers:
             result.update(manager_id=args.manager_id, target_identity=target_identity)
         atomic_json(record, result)
@@ -273,20 +326,24 @@ def main():
                     raise SystemExit(3)
                 if receipt.get('phase') != 'confirmed':
                     raise ValueError('Manager publisher did not confirm activation')
-            result['result'] = 'success'
+            result.update(result='success', failures=0)
             status('success', f'Validated {label} release publisher completed')
         except (subprocess.CalledProcessError, OSError, RuntimeError, ValueError):
             result['result'] = 'failure'
-            result['retry_after'] = time.time() + 900
+            result['failures'] = failures + 1
+            result['retry_after'] = time.time() + failure_backoff(failures + 1)
             status('failure', 'Release failed; see publisher validation logs')
             raise
         finally:
             atomic_json(record, result)
             atomic_json(attempt / 'worker-receipt.json', result)
-        # Retain recent attempts for diagnosis; installed/rollback binaries live on the Hub.
-        attempts = sorted((p for p in target_state.iterdir() if p.is_dir() and (p / 'validation.log').exists()), key=lambda p: p.name)
-        for old in attempts[:-5]:
-            shutil.rmtree(old)
+            # Failed attempts too: a red main must not grow the state directory or the build cache without bound.
+            # Cleanup problems are reported but never replace the attempt's own result.
+            try:
+                prune_attempts(target_state)
+                trim_go_cache(checkout, go_cache_limit)
+            except (OSError, subprocess.CalledProcessError) as error:
+                print(f'Release cleanup failed: {error}', file=sys.stderr, flush=True)
 
 
 if __name__ == '__main__':

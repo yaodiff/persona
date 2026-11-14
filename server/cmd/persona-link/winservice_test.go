@@ -137,21 +137,13 @@ func TestInstallOnWindows(t *testing.T) {
 	if !nodeStatus(f.env).Installed {
 		t.Error("node status says the node is not in the task")
 	}
-	exe := f.serviceExePath()
-	if got, want := strings.Join(f.trayCalls, "\n"), strings.Join([]string{"quit", "autostart " + exe, "links " + exe, "start " + exe}, "\n"); got != want {
-		t.Errorf("tray:\n%s\nwant:\n%s", got, want)
-	}
-	if !strings.Contains(out, "托盘图标已启动") {
-		t.Errorf("output lacks the tray:\n%s", out)
-	}
-
 	// Again, as an upgrade: the running task is ended first (its programs cannot be replaced while they run), and
 	// install waits for the old persona-link to let go of the run lock.
 	release, err := link.LockRun(f.configPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.calls, f.trayCalls = nil, nil
+	f.calls = nil
 	f.out.Reset()
 	f.onCommand = func(call string) (string, error) {
 		switch {
@@ -177,33 +169,15 @@ func TestInstallOnWindows(t *testing.T) {
 	if nodeStatus(f.env).Installed {
 		t.Error("node status says the node is in the task")
 	}
-	if len(f.trayCalls) == 0 || f.trayCalls[0] != "quit" || f.trayCalls[len(f.trayCalls)-1] != "start "+exe {
-		t.Errorf("tray on upgrade: %q", f.trayCalls)
-	}
 }
 
-func TestInstallOnWindowsWithoutTheTray(t *testing.T) {
+func TestInstallOnWindowsRejectsTheRetiredTrayFlag(t *testing.T) {
 	f, _ := newWindowsEnv(t)
-	f.pairHere(t)
-	f.trayAuto = true // an earlier install turned it on
-	answer := f.onCommand
-	f.onCommand = func(call string) (string, error) {
-		if strings.HasPrefix(call, "schtasks /Run") {
-			f.saveStatus(t, link.Status{State: "connected", Node: "online"}, 42)
-		}
-		return answer(call)
+	if err := install(f.env, []string{"--no-tray"}); !errors.Is(err, errUsage) {
+		t.Fatalf("retired tray flag: %v", err)
 	}
-	if err := install(f.env, []string{"--no-node", "--no-tray"}); err != nil {
-		t.Fatalf("%v\n%s", err, f.out)
-	}
-	if got := strings.Join(f.trayCalls, ","); got != "quit,autostart off" {
-		t.Errorf("tray: %q", f.trayCalls)
-	}
-	if f.trayAuto || f.trayUp {
-		t.Error("the tray still starts at sign-in, or runs")
-	}
-	if out := f.out.String(); !strings.Contains(out, "托盘图标：不装（--no-tray）") {
-		t.Errorf("output:\n%s", out)
+	if len(f.calls) != 0 || fileExists(f.taskFile()) {
+		t.Fatal("the retired tray flag installed something")
 	}
 }
 
@@ -226,13 +200,10 @@ func TestUninstallOnWindows(t *testing.T) {
 	if err := install(f.env, nil); err != nil {
 		t.Fatalf("%v\n%s", err, f.out)
 	}
-	f.calls, f.trayCalls = nil, nil
+	f.calls = nil
 	f.out.Reset()
 	if err := uninstall(f.env, nil); err != nil {
 		t.Fatal(err)
-	}
-	if got := strings.Join(f.trayCalls, ","); got != "quit,autostart off,unlinks,data" {
-		t.Errorf("tray: %q", f.trayCalls)
 	}
 	if *registered || fileExists(f.taskFile()) || fileExists(f.serviceExePath()) {
 		t.Fatalf("left behind: registered %v, %v, %v", *registered, fileExists(f.taskFile()), fileExists(f.serviceExePath()))
@@ -266,12 +237,8 @@ func TestStatusAndNodeOnWindows(t *testing.T) {
 	if s := gather(f.env).Service; !s.Installed || s.Active != "Running" {
 		t.Fatalf("%+v", s)
 	}
-	if tr := r.Tray; tr == nil || tr.Running || tr.Autostart || !strings.Contains(r.text(f.now(), "me"), "托盘图标：没在运行") {
-		t.Fatalf("tray before: %+v\n%s", tr, r.text(f.now(), "me"))
-	}
-	f.trayUp, f.trayAuto = true, true
-	if r := gather(f.env); !r.Tray.Running || !r.Tray.Autostart || !strings.Contains(r.text(f.now(), "me"), "托盘图标：在运行 · 登录时启动") {
-		t.Fatalf("tray after: %+v\n%s", r.Tray, r.text(f.now(), "me"))
+	if text := r.text(f.now(), "me"); strings.Contains(text, "托盘") {
+		t.Fatalf("the retired tray is still reported:\n%s", text)
 	}
 	if st := nodeStatus(f.env); !st.Installed || st.Running != "Running" {
 		t.Fatalf("%+v", st)

@@ -62,7 +62,6 @@ struct RecordingDayConsentView: View {
     /// The user's answer: true for Agree. The presenter stores it and closes the sheet.
     var answer: (Bool) -> Void
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.dynamicTypeSize) private var size
 
     var body: some View {
         NavigationStack {
@@ -134,7 +133,7 @@ struct RecordingDayConsentView: View {
             .buttonStyle(.borderless)
             .accessibilityIdentifier("allday-consent-not-now")
         }
-        .padding(.horizontal, size.isAccessibilitySize ? Theme.Space.page : Theme.Space.xl)
+        .padding(.horizontal, Theme.Space.xl)
         .padding(.vertical, Theme.Space.m)
         .frame(maxWidth: Theme.Size.readable)
         .frame(maxWidth: .infinity)

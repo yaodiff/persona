@@ -256,7 +256,8 @@ func errGone(id string) error {
 // workAnswer is manager.action for one of the cards (false: id is none of them). What the agent is to hear goes to it;
 // the answers the manager acts on itself ("Not now", "Wait a bit"…) do not. The work is read back first: an answer the hub kept
 // while the manager was away comes right after it is back. When the agent cannot be sent the answer (its machine just
-// went away) the card goes up again, under a new id. A repeated callback while an answer is being sent is answered OK
+// went away) the card goes up again, under a new id; when its computer no longer has the session, the card goes
+// (sessionNotFound). A repeated callback while an answer is being sent is answered OK
 // and delivered once: the send can take until its timeout, and the entry still names the card until it comes back.
 func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution) (bool, error) {
 	if !strings.HasPrefix(id, workCardPrefix) {
@@ -387,6 +388,17 @@ func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution)
 		text = render()
 	}
 	if err := s.sendToSession(ctx, ix.MachineID, ix.SessionID, text); err != nil {
+		if sessionNotFound(err) {
+			// Its computer has no such session any more (deleted there, or listed under another id since): put up again,
+			// the card could never be answered. It goes, and the answer with it (#6709).
+			s.logf("work %s/%s: the answer did not go, the session is no longer on its computer: the card goes: %v", ix.MachineID, short(ix.SessionID), err)
+			s.workEvent(ix.MachineID, ix.SessionID, "answer_failed", map[string]any{"error": clip(err.Error(), 200), "gone": true})
+			s.work.mu.Lock()
+			delete(s.work.approved, key)
+			s.work.mu.Unlock()
+			done(nil)
+			return true, nil
+		}
 		s.logf("work %s/%s: the answer did not go, the card is up again: %v", ix.MachineID, short(ix.SessionID), err)
 		s.workEvent(ix.MachineID, ix.SessionID, "answer_failed", map[string]any{"error": clip(err.Error(), 200)})
 		s.work.mu.Lock()
@@ -410,6 +422,15 @@ func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution)
 }
 
 type agentAnswerItem struct{ question, answer string }
+
+// codeSessionNotFound is what a node, or the runtime it asks, answers for a session it does not have.
+const codeSessionNotFound = "not_found"
+
+// sessionNotFound: err says the session is not on its computer (not that the computer or its engine is away).
+func sessionNotFound(err error) bool {
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code == codeSessionNotFound
+}
 
 // sendToSession sends text to sid as the manager (the next working is its doing, not the user's).
 func (s *Service) sendToSession(ctx context.Context, machine, sid, text string) error {

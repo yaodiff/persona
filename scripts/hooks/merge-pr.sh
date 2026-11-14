@@ -26,7 +26,8 @@ if [ -z "${PR_WATCH_MERGE_LOCKED:-}" ]; then
   export PR_WATCH_EXPECT_HEAD="$expect_head"
   export PR_WATCH_EXPECT_BASE="$expect_base"
   root="$(git rev-parse --show-toplevel)"
-  git_common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)"
+  # Not --path-format=absolute: git before 2.31 echoes that option back as a line of output.
+  git_common="$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
   python3 - "$git_common/persona-pr-merge.lock" "$root/scripts/hooks/merge-pr.sh" "$@" <<'PY'
 import fcntl, os, subprocess, sys
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)

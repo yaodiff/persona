@@ -11,7 +11,9 @@ import Foundation
 /// seconds.
 nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
     /// The file's shape. The app and its widgets ship together; a file of another shape (written by the version before
-    /// an update, until the app runs again) reads as none. Bump it with any change to the fields.
+    /// an update, until the app runs again) reads as none. Bump it when a field changes its meaning or a new one is
+    /// required; a new optional field reads as absent from an older file and needs no bump (`Today.days`), so the
+    /// widgets keep their content across an update.
     static let version = 1
     var version = HomeSnapshot.version
     /// When the app wrote it; the widgets say how old it is once it is `staleAfter` old.
@@ -112,8 +114,27 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
         var events: [Event] = []
         /// Where they came from: nil when neither can be read (the widget says how to allow the calendar).
         var source: EventSource?
+        /// The days around today for the Calendar widget's week and month (`HomeDays`), from the phone's calendar; nil
+        /// when only today is known (the hub's meetings) or nothing is.
+        var days: Days?
 
         static let cap = 8
+    }
+
+    /// Every day from `from` to `to` (`HomeDays.key`s): this month's grid and the two weeks after today. A day of the
+    /// range missing from `byDay` has no events; a day outside the range is not known.
+    nonisolated struct Days: Codable, Hashable, Sendable {
+        var from: String
+        var to: String
+        var byDay: [String: Day] = [:]
+
+        func covers(_ key: String) -> Bool { key >= from && key <= to }
+    }
+
+    nonisolated struct Day: Codable, Hashable, Sendable {
+        /// How many events the day has; `events` holds the first `HomeDays.perDay`.
+        var count: Int
+        var events: [Event]
     }
 
     nonisolated enum EventSource: String, Codable, Hashable, Sendable {

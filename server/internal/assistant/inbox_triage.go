@@ -105,6 +105,7 @@ func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 		it.Tier, it.Reason = fallback, b.byRules()
 	}
 	b.applyPolicyTier(it) // the user's policy has the last word on the tier (inbox_policies.go)
+	b.liftMerged(it)      // a merged row stays at its rows' highest tier (inbox_merge.go, #7230)
 	it.TriagedAt = last
 	b.noteTriaged(it)
 	// Triage can settle an item read elsewhere while it was still untriaged (not one filed while the model thought).
@@ -346,6 +347,12 @@ func (s *Service) replyInboxFrom(ctx context.Context, id, text, clientID string,
 // replyInboxDo is replyInboxFrom; file false keeps the item open (a confirmed suggestion's reply: the event waits for
 // the other side), a repeat of the reply still being answered as sent.
 func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, fromCard, file bool, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxDoMode(ctx, id, text, clientID, fromCard, file, false, changes...)
+}
+
+// replyInboxDoMode adds the direct /reply route's waiting mode without changing the shared send-once path used by
+// handed-off suggestions. followDirect is true only for POST /api/v1/inbox/{id}/reply.
+func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, changes ...DocChange) (InboxItem, error) {
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
@@ -419,7 +426,7 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 	}
 	now := time.Now()
 	if already {
-		if once.unsaved { // the reply filed the item but the row was not written: a repeat writes it (#4627)
+		if once.unsaved { // the reply's item was not written: a repeat writes it (#4627)
 			s.saveReplied(ctx, it, once)
 		}
 		b.mu.Lock()
@@ -428,21 +435,41 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 		s.markCardsSent(ctx, id, now, text, true)
 		return out, nil
 	}
+	var loc *time.Location
+	if followDirect {
+		loc = s.location(ctx)
+	}
 	b.mu.Lock()
 	// The reply answers what the item held when it was sent. A move that came in meanwhile (collection runs while the
 	// reply is out) is not answered: the item stays open with it, so it is not filed unseen (#1828). An item filed
 	// meanwhile (read elsewhere) is filed as replied.
 	kept := !file && it.open() || it.open() && it.Last != c.Last
+	// A direct reply with a processing conversation waits for the other side instead of filing the matter. Old-App
+	// card sends keep filing. If new messages arrived while the reply was out, the existing kept-open path is unchanged.
+	if followDirect && !fromCard && file {
+		resetInboxFollowChecks(it)
+	}
+	wait := followDirect && !fromCard && file && !kept && it.open() && it.Agent != nil && it.Agent.SessionID != ""
+	kept = kept || wait
 	once.keptOpen = kept
+	if c.Mail != nil {
+		once.clientID = text
+	}
 	b.noteSent(it, now)
 	tell := false
-	if !kept {
+	if wait {
+		it.Suggestion = nil // the user's own reply supersedes a suggestion still waiting for confirmation
+		it.Agent.SentOf = c.Last
+		b.waitForOtherSide(it, defaultInboxFollow(now), ViaUser, now, loc, true)
+		b.tell(it, inboxNote{Name: prompts.NoteSent, Text: text}, false, now)
+		tell = true
+	} else if !kept {
 		it.done(now, "replied")
 		tell = b.closeHandling(it, "replied", now) // its conversation stops
 	}
 	out := it.listed()
 	b.mu.Unlock()
-	if !kept {
+	if !kept || wait {
 		s.saveReplied(ctx, it, once)
 	} else if !file {
 		s.saveInbox(ctx, []*InboxItem{it})
@@ -455,14 +482,14 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 	return out, nil
 }
 
-// saveReplied writes the item a reply filed. The reply went out, so a failed write keeps the item filed in memory
-// (rolling it back would let a repeat send the reply again) and is remembered on the item's replies: a repeat of
-// the reply writes it then, instead of the item coming back as "Needs you" after a restart. With once.mu held.
+// saveReplied writes the item after its reply, filed or waiting. The reply went out, so a failed write keeps the item's
+// resulting state in memory (rolling it back would let a repeat send the reply again) and is remembered on the item's
+// replies: a repeat writes it then, instead of the item returning to its pre-reply state after a restart. With once.mu held.
 func (s *Service) saveReplied(ctx context.Context, it *InboxItem, once *inboxReply) {
 	failed := s.saveInbox(ctx, []*InboxItem{it})
 	once.unsaved = failed[it.ID]
 	if once.unsaved {
-		s.logf("inbox: %s was replied to but could not be saved as done", it.ID)
+		s.logf("inbox: %s was replied to but its resulting state could not be saved", it.ID)
 	}
 }
 
@@ -472,9 +499,18 @@ func (s *Service) replyMail(ctx context.Context, r inboxReplyReq) (bool, error) 
 	if m == nil || len(m.UIDs) == 0 {
 		return false, errCannotReply
 	}
+	b := &s.inbox
+	b.mu.Lock()
+	repeated := r.once.repeated(r.live, r.text)
+	b.mu.Unlock()
+	if repeated {
+		return true, nil
+	}
 	var sent assistantwire.InboxSent
 	err := s.appCall(ctx, AppInbox, inboxReplyMail, map[string]any{"account_id": m.AccountID, "uid": m.UIDs[len(m.UIDs)-1],
 		"mailbox": m.Mailbox, "text": r.text, "send_id": r.sendID}, &sent)
 	s.inboxSent(sent, r.sendID)
+	// A hub "already" can be the first answer this manager got after an in-doubt send: this manager still writes the
+	// resulting item state. Only the local repeat check above may skip that write.
 	return false, err
 }

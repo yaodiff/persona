@@ -53,7 +53,7 @@ class ContinuityFixtureTest(private val name: String, private val fixture: Fixtu
                     actions = result.actions
                 }
                 "http_older" -> sync.older(event.items(), requireNotNull(event.boolean("has_more")))
-                "fill_timer" -> actions = sync.fillTimer()
+                "continue_fill" -> actions = sync.continueFill()
                 "load_older" -> actions = sync.loadOlder()
                 "reconnect" -> actions = sync.reconnect()
                 "open_fold" -> actions = sync.openFold(requireNotNull(event.text("fold_id")))
@@ -89,7 +89,6 @@ class ContinuityFixtureTest(private val name: String, private val fixture: Fixtu
 
 private fun Action.json(): JsonObject = buildJsonObject {
     when (val action = this@json) {
-        is Action.ScheduleFill -> { put("kind", "schedule_fill"); put("delay_ms", action.delayMillis) }
         is Action.FetchAfter -> { put("kind", "fetch_after"); put("after_seq", action.afterSeq) }
         is Action.FetchLatest -> { put("kind", "fetch_latest"); put("fold_work", action.foldWork) }
         is Action.Subscribe -> {

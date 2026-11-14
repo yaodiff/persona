@@ -597,6 +597,125 @@ final class InboxStore {
         }
     }
 
+    // MARK: Merge and Add to To-Dos (#6480)
+
+    /// What a merge or a to-do may act on: the open rows the list has now, in the list's order.
+    nonisolated static func actionable(_ list: [InboxItem], in items: [InboxItem]) -> [InboxItem] {
+        let keys = Set(list.map(\.key))
+        return items.filter { keys.contains($0.key) && !$0.isDone }
+    }
+
+    /// Merge needs two or more open rows of one manager (a manager knows only its own).
+    nonisolated static func canMerge(_ list: [InboxItem]) -> Bool {
+        let open = list.filter { !$0.isDone }
+        return open.count >= 2 && Set(open.map(\.manager)).count == 1
+    }
+
+    /// Merge: the newest row stands for the rest; the members leave the list when the hub answers, and the toast has Undo.
+    /// `done` runs once it went through (selecting ends).
+    func merge(_ list: [InboxItem], done: @escaping @MainActor () -> Void = {}) {
+        let targets = Self.actionable(list, in: items)
+        guard Self.canMerge(targets), let first = targets.first, let api = AppModel.shared.api else { return }
+        let manager = first.manager
+        Task { await runMerge(targets, manager: manager, api: api.manager(AppModel.shared.itemManager(manager)), done: done) }
+    }
+
+    private func runMerge(_ targets: [InboxItem], manager: String?, api: APIClient, done: @MainActor () -> Void) async {
+        do {
+            let r = try await api.mergeInbox(targets)
+            var survivor = r.item
+            if survivor.manager == nil { survivor.manager = manager }
+            if survivor.version == nil { survivor.version = items.first { $0.key == survivor.key }?.version }
+            let gone = Set(r.members.map { InboxItem.key(id: $0, manager: manager) })
+            items = items.filter { !gone.contains($0.key) }.map { $0.key == survivor.key ? survivor : $0 }
+            let snapshot = items
+            saver.run { StateCache.save(Self.stateName, snapshot) }
+            Haptics.success()
+            let button = r.undoID.map { id in Toast.Action(title: String(localized: "Undo")) { [weak self] in self?.undoMerge(id, manager: manager) } }
+            AppModel.shared.toast = Toast(String(localized: "Merged \(r.members.count + 1) rows into one"), style: .success, action: button)
+            done()
+        } catch {
+            AppModel.shared.show(error)
+            reload()
+        }
+    }
+
+    private func undoMerge(_ id: String, manager: String?) {
+        guard let api = AppModel.shared.api?.manager(AppModel.shared.itemManager(manager)) else { return }
+        Task {
+            do {
+                for var it in try await api.undoInboxMerge(id) {
+                    if it.manager == nil { it.manager = manager }
+                    if let i = items.firstIndex(where: { $0.key == it.key }) { items[i] = it }
+                }
+                reload() // the members are listed again
+                AppModel.shared.toast = Toast(String(localized: "Split into separate rows again"), style: .success)
+            } catch {
+                AppModel.shared.show(error)
+            }
+        }
+    }
+
+    /// Add to To-Dos: one to-do per row, all with the same due. The rows count as handled (they leave the open list when the
+    /// hub answers), and the toast has Undo. `done` runs once it went through (selecting ends).
+    func addTodos(_ list: [InboxItem], due: InboxDue, done: @escaping @MainActor () -> Void = {}) {
+        let targets = Self.actionable(list, in: items)
+        guard !targets.isEmpty, let api = AppModel.shared.api else { return }
+        Task {
+            var made: [(manager: String?, made: [InboxTodoReply.Made])] = []
+            var failure: Error?
+            var count = 0
+            for (manager, mine) in Self.managers(targets).map({ ($0.key, $0.items) }) {
+                do {
+                    let r = try await api.manager(AppModel.shared.itemManager(manager)).todoInbox(mine, due: due)
+                    for var it in r.changed {
+                        if it.manager == nil { it.manager = manager }
+                        if let i = items.firstIndex(where: { $0.key == it.key }) {
+                            if it.version == nil { it.version = items[i].version }
+                            items[i] = it
+                        }
+                    }
+                    count += r.todos.count
+                    if !r.todos.isEmpty { made.append((manager, r.todos)) }
+                } catch {
+                    failure = error
+                }
+            }
+            let snapshot = items
+            saver.run { StateCache.save(Self.stateName, snapshot) }
+            if let failure {
+                AppModel.shared.show(failure)
+                Haptics.error()
+                reload()
+            }
+            guard count > 0, failure == nil else { return }
+            Haptics.success()
+            let button = Toast.Action(title: String(localized: "Undo")) { [weak self] in self?.undoTodos(made) }
+            AppModel.shared.toast = Toast(String(localized: "Added \(count) to your to-dos"), style: .success, action: button)
+            done()
+        }
+    }
+
+    private func undoTodos(_ groups: [(manager: String?, made: [InboxTodoReply.Made])]) {
+        guard let api = AppModel.shared.api else { return }
+        Task {
+            do {
+                for g in groups {
+                    for var it in try await api.manager(AppModel.shared.itemManager(g.manager)).undoInboxTodo(g.made) {
+                        if it.manager == nil { it.manager = g.manager }
+                        if let i = items.firstIndex(where: { $0.key == it.key }) { items[i] = it }
+                    }
+                }
+                let snapshot = items
+                saver.run { StateCache.save(Self.stateName, snapshot) }
+                AppModel.shared.toast = Toast(String(localized: "Taken out of your to-dos"), style: .success)
+            } catch {
+                AppModel.shared.show(error)
+                reload()
+            }
+        }
+    }
+
     /// The hub's copy of one item, as an answer of `manager` (the one asked, the item's stamp) returned it (acting on its
     /// suggestion): replaces the list's, kept on disk.
     func put(_ item: InboxItem, manager: String?) {

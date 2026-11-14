@@ -277,6 +277,9 @@ extension MeetingAsk.Deps {
              now: { RecordingCapture.shared.timeline },
              heard: { id in
                  RecordingCapture.shared.flushSegment()
+                 // Hub mode (#3862 phase 5): the hub finishes its own sentences up to `at` and ignores `live_next`; the
+                 // segment cut here still reaches it with the next upload, for when it has no sentences of its own.
+                 if MeetingTranscription.shared.hubTranscribes(id) { return nil }
                  await MeetingAskWire.transcribed(id)
                  MeetingLive.shared.append(id)
                  return await MeetingLive.shared.sent(id)

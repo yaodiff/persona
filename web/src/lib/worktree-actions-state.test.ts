@@ -91,6 +91,15 @@ describe("one-use safe removal", () => {
     calls[2].resolve({ workspace_id: "work", removed: false, state: "present" }); await check;
     expect(model.snapshot().phase).toBe("uncertain");
   });
+  it("deletes a Paseo worktree through the same preview, acknowledgement and one-use token", async () => {
+    target.host = "paseo";
+    const pending = model.preview(); calls[0].resolve(preview({ kind: "paseo", dirty: 2 })); await pending;
+    expect(calls[0].body).toEqual({ workspace_id: "work", kind: "paseo", preview: true });
+    await model.remove(false, false); expect(calls).toHaveLength(1);
+    const removing = model.remove(true, false);
+    expect(calls[1].body).toEqual({ workspace_id: "work", kind: "paseo", preview_token: "opaque-preview", force: true });
+    calls[1].resolve(done()); await removing; expect(acknowledged).toHaveBeenCalledExactlyOnceWith("delete");
+  });
   it("folder unregister cannot send force or branch deletion even with dirty metadata", async () => {
     await ready({ folder: true, dirty: 8 }); const pending = model.remove(true, true);
     expect(calls[1].body).toEqual({ workspace_id: "work", kind: "orca", preview_token: "opaque-preview" }); calls[1].resolve(done()); await pending;

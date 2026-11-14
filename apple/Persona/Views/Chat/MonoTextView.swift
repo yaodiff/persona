@@ -4,7 +4,8 @@ import UIKit
 #endif
 
 #if os(iOS) || os(visionOS)
-/// Monospaced, unwrapped text that scrolls both ways — files, diffs, the terminal. A UIScrollView around a
+/// Monospaced, unwrapped text that scrolls both ways — files, diffs, the terminal — or wrapped at its width (`wraps`:
+/// the full-text sheet). A UIScrollView around a
 /// non-scrolling UITextView sized to the longest line: SwiftUI's horizontal ScrollView around a LazyVStack cannot size
 /// its content width, and a scrolling UITextView (TextKit 2) wraps no matter how wide its text container is.
 struct MonoTextView: UIViewRepresentable {
@@ -14,15 +15,20 @@ struct MonoTextView: UIViewRepresentable {
     var inset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
     /// Called while the user scrolls near the top (load the page before; the view keeps its place when it arrives).
     var onNearTop: (() -> Void)? = nil
+    /// Long lines wrap at the view's width (at spaces, a long word anywhere): a whole command or a tool's output read on
+    /// a phone, where a line cut at the edge did not say it scrolled sideways (#6605). Off: unwrapped, scrolling both ways.
+    var wraps = false
 
     func makeUIView(context: Context) -> MonoScrollView {
         let v = MonoScrollView()
         v.inset = inset
+        v.wraps = wraps
         return v
     }
 
     func updateUIView(_ v: MonoScrollView, context: Context) {
         v.onNearTop = onNearTop
+        v.wraps = wraps
         v.set(text, followsEnd: followsEnd)
     }
 }
@@ -33,6 +39,16 @@ final class MonoScrollView: UIScrollView, UIScrollViewDelegate {
     private var measured: CGSize = .zero
     private var first = true
     var inset = UIEdgeInsets.zero
+    /// Wrapped at the width (`MonoTextView.wraps`): measured for the width it is laid out at, `wrappedWidth`.
+    var wraps = false {
+        didSet {
+            guard wraps != oldValue else { return }
+            textView.textContainer.lineBreakMode = wraps ? .byWordWrapping : .byClipping
+            wrappedWidth = 0
+            setNeedsLayout()
+        }
+    }
+    private var wrappedWidth: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -62,9 +78,13 @@ final class MonoScrollView: UIScrollView, UIScrollViewDelegate {
         guard first || textView.attributedText.string != text.string else { return }
         let fromEnd = contentSize.height - contentOffset.y
         textView.attributedText = text
-        let r = text.boundingRect(with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
-                                  options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-        measured = CGSize(width: ceil(r.width) + 2, height: ceil(r.height) + 2)
+        if wraps {
+            wrappedWidth = 0 // measured again in layoutSubviews, at the width it has there
+        } else {
+            let r = text.boundingRect(with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+                                      options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+            measured = CGSize(width: ceil(r.width) + 2, height: ceil(r.height) + 2)
+        }
         setNeedsLayout()
         layoutIfNeeded()
         if followsEnd {
@@ -77,7 +97,14 @@ final class MonoScrollView: UIScrollView, UIScrollViewDelegate {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let w = max(measured.width, bounds.width - inset.left - inset.right)
+        let available = bounds.width - inset.left - inset.right
+        if wraps, available > 0, available != wrappedWidth {
+            // The text view's own layout at this width (its container's word wrapping), once per width and text.
+            let h = textView.sizeThatFits(CGSize(width: available, height: CGFloat.greatestFiniteMagnitude)).height
+            measured = CGSize(width: available, height: ceil(h) + 2)
+            wrappedWidth = available
+        }
+        let w = max(measured.width, available)
         let frame = CGRect(x: inset.left, y: inset.top, width: w, height: measured.height)
         if textView.frame != frame { textView.frame = frame }
         let size = CGSize(width: w + inset.left + inset.right, height: measured.height + inset.top + inset.bottom)

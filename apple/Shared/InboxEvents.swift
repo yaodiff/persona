@@ -5,6 +5,24 @@ import Foundation
 // one is optional, an older hub sends none and the app draws what it drew before.
 
 extension InboxItem {
+    /// The assistant's own row (#6430, source `assistant`): the manager puts a conversation into the Inbox itself.
+    var isAssistantRow: Bool { source == "assistant" }
+
+    /// The row's text repeats the summary under it (the assistant's own rows: their text is the summary), so it is drawn once.
+    var repeatsSummary: Bool {
+        guard isAssistantRow, let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else { return false }
+        let text = preview.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !text.isEmpty && text.hasPrefix(summary)
+    }
+
+    /// The assistant's own row whose text is only its title and summary, already shown above: no Content section.
+    func onlyTitleAndSummary(_ context: String?) -> Bool {
+        guard isAssistantRow, let summary, !summary.isEmpty else { return false }
+        func flat(_ s: String) -> String { s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        let text = flat(context ?? preview)
+        return text.isEmpty || text == flat(title + " " + summary) || text == flat(summary)
+    }
+
     /// The processing conversation bound to the item.
     nonisolated struct Handling: Codable, Hashable, Sendable {
         var owner: String?
@@ -31,6 +49,8 @@ extension InboxItem {
         var kind: String
         var text: String
         var note: String?
+        /// A to-do suggestion's due: a day (2006-01-02, all day) or a moment (RFC 3339); nil: no due date.
+        var due: String?
         /// Needs judgment: confirming hands it back to the processing conversation instead of running it.
         var handback: Bool?
         var machineID: String?
@@ -40,11 +60,14 @@ extension InboxItem {
         var conversation: Handoff?
 
         enum CodingKeys: String, CodingKey {
-            case version, kind, text, note, handback, changes, at, conversation
+            case version, kind, text, note, due, handback, changes, at, conversation
             case machineID = "machine_id"
         }
 
         var isHandback: Bool { handback == true }
+
+        /// Version zero addresses an item with no current suggestion, for an instruction outside the suggestion card.
+        static var withoutSuggestion: Self { Self(version: 0, kind: "", text: "") }
     }
 
     /// One key call of the chain. Decoded leniently: a field of an unexpected shape is left out rather than failing
@@ -54,6 +77,8 @@ extension InboxItem {
         var at: Date?
         var kind: String
         var text: String
+        /// Who or what did this step: a source id, `assistant`, `agent`, or `user`; nil on an older hub.
+        var via: String?
         var edited: Bool?
         var detail: String?
         var count: Int?
@@ -67,9 +92,9 @@ extension InboxItem {
             var at: Date?
         }
 
-        init(id: String, at: Date? = nil, kind: String, text: String, edited: Bool? = nil, detail: String? = nil,
+        init(id: String, at: Date? = nil, kind: String, text: String, via: String? = nil, edited: Bool? = nil, detail: String? = nil,
              count: Int? = nil, sender: String? = nil, messages: [Message]? = nil, link: Link? = nil) {
-            self.id = id; self.at = at; self.kind = kind; self.text = text; self.edited = edited; self.detail = detail
+            self.id = id; self.at = at; self.kind = kind; self.text = text; self.via = via; self.edited = edited; self.detail = detail
             self.count = count; self.sender = sender; self.messages = messages; self.link = link
         }
 
@@ -78,6 +103,7 @@ extension InboxItem {
             at = try? c.decodeIfPresent(Date.self, forKey: .at)
             kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? ""
             text = (try? c.decodeIfPresent(String.self, forKey: .text)) ?? ""
+            via = (try? c.decodeIfPresent(String.self, forKey: .via)).flatMap { $0.isEmpty ? nil : $0 }
             id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? "\(kind)-\(at?.timeIntervalSince1970 ?? 0)"
             edited = try? c.decodeIfPresent(Bool.self, forKey: .edited)
             detail = try? c.decodeIfPresent(String.self, forKey: .detail)
@@ -87,16 +113,21 @@ extension InboxItem {
             link = try? c.decodeIfPresent(Link.self, forKey: .link)
         }
 
-        enum CodingKeys: String, CodingKey { case id, at, kind, text, edited, detail, count, sender, messages, link }
+        enum CodingKeys: String, CodingKey { case id, at, kind, text, via, edited, detail, count, sender, messages, link }
+
+        /// A reported entry's detail is already its row's words, so it is not also expanded below the row.
+        var detailIsInLine: Bool { kind == "reported" && !(detail ?? "").isEmpty }
 
         /// What opens inline when there is no link: the reason, the words, the batch's messages.
-        var expandable: Bool { !(detail ?? "").isEmpty || !(messages ?? []).isEmpty }
+        var expandable: Bool {
+            !(messages ?? []).isEmpty || (!(detail ?? "").isEmpty && !detailIsInLine)
+        }
     }
 
     /// Where tapping a chain entry goes: the item's source (at a Feishu position, a mail uid, a URL, or just the source
     /// page), a conversation, or another inbox item.
     nonisolated struct Link: Codable, Hashable, Sendable {
-        /// source | session | item
+        /// source | session | item | todo
         var type: String
         var position: String?
         var uid: UInt32?
@@ -144,9 +175,10 @@ extension InboxItem {
         return s
     }
 
-    /// The item is an event of inbox phase 1 (the hub sent any of its fields): its detail draws recap, the suggestion and
-    /// the chain; without them the detail is today's.
-    nonisolated var isEvent: Bool { handling != nil || suggestion != nil || !(chain ?? []).isEmpty || !(recap ?? "").isEmpty }
+    /// The processing fields or a shared state key make this an event; without them the detail is today's.
+    nonisolated var isEvent: Bool {
+        now != nil || handling != nil || suggestion != nil || !(chain ?? []).isEmpty || !(recap ?? "").isEmpty
+    }
 }
 
 extension SessionKey {
@@ -204,6 +236,7 @@ nonisolated enum InboxEventText {
         case "reply": String(localized: "Suggested reply")
         case "agent": String(localized: "Suggested Agent task")
         case "conclusion": String(localized: "Conclusion")
+        case "todo": String(localized: "Suggested To-Do")
         default: String(localized: "Suggestion")
         }
     }
@@ -214,6 +247,7 @@ nonisolated enum InboxEventText {
         case "reply": Theme.Icon.reply
         case "agent": Theme.Icon.agents
         case "conclusion": Theme.Icon.concluded
+        case "todo": Theme.Icon.todo
         default: Theme.Icon.ai
         }
     }
@@ -223,24 +257,85 @@ nonisolated enum InboxEventText {
         text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
     }
 
-    /// A chain entry's icon by kind; an unknown kind gets the generic one.
-    static func symbol(_ e: InboxItem.ChainEntry) -> String {
+    /// The timeline's shared icon meaning (spec/fixtures/inbox/timeline.json). A source id stays `source` here;
+    /// the view draws that source's own brand or generic source mark.
+    static func iconMeaning(_ e: InboxItem.ChainEntry) -> String {
+        if e.kind == "reported" { return "reported" }
+        if let via = e.via, !via.isEmpty {
+            switch via {
+            case "assistant": return "persona"
+            case "agent": return "agents"
+            case "user": return "person"
+            default: return "source"
+            }
+        }
         switch e.kind {
+        case "received": return "received"
+        case "triaged": return "triaged"
+        case "handling": return "persona"
+        case "sent": return "sendMail"
+        case "agent": return "agents"
+        case "confirmed": return "success"
+        case "rejected": return "rejected"
+        case "instructed": return "instructed"
+        case "self_replied": return "reply"
+        case "failed": return "error"
+        case "concluded": return "concluded"
+        case "done": return "done"
+        default: return "dot"
+        }
+    }
+
+    /// A chain entry's symbol. Source brands are chosen by the view; this is their generic fallback and every other meaning.
+    static func symbol(_ e: InboxItem.ChainEntry) -> String {
+        switch iconMeaning(e) {
         case "received": Theme.Icon.received
         case "triaged": Theme.Icon.triaged
-        case "handling": Theme.Icon.persona
-        case "sent": Theme.Icon.sendMail
-        case "agent": Theme.Icon.agents
-        case "confirmed": Theme.Icon.success
+        case "persona": Theme.Icon.persona
+        case "sendMail": Theme.Icon.sendMail
+        case "agents": Theme.Icon.agents
+        case "success": Theme.Icon.success
         case "rejected": Theme.Icon.rejected
         case "instructed": Theme.Icon.instructed
-        case "self_replied": Theme.Icon.reply
-        case "failed": Theme.Icon.error
+        case "reply": Theme.Icon.reply
+        case "error": Theme.Icon.error
         case "concluded": Theme.Icon.concluded
         case "done": Theme.Icon.done
+        case "person": Theme.Icon.person
+        case "reported": Theme.Icon.reported
+        case "source":
+            switch e.via {
+            case "mail": Theme.Icon.mailFilled
+            case "chat": Theme.Icon.conversation
+            case "imessage": Theme.Icon.messagesApp
+            default: Theme.Icon.connectors
+            }
         default: Theme.Icon.dot
         }
     }
+
+    /// The words of a chain row. A reported entry's server text already says "Assistant says" for older apps;
+    /// the new app's label carries that meaning, so it shows the original words from detail instead.
+    static func chainText(_ e: InboxItem.ChainEntry) -> String {
+        if e.detailIsInLine, let detail = e.detail { return detail }
+        return e.text.isEmpty ? e.kind : e.text
+    }
+
+    /// Detail to repeat in the expansion; reported detail is already in the row and is not repeated there.
+    static func expansionDetail(_ e: InboxItem.ChainEntry) -> String? {
+        guard !e.detailIsInLine, let detail = e.detail, !detail.isEmpty else { return nil }
+        return detail
+    }
+
+    /// Folded, the timeline keeps its three newest entries in their original order; expanded, it keeps every entry.
+    static func chainRows(_ chain: [InboxItem.ChainEntry], expanded: Bool) -> [InboxItem.ChainEntry] {
+        expanded ? chain : Array(chain.suffix(3))
+    }
+
+    static var assistantSays: String { String(localized: "Assistant says") }
+    static var saySomething: String { String(localized: "Say something") }
+    static var tryAgain: String { String(localized: "Try again [Inbox Detail]") }
+    static var retryInstruction: String { String(localized: "Please try again.") }
 
     /// The suggestion card's buttons, in order: the main one first.
     enum Action: Equatable {
@@ -255,6 +350,7 @@ nonisolated enum InboxEventText {
         case "reply": return [.confirm(String(localized: "Send")), .edit, .reject]
         case "agent": return [.confirm(String(localized: "Start")), .edit, .reject]
         case "conclusion": return [.confirm(String(localized: "OK [Recordings Section de32e2]")), .reject]
+        case "todo": return [.confirm(String(localized: "Add to To-Dos")), .reject]
         default: return [.confirm(String(localized: "Confirm")), .reject]
         }
     }
@@ -266,10 +362,12 @@ nonisolated struct InboxSuggestionBody: Encodable, Sendable, Equatable {
     /// confirm | reject | instruct
     var action: String
     var text: String?
+    /// A to-do suggestion confirmed: its due as the card shows it (a day, or an RFC 3339 moment).
+    var due: String? = nil
     var clientID: String
 
     enum CodingKeys: String, CodingKey {
-        case version, action, text
+        case version, action, text, due
         case clientID = "client_id"
     }
 }
@@ -318,6 +416,8 @@ nonisolated enum InboxChainTarget: Equatable, Sendable {
     case session(SessionKey, manager: Bool)
     /// Another inbox item.
     case item(String)
+    /// The to-do the row was turned into (#6480).
+    case todo(String)
     /// No link: the entry's detail / messages open in place.
     case inline
     /// Nothing to open.
@@ -340,6 +440,9 @@ nonisolated enum InboxChainTarget: Equatable, Sendable {
         case "item":
             guard let id = l.id, !id.isEmpty else { return here }
             return .item(id)
+        case "todo":
+            guard let id = l.id, !id.isEmpty else { return here }
+            return .todo(id)
         default:
             return here
         }

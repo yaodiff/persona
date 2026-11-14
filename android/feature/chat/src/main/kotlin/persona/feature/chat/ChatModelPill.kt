@@ -370,6 +370,10 @@ fun PersonaModelPill(
     val shownSession = session?.let { s -> drawn?.takeIf { it.rev == s.rev }?.let { s.copy(modelPick = it.pick) } ?: s }
     val chat = PersonaModelPanel.Chat(shownSession, isMain = session != null && config?.main == session.sessionId, kept = kept,
         config = config?.launcher, pagePick = pagePick)
+    // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
+    // another assistant conversation draws no pill and follows the default or what it started with. The new-chat page
+    // (session null) keeps its starter pick, which goes with the main conversation's start.
+    if (session != null && !chat.isMain) return
     val info = lists.assistant[machineId]
     val setup = PersonaModelPanel.setup(chat, info)
     LaunchedEffect(management, machineId, setup.provider) {

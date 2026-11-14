@@ -27,7 +27,6 @@
   "unsorted_footer_docs": "Docs seen only in groups and not tagged yet. AI sorts out the ones in your conversations or important chats.",
   "unsorted_footer_meetings": "Meetings seen only in groups and not tagged yet. AI sorts out the ones in your conversations or important chats.",
   "unsorted_footer_events": "Events seen only in groups and not tagged yet. AI sorts out the ones in your conversations or important chats.",
-  "count_over": "10K+",
   "hit_chat": "Chat history · {day}",
   "hit_sender": "{sender}: {text}",
   "hit_profile": "Profile",

@@ -18,5 +18,9 @@
   "entry_collapse": "收起",
   "message_sender": "{sender}：",
   "related": "有关",
-  "manager_done": "助手处理了"
+  "manager_done": "助手处理了",
+  "todo_title": "待办标题",
+  "todo_day": "截止日期",
+  "todo_time": "截止时间",
+  "todo_all_day": "全天"
 }

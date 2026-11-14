@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { citedPhoto, formatSpan, minutesKeptUntil, recordingClock, transcriptTarget, type KBDetail, type MinutesAction, type MinutesPoint, type RecordingView } from "../../lib/kb";
+import { minutesOverview, type OverviewCite } from "../../lib/minutes-overview";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import { Button, copyText, cx, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Card, SectionTitle, TonePill } from "./KBParts";
+import { MinutesOverviewCard } from "./MinutesOverview";
 import { PhotoCite, type MeetingPhotos } from "./RecordingPhotos";
 
 export type RecordingAuth = { token: string; tokenOwner: string; headers: Record<string, string> };
@@ -24,7 +26,8 @@ type Props = {
 
 /** Minutes are retained during regeneration; suggested actions become to-dos only on explicit confirmation. A trimmed
  *  recording (its transcript expired, #3780) keeps its minutes and their to-dos, but they can't be made again. An item
- *  may cite a meeting photo instead of a transcript line (`"photo": n`): its thumbnail goes to it under **Photos**. */
+ *  may cite a meeting photo instead of a transcript line (`"photo": n`): its thumbnail goes to it under **Photos**.
+ *  Minutes with a usable overview (#6563) read as one summary card (MinutesOverview.tsx); the others as before. */
 export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved, onJump, photos }: Props) {
   const heading = useId();
   const minutes = detail.minutes;
@@ -32,6 +35,8 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
   const { busy, needsRefresh, run } = useMinutesRequests({ id: detail.id, version: minutes?.version, pending: state === "pending", auth, current, refresh, onSaved });
   const minutesDays = useMinutesDays(rec.trimmedAt, auth, current);
   const keptUntil = rec.trimmedAt ? minutesKeptUntil(rec.startedAt, minutesDays) : undefined;
+  // The summary card (#6563) when the minutes carry an overview with a bullet left after cleaning; else as before.
+  const overview = useMemo(() => minutesOverview(minutes?.overview), [minutes?.overview]);
 
   if (detail.meta?.kind !== "meeting" && rec.partial) return null;
   const disabled = busy || needsRefresh;
@@ -42,6 +47,9 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
     const n = citedPhoto(item);
     return n ? <PhotoCite n={n} at={item.at} rec={rec} photos={photos} onJump={onJump} /> : time(item.at);
   };
+  // A summary-card line's source the same way; one whose time did not read shows none.
+  const overviewCite = (item: OverviewCite) => item.photo ? <PhotoCite n={item.photo} at={item.at} rec={rec} photos={photos} onJump={onJump} /> : item.at === undefined ? null : time(item.at);
+  const actions = (level: 3 | 4) => <ActionItems level={level} title={t("knowledge-kbdetail.minutes_actions")} actions={minutes?.actions} disabled={disabled} time={(_at, action) => cite(action)} onAdd={(ids) => void run(ids)} />;
   const points = (title: string, items?: MinutesPoint[]) => items?.length ? (
     <div className="px-4 py-3.5">
       <h3 className="mb-2 text-[13px] font-semibold text-ink">{title}</h3>
@@ -69,7 +77,14 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
       {needsRefresh && !busy && <div className="mb-2 px-1">
         <Button tone="secondary" onClick={() => void run(undefined, true)}>{t("knowledge-kbdetail.minutes_retry_refresh")}</Button>
       </div>}
-      {minutes && <Card>
+      {minutes && overview && <MinutesOverviewCard
+        minutes={minutes}
+        overview={overview}
+        cite={overviewCite}
+        actions={actions(4)}
+        open={minutes.open?.length ? <PointList items={minutes.open} time={time} cite={cite} /> : null}
+      />}
+      {minutes && !overview && <Card>
         <div className="px-4 py-3.5">
           <h3 className="break-words text-[14px] font-semibold leading-relaxed text-ink">{minutes.title}</h3>
           <div className="mt-1.5 space-y-1 break-words text-[12.5px] leading-relaxed text-ink-2">
@@ -81,7 +96,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
         </div>
         {points(t("knowledge-kbdetail.minutes_points"), minutes.points)}
         {points(t("knowledge-kbdetail.minutes_decisions"), minutes.decisions)}
-        <ActionItems title={t("knowledge-kbdetail.minutes_actions")} actions={minutes.actions} disabled={disabled} time={(_at, action) => cite(action)} onAdd={(ids) => void run(ids)} />
+        {actions(3)}
         {points(t("knowledge-kbdetail.minutes_open"), minutes.open)}
       </Card>}
     </section>
@@ -252,19 +267,22 @@ export function PointList({ items, time, cite }: {
 }
 
 /** Suggested actions, each added to the to-dos only when the user confirms it (or all that are left). */
-export function ActionItems<A extends MinutesAction>({ title, actions, disabled, time, onAdd }: {
+export function ActionItems<A extends MinutesAction>({ title, actions, disabled, time, onAdd, level = 3 }: {
   title: string;
   actions?: A[] | null;
   disabled: boolean;
   time: (at: number, action: A) => React.ReactNode;
   onAdd: (ids: string[]) => void;
+  /** Its heading's level: 4 under the summary card's headline (#6563). */
+  level?: 3 | 4;
 }) {
   if (!actions?.length) return null;
   const remaining = actions.filter((action) => !action.todo_id);
+  const Heading = level === 4 ? "h4" : "h3";
   return (
     <div className="px-4 py-3.5">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-[13px] font-semibold text-ink">{title}</h3>
+        <Heading className="text-[13px] font-semibold text-ink">{title}</Heading>
         {remaining.length > 0 && <Button tone="quiet" disabled={disabled} onClick={() => onAdd(remaining.map((action) => action.id))}>{t("knowledge-kbdetail.minutes_add_all")}</Button>}
       </div>
       <ul className="divide-y divide-line">

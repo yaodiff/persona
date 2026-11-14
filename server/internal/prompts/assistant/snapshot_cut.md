@@ -1,1 +1,1 @@
-- 快照到此截断；其余用 agents_list、todo_list、inbox 查
+- 快照到此截断；其余用 agents_list、todo_list 查；收件箱在 App 里看

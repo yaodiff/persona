@@ -25,9 +25,11 @@ const (
 )
 
 type suggestionReq struct {
-	Version  int     `json:"version"`
-	Action   string  `json:"action"`
-	Text     *string `json:"text"`
+	Version int     `json:"version"`
+	Action  string  `json:"action"`
+	Text    *string `json:"text"`
+	// Due is a to-do suggestion's due time as the user left it (a day or a moment, "" none); absent keeps the suggestion's.
+	Due      *string `json:"due"`
 	ClientID string  `json:"client_id"`
 }
 
@@ -115,14 +117,16 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	if in.Text != nil && strings.TrimSpace(*in.Text) != "" {
 		text = strings.TrimSpace(*in.Text)
 	}
-	if !full && (g == nil || in.Action != suggestConfirm || g.Kind == SuggestAgent || g.Handback || len(g.Changes) > 0 || assistantwire.AsksAgent(text)) {
+	if !full && (g == nil || in.Action != suggestConfirm || g.Kind == SuggestAgent || g.Kind == SuggestTodo || g.Handback || len(g.Changes) > 0 || assistantwire.AsksAgent(text)) {
 		b.mu.Unlock()
 		return InboxItem{}, errAnswerOnly
 	}
 	if g != nil && g.Conversation != nil {
+		resetInboxFollowChecks(it)
 		return s.actOnHandedSuggestion(ctx, it, g, in, text) // it lets b.mu go
 	}
 	w := beginWrite(it)
+	resetInboxFollowChecks(it)
 	if it.Agent == nil { // an old draft's item, or a first instruction: its conversation's bookkeeping starts here
 		it.Agent = &InboxAgent{State: AgentSkipped}
 	}
@@ -138,17 +142,20 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	switch {
 	case in.Action == suggestReject:
 		b.chainAdd(it, rejectedEntry(l, g.Text, now))
-		b.setHandling(it, HandlingLooking, "", now)
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteRejected, Text: g.Text}, true, now)
+		b.setHandling(it, HandlingLooking, "", now)
 	case in.Action == suggestInstruct:
 		words := strings.TrimSpace(*in.Text)
 		b.chainAdd(it, instructedEntry(l, words, now))
-		b.setHandling(it, HandlingLooking, "", now)
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteInstructed, Text: words}, true, now)
+		b.setHandling(it, HandlingLooking, "", now)
 	case !execute: // handback: the conversation does it
 		b.chainAdd(it, confirmedEntry(l, text, edited, now))
-		b.setHandling(it, HandlingLooking, "", now)
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteHandback, Text: text, Edited: edited}, true, now)
+		b.setHandling(it, HandlingLooking, "", now)
 	case g.Kind == SuggestConclusion:
 		b.chainAdd(it, confirmedEntry(l, text, false, now))
 		b.setHandling(it, HandlingDone, "", now)
@@ -180,6 +187,13 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	}
 	if g.Kind == SuggestAgent {
 		return s.confirmAgent(ctx, it, g, text, edited)
+	}
+	if g.Kind == SuggestTodo {
+		due := g.Due
+		if in.Due != nil {
+			due = strings.TrimSpace(*in.Due)
+		}
+		return s.confirmTodo(ctx, it, text, due)
 	}
 	return s.confirmReply(ctx, it, g, text, edited, last, in.ClientID)
 }
@@ -220,12 +234,13 @@ func (s *Service) confirmReply(ctx context.Context, it *InboxItem, g *InboxSugge
 	}
 	b := &s.inbox
 	now := time.Now()
+	loc := s.location(ctx)
 	b.mu.Lock()
 	if err != nil {
 		b.failHandling(it, i18n.T(b.userLang(), "assistant-inbox_chain.failed_send"), now)
 	} else {
 		it.Agent.SentOf = last
-		b.setHandling(it, HandlingWaiting, "", now)
+		b.waitForOtherSide(it, defaultInboxFollow(now), ViaUser, now, loc, false)
 		b.tell(it, inboxNote{Name: prompts.NoteSent, Text: text, Edited: edited}, false, now)
 	}
 	out := it.listed()
@@ -238,7 +253,7 @@ func (s *Service) confirmReply(ctx context.Context, it *InboxItem, g *InboxSugge
 }
 
 // confirmAgent starts the Agent with the confirmed instruction, as the event's conversation would (agent_start from
-// it: the chain links the sub-session, the conversation is told when it is done).
+// it: the chain links the sub-session; when it stops, its last words or failure wake the conversation for the next suggestion).
 func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSuggestion, text string, edited bool) (InboxItem, error) {
 	b := &s.inbox
 	b.mu.Lock()

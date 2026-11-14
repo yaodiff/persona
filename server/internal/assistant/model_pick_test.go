@@ -17,6 +17,32 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+func TestCarriedMainStartIgnoresUnnamedServiceTier(t *testing.T) {
+	ctx := context.Background()
+	s, f := pickFixture(t)
+	if r := putPick(t, s, "main", `{"launcher":"cx","model":"gpt-5","effort":"low"}`); r.Code != 200 {
+		t.Fatal(r.Body.String())
+	}
+	if _, err := s.clearMain(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := startConv(t, s, `{"prompt":"hi","main":true,"service_tier":"priority"}`)
+	p := f.lastSend(t)
+	// The tier belonged to a setup the client did not name. The carried pick still runs, but never inherits that tier.
+	if code != 200 || p["launcher"] != "cx" || p["model"] != "gpt-5" || p["effort"] != "low" || p["service_tier"] != nil {
+		t.Fatalf("under-specified Fast reached the carried pick: %d %v", code, p)
+	}
+}
+
+func TestBusHelloNamesAssistantStartServiceTier(t *testing.T) {
+	b := NewBusHub(BusOptions{Hub: "http://[fd00::20]:18660", Token: "t"})
+	p, _ := b.client.HelloParams().(map[string]any)
+	caps, _ := p["capabilities"].([]string)
+	if !slices.Contains(caps, assistantwire.CapabilityAssistantStartServiceTier) {
+		t.Fatalf("manager does not advertise first-message Fast: %v", caps)
+	}
+}
+
 // pickFixture is mainChatFixture with the main conversation "main" and a side conversation "side" (on cx) on "server",
 // Model configuration › Main chat on gw, and two more providers: "far", kept off every computer, and "own", which
 // skips computers with their own Claude Code sign-in (as "server" has).
@@ -120,28 +146,61 @@ func TestModelPickIsKeptAndCleared(t *testing.T) {
 	if p := view(); p != nil {
 		t.Fatalf("still picked: %+v", p)
 	}
-	// A launcher alone: its own default model.
-	if r := putPick(t, s, "side", `{"launcher":"claude"}`); r.Code != 200 || !strings.Contains(r.Body.String(), `"model_pick":{"launcher":"claude"}`) {
-		t.Fatalf("launcher alone: %d %s", r.Code, r.Body.String())
+	// Only the main conversation may keep a pick (#6911): another assistant conversation's PUT is refused and nothing
+	// is written to the book.
+	r = putPick(t, s, "side", `{"launcher":"claude"}`)
+	if r.Code != 400 || !strings.Contains(r.Body.String(), "Only the main conversation") {
+		t.Fatalf("side pick: %d %s", r.Code, r.Body.String())
+	}
+	if picks, _ := s.modelPicksSet(); len(picks) != 0 {
+		t.Fatalf("a side pick was kept: %v", picks)
 	}
 }
 
-// A message that picks nothing runs on the conversation's pick, the main one's and a side one's alike; one that picks
-// a launcher or a model (an older app) runs on that; an effort sent with the message wins over the pick's.
+// An older build kept picks for a leader, the supervisor or another assistant conversation in the book. #6911 leaves
+// them there (no migration, no deletion) but never applies or publishes them, and DELETE answers ok without removing one.
+func TestStoredSidePicksAreIgnoredButKept(t *testing.T) {
+	s, f := pickFixture(t)
+	ctx := context.Background()
+	if err := s.setModelPick(ctx, "side", &modelPick{MachineID: "server", Launcher: "claude", Model: "opus", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.modelPickOf(ctx, "server", "side"); ok {
+		t.Fatal("a stored side pick was applied")
+	}
+	if p, err := send(t, s, "side", map[string]any{}); err != nil || p["launcher"] != "cx" {
+		t.Fatalf("side ran on its stored pick: %v %v", p, err)
+	}
+	for _, v := range f.lastSnapshot().Sessions {
+		if v.SessionID == "side" && v.ModelPick != nil {
+			t.Fatalf("the side pick was published: %+v", v.ModelPick)
+		}
+	}
+	if r := request(s, "DELETE", "/api/v1/assistant/conversations/side/model", ""); r.Code != 200 {
+		t.Fatalf("DELETE side: %d %s", r.Code, r.Body.String())
+	}
+	if picks, _ := s.modelPicksSet(); picks["side"].Launcher != "claude" {
+		t.Fatalf("the stored side pick must stay in the book: %v", picks)
+	}
+}
+
+// A message that picks nothing runs on the main conversation's pick; one that picks a launcher or a model (an older
+// app) runs on that; an effort sent with the message wins over the pick's. Another assistant conversation has no pick
+// (#6911): its PUT is refused and its messages keep running on what it started with.
 func TestSendRunsOnThePick(t *testing.T) {
 	s, _ := pickFixture(t)
 	if r := putPick(t, s, "main", `{"launcher":"cx","model":"gpt-5","effort":"high"}`); r.Code != 200 {
 		t.Fatalf("PUT main: %d %s", r.Code, r.Body.String())
 	}
-	if r := putPick(t, s, "side", `{"launcher":"claude","model":"opus"}`); r.Code != 200 {
+	if r := putPick(t, s, "side", `{"launcher":"claude","model":"opus"}`); r.Code != 400 {
 		t.Fatalf("PUT side: %d %s", r.Code, r.Body.String())
 	}
 	p, err := send(t, s, "main", map[string]any{})
 	if err != nil || p["launcher"] != "cx" || p["model"] != "gpt-5" || p["effort"] != "high" || p["model_fingerprint"] == nil {
 		t.Fatalf("main on its pick: %v %v", p, err)
 	}
-	if p, err := send(t, s, "side", map[string]any{}); err != nil || p["launcher"] != "claude" || p["model"] != "opus" || p["effort"] != nil {
-		t.Fatalf("side on its pick: %v %v", p, err)
+	if p, err := send(t, s, "side", map[string]any{}); err != nil || p["launcher"] != "cx" {
+		t.Fatalf("side runs on what it started with, not a pick: %v %v", p, err)
 	}
 	if p, err := send(t, s, "main", map[string]any{"effort": "low"}); err != nil || p["launcher"] != "cx" || p["effort"] != "low" {
 		t.Fatalf("the message's effort: %v %v", p, err)
@@ -162,7 +221,8 @@ func TestSendRunsOnThePick(t *testing.T) {
 
 // The route refuses what could never run: a launcher out of the computer's device scope or missing there (with the
 // codes the apps act on), one that can't run the assistant, a model that is no id or a launcher that takes none, an
-// effort no agent knows, a conversation that isn't the assistant's, a guest conversation, a read-only device.
+// effort no agent knows, a read-only device. A conversation that is not the main one — an Agent, an unknown id, a
+// guest — gets the main-only refusal before any launcher check (#6911); an unknown machine still 404s first.
 func TestModelPickRefusals(t *testing.T) {
 	s, f := pickFixture(t)
 	f.modelsLocked = map[string]string{"cx": "it passes --model itself"}
@@ -177,6 +237,7 @@ func TestModelPickRefusals(t *testing.T) {
 		}
 		return res, nil
 	})
+	mainOnly := "Only the main conversation"
 	for _, c := range []struct {
 		name, sid, body string
 		status          int
@@ -186,14 +247,14 @@ func TestModelPickRefusals(t *testing.T) {
 		{"own sign-in", "main", `{"launcher":"own"}`, 409, proto.CodeLauncherOwnService, "own"},
 		{"missing", "main", `{"launcher":"gone"}`, 409, proto.CodeLauncherMissing, "“gone”"},
 		{"can't run the assistant", "main", `{"launcher":"cc-relay"}`, 400, "", "can’t run assistant chats"},
-		{"managed Codex", "side", `{"launcher":"codex-gw"}`, 400, "", "can’t run assistant chats"},
+		{"managed Codex on a side chat", "side", `{"launcher":"codex-gw"}`, 400, "", mainOnly},
 		{"no launcher", "main", `{"model":"opus"}`, 400, "", "Choose a model provider"},
 		{"no model id", "main", `{"launcher":"claude","model":"-rf"}`, 400, "", "-rf"},
 		{"locked", "main", `{"launcher":"cx","model":"gpt-5"}`, 400, "", "sets its own model"},
 		{"takes no model", "main", `{"launcher":"agy-rt","model":"m"}`, 400, "", "doesn’t take a model choice"},
 		{"effort", "main", `{"launcher":"claude","effort":"turbo"}`, 400, "", "turbo"},
-		{"an Agent", "agent", `{"launcher":"claude"}`, 404, "", "isn't on"},
-		{"unknown", "nope", `{"launcher":"claude"}`, 404, "", "isn't on"},
+		{"an Agent conversation", "agent", `{"launcher":"claude"}`, 400, "", mainOnly},
+		{"an unknown conversation", "nope", `{"launcher":"claude"}`, 400, "", mainOnly},
 		{"unknown machine", "side", `{"launcher":"claude","machine_id":"elsewhere"}`, 404, "", "unknown machine"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -216,12 +277,16 @@ func TestModelPickRefusals(t *testing.T) {
 		t.Fatalf("typed model: %d %s", r.Code, r.Body.String())
 	}
 
+	// A guest conversation is not the main one: it gets the same main-only refusal, and being a guest changes nothing.
 	if err := s.putSetting(context.Background(), guestsKey, map[string]*guestConv{"side": {MachineID: "server", Tools: []string{"x"}, At: time.Now()}}); err != nil {
 		t.Fatal(err)
 	}
 	s.guests = guestBook{}
-	if r := putPick(t, s, "side", `{"launcher":"claude"}`); r.Code != 409 || !strings.Contains(r.Body.String(), "guest conversation") {
+	if r := putPick(t, s, "side", `{"launcher":"claude"}`); r.Code != 400 || !strings.Contains(r.Body.String(), mainOnly) {
 		t.Fatalf("guest: %d %s", r.Code, r.Body.String())
+	}
+	if picks, _ := s.modelPicksSet(); len(picks) != 1 { // only the typed-model pick on "main" above
+		t.Fatalf("a refused pick was kept: %v", picks)
 	}
 
 	for _, method := range []string{"PUT", "DELETE"} {
@@ -274,14 +339,15 @@ func TestSendRefusesAPickThatCantRun(t *testing.T) {
 	}
 }
 
-// A pick names its machine: the same session id on another machine runs as it would without one.
+// A pick another conversation's older build left in the book is never applied (#6911): the conversation runs on what
+// it started with. A pick naming another machine was already ignored; now every non-main one is.
 func TestModelPickIsTheConversationsMachines(t *testing.T) {
 	s, _ := pickFixture(t)
 	if err := s.setModelPick(context.Background(), "side", &modelPick{MachineID: "other", Launcher: "claude", At: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := send(t, s, "side", map[string]any{}); err != nil || p["launcher"] != "cx" {
-		t.Fatalf("another machine's pick applied: %v %v", p, err)
+		t.Fatalf("a stored side pick was applied: %v %v", p, err)
 	}
 }
 
@@ -360,11 +426,12 @@ func TestMainChatPickerListsWhatItCantRun(t *testing.T) {
 	}
 }
 
-// With the fleet on, the conversation the apps get carries its pick, and a change reaches them (the snapshot names
-// the machine as changed); an Agent's session never gets one.
+// With the fleet on, the main conversation's pick reaches the apps (the snapshot names the machine as changed);
+// another conversation's pick is no longer published, and an Agent's session never gets one (#6911).
 func TestFleetConversationCarriesItsPick(t *testing.T) {
 	ft := newFleetTest(t)
 	machine, _ := ft.s.fleetMachine("mac")
+	setSettings(t, ft.s, func(v *Settings) { v.Main, v.MainMachineID = "conv", machine.ID })
 	conv := proto.Session{SessionID: "conv", Agent: "claude", Cwd: machine.assistantCwd(), Status: proto.StatusIdle}
 	agent := proto.Session{SessionID: "agent", Agent: "claude", Cwd: "/home/u/src", PaneID: "p1", Status: proto.StatusIdle}
 	ft.d.setSessions("mac", []proto.Session{conv, agent})
@@ -379,7 +446,7 @@ func TestFleetConversationCarriesItsPick(t *testing.T) {
 		picks[sess.SessionID] = sess.ModelPick
 	}
 	if p := picks["conv"]; p == nil || p.Launcher != "claude" || p.Model != "opus" {
-		t.Fatalf("conversation: %+v", p)
+		t.Fatalf("main conversation: %+v", p)
 	}
 	if picks["agent"] != nil {
 		t.Fatalf("an Agent got a pick: %+v", picks["agent"])
@@ -448,9 +515,10 @@ func TestWarmTakesTheMainConversationsPick(t *testing.T) {
 	}
 }
 
-// A new conversation takes a model with its first message, as a message does, and keeps what it was started with as
-// its pick: its later messages run on it. Nothing named, nothing kept; a launcher that is gone falls back as before,
-// with its model dropped and no pick kept.
+// A new main conversation takes a model with its first message, as a message does, and keeps what it was started with
+// as its pick: its later messages run on it. Only a main start keeps one (#6911); another conversation's start runs on
+// what it named but keeps nothing. Nothing named, nothing kept; a launcher that is gone falls back as before, with its
+// model dropped and no pick kept.
 func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 	start := func(t *testing.T, s *Service, body string) (int, map[string]any) {
 		t.Helper()
@@ -467,7 +535,7 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 	}
 	t.Run("launcher, model and effort", func(t *testing.T) {
 		s, f := pickFixture(t)
-		code, got := start(t, s, `{"prompt":"hi","launcher":"cx","model":"vendor/typed-1","effort":"high"}`)
+		code, got := start(t, s, `{"prompt":"hi","main":true,"launcher":"cx","model":"vendor/typed-1","effort":"high"}`)
 		want := proto.ModelPick{Launcher: "cx", Model: "vendor/typed-1", Effort: "high"}
 		if code != 200 || got["pick"] != want {
 			t.Fatalf("%d %v", code, got)
@@ -481,9 +549,25 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 			t.Fatalf("next message: %v %v", p, err)
 		}
 	})
+	t.Run("Fast and effort stay independent", func(t *testing.T) {
+		s, f := pickFixture(t)
+		code, got := start(t, s, `{"prompt":"hi","main":true,"launcher":"cx","model":"vendor/typed-1","effort":"high","service_tier":"priority"}`)
+		want := proto.ModelPick{Launcher: "cx", Model: "vendor/typed-1", Effort: "high"}
+		if code != 200 || got["pick"] != want {
+			t.Fatalf("%d %v", code, got)
+		}
+		if p := f.lastSend(t); p["launcher"] != "cx" || p["model"] != "vendor/typed-1" || p["effort"] != "high" || p["service_tier"] != "priority" {
+			t.Fatalf("first message: %v", p)
+		}
+		sid := got["sid"].(string)
+		f.setSessions("server", proto.Session{SessionID: sid, Assistant: true, Launcher: "cx"})
+		if p, err := send(t, s, sid, map[string]any{}); err != nil || p["launcher"] != "cx" || p["model"] != "vendor/typed-1" || p["effort"] != "high" || p["service_tier"] != nil {
+			t.Fatalf("next message: %v %v", p, err)
+		}
+	})
 	t.Run("a model for the default launcher", func(t *testing.T) {
 		s, f := pickFixture(t)
-		code, got := start(t, s, `{"prompt":"hi","model":"m9"}`)
+		code, got := start(t, s, `{"prompt":"hi","main":true,"model":"m9"}`)
 		if want := (proto.ModelPick{Launcher: "gw", Model: "m9"}); code != 200 || got["pick"] != want {
 			t.Fatalf("%d %v", code, got)
 		}
@@ -493,7 +577,7 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 	})
 	t.Run("an older app's launcher alone", func(t *testing.T) {
 		s, _ := pickFixture(t)
-		if code, got := start(t, s, `{"prompt":"hi","launcher":"claude"}`); code != 200 || got["pick"] != (proto.ModelPick{Launcher: "claude"}) {
+		if code, got := start(t, s, `{"prompt":"hi","main":true,"launcher":"claude"}`); code != 200 || got["pick"] != (proto.ModelPick{Launcher: "claude"}) {
 			t.Fatalf("%d %v", code, got)
 		}
 	})
@@ -507,6 +591,15 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 			t.Fatalf("main pick: %+v %v", p, ok)
 		}
 	})
+	t.Run("a side conversation keeps nothing", func(t *testing.T) {
+		s, _ := pickFixture(t)
+		if code, got := start(t, s, `{"prompt":"hi","launcher":"cx"}`); code != 200 || got["pick"] != nil {
+			t.Fatalf("%d %v", code, got)
+		}
+		if picks, _ := s.modelPicksSet(); len(picks) != 0 {
+			t.Fatalf("kept: %v", picks)
+		}
+	})
 	t.Run("nothing named", func(t *testing.T) {
 		s, _ := pickFixture(t)
 		if code, got := start(t, s, `{"prompt":"hi"}`); code != 200 || got["pick"] != nil {
@@ -518,7 +611,7 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 	})
 	t.Run("a launcher that is gone", func(t *testing.T) {
 		s, f := pickFixture(t)
-		code, got := start(t, s, `{"prompt":"hi","launcher":"gone","model":"m9"}`)
+		code, got := start(t, s, `{"prompt":"hi","main":true,"launcher":"gone","model":"m9"}`)
 		if code != 200 || got["pick"] != nil {
 			t.Fatalf("%d %v", code, got)
 		}
@@ -530,8 +623,8 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 		s, f := pickFixture(t)
 		f.modelsLocked = map[string]string{"cx": "it passes --model itself"}
 		for body, words := range map[string]string{
-			`{"prompt":"hi","launcher":"claude","model":"-rf"}`: "-rf",
-			`{"prompt":"hi","launcher":"cx","model":"gpt-5"}`:   "sets its own model",
+			`{"prompt":"hi","main":true,"launcher":"claude","model":"-rf"}`: "-rf",
+			`{"prompt":"hi","main":true,"launcher":"cx","model":"gpt-5"}`:   "sets its own model",
 		} {
 			code, got := start(t, s, body)
 			if code != 400 || !strings.Contains(got["body"].(string), words) {

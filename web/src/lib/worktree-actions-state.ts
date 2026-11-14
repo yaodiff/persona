@@ -4,7 +4,7 @@ import { MANAGER_HEADER, onManagerChoice } from "./manager-choice";
 import type { OwnedWorkspaceTarget, ResolvedWorktreeAction } from "./worktree-actions";
 
 export interface WorktreeDeletionPreview {
-  workspace_id: string; kind: "orca" | "herdr"; host_id: "local"; instance_id: string;
+  workspace_id: string; kind: "orca" | "herdr" | "paseo"; host_id: "local"; instance_id: string;
   path: string; branch: string; dirty: number; folder: boolean; preview_token: string;
   close_only?: boolean;
 }

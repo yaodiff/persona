@@ -113,6 +113,8 @@ type Todo struct {
 	// SeenAt: when the owner last looked at it in Just finished, by Got it or by opening it (#5707, todo_seen.go); a to-do
 	// seen since it got there is filed under Done (todo_triage.go). Absent when never seen.
 	SeenAt *time.Time `json:"seen_at,omitempty"`
+	// InboxItem is the Inbox row it was made from (#6480); the to-do's page opens that row. Empty for any other to-do.
+	InboxItem string `json:"inbox_item,omitempty"`
 	// Brief: what was asked when the work was handed out, with its log, and Lineage: the to-dos that carried the work
 	// (#3822, task_brief.go). Filled in where the apps read the to-dos (withBrief); absent for a to-do with no brief.
 	Brief   *TaskBrief    `json:"brief,omitempty"`

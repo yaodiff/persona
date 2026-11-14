@@ -159,6 +159,18 @@ Prompts explain component selection: options for decisions, table for comparison
 
 The admin UI describes client support and previews static examples. Previews do not connect to real chats or send actions; describe actual client support. The hello feature `assistant_views` means APIs and events are available; each client still chooses renderer or fallback according to its actual capabilities.
 
+## Sharing a reply as a picture
+
+What you see is what you share (#7261). Share as Image (iOS `MessageShareCard`, Android `MessageShareCard`) draws a reply's cards as the chat draws them, never their JSON:
+
+- **Split by the chat's fence rules**: the picture splits the message as the chat does (iOS `ShareCardParts` over `AssistantViewBlocks`, Android `ChatMarkdownCards` over `AssistantFences`). A closed ```persona-view among the first three, within the limits and with its `fallback`, is a card; anything else is its fallback, or the placeholder when it has none. A ```persona-card in the words is drawn as always, in words when the app cannot draw it, else the placeholder. An example inside another code block stays code.
+- **Drawn with nothing to use**: the same renderer, in a picture mode (iOS `extensionPicture`, Android `ViewBlocks.picture` without a conversation's card host). Buttons, fields, segmented choices and row controls are drawn as they look, so a decision card shows its choices; nothing on it answers. On iOS, where `ImageRenderer` draws no scroll views and no UIKit controls, progress bars, switches and segmented choices are shapes and the style's icons, and tables and Markdown wrap at the picture's width.
+- **Its fallback where it only draws live**: a card with an HTML page on its first page is its fallback on both. On iOS a card with pictures that load later (an `image`, a `grid` or `carousel`, a row's thumbnail or avatar picture) is its fallback too: the picture is drawn offscreen at once, and Android records the live card, so its pictures show once loaded.
+- **Never cut or widened by its source**: a card's JSON does not count as a wide code block (`ShareCardBlocks`). The 3,000-character cut never splits a card: iOS counts a card as long as its fallback and leaves out a card past the cut whole; Android cuts before a card the cut would split.
+- **Text stays text**: Copy and Share Text keep the message's text as it is.
+
+Tests: `ShareCardPartsTests` (iOS), `MessagePictureTest` and `AssistantCardsTest.whatAPictureDraws` (Android). The web has no share-as-image of a message.
+
 ## Examples and stages
 
 `schema/extension/examples/assistant/` supplies sets for decisions, comparisons, progress (before/after updates), forms, charts, and HTML. Every client reads the same test data; screenshots use only synthetic data.
@@ -172,6 +184,6 @@ The admin UI describes client support and previews static examples. Previews do 
 | Web | #2021, #4215 | Reuses ViewBody with reply, open, push / pop, confirmation, expected_version, 409 handling, and multi-device synchronization for body / live cards (`web/src/lib/assistant-views.ts`, `web/src/ui/AssistantCard.tsx`); actual submissions wait for hub `assistant_views`. HTML runs in the isolated runtime (`web/src/lib/html-runtime/`, `web/src/ui/HtmlCard.tsx`, "Security boundaries" above): `web/e2e/html-runtime-security.mjs` passes in Chromium and WebKit, and the runtime is on where the hub has `assistant_html_bridge` |
 | Android | #2022 | Reuse #1851 components; actions, live cards, HTML, screenshots of all three styles in light/dark mode |
 | Admin UI | #2023, #5509 | Per-client support explanations and local example preview (HTML shows only fallback) are in `/admin/assistant`; the switch it had is gone with #5509 |
-| Apple | #2024, #2025 | Integrate existing foundations; actions, live cards, automatic HTML execution; verify every Apple platform except the Mac, and the Watch. The native Mac app is frozen ([mac.md](../apple/mac.md)): it gets only what the shared code brings and is not verified here |
+| Apple | #2024, #2025 | Integrate existing foundations; actions, live cards, automatic HTML execution; verify every Apple platform except the retired native Mac, and the Watch. The Electron desktop reuses this web UI ([desktop.md](../desktop/desktop.md)) |
 
 After each stage merges and before deployment, check the current production version and backups to ensure rollback. End-to-end tests use an independent test hub or authorized temporary chat. Tests cannot send to the real main chat or compact, replace, or delete user chats. For CI environment failures, merge with local verification under CLAUDE.md and truthfully list unrun checks in the PR.

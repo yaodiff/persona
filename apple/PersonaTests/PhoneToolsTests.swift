@@ -76,6 +76,8 @@ struct PhoneToolsTests {
             "phone_location_search",
             "phone_health_summary",
             "phone_health_write_sample",
+            "phone_workouts_recent",
+            "phone_workout_detail",
             "phone_photos_recent",
             "phone_photo_get",
             "phone_device_info",
@@ -146,6 +148,96 @@ struct PhoneToolsTests {
         reminders.isEnabled = false
         #expect(!PhoneToolRegistry.enabledSpecs(eventKit: (events: .granted, reminders: .granted)).contains { $0.name.hasPrefix("phone_reminders") })
         #expect(PhoneToolRegistry.enabledSpecs(eventKit: (events: .granted, reminders: .granted)).contains { $0.name == "phone_calendar_events" })
+    }
+
+    // MARK: - Not asked yet (#7659)
+
+    /// A source iOS hasn't asked about is offered while it is on, when its first use asks; Health and the iPhone
+    /// integrations only once allowed; a refused one never; one turned off in Settings never.
+    @Test func aSourceNotAskedYetIsOfferedWhenItsFirstUseAsks() {
+        for source in [PhoneDataSource.contacts, .calendar, .reminders, .location, .photos, .notifications] {
+            #expect(source.asksWhenUsed, "\(source) asks the first time a tool uses it")
+            #expect(source.offered(.notDetermined) && source.offered(.granted))
+            #expect(!source.offered(.denied))
+        }
+        for source in [PhoneDataSource.health, .alarms, .media, .home] {
+            #expect(!source.asksWhenUsed, "\(source) asks only from Settings")
+            #expect(!source.offered(.notDetermined) && source.offered(.granted))
+        }
+        let calendar = PhoneDataSource.calendar, reminders = PhoneDataSource.reminders
+        let before = (calendar.isEnabled, reminders.isEnabled)
+        defer { calendar.isEnabled = before.0; reminders.isEnabled = before.1 }
+        calendar.isEnabled = true
+        reminders.isEnabled = true
+        let notAsked = PhoneToolRegistry.enabledSpecs(eventKit: (events: .notDetermined, reminders: .notDetermined)).map(\.name)
+        #expect(notAsked.contains("phone_reminders_list") && notAsked.contains("phone_calendar_events"))
+        #expect(!PhoneToolRegistry.enabledSpecs(eventKit: (events: .denied, reminders: .denied)).contains { $0.name.hasPrefix("phone_reminders") })
+        reminders.isEnabled = false
+        #expect(!PhoneToolRegistry.enabledSpecs(eventKit: (events: .notDetermined, reminders: .notDetermined))
+            .contains { $0.name.hasPrefix("phone_reminders") }, "turned off in Settings, it is neither offered nor asked")
+    }
+
+    /// Calls to a source iOS hasn't asked about share one dialog; refused, each says where to allow it.
+    @Test func theFirstUseAsksOnceAndARefusalSaysWhereToAllowIt() async {
+        let asked = AskCount()
+        let restore = firstUse(status: .notDetermined, inFront: true, answer: .denied, asked: asked)
+        defer { restore() }
+        let first = Task { await PhoneToolRegistry.call(name: "phone_reminders_list", args: .object([:])) { _ in true } }
+        let second = Task { await PhoneToolRegistry.call(name: "phone_reminders_list", args: .object([:])) { _ in true } }
+        for result in [await first.value, await second.value] {
+            #expect(result.isError)
+            #expect(text(of: result.content).contains("iOS 设置 › Persona"))
+        }
+        #expect(asked.count == 1, "calls that arrive together share one dialog")
+    }
+
+    /// iOS can show its dialog only while Persona is in front: otherwise the call says to open Persona and asks nothing.
+    @Test func theFirstUseOutsidePersonaSaysToOpenIt() async {
+        let asked = AskCount()
+        let restore = firstUse(status: .notDetermined, inFront: false, answer: .granted, asked: asked)
+        defer { restore() }
+        let result = await PhoneToolRegistry.call(name: "phone_reminders_list", args: .object([:])) { _ in true }
+        #expect(result.isError)
+        #expect(text(of: result.content).contains("not open on the iPhone"))
+        #expect(asked.count == 0)
+    }
+
+    /// The dialog comes after a write's card: a write the user turned down never asks iOS.
+    @Test func aDeclinedWriteNeverAsks() async {
+        let asked = AskCount()
+        let restore = firstUse(status: .notDetermined, inFront: true, answer: .granted, asked: asked)
+        defer { restore() }
+        let result = await PhoneToolRegistry.call(
+            name: "phone_calendar_create_event",
+            args: .object([
+                "title": .string("Team sync"),
+                "start": .string("2026-10-24T14:00:00+08:00"),
+                "end": .string("2026-10-24T15:00:00+08:00"),
+            ])
+        ) { _ in false }
+        #expect(result.isError)
+        #expect(asked.count == 0)
+    }
+
+    /// Turns calendar and reminders on and replaces what a first use reads and asks; the result puts everything back.
+    private func firstUse(status: PhoneAuthStatus, inFront: Bool, answer: PhoneAuthStatus, asked: AskCount) -> () -> Void {
+        let calendar = PhoneDataSource.calendar, reminders = PhoneDataSource.reminders
+        let before = (calendar.isEnabled, reminders.isEnabled)
+        let saved = (PhoneToolRegistry.accessStatus, PhoneToolRegistry.inFront, PhoneToolRegistry.askAccess)
+        calendar.isEnabled = true
+        reminders.isEnabled = true
+        PhoneToolRegistry.accessStatus = { _ in status }
+        PhoneToolRegistry.inFront = { inFront }
+        PhoneToolRegistry.askAccess = { _ in
+            asked.count += 1
+            try? await Task.sleep(for: .milliseconds(50)) // the dialog is on screen while a second call arrives
+            return answer
+        }
+        return {
+            calendar.isEnabled = before.0
+            reminders.isEnabled = before.1
+            (PhoneToolRegistry.accessStatus, PhoneToolRegistry.inFront, PhoneToolRegistry.askAccess) = saved
+        }
     }
 
     @Test func disabledSourceMeansError() async {
@@ -303,6 +395,29 @@ struct PhoneToolsTests {
         }
     }
 
+    @Test func nutritionAndRestingEnergyUseDailyTotalsAndTheirPublicUnits() throws {
+        let energy = HKQuantity(unit: .joule(), doubleValue: 418_400)
+        let nutrients = HKQuantity(unit: .gramUnit(with: .milli), doubleValue: 12_500)
+        let metrics: [(String, HKQuantityTypeIdentifier, HKQuantity, Double)] = [
+            ("dietary_energy", .dietaryEnergyConsumed, energy, 100),
+            ("protein", .dietaryProtein, nutrients, 12.5),
+            ("carbs", .dietaryCarbohydrates, nutrients, 12.5),
+            ("fat", .dietaryFatTotal, nutrients, 12.5),
+            ("resting_energy", .basalEnergyBurned, energy, 100),
+        ]
+        let summary = try #require(HealthTool.tools.first { $0.spec.name == "phone_health_summary" })
+        let advertised = try #require(summary.spec.inputSchema["properties"]?["metrics"]?["items"]?["enum"]?.array)
+        for (metric, identifier, sample, expected) in metrics {
+            let actualIdentifier = try #require(HealthTool.quantityIdentifiers[metric])
+            #expect(actualIdentifier == identifier)
+            let type = HKQuantityType(actualIdentifier)
+            #expect(advertised.contains(.string(metric)), "\(metric) must be callable through the hub")
+            #expect(HealthTool.readTypes.contains(type), "\(metric) needs read permission")
+            #expect(HealthTool.statisticsOptions(for: type, metric: metric) == .cumulativeSum)
+            #expect(abs(sample.doubleValue(for: HealthTool.quantityUnit(for: metric)) - expected) < 0.001)
+        }
+    }
+
     // MARK: - Helpers
 
     @Test func argumentClampingStaysInRange() {
@@ -411,6 +526,11 @@ struct PhoneToolsTests {
     private func text(of content: [ToolContent]) -> String {
         content.compactMap(\.text).joined(separator: "\n")
     }
+}
+
+/// How many times a test's first use asked iOS (#7659).
+@MainActor private final class AskCount {
+    var count = 0
 }
 
 /// A pasteboard that takes writes like iOS does for the app in front, or drops them (`takesWrites`) or keeps no string

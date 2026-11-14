@@ -102,17 +102,19 @@ enum ChatNames {
 /// tint: the words' color (nil: the accent); a user bubble's link color in your own long message (`BubbleFold`).
 /// showMore: Show More / Show Less, the web's words for your own long message (#5676), whose row is the bubble's width
 /// and takes taps a space around it (the bubble's bottom padding), as a 44 pt target would.
+/// title: other words for it; a pending card's long command says Show All N Lines, as the chat's tool output does (`CardFold`).
 struct FoldToggle: View {
     var open: Bool
     var prefix: String
     var tint: Color? = nil
     var showMore = false
+    var title: String? = nil
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: Theme.Space.xs) {
-                Text(title).lineLimit(1)
+                Text(words).lineLimit(1)
                 ThemedIcon(Theme.Icon.disclosure)
                     .rotationEffect(.degrees(open ? -90 : 90))
                     .accessibilityHidden(true)
@@ -128,7 +130,8 @@ struct FoldToggle: View {
         .accessibilityIdentifier(prefix + (open ? ".collapse" : ".expand"))
     }
 
-    private var title: String {
+    private var words: String {
+        if let title { return title }
         if showMore { return open ? String(localized: "Show Less [Bubble Fold]") : String(localized: "Show More [Bubble Fold]") }
         return open ? String(localized: "Collapse") : String(localized: "Expand")
     }

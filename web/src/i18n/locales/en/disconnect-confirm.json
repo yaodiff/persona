@@ -1,0 +1,5 @@
+{
+  "title": "Disconnect this browser?",
+  "body": "This browser will be signed out, and the hub will take back its access. To use Persona here again, you'll need to pair this browser again.",
+  "confirm": "Disconnect"
+}

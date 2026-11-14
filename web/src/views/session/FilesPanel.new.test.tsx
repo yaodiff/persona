@@ -80,16 +80,16 @@ describe("FilesPanel New and zip (#5828)", () => {
     };
     await menuOf("a.txt");
     await act(async () => item(t("files-ops.duplicate"))!.click()); await flush();
-    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/copy", body: { paths: ["/home/me/app/a.txt"], cwd: "/home/me/app", dir: "/home/me/app", conflict: "keep" } });
+    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/copy", body: { paths: ["/home/me/app/a.txt"], cwd: "/home/me/app", dir: "/home/me/app", conflict: "keep", operation_id: expect.any(String) } });
     await menuOf("src");
     await act(async () => item(t("files-ops.compress"))!.click()); await flush();
-    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/zip", body: { paths: ["/home/me/app/src"], cwd: "/home/me/app", name: "src.zip", dir: "/home/me/app" } });
+    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/zip", body: { paths: ["/home/me/app/src"], cwd: "/home/me/app", name: "src.zip", dir: "/home/me/app", operation_id: expect.any(String) } });
     expect(document.body.textContent).toContain(t("files-ops.compressed", { name: "src.zip" }));
     await menuOf("a.txt");
     await act(async () => item(t("files-ops.copy_to"))!.click()); await flush();
     expect(document.body.textContent).toContain(t("files-ops.copy_one_title", { name: "a.txt" }));
     await click(t("files-ops.copy_here"));
-    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/copy", body: { paths: ["/home/me/app/a.txt"], cwd: "/home/me/app", dir: "/home/me/app" } });
+    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/copy", body: { paths: ["/home/me/app/a.txt"], cwd: "/home/me/app", dir: "/home/me/app", operation_id: expect.any(String) } });
   });
 
   it("opens a terminal in the folder shown (#5832)", async () => {

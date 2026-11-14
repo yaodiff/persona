@@ -256,6 +256,7 @@ enum ExtensionUIStyle {
 struct ExtensionItemRow: View {
     var item: ExtensionComponent
     @Environment(\.assistantHTMLRendering) private var htmlContext
+    @Environment(\.extensionPicture) private var picture
     var model: (any ExtensionViewControlling)?
     @Binding var link: LinkTarget?
 
@@ -272,14 +273,18 @@ struct ExtensionItemRow: View {
         case .progress(let p): progress(p)
         case .row(let r):
             Group {
-                if let control = r.control, control.drawable {
+                if let control = r.control, control.drawable, picture {
+                    // In a picture its control as it looks (`ExtensionPictureControl`).
+                    ExtensionComponentRowLabel(row: r, model: model, chevron: false) { ExtensionPictureControl(control: control) }
+                } else if let control = r.control, control.drawable {
                     // UI version 6: a switch, a slider or a stepper in the row (`ExtensionControlRow`).
                     ExtensionControlRow(row: r, control: control, model: model, link: $link)
                 } else if let action = r.action, let model {
                     ExtensionActionButton(action: action, title: r.title, model: model, link: $link) { ExtensionComponentRowLabel(row: r, model: model, chevron: true) }
                         .foregroundStyle(Color.primary)
                 } else {
-                    ExtensionComponentRowLabel(row: r, model: model, chevron: false)
+                    // In a picture a row the chat lets you tap keeps its chevron.
+                    ExtensionComponentRowLabel(row: r, model: model, chevron: picture && r.action != nil)
                 }
             }
             // UI version 6: its extra actions (`ExtensionRowActions.swift`).
@@ -295,6 +300,8 @@ struct ExtensionItemRow: View {
                         if model.running == b.action.id { ProgressView().controlSize(.small) }
                     }
                 }
+            } else if picture {
+                ExtensionPictureButton(title: b.title, destructive: b.role == "destructive")
             }
         case .link(let l):
             if let url = URL(string: l.url), url.scheme == "https" {
@@ -303,15 +310,17 @@ struct ExtensionItemRow: View {
                 }
                 .accessibilityIdentifier("plugin-ui-link")
             }
-        case .field(let f): if let model { ExtensionFieldItem(field: f, model: model) }
+        case .field(let f):
+            if let model { ExtensionFieldItem(field: f, model: model) } else if picture { ExtensionPictureField(field: f) }
         case .chart(let c): ExtensionChartItem(item: c)
         case .statGrid(let g): ExtensionStatGrid(stats: g.stats)
-        case .segmented(let s): if let model { ExtensionSegmented(item: s, model: model, link: $link) }
+        case .segmented(let s):
+            if let model { ExtensionSegmented(item: s, model: model, link: $link) } else if picture { ExtensionPictureSegmented(item: s) }
         case .table(let t): ExtensionTable(table: t)
         case .empty(let e): ExtensionEmpty(empty: e, model: model, link: $link)
         case .loading(let l):
             HStack(spacing: Theme.Space.s) {
-                ProgressView().controlSize(.small)
+                if !picture { ProgressView().controlSize(.small) } // a spinner does not draw into a picture
                 Text(l.title?.isEmpty == false ? l.title! : String(localized: "Loading… [Personal Agent Session View 4927a5]")).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
             }
             .accessibilityIdentifier("plugin-ui-loading")
@@ -339,8 +348,10 @@ struct ExtensionItemRow: View {
         // UI version 6's picture (`ExtensionMedia.swift`).
         case .image(let i): ExtensionImageItem(item: i, model: model)
         case .divider, .unknown: EmptyView()
-        // UI version 4's code-hosting components: a View with them is drawn by the code page (`ExtensionCodePage`, #2961).
-        case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer: EmptyView()
+        // UI version 4–5's code-hosting components: a whole page with them is drawn by the code page (`ExtensionCodePage`,
+        // #2961); a card or a section says what they say (`ExtensionCodeSummary`).
+        case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer:
+            ExtensionCodeSummary(item: item, model: model, link: $link)
         }
     }
 
@@ -374,7 +385,11 @@ struct ExtensionItemRow: View {
                 Text("\(Int((ratio * 100).rounded()))%").font(Theme.Font.caption.monospacedDigit())
                     .foregroundStyle(p.tone == nil || p.tone == "neutral" ? Color.secondary : ExtensionUIStyle.tone(p.tone)).lineLimit(1)
             }
-            ProgressView(value: ratio).tint(ExtensionUIStyle.bar(p.tone))
+            if picture {
+                ExtensionPictureBar(ratio: ratio, tint: ExtensionUIStyle.bar(p.tone))
+            } else {
+                ProgressView(value: ratio).tint(ExtensionUIStyle.bar(p.tone))
+            }
             if let d = p.detail, !d.isEmpty { Text(d).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2) }
         }
         .padding(.vertical, Theme.Space.xxs)
@@ -385,6 +400,10 @@ struct ExtensionItemRow: View {
 extension EnvironmentValues {
     /// An extension's View drawn as a card (`size: compact`): charts without axis text, the rest as usual.
     @Entry var pluginUICompact = false
+    /// Drawn into a picture (Share as Image of a reply with a card, #7261, `ShareCardViewCard`): without a model, buttons,
+    /// fields, segmented choices and row controls are drawn as they look instead of left out, progress bars as shapes,
+    /// tables and Markdown wrap (`ImageRenderer` draws no scroll views and no UIKit controls).
+    @Entry var extensionPicture = false
 }
 
 /// An extension's View on a page that is not a list (a machine's page, a card, the assistant's reply): each section a

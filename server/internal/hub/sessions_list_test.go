@@ -388,9 +388,13 @@ func fullIndexItems(mid string, list []proto.Session, encoded []sentSession) []s
 			root = row.FoldedUnder()
 		}
 		kids := row.Children()
+		todo := ""
+		if row.Todo != nil {
+			todo = row.Todo.ID
+		}
 		foldedWaiting := row.BackgroundWaiting && kids.Working == 0 && kids.NeedsYou == 0
-		var fold *sessionlist.Fold // none: folded under nothing, shown with its own state and background wait
-		if f := (sessionlist.Fold{Root: root, State: row.FoldedState(), BackgroundWaiting: foldedWaiting}); f != (sessionlist.Fold{State: row.State, BackgroundWaiting: row.BackgroundWaiting}) {
+		var fold *sessionlist.Fold // none: no hierarchy or to-do, shown with its own state and background wait
+		if f := (sessionlist.Fold{Root: root, State: row.FoldedState(), Todo: todo, BackgroundWaiting: foldedWaiting}); f != (sessionlist.Fold{State: row.State, BackgroundWaiting: row.BackgroundWaiting}) {
 			fold = &f
 		}
 		items = append(items, sessionlist.Item{
@@ -476,6 +480,9 @@ func TestIndexRowReuseMatchesFullPath(t *testing.T) {
 		},
 		func(r *proto.Session, n int) {
 			r.State, r.BackgroundWaiting = cycle(n, "working", "needs_you", "idle"), n%2 == 0
+		},
+		func(r *proto.Session, n int) { // open to-do: none, one id, another (#6662)
+			r.Todo = []*proto.TodoRef{nil, {ID: "todo_a"}, {ID: "todo_b"}}[n%3]
 		},
 		func(r *proto.Session, n int) { r.Rev++ },
 		func(r *proto.Session, n int) { r.Archived = n%2 == 0 }, // hidden from the lists while archived

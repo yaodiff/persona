@@ -28,6 +28,7 @@ type inboxBook struct {
 	epoch       string                  // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running
 	seq         uint64
 	triaging    sync.Mutex     // one triage pass at a time (inbox_triage.go)
+	titling     sync.WaitGroup // merged rows' titles being written (inbox_merge_title.go; tests wait for it)
 	handing     sync.Mutex     // one judge / agent pass at a time (inbox_agent.go)
 	handAgain   atomic.Bool    // a pass is asked for: the goroutine holding handing runs it (handInbox)
 	passHook    func()         // tests: runs as each pass starts
@@ -225,7 +226,7 @@ func (x *threadIndex) openFor(thread string) (open, done *InboxItem) {
 		if !x.under(it, thread) {
 			continue
 		}
-		if it.open() {
+		if it.DoneAt == nil { // a member of a merged row is collected into as any open row (inbox_merge.go)
 			if open == nil || newerItem(it, open) {
 				open = it
 			}

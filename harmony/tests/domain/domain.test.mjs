@@ -23,6 +23,7 @@ import {
 
 const fixtureRoot = new URL("../../../spec/fixtures/", import.meta.url);
 const continuityFiles = [
+  "continuity/adjacency.json",
   "continuity/append_and_gaps.json",
   "continuity/history_and_cache.json",
   "continuity/pagination_and_legacy.json",
@@ -46,8 +47,6 @@ function batchFrom(event) {
 
 function fixtureAction(action) {
   switch (action.kind) {
-    case "schedule_fill":
-      return { kind: action.kind, delay_ms: action.delayMillis };
     case "fetch_after":
       return { kind: action.kind, after_seq: action.afterSeq };
     case "fetch_latest":
@@ -90,8 +89,8 @@ function replayContinuityCase(scenario) {
         actions = sync.settle(gap);
         break;
       }
-      case "fill_timer": {
-        actions = sync.fillTimer();
+      case "continue_fill": {
+        actions = sync.continueFill();
         break;
       }
       case "http_after": {
@@ -146,7 +145,6 @@ function replayContinuityCase(scenario) {
 for (const fixtureFile of continuityFiles) {
   const fixture = readJson(fixtureFile);
   for (const scenario of fixture.cases) {
-    if (fixtureFile === "continuity/pagination_and_legacy.json" && scenario.name === "same_id_plain_item_keeps_original") continue;
     test(`continuity fixture ${scenario.name}`, () => {
       assert.deepStrictEqual(replayContinuityCase(scenario), scenario.expected);
     });
@@ -339,30 +337,6 @@ test("assistant narration participates in folds while user text and out-of-range
   reducer.apply({ items: [narration] });
   assert.deepStrictEqual(reducer.items.map(item => item.id), [user.id, narration.id, answer.id]);
   assert.equal(reducer.covered, 2);
-});
-
-test("Harmony adopts current full-copy semantics for repeated plain item IDs", () => {
-  // Current Apple ChatStore.merge replaces duplicate IDs with the incoming full item. Keep the shared legacy fixture unchanged.
-  const legacy = readJson("continuity/pagination_and_legacy.json").cases.find((entry) => entry.name === "same_id_plain_item_keeps_original");
-  assert.notEqual(legacy, undefined);
-  const previous = legacy.input.initial.items[0];
-  const event = legacy.input.events[0];
-  const incoming = event.items[0];
-  const reducer = new TranscriptReducer();
-  reducer.restore({
-    items: legacy.input.initial.items,
-    covered: legacy.input.initial.covered,
-    history: legacy.input.initial.history,
-    hasMore: legacy.input.initial.has_more,
-    loadedOnce: legacy.input.initial.loaded_once,
-  });
-
-  reducer.apply(batchFrom(event));
-
-  assert.deepStrictEqual(reducer.snapshot(), {
-    items: [incoming], covered: 1, history: "h", hasMore: true, loadedOnce: false,
-  });
-  assert.notDeepStrictEqual(incoming, previous);
 });
 
 test("a repeated tool receipt replaces stale error metadata and keeps authoritative supervision visibility", () => {

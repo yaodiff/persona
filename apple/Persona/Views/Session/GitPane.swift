@@ -11,6 +11,8 @@ struct GitPane: View {
     @Binding var status: GitStatus?
     /// Opens the review of the session's changes at a scope (#151); nil where there is none (no `git_review`, the Mac).
     var review: ((GitReviewScope?) -> Void)? = nil
+    /// Where a pull request's review thread goes as a comment for the agent (#7014); nil when the chat takes no messages.
+    var commentKey: SessionKey? = nil
     @State private var error: String?
     /// A refresh the user asked for failed over a status already shown (#1889): said above it, which stays.
     @State private var refreshError: String?
@@ -23,8 +25,33 @@ struct GitPane: View {
     @State private var commit: GitCommit?
     @State private var pullModel = GitPullModel()
     @State private var revision = 0
+    /// The tab's writes (#7013): staging, the commit, the push.
+    @State private var writer = GitWriteModel()
+    /// The sheet over the tab: the commit, Branches or Stashes (#7015).
+    @State private var sheet: WriteSheet?
+    /// The commit message, kept while the sheet is closed or the commit refused.
+    @State private var commitMessage = ""
+    /// A push waiting for its yes.
+    @State private var askingPush: GitPushKind?
+    /// The branch's pull request (#7014).
+    @State private var prModel = GitPRModel()
+
+    /// The hub writes for this tab (`git_write`, #7013): iPhone and iPad only, the Mac app is frozen.
+    private var canWrite: Bool {
+        #if os(iOS)
+        model.features(group).contains("git_write")
+        #else
+        false
+        #endif
+    }
+
+    private var writeDeps: GitWriteModel.Deps? { model.api(group).map { GitWriteModel.Deps(api: $0) } }
 
     var body: some View {
+        writeSheets(page)
+    }
+
+    private var page: some View {
         List {
             if let refreshError, status != nil {
                 Section {
@@ -37,7 +64,14 @@ struct GitPane: View {
                 }
             }
             if let s = status, s.isRepo {
-                Section { header(s) }
+                Section {
+                    header(s)
+                    if canWrite { sheetRows(s) }
+                }
+                if canWrite {
+                    GitPRSection(status: s, pr: prModel, open: { sheet = .pr }, create: { sheet = .prCreate },
+                                 retry: { Task { await readPR(force: true) } })
+                }
                 changes(s)
                 history(s)
             } else if let error {
@@ -52,11 +86,17 @@ struct GitPane: View {
         }
         .listStyle(.insetGrouped)
         .themedPage()
-        .refreshable { await load() }
+        .safeAreaInset(edge: .bottom) { commitBar }
+        .refreshable {
+            await load()
+            await readPR(force: true)
+        }
         #if os(macOS)
         .pageToolbar { MacRefreshItem(id: [machineID, cwd]) { await load() } } // no pull to refresh on the Mac
         #endif
         .task(id: cwd) { await load() }
+        // The pull request again only when what was pushed moved (gh asks GitHub each time), as on the web.
+        .task(id: canWrite ? GitPRModel.key(status) : "") { await readPR() }
         #if DEBUG
         // `-showGitReload YES`: a refresh and a Load Earlier Commits two seconds after the first read, as the user's
         // would be, to see what their failures say (#1889, with scripts/mock/mock_hub.py MOCK_GIT_READ_FAIL=1).
@@ -91,16 +131,19 @@ struct GitPane: View {
     }
 
     private func header(_ s: GitStatus) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
+        let push = canWrite ? GitPushKind(s) : nil
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(spacing: Theme.Space.s) {
                 ThemedIcon(Theme.Icon.gitBranch).foregroundStyle(Theme.accent)
                 Text(s.branch ?? String(localized: "Detached HEAD")).font(Theme.Font.heading).lineLimit(1)
                 Spacer(minLength: Theme.Space.xs)
-                if s.ahead > 0 { sync(Theme.Icon.send, s.ahead, .secondary) }
-                if s.upstream != nil && s.gone != true { pullButton(s) } // nothing to pull from a deleted upstream
+                // With Push (#7013) the commits to send are its count.
+                if s.ahead > 0 && push == nil { sync(Theme.Icon.send, s.ahead, .secondary) }
+                if s.upstreamName != nil && s.gone != true { pullButton(s) } // nothing to pull from a deleted upstream
+                if let push { pushButton(push) }
             }
             HStack(spacing: Theme.Space.sm) {
-                if let up = s.upstream {
+                if let up = s.upstreamName {
                     Label(up, systemImage: Theme.Icon.gitUpstream).lineLimit(1)
                     if s.gone == true {
                         Text("· Deleted on the remote")
@@ -133,7 +176,7 @@ struct GitPane: View {
         } label: {
             HStack(spacing: Theme.Space.xs) {
                 if pullModel.isPulling { ProgressView().controlSize(.mini) }
-                Chip(text: pullModel.isPulling ? String(localized: "Pulling") : s.behind > 0 ? String(localized: "Pull \(s.behind)") : String(localized: "Pull"),
+                Chip(text: pullModel.isPulling ? String(localized: "Pulling") : s.behind > 0 ? String(localized: "Pull \(s.behind)") : String(localized: "git.pull", defaultValue: "Pull"),
                      symbol: pullModel.isPulling ? nil : Theme.Icon.down,
                      look: .tint(s.behind > 0 ? Theme.cautionText : Theme.accent))
                     .monospacedDigit()
@@ -143,11 +186,35 @@ struct GitPane: View {
             .contentShape(.rect)
         }
         .buttonStyle(.borderless)
-        .disabled(pullModel.isPulling || loadingMore || s.branch == nil)
+        .disabled(pullModel.isPulling || loadingMore || s.branch == nil || writer.busy != nil)
         .accessibilityIdentifier("git-pull")
         .accessibilityLabel("Pull Latest Code")
         .accessibilityValue(pullModel.isPulling ? String(localized: "Pulling") : String(localized: "\(s.behind) commits behind"))
         .help("Safely pulls the latest upstream code without merging or overwriting local changes")
+    }
+
+    /// Push beside Pull (#7013): the commits to send, or a branch the remote doesn't have (any more). It asks first.
+    private func pushButton(_ kind: GitPushKind) -> some View {
+        let pushing = writer.busy == .push
+        let count = if case .commits(let n, _) = kind { n } else { 0 }
+        return Button {
+            askingPush = kind
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                if pushing { ProgressView().controlSize(.mini) }
+                Chip(text: pushing ? String(localized: "Pushing") : count > 0 ? String(localized: "Push \(count)") : String(localized: "Push"),
+                     symbol: pushing ? nil : Theme.Icon.gitPush, look: .tint(Theme.accent))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .padding(.vertical, Theme.Space.s)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.borderless)
+        .disabled(writer.busy != nil || pullModel.isPulling)
+        .accessibilityIdentifier("git-push")
+        .accessibilityLabel(Text("Push"))
+        .accessibilityValue(pushing ? String(localized: "Pushing") : count > 0 ? String(localized: "\(count) commits to push") : "")
     }
 
     private func sync(_ symbol: String, _ n: Int, _ color: Color) -> some View {
@@ -160,11 +227,7 @@ struct GitPane: View {
                 Label("Working tree is clean", systemImage: Theme.Icon.success).foregroundStyle(.secondary)
             }
             ForEach(s.files) { f in
-                Button { diff = GitDiffTarget(file: f, staged: f.isStaged && !f.hasUnstaged) } label: { GitFileRow(file: f) }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button { UIPasteboard.general.string = f.path } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
-                    }
+                changeRow(f)
             }
         } header: {
             if !s.files.isEmpty {
@@ -212,8 +275,225 @@ struct GitPane: View {
         }
     }
 
+    /// A changed file: its diff on a tap; with the hub's writes (#7013), its tick box in front (stage / unstage at once),
+    /// and the same as a swipe from the leading edge and in the long-press menu.
+    @ViewBuilder private func changeRow(_ f: GitFile) -> some View {
+        let open = Button { diff = GitDiffTarget(file: f, staged: f.isStaged && !f.hasUnstaged) } label: { GitFileRow(file: f) }
+            .buttonStyle(.plain)
+        if canWrite {
+            let mark = GitStageMark(f)
+            HStack(spacing: Theme.Space.xs) {
+                TickBox(mark: mark == .all ? .all : mark == .some ? .some : .none,
+                        label: mark == .all ? String(localized: "Unstage \(f.name)") : String(localized: "Stage \(f.name)"),
+                        value: mark == .all ? String(localized: "Staged") : mark == .some ? String(localized: "Partly staged") : String(localized: "Not staged"),
+                        busy: writer.busy == .stage(f.path)) { Task { await toggle(f) } }
+                    .disabled(writer.busy != nil)
+                    .accessibilityIdentifier("git.stage")
+                open
+            }
+            .listRowInsets(EdgeInsets(top: Theme.Space.xs, leading: Theme.Space.xs, bottom: Theme.Space.xs, trailing: Theme.Space.l))
+            .swipeActions(edge: .leading) {
+                Button { Task { await toggle(f) } } label: { stageLabel(mark) }
+                    .tint(Theme.accent)
+                    .disabled(writer.busy != nil)
+            }
+            .contextMenu {
+                Button { Task { await toggle(f) } } label: { stageLabel(mark) }.disabled(writer.busy != nil)
+                Button { UIPasteboard.general.string = f.path } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
+            }
+        } else {
+            open.contextMenu {
+                Button { UIPasteboard.general.string = f.path } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
+            }
+        }
+    }
+
+    private func stageLabel(_ mark: GitStageMark) -> some View {
+        mark == .all ? Label("Unstage", systemImage: Theme.Icon.uncheckedBox) : Label("Stage", systemImage: Theme.Icon.checkedBox)
+    }
+
+    /// The bar over the bottom while there are changes (#7013): every change's tick box, how many are staged, and
+    /// Commit…, which opens the commit sheet.
+    @ViewBuilder private var commitBar: some View {
+        if canWrite, let s = status, s.isRepo, !s.files.isEmpty {
+            let all = GitStageMark(all: s.files)
+            let staged = s.files.count(where: { GitStageMark($0) != .none })
+            HStack(spacing: Theme.Space.s) {
+                TickBox(mark: all == .all ? .all : all == .some ? .some : .none,
+                        label: all == .all ? String(localized: "Unstage All") : String(localized: "Stage All"),
+                        value: String(localized: "\(staged) staged"),
+                        busy: writer.busy == .stageAll) { Task { await toggleAll(s) } }
+                    .disabled(writer.busy != nil)
+                    .accessibilityIdentifier("git.stageAll")
+                VStack(alignment: .leading, spacing: Theme.Space.flush) {
+                    Text(s.branch == nil ? String(localized: "Detached HEAD: switch to a branch to commit")
+                         : staged == 0 ? String(localized: "Tick the files to commit") : String(localized: "\(staged) staged"))
+                        .font(Theme.Font.secondaryMedium)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Text("\(s.files.count) changes").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .accessibilityElement(children: .combine)
+                Spacer(minLength: 0)
+                Button { sheet = .commit } label: { Text("Commit…").lineLimit(1) }
+                    .themedButton(prominent: true)
+                    .disabled(staged == 0 || s.branch == nil || writer.busy != nil)
+                    .accessibilityIdentifier("git.commit")
+            }
+            .padding(.vertical, Theme.Space.xs)
+            .padding(.trailing, Theme.Space.m)
+            .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
+            .padding(.horizontal, Theme.Space.page).padding(.bottom, Theme.Space.s)
+            // The list runs on under the bar: back it with the page and fade the list out above it, or the rows and
+            // commits scrolled under it read through its words.
+            .background(alignment: .top) {
+                LinearGradient(colors: [Theme.groupedPage.opacity(0), Theme.groupedPage], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Theme.Space.xl)
+                    .offset(y: -Theme.Space.xl)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .background(Theme.groupedPage.ignoresSafeArea(edges: .bottom))
+        }
+    }
+
+    enum WriteSheet: String, Identifiable {
+        case commit, branches, stashes, pr, prCreate
+        var id: String { rawValue }
+    }
+
+    /// Branches and Stashes under the branch card (#7015): each opens its sheet; Stashes says how many there are.
+    @ViewBuilder private func sheetRows(_ s: GitStatus) -> some View {
+        sheetRow(String(localized: "Branches"), symbol: Theme.Icon.gitBranch, value: nil, open: .branches)
+        sheetRow(String(localized: "Stashes"), symbol: Theme.Icon.gitStash, value: s.stashes > 0 ? "\(s.stashes)" : nil, open: .stashes)
+    }
+
+    private func sheetRow(_ title: String, symbol: String, value: String?, open: WriteSheet) -> some View {
+        Button { sheet = open } label: {
+            HStack(spacing: Theme.Space.m) {
+                ThemedIcon(symbol).foregroundStyle(Theme.accent)
+                Text(title).foregroundStyle(Color.primary).lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
+                if let value { Text(value).foregroundStyle(.secondary).monospacedDigit() }
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.label).foregroundStyle(.tertiary)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(writer.busy != nil)
+        .accessibilityIdentifier("git.open." + open.rawValue)
+    }
+
+    /// The commit, Branches and Stashes sheets, Push's question and a refusal's alert (#7013, #7015), on the tab.
+    private func writeSheets(_ content: some View) -> some View {
+        content
+            .sheet(item: $sheet) { which in
+                if let s = status, let deps = writeDeps {
+                    switch which {
+                    case .commit:
+                        GitNewCommitSheet(status: s, message: $commitMessage, writer: writer) { await commit() }
+                    case .branches:
+                        GitBranchesSheet(machineID: machineID, cwd: cwd, status: s, writer: writer, deps: deps,
+                                         applied: { applied($0) }, openStashes: { sheet = .stashes })
+                    case .stashes:
+                        GitStashesSheet(machineID: machineID, cwd: cwd, status: s, writer: writer, deps: deps, applied: { applied($0) })
+                    case .pr:
+                        if let api = model.api(group) {
+                            GitPRSheet(machineID: machineID, cwd: cwd, status: s, pr: prModel, deps: GitPRModel.Deps(api: api), commentKey: commentKey)
+                        }
+                    case .prCreate:
+                        if let api = model.api(group) {
+                            GitPRCreateSheet(machineID: machineID, cwd: cwd, status: s, pr: prModel, deps: GitPRModel.Deps(api: api),
+                                             branches: { try await deps.branches(machineID, cwd) }, opened: { sheet = .pr })
+                        }
+                    }
+                }
+            }
+            .confirmationDialog(Text("Push to the Remote?"), isPresented: Binding(get: { askingPush != nil }, set: { if !$0 { askingPush = nil } }),
+                                titleVisibility: .visible, presenting: askingPush) { kind in
+                Button { Task { await push(kind) } } label: { Text("Push").lineLimit(1) }
+                    .accessibilityIdentifier("git.push.confirm")
+            } message: { kind in
+                Text(pushQuestion(kind))
+            }
+            .gitRefusalAlert(Binding(get: { sheet != nil ? nil : writer.refusal }, set: { writer.refusal = $0 }))
+    }
+
+    /// What Push says it does, as the web's question: never forced.
+    private func pushQuestion(_ kind: GitPushKind) -> String {
+        let branch = status?.branch ?? ""
+        return switch kind {
+        case .commits(let n, let up): String(localized: "\(n) commits go to \(up). Never forced: if the remote has newer commits, the push stops and says so.")
+        case .fresh: String(localized: "\(branch) is not on the remote yet: it is created on origin under the same name and tracked from now on. Never forced: if the remote has newer commits, the push stops and says so.")
+        case .gone(let up): String(localized: "\(up) was deleted on the remote: pushing creates it again from \(branch). Never forced: if the remote has newer commits, the push stops and says so.")
+        }
+    }
+
+    private func toggle(_ f: GitFile) async {
+        guard let deps = writeDeps else { return }
+        Haptics.selection()
+        revision += 1
+        applied(await writer.toggle(f, machine: machineID, cwd: cwd, deps: deps))
+    }
+
+    private func toggleAll(_ s: GitStatus) async {
+        guard let deps = writeDeps else { return }
+        Haptics.selection()
+        revision += 1
+        applied(await writer.toggleAll(s, machine: machineID, cwd: cwd, deps: deps))
+    }
+
+    private func commit() async {
+        guard let deps = writeDeps else { return }
+        revision += 1
+        let r = await writer.commit(message: commitMessage, machine: machineID, cwd: cwd, deps: deps)
+        applied(r)
+        if let c = r?.commit {
+            commitMessage = ""
+            sheet = nil
+            Haptics.success()
+            model.toast = Toast(String(localized: "Committed \(c.short)"), style: .success)
+        }
+    }
+
+    private func push(_ kind: GitPushKind) async {
+        guard let deps = writeDeps else { return }
+        askingPush = nil
+        revision += 1
+        let branch = status?.branch ?? ""
+        if applied(await writer.push(kind, machine: machineID, cwd: cwd, deps: deps)) {
+            Haptics.success()
+            model.toast = Toast(String(localized: "Pushed \(branch)"), style: .success)
+        }
+    }
+
+    /// A write's answer is the repository after it: shown as is (the history again from the top when HEAD moved). A
+    /// refusal buzzes and reads the status again, since it may have changed the tree.
+    @discardableResult private func applied(_ r: GitWriteResult?) -> Bool {
+        guard let r else {
+            if writer.refusal != nil {
+                Haptics.error()
+                Task { await load() }
+            }
+            return false
+        }
+        if r.status.head?.hash != status?.head?.hash {
+            older = []
+            noMore = false
+        }
+        status = r.status
+        error = nil
+        return true
+    }
+
+    /// Reads the branch's pull request when what was pushed moved, or always with force.
+    private func readPR(force: Bool = false) async {
+        guard canWrite, let api = model.api(group) else { return }
+        await prModel.read(status, machine: machineID, cwd: cwd, deps: GitPRModel.Deps(api: api), force: force)
+    }
+
     private func pull() async {
-        guard let api = model.api(group), !cwd.isEmpty, !pullModel.isPulling else { return }
+        guard let api = model.api(group), !cwd.isEmpty, !pullModel.isPulling, writer.busy == nil else { return }
         revision += 1
         if let fresh = await pullModel.pull(machine: machineID, cwd: cwd, deps: .init(api: api)) {
             status = fresh
@@ -230,7 +510,8 @@ struct GitPane: View {
     /// and a failure leaves what is shown without a word. One the user asked for (pull to refresh, Refresh / ⌘R, Retry)
     /// says it failed (GitReadFailure).
     private func load(live: Bool = false) async {
-        guard let api = model.api(group), !cwd.isEmpty, !pullModel.isPulling else { return }
+        // A write running answers the status itself (#7013); a read taken in its middle would land after it.
+        guard let api = model.api(group), !cwd.isEmpty, !pullModel.isPulling, writer.busy == nil else { return }
         let started = revision
         do {
             let fresh = try await api.gitStatus(machine: machineID, cwd: cwd)

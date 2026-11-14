@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="inbox_now_confirm_reply">等你确认回复</string>
+    <string name="inbox_now_confirm_agent">等你启动 Agent</string>
+    <string name="inbox_now_decide">等你拿主意</string>
+    <string name="inbox_now_queued">排队中，等 AI 看</string>
+    <string name="inbox_now_looking">AI 正在看</string>
+    <string name="inbox_now_agent_working">Agent 在做</string>
+    <string name="inbox_now_waiting">等%1$s</string>
+    <string name="inbox_now_waiting_anyone">等对方回复</string>
+    <string name="inbox_now_look_again">" · %1$s 再看"</string>
+    <string name="inbox_now_next">：%1$s</string>
+    <string name="inbox_now_follow_up_ask">看过 3 次还没动静，还要跟吗？</string>
+    <string name="inbox_now_check_due">到了再看的时间</string>
+    <string name="inbox_now_failed">AI 没处理完：%1$s</string>
+    <string name="inbox_now_failed_plain">AI 处理失败</string>
+    <string name="inbox_now_needs_you">需要你</string>
+    <string name="inbox_now_fyi">知悉即可</string>
+    <string name="inbox_now_folded">已折叠</string>
+    <string name="inbox_now_done_replied">你回过了</string>
+    <string name="inbox_now_done_manager">助手看完，不用管</string>
+    <string name="inbox_now_done_user">你标了已处理</string>
+    <string name="inbox_now_done_read">在别处看过了</string>
+    <string name="inbox_now_done_dismissed">你忽略了</string>
+    <string name="inbox_now_done_muted">已静音</string>
+    <string name="inbox_now_done_superseded">已被新的一条取代</string>
+    <string name="inbox_row_sender">%1$s：%2$s</string>
+    <string name="inbox_row_where">%1$s · %2$s</string>
+    <string name="inbox_time_tomorrow">明天</string>
+    <string name="inbox_time_yesterday">昨天</string>
+    <string name="inbox_event_assistant_says">助手说</string>
+    <string name="inbox_event_processing_chat">处理对话 ›</string>
+</resources>

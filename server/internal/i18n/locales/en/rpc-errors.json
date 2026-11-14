@@ -63,5 +63,10 @@
   "rewind_unsupported": "This session does not support the requested rewind.",
   "rewind_mismatch": "The selected message moved. Reload the conversation before rewinding.",
   "rewind_nothing": "There is no message to rewind to.",
-  "rewind_failed": "Rewind could not be confirmed. Reload the conversation to check its current history."
+  "rewind_failed": "Rewind could not be confirmed. Reload the conversation to check its current history.",
+  "preview_no_terminal": "This computer has no terminal engine to run the server in. Turn one on in this computer’s settings, then try again.",
+  "space_gone": "No engine on this computer lists this space any more. Refresh and try again.",
+  "assistant_service_tier_start_only": "Fast can be chosen only when starting a new conversation. Change it in the existing conversation instead.",
+  "assistant_service_tier_unsupported": "Fast from the first message is available only for Codex models that offer it. Nothing was sent.",
+  "assistant_service_tier_refused": "Codex couldn’t apply Fast before the first message. Nothing was sent; try again or choose Standard."
 }

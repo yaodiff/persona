@@ -85,7 +85,8 @@ Step 6 (#270) made the hub send `sessions_delta`: it remembers the sessions sent
 
 The most expensive part of a push is the Agents list body (grouping, sorting, folding, counting), so its `AgentsFeed` publishes structure separately from rows:
 - One `AgentsFeed.Row` (`@Observable`) per Agent; rows (`SlotRow` / `CompactSlotRow`) read it, and a push updates only the changed `Row`s;
-- `sessions`, read by list body, is replaced only when structure changes: compare `AgentsFeed.shape`, i.e. sessions with row-only fields removed (`rev`, last line, ports, queue, suggestions, modes, model, seen time; time rounded to minutes; sub-Agents and background tasks reduced to whether any are running);
+- `sessions`, read by list body, is replaced only when structure changes: compare `AgentsFeed.shape`, i.e. sessions with row-only fields removed (`rev`, last line, ports, queue, suggestion text and its risk flag, modes, model, seen time; time rounded to minutes; sub-Agents and background tasks reduced to whether any are running);
+  a bounded summary merge preserves both suggestion fields with the other chat-only details, while the open-chat comparison still sees a risk-only change and redraws the pill;
 - during search the list filters by last line, so last line becomes structural (`searching`);
 - holding and critical bypass stay: `Row`s and structure land together, and critical updates update only listed rows too (`landCritical`);
 - `probe.agents-list` reads each row (`AgentsListProbe`), measuring what's drawn, not the list structure.
@@ -442,7 +443,7 @@ Why it works this way:
 Measurement: decode simulator recordings frame by frame, calculate content displacement relative to the previous frame, last-row distance from the composer, and "large change then reversal within a frame" jumps. In the App, `-scrollTrace YES`
 records UIKit / AppKit offset, content height, finger / inertia, and follow state each frame (`ScrollTrace`). Cases: `StreamingScrollTests` (mock `/mock/say?preset=markdown`:
 code blocks, tables, lists, delta every 80 ms like the hub; `&late=600` clears first and sends the committed message 600 ms later). A locked Mac can't record the screen and has no real trackpad:
-`MacScrollLab` sends synthetic two-finger scroll and inertia to the list, rendering the window every 0.1 s (`docs/apple/mac.md`). Tools live in `scripts/diag/stream-scroll/`.
+`MacScrollLab` sent synthetic two-finger scroll and inertia to the list, rendering the window every 0.1 s (`docs/archive/apple/mac.md`). Tools live in `scripts/diag/stream-scroll/`.
 
 | Symptom (before the fix) | Cause | Fix |
 | --- | --- | --- |

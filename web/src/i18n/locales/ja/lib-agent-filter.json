@@ -5,7 +5,6 @@
   "botmux": "botmux",
   "botmux_show": "botmux セッションを表示",
   "botmux_hide": "botmux セッションを非表示",
-  "search_placeholder": "名前、プロジェクト、モデル、machine: で検索…",
   "search_in": "検索範囲",
   "scope_all": "全文",
   "scope_title": "タイトルのみ",
@@ -28,5 +27,6 @@
   "role_title": "タイトル：",
   "filter": "フィルタ",
   "remove_filter": "{name} を外す",
-  "search_as_code_off": "コード検索をオフ"
+  "search_as_code_off": "コード検索をオフ",
+  "query_chip": "検索"
 }

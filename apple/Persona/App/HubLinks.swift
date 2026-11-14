@@ -22,6 +22,8 @@ final class HubLink: Identifiable {
     var desktops: [DesktopDevice] = []
     /// Pinned and muted spaces / agents: each hub keeps its own.
     @ObservationIgnored let pins: PinsStore
+    /// The last good workspace snapshot for this group's @ menus; replaced, never accumulated, and dropped with the link.
+    @ObservationIgnored let workspaceMentions = MentionWorkspaceCache()
     /// Where requests go when the socket has not picked a hub yet: the group's first hub.
     @ObservationIgnored var fallback: ServerConfig
     #if DEBUG

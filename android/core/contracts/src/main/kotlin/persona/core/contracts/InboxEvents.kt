@@ -44,6 +44,15 @@ data class InboxSuggestion(
     @WireTime val at: String? = null,
 )
 
+/** Who a follow-up waits on, what happens next, and when to look again (`follow`). */
+@KeepGeneratedSerializer
+@Serializable(with = InboxFollowSerializer::class)
+data class InboxFollow(
+    val who: String? = null,
+    val next: String? = null,
+    @WireTime @SerialName("check_at") val checkAt: String? = null,
+)
+
 /** One message of a `received` entry. */
 @KeepGeneratedSerializer
 @Serializable(with = InboxChainMessageSerializer::class)
@@ -82,6 +91,7 @@ data class InboxChainEntry(
     val sender: String? = null,
     val messages: List<InboxChainMessage> = emptyList(),
     val link: InboxChainLink? = null,
+    val via: String? = null,
 )
 
 /** Another item this one is Related (`related`): each goes its own way, tapping one opens it. */
@@ -89,7 +99,7 @@ data class InboxChainEntry(
 @Serializable(with = InboxRelatedSerializer::class)
 data class InboxRelated(val id: String = "", val title: String = "", val source: String = "")
 
-/** An item's phase-1 fields, as [inboxEventFields] reads them. */
+/** An item's event fields, as [inboxEventFields] reads them; older hubs omit each one. */
 data class InboxEventFields(
     /** The section of an open item (action / working / fyi / noise); null from an older hub (then the tier decides). */
     val status: String? = null,
@@ -101,6 +111,10 @@ data class InboxEventFields(
     val related: List<InboxRelated> = emptyList(),
     /** Who filed a done item (`done_by`: user, replied, dismissed, manager…); an existing field, read here for the event page. */
     val doneBy: String? = null,
+    val where: String? = null,
+    val follow: InboxFollow? = null,
+    /** A hub state key; unknown keys stay intact so the UI can keep its own state words. */
+    val now: String? = null,
 ) {
     /** The hub sent any of them: the item opens as an event (Summary, Recap, Suggestion, Handling chain) rather than straight into its source. */
     val present: Boolean get() = status != null || recap != null || handling != null || suggestion != null || chain.isNotEmpty()
@@ -114,8 +128,9 @@ private inline fun <reified T> JsonElement?.decoded(): T? =
     this?.let { runCatching { JsonCodec.decodeFromJsonElement<T>(it) }.getOrNull() }
 
 /**
- * The phase-1 fields of an inbox item's JSON. Each is read on its own and a malformed one is left out, so is a malformed
- * chain entry (the others stay); an unknown status reads as none (the tier decides), an unknown chain kind is kept.
+ * The event fields of an inbox item's JSON. Each is read on its own and a malformed one is left out, so is a malformed
+ * chain entry (the others stay); an unknown status reads as none (the tier decides), while unknown chain kinds and now
+ * state keys are kept.
  */
 fun inboxEventFields(item: JsonObject): InboxEventFields = InboxEventFields(
     status = (item["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it in InboxStatuses },
@@ -126,6 +141,9 @@ fun inboxEventFields(item: JsonObject): InboxEventFields = InboxEventFields(
     chain = (item["chain"] as? JsonArray).orEmpty().mapNotNull { it.decoded<InboxChainEntry>() },
     related = (item["related"] as? JsonArray).orEmpty().mapNotNull { it.decoded<InboxRelated>() }.filter { it.id.isNotBlank() },
     doneBy = (item["done_by"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() },
+    where = (item["where"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() },
+    follow = item["follow"].decoded<InboxFollow>(),
+    now = (item["now"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() },
 )
 
 /** The sections an open item can be in (`status`). */
@@ -133,6 +151,7 @@ val InboxStatuses = setOf("action", "working", "fyi", "noise")
 
 object InboxHandlingSerializer : WireSerializer<InboxHandling>(InboxHandling.generatedSerializer())
 object InboxSuggestionSerializer : WireSerializer<InboxSuggestion>(InboxSuggestion.generatedSerializer())
+object InboxFollowSerializer : WireSerializer<InboxFollow>(InboxFollow.generatedSerializer())
 object InboxChainMessageSerializer : WireSerializer<InboxChainMessage>(InboxChainMessage.generatedSerializer())
 object InboxChainLinkSerializer : WireSerializer<InboxChainLink>(InboxChainLink.generatedSerializer())
 object InboxChainEntrySerializer : WireSerializer<InboxChainEntry>(InboxChainEntry.generatedSerializer())

@@ -72,10 +72,10 @@ final class AvailabilityFollowupsUITests: XCTestCase {
         let wake = app.buttons["brief.setup.open.triage_wake"]
         XCTAssertTrue(wake.waitForExistence(timeout: 10), "no setup line with Open Settings:\n\(app.debugDescription)")
         XCTAssertTrue(app.buttons["brief.setup.open.supervisor_tier"].exists)
-        for id in ["task_trust", "standing_authorizations", "delegate"] {
+        XCTAssertTrue(app.buttons["brief.setup.open.standing_authorizations"].exists, "standing authorizations have a page now (#7002)")
+        for id in ["task_trust", "delegate"] {
             XCTAssertFalse(app.buttons["brief.setup.open.\(id)"].exists, "\(id) has no page in this app")
         }
-        XCTAssertTrue(app.staticTexts["brief.setup.web.standing_authorizations"].exists, "the web-only page is not named")
         reveal(wake, in: app)
         try shot(app, "setup")
 

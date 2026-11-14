@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
   "operation": "inbox_timeline",
-  "description": "An item's timeline (its chain) in the detail. With via, icon is a meaning in spec/icons/meanings.json (agents, persona, person, reported), or 'source': the item's own source mark (its brand or the app's generic source icon; for a via that names another source, that source's mark). A reported step always draws reported, whatever its via, and is drawn apart from the program's steps. Without via (entries from before), icon is the iPhone's Theme.Icon name for the kind (kind_icons_without_via): each app keeps the icon it draws for that kind today, and these names are not all in meanings.json. An Agent step also shows the Agent's live state from the app's session list (running, stopped, asking), not covered here.",
+  "description": "An item's timeline (its chain) in the detail. With via, icon is a meaning in spec/icons/meanings.json (agents, persona, person, reported), or 'source': the item's own source mark (its brand or the app's generic source icon; for a via that names another source, that source's mark). A reported step always draws reported, whatever its via, and is drawn apart from the program's steps: the app shows its own label (Assistant says) with the entry's detail, the assistant's own words; text carries the same label for apps from before, so it is used only when detail is empty. Without via (entries from before), icon is the iPhone's Theme.Icon name for the kind (kind_icons_without_via): each app keeps the icon it draws for that kind today, and these names are not all in meanings.json. An Agent step also shows its session's live state: see live_state.",
+  "live_state": "An Agent step (kind agent or agent_stopped, linking a session) shows the session's live state only on the newest step linking that session, in the same words the app's Agents list uses for it (needs_you, working, unread, idle as seen, offline as not running); a session the app does not have shows nothing.",
   "via_icons": {
     "<a source id>": "source",
     "assistant": "persona",
@@ -89,8 +90,9 @@
               "id": "c5",
               "at": "2026-01-01T11:20:00Z",
               "kind": "reported",
-              "text": "Sent an email: quote corrected",
-              "via": "agent"
+              "text": "Assistant says: Sent an email: quote corrected",
+              "via": "agent",
+              "detail": "Sent an email: quote corrected"
             },
             {
               "id": "c6",
@@ -287,6 +289,151 @@
             "id": "c2",
             "icon": "persona",
             "reported": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "agent_state_on_newest_entry",
+      "description": "Two steps link the same Agent session (it was started, then it stopped): only the newest step that links it shows the session's live state, in the words the app's Agents list uses; older steps show none. A session the app does not have shows nothing.",
+      "source": [
+        "docs/assistant/inbox.md: Following up"
+      ],
+      "derived": true,
+      "input": {
+        "item": {
+          "id": "t-5",
+          "source": "chat",
+          "kind": "group",
+          "chain": [
+            {
+              "id": "c1",
+              "at": "2026-01-01T11:02:00Z",
+              "kind": "received",
+              "text": "Received 2 messages · Alex",
+              "via": "chat",
+              "count": 2,
+              "sender": "Alex",
+              "link": {
+                "type": "source"
+              }
+            },
+            {
+              "id": "c2",
+              "at": "2026-01-01T11:03:00Z",
+              "kind": "handling",
+              "text": "Assistant handling",
+              "via": "assistant",
+              "link": {
+                "type": "session",
+                "machine_id": "m1",
+                "session_id": "s-handling"
+              }
+            },
+            {
+              "id": "c3",
+              "at": "2026-01-01T11:04:00Z",
+              "kind": "agent",
+              "text": "Opened an Agent: check the quote",
+              "via": "agent",
+              "link": {
+                "type": "session",
+                "machine_id": "m1",
+                "session_id": "s-agent"
+              }
+            },
+            {
+              "id": "c4",
+              "at": "2026-01-01T11:19:00Z",
+              "kind": "agent_stopped",
+              "text": "Agent stopped: line 3 of the quote has the wrong tax rate",
+              "via": "agent",
+              "link": {
+                "type": "session",
+                "machine_id": "m1",
+                "session_id": "s-agent"
+              }
+            },
+            {
+              "id": "c5",
+              "at": "2026-01-01T11:20:00Z",
+              "kind": "reported",
+              "text": "Assistant says: Sent an email: quote corrected",
+              "via": "agent",
+              "detail": "Sent an email: quote corrected"
+            },
+            {
+              "id": "c6",
+              "at": "2026-01-01T11:20:30Z",
+              "kind": "waiting",
+              "text": "Waiting for Alex to confirm the new quote · look again tomorrow 09:00",
+              "via": "assistant"
+            }
+          ]
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-agent",
+            "state": "unread"
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-handling",
+            "state": "idle"
+          }
+        ]
+      },
+      "expected": {
+        "folded": [
+          "c4",
+          "c5",
+          "c6"
+        ],
+        "expanded": [
+          "c1",
+          "c2",
+          "c3",
+          "c4",
+          "c5",
+          "c6"
+        ],
+        "steps": [
+          {
+            "id": "c1",
+            "icon": "source",
+            "reported": false
+          },
+          {
+            "id": "c2",
+            "icon": "persona",
+            "reported": false
+          },
+          {
+            "id": "c3",
+            "icon": "agents",
+            "reported": false
+          },
+          {
+            "id": "c4",
+            "icon": "agents",
+            "reported": false
+          },
+          {
+            "id": "c5",
+            "icon": "reported",
+            "reported": true
+          },
+          {
+            "id": "c6",
+            "icon": "persona",
+            "reported": false
+          }
+        ],
+        "live_state": [
+          {
+            "id": "c4",
+            "session_state": "unread"
           }
         ]
       }

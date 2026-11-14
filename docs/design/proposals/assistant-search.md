@@ -41,7 +41,7 @@ chat can show, including behind a disclosure; nothing that is never shown.
 | `<persona-view-errors>`, attached image paths, `[Image #n]` | never | no | no |
 | A file card (`<persona-file>`) | its name | its name | no |
 | An injected message (`docs/protocol/protocol.md` ("Messages injected by Persona")) | one line (and its detail) | the line and detail, not its words for the model | no |
-| The assistant's reply, cards included (their visible text, `AssistantCardText` in `sdk/go/wire`) | the reply | Messages | yes |
+| The assistant's reply, cards included (their visible text, `AssistantCardText` in `sdk/go/wire`) | the reply | Messages | yes, without Markdown's markup (#7072) |
 | Thoughts | open to read | Thinking | no |
 | Tool names, input and output, folded or not | open to read | their groups | no |
 | Notices, recaps, task events | shown | System events | no |

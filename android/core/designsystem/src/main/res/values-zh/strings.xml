@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="designsystem_more">更多</string>
     <string name="designsystem_status_needs_you">需要你</string>
     <string name="designsystem_status_working">工作中</string>
     <string name="designsystem_status_unread">完成未看</string>

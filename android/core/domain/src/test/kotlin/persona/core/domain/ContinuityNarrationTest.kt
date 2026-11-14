@@ -16,7 +16,7 @@ class ContinuityNarrationTest {
         val fold = Item("fold:2#0", 2, role = "assistant", kind = "fold",
             fold = Fold(items = 3, throughSeq = 4, throughId = "4#0"))
         reducer.latest(listOf(prompt, fold, answer), "history", 20, false)
-        reducer.unfold(fold, narration)
+        reducer.latest(narration, "history", 4)
         assertEquals(listOf(1, 2, 3, 4, 20), reducer.items.map { it.seq })
 
         reducer.latest(listOf(prompt, fold, answer), "history", 20, false)

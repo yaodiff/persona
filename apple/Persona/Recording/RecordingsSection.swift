@@ -24,6 +24,9 @@ struct RecordingsSection: View {
     #if os(iOS)
     /// The start's choices when the page has none to share (Knowledge › Recordings): the line under Record reads them too.
     @State private var ownForm = RecordingStartForm()
+    /// The speech service a hub-mode meeting's audio goes to, when the owner chose another extension's (#3862 phase 5):
+    /// the line under Record names it. nil: the built-in one.
+    @State private var transcriptionService: String?
     #endif
     /// The recording a swipe asked to delete (its row shows the confirmation), and why a delete failed.
     @State private var pendingDelete: UUID?
@@ -61,6 +64,21 @@ struct RecordingsSection: View {
         .task(id: MeetingAttendees.conversation(model)) {
             guard MeetingAttendees.conversation(model), let hub = model.hub else { return }
             await VoiceSupport.shared.refresh(group: hub.group, api: hub.api)
+        }
+        // Hub transcription (#3862 phase 5): whether the hub can transcribe now (the start offers On the Hub only then),
+        // read again as the page opens, and the speech service the line under Record names when it isn't the built-in one.
+        .task(id: MeetingAttendees.transcription(model)) {
+            guard MeetingAttendees.transcription(model), let api = model.api else { return }
+            await model.refreshAssistant()
+            let ref = model.assistantConfig?.meetingTranscriptionExtension ?? ""
+            var name: String?
+            if !ref.isEmpty {
+                let listed = (try? await api.currentAssistantSettings().plugins()) ?? []
+                name = MeetingTranscriptionSettings.service(ref, choices: MeetingTranscriptionSettings.choices(listed))
+            }
+            transcriptionService = name
+            // The meeting page's Talk line names it too.
+            MeetingTranscription.shared.noteService(name)
         }
         #endif
         #if os(iOS)
@@ -142,18 +160,21 @@ struct RecordingsSection: View {
 
 #if os(iOS)
 extension RecordingsSection {
-    /// The line under Record: what leaves the phone. Where the next meeting's Talk would send its spans to the voice
-    /// service (a room meeting taking part, on a hub whose voice extension takes meeting calls; #3862 phase 4), the
-    /// contract's Wording, before the meeting starts; elsewhere the audio stays on this device, as before.
+    /// The line under Record: what leaves the phone, the contract's Wording per mode (docs/assistant/meeting-minutes.md
+    /// 「Privacy per mode」), before the meeting starts. A meeting about to start in hub mode (#3862 phase 5: picked, or
+    /// the hub's default while it is ready) sends its audio through the hub to its speech service, named when the owner
+    /// chose another extension's. Otherwise, where the next meeting's Talk would send its spans to the voice service (a
+    /// room meeting taking part, on a hub whose voice extension takes meeting calls; phase 4), privacy mode's words;
+    /// elsewhere the audio stays on this device, as before.
     private var startPrivacy: String {
         let form = form ?? ownForm
         let role = form.pickedRole ?? MeetingAttendees.defaultRole(model)
         let voice = model.hub.flatMap { MeetingCall.shared.voiceExtension(group: $0.group) }
-        if form.pickedKind == .meeting,
-           MeetingCallRule.talkSendsAudio(conversation: MeetingAttendees.conversation(model), role: role, voice: voice) {
-            return String(localized: "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for \(sync.store.days) days.")
-        }
-        return String(localized: "Audio stays on this device. Its text syncs to Knowledge and is kept for \(sync.store.days) days.")
+        let meeting = form.pickedKind == .meeting
+        let mode = meeting && MeetingAttendees.conversation(model)
+            ? MeetingAttendees.startTranscription(model, picked: MeetingAttendees.offersHub(model) ? form.pickedTranscription : nil) : nil
+        let talk = meeting && MeetingCallRule.talkSendsAudio(conversation: MeetingAttendees.conversation(model), role: role, voice: voice)
+        return MeetingTranscriptionWords.startPrivacy(mode, service: transcriptionService, talk: talk, days: sync.store.days)
     }
 }
 
@@ -253,6 +274,9 @@ struct RecordingStatusText: View {
     var pickedPrivate = false
     /// Meeting unless Note is picked here, for the next start only (#5243): never remembered.
     var pickedKind = RecordingKindChoice.meeting
+    /// How the next meeting is transcribed (#3862 phase 5): the hub's default until picked here, for that meeting only;
+    /// offered only while the hub lists `meeting_transcription` and can transcribe.
+    var pickedTranscription: MeetingTranscriptionMode?
     /// A start was tapped and recording has not begun (the calendar read, then the microphone): Record stays, busy.
     var startRequested = false
     /// The calendar's meeting on now (read again each minute while nothing records).
@@ -285,7 +309,6 @@ struct RecordingCaptureControls: View {
     #if os(iOS)
     @StoredValue(RecordingInput.storageKey) private var inputRaw = RecordingInput.phone.rawValue
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var size
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #endif
 
@@ -361,7 +384,6 @@ struct RecordingCaptureControls: View {
     @ViewBuilder private var idleControls: some View {
         let busy = preparing != .idle
         if part == .inline { hero(busy: busy) }
-        if part == .options, size.isAccessibilitySize, form.pickedKind == .meeting { calendarLine }
         if capture.state == .starting { startingRow }
         // Meeting or Note is a choice row under the one Record button, never a second button (#5243); a note has none
         // of the meeting's options (progressive disclosure).
@@ -371,6 +393,9 @@ struct RecordingCaptureControls: View {
             if MeetingAttendees.conversation(model) {
                 // The meeting's own room conversation attends (#3862): no session to pick, and the private mark instead.
                 privateRow.disabled(busy)
+                // On This iPhone or On the Hub (#3862 phase 5), only while the hub can transcribe: never a choice that
+                // can't be had. The line under Record says what each sends.
+                if MeetingAttendees.offersHub(model) { transcriptionRow.disabled(busy) }
             } else if role.attends {
                 // Never the main chat by default (#3862): Choose until one is picked here or picked before (not the main
                 // chat), and the meeting starts with Persona off without one.
@@ -414,11 +439,8 @@ struct RecordingCaptureControls: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Button { record() } label: {
                 HStack(spacing: Theme.Space.s) {
-                    // At accessibility sizes the icon goes: the words never truncate, they scale down a little instead.
-                    if size.isAccessibilitySize { Text("Record [Recordings Section ef2821]") } else {
-                        // White like the title: the symbol took the tint, drew in the button's own blue and pushed the title off-center.
-                        Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
-                    }
+                    // White like the title: the symbol took the tint, drew in the button's own blue and pushed the title off-center.
+                    Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
                     if busy { ProgressView() }
                 }
                 .font(Theme.Font.bodyStrong)
@@ -430,8 +452,7 @@ struct RecordingCaptureControls: View {
             .themedButton(prominent: true)
             .disabled(busy)
             .accessibilityIdentifier("recording-meeting-start")
-            // In the bottom bar at accessibility sizes the line would take the screen: it is the list's first row then.
-            if form.pickedKind == .meeting, !(part == .bar && size.isAccessibilitySize) {
+            if form.pickedKind == .meeting {
                 calendarLine.frame(maxWidth: .infinity, alignment: part == .bar ? .center : .leading)
             }
         }
@@ -453,7 +474,7 @@ struct RecordingCaptureControls: View {
                 }
             } label: {
                 Label("Name Recordings After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption)
-                    .lineLimit(size.isAccessibilitySize ? 4 : 1).multilineTextAlignment(.leading)
+                    .lineLimit(1).multilineTextAlignment(.leading)
             }
             .buttonStyle(.borderless)
         } else {
@@ -519,6 +540,19 @@ struct RecordingCaptureControls: View {
         .accessibilityIdentifier("meeting-private-start")
     }
 
+    /// How the meeting is transcribed (#3862 phase 5): a menu row like Persona's, the hub's default until picked here.
+    private var transcriptionRow: some View {
+        Picker(selection: Binding(get: { MeetingAttendees.startTranscription(model, picked: form.pickedTranscription) ?? .device },
+                                  set: { form.pickedTranscription = $0 })) {
+            ForEach(MeetingTranscriptionMode.allCases, id: \.self) { Text(MeetingTranscriptionWords.title($0)).tag($0) }
+        } label: {
+            Label { RowTitle("Transcription [Meeting Transcription]") } icon: { ThemedIcon(Theme.Icon.meetingTranscription) }
+        }
+        .pickerStyle(.menu)
+        .font(Theme.Font.body)
+        .accessibilityIdentifier("meeting-transcription-start")
+    }
+
     /// The role shown and started with: the one picked here, else the hub's default; on a hub without the meeting
     /// conversation, Off while nobody is chosen to attend (the main chat never attends by default, #3862).
     private var role: MeetingAttendance {
@@ -538,16 +572,15 @@ struct RecordingCaptureControls: View {
                 RecordingStateDot(paused: paused).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(entry?.displayTitle ?? String(localized: "Recording")).font(Theme.Font.bodyStrong)
-                        .lineLimit(size.isAccessibilitySize ? 3 : 1)
+                        .lineLimit(1)
                         .accessibilityIdentifier("recording-now-title")
                     Text(capture.interrupted ? String(localized: "Paused by a call") : paused ? String(localized: "Paused") : String(localized: "Recording [Recordings Section 5254d3]"))
                         .font(Theme.Font.secondary)
                         .foregroundStyle(paused ? Color.secondary : Palette.recordingRed)
                         .accessibilityIdentifier("recording-now-state")
-                    if size.isAccessibilitySize { clock(paused: paused) }
                 }
                 Spacer(minLength: Theme.Space.s)
-                if !size.isAccessibilitySize { clock(paused: paused) }
+                clock(paused: paused)
                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(.tertiary)
             }
             .contentShape(.rect)
@@ -596,12 +629,17 @@ struct RecordingCaptureControls: View {
 
     /// Record: a meeting with the options shown, or a note when Note is picked. The picks are for this start only.
     private func record() {
+        // The transcription mode (#3862 phase 5): the one picked here while the hub can transcribe, else the hub's default
+        // (`device` while it can't).
+        let picked = MeetingAttendees.offersHub(model) ? form.pickedTranscription : nil
         let start = RecordingStart.make(form.pickedKind, offered: MeetingAttendees.offered(model), conversation: MeetingAttendees.conversation(model),
                                         photos: MeetingAttendees.photos(model), liveView: MeetingAttendees.liveView(model),
                                         highlights: MeetingAttendees.highlights(model),
+                                        transcription: MeetingAttendees.startTranscription(model, picked: picked),
                                         role: role, privateMark: form.pickedPrivate,
                                         attendee: chosenAttendee)
         form.pickedRole = nil; form.pickedAttendee = nil; form.pickedPrivate = false; form.pickedKind = .meeting
+        form.pickedTranscription = nil
         switch start {
         case .meeting(let attendance): startMeeting(attendance)
         case .note: startNote()
@@ -763,10 +801,14 @@ struct RecordingsPage: View {
                 // Once per launch: back from it, the page appears again.
                 guard !Self.sampleOpened else { return }
                 let defaults = UserDefaults.standard
-                // `-showMeetingSample minutes|pending`: the made-up finished meeting's page.
+                // `-showMeetingSample minutes|pending`: the made-up finished meeting's page; `overview`: the longer one's,
+                // for the summary card (#6563).
                 if ["minutes", "pending"].contains(defaults.string(forKey: "showMeetingSample")) {
                     Self.sampleOpened = true
                     debugPage = .recording(RecordingSamples.pastMeeting)
+                } else if defaults.string(forKey: "showMeetingSample") == "overview" {
+                    Self.sampleOpened = true
+                    debugPage = .recording(RecordingSamples.overviewMeeting)
                 }
                 #if os(iOS)
                 // `-openDayRecap YES` with `-showDaySample …`: the made-up past day's page, once it is in place.
@@ -878,6 +920,13 @@ struct RecordingDetailView: View {
                     RecordingStatusText(entry: entry)
                 }
                 .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
+                #if os(iOS)
+                // How it was transcribed (#3862 phase 5): on the hub (being finished until final, its gaps), or kept on
+                // this iPhone although it asked for the hub.
+                if entry.attendance?.transcription != nil {
+                    RecordingTranscriptionRow(id: id, view: minutes.transcription, asked: entry.attendance?.transcription)
+                }
+                #endif
                 if !entry.marks.isEmpty {
                     Label(String(localized: "Bookmarks \(ListFormatter.localizedString(byJoining: entry.marks.map(RecordingFormat.clock)))"), systemImage: Theme.Icon.pin)
                         .font(Theme.Font.secondary).foregroundStyle(.secondary)
@@ -937,9 +986,17 @@ struct RecordingDetailView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text(entry.isRolling
-                    ? String(localized: "Rolling keeps the last \(Int(RecordingRolling.keepHours)) hours. Pull a range to transcribe it; text syncs into Knowledge. Audio stays on this device.")
-                    : String(localized: "Only the text and timestamps go into Knowledge; the original audio isn't uploaded. After the retention period (\(sync.store.days) days) it's cleared from this device and Knowledge."))
+                #if os(iOS)
+                // A meeting whose audio went through the hub (#3862 phase 5) says so, before its `detail.meta` too.
+                if entry.attendance?.transcription != nil {
+                    RecordingRetentionFooter(id: id, attendance: entry.attendance, meta: minutes.transcription,
+                                             days: sync.store.days, device: retentionFooter(entry))
+                } else {
+                    Text(retentionFooter(entry))
+                }
+                #else
+                Text(retentionFooter(entry))
+                #endif
             }
         }
         // The minutes unfold when they arrive (Reduce Motion: at once).
@@ -955,6 +1012,16 @@ struct RecordingDetailView: View {
             Task { jump(to: at, in: entry, proxy: proxy) }
         }
         #endif
+    }
+
+    /// What the page says, at its end, about what left the device and how long it is kept, when the audio stayed here. A
+    /// meeting that asked for a transcription mode (#3862 phase 5) shows it through `RecordingRetentionFooter`, which says
+    /// the audio went through the hub instead when it may have.
+    private func retentionFooter(_ entry: RecordingEntry) -> String {
+        if entry.isRolling {
+            return String(localized: "Rolling keeps the last \(Int(RecordingRolling.keepHours)) hours. Pull a range to transcribe it; text syncs into Knowledge. Audio stays on this device.")
+        }
+        return String(localized: "Only the text and timestamps go into Knowledge; the original audio isn't uploaded. After the retention period (\(sync.store.days) days) it's cleared from this device and Knowledge.")
     }
 
     /// The transcript, a line a row with its time; a line a time in the minutes jumped to is lit.
@@ -1001,7 +1068,7 @@ struct RecordingDetailView: View {
             .labelsHidden()
             .accessibilityIdentifier("recording-view-switch")
             .minutesCanvasRow()
-            RecordingMinutesActions(entry: entry, minutes: ready)
+            RecordingMinutesActions(entry: entry, minutes: ready, summaryCard: summary?.overview != nil)
                 .minutesCanvasRow()
         }
     }
@@ -1018,7 +1085,8 @@ struct RecordingDetailView: View {
             if summary != nil { summary = nil }
             return
         }
-        let next = RecordingMinutesCards.summary(ready, sentences: entry.sentences)
+        // The summary card (#6563) leaves out what the page's header already says of the meeting.
+        let next = RecordingMinutesCards.summary(ready, sentences: entry.sentences, shown: .init(entry.meeting))
         guard next != summary else { return }
         // The first cards come a moment after the minutes (this runs after the update that brought them): they unfold
         // as the minutes do (Reduce Motion: at once); later changes of the transcript just redraw them.

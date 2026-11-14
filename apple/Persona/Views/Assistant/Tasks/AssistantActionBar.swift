@@ -363,16 +363,9 @@ struct AssistantActionBar: View {
     /// What the user picked on each plan row's card; the tray draws Start, Edit and Don't Start of the open one under its
     /// list (`PlanActions`), so a tall card never scrolls them away.
     @State private var planChoices: [String: PlanChoices] = [:]
-    @Environment(\.dynamicTypeSize) private var typeSize
     private var store: TasksStore { .shared }
 
-    /// The entries side by side; at the accessibility text sizes they go on to the next line when they don't fit, each
-    /// whole (`docs/design/DESIGN_SYSTEM.md` 1.2 rule 3): side by side they made the row, and with it the whole chat
-    /// page, wider than the screen, cut off at both edges (#5702). The layout changes, not the views.
-    private var entryRow: AnyLayout {
-        typeSize.isAccessibilitySize ? AnyLayout(FlowLayoutRow(spacing: Theme.Space.s))
-            : AnyLayout(HStackLayout(spacing: Theme.Space.s))
-    }
+    private var entryRow: AnyLayout { AnyLayout(HStackLayout(spacing: Theme.Space.s)) }
 
     var body: some View {
         let content = Self.content(conversation, key: key)

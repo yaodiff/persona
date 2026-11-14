@@ -52,7 +52,26 @@ struct RootView: View {
     private let away = false
     #endif
 
-    /// The iPhone-width shell; regular-width and other platforms keep their own navigation.
+    #if os(iOS)
+    /// Settings › Appearance › Navigation (#6332): Separate (the default) or Sidebar.
+    @StoredValue(NavigationLayout.key) private var navigation: NavigationLayout = .separate
+    #endif
+
+    /// The Sidebar layout instead of the shell or the tabs (#6332): one root at every width, the drawer on a phone's
+    /// width and the column beside the page at regular width (`ChatsView` under `\.unifiedSidebar`).
+    private var usesSidebar: Bool {
+        #if os(iOS)
+        navigation == .sidebar && NavigationLayout.offered
+        #else
+        false
+        #endif
+    }
+
+    /// The shell is the root: the iPhone's width in the Separate layout.
+    private var showsShell: Bool { usesShell && !usesSidebar }
+
+    /// The iPhone-width shell; regular-width and other platforms keep their own navigation. In the Sidebar layout the
+    /// same width is its drawer's (`showsShell`).
     private var usesShell: Bool {
         #if os(visionOS)
         // Apple Vision Pro keeps the tabs, as the system's ornament (VisionShell), whatever the window's width.
@@ -86,13 +105,13 @@ struct RootView: View {
 
     /// The shell is on screen, and with it its toast window (`ToastWindow`): not on the welcome page, the engine step or
     /// the checklist after pairing (the same branches as `body`).
-    private var shellShown: Bool { usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist }
+    private var shellShown: Bool { showsShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist }
 
     /// The tabs are on screen at regular width (iPad, iPhone Duo open), with a toast window of
     /// their own (`ToastWindowHook`): the same branches as `body`, with no extension page in the app's place.
     private var tabsToastWindow: Bool {
         #if os(iOS)
-        !usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
+        !showsShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
         #else
         false
         #endif
@@ -116,7 +135,9 @@ struct RootView: View {
                 #if os(visionOS)
                 RootTabs().visionShell()
                 #elseif os(iOS)
-                if usesShell { ShellView().modifier(BuiltTreeRoot()) } else { RootTabs().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
+                if usesSidebar { SidebarRoot().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
+                else if usesShell { ShellView().modifier(BuiltTreeRoot()) }
+                else { RootTabs().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
                 #else
                 RootTabs()
                 #endif
@@ -187,7 +208,7 @@ struct RootView: View {
             }
             swaps.count += 1
         }
-        .onChange(of: usesShell) { swaps.rebuilt += 1 }
+        .onChange(of: showsShell) { swaps.rebuilt += 1 }
         .screenProbe("tree", swaps)
         // LookBlink drives UIWindowScene overrides, so it only exists on iOS and visionOS.
         #if os(iOS) || os(visionOS)
@@ -211,7 +232,12 @@ struct RootView: View {
         .overlay(alignment: .top) { if overlayToasts { ToastOverlay().padding(.top, toastClearance) } }
         #if os(iOS) || os(visionOS)
         // Settings › Appearance › Light & Dark on this scene's window (and any other open one) as it first shows.
-        .onAppear { model.colorScheme.apply() }
+        .onAppear {
+            model.colorScheme.apply()
+            #if DEBUG || PERF_SIGNPOST
+            PerfTrace.firstFrame()
+            #endif
+        }
         #if os(iOS)
         // The interface's cap on the windows' text size, so sheets and covers are capped too (`WindowTextSize`).
         .onAppear { WindowTextSize.apply(); systemSize = WindowTextSize.system }
@@ -235,6 +261,11 @@ struct RootView: View {
             }
         }
         .screenProbe("connection", ConnectionShown(shown: "\(model.connection.shown)", network: model.connection.networkUp))
+        #if os(iOS)
+        // Hub transcription's store (#3862 phase 5): the mode, the socket, the hub's lines and the fallback, for UI tests;
+        // a view of its own, so its changes redraw only it.
+        .overlay(alignment: .topLeading) { if ScreenProbe.enabled { MeetingTranscriptionProbe() } }
+        #endif
         .htmlCardSample()
         .voiceOrbSample()
         .closeoutSample()
@@ -291,6 +322,24 @@ struct RootView: View {
 }
 
 #if os(iOS)
+/// The Sidebar layout at regular width (Settings › Appearance › Navigation, #6332; docs/apple/ios.md「Sidebar layout」): the
+/// Agents page's split with the whole sidebar as its list column (`UnifiedSidebarColumn`) and the Persona conversation
+/// as the page beside it, every pick in the sidebar opening over that. The iPad's routes and Settings as the tabs'
+/// (`PadRouter`, `PadRoutes`), with a route to Persona going back to the conversation.
+@MainActor private struct SidebarRoot: View {
+    @State private var pad = PadRouter(unified: true)
+    @State private var unified = UnifiedSidebar()
+
+    var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("SidebarRoot")
+        #endif
+        ChatsView()
+            .environment(\.unifiedSidebar, unified)
+            .modifier(PadRoutes(router: pad))
+    }
+}
+
 /// Where the iPad's routes to Inbox and Settings land without their tabs: every route in the app still
 /// sets `AppModel.selectedTab` (notifications, Siri, the inbox's rows…). `.mail` opens the inbox on the Persona tab's page,
 /// beside its sidebar; `.settings` the sheet, over the tab that was in front. As the iPhone's shell does (`ShellState.route`).
@@ -299,6 +348,16 @@ struct RootView: View {
     private(set) var request: (page: ShellPage, serial: Int)?
     /// The tab in front, for Settings to go back to.
     @ObservationIgnored private var front = AppTab.assistant
+    /// The Sidebar layout (#6332): no tabs, one page beside the sidebar. A route to Persona goes back to the conversation
+    /// (an Agent's chat or a place may be in front), and Messages opens beside the sidebar.
+    @ObservationIgnored let unified: Bool
+    /// Set while this router sets the tab itself: that new tab is only noted, not routed again (Inbox, then Persona,
+    /// would otherwise go back from the inbox it just opened).
+    @ObservationIgnored private var settingTab = false
+
+    init(unified: Bool = false) {
+        self.unified = unified
+    }
 
     func show(_ page: ShellPage) {
         request = (page, (request?.serial ?? 0) + 1)
@@ -315,33 +374,50 @@ struct RootView: View {
     }
 
     func route(_ t: AppTab, in model: AppModel) {
+        if settingTab { front = t; return }
         switch t {
         case .mail:
             show(.inbox)
             front = .assistant
-            model.selectedTab = .assistant
+            setTab(.assistant, in: model)
         case .settings:
             model.shellSettings = true
-            model.selectedTab = front
+            setTab(front, in: model)
+        case .assistant where unified:
+            front = t
+            show(.conversation)
+        case .feishu where unified:
+            show(.messages)
+            front = .assistant
+            setTab(.assistant, in: model)
         default:
             front = t
         }
     }
+
+    private func setTab(_ t: AppTab, in model: AppModel) {
+        settingTab = true
+        model.selectedTab = t
+        settingTab = false
+    }
 }
 
 /// The iPad's routes (`PadRouter`) and its Settings, on the tabs: a sheet on the iPad; on a phone (iPhone Duo open) the
-/// whole window, one column across, as ChatGPT shows its account page there, not a sheet over half of it (#3701).
+/// whole window, one column across, as ChatGPT shows its account page there, not a sheet over half of it (#3701). At a
+/// phone's own width (the Sidebar layout's drawer, #6332) the sheet the shell shows it in.
 private struct PadRoutes: ViewModifier {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var width
     let router: PadRouter
     private let phone = UIDevice.current.userInterfaceIdiom == .phone
+    private var cover: Bool { phone && width == .regular }
 
     func body(content: Content) -> some View {
         @Bindable var model = model
         content
             .environment(\.padRouter, router)
-            .sheet(isPresented: phone ? .constant(false) : $model.shellSettings) { settings.presentationSizing(.page) }
-            .fullScreenCover(isPresented: phone ? $model.shellSettings : .constant(false)) {
+            .sheet(isPresented: cover ? .constant(false) : $model.shellSettings) { settings.presentationSizing(.page) }
+            .fullScreenCover(isPresented: cover ? $model.shellSettings : .constant(false)) {
                 settings
                     .environment(\.horizontalSizeClass, .compact)
                     .accessibilityAction(.escape) { model.shellSettings = false } // VoiceOver's scrub, as on a sheet

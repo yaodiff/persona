@@ -18,6 +18,12 @@ struct AssistantTopBar: View {
     /// The column is out. On a phone's tabs (iPhone Duo open) its own button folds it, at its top, so this one is only
     /// there to bring it back (#2623).
     var sidebarShown = false
+    /// The Sidebar layout (#6332): with its column folded away, the button carries how many Agents need the user (the
+    /// sidebar is where they are); off elsewhere.
+    var sidebarCounts = false
+    /// The Sidebar layout on a phone (#6332): the face opens the drawer, the conversation's name is the middle
+    /// (`drawerRow`); off elsewhere.
+    var drawerTitle = false
     /// A phone's tabs (iPhone Duo open): the Assistant | Agents switch in the face's place (#2623).
     @Environment(\.pageTabSwitch) private var pageTabSwitch
     var openSidebar: () -> Void
@@ -112,10 +118,58 @@ struct AssistantTopBar: View {
     @ViewBuilder private var bar: some View {
         #if os(macOS)
         if shell != nil { shellBar } else if AppStyle.current.usesBeautifulUI { classicBar } else { macBar }
+        #elseif os(iOS)
+        if shell != nil { shellBar } else if drawerTitle { drawerRow } else { classicBar }
         #else
         if shell != nil { shellBar } else { classicBar }
         #endif
     }
+
+    #if os(iOS)
+    /// The Sidebar layout's bar on a phone (#6332), the shell's without the switch: the persona's face opens the drawer
+    /// (the inbox's mark on it, how many Agents need the user at its corner), the conversation's name in the middle with
+    /// the face's menu (Knowledge, details, copy…), New Chat.
+    private var drawerRow: some View {
+        let link = model.connection.shown
+        return HStack(alignment: .top) {
+            ShellPersonaButton(id: "assistant-sidebar-button", action: openSidebar)
+                .overlay(alignment: .topTrailing) { SidebarWaitingBadge() }
+            Spacer(minLength: Theme.Space.s)
+            Menu { menuItems(link) } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    if link != .online {
+                        ConnectionLabel(phase: link, compact: true)
+                    } else {
+                        Text(name).font(Theme.Font.bodyStrong).lineLimit(1)
+                        ThemedIcon(Theme.Icon.expand).font(Theme.Font.label).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, Theme.Space.l)
+                .scaledFrame(height: Theme.Size.tapTarget)
+                .scaledFrame(maxWidth: Theme.Size.box240)
+                .fixedSize()
+                // Not the glass `surface`: inside a Menu's label it spreads over the whole label (the face's menu).
+                .background(.regularMaterial, in: .capsule)
+                .contentShape(.capsule)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityLabel(link != .online ? String(localized: "\(name), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true))") : name)
+            .accessibilityHint("Knowledge, details, copy directory and chat info")
+            .accessibilityIdentifier("persona-avatar")
+            .connectionDetails($showLink)
+            Spacer(minLength: Theme.Space.s)
+            ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Chat [Quick Actions ea4b29]"), id: "assistant-new", action: newConversation)
+                .disabled(key == nil)
+                .opacity(key == nil ? 0.4 : 1)
+        }
+        .shellTopBarScaled()
+        .padding(.horizontal, Theme.Space.l)
+        .padding(.top, Theme.Space.xxs)
+        .frame(height: Self.height, alignment: .top)
+        .background(alignment: .top) { BarFog(solid: Self.fogSolid, fade: Self.fade) }
+    }
+    #endif
 
     #if os(macOS)
     /// The Mac's (#2113): the title bar's row of the conversation's column, as the Agents chat's (`macTitleRow`):
@@ -232,6 +286,7 @@ struct AssistantTopBar: View {
                         openSidebar()
                     }
                 }
+                .overlay(alignment: .topTrailing) { if sidebarCounts && !sidebarShown { SidebarWaitingBadge() } }
                 .transition(.identity)
             }
             Spacer(minLength: 8)

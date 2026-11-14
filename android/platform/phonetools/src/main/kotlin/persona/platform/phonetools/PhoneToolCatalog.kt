@@ -102,8 +102,10 @@ internal object PhoneToolCatalog {
                 "the user asks something that needs their location.",
             PhoneSource.Location, foreground = true),
         tool("phone_health_summary",
-            "Summarize the user's health data per day. Metrics: steps, distance (meters), active_energy (kcal), " +
-                "heart_rate (bpm, average/min/max over the day), resting_heart_rate (bpm), sleep (hours asleep), weight (kg). " +
+            "Summarize the user's health data per day. Metrics: steps, distance (meters), " +
+                "active_energy, resting_energy, dietary_energy (kcal, daily totals), " +
+                "protein, carbs, fat (grams, daily totals), heart_rate (bpm, average/min/max over the day), " +
+                "resting_heart_rate (bpm), sleep (hours asleep), weight (kg). " +
                 "Defaults to steps over the last 7 days. Only the requested metrics are read. Days run from local midnight to " +
                 "midnight; today's numbers are partial. Returns one row per day with only the days that have data. Read access is " +
                 "never reported to apps, so an empty result can also mean the user denied read access.",

@@ -5,6 +5,11 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 eval "$(python3 scripts/persona_config.py env)"
 python3 scripts/persona_config.py xcconfig
+if [ -x "${PERSONA_XCODE_RUNNER:-$HOME/.local/bin/xcode-slot}" ]; then
+  "${PERSONA_XCODE_RUNNER:-$HOME/.local/bin/xcode-slot}" native/app-core/scripts/build-apple.sh
+else
+  native/app-core/scripts/build-apple.sh
+fi
 RESOLVER=$(python3 scripts/persona_identity.py --service hub --prefix -)
 cd apple
 SIM="${SIM:-$PERSONA_SIM}"

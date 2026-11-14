@@ -1,0 +1,12 @@
+{
+  "merged": "已把 {count} 行合并成一行",
+  "merge_failed": "合并失败：{error}",
+  "unmerged": "已拆回各自的行",
+  "unmerge_failed": "撤销合并失败：{error}",
+  "todo_added": "已加入待办（{count} 项）",
+  "todo_partly": "已加入 {count} 项，之后失败：{error}",
+  "todo_failed": "加入待办失败：{error}",
+  "todo_undone": "已从待办移除",
+  "todo_undo_failed": "撤销失败：{error}",
+  "undo": "撤销"
+}

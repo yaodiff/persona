@@ -13,14 +13,14 @@ The full list of current problems the rules found is in "Survey of the current c
 
 | Rule | In one line | Checked by |
 | --- | --- | --- |
-| P1 | No system-framework or disk IO on the main actor; `.task` and `async` do not move work off it | ratchet, review, Time Profiler |
-| P2 | Keychain and UserDefaults: read once, off the hot path; nothing that changes often goes in UserDefaults | ratchet, review |
+| P1 | No system-framework or disk IO on the main actor; `.task` and `async` do not move work off it | isolation lint, review, Time Profiler |
+| P2 | Keychain and UserDefaults: read once, off the hot path; nothing that changes often goes in UserDefaults | isolation lint, ratchet, review |
 | P3 | `@State` initial values are cheap and have no side effects | review, `PerfTrace.body` counts |
 | P4 | `body` only arranges views: no sorting, parsing, formatting or decoding in it | review, SwiftUI instrument |
 | P5 | A view reads only what it draws; split readers into small views | `RenderBudgetTests`, `AllSessionsReadersTests` |
 | P6 | Lists have stable, unique identities and cheap rows | review, `PerfTrace.body` counts |
 | P7 | Coalesce high-frequency updates; no state ↔ layout feedback loops | `PerfCount` push time, review |
-| P8 | Decode and downsample images off the main thread, to the pixel size drawn, and cache them | ratchet, Allocations |
+| P8 | Decode and downsample images off the main thread, to the pixel size drawn, and cache them | isolation lint, Allocations |
 | P9 | Timers, polling and animations stop when nobody sees them | ratchet, `ContinuousMotionTests`, `HoldSourceTests` |
 | P10 | Launch draws the first frame before doing anything else | App Launch template, `XCTApplicationLaunchMetric` |
 | P11 | Caches and retained pages are bounded; extensions decode to the size they show | Allocations, Leaks, memory graph |
@@ -36,7 +36,7 @@ repository's.
 | One main-thread work item during scrolling, typing or an animation | ≤ 16 ms (one frame at 60 Hz; 8 ms on 120 Hz ProMotion screens is the goal) | Time Profiler, Animation Hitches, `FrameStats` |
 | Any single main-thread block, anywhere (first tap, page open, push) | < 100 ms; Apple calls a delay over 100 ms noticeable | `MainThreadWatchdog`, Time Profiler, Hangs instrument, `sample <pid>` |
 | A hang | none ≥ 250 ms, the point where Apple's tools report a hang; one found is a bug to fix before release | Hangs instrument, Xcode Organizer, MetricKit |
-| Assistant ⇄ Agents switch (`PerfAssistantTests/testTabSwitchAssistantAgents`) | hitch < 10 ms/s and no frame over 100 ms; on 2026-11-12 the simulator measured 32–55 ms/s and a worst frame of 225–330 ms (optimized build, `assistant` suite data), over budget and tracked in #5438 | `scripts/app/perf-test.sh assistant`, `sample` while switching |
+| Assistant ⇄ Agents switch (`PerfAssistantTests/testTabSwitchAssistantAgentsByCue`: the app switches on a cue, nothing of XCTest's in the frames) | hitch < 10 ms/s and no frame over 100 ms. Simulator, optimized build, `assistant` suite data, 2026-11-13: 39–40 ms/s, longest frame 93–101 ms (median), main thread busy p95 8.3 ms; before #5438's fixes 74–91 ms/s, 121–135 ms and 17–19 ms. Still over: a switch swaps the pages' top bars for the moving one and back, glass and menus built each time, and the first visit to Agents builds the page (a frame of about 0.85 s in the tapping test). `testTabSwitchAssistantAgents` taps and waits through XCTest, whose accessibility snapshots are most of its 67–133 ms/s; it shows the tap's path, not this budget | `scripts/app/perf-test.sh assistant`, `sample` while switching |
 | Hitch time ratio while scrolling | < 5 ms/s (Apple: good under 5, warning 5–10, critical above 10) | `XCTHitchMetric`, `scripts/app/perf-test.sh` |
 | View bodies per hub push, page at rest | the numbers in `docs/apple/ios-state.md` ("Cost of one push"): Agents list 1 / 2, chats 0 | `RenderBudgetTests` |
 | Main-thread time per hub push | no regression against the tables in `docs/operations/testing.md` ("Whole App (any page)") | `-perfCounts YES`, `-showPagePerf YES` |
@@ -91,8 +91,8 @@ struct Assets: @unchecked Sendable { let list: [PHAsset] }
 Start the work before the user needs it where it is free to do so (prefetch when the composer appears, not when + is
 tapped), and show the panel at once with a placeholder.
 
-**Check.** `scripts/test/test_apple_perf_patterns.py` keeps the count of these calls per file from growing ("Automated
-checks"). In review: every new call to a system framework or the file system names the thread it runs on. Measure with
+**Check.** `scripts/test/isolation-lint.sh` reads where each Photos fetch, file read and directory listing runs and fails
+when a file gains one on the main actor, or one it cannot place ("Isolation lint"). In review: every new call to a system framework or the file system names the thread it runs on. Measure with
 Time Profiler (main thread, "Hide system libraries" off) or `sample <pid>` during the first tap on a cold launch.
 
 ### P2. Keychain and UserDefaults: read once, off the hot path
@@ -114,7 +114,7 @@ unlocking. Every UserDefaults write, for any key, makes every `@AppStorage` view
 **Do.** One reader, `Keychain` (`apple/Shared/Keychain.swift`), called from the code that loads credentials at launch or
 pairing; keep the value in the model and pass it down. For new persisted state pick `StateCache` first.
 
-**Check.** The ratchet counts `SecItemCopyMatching` and `synchronize()`; `AppStorageRatchetTests` keeps the list of files
+**Check.** The isolation lint counts `SecItemCopyMatching` on the main actor and the ratchet counts `synchronize()`; `AppStorageRatchetTests` keeps the list of files
 holding `@AppStorage` from growing. Review: no `@AppStorage` key written more than once per user action; no keychain read reachable from `body`, a row, or a push handler.
 
 ### P3. `@State` initial values are cheap and have no side effects
@@ -135,7 +135,13 @@ for expensive objects.
 - Fixed before: `ShellState(...)` as a `@State` initial value called the pager and a DEBUG trace on every `RootView`
   rebuild, which kept the main thread at 100% (commit `d2289dee5`, `docs/lessons/ios.md`).
 
-**Do.** Keep the model's `init` empty and create its expensive parts lazily (`@ObservationIgnored private lazy var
+- An initial value is evaluated in the **parent's** `body` (that is where the struct is built), so what it reads, the
+  parent follows. `ShellView`'s `@State private var shell = ShellState(page: … AppModel.shared.selectedTab …)` made
+  `RootView`'s body depend on the app's tab: every switch between Assistant and Agents ran `RootView`, built a throwaway
+  `ShellState` and handed the shell's whole tree new structs to compare (#5438). It reads `AppModel.selectedTabNow` now.
+
+**Do.** An initial value reads nothing observed: take the unobserved accessor (`sessionsNow`, `selectedTabNow`) or pass
+the value in. Keep the model's `init` empty and create its expensive parts lazily (`@ObservationIgnored private lazy var
 manager = PHCachingImageManager()`), or own the object one level up (the page's model) and pass it in.
 
 **Check.** Review: open every class used as a `@State` initial value and read its `init`. To measure, log or count the
@@ -162,10 +168,10 @@ every push and every frame of a scroll.
 **Counter-examples.**
 - `apple/Persona/Views/Inbox/Lark/LarkInline.swift:303`: compiles a regular expression on every call, from every Lark card node's `body`.
 - `apple/Persona/Views/Knowledge/KnowledgeView.swift:1092`: a new `DateFormatter` per call from `body` (`apple/Persona/Views/Knowledge/KnowledgeView.swift:826`).
-- `apple/Shared/StateNames.swift`: `StateName.text` calls `interfaceText(_:)` each time it is read. With an explicit locale,
+- Fixed before, `apple/Shared/StateNames.swift`: `StateName.text` called `interfaceText(_:)` each time it was read. With an explicit locale,
   `String(localized:)` reads the string tables on every call (1–2 ms each on the simulator, against the cached lookup of
   the default locale). The Agents filter chips (`QuickFilterBar.plainChips` → `AgentFilter.title`) and row badges read it
-  on every redraw: 1153 ms of main-thread time over 20 Assistant ⇄ Agents switches, about 57 ms per switch, measured with
+  on every redraw (kept per locale now): 1153 ms of main-thread time over 20 Assistant ⇄ Agents switches, about 57 ms per switch, measured with
   `sample` on an optimized build (#5438).
 - Fixed before: the Agents list grouped, sorted, folded and counted every session in `body` on every push until `AgentsFeed` and
   `AgentListProjection` moved that into the model (`docs/apple/ios-state.md`, steps 1 and 3); Markdown re-parsed finished blocks while streaming until `StreamChunks`.
@@ -208,13 +214,31 @@ in one place, move that read into a small child view. Actions read unobserved va
 - Fixed before: the chat subtitle read `machines`, so every machine heartbeat recomputed the page and all its rows
   (`docs/apple/ios-state.md`, step 5); writing a trace array in `body` made `RootView` observe it and redraw for ever (commit `d2289dee5`).
 
-**Do.** Follow `docs/apple/ios-state.md` ("Keeping redraws small"). Write-only records are `@ObservationIgnored`. A store
+- Fixed before: three reads that made whole pages run on every switch between Assistant and Agents, where nothing they
+  draw changes (#5438, measured with `-perfCounts YES`, bodies per switch):
+  - `AgentsList`'s body worked out whether the list is out of sight from `model.selectedTab`, the strip's `moving` and
+    `model.visibleSession`, all of which change on a switch: 3–4 runs of the list's body, over every row. The reads moved
+    into `AgentsCoverWatch`, a clear view in the list's background that holds the feed and carries the polling.
+  - `ChatView` declared `@Environment(\.dismiss)`. SwiftUI hands out a new `DismissAction` when the presentation around
+    a view changes, and a shell page going behind or coming back counts: 2–3 runs of the chat page, its footer and its
+    transcript. `DismissReader` declares it now and keeps the latest in an unobserved `DismissHolder`.
+  - `ChatsView`'s body read where the shell's bar is drawn (`AgentsHeader.bar`) to fade it. The bar is put back each time
+    the strip rests on Agents and reports its place again: one run of the page and one of the list. The read moved
+    into the bar's own modifier (`AgentsTopBarPlace`).
+
+**Do.** Follow `docs/apple/ios-state.md` ("Keeping redraws small"). An environment value that changes with the
+presentation (`dismiss`, `isPresented`, `scenePhase`, `tabIsActive`) and a model value that only an action or a side
+effect needs are read by a small view or modifier of their own (`DismissReader`, `PageFrontWatcher`, `AgentsCoverWatch`),
+which hands the big view nothing to redraw for. Write-only records are `@ObservationIgnored`. A store
 many pages share hands each one a projection of its own key, built per change: `MeetingPhotos.Album` is one recording's
 photos with each row's content worked out, so the meeting thread reads only their order, each photo row reads the rest,
 and another recording's uploads redraw neither.
 
-**Check.** `RenderBudgetTests` (views per push) and `AllSessionsReadersTests` (who may read `allSessions`) fail on
-regressions; add a `PerfTrace.body("Name")` to a new heavy view so its count shows up.
+**Check.** `RenderBudgetTests` (views per push, and `testShellSwitch`: views per switch between Assistant and Agents) and
+`AllSessionsReadersTests` (who may read `allSessions`) fail on regressions; add a `PerfTrace.body("Name")` to a new heavy
+view so its count shows up. To find what made a body run, put `let _ = Self._printChanges()` at its top in a local build
+and read the app's console (`xcrun simctl launch --console-pty …`): it names the property, environment value or
+observed key path that changed.
 
 ### P6. Lists have stable identities and cheap rows
 
@@ -258,13 +282,29 @@ value written back into state that changes the layout loops for ever and hangs t
   docs/lessons/ios.md「Animated jumps redraw every text they pass」). Jumps to the newest end now move the
   `UIScrollView` (`ChatJumpRun`); jumps to a line keep SwiftUI's (a far one measured a longer frame on the list).
 
-**Do.** Batch into one main-actor hop per frame or per short window (`applyPendingSessions`); compare before assigning;
+- Fixed before: the composer kept where its 「+」 is in the window in `@State`
+  (`.onGeometryChange { $0.frame(in: .global) } action: { plusFrame = $0 }`), for the panel a tap opens. While the
+  shell's strip slides, every window frame on both pages changes on every frame: the bar's body ran about 30 times a
+  switch, each run building its menus and updating its text field again (`PlatformTextFieldCoordinator.update` →
+  `setSelection`, where the watchdog once caught a 195 ms block). It is an unobserved `WindowFrame` now, read on the
+  tap. The Agents header's field did the same with its row's frame (about 60 runs a switch), and laid the row
+  out again each frame, the filters' `ViewThatFits` with it; it goes by the row's width and the page's now. A named
+  coordinate space on the `List` did not help: a row does not resolve it and falls back to the window's (#5438).
+- Fixed before: a `ViewThatFits` in a list row measured every candidate on every frame the row moved on screen (a row
+  has a view graph of its own, which works its size out again each time): the Agents filters, 53 ms of main-thread time
+  a switch. Each candidate is wrapped in `MeasuredOnce` (`apple/Persona/DesignSystem/Components.swift`).
+
+**Do.** A frame in the window (`.global`) moves whenever anything above the view moves: the shell's strip, the drawer, a
+sheet's drag, the keyboard. Measure in the coordinate space of what the value is about (`.named(…)` on the page or the
+list), take only the component needed (`minY` does not change in a slide sideways), and keep a frame that only an action
+reads in an unobserved object. Batch into one main-actor hop per frame or per short window (`applyPendingSessions`); compare before assigning;
 round geometry to whole points and write it back only when it moved by at least a point. Animate a long list's
 programmatic scroll on its `UIScrollView` (a display link, whole pixels; `ChatJumpRun`), never by animating SwiftUI's
 scroll position; put a far target a screen short first (`ChatJump`).
 
 **Check.** `-perfCounts YES` push time and bodies; the mock hub's `/mock/churn` and `/mock/say?stream=1` drive the load
-(`docs/operations/testing.md`, "Persona page (long main chat)").
+(`docs/operations/testing.md`, "Persona page (long main chat)"). The ratchet counts `window-frame`, every
+`frame(in: .global)`: a new one fails unless its line says why it is fine (`// perf-ok: only y, kept unobserved`).
 
 ### P8. Decode and downsample images off the main thread
 
@@ -288,7 +328,7 @@ decode takes tens of milliseconds. `UIImage(data:)` decodes lazily at first draw
 `Task.detached { decode(data, maxPixel:) }` with a `nonisolated` ImageIO thumbnail, in-flight requests shared, an `NSCache`
 with a byte cost. Photos thumbnails come from `PHCachingImageManager` at the cell's pixel size.
 
-**Check.** The ratchet counts `UIImage(data:)` / `UIImage(contentsOfFile:)` / `NSImage(data:)`. Allocations shows
+**Check.** The isolation lint counts `UIImage(data:)` / `UIImage(contentsOfFile:)` / `NSImage(data:)` on the main actor. Allocations shows
 full-size `CGImage` backing stores.
 
 ### P9. Work stops when nobody sees it
@@ -318,7 +358,7 @@ animations on the Mac in Core Animation (`MacBreathingRing`).
 
 **Check.** The ratchet counts `TimelineView(.animation…)` without `paused:`; `ContinuousMotionTests`; `HoldSourceTests`
 (no timers in model-following feeds). Leaks and the memory graph after leaving the page. Work that reruns on every return
-cannot be found by text: `PerfAssistantTests/testTabSwitchAssistantAgents` measures the Assistant ⇄ Agents switch against
+cannot be found by text: `PerfAssistantTests/testTabSwitchAssistantAgentsByCue` measures the Assistant ⇄ Agents switch against
 its budget ("Budgets"); a page with its own switch-back cost gets a test of the same shape.
 
 ### P10. Launch draws the first frame first
@@ -336,7 +376,12 @@ launch. Everything before the first frame is time the user stares at the launch 
 - `apple/PersonaWatch/PersonaWatchApp.swift:6`: the watch's `WatchModel()` reads the keychain and the pet manifest and starts polling in `init`.
 
 **Do.** Show the cached state, then connect. Mark launch phases with `PerfTrace.event` so Instruments' Points of Interest
-show where the time went.
+show where the time went. `Snapshot restored` follows a successfully decoded cached snapshot and publication of its values;
+`First frame (root appeared)` is the once-per-process root-appearance boundary immediately before SwiftUI submits the first
+frame (the system launch metric, not this proxy, is the displayed-frame timestamp); `Connected` enters `AppModel.didConnect`
+after the socket reaches `.connected` and before registration and refetch work. They add no dynamic detail or file IO; their
+only new state is one static Bool, and their logging cost is the existing `PerfTrace.event` path (including its lazy OSLog
+setup). They compile only in DEBUG / PERF_SIGNPOST builds.
 
 **Check.** The App Launch template in Instruments (simulator or device), `XCTApplicationLaunchMetric` in a UI test, and the
 launch histogram in Xcode Organizer for TestFlight builds.
@@ -393,7 +438,8 @@ Start from a reproduction, measure the base, change one thing, measure again.
      their causes and long updates); App Launch; Allocations and Leaks. Animation Hitches needs a device.
    - Signposts: `PerfTrace.event("Name", detail)` (`apple/Persona/App/PerfSignpost.swift`, subsystem `Persona.Performance`,
      Points of Interest) marks moments. For a span, use an `OSSignposter` interval in the same subsystem, compiled under
-     `#if DEBUG || PERF_SIGNPOST`.
+     `#if DEBUG || PERF_SIGNPOST`. The launch marks are `Snapshot restored`, `First frame (root appeared)` and `Connected`;
+     the middle mark is an app-side pre-submission proxy, while the system's launch metric records the displayed frame.
 4. **Count redraws.** Add `PerfTrace.body("ViewName")` at the top of a heavy `body`; launch with `-perfCounts YES`.
    `PerfCount` counts bodies and the main thread's time from each push to the next idle run loop. When a modal sheet or
    overlay hitches, check the background page's counters too (`ChatView`, `ChatTranscript.body`): presenting on the shell
@@ -415,7 +461,24 @@ Start from a reproduction, measure the base, change one thing, measure again.
    "Probes and assertions") expose state for UI tests. The suites in `scripts/app/perf-test.sh` (`PerfAgentsTests`,
    `PerfAssistantTests`, `PerfComposerTests`, …) do this with `XCTHitchMetric` and report through
    `scripts/app/perf_report.py`.
-7. **In the field.** TestFlight builds report hangs, launch time and memory to Xcode Organizer. MetricKit is not wired yet
+
+   `scripts/app/perf-test.sh launch` instead runs `PerfLaunchTests` with `XCTApplicationLaunchMetric` and no frame probe.
+   Cold launches reset the saved pairing and delete the development snapshot before each fresh process; the host-side test
+   runner performs that deletion in its assigned simulator's container, without changing app-side cleanup. Warm launches
+   first verify the large mock data and the durable snapshot from an unmeasured seed; screen probes run only in that seed,
+   never in a measured launch. The measured warm launches use the saved pairing. XCTest discards its own warm-up, so these
+   are fresh pairing/snapshot-state and restored-snapshot process launches with warm OS caches, not a rebooted-device cold
+   series. Other persisted launch inputs (transcripts, drafts, outbox and personas) stay untouched; the lane measures their
+   existing loading rather than changing it. The report keeps every retained value and shows cold / warm median, range and
+   spread in milliseconds. The 400 ms recent-iPhone budget is not a simulator failure gate.
+7. **Keep XCTest out of the measured frames.** `element.tap()` resolves the element from an accessibility snapshot of
+   the app, and `waitForExistence` takes one per poll, all on the app's main thread: 55–70 ms each with the `assistant`
+   suite's data, about three quarters of the main thread's busy time during `testTabSwitchAssistantAgents` (#5438). A
+   test that taps and waits inside `measure` reports XCTest's hitches with the app's. For an animation, give the app a
+   cue (a Darwin notification handled by `FrameProbe`, as `com.persona.perf.shell.switch`) and let the test only sleep
+   while frames are recorded (`testTabSwitchAssistantAgentsByCue`; the list glides run inside the app the same way, `FrameProbe.runGlide`). To see the split,
+   `PERF_SAMPLE=<test>` samples the app during a test: XCTest's share is everything under `__XCTPerformOnMainRunLoop`.
+8. **In the field.** TestFlight builds report hangs, launch time and memory to Xcode Organizer. MetricKit is not wired yet
    (#4265).
 
 Report the device or simulator, OS, build settings, data set, number of runs and the range, and say what was not measured.
@@ -424,15 +487,102 @@ Report the device or simulator, OS, build settings, data set, number of runs and
 
 | Check | What it does | State |
 | --- | --- | --- |
-| `scripts/test/test_apple_perf_patterns.py` | Ratchet over Swift under `apple/` (tests excluded): Photos fetches, `SecItemCopyMatching`, `Data` / `String(contentsOf:)`, directory listings, `UserDefaults.synchronize()`, `UIImage(data:)` / `(contentsOfFile:)` / `NSImage(data:)`, `TimelineView(.animation…)` without `paused:`, and localization lookups with an explicit locale (`interfaceText(`,
-`String(localized:…, locale:)`; P4). Each file's counts (`scripts/test/apple_perf_baseline.json`) may only go down; a call verified to run off the main thread is marked `// perf-ok: <reason>`. After removing calls, run it with `--update`; `--list` prints every counted call. Runs in `scripts/ci/python-tests.py`. | Implemented |
-| `RenderBudgetTests`, `AllSessionsReadersTests`, `AppStorageRatchetTests`, `HoldSourceTests`, `ContinuousMotionTests` | Views per push, who reads `allSessions`, files still holding `@AppStorage`, no self-managed waits, every unending animation stops under Reduce Motion | Existing |
-| `scripts/app/perf-test.sh` | Scroll, navigation and composer hitches per page | Existing, run by hand |
-| Isolation-aware lint | Flag the patterns above only where the compiler says the call is on the main actor (SwiftSyntax or a SourceKit index over the isolation of the enclosing declaration), so the ratchet can become a hard zero | Proposed, #4262 |
+| `scripts/test/test_apple_perf_patterns.py` | Ratchet over Swift under `apple/` (tests excluded): `UserDefaults.synchronize()`, `TimelineView(.animation…)` without `paused:`, localization lookups with an explicit locale (`interfaceText(`, `String(localized:…, locale:)`; P4), and reads of a view's frame in the window (`frame(in: .global)`; P7). Each file's counts (`scripts/test/apple_perf_baseline.json`) may only go down; a call verified to be fine is marked `// perf-ok: <reason>`. After removing calls, run it with `--update`; `--list` prints every counted call. Runs in `scripts/ci/python-tests.py`. | Implemented |
+| `RenderBudgetTests`, `AllSessionsReadersTests`, `AppStorageRatchetTests`, `HoldSourceTests`, `ContinuousMotionTests` | Views per push and per switch between Assistant and Agents (`testShellSwitch`: no page's body runs, the composer bar's at most three times), who reads `allSessions`, files still holding `@AppStorage`, no self-managed waits, every unending animation stops under Reduce Motion | Existing |
+| `scripts/app/perf-test.sh` | Scroll, navigation and composer hitches per page, plus cold / warm first-frame launch timing | Existing, run by hand |
+| `scripts/test/isolation-lint.sh` | Isolation lint over Swift under `apple/` (tests excluded): Photos fetches, `SecItemCopyMatching`, `Data` / `String(contentsOf:)`, directory listings and `UIImage(data:)` / `(contentsOfFile:)` / `NSImage(data:)`, each with where it runs: on the main actor, off it, or unknown. Only the first and the last count; each file's counts (`scripts/test/apple_isolation_baseline.json`) may only go down, and no comment clears a call ("Isolation lint"). Runs in `scripts/ci/apple.sh`. | Implemented, #4262 |
 | `scripts/test/test_apple_state_initial_values.py` | P3 ratchet over Swift under `apple/`, including tests: class construction in `@State` with non-trivial `init` bodies or eager stored-property initial values. Each file/type count (`scripts/test/apple_state_initial_values_baseline.json`) may only go down; new entries start at zero. `--update` lowers the baseline; `--list` prints every counted site and its reason. Automatically discovered by `scripts/ci/python-tests.py` in the scripts lane. | Implemented, #4263 |
 | DEBUG main-thread watchdog | A background thread pings the main run loop and logs a `PerfTrace.event` plus a main-thread sample when it is blocked over 100 ms, so UI tests and runtime CLI scenarios catch blocks without Instruments | Implemented, #4264 |
 | MetricKit | Subscribe `MXMetricManager` in TestFlight builds; send hang (`MXHangDiagnostic`), launch and memory payloads into Copy Diagnostics | Proposed, #4265 |
-| Launch metric | A UI test with `XCTApplicationLaunchMetric` in `scripts/app/perf-test.sh` | Proposed, #4266 |
+| Launch metric | `PerfLaunchTests` measures fresh-state and snapshot-restored process launches with `XCTApplicationLaunchMetric`; `scripts/app/perf-test.sh launch` uses the large mock and `perf_report.py` reports median, range and spread without a simulator device-budget gate | Implemented, #4266; run by hand |
+
+### Isolation lint
+
+`scripts/test/isolation-lint.sh` builds the SwiftSyntax package in `scripts/test/isolation-lint` and runs it over `apple/`.
+It reads the sources and the project, not a build: about two seconds once built. For each blocking call (P1, P2, P8) it
+says where the call runs:
+
+| Verdict | Meaning | Counted |
+| --- | --- | --- |
+| `main` | On the main actor in at least one target that compiles the file | yes |
+| `unknown` | The lint cannot tell: nothing it can read says which thread runs the code | yes |
+| `off` | Off the main actor in every target, with every use the lint found listed in the reason | no |
+
+```sh
+scripts/test/isolation-lint.sh                # the check: PASS, or FAIL with each new call and why
+scripts/test/isolation-lint.sh --list --why   # every call, its verdict and the chain of reasons
+scripts/test/isolation-lint.sh --update       # lower the baseline after moving calls off the main actor
+scripts/test/isolation-lint.sh test           # the lint's own tests
+```
+
+The baseline may only go down: `--update` refuses when a count would rise, and a new call that is `main` or `unknown`
+fails the check. There is no comment that clears a call. To fix a finding, move the work ("Do" under P1), or make the
+code say where it runs in a form the lint reads; `--list --why` shows what it read.
+
+**Where the isolation comes from.** `xcodegen dump` of `apple/project.yml` gives each target's sources and its
+`SWIFT_DEFAULT_ACTOR_ISOLATION` and `SWIFT_APPROACHABLE_CONCURRENCY`; packages under `apple/` have no default isolation
+unless their manifest sets one. A file that several targets compile is on the main actor if any of them puts it there;
+a file no target compiles is `unknown`. Nothing is guessed from a path.
+
+**Declarations it understands** (each checked against the compiler, Swift 6 mode with MainActor as the default):
+
+- Unannotated declarations of a target that defaults to MainActor, explicit `@MainActor` on a type, extension,
+  function, property, initializer or closure, and the SwiftUI and UIKit types that are `@MainActor` in the SDK: `main`.
+- `actor` instance members and other global actors: `off`. An actor's static members, `nonisolated` members and nested
+  types are not on the actor.
+- `@concurrent`: `off`. `nonisolated async`: on its caller's actor where the target turns on
+  `NonisolatedNonsendingByDefault` (the app targets do), `off` where it does not.
+- `nonisolated` functions, properties, initializers, types and extensions run where they are called (below). The
+  modifier on a type covers its members and nested types, but not a plain `extension` of it, which is MainActor again
+  in a target that defaults to it.
+- Types the compiler infers `nonisolated`: one that conforms to `Error`, `LocalizedError` or `CodingKey` on its own
+  declaration (not in an extension), and a subclass of a `nonisolated` class.
+- A member that meets a requirement of a `@MainActor` protocol, or of a protocol declared in a MainActor-by-default
+  target, is `main` even inside a `nonisolated` type, unless the member itself says `nonisolated`.
+- `deinit` is `unknown` (it runs on whichever thread drops the last reference) unless it is `isolated deinit`.
+  A parameter's default value runs where the function is called; `async let` runs in a child task.
+
+**Closures it understands.**
+
+- Leave the actor: `Task.detached`, `Thread.detachNewThread`, `DispatchQueue.global().async` / `asyncAfter`, `async` /
+  `asyncAfter` on a queue the same file creates with `DispatchQueue(label:)`, a task group's `addTask` /
+  `addTaskUnlessCancelled` written inside the `with…TaskGroup` closure, and `{ @concurrent in }`.
+- Come back: `MainActor.run`, `MainActor.assumeIsolated`, `DispatchQueue.main.async` / `asyncAfter` / `sync`,
+  `OperationQueue.main.addOperation`, `RunLoop.main.perform`, `{ @MainActor in }`, and a `@MainActor` closure parameter
+  of a function in the scanned sources.
+- Stay where they are written: `Task { }` and `Task.immediate` (on the main actor in main-actor code, on the global
+  executor in code that is not isolated), closures a collection runs before it returns (`map`, `forEach`, `filter`, …),
+  `withCheckedContinuation` and the other `with…` scopes, `sync` on a queue that is not the main one, and `{ … }()`.
+- An explicit `{ @Sendable in }` is not isolated to the code around it: it runs where it is called.
+- A closure handed to a function of the scanned sources runs where that function calls its parameter; one kept in a
+  property (assigned, or through a struct's memberwise initializer) runs where the property is called.
+
+**Code that is not isolated runs where it is called.** The lint follows calls by name, argument labels and the declared
+type of the value they are made on. One caller on the main actor makes it `main`. It is `off` only when every use found
+is off the main actor and nothing can call it unseen.
+
+**What it does not understand, and what it says instead.** It never answers `off` for these:
+
+| Form | Answer |
+| --- | --- |
+| A closure handed to an SDK function not listed above (`URLSession` completion handlers, `NotificationCenter` observers, `PHImageManager` result handlers, `NSItemProvider` loaders) | `main` when written in main-actor code without `@Sendable`, otherwise `unknown` |
+| A closure literal that only its destination's type makes `@Sendable` | `main` when written in main-actor code (a false positive: write `{ @Sendable in` to say so) |
+| A closure kept in a local variable, or read out of a property and handed on | `unknown` outside main-actor code |
+| `map`, `filter` and the like on a lazy sequence, in a file that imports Combine, or in the sequence of a `for await` | `unknown` outside main-actor code |
+| A call on a value whose type no declaration states (`$0.load()`, a value out of an untyped closure) | may make the callee `unknown`, never `main` or `off` |
+| `@objc` members, `#selector`, overrides of SDK classes, callbacks of SDK delegate protocols | `unknown`: the caller is outside the sources |
+| A function handed on as a value, or a property named in a key path | `unknown` |
+| `nonisolated` code with no call in the sources | `unknown` |
+| A conformance other than `Error`, `LocalizedError` or `CodingKey` that makes the compiler infer `nonisolated` | read as MainActor |
+| `SWIFT_DEFAULT_ACTOR_ISOLATION` set per build configuration | the run stops with an error |
+
+Two limits can hide a call and are worth knowing. An async sequence's `map` or `filter` outside a `for await` header, in
+a file that does not import Combine, is taken for a collection's and so for running in place. A global actor other than
+`MainActor` is taken to run off the main thread. Types are matched by name across targets, which can only add callers.
+
+The lint is syntax-only on purpose: a SourceKit index would give the compiler's own answer for a declaration, but it
+needs a full build of every target for every platform first, and it still does not say where `nonisolated` code is
+called from, which is most of the answers above.
 
 ## Review checklist
 
@@ -526,7 +676,7 @@ Grep counts are across `apple/` without tests; they are leads to read, not each 
 
 **Instrumentation that exists**
 
-`PerfTrace` / `PerfCount` (`apple/Persona/App/PerfSignpost.swift`), `MainThreadWatchdog`, `FrameStats`, `apple/Mac/App/MacPerfHarness.swift`, `apple/PersonaUITests/PerfTestCase.swift` (`XCTHitchMetric`, scroll and navigation signpost metrics, `XCTClockMetric`), `RenderBudgetTests`. No `OSSignposter` intervals, no MetricKit.
+`PerfTrace` / `PerfCount` (`apple/Persona/App/PerfSignpost.swift`), `MainThreadWatchdog`, `FrameStats`, `apple/PersonaUITests/PerfTestCase.swift` (`XCTHitchMetric`, scroll and navigation signpost metrics, `XCTClockMetric`), `PerfLaunchTests` (`XCTApplicationLaunchMetric`, no frame probe), `RenderBudgetTests`. The retired native Mac's instrumentation was removed with that target. No `OSSignposter` intervals, no MetricKit.
 
 ## Sources
 

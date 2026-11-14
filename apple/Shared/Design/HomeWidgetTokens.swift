@@ -118,6 +118,45 @@ nonisolated enum HomeWidgetTokens {
     /// A state's dot.
     static let dot: CGFloat = 8
 
+    // MARK: Calendar (the switch, the week and the month)
+
+    /// The switch at the Calendar widget's top right (Today · Week · Month): its height, its corner and the chosen
+    /// part's, the space around a part's word, the chosen part's fill. A fixed size, as the grids it switches between.
+    static let segmentHeight: CGFloat = 22
+    static let segmentCorner: CGFloat = 8
+    static let segmentInset: CGFloat = 2
+    static let segmentPad: CGFloat = 8
+    static let segment = Font.system(size: 12, weight: .semibold)
+    static let segmentOn = Color(light: 0xFFFFFF, dark: 0x636366)
+    static let segmentOnMono = Color.white.opacity(0.35)
+    /// A day in the week's strip: its number's disc and the number, the weekday's letter above.
+    static let weekDisc: CGFloat = 25
+    static let weekNumber = Font.system(size: 15, weight: .semibold)
+    static let weekday = Font.system(size: 11, weight: .semibold)
+    /// The row of weekday letters over a month: the large widget's, the medium's.
+    static let weekdayRow: CGFloat = 16
+    static let weekdayRowCompact: CGFloat = 12
+    /// The large widget's month: a row, a day's disc and number. The medium widget's: the same, smaller, with the
+    /// grid's width beside the day's list.
+    static let monthRow: CGFloat = 29
+    static let monthDisc: CGFloat = 24
+    static let monthNumber = Font.system(size: 15, weight: .medium)
+    static let monthRowCompact: CGFloat = 15
+    static let monthDiscCompact: CGFloat = 15
+    static let monthNumberCompact = Font.system(size: 11, weight: .medium)
+    static let weekdayCompact = Font.system(size: 10, weight: .semibold)
+    static let monthGridCompact: CGFloat = 150
+    /// The dot under a day that has events: in the week, in the large month, in the medium month.
+    static let dayDot: CGFloat = 5
+    static let dayDotMonth: CGFloat = 4
+    static let dayDotCompact: CGFloat = 2.5
+    /// Days gone by step back: their dots.
+    static let pastDot = 0.45
+    /// An event on one line: the bar beside it, its title.
+    static let lineBar: CGFloat = 3
+    static let lineBarHeight: CGFloat = 13
+    static let lineTitle = Font.system(.footnote, weight: .semibold)
+
     // MARK: The persona (an accent)
 
     /// In the corner beside the widget's name.

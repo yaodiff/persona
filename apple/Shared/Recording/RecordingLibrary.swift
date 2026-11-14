@@ -391,7 +391,7 @@ extension RecordingLibrary {
         let files = FileManager.default
         for folder in folders {
             guard !files.fileExists(atPath: folder.appendingPathComponent(entryFileName).path),
-                  let names = try? files.contentsOfDirectory(atPath: folder.path), // perf-ok: nonisolated, from init's Task.detached
+                  let names = try? files.contentsOfDirectory(atPath: folder.path),
                   names.contains(where: { seqMark(fileName: $0) != nil }) else { continue }
             try? files.removeItem(at: folder)
         }

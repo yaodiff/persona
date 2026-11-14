@@ -718,7 +718,7 @@ nonisolated enum RecordingM4A {
     /// given the original's creation date back: when the chunk's first sample was written, which is where
     /// `RecordingLibrary.recover` has a chunk an exit left unregistered begin.
     static func compact(_ url: URL) {
-        guard let data = try? Data(contentsOf: url), // perf-ok: the writer's queue, once per finished file
+        guard let data = try? Data(contentsOf: url),
               let compact = compacted(data) else { return }
         let files = FileManager.default
         let created = (try? files.attributesOfItem(atPath: url.path))?[.creationDate] as? Date

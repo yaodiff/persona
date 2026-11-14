@@ -8,9 +8,12 @@
   "decisions": "结论与决定",
   "actions": "待办",
   "open": "未决问题",
+  "conclusions": "核心结论",
+  "decided": "已决定：",
   "who": "（{who}）",
   "owner": "{who}：",
   "by": "（{by}）",
   "photo": "（照片 {n}）",
-  "partial": "转写太长，结尾部分没有整理进纪要。"
+  "partial": "转写太长，结尾部分没有整理进纪要。",
+  "ai_note": "由 AI 根据录音生成，重要内容请核对。"
 }

@@ -33,8 +33,9 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
 
     var host: String { URL(string: url)?.host ?? url }
 
-    /// The extra attributes in the order they are written: a forward's metadata first, then any others by name.
-    static let extraOrder = ["role", "author", "chat", "project", "machine", "time"]
+    /// The extra attributes in the order they are written: a forward's metadata and a workspace's location first, then
+    /// any others by name.
+    static let extraOrder = ["role", "author", "chat", "project", "machine", "cwd", "branch", "time"]
 
     var xml: String {
         func esc(_ s: String) -> String {
@@ -105,6 +106,7 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
         case "instructions": Theme.Icon.info
         case "doc": Theme.Icon.document
         case "edit": Theme.Icon.ai
+        case "workspace": Theme.Icon.folder
         case ForwardMessage.kind: Theme.Icon.forwardMessage
         default: Theme.Icon.quote
         }
@@ -309,8 +311,7 @@ struct LinkSheet: View {
 /// page. All share the default (on-disk) website data store, so assets and logins carry over.
 /// On iPhone, iPad and Vision Pro a view serves one opening of its link: once a sheet has shown it, the pool lets it go
 /// (`release`, from `PooledWebView`), so a later tap on the link starts on the link's own page with no back/forward
-/// history, not where the last opening was left (#4074). The Mac's panel (frozen, apple/Mac/Link) still reuses its views:
-/// its Open in Separate Window moves the view on screen, page and history, into the window.
+/// history, not where the last opening was left (#4074).
 @MainActor
 final class WebViewPool {
     static let shared = WebViewPool()

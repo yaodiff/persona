@@ -428,6 +428,10 @@ func (h *Hub) saveMachineEntries(ctx context.Context) {
 	d := &h.devices
 	d.reportedSave.Lock()
 	defer d.reportedSave.Unlock()
+	// A handover can time out while a background write holds the lock. Do not start another write when it is released.
+	if ctx.Err() != nil {
+		return
+	}
 	h.writeMachineEntries(ctx)
 }
 

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -294,6 +295,7 @@ func (n *Node) previewStartRPC(ctx context.Context, params json.RawMessage) (any
 	if err := json.Unmarshal(params, &p); err != nil || p.Cwd == "" || p.Name == "" || p.Workspace == "" {
 		return nil, errors.New("preview.start: need cwd, name and workspace")
 	}
+	runtimeSpace := n.isRuntimeWorkspace(p.Workspace)
 	file := findLaunchFile(filepath.Clean(p.Cwd))
 	if file == "" {
 		return nil, fmt.Errorf("no %s for %s", launchFile, p.Cwd)
@@ -317,6 +319,21 @@ func (n *Node) previewStartRPC(ctx context.Context, params json.RawMessage) (any
 	case len(s.Command) == 0:
 		return nil, fmt.Errorf("entry %q only opens %s: start its server yourself", p.Name, s.URL)
 	}
+	if runtimeSpace {
+		// A runtime's workspace (a Paseo session's workspace_id) has no terminal: the server runs in the terminal
+		// engine's workspace that holds its folder, else in a new workspace there; never in one that only happens to be
+		// first.
+		if p.Kind, p.Workspace = n.launchSpaceHolding(ctx, s.Cwd); p.Workspace == "" {
+			launch, created, err := n.launchSpace(ctx, "", s.Cwd, s.Name)
+			switch {
+			case errors.Is(err, errNoLauncher):
+				return nil, refusal(codePreviewNoTerminal, i18n.T(i18n.Default, "rpc-errors."+codePreviewNoTerminal), nil)
+			case err != nil:
+				return nil, fmt.Errorf("could not open a terminal tab: %w", err)
+			}
+			return n.runPreview(ctx, launch, created, s)
+		}
+	}
 	var launch host.Launcher
 	for _, h := range n.hosts.All() {
 		if l, ok := h.(host.Launcher); ok && (p.Kind == "" || h.Kind() == p.Kind) {
@@ -333,6 +350,15 @@ func (n *Node) previewStartRPC(ctx context.Context, params json.RawMessage) (any
 	if err != nil {
 		return nil, fmt.Errorf("could not open a terminal tab: %w", err)
 	}
+	return n.runPreview(ctx, launch, created, s)
+}
+
+// codePreviewNoTerminal: a preview's server has nowhere to run, the machine enabling no terminal engine (its words
+// are the hub's, in the request's language: rpc-errors.preview_no_terminal).
+const codePreviewNoTerminal = "preview_no_terminal"
+
+// runPreview runs entry s in the new tab created and answers with its pane and port.
+func (n *Node) runPreview(ctx context.Context, launch host.Launcher, created *host.Created, s *previewServer) (any, error) {
 	if created == nil || created.Pane.ID == "" {
 		return nil, errors.New("could not open a terminal tab: the host returned no pane")
 	}

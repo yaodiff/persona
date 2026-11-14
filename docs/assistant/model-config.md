@@ -118,9 +118,13 @@ final text. Nothing reads, copies or re-serves the login (#4220 is a different t
 - **Which providers**: a launcher whose CLI is Claude Code (plain `claude`, a `~/.zshrc` or `PATH` launcher, a managed
   launcher that does not speak Messages), on that computer and in its scope. A managed launcher that speaks Messages
   keeps being called over HTTP with its own address and key, as before; direct API connections are unchanged. Codex is
-  not offered: `codex exec` has no switch that turns off all its tools (its shell reads any file even in the read-only
-  sandbox, and the user's MCP servers, apps and plugins come along), and a request's text may be anyone's (a mail, an
-  extension). A launcher deleted since it was picked fails with "can't call this provider", never a run.
+  not offered (#6628): `codex-cli 0.167.1` has independent `shell_tool`, `unified_exec`, `view_image`, `browser_use`
+  and other tool flags but no all-tools-off `exec` switch, and its app-server `ThreadStartParams` / `TurnStartParams`
+  has no empty built-in tool set (`dynamicTools` only adds tools). There is therefore no proof that a request's text,
+  which may be anyone's (a mail, an extension), can be handled without tools, MCP servers, apps, plugins or a retained
+  session. The purpose's status says so and names the alternatives: a keyed connection or a Claude Code launcher. If
+  the done judge has no model, its task stays open with the same localized explanation on its completion check. A
+  launcher deleted since it was picked fails with "can't call this provider", never a run.
 - **Which computer**: the main chat's (Settings › Assistant), which the purpose's `machine_id` in
   `GET /api/v1/model-config` names. With none set, the purpose says so.
 - **What is sent**: the manager resolves the purpose as always, then sends one `model.run` call to that computer's node

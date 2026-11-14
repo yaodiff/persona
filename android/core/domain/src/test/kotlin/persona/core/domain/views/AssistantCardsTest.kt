@@ -27,6 +27,14 @@ class AssistantCardsTest {
         assertEquals(320, html.height)
     }
 
+    /** Share as a picture draws every example but the HTML page, which only runs live (#7261). */
+    @Test fun whatAPictureDraws() {
+        for (name in listOf("decision", "compare", "progress", "progress-updated", "form", "chart")) {
+            assertTrue(name, AssistantCards.parse(example(name))!!.drawsInPicture)
+        }
+        assertTrue(!AssistantCards.parse(example("html"))!!.drawsInPicture)
+    }
+
     @Test fun pagesAndOneComponent() {
         val card = AssistantCards.parse("""{"fallback":"f","sections":[{"items":[
             {"type":"row","title":"详情","action":{"id":"more","push":{"page":"detail"}}}]}],

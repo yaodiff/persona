@@ -6,7 +6,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getState, reset } from "../lib/store";
+import { dropPick, NEW_CONVERSATION, pickedFast, pickEffort, pickFast, pickLauncher, pickModel } from "../lib/assistant-chat";
+import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../lib/assistant-models";
+import { chooseManager } from "../lib/manager-choice";
 import type { Session } from "../lib/types";
+import { panelStoreKey } from "../ui/model-panel/store";
 import { PersonaAssistant, SLOW_START_MS } from "./PersonaAssistant";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -19,9 +23,9 @@ vi.hoisted(() => {
 });
 
 type Started = { session: Session };
-const starts = vi.hoisted(() => [] as { resolve: (r: Started) => void; reject: (e: unknown) => void }[]);
+const starts = vi.hoisted(() => [] as { resolve: (r: Started) => void; reject: (e: unknown) => void; body: Record<string, unknown> }[]);
 vi.mock("../lib/assistant-start", () => ({
-  startConversation: () => new Promise<Started>((resolve, reject) => starts.push({ resolve, reject })),
+  startConversation: (body: Record<string, unknown>) => new Promise<Started>((resolve, reject) => starts.push({ resolve, reject, body })),
 }));
 
 const navigate = vi.hoisted(() => vi.fn());
@@ -59,10 +63,12 @@ const send = async () => {
 };
 
 const waiting = () => host.querySelector("[data-start-pending]");
+const sentBody = () => JSON.parse(JSON.stringify(starts[0].body)) as Record<string, unknown>;
 const headerTitle = () => host.querySelector("header h1, header [data-header-title]")?.textContent ?? host.querySelector("header")?.textContent ?? "";
 
 beforeEach(() => {
   reset();
+  dropPick(NEW_CONVERSATION);
   starts.length = 0;
   navigate.mockClear();
   Object.assign(getState(), {
@@ -77,9 +83,13 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+  localStorage.removeItem(panelStoreKey("assistant", "recent"));
   act(() => root.unmount());
   host.remove();
   reset();
+  dropPick(NEW_CONVERSATION);
+  chooseManager(null);
 });
 
 describe("新对话页：第一条消息发出、会话还没开起来 (#1697)", () => {
@@ -130,5 +140,101 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     expect(host.querySelector("textarea")!.value).toBe(WORDS);
     expect(host.querySelector("textarea")!.disabled).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("sends an explicit Fast choice with the first request, independently of effort, then clears it", async () => {
+    Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
+    pickLauncher(NEW_CONVERSATION, "codex");
+    pickModel(NEW_CONVERSATION, "gpt-fast");
+    pickEffort(NEW_CONVERSATION, "high");
+    pickFast(true);
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    await send();
+    expect(sentBody()).toMatchObject({ launcher: "codex", model: "gpt-fast", effort: "high", service_tier: "priority" });
+    await act(async () => starts[0].resolve({ session: { machine_id: "hub", session_id: "c2", title: "" } as Session }));
+    await flush();
+    expect(pickedFast()).toBe(false);
+  });
+
+  it("a Fast-only Recent pick names the displayed launcher, model and effort in the first request", async () => {
+    Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
+    localStorage.setItem(panelStoreKey("assistant", "recent"), JSON.stringify([{ provider: "codex", model: "gpt-fast", effort: "low", fast: true }]));
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/codex/models")) return json({ agent: "codex", models: [
+        { id: "gpt-fast", name: "GPT Fast", efforts: ["low", "high"], service_tiers: [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }] },
+      ] });
+      if (url.includes("/launchers?purpose=assistant")) return json({
+        launchers: [{ name: "codex", source: "builtin", agent: "codex", agent_type: "codex" }],
+        default: { provider: "codex", model: "gpt-fast", effort: "low" },
+      });
+      return json({ ok: true });
+    }));
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    const pill = host.querySelector<HTMLButtonElement>("[data-new-conversation] button[data-model-pill]")!;
+    expect(pill.getAttribute("data-model-pill")).toBe("ready");
+    await act(async () => pill.click());
+    await act(async () => vi.dynamicImportSettled());
+    await flush();
+    const rail = document.querySelector<HTMLButtonElement>('[data-rail-cell="recent"]')!;
+    await act(async () => rail.click());
+    await flush();
+    const recent = document.querySelector<HTMLElement>('[data-panel-row="recent:0"]')!;
+    expect(recent.getAttribute("aria-disabled")).toBeNull();
+    expect(recent.querySelector("[data-row-setup]")?.getAttribute("title")).toContain("Fast");
+    await act(async () => recent.click());
+    await flush();
+    await send();
+    expect(sentBody()).toMatchObject({ launcher: "codex", model: "gpt-fast", effort: "low", service_tier: "priority" });
+  });
+
+  it("an untouched first request has no service_tier", async () => {
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    await send();
+    expect(sentBody()).not.toHaveProperty("service_tier");
+  });
+
+  it("an older hub gets no service_tier even when a downgraded page held a draft", async () => {
+    Object.assign(getState(), { features: [] });
+    pickLauncher(NEW_CONVERSATION, "codex");
+    pickModel(NEW_CONVERSATION, "gpt-fast");
+    pickFast(true);
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    await send();
+    expect(sentBody()).toMatchObject({ launcher: "codex", model: "gpt-fast" });
+    expect(sentBody()).not.toHaveProperty("service_tier");
+  });
+
+  it("a manager change disarms Fast before the destination catalog answers", async () => {
+    Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
+    pickLauncher(NEW_CONVERSATION, "codex");
+    pickModel(NEW_CONVERSATION, "gpt-fast");
+    pickFast(true);
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    act(() => chooseManager("other-manager"));
+    await flush();
+    expect(pickedFast()).toBe(false);
+    await send();
+    expect(sentBody()).not.toHaveProperty("service_tier");
+  });
+
+  it("a refused start keeps Fast with the restored draft", async () => {
+    Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
+    pickLauncher(NEW_CONVERSATION, "codex");
+    pickModel(NEW_CONVERSATION, "gpt-fast");
+    pickFast(true);
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    await send();
+    await act(async () => starts[0].reject(new Error("no launcher")));
+    await flush();
+    expect(pickedFast()).toBe(true);
+    expect(sentBody()).toHaveProperty("service_tier", "priority");
   });
 });

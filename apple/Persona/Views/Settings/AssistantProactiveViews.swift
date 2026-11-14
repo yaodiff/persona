@@ -113,11 +113,21 @@ enum AssistantScheduleText {
         r.pushesOnlyAsked ? String(localized: "Pushes only when it alerts you") : nil
     }
 
-    /// The capsule row's rule line: the rule, then the push mark (on the line rather than as a second pill, which
-    /// squeezes the title on a phone). The plain row puts the mark on a line of its own, since its rule line is one line.
+    /// The mark for a task that puts rows in the Inbox (#6430): beside the push mark, so the list shows which ones do; nil for Don't.
+    static func inboxMark(_ r: APIClient.ScheduledTask) -> String? {
+        switch r.inbox {
+        case APIClient.ScheduledTask.inboxWorthy: String(localized: "Inbox: if worth a look")
+        case APIClient.ScheduledTask.inboxEvery: String(localized: "Inbox: every time")
+        default: nil
+        }
+    }
+
+    /// The capsule row's rule line: the rule, then the push mark and the Inbox mark (on the line rather than as pills,
+    /// which squeeze the title on a phone). The plain row puts the marks on lines of their own, since its rule line is one line.
     static func ruleLine(_ r: APIClient.ScheduledTask) -> String {
         let rule = rule(r)
-        return r.pushesOnlyAsked ? String(localized: "\(rule) · Pushes only when it alerts you") : rule
+        let pushed = r.pushesOnlyAsked ? String(localized: "\(rule) · Pushes only when it alerts you") : rule
+        return [pushed, inboxMark(r)].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// What it runs with when that isn't the default, in a few words: "claude-fast · Auto-Edit · Thinking Low"; `danger`
@@ -432,6 +442,13 @@ struct AssistantTaskRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                if let mark = AssistantScheduleText.inboxMark(t) {
+                    Label(mark, systemImage: Theme.Icon.inbox)
+                        .labelStyle(AssistantCompactLabel())
+                        .font(Theme.Font.label)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 if let last = AssistantScheduleText.lastRun(t) {
                     Label(last.text, systemImage: last.failed ? Theme.Icon.errorFilled : Theme.Icon.done)
                         .labelStyle(AssistantCompactLabel())
@@ -526,6 +543,8 @@ struct AssistantTaskEditor: View {
     private var changed: Bool { saved.map { !Self.same($0, draft) } ?? true }
     /// Push When Done shows when the hub takes it (task_push), or the task already has it.
     private var showsPush: Bool { model.hubFeatures.contains(APIClient.ScheduledTask.pushFeature) || opened.pushesOnlyAsked }
+    /// When Done, Put It in the Inbox shows when the hub takes it (task_inbox), or the task already has a setting.
+    private var showsInbox: Bool { model.hubFeatures.contains(APIClient.ScheduledTask.inboxFeature) || !(opened.inbox ?? "").isEmpty }
     private var machineID: String { model.assistantConfig?.machineID ?? model.hubMachineID }
 
     var body: some View {
@@ -552,6 +571,7 @@ struct AssistantTaskEditor: View {
             }
             runsWithSection
             if showsPush { pushSection }
+            if showsInbox { inboxSection }
             conversationSection
             Section {
                 Button { Task { await runNow() } } label: {
@@ -692,6 +712,31 @@ struct AssistantTaskEditor: View {
             Text(draft.pushesOnlyAsked
                  ? String(localized: "Pushes only when a run decides you need to know and alerts you; otherwise it stays quiet. Errors and interruptions are pushed as usual. These tasks always run in their own chat, and messages you send in that chat aren't pushed when done either.")
                  : String(localized: "Pushes the answer to your phone after every run."))
+        }
+    }
+
+    /// When Done, Put It in the Inbox (docs/assistant/assistant.md「Put it in the Inbox when done」): nothing, a row only when a run finds something
+    /// worth a look, or a row after every run. Independent of Push When Done; Don't is sent as "" so a task switched back is saved as such.
+    private var inboxSection: some View {
+        Section {
+            SegmentedChoice(String(localized: "When Done, Put It in the Inbox"),
+                            [(value: "", label: String(localized: "Don’t")),
+                             (value: APIClient.ScheduledTask.inboxWorthy, label: String(localized: "Worth a Look")),
+                             (value: APIClient.ScheduledTask.inboxEvery, label: String(localized: "Every Time"))],
+                            selection: Binding { draft.inbox ?? "" } set: { new in withAnimation(Theme.Motion.standard) { draft.inbox = new } })
+                .accessibilityIdentifier("task-inbox")
+        } header: {
+            Text("When Done, Put It in the Inbox")
+        } footer: {
+            Text(inboxHint)
+        }
+    }
+
+    private var inboxHint: String {
+        switch draft.inbox ?? "" {
+        case APIClient.ScheduledTask.inboxEvery: String(localized: "Every run adds a row to your Inbox so you can follow up. Tapping it opens that chat.")
+        case APIClient.ScheduledTask.inboxWorthy: String(localized: "A row is added to your Inbox only when a run finds something worth a look. Tapping it opens that chat.")
+        default: String(localized: "Nothing is added to your Inbox.")
         }
     }
 
@@ -873,7 +918,7 @@ struct AssistantTaskEditor: View {
     static func same(_ a: APIClient.ScheduledTask, _ b: APIClient.ScheduledTask) -> Bool {
         guard a.title == b.title, a.prompt == b.prompt, a.repeats == b.repeats, a.enabled == b.enabled, a.sessionID == b.sessionID,
               a.launcher == b.launcher, a.permissionMode == b.permissionMode, a.effort == b.effort,
-              (a.push ?? "") == (b.push ?? "") else { return false }
+              (a.push ?? "") == (b.push ?? ""), (a.inbox ?? "") == (b.inbox ?? "") else { return false }
         return switch a.repeats {
         case .once: a.at == b.at
         case .daily: a.time == b.time && Set(a.weekdays) == Set(b.weekdays)

@@ -24,15 +24,34 @@ nonisolated extension ExtensionUIPlace: Identifiable {
 }
 
 nonisolated extension ExtensionUIContext {
-    /// The UI version a whole page of the app draws (`ExtensionPageView`): 4 adds the code-hosting parts (header,
-    /// breadcrumb, file_tree, code, diff, comment_thread, composer, tabs, the split layout) and actions' own values
-    /// (#2961). Cards, widgets, the watch and the extensions keep `version` (Shared, 3): they draw none of them.
+    #if os(macOS)
+    /// The frozen Mac app (docs/apple/mac.md) keeps the versions it reported before #827: new features skip it, so the
+    /// hub goes on turning newer components into ones it has always drawn.
     static let pageVersion = 4
+    static let cardVersion = version
+    #else
+    /// The UI version a whole page of the app draws (`ExtensionPageView`): 4's code hosting (#2961), 5's code review
+    /// (#3136) and 6's pictures, controls, row actions, charts, tiles, fields and styles (#827).
+    static let pageVersion = 6
+
+    /// The UI version the app's cards and sections draw (the Settings home's cards, a launcher's or a computer's
+    /// sections, an Inbox item's, the assistant's `persona-view`): 6 too, version 4–5's code components read-only
+    /// (`ExtensionCodeSummary`). Widgets, the watch and the system extensions keep `version` (Shared, 3): they draw
+    /// none of it.
+    static let cardVersion = 6
+    #endif
 
     /// This context for a whole page: the page's UI version.
     func forPage() -> Self {
         var c = self
         if c.size == nil || c.size == "full" { c.uiVersion = Self.pageVersion }
+        return c
+    }
+
+    /// This context drawn by the app's own renderer (a page or a card): at least the cards' version.
+    func drawnByApp() -> Self {
+        var c = self
+        c.uiVersion = max(c.uiVersion ?? 0, Self.cardVersion)
         return c
     }
 }
@@ -306,14 +325,17 @@ extension APIClient {
         self.plugin = plugin
         self.initialManager = manager
         self.ui = ui
-        self.context = context
+        // A whole page (`forPage()`) is told from a card or a section by the version it was given, before every model
+        // says what the app's renderer draws (both 6): only a page opens the native stream.
+        let isPage = context.uiVersion == ExtensionUIContext.pageVersion && (context.size == nil || context.size == "full")
+        self.context = context.drawnByApp()
         self.initialState = state
         self.depth = depth
         self.deps = deps
         ExtensionUIRegistry.shared.add(self)
         #if os(iOS) || os(macOS)
         // The source subscription pages (#2041) are the manager's, drawn over HTTP only.
-        if context.uiVersion == ExtensionUIContext.pageVersion, plugin != SubscriptionsUI.id, let connection = deps.connection() {
+        if isPage, plugin != SubscriptionsUI.id, let connection = deps.connection() {
             let stream = ExtensionPageStream(connection: connection, owner: plugin, contribution: ui,
                                              context: context, state: state ?? "", manager: manager)
             self.stream = stream

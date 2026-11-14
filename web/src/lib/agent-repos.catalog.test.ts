@@ -116,6 +116,17 @@ describe("catalog-backed By repo projection", () => {
     expect(sessionWorkspace(session("other-manager", "a", { manager: "manager-b" }), catalog, "manager-a")).toBeUndefined();
   });
 
+  it("binds a Paseo Agent to its workspace by id, not its project; an empty Paseo workspace is a row of the project", () => {
+    const paseo = (id: string, patch: Partial<HostWorkspace> = {}) => workspace(id, { source: "paseo", project_id: "prj_app", project_name: "app", workspace_kind: "git", ...patch });
+    const catalog = [paseo("wks_main", { cwd: "/code/app", is_main: true }), paseo("wks_fix", { cwd: "/paseo/worktrees/abc/fix", is_main: false, branch: "fix" })];
+    const agent = session("paseo-1", "prj_app", { space_kind: "paseo", host: "paseo", source_kind: "runtime", workspace_id: "wks_fix", cwd: "/paseo/worktrees/abc/fix" });
+    expect(sessionWorkspace(agent, catalog)?.source_id).toBe("wks_fix");
+    expect(sessionWorkspace({ ...agent, workspace_id: undefined }, catalog)).toBeUndefined();
+    const tree = buildRepoMachineTree([agent], machines, options(catalog));
+    expect(tree[0].repos.map((r) => [r.name, r.count])).toEqual([["app", 1]]);
+    expect(flatten(tree[0].repos[0].worktrees).map((w) => [w.name, w.sessions.length])).toEqual([["wks_main", 0], ["wks_fix", 1]]);
+  });
+
   it("attributes unbound native Agents only to a unique deepest containing directory and respects worktree markers", () => {
     const a = workspace("a", { cwd: "/code/app" }), b = workspace("b", { cwd: "/code/app/child" });
     const native = session("native", "", { space_kind: undefined, cwd: "/code/app/child/src" });

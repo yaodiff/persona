@@ -70,6 +70,23 @@ class AvailabilityFollowupsMockTests(unittest.TestCase):
         self.addCleanup(stop, process, log)
         return base
 
+    def test_seeded_standing_authorizations_are_listed_and_revoked_as_on_the_hub(self):
+        base = self.serve(MOCK_STANDING_AUTHORIZATIONS="1")
+        listed = call(base, "/api/v1/assistant/standing-authorizations")
+        self.assertEqual([g["id"] for g in listed["authorizations"]], ["sa_mock_weather", "sa_mock_blog"])
+        self.assertEqual(listed["authorizations"][0]["actions"], ["merge", "deploy-test"])
+        self.assertEqual(call(base, "/api/v1/assistant/standing-authorizations/sa_mock_blog", method="DELETE"), {"ok": True, "revision": 2})
+        self.assertEqual([g["id"] for g in call(base, "/api/v1/assistant/standing-authorizations")["authorizations"]], ["sa_mock_weather"])
+        call(base, "/mock/reset")
+        self.assertEqual(len(call(base, "/api/v1/assistant/standing-authorizations")["authorizations"]), 2, "reset seeds them again")
+
+    def test_standing_authorizations_without_full_access_or_with_failing_revokes(self):
+        base = self.serve(MOCK_STANDING_AUTHORIZATIONS="forbidden")
+        self.assertEqual(status(base, "/api/v1/assistant/standing-authorizations"), 403)
+        base = self.serve(MOCK_STANDING_AUTHORIZATIONS="fail")
+        self.assertEqual(status(base, "/api/v1/assistant/standing-authorizations/sa_mock_weather", method="DELETE"), 503)
+        self.assertEqual(len(call(base, "/api/v1/assistant/standing-authorizations")["authorizations"]), 2, "a failed revoke keeps it")
+
     def test_a_suggested_rule_rides_on_each_kind_of_card_and_is_answered_once(self):
         base = self.serve(MOCK_RULE_SUGGESTIONS="1", MOCK_TODO_ASKS="1", MOCK_TASKS="1")
         todo = next(t for t in call(base, "/api/v1/todos")["todos"] if t["id"] == "todo_review")
@@ -103,8 +120,10 @@ class AvailabilityFollowupsMockTests(unittest.TestCase):
 
         # /mock/reset offers them all again (a run that answers them starts each pass from the same cards)
         gone = call(base, "/api/v1/assistant/standing-authorizations/" + made["authorization"]["id"], method="DELETE")
-        self.assertEqual((gone["revision"], gone["authorizations"]), (3, []))
-        self.assertEqual(status(base, "/api/v1/assistant/standing-authorizations/sa_never", method="DELETE"), 404)
+        self.assertEqual(gone, {"ok": True, "revision": 3}, "the hub's answer")
+        self.assertEqual(call(base, "/api/v1/assistant/standing-authorizations")["authorizations"], [])
+        self.assertEqual(call(base, "/api/v1/assistant/standing-authorizations/sa_never", method="DELETE"), {"ok": True, "revision": 3},
+                         "one that is gone already is ok too, as on the hub")
         call(base, "/mock/reset")
         self.assertNotIn("macbook|/Users/me/code/weather|edit", [k["key"] for k in call(base, "/api/v1/task-trust")["kinds"]])
         todo = next(t for t in call(base, "/api/v1/todos")["todos"] if t["id"] == "todo_review")

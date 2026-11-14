@@ -119,7 +119,7 @@ func TestRuntimePaneSource8000(t *testing.T) {
 	for _, q := range queries {
 		t.Run(q.Encode(), func(t *testing.T) {
 			var expected []originRow
-			want := sessionlist.Counts{Machine: map[string]int{}, Project: map[string]int{}, Group: map[string]int{}, State: map[string]int{}, PaneSource: map[string]int{}}
+			want := sessionlist.Counts{Machine: map[string]int{}, Project: map[string]int{}, Group: map[string]int{}, State: map[string]int{}, PaneSource: map[string]int{}, Todo: map[string]int{}}
 			for _, row := range all {
 				// Expected origin labels are independently checked against sessionSource
 				// in web/src/lib/pane-source-contract.test.ts, never against the Go helper.
@@ -140,6 +140,7 @@ func TestRuntimePaneSource8000(t *testing.T) {
 				want.Group[row.SpaceID]++
 				want.State[row.State]++
 				want.PaneSource[row.PaneSource]++
+				want.Todo[""]++ // on no to-do
 			}
 			q.Set("limit", "137")
 			p := getOriginPage(t, h, q)

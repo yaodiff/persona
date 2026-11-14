@@ -42,7 +42,9 @@ const item = (id: string, tier: InboxItem["tier"]): InboxItem => ({
   updated_at: "2026-11-09T04:00:00Z", tier, version: `v-${id}`, lark: { feed_id: id, is_group: true },
   chain: [
     { id: `${id}-received`, kind: "received", text: "received" },
+    { id: `${id}-triaged`, kind: "triaged", text: "triaged" },
     { id: `${id}-handling`, kind: "handling", text: "handling" },
+    { id: `${id}-waiting`, kind: "waiting", text: "waiting" },
   ],
 });
 
@@ -117,13 +119,13 @@ describe("E3 review: an entry keeps its own snapshot", () => {
     // the last return is the one this package restores, and it must still show A's chain expanded.
     await openItem("a1");
     await act(async () => chainToggle().click());
-    expect(chainRows()).toHaveLength(2);
+    expect(chainRows()).toHaveLength(4);
     await openItem("a2");
-    expect(chainRows()).toHaveLength(1);
+    expect(chainRows()).toHaveLength(3);
     await back("a1");
     await leaveForChat();
     await back("a1");
-    expect(chainRows()).toHaveLength(2);
+    expect(chainRows()).toHaveLength(4);
   });
 
   it("leaving and returning by Back shows the view the entry was left with", async () => {
@@ -133,7 +135,7 @@ describe("E3 review: an entry keeps its own snapshot", () => {
     await leaveForChat();
     await back("a1");
     expect(search().value).toBe("chat");
-    expect(chainRows()).toHaveLength(2);
+    expect(chainRows()).toHaveLength(4);
   });
 
   it("Back to the list entry from an item keeps the list's scroll", async () => {
@@ -162,13 +164,13 @@ describe("E3 review: an entry keeps its own snapshot", () => {
     await act(async () => chainToggle().click());
     await leaveForChat();
     await back("a1");
-    expect(chainRows()).toHaveLength(2);
+    expect(chainRows()).toHaveLength(4);
     await act(async () => popped(() => history.forward()));
     await show();
     expect(location.pathname).toBe("/persona/c1");
     await act(async () => popped(() => history.back()));
     await show("a1");
-    expect(chainRows()).toHaveLength(2);
+    expect(chainRows()).toHaveLength(4);
   });
 
   it("a remount on the same entry that no Back or Forward reached starts clean", async () => {

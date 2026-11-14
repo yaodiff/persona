@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apns"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // A phone whose relay registration failed says why when it registers, and the hub, which has no apns.json, answers
@@ -189,10 +189,9 @@ func TestDoctorListsPushRoutes(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
 		return http.DefaultClient.Do(req)
 	}
-	var out bytes.Buffer
-	d := &doctorReport{out: &out}
+	d := &doctorReport{l: i18n.ZhHans} // the wording the report had before it spoke other languages
 	d.pushRoutes(context.Background(), get)
-	text := out.String()
+	text := reportText(d)
 	for _, want := range []string{"有问题｜推送", "没有 apns.json", "1 台设备", "我的 iPhone（iphone）：收不到后台推送：向推送中继登记失败（403 topic not served）"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("doctor missing %q:\n%s", want, text)
@@ -200,6 +199,12 @@ func TestDoctorListsPushRoutes(t *testing.T) {
 	}
 	if strings.Contains(text, "prefs-only") {
 		t.Fatalf("doctor listed a settings-only row:\n%s", text)
+	}
+	en := &doctorReport{l: i18n.En}
+	en.pushRoutes(context.Background(), get)
+	if text := reportText(en); !strings.Contains(text, "Problem | Push: The hub has no apns.json") || !strings.Contains(text, "; 1 device can’t get pushes") ||
+		!strings.Contains(text, "  我的 iPhone (iphone): Can’t get background pushes: registering with the push relay failed (403 topic not served)") {
+		t.Fatalf("en:\n%s", text)
 	}
 	if allowed(principal{Role: roleAnswer}, http.MethodGet, "/api/v1/devices/push") {
 		t.Fatal("a watch may read every device's push way")
@@ -222,12 +227,11 @@ func TestDoctorListsPushRoutes(t *testing.T) {
 func TestDoctorPushOnAnOlderHub(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
-	var out bytes.Buffer
-	d := &doctorReport{out: &out}
+	d := &doctorReport{l: i18n.ZhHans}
 	d.pushRoutes(context.Background(), func(ctx context.Context, path string) (*http.Response, error) {
 		return http.Get(srv.URL + path)
 	})
-	if !strings.Contains(out.String(), "版本太旧") {
-		t.Fatalf("doctor: %s", out.String())
+	if out := reportText(d); !strings.Contains(out, "版本太旧") {
+		t.Fatalf("doctor: %s", out)
 	}
 }

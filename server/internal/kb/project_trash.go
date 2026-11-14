@@ -51,6 +51,7 @@ func (e *Engine) DeleteProject(slug string, now time.Time) (TrashEntry, error) {
 		return TrashEntry{}, ErrReadOnly
 	}
 	st := e.Store
+	defer st.SearchIndexPurge() // a deleted project's text leaves the search index at its next update
 	st.applyMu.Lock()
 	defer st.applyMu.Unlock()
 	p, ok := st.Project(slug)

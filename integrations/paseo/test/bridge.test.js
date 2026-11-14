@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createPaseoBridge, TIMELINES_MAX, uuidOf } from '../lib/bridge.js'
 import { PaseoClient } from '../lib/paseo.js'
-import { agentSnapshot, entry, mcpServersError, startFakePaseo } from './fake-paseo.js'
+import { agentSnapshot, entry, mcpServersError, startFakePaseo, workspaceDescriptor } from './fake-paseo.js'
 
 const SID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const SID2 = 'aaaaaaaa-0000-4000-8000-000000000002'
@@ -62,7 +62,7 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
   assert.equal(node.hello.name, 'Paseo')
   assert.equal(node.hello.version, '0.14.0', "Paseo's version")
   assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, rename: true, close: true, assistant: false, modes: true, model: true,
-    models: true, check: true, rewind: true, seen: true, resume: true, readonly: true })
+    models: true, check: true, rewind: true, seen: true, workspaces: true, resume: true, readonly: true })
   assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent]), [['my-claude', 'claude'], ['my-codex', 'codex'], ['grok', 'paseo']])
   assert.deepEqual(node.hello.launchers[0].models, [{ id: 'fable[1m]', name: 'Fable', default: true, efforts: ['low', 'high', 'max'], default_effort: 'max' }])
   const byId = Object.fromEntries(rows().map((r) => [r.session_id, r]))
@@ -341,7 +341,8 @@ test('a rewind goes to the message the app saw, keeps the session id through Cla
   assert.deepEqual(res, { prompt: 'again', restore: 'code_and_conversation', code_restored: true, input_cleared: true })
   assert.deepEqual(fake.requestsOf('agent.rewind.request').map((r) => [r.agentId, r.messageId, r.mode]), [[a.claude.id, 'u2', 'both']],
     "the last 'again', its context block aside; an interruption is no message of the user's")
-  assert.deepEqual(fake.requestsOf('update_agent_request').map((r) => r.labels), [{ 'persona.session': SID }], 'its id kept on the label first')
+  assert.deepEqual(fake.requestsOf('update_agent_request').map((r) => r.labels), [{ 'persona.session': SID, 'persona.kept': '1' }],
+    'its id kept on the label first, marked as kept by the bridge (not an Agent Persona started)')
   await until('the fork listed', () => rows().find((r) => r.session_id === SID)?.transcript === SID2)
   assert.equal(rows().filter((r) => r.session_id === SID).length, 1, 'the same session, now in the fork')
   // The first 'again' (two after it), restoring only the conversation.
@@ -606,6 +607,38 @@ test("a new Codex session: bypassPermissions starts it with Paseo's full-access 
   assert.equal((await start('bypassPermissions')).modeId, 'full-access')
   assert.equal((await start('auto')).modeId, undefined)
   assert.equal((await start('default')).modeId, undefined)
+})
+
+test("Grok: Allow all starts it with Paseo's Auto Accept on and switches that, the row follows; no other mode reaches it", async (t) => {
+  const { fake, node, a, rows } = await setup(t)
+  const start = (launcher, permission_mode) => call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher, permission_mode })
+  const created = () => fake.requestsOf('agent.create.request').at(-1).config
+  const on = await start('grok', 'bypassPermissions')
+  assert.deepEqual(created().featureValues, { auto_accept: true })
+  assert.equal(on.session.permission_mode, 'bypassPermissions')
+  for (const mode of ['default', 'acceptEdits', undefined]) {
+    await start('grok', mode)
+    assert.equal(created().featureValues, undefined, `${mode}: Paseo's own default (off)`)
+  }
+  await start('my-claude', 'bypassPermissions')
+  assert.deepEqual([created().modeId, created().featureValues], ['bypassPermissions', undefined], "Claude Code's mode, as before")
+
+  const sid = on.session.session_id
+  const mode = () => rows().find((r) => r.session_id === sid)?.permission_mode
+  const feature = () => fake.requestsOf('set_agent_feature_request').at(-1)
+  await call(node, 'session.modes', { session_id: sid, permission_mode: 'default' })
+  assert.deepEqual([feature().featureId, feature().value], ['auto_accept', false])
+  await until('Ask: no mode said', () => mode() === undefined)
+  await call(node, 'session.modes', { session_id: sid, permission_mode: 'bypassPermissions', effort: 'xhigh' })
+  assert.equal(feature().value, true)
+  await until('Allow all', () => mode() === 'bypassPermissions')
+  await assert.rejects(call(node, 'session.modes', { session_id: sid, permission_mode: 'acceptEdits' }), /没有这个权限模式/)
+  assert.equal(fake.requestsOf('set_agent_mode_request').length, 0, 'never a mode Grok does not have')
+  // One not running is asked too: Paseo loads it first.
+  await call(node, 'session.modes', { session_id: `paseo-${a.grok.id}`, permission_mode: 'bypassPermissions' })
+  assert.equal(feature().agentId, a.grok.id)
+  fake.handlers.set_agent_feature_request = () => ({ payload: { accepted: false, error: 'busy' } })
+  await assert.rejects(call(node, 'session.modes', { session_id: sid, permission_mode: 'default' }), /没有换模式：busy/)
 })
 
 test('a resolved preset whose launcher Paseo lacks uses the replacement provider defaults', async (t) => {
@@ -1330,3 +1363,165 @@ test('forced close cancels a confirmation and retains the Agent on archive failu
   assert.equal(fake.requestsOf('agent_permission_response').filter(r => r.response?.behavior === 'allow').length, 0)
   await until('force-archived Agent gone', () => !rows().some(r => r.session_id === SID))
 })
+
+// ---- Paseo's workspaces (#6295) ----
+
+/** Paseo's checkout of a repository, a worktree of it, and a background workspace, as its directory lists them. */
+function repoWorkspaces(dir) {
+  const app = join(dir, 'app')
+  const tree = join(dir, 'trees', 'abcd1234', 'feat-x')
+  mkdirSync(app, { recursive: true })
+  mkdirSync(tree, { recursive: true })
+  const checkout = (cwd, o = {}) => ({ cwd, isGit: true, currentBranch: o.branch ?? 'main', worktreeRoot: cwd, isPaseoOwnedWorktree: o.paseo ?? false, mainRepoRoot: o.main ?? null })
+  const main = workspaceDescriptor({ id: 'wks_00000000000000a1', workspaceDirectory: app, projectId: 'prj_app', projectDisplayName: 'app', name: 'main',
+    project: { projectKey: 'prj_app', projectName: 'app', workspaceName: null, checkout: checkout(app) } })
+  const wt = workspaceDescriptor({ id: 'wks_00000000000000a2', workspaceDirectory: tree, projectId: 'prj_app', projectDisplayName: 'app', name: 'Login fix',
+    workspaceKind: 'worktree', worktreeSlug: 'feat-x', gitRuntime: { currentBranch: 'feat/x', isPaseoOwnedWorktree: true, isDirty: false },
+    project: { projectKey: 'prj_app', projectName: 'app', workspaceName: 'Login fix', checkout: checkout(tree, { branch: 'feat/x', paseo: true, main: app }) } })
+  const hidden = workspaceDescriptor({ id: 'wks_00000000000000a3', workspaceDirectory: app, background: true })
+  return { app, tree, main, wt, hidden }
+}
+
+test("Paseo's workspaces are the node's, agents in them or not: their kind, branch and space; a change that lists nothing new says nothing", async (t) => {
+  const dir = realpathSync(mkdtempSync('/tmp/ppaseo-ws-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const w = repoWorkspaces(dir)
+  const { fake, node, a, rows } = await setup(t, { workspaces: [w.main, w.wt, w.hidden] })
+  const listed = await until('the workspaces', () => node.last('runtime.workspaces')?.workspaces)
+  assert.deepEqual(listed, [
+    { workspace_id: w.main.id, title: 'main', cwd: w.app, kind: 'checkout', branch: 'main', space_id: 'prj_app', space_name: 'app', repo_root: w.app },
+    { workspace_id: w.wt.id, title: 'Login fix', cwd: w.tree, kind: 'worktree', branch: 'feat/x', space_id: 'prj_app', space_name: 'app', repo_root: w.app, owned: true },
+  ], 'not the background one; no agents in either')
+  assert.ok(fake.requestsOf('fetch_workspaces_request')[0].subscribe, 'followed')
+  const said = node.all('runtime.workspaces').length
+  fake.upsertWorkspace({ ...w.main, status: 'running', activityAt: new Date().toISOString() })
+  const notes = workspaceDescriptor({ id: 'wks_00000000000000b1', workspaceDirectory: dir, workspaceKind: 'directory', projectId: 'prj_notes', projectDisplayName: 'notes', name: 'notes',
+    project: { projectKey: 'prj_notes', projectName: 'notes', workspaceName: null, checkout: { cwd: dir, isGit: false } } })
+  fake.upsertWorkspace(notes)
+  await until('the new one', () => node.last('runtime.workspaces').workspaces.some((x) => x.workspace_id === notes.id))
+  assert.equal(node.all('runtime.workspaces').length, said + 1, 'a status alone is no change of the list')
+  assert.deepEqual(node.last('runtime.workspaces').workspaces.find((x) => x.workspace_id === notes.id),
+    { workspace_id: notes.id, title: 'notes', cwd: dir, kind: 'folder', space_id: 'prj_notes', space_name: 'notes' })
+  fake.removeWorkspace(w.wt.id)
+  await until('archived: gone', () => !node.last('runtime.workspaces').workspaces.some((x) => x.workspace_id === w.wt.id))
+  // An agent's row names its workspace.
+  assert.equal(rows().find((r) => r.session_id === SID)?.workspace_id, a.claude.workspaceId)
+})
+
+test('a session starts in a workspace that has no agents; a workspace Paseo no longer has is refused; a project or folder still names none', async (t) => {
+  const dir = realpathSync(mkdtempSync('/tmp/ppaseo-ws-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const w = repoWorkspaces(dir)
+  const { fake, node } = await setup(t, { workspaces: [w.main, w.wt] })
+  await until('the workspaces', () => node.last('runtime.workspaces'))
+  const started = (params) => call(node, 'session.start', { prompt: 'x', launcher: 'my-codex', ...params }).then(() => fake.requestsOf('agent.create.request').at(-1))
+  assert.equal((await started({ cwd: w.app, workspace_id: w.main.id })).workspaceId, w.main.id, 'named, with no agents in it')
+  assert.equal((await started({ cwd: w.tree })).workspaceId, w.wt.id, 'a worktree by its folder, with no agents in it')
+  assert.equal((await started({ cwd: w.app, workspace_id: 'prj_app' })).workspaceId, undefined, 'a space: a new workspace of the project, as before')
+  const before = fake.requestsOf('agent.create.request').length
+  await assert.rejects(started({ cwd: w.app, workspace_id: 'wks_00000000000000ff' }), (err) => err.code === 'workspace_missing')
+  assert.equal(fake.requestsOf('agent.create.request').length, before, 'nothing created elsewhere')
+  // Still being created: the row it will have is in the workspace's project, named after it.
+  fake.handlers['agent.create.request'] = () => null
+  const slow = await call(node, 'session.start', { prompt: 'x', launcher: 'my-codex', cwd: w.tree, workspace_id: w.wt.id })
+  assert.deepEqual([slow.session.space_id, slow.session.slot_name, slow.session.workspace_id], ['prj_app', 'Login fix', w.wt.id])
+})
+
+test("worktrees made by Paseo: from the workspace's folder, a new branch cut from its base or one checked out, no agent with it; where they go", async (t) => {
+  const dir = realpathSync(mkdtempSync('/tmp/ppaseo-ws-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const w = repoWorkspaces(dir)
+  const { fake, node, paseo } = await setup(t, { workspaces: [w.main, w.wt], worktreesRoot: join(dir, 'trees', 'abcd1234') })
+  await until('the workspaces', () => node.last('runtime.workspaces'))
+  assert.deepEqual(await call(node, 'workspace.prepare', { cwd: w.app, repo_root: w.app }), { checkouts: join(dir, 'trees', 'abcd1234') },
+    'beside a worktree Paseo made of the repository')
+  const other = join(dir, 'other')
+  mkdirSync(other)
+  const { checkouts } = await call(node, 'workspace.prepare', { cwd: other, repo_root: other })
+  assert.match(checkouts, new RegExp(`^${paseo.home}/worktrees/[0-9a-z]{8}$`), "else where Paseo's own code puts them")
+
+  const made = await call(node, 'workspace.create', { cwd: w.app, workspace_id: w.main.id, branch: 'feat/y', create_branch: true, base: 'main', name: 'feat-y', key: 'persona-k1' })
+  const req = fake.requestsOf('workspace.create.request').at(-1)
+  assert.deepEqual(req.source, { kind: 'worktree', cwd: w.app, action: 'branch-off', refName: 'main', branchName: 'feat/y', worktreeSlug: 'feat-y' })
+  assert.equal(req.idempotencyKey, 'persona-k1')
+  assert.equal(req.agent, undefined, 'no agent: Paseo would rename the branch after its prompt')
+  assert.equal(req.firstAgentContext, undefined)
+  assert.deepEqual(made.workspace, { workspace_id: made.workspace.workspace_id, title: 'feat/y', cwd: join(dir, 'trees', 'abcd1234', 'feat-y'), kind: 'worktree',
+    branch: 'feat/y', space_id: 'prj_1', space_name: 'proj', repo_root: w.app, owned: true })
+  await until('listed', () => node.last('runtime.workspaces').workspaces.some((x) => x.workspace_id === made.workspace.workspace_id))
+  // A session at its folder goes into it, though Paseo's answer had no placement.
+  mkdirSync(made.workspace.cwd, { recursive: true })
+  await call(node, 'session.start', { prompt: 'x', launcher: 'my-codex', cwd: made.workspace.cwd })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).workspaceId, made.workspace.workspace_id)
+
+  await call(node, 'workspace.create', { cwd: w.app, branch: 'spare', create_branch: false, name: 'spare' })
+  assert.deepEqual(fake.requestsOf('workspace.create.request').at(-1).source, { kind: 'worktree', cwd: w.app, action: 'checkout', refName: 'spare', worktreeSlug: 'spare' })
+  await call(node, 'workspace.create', { cwd: w.app, create_branch: true, base: 'main' })
+  assert.deepEqual(fake.requestsOf('workspace.create.request').at(-1).source, { kind: 'worktree', cwd: w.app, action: 'branch-off', refName: 'main' },
+    "no branch, no name: Paseo's own")
+  await assert.rejects(call(node, 'workspace.create', { cwd: w.app, workspace_id: 'wks_00000000000000ff', branch: 'x', create_branch: true }), (err) => err.code === 'workspace_missing')
+  fake.handlers['workspace.create.request'] = () => ({ payload: { workspace: null, setupTerminalId: null, error: 'Create worktree requires a git repository', errorCode: 'not_git' } })
+  await assert.rejects(call(node, 'workspace.create', { cwd: w.app, branch: 'x', create_branch: true }), /requires a git repository/)
+})
+
+// ---- renaming and archiving Paseo's workspaces (#6297) ----
+
+test("a workspace's title and a project's name are set in Paseo, and the rows say them at once; nothing else is renamed", async (t) => {
+  const dir = realpathSync(mkdtempSync('/tmp/ppaseo-ws-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const w = repoWorkspaces(dir)
+  const { fake, node, rows } = await setup(t, { workspaces: [w.main, w.wt], projects: ['prj_1'] })
+  await until('the workspaces', () => node.last('runtime.workspaces'))
+  const inTree = agentSnapshot({ provider: 'my-codex', cwd: w.tree, title: 'In the tree', workspaceId: w.wt.id })
+  fake.upsert(inTree, w.wt.project)
+  await until('listed in its workspace', () => rows().some((r) => r.session_id === `paseo-${inTree.id}` && r.slot_name === 'Login fix'))
+
+  const renamed = await call(node, 'workspace.rename', { workspace_id: w.wt.id, title: ' Login work ' })
+  assert.deepEqual(fake.renamed.at(-1), ['workspace', w.wt.id, 'Login work'])
+  assert.equal(fake.requestsOf('workspace.title.set.request').at(-1).title, 'Login work')
+  assert.equal(renamed.workspace.title, 'Login work')
+  await until("the agent's row", () => rows().find((r) => r.session_id === `paseo-${inTree.id}`)?.slot_name === 'Login work')
+  await until('the list', () => node.last('runtime.workspaces').workspaces.find((x) => x.workspace_id === w.wt.id)?.title === 'Login work')
+
+  // The project of the agents set up in prj_1: Paseo sends no agent of it again, the rows still say the new name.
+  assert.deepEqual(await call(node, 'workspace.rename', { space_id: 'prj_1', title: 'Renamed' }), { space_name: 'Renamed' })
+  assert.deepEqual(fake.requestsOf('project.rename.request').at(-1).customName, 'Renamed')
+  await until('every row of the project', () => rows().filter((r) => r.space_id === 'prj_1').every((r) => r.space_name === 'Renamed'))
+  assert.ok(rows().filter((r) => r.space_id === 'prj_1').length >= 3)
+  assert.ok(rows().filter((r) => r.space_id === 'prj_app').every((r) => r.space_name === 'app'), 'another project keeps its name')
+
+  for (const params of [{ workspace_id: 'wks_00000000000000ff', title: 'x' }, { space_id: 'prj_none', title: 'x' }]) {
+    await assert.rejects(call(node, 'workspace.rename', params), (err) => err.code === 'workspace_missing')
+  }
+  await assert.rejects(call(node, 'workspace.rename', { workspace_id: w.wt.id, title: '  ' }), (err) => err.code === 'bad_request')
+  fake.handlers['workspace.title.set.request'] = (msg) => ({ payload: { workspaceId: msg.workspaceId, accepted: false, title: null, error: 'Workspace not found' } })
+  await assert.rejects(call(node, 'workspace.rename', { workspace_id: w.wt.id, title: 'x' }), (err) => err.code === 'rename_failed' && /Workspace not found/.test(err.message))
+})
+
+test('a workspace archived in Paseo leaves the list with its agents; one Paseo does not have, or will not archive, is an error', async (t) => {
+  const dir = realpathSync(mkdtempSync('/tmp/ppaseo-ws-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const w = repoWorkspaces(dir)
+  const { fake, node, rows } = await setup(t, { workspaces: [w.main, w.wt] })
+  await until('the workspaces', () => node.last('runtime.workspaces'))
+  const inTree = agentSnapshot({ provider: 'my-codex', cwd: w.tree, title: 'In the tree', workspaceId: w.wt.id })
+  fake.upsert(inTree, w.wt.project)
+  await until('listed', () => rows().some((r) => r.session_id === `paseo-${inTree.id}`))
+  let removed
+  fake.onArchiveWorkspace = (d) => { removed = d.workspaceDirectory }
+  const res = await call(node, 'workspace.archive', { workspace_id: w.wt.id })
+  assert.match(res.archived_at, /^\d{4}-/)
+  assert.deepEqual(fake.requestsOf('archive_workspace_request').map((r) => r.workspaceId), [w.wt.id])
+  assert.equal(removed, w.tree)
+  await until('off the list', () => !node.last('runtime.workspaces').workspaces.some((x) => x.workspace_id === w.wt.id))
+  await until('its agent archived with it', () => !rows().some((r) => r.session_id === `paseo-${inTree.id}`))
+  assert.ok(bridgeHas(node, w.main.id), 'the checkout stays')
+
+  await assert.rejects(call(node, 'workspace.archive', { workspace_id: w.wt.id }), (err) => err.code === 'workspace_missing')
+  fake.onArchiveWorkspace = () => { throw new Error('Refusing to delete non-Paseo worktree') }
+  await assert.rejects(call(node, 'workspace.archive', { workspace_id: w.main.id }), (err) => err.code === 'archive_failed' && /non-Paseo worktree/.test(err.message))
+})
+
+function bridgeHas(node, id) {
+  return node.last('runtime.workspaces').workspaces.some((x) => x.workspace_id === id)
+}

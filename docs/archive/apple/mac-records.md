@@ -1,6 +1,6 @@
 # Mac: records
 
-Moved unchanged from the [Mac guide](../../apple/mac.md), which keeps the feature checklist itself.
+Moved unchanged from the [retired Mac guide](mac.md), which keeps the feature checklist itself.
 These are how the Mac acceptance checklist was reviewed (2026-11-01 to 2026-11-03, #403) and the roles and checklist-writing rules used for its real-window checks, with the baseline run that validated them.
 
 ## Acceptance checklist: review history

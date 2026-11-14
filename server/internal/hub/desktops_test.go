@@ -64,6 +64,40 @@ func TestRegisterDesktopIsAnnouncedAndGone(t *testing.T) {
 	}
 }
 
+func TestUnregisterDesktopKeepsClientAndCanRegisterAgain(t *testing.T) {
+	h := newTestHub(t)
+	phone := &client{out: make(chan []byte, 32), subs: map[[2]string]bool{}, role: roleFull}
+	desktop := &client{out: make(chan []byte, 16), subs: map[[2]string]bool{}, device: "dev_desktop", role: roleFull}
+	h.mu.Lock()
+	h.clients[phone], h.clients[desktop] = struct{}{}, struct{}{}
+	h.mu.Unlock()
+
+	h.onClientMessage(context.Background(), desktop, []byte(`{"type":"register_desktop","device_name":"Desktop","device_id":"push"}`))
+	if got := desktopNames(t, nextOfType(t, phone, "desktops")); len(got) != 1 {
+		t.Fatalf("desktops = %v", got)
+	}
+	h.onClientMessage(context.Background(), desktop, []byte(`{"type":"unregister_desktop"}`))
+	if got := desktopNames(t, nextOfType(t, phone, "desktops")); len(got) != 0 {
+		t.Fatalf("after unregister: %v", got)
+	}
+	if h.desktopOnline() || h.desktopOpen("push") {
+		t.Fatal("withdrawn desktop still suppresses phone alerts")
+	}
+	if _, ok := h.clients[desktop]; !ok {
+		t.Fatal("unregister must not disconnect the app")
+	}
+	h.onClientMessage(context.Background(), desktop, []byte(`{"type":"unregister_desktop"}`))
+	select {
+	case event := <-phone.out:
+		t.Fatalf("idempotent unregister emitted %s", event)
+	default:
+	}
+	h.onClientMessage(context.Background(), desktop, []byte(`{"type":"register_desktop","device_name":"Desktop"}`))
+	if !h.desktopOnline() {
+		t.Fatal("an active desktop can register again")
+	}
+}
+
 // An answer-only credential (a watch) cannot pose as a desktop: it would mute the phone's pushes.
 func TestAnswerOnlyCannotRegisterDesktop(t *testing.T) {
 	h := newTestHub(t)

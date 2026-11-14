@@ -189,6 +189,9 @@ type Item struct {
 	// Unknown nonempty kinds are still not user-authored input.
 	Source *MessageSource `json:"source,omitempty"`
 	Fold   *Fold          `json:"fold,omitempty"`
+	// SupervisionUser is a user's visible action folded into this work item. Ordinary items retain it across pages
+	// and cache restores, matching the iOS model; old items without the field stay unmarked.
+	SupervisionUser bool `json:"supervision_user,omitempty"`
 	// Task: a background task notice, or a subagent tool result associated with its launching call.
 	Task         *TaskNote     `json:"task,omitempty"`
 	TurnDuration *TurnDuration `json:"turn_duration,omitempty"`

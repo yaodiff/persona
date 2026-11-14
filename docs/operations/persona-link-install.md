@@ -1,23 +1,21 @@
-# Build and install Persona Link on Mac
+# Install Persona Link independently on Mac
 
-Persona Link is a small Mac menu-bar app. It connects this Mac to your Persona hub, letting the hub use this computer to view and drive Claude Code, Codex, and other Agents running here.
-It bundles the persona-link connector and persona-node (the device's own program), and installs a persistent local node service on first launch. See [link.md](link.md) for the architecture, two connection modes, and protocol; this document covers installation only.
+Persona Link connects this Mac to your Persona hub so the hub can use Agents running here. It is a background connector and resident-node service, not a menu bar app and not a prerequisite of the Electron desktop app.
 
-There is no published installer yet. Build from source for now; it takes a few minutes.
+The independent helper package also contains **Persona Screen**, which owns the Screen Recording permission for live-screen capture, and **Persona Input**, which owns the Accessibility permission for scrolling the live screen by the point ([computer-use.md](../extensions/computer-use.md) "Pixel scrolling (#7775)"). It is not bundled into the Electron desktop's login items or process lifetime. See [link.md](link.md) for connection modes and protocol, and [desktop.md](../desktop/desktop.md) for the separate desktop boundary.
 
-On a computer you use Persona through the web app; this app is the part that runs on the Mac ([link.md](link.md), "On computers: the web app and Persona Link").
-If this Mac already runs the command-line Link (`persona-link run`), follow [link.md](link.md), "Move a Mac from the command-line Link to the menu bar App", instead: it stops that Link first and keeps its pairing and data directory.
+There is no signed distribution package yet. Build from source for local use; this guide does not claim Developer ID signing or notarization.
 
 ## Prerequisites
 
 | Requirement | Details |
 | --- | --- |
-| macOS 15 or later | The app's minimum OS version |
-| Xcode (the full app, not just command-line tools) | Builds the Swift package with `xcodebuild`; after installation, run `sudo xcode-select -s /Applications/Xcode.app` and open Xcode once to accept its license |
-| Go | Builds persona-link and persona-node. Use the version in `server/go.mod`; a slightly older local Go is fine if `GOTOOLCHAIN=local` is not set, since Go downloads the required version automatically |
-| A running hub | And a browser already connected to it (the web client), to add this Mac. A hub set up with the install command already has the secure connection required for computer access; for an older hub, see "Advanced" under "Pairing" below |
+| macOS 15 or later | Persona Screen's minimum OS version |
+| Xcode (the full app, not just command-line tools) | Builds Persona Screen with `xcodebuild` |
+| Go | Builds persona-link and persona-node, using the version in `server/go.mod` |
+| A running hub | And a browser already connected to it, to add this Mac |
 
-No Apple developer account is needed: the app uses local ad-hoc signing and runs only on the Mac that built it.
+No Apple developer account is needed for local ad-hoc signing. An ad-hoc build is not a notarized installer for other Macs.
 
 ## Build and install
 
@@ -26,107 +24,63 @@ git clone <repository-url> persona && cd persona
 ./scripts/app/mac-link.sh install
 ```
 
-This command builds the app for the local architecture (Apple silicon / Intel), builds and bundles persona-link and persona-node, signs the app, installs it at `/Applications/Persona Link.app` (the filename remains Persona Link for compatibility with older versions; the app displays Persona Link), and opens it.
-If an older version is running, it quits and replaces it first.
+The command builds persona-link, persona-node, Persona Screen and Persona Input, places them under `/Applications/Persona Link.app/Contents/Helpers/`, then registers two independent launchd agents:
 
-- Build without installing: `./scripts/app/mac-link.sh build`; output is `apple/PersonaLink/build/Persona Link.app`.
-- Build for both Apple silicon and Intel: `UNIVERSAL=1 ./scripts/app/mac-link.sh build`.
-- The default bundle ID is the placeholder `com.example.persona.link`; no need to change it for personal use. To change it, set `mac.link_bundle_id` in `~/.config/persona/config.json`
-  (or the `PERSONA_LINK_BUNDLE_ID` environment variable). Changing the bundle ID makes it a different app, so enable "Launch at login" again.
+- `com.persona.link` runs the connector copied to `~/.persona/bin/persona-link`. This fixed path is also what the Electron setup window invokes.
+- `com.persona.node` runs the resident node. An existing node service is preserved, including its program and data directory.
 
-After launch, an icon appears at the top right in the menu bar, with no Dock icon. On first launch:
+Both start after installation and at login, and restart on exit. There is no UI to open and no Electron process to keep running. On first LAN use, macOS may ask for local-network permission; allow it if this Mac connects to the hub over the LAN.
 
-- When the `com.persona.node` LaunchAgent is not installed yet, it copies the bundled persona-node to `~/.persona/bin/persona-node` and installs the agent to keep the local node running on it (on a Mac that runs a hub or a manager, the agent runs their personad). An agent that is already there stays as it is: one that runs personad moves over with `persona-link node switch`, [link.md](link.md) "The device's program". **Reinstall** in the menu (offered when the agent is installed but not running) removes the agent and installs it again, so it comes back on persona-node, without the switch's wait for an answer.
-- On the first connection to a LAN address, the system asks whether to allow Persona Link to find devices on the local network. Choose Allow. If you denied it, enable it in **System Settings › Privacy & Security › Local Network**.
-- When the hub first sends the "Needs you" summary, the system asks whether Persona Link may send notifications. Choose Allow: Persona Link then notifies you when a session needs you, even with the web app closed. If you denied it, the menu offers **Turn On Notifications…**.
-  On a Mac with Persona Link, leave the web app's "Show system notifications" off, or both notify.
+Build without installing: `./scripts/app/mac-link.sh build`; output is `apple/PersonaLink/build/Persona Link.app`. Use `UNIVERSAL=1` for Apple silicon and Intel. `mac.link_bundle_id` or `PERSONA_LINK_BUNDLE_ID` controls Persona Screen's bundle-id prefix, defaulting to `app.bundle_id` + `.link`; without either the build stops and says what to set. Keep it the same from build to build: macOS keeps Persona Screen's Screen Recording grant per bundle id, so a Mac that ran a build with another id (such as an earlier `com.example.persona.link` placeholder build) asks for Screen Recording again once (#7569).
+
+### Moving from the retired menu bar app
+
+Keep the existing `~/.persona/link.json` and node service. First stop the old menu bar app and any foreground `persona-link run`; otherwise two connectors will contend for the same run lock. The installer does not kill or replace an unmanaged running connector. Do not use `persona-link uninstall --purge`, which would delete the pairing you want to keep.
+
+The historical migration record is in [link-menu-tray.md](../archive/operations/link-menu-tray.md), not a current setup procedure.
 
 ## Pairing
 
-Add this Mac in the web client already connected to your hub, get a pairing link, paste it into Persona Link, then return to the web client to confirm that it is your computer.
+1. Open **Machines › Add computer** in the signed-in web app, choose Mac, name the computer and copy its pairing link.
+2. If the Electron desktop is installed, open its local setup window and use the advanced **Persona Link** section. This is optional; it does not install Link for you.
+3. Otherwise pair in a terminal:
 
-1. Open **Machines** in the web client, click **Add computer**, choose Mac, give it a name (Chinese is supported too, such as "我的 MacBook"—"My MacBook"), and click Next. **Add computer** on iPhone and Android is still in progress; use the web client for now.
-2. A pairing link appears. Click **Copy pairing link** or **Share…** and send it to this Mac (Notes, AirDrop, or email all work).
-3. On this Mac, open the link directly: Persona Link opens its pairing window with the link filled in. Or click the Persona Link menu-bar icon › **Paste pairing link…**, keep the default **I connect to hub (active)**, and paste the link.
-   Check that the hub shown in the window (**Hub to connect to**) is yours, then click Pair: opening a link never pairs by itself.
-   The app is not signed or notarized: open it the first time with right-click › Open in Finder. Clicking a link works only after the app has been opened once.
-4. Return to that web screen. It asks, "A computer wants to join: <name>. Is it yours?" Click **It's my computer**.
-   Before confirmation, this Mac cannot receive Persona-managed model keys, and Persona will not run work on it. It is deleted automatically if not confirmed within 24 hours. If you closed that screen, you can also confirm on the computer's card in the machine list.
-5. Success: the icon shows connected; the menu says "Local node online" and "This computer is '<name>' on the hub"; this computer is online in the web and mobile machine lists.
-6. To connect at startup, enable **Launch at login** in the menu.
+   ```bash
+   ~/.persona/bin/persona-link pair - <<< '<pairing-link>'
+   ```
 
-The link is valid for 10 minutes and can be used only once. If it expires, click **Regenerate** on that web screen. Until used, it grants pairing permission: send it only to your own computer, never post it in a group.
+4. Return to the web screen and confirm **This is my computer**. A link is valid for 10 minutes and can be used once; never post it publicly.
+5. Verify with `~/.persona/bin/persona-link status`. The command reports the connector's mode, connection, resident-node state as seen by the hub, and the launchd agent. `status --json` is available for the desktop's allowlisted bridge and scripts.
 
-If the web client says "Secure connection isn't enabled on the hub yet", the older hub lacks the secure connection needed for computer access. Enable it in the hub's **Admin › Network**, or see "Advanced" below.
+For passive mode, use `persona-link pair --listen` and paste the printed link into hub admin **Computers › Add computer › Hub connects**. SSH tunnel setup and other advanced options remain in the CLI; see [link.md](link.md), "SSH tunnel".
 
-### Advanced
+## Everyday commands
 
-- **Get a link without the web client**: in the hub's **Admin › Computers › Add computer › Computer connects**, enter this computer's ID (such as `macbook`) and name; or run
-  `personad hub pair --machine macbook --add --name MacBook` on the hub machine (inside the container for a Docker hub; see [docker.md](docker.md)). Computers added by either method are confirmed immediately; no need to click "It's my computer".
-- **The hub must have TLS enabled**: active mode uses only TLS (`public.tls_listen` in hub.json), or a hub behind an HTTPS reverse proxy ([link.md](link.md), "Hub behind a reverse proxy"). A newly installed hub from `personad hub setup` enables it only on LAN IPv4 by default.
-- **Let the hub connect (passive)**: when this computer cannot reach the hub but the hub can reach it (for example, the hub is on someone else's network and can only be reached through a proxy), select this option in the pairing window,
-  click **Generate pairing link**, and paste it into **Admin › Computers › Add computer › Hub connects**. Allow its listening port (default 18663) through the firewall only for the hub. See [link.md](link.md), "Passive mode".
-- **Pair in the terminal**:
-
-  ```bash
-  echo '<pairing-link>' | "/Applications/Persona Link.app/Contents/Helpers/persona-link" pair -
-  ```
-
-## Menu entries
-
-| Entry | Meaning |
+| Command | Purpose |
 | --- | --- |
-| LAN / Public IPv6 / Domain · address | Which route is currently used to connect to the hub |
-| Hub "…" · N hubs in the linked group | Which hub is connected (absent when an older hub sends no name) |
-| Local node online | Everything is working |
-| Link connected, but the hub cannot reach the local node | The persistent node is not running; see "Troubleshooting" below |
-| Disconnected · Retry in N seconds | One line per candidate address explaining why it failed; retries automatically, or click **Reconnect now** |
-| Hub rejected this computer's credentials | The computer was removed from the hub or its credentials were revoked: pair again |
-| **Needs You** and a count beside the icon | Sessions waiting on you (newer hubs only). Click one to open it in the web app; **And N More…** opens the web app |
-| **Set Web Address…** | Where the web app opens. Needed when the hub has no https public URL, or when you use the web app at another address |
+| `persona-link status [--json]` | Connector and service state; no credential contents |
+| `persona-link reconnect` | Ask the running connector to reconnect immediately |
+| `persona-link node status [--json]` | Resident-node service state without connecting to its socket |
+| `persona-link logs -f` | Follow `~/.persona/link.log` |
+| `persona-link pair --listen` | Generate a passive-mode pairing link |
+| `persona-link name <new>` | Rename this computer on the hub while connected |
 
-See [link.md](link.md), "Menu bar App or command-line Link", for the icon states.
+## Upgrade and uninstall
 
-## Upgrade
+Upgrade by building and running `./scripts/app/mac-link.sh install` again. The connector executable is replaced at its stable path and its launchd agent is restarted. Existing pairing and node-service files stay. Reinstalling Link does **not** replace an already installed resident-node binary; see [node-update.md](node-update.md).
 
-Pull the latest code and install again. Pairing and settings live in `~/.persona/link.json` and are preserved:
+To remove the connector while keeping its pairing and resident node:
 
 ```bash
-git pull && ./scripts/app/mac-link.sh install
+~/.persona/bin/persona-link uninstall
 ```
 
-Upgrading the app does not replace the program the persistent node runs (persona-node, or personad on a Mac that had it before). A node that supports the update protocol can be updated through **Redeploy** on Persona's machine page, using the existing connection without reinstalling the menu-bar app.
-
-Older nodes need one initial local upgrade. First inspect the actual service's binary path and status:
-
-```bash
-"/Applications/Persona Link.app/Contents/Helpers/persona-link" node status --json
-```
-
-Replace the service binary pointed to by `bin` through its original installation / deployment channel and restart `com.persona.node`, preserving the existing runtime root, launch arguments, and pairing. Do not uninstall before querying the path, and do not assume upgrading the app upgrades the persistent node. See [node-update.md](node-update.md) for the full initial migration and failure recovery procedure.
-
-## Uninstall
-
-1. If you no longer want the persistent node, stop it and remove its service first (before deleting the app): `"/Applications/Persona Link.app/Contents/Helpers/persona-link" node uninstall`.
-2. Menu › **Quit Persona Link**; remove it from **System Settings › General › Login Items** if listed.
-3. Delete the app: `rm -rf "/Applications/Persona Link.app"`.
-4. Pairing credentials are in `~/.persona/link.json`, state in `~/.persona/link.status.json`, passive-mode TLS identity in `~/.persona/link-tls/`, logs in `~/.persona/link.log`, and the persistent node's program in `~/.persona/bin/persona-node` (or `~/.persona/bin/personad` on a Mac that had it before; if this computer has also run the install script, `~/.persona/bin/` contains `persona-link` too). Delete these if no longer needed. Remove this computer in the hub's **Admin › Computers**.
+To remove the resident node too, inspect its actual service and binary first, then run `persona-link node uninstall`. `--purge` is a separate, explicit destructive operation that removes connector credentials, status, logs and its installed executable; revoke this computer on the hub as well. Persona Screen can then be removed with `/Applications/Persona Link.app` if no longer needed. Do not run those removal commands merely to troubleshoot a connection.
 
 ## Troubleshooting
 
-**Build fails with `xcodebuild: error: SDK … cannot be located` or a missing developer directory**: the system points at command-line tools, not Xcode.
-Run `sudo xcode-select -s /Applications/Xcode.app`, or temporarily `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
-
-**Build says Go is too old, or toolchain download fails**: install Go at least as new as the version in `server/go.mod`, or allow `go` network access to download it automatically.
-
-**The system says it cannot verify the developer when opening the app**: this happens to apps copied from elsewhere (ad-hoc signatures are trusted only on the machine that built them). Build on the Mac where you will use it.
-If you must copy it, right-click › Open, or run `xattr -dr com.apple.quarantine "/Applications/Persona Link.app"`.
-
-**Always "Disconnected", with the LAN route shown as unreachable**: local network permission was probably denied; see "On first launch" above. When away from home, LAN being unreachable is normal; it uses public IPv6 or a domain instead.
-
-**"Link connected, but the hub cannot reach the local node"**: run `"/Applications/Persona Link.app/Contents/Helpers/persona-link" node status` to check whether the persistent node service is installed
-and loaded by launchd. Logs are in `~/.persona/node-attach.log`. If not installed, click **Install local node service** in the menu.
-
-**The menu-bar panel has the old square corners and thin border**: the app was built with an older script. Pull the latest code and run `install` again (see [lessons/macos.md](../lessons/macos.md), "Persona Link's panel kept the old appearance", for why).
-
-**Read logs**: `tail -f ~/.persona/link.log`, or `"/Applications/Persona Link.app/Contents/Helpers/persona-link" logs -f`. On a computer that used the older Persona version, these files may still live under `~/.persona/` ([config.md](config.md), "Naming and configuration").
+- **Connector not running**: `launchctl print gui/$(id -u)/com.persona.link` and `persona-link logs -f`.
+- **Hub cannot reach the local node**: `persona-link node status`; logs are in `~/.persona/node-attach.log`.
+- **LAN unreachable**: check macOS local-network permission for the connector. Other routes and TLS errors are explained by `persona-link status`.
+- **Persona Input permission**: `Contents/Helpers/Persona Input.app`; its Accessibility grant is its own. `mac-link.sh` rebuilds it only when its sources change (it keeps the built helper in `~/.persona/cache/persona-input`), so an update leaves the grant alone; `./scripts/app/mac-link.sh verify-input` checks that two clean builds are the same.
+- **Persona Screen permission**: the helper remains at `/Applications/Persona Link.app/Contents/Helpers/Persona Screen.app`, the path the node already searches. Its Screen Recording grant is separate from the Electron app and the connector.

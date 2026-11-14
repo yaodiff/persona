@@ -7,7 +7,7 @@
   "agent_working": "Agent 在做",
   "waiting": "等{who}",
   "waiting_anyone": "等对方回复",
-  "look_again": " · {time}再看",
+  "look_again": " · {time} 再看",
   "next": "：{next}",
   "follow_up_ask": "看过 3 次还没动静，还要跟吗？",
   "check_due": "到了再看的时间",

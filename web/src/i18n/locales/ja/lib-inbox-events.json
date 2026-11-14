@@ -17,5 +17,8 @@
   "handed_back": "AI に任せました",
   "sent": "送信しました。返信待ちです",
   "agent_started": "Agent を開始しました",
-  "filed": "処理済みにしました"
+  "filed": "処理済みにしました",
+  "kind_todo": "ToDoの提案",
+  "add_todo": "ToDoに追加",
+  "todo_added": "ToDoに追加しました"
 }

@@ -95,4 +95,12 @@ describe("RenameSpaceDialog", () => {
     await reply(posts("/machines/m/spaces/sp/rename")[0], 200, {});
     expect(closed).toHaveBeenCalledTimes(1);
   });
+  it("renames a Paseo space by its project, without herdr's hint", async () => {
+    const paseo = { ...session, source_kind: "runtime", space_kind: "paseo", space_id: "prj_0000000000000001", workspace_id: "wks_0000000000000001" } as Session;
+    await act(async () => root.render(<RenameSpaceDialog session={paseo} open onClose={closed} />));
+    expect(document.querySelector("[role=dialog]")?.textContent).not.toContain("herdr");
+    await type("New project");
+    await enter();
+    expect(posts("/machines/m/spaces/prj_0000000000000001/rename")).toHaveLength(1);
+  });
 });

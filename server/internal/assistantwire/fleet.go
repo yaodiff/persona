@@ -41,7 +41,7 @@ const (
 	// AppPhone is the phone's own MCP tools: listing them and running one on a connected phone (waking it first).
 	AppPhone   = "phone"
 	PhoneTools = "phone.tools" // {} → {tools}
-	PhoneCall  = "phone.call"  // {name, args} → proto.ToolResult
+	PhoneCall  = "phone.call"  // {name, args, call_id?, machine_id?} → proto.ToolResult
 )
 
 // InteractionsOwnerAction has the manager's channels take the owner action they handed over with a channel's press or

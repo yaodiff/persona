@@ -2,21 +2,23 @@ import SwiftUI
 
 /// What a screen card shows of a command's permission prompt read off the terminal, in plain words (#5266), under its
 /// heading ("Claude Wants to Run a Command") and over its answers: the agent's own words for it, the command in code type
-/// (a long one folded, Show All), the warning in plain words with Claude Code's own under Show Original, and the
-/// countdown running. The default style's `ScreenForm` and Beautiful UI's `BUIScreenForm` (`compact`) both lay it out.
+/// (a long one folded, Show All N Lines opening it whole: `CardCode`, #6605), the warning in plain words with Claude
+/// Code's own under Show Original, and the countdown running. The default style's `ScreenForm` and Beautiful UI's
+/// `BUIScreenForm` (`compact`) both lay it out.
 struct ScreenCommandAskBody: View {
     var ask: CommandAsk
+    /// The agent asking ("Claude"): the whole command's sheet is titled as the card's heading is.
+    var agent = "Claude"
     /// Beautiful UI's card, whose choice rows and Send under this take more room than the default style's two buttons:
     /// the agent's words in the secondary type close over the command (as its permission card shows a reason), the
     /// command folded to two rows, the countdown beside the warning where the row has room. So Send stays in the
     /// half-page panel's view.
     var compact = false
-    @State private var showsAll = false
     @State private var showsOriginal = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
-            if compact {
+        if compact {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     if let description = ask.description {
                         Text(description)
@@ -26,53 +28,33 @@ struct ScreenCommandAskBody: View {
                     }
                     command
                 }
-            } else {
-                if let description = ask.description {
-                    Text(description)
-                        .font(Theme.Font.body).lineHeight(.body)
-                        .fixedSize(horizontal: false, vertical: true)
+                if ask.riskLine != nil || ask.deadlineAt != nil {
+                    VStack(alignment: .leading, spacing: Theme.Space.s) { compactNotes }
                 }
-                command
             }
-            // Close together, so Deny / Allow stay in the panel's view under them.
+        } else {
+            // One part after another, no stack of its own: in the card's form (`CardBodyStack`) the command is the part
+            // that gives up lines when the card is short, and Deny / Allow stay in view under them all.
+            if let description = ask.description {
+                Text(description)
+                    .font(Theme.Font.body).lineHeight(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            command
+            // Close together.
             if ask.riskLine != nil || ask.deadlineAt != nil {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    if compact {
-                        compactNotes
-                    } else {
-                        if let risk = ask.riskLine { warning(risk) }
-                        if ask.deadlineAt != nil { ScreenCountdown(ask: ask) }
-                    }
+                    if let risk = ask.riskLine { warning(risk) }
+                    if ask.deadlineAt != nil { ScreenCountdown(ask: ask) }
                 }
             }
         }
     }
 
-    private var foldedLines: Int { compact ? CommandAsk.compactFoldedLines : CommandAsk.foldedLines }
-
-    /// The command as the permission card shows one (`PermissionForm`): code type in its box, selectable.
+    /// The command as a permission card shows one (`CardCode`): code type in its box, folded when long.
     private var command: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            Text(ask.command)
-                .font(Theme.Font.code)
-                .lineLimit(ask.folds(at: foldedLines) && !showsAll ? foldedLines : nil)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Theme.Space.m)
-                .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                .accessibilityIdentifier("screen-command")
-            if ask.folds(at: foldedLines) {
-                Button {
-                    withAnimation(Theme.Motion.standard) { showsAll.toggle() }
-                } label: {
-                    Text(showsAll ? String(localized: "Collapse") : String(localized: "Show All")).lineLimit(1)
-                }
-                .font(Theme.Font.captionMedium)
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.accent)
-                .accessibilityIdentifier("screen-command-all")
-            }
-        }
+        CardCode(text: ask.command, title: CommandAsk.title(agent: agent),
+                 lines: compact ? CommandAsk.compactFoldedLines : CommandAsk.foldedLines, id: "screen-command")
     }
 
     /// The warning in plain words, Show Original at the end of its row (under it where the row has no room); Claude

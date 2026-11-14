@@ -8,4 +8,5 @@ h2 { font-size: 19px; margin: 32px 0 8px; }
 p, li { color: var(--fg); }
 .muted { color: var(--muted); }
 a { color: var(--accent); }
-nav { display: flex; gap: 20px; margin-top: 40px; font-size: 15px; }
+nav { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 40px; font-size: 15px; }
+nav .lang { display: inline-flex; align-items: center; min-height: 44px; }

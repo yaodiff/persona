@@ -43,6 +43,14 @@ func agentBranch(nameHint string) string {
 // existing one checked out, a new one made from the repository's HEAD.
 func (n *Node) worktreeAdd(ctx context.Context, kind, cwd, branch, nameHint string) (proto.WorktreeAdded, error) {
 	var res proto.WorktreeAdded
+	// On an engine runtime (Paseo) the runtime makes it, as a workspace of its own its start then finds
+	// (runtimeworkspaces.go): a bare git worktree would be a folder it files under a project of its own.
+	if rt, runtime, err := n.worktreeRuntime(ctx, kind); runtime {
+		if err != nil {
+			return res, refusal("worktree_failed", err.Error(), nil)
+		}
+		return n.runtimeWorktreeAdd(ctx, rt, cwd, branch, nameHint)
+	}
 	dir := proto.ExpandHome(strings.TrimSpace(cwd), n.home)
 	if dir == "" || !filepath.IsAbs(dir) {
 		return res, refusal("not_a_repository", "the folder is not in a Git repository", nil)
@@ -86,7 +94,12 @@ func (n *Node) worktreeAdd(ctx context.Context, kind, cwd, branch, nameHint stri
 		}
 		return proto.WorktreeAdded{Path: dest, Branch: b, Root: repo.root}, nil
 	}
-	return res, refusal("worktree_failed", "no free branch name for the agent's worktree", nil)
+	return res, noAgentBranch(ctx)
+}
+
+// noAgentBranch is the refusal when the agent's own branch name and the next 49 are all taken.
+func noAgentBranch(ctx context.Context) error {
+	return refusal("worktree_failed", composerError(ctx, "agent_branch_exhausted").Error(), nil)
 }
 
 func branchExists(ctx context.Context, root, branch string) bool {
@@ -123,15 +136,27 @@ func (n *Node) worktreeStatus(ctx context.Context, kind, cwd string) (proto.Work
 		return st, nil
 	}
 	st.Branch = repo.branch
-	h, _ := n.hostOfKind(kind)
-	st.Checkouts = n.worktreesDir(h, repo.name)
+	rt, runtime, _ := n.worktreeRuntime(ctx, kind)
+	if runtime {
+		st.Checkouts = n.runtimeCheckoutsOf(ctx, rt, st.Path) // the runtime's folder ("" when it cannot say)
+	} else {
+		h, _ := n.hostOfKind(kind)
+		st.Checkouts = n.worktreesDir(h, repo.name)
+	}
 	gitDir, err1 := absGit(ctx, st.Path, "--git-dir")
 	common, err2 := absGit(ctx, st.Path, "--git-common-dir")
 	if err1 != nil || err2 != nil || gitDir == common {
 		return st, nil // the main checkout, not a linked worktree
 	}
 	st.Worktree = true
-	st.Ours = within(realPath(st.Path), realPath(st.Checkouts))
+	// A runtime's worktree is its workspace too: Persona's to remove only when it is the folder of a worktree workspace
+	// the runtime made, which worktree.remove then has the runtime archive (runtimeAgentWorktreeRemove); removing only
+	// the checkout would leave the runtime a workspace in a folder that is gone.
+	if runtime {
+		_, st.Ours = rt.ownedWorktreeAt(st.Path)
+	} else {
+		st.Ours = within(realPath(st.Path), realPath(st.Checkouts))
+	}
 	if out, err := git(ctx, st.Path, "status", "--porcelain"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
 			if strings.TrimSpace(line) != "" {
@@ -179,6 +204,11 @@ func absGit(ctx context.Context, dir, option string) (string, error) {
 // deleting a branch with commits the main checkout's branch lacks, unless the user confirmed it (force).
 func (n *Node) worktreeRemove(ctx context.Context, kind, path string, deleteBranch, force bool) (proto.WorktreeRemoved, error) {
 	var res proto.WorktreeRemoved
+	if _, runtime, _ := n.worktreeRuntime(ctx, kind); runtime { // the checks and the runtime's archive, inside the hub's 90 s
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, runtimeRemoveDeadline)
+		defer cancel()
+	}
 	p := proto.ExpandHome(strings.TrimSpace(path), n.home)
 	st, err := n.worktreeStatus(ctx, kind, p)
 	if err != nil {
@@ -196,6 +226,9 @@ func (n *Node) worktreeRemove(ctx context.Context, kind, path string, deleteBran
 	if deleteBranch && st.Unmerged > 0 && !force {
 		return res, refusal("worktree_unmerged", "the branch has commits that are not on the main branch",
 			map[string]any{"unmerged": st.Unmerged, "main_branch": st.MainBranch})
+	}
+	if rt, runtime, _ := n.worktreeRuntime(ctx, kind); runtime { // ours: a worktree workspace the runtime made
+		return n.runtimeAgentWorktreeRemove(ctx, rt, st, deleteBranch, force)
 	}
 	args := []string{"worktree", "remove"}
 	if force {

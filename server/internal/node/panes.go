@@ -180,6 +180,13 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 		}
 		start = real
 	}
+	if start != "" && n.isRuntimeWorkspace(ws) {
+		// A runtime's workspace (a Paseo session's workspace_id) has no terminal: the shell opens in the terminal
+		// engine's workspace that holds the folder, else in a new one there; never in one that only happens to be first.
+		if kind, ws = n.launchSpaceHolding(ctx, start); ws == "" {
+			return n.newShellSpace(ctx, "", start)
+		}
+	}
 	if ws == "" && start != "" {
 		if ws = n.firstLaunchSpace(kind); ws == "" {
 			return n.newShellSpace(ctx, kind, start)
@@ -216,6 +223,22 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 // when given) that opens tabs: a computer whose engine is running with no workspace yet still gets a terminal, the way
 // an Agent start does (newTab).
 func (n *Node) newShellSpace(ctx context.Context, kind, dir string) (proto.NewShellResult, error) {
+	launch, created, err := n.launchSpace(ctx, kind, dir, "shell")
+	if errors.Is(err, errNoLauncher) {
+		return proto.NewShellResult{}, errors.New("no workspace")
+	}
+	if err != nil {
+		return proto.NewShellResult{}, fmt.Errorf("创建终端标签页失败：%w", err)
+	}
+	return n.shellCreated(ctx, launch, created)
+}
+
+// errNoLauncher: no host of the machine opens tabs (it enables no terminal engine).
+var errNoLauncher = errors.New("no host that opens tabs")
+
+// launchSpace makes a new workspace in dir, named after it, on the first host (of kind, when given) that opens tabs,
+// its first tab named after label (label, label-2… as the workspace's tabs leave free).
+func (n *Node) launchSpace(ctx context.Context, kind, dir, label string) (host.Launcher, *host.Created, error) {
 	for _, h := range n.hosts.All() {
 		launch, ok := h.(host.Launcher)
 		if !ok || (kind != "" && h.Kind() != kind) {
@@ -223,18 +246,39 @@ func (n *Node) newShellSpace(ctx context.Context, kind, dir string) (proto.NewSh
 		}
 		created, err := launch.CreateSpace(ctx, dir, filepath.Base(dir))
 		if err != nil {
-			return proto.NewShellResult{}, fmt.Errorf("创建终端标签页失败：%w", err)
+			return launch, nil, err
 		}
 		if created != nil && created.SlotID != "" {
 			var taken map[string]bool
 			if _, ok := launch.(*herdrCoreHost); ok {
 				taken = n.tabLabels(ctx, launch, created.SpaceID) // CreateSpace can reuse an app space by its folder
 			}
-			_ = renameSlot(ctx, launch, created.SlotID, tabLabel("shell", taken))
+			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(label, taken))
 		}
-		return n.shellCreated(ctx, launch, created)
+		return launch, created, nil
 	}
-	return proto.NewShellResult{}, errors.New("no workspace")
+	return nil, nil, errNoLauncher
+}
+
+// launchSpaceHolding is the workspace, and its host's kind, of a host that opens tabs whose folder is dir or holds it,
+// the deepest one: where a terminal for a folder of a runtime's workspace goes (a Paseo session's, which has none of
+// its own). "" when none does but one in the home folder or at the root, which hold everything and so nothing in
+// particular.
+func (n *Node) launchSpaceHolding(ctx context.Context, dir string) (kind, ws string) {
+	home, depth := realPath(filepath.Clean(n.home)), -1
+	for _, h := range n.hosts.All() {
+		if _, ok := h.(host.Launcher); !ok {
+			continue
+		}
+		s, err := spaceHoldingDirectory(ctx, h, dir)
+		if err != nil || s.workspace == "" || s.cwd == home || s.cwd == string(filepath.Separator) {
+			continue
+		}
+		if len(s.cwd) > depth {
+			kind, ws, depth = h.Kind(), s.workspace, len(s.cwd)
+		}
+	}
+	return kind, ws
 }
 
 // shellCreated answers with the new shell's pane once it is in the layout the terminal call checks.

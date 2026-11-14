@@ -199,3 +199,18 @@ func TestFileChmodRoute(t *testing.T) {
 		t.Fatalf("node got %v", got)
 	}
 }
+
+func TestFileCopyPassesOperationID(t *testing.T) {
+	var methods []string
+	mux := fileEditHub(t, func(method string, p map[string]any) (any, error) {
+		methods = append(methods, method)
+		return map[string]any{"id": p["operation_id"], "state": "running"}, nil
+	})
+	code, out := postEdit(mux, "copy", `{"paths":["~/a"],"dir":"~/dest","operation_id":"op-1"}`)
+	if code != 200 || out["id"] != "op-1" {
+		t.Fatalf("copy operation_id: %d %v", code, out)
+	}
+	if len(methods) != 1 || methods[0] != "file.copy" {
+		t.Fatalf("methods = %v", methods)
+	}
+}

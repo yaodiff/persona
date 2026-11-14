@@ -194,7 +194,7 @@ nonisolated final class RFBFrameSink: @unchecked Sendable {
 
     /// A sample of the frame at this moment on the host clock (rising from one to the next); `immediate`: shown at once
     /// whatever the layer's time (the page's), else when its timebase reaches it (the small window's, at once too).
-    private static func sample(_ pb: CVPixelBuffer, immediate: Bool) -> CMSampleBuffer? {
+    static func sample(_ pb: CVPixelBuffer, immediate: Bool) -> CMSampleBuffer? {
         var format: CMVideoFormatDescription?
         guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pb, formatDescriptionOut: &format) == noErr,
               let format else { return nil }
@@ -218,7 +218,8 @@ nonisolated final class RFBFrameSink: @unchecked Sendable {
         if let sample = sample(pb, immediate: false) { enqueue(sample, in: layer) }
     }
 
-    @MainActor private static func enqueue(_ sample: CMSampleBuffer, in layer: AVSampleBufferDisplayLayer) {
+    /// Into the layer's renderer, flushed first when it failed (a picture of another format, the app suspended).
+    @MainActor static func enqueue(_ sample: CMSampleBuffer, in layer: AVSampleBufferDisplayLayer) {
         let r = layer.sampleBufferRenderer
         if r.status == .failed { r.flush() }
         r.enqueue(sample)

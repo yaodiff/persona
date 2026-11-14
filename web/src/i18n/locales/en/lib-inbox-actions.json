@@ -1,0 +1,14 @@
+{
+  "merged_one": "Merged",
+  "merged_other": "Merged {count} rows into one",
+  "merge_failed": "Couldn't merge: {error}",
+  "unmerged": "Split into separate rows again",
+  "unmerge_failed": "Couldn't undo the merge: {error}",
+  "todo_added_one": "Added to your to-dos",
+  "todo_added_other": "Added {count} to your to-dos",
+  "todo_partly": "Added {count}, then it stopped: {error}",
+  "todo_failed": "Couldn't add to your to-dos: {error}",
+  "todo_undone": "Taken out of your to-dos",
+  "todo_undo_failed": "Couldn't undo: {error}",
+  "undo": "Undo"
+}

@@ -32,16 +32,19 @@ const (
 	SuggestReply      = "reply"      // one message to send
 	SuggestAgent      = "agent"      // an instruction for a new Agent
 	SuggestConclusion = "conclusion" // done: just read it
+	SuggestTodo       = "todo"       // a to-do to add: Text its title, Due when (#6480)
 )
 
 // InboxSuggestion is the manager's one current suggestion on an event; Version bumps with every new one and a
 // confirmation must name it.
 type InboxSuggestion struct {
-	Version   int         `json:"version"`
-	Kind      string      `json:"kind"`
-	Text      string      `json:"text"`
-	Note      string      `json:"note,omitempty"`
-	Handback  bool        `json:"handback"`
+	Version  int    `json:"version"`
+	Kind     string `json:"kind"`
+	Text     string `json:"text"`
+	Note     string `json:"note,omitempty"`
+	Handback bool   `json:"handback"`
+	// Due is when a to-do suggestion is due: a day (2006-01-02, all day) or a moment (RFC 3339); "" none.
+	Due       string      `json:"due,omitempty"`
 	MachineID string      `json:"machine_id,omitempty"`
 	Changes   []DocChange `json:"changes,omitempty"`
 	At        time.Time   `json:"at"`

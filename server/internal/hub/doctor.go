@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,29 +19,37 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/netaddr"
 )
 
-// Doctor inspects local state without creating configuration, renewing certificates or changing network rules.
+// Doctor prints the hub's read-only self-check (`personad hub doctor`) in the terminal's language (i18n.Terminal,
+// #5520). It inspects local state without creating configuration, renewing certificates or changing network rules.
 func Doctor(ctx context.Context, out io.Writer) error {
-	d := &doctorReport{out: out}
-	fmt.Fprintln(out, "hub 自检（只读）")
-	cfg := d.config(dataDir())
+	runDoctor(ctx, dataDir(), i18n.Terminal()).write(out)
+	return ctx.Err()
+}
+
+// runDoctor runs every check on the hub whose data directory is dir and words the report in l: the terminal's for the
+// command, the request's for the admin page (POST /api/v1/admin/doctor).
+func runDoctor(ctx context.Context, dir string, l i18n.Lang) *doctorReport {
+	d := &doctorReport{l: l}
+	cfg := d.config(dir)
 	var endpoints []Endpoint
 	if cfg != nil {
 		endpoints = d.running(ctx, cfg)
 	}
-	d.credentials(dataDir())
+	d.credentials(dir)
 	addrs := d.ipv6()
 	d.system(ctx)
-	port := "<TLS 端口>"
+	port := i18n.T(l, "hub-doctor.port_placeholder")
 	if cfg != nil {
 		if p, err := doctorPort(cfg.Public.TLSListen); err == nil {
 			port = p
 		}
 	}
-	d.next = append(d.next, "在主机、路由器和光猫上，对公网只放行 hub 的 TCP TLS 端口 "+port+"；明文端口仅限内网或 VPN，并检查 Docker 端口映射")
+	d.next = append(d.next, i18n.T(l, "hub-doctor.next_firewall", i18n.Args{"port": port}))
 	var probes []string
 	for _, e := range endpoints {
 		u, err := url.Parse(e.URL)
@@ -56,32 +65,72 @@ func Doctor(ctx context.Context, out io.Writer) error {
 		}
 	}
 	if len(probes) == 0 {
-		probes = []string{"https://[<全局 IPv6 地址>]:" + port + "/api/v1/health"}
+		probes = []string{"https://[" + i18n.T(l, "hub-doctor.ipv6_placeholder") + "]:" + port + "/api/v1/health"}
 	}
-	fmt.Fprintln(out, "外部可达性：未验证。本机连自己的地址走环回，不能证明公网可达。")
+	d.info(i18n.T(l, "hub-doctor.item_reach"), i18n.T(l, "hub-doctor.reach_unverified"))
 	for _, probe := range probes {
-		d.next = append(d.next, "用手机关掉 Wi-Fi，打开 "+probe+" 测一次（不要携带 token）")
+		d.next = append(d.next, i18n.T(l, "hub-doctor.next_probe", i18n.Args{"url": probe}))
 	}
-	d.next = append(d.next, "浏览器出现自签证书警告说明已到达 TLS 服务，但尚未验证 hub 身份；用 App 核对钉扎值。若连接超时，检查 IPv6 入站防火墙和 TUN 回包路由")
-	fmt.Fprintln(out, "\n下一步：")
-	for _, step := range d.next {
-		fmt.Fprintln(out, "- "+step)
-	}
-	return ctx.Err()
+	d.next = append(d.next, i18n.T(l, "hub-doctor.next_certificate"))
+	return d
 }
 
+// doctorItem is one line of the report: a check that is fine (ok) or wants something done (problem), or what the
+// check found out without judging it (info). Detail's later lines belong to it (addresses, devices, rules).
+type doctorItem struct {
+	Level  string `json:"level"` // ok | problem | info
+	Item   string `json:"item"`
+	Detail string `json:"detail"`
+}
+
+// doctorReport is a self-check's findings, worded in l.
 type doctorReport struct {
-	out  io.Writer
-	next []string
+	l     i18n.Lang
+	items []doctorItem
+	next  []string
 	// problems are the "Problem" lines, as "item: action" (`personad hub setup` prints only these).
 	problems []string
 }
 
+// write prints the report as `personad hub doctor` does: a title, a line per item (its later lines indented), then the
+// next steps.
+func (d *doctorReport) write(out io.Writer) {
+	fmt.Fprintln(out, i18n.T(d.l, "hub-doctor.title"))
+	for _, it := range d.items {
+		first, rest, _ := strings.Cut(it.Detail, "\n")
+		args := i18n.Args{"item": it.Item, "detail": first}
+		switch {
+		case it.Level == "ok":
+			fmt.Fprintln(out, i18n.T(d.l, "hub-doctor.line_ok", args))
+		case it.Level == "problem":
+			fmt.Fprintln(out, i18n.T(d.l, "hub-doctor.line_problem", args))
+		case it.Item != "":
+			fmt.Fprintln(out, i18n.T(d.l, "hub-doctor.item_detail", args))
+		default:
+			fmt.Fprintln(out, first)
+		}
+		if rest != "" {
+			for _, line := range strings.Split(rest, "\n") {
+				fmt.Fprintln(out, "  "+line)
+			}
+		}
+	}
+	fmt.Fprintln(out, "\n"+i18n.T(d.l, "hub-doctor.next_title"))
+	for _, step := range d.next {
+		fmt.Fprintln(out, "- "+step)
+	}
+}
+
+// itemsOrEmpty and nextOrEmpty are the report for JSON: empty lists, never null.
+func (d *doctorReport) itemsOrEmpty() []doctorItem { return append([]doctorItem{}, d.items...) }
+func (d *doctorReport) nextOrEmpty() []string      { return append([]string{}, d.next...) }
+
 // ipv6 checks this machine's global IPv6 addresses (for reaching the hub from outside) and returns every address.
 func (d *doctorReport) ipv6() []netaddr.Addr {
+	item := i18n.T(d.l, "hub-doctor.item_ipv6")
 	addrs, err := netaddr.List()
 	if err != nil {
-		d.problem("本机 IPv6", "无法读取地址；请检查本机网卡状态")
+		d.problem(item, i18n.T(d.l, "hub-doctor.ipv6_unreadable"))
 	} else {
 		stable := 0
 		for _, a := range addrs {
@@ -90,23 +139,24 @@ func (d *doctorReport) ipv6() []netaddr.Addr {
 			}
 			if netaddr.Stable(a) {
 				stable++
-				d.ok("本机 IPv6", fmt.Sprintf("%s（%s，Stable）", a.IP, a.Interface))
+				d.ok(item, i18n.T(d.l, "hub-doctor.ipv6_stable", i18n.Args{"ip": a.IP.String(), "interface": a.Interface}))
 			} else {
-				fmt.Fprintf(d.out, "  已排除 %s（%s）：%s\n", a.IP, a.Interface, doctorAddressReason(a))
+				d.note(i18n.T(d.l, "hub-doctor.ipv6_excluded", i18n.Args{"ip": a.IP.String(), "interface": a.Interface,
+					"reason": doctorAddressReason(d.l, a)}))
 			}
 		}
 		if stable == 0 {
-			d.problem("本机 IPv6", "没有可确认稳定的全局 IPv6；请检查运营商 IPv6 和网卡地址，非 Linux 系统无法确认地址标志")
+			d.problem(item, i18n.T(d.l, "hub-doctor.ipv6_none"))
 		}
 	}
 	return addrs
 }
 
-// setupDoctor is the check at the end of `personad hub setup` (docs/assistant/onboarding.md 4.1): only what is wrong, none of
-// the excluded addresses or the routes and firewall, which are about reaching the hub from outside (outside: asked
-// for with --outside, then those too).
-func setupDoctor(ctx context.Context, dir string, outside bool) []string {
-	d := &doctorReport{out: io.Discard}
+// setupDoctor is the check at the end of `personad hub setup` (docs/assistant/onboarding.md 4.1), in l: only what is
+// wrong, none of the excluded addresses or the routes and firewall, which are about reaching the hub from outside
+// (outside: asked for with --outside, then those too).
+func setupDoctor(ctx context.Context, dir string, outside bool, l i18n.Lang) []string {
+	d := &doctorReport{l: l}
 	if cfg := d.config(dir); cfg != nil {
 		d.running(ctx, cfg)
 	}
@@ -118,82 +168,102 @@ func setupDoctor(ctx context.Context, dir string, outside bool) []string {
 }
 
 func (d *doctorReport) ok(item, detail string) {
-	fmt.Fprintf(d.out, "正常｜%s：%s\n", item, detail)
+	d.items = append(d.items, doctorItem{Level: "ok", Item: item, Detail: detail})
 }
 
 func (d *doctorReport) problem(item, action string) {
-	fmt.Fprintf(d.out, "有问题｜%s：%s\n", item, action)
+	d.items = append(d.items, doctorItem{Level: "problem", Item: item, Detail: action})
 	d.next = append(d.next, action)
-	d.problems = append(d.problems, item+"："+action)
+	d.problems = append(d.problems, i18n.T(d.l, "hub-doctor.item_detail", i18n.Args{"item": item, "detail": action}))
+}
+
+// info is what a check found out without judging it, such as a check it skipped.
+func (d *doctorReport) info(item, detail string) {
+	d.items = append(d.items, doctorItem{Level: "info", Item: item, Detail: detail})
+}
+
+// note adds a line to the item before it (an address it left out, a device's push path, a firewall rule).
+func (d *doctorReport) note(line string) {
+	if len(d.items) == 0 {
+		d.info("", line)
+		return
+	}
+	last := &d.items[len(d.items)-1]
+	last.Detail += "\n" + line
 }
 
 func (d *doctorReport) config(dir string) *Config {
+	l := d.l
+	item := i18n.T(l, "hub-doctor.item_config")
 	b, err := os.ReadFile(filepath.Join(dir, "hub.json"))
 	if err != nil {
-		d.problem("配置", "无法读取 ~/.persona/hub.json；请确认配置存在且当前用户有读取权限")
+		d.problem(item, i18n.T(l, "hub-doctor.config_unreadable"))
 		return nil
 	}
 	// Match the runtime's omitted-listen default, without generating a token or host name.
 	cfg := &Config{Listen: ":18660", dir: dir}
 	if json.Unmarshal(b, cfg) != nil {
-		d.problem("配置", "hub.json 格式有误；请修正 JSON 后重新运行 personad hub doctor")
+		d.problem(item, i18n.T(l, "hub-doctor.config_invalid"))
 		return nil
 	}
 	var raw map[string]json.RawMessage
 	_ = json.Unmarshal(b, &raw)
+	listen := i18n.T(l, "hub-doctor.item_listen")
 	if _, err := doctorPort(cfg.Listen); err != nil {
-		d.problem("明文 listen", "未设置有效监听端口；请在 hub.json 中配置 listen")
+		d.problem(listen, i18n.T(l, "hub-doctor.listen_invalid"))
 	} else {
-		detail := cfg.Listen
+		value := cfg.Listen
 		if _, set := raw["listen"]; !set {
-			detail += "（未显式设置，使用默认值）"
+			value = i18n.T(l, "hub-doctor.listen_default", i18n.Args{"listen": cfg.Listen})
 		}
-		d.ok("明文 listen", detail+"；仅供内网或 VPN 使用")
+		d.ok(listen, i18n.T(l, "hub-doctor.listen_ok", i18n.Args{"listen": value}))
 	}
 	if _, err := doctorPort(cfg.Public.TLSListen); err != nil {
-		d.problem("public.tls_listen", "未设置有效 TLS 监听端口；请配置 public.tls_listen 后重启 hub")
+		d.problem("public.tls_listen", i18n.T(l, "hub-doctor.tls_listen_invalid"))
 	} else {
-		d.ok("public.tls_listen", cfg.Public.TLSListen+"（配置值，尚未验证 TLS 监听）")
+		d.ok("public.tls_listen", i18n.T(l, "hub-doctor.tls_listen_ok", i18n.Args{"listen": cfg.Public.TLSListen}))
 	}
 	if cfg.Security.AllowPublicPlaintext {
-		d.problem("security.allow_public_plaintext", "当前已开启公网明文；请设为 false 并重启 hub，公网连接改用 HTTPS")
+		d.problem("security.allow_public_plaintext", i18n.T(l, "hub-doctor.public_plaintext_on"))
 	} else {
-		d.ok("security.allow_public_plaintext", "已关闭")
+		d.ok("security.allow_public_plaintext", i18n.T(l, "hub-doctor.public_plaintext_off"))
 	}
 	switch {
 	case cfg.Security.PlaintextLoopbackOnly && cfg.Public.TLSListen == "":
-		d.problem("security.plaintext_loopback_only", "已开启但没有 public.tls_listen，hub 启动不了；请配置 TLS 监听或关闭此项")
+		d.problem("security.plaintext_loopback_only", i18n.T(l, "hub-doctor.loopback_only_without_tls"))
 	case cfg.Security.PlaintextLoopbackOnly:
-		d.ok("security.plaintext_loopback_only", "已开启：明文端口只服务本机，局域网页面跳转到 TLS 端口，其余请求 403 tls_required")
+		d.ok("security.plaintext_loopback_only", i18n.T(l, "hub-doctor.loopback_only_on"))
 	default:
-		d.ok("security.plaintext_loopback_only", "未开启：局域网和 VPN 来源仍可用明文端口带令牌访问")
+		d.ok("security.plaintext_loopback_only", i18n.T(l, "hub-doctor.loopback_only_off"))
 	}
 	if pp := cfg.Security.ProxyProtocol; pp != nil {
 		switch p, err := pp.policy(); {
 		case err != nil:
-			d.problem("security.proxy_protocol", "配置有误，hub 启动不了："+err.Error())
+			d.problem("security.proxy_protocol", i18n.T(l, "hub-doctor.proxy_protocol_invalid", i18n.Args{"error": err.Error()}))
 		case p.tls && !p.http && cfg.Public.TLSListen == "":
-			d.problem("security.proxy_protocol", "只作用于 TLS 端口，但没开 public.tls_listen：现在不起作用")
+			d.problem("security.proxy_protocol", i18n.T(l, "hub-doctor.proxy_protocol_idle"))
 		default:
-			d.ok("security.proxy_protocol", "读 "+strings.Join(pp.From, "、")+" 发来的 PROXY 头；配好后 hub 日志里公网来源不应再是回环")
+			d.ok("security.proxy_protocol", i18n.T(l, "hub-doctor.proxy_protocol_ok",
+				i18n.Args{"sources": strings.Join(pp.From, i18n.T(l, "hub-doctor.list_separator"))}))
 		}
 	}
 	certFile, keyFile := cfg.Public.CertFile, cfg.Public.KeyFile
 	if certFile == "" && keyFile == "" {
 		certFile, keyFile = filepath.Join(dir, "tls", "hub.crt"), filepath.Join(dir, "tls", "hub.key")
 	}
+	certItem := i18n.T(l, "hub-doctor.item_tls_certificate")
 	cert, fp, err := loadTLSFiles(certFile, keyFile)
 	if err != nil {
-		d.problem("TLS 证书", "无法读取证书或密钥不匹配；请检查 ~/.persona/tls/ 或 public.cert_file、public.key_file。托管证书由启用 TLS 的 hub 启动时生成，自检不会创建")
+		d.problem(certItem, i18n.T(l, "hub-doctor.certificate_unreadable"))
 	} else {
-		detail := fmt.Sprintf("SPKI SHA-256 钉扎值 %s；到期时间 %s", fp, cert.Leaf.NotAfter.UTC().Format(time.RFC3339))
+		args := i18n.Args{"pin": fp, "expires": cert.Leaf.NotAfter.UTC().Format(time.RFC3339)}
 		now := time.Now()
 		if now.Before(cert.Leaf.NotBefore) || !now.Before(cert.Leaf.NotAfter) {
-			d.problem("TLS 证书", detail+"；证书尚未生效或已过期，请检查系统时间并续签证书，保留原密钥")
+			d.problem(certItem, i18n.T(l, "hub-doctor.certificate_expired", args))
 		} else if !cert.Leaf.NotAfter.After(now.Add(30 * 24 * time.Hour)) {
-			d.problem("TLS 证书", detail+"；即将到期，请检查 hub 自动续签状态；自定义证书需自行续签，保留原密钥")
+			d.problem(certItem, i18n.T(l, "hub-doctor.certificate_expiring", args))
 		} else {
-			d.ok("TLS 证书", detail)
+			d.ok(certItem, i18n.T(l, "hub-doctor.certificate_ok", args))
 		}
 	}
 	return cfg
@@ -210,8 +280,10 @@ var doctorCredentialFiles = []string{filepath.Join("docker", "db-password")}
 // finding means a file was copied in or chmoded by hand. POSIX permission bits do not exist on Windows, where the
 // check is skipped.
 func (d *doctorReport) credentials(dir string) {
+	l := d.l
+	item := i18n.T(l, "hub-doctor.item_credentials")
 	if runtime.GOOS == "windows" {
-		fmt.Fprintln(d.out, "凭据文件权限：已跳过 Windows 专用检查（POSIX 权限位不适用）")
+		d.info(item, i18n.T(l, "hub-doctor.credentials_windows"))
 		return
 	}
 	bad := 0
@@ -223,18 +295,19 @@ func (d *doctorReport) credentials(dir string) {
 		}
 		if err != nil {
 			bad++
-			d.problem("凭据文件权限", "无法读取 "+filepath.ToSlash(rel)+" 的状态："+err.Error())
+			d.problem(item, i18n.T(l, "hub-doctor.credentials_stat", i18n.Args{"path": filepath.ToSlash(rel), "error": err.Error()}))
 			return
 		}
 		if st.Mode().Perm() != want {
 			bad++
-			d.problem("凭据文件权限", fmt.Sprintf("%s 的权限是 %04o，应为 %04o；请运行 chmod %o %s",
-				filepath.ToSlash(rel), st.Mode().Perm(), want, want, path))
+			d.problem(item, i18n.T(l, "hub-doctor.credentials_mode", i18n.Args{"path": filepath.ToSlash(rel),
+				"mode": fmt.Sprintf("%04o", st.Mode().Perm()), "want": fmt.Sprintf("%04o", want),
+				"command": fmt.Sprintf("chmod %o %s", want, path)}))
 		}
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		d.problem("凭据文件权限", "无法读取数据目录 "+dir+"："+err.Error())
+		d.problem(item, i18n.T(l, "hub-doctor.credentials_dir", i18n.Args{"dir": dir, "error": err.Error()}))
 		return
 	}
 	for _, e := range entries {
@@ -251,7 +324,7 @@ func (d *doctorReport) credentials(dir string) {
 		check(rel, 0o600)
 	}
 	if bad == 0 {
-		d.ok("凭据文件权限", "数据目录中的凭据文件均为 0600，整目录关闭的凭据文件夹均为 0700")
+		d.ok(item, i18n.T(l, "hub-doctor.credentials_ok"))
 	}
 }
 
@@ -259,25 +332,27 @@ func doctorPort(listen string) (string, error) {
 	_, port, err := net.SplitHostPort(listen)
 	n, parseErr := strconv.Atoi(port)
 	if err != nil || parseErr != nil || n < 1 || n > 65535 {
-		return "", fmt.Errorf("无效监听端口")
+		return "", fmt.Errorf("invalid listen port %q", listen)
 	}
 	return port, nil
 }
 
 func (d *doctorReport) running(ctx context.Context, cfg *Config) []Endpoint {
+	l := d.l
 	port, err := doctorPort(cfg.Listen)
 	if err != nil {
 		return nil
 	}
+	item := i18n.T(l, "hub-doctor.item_running")
 	if strings.TrimSpace(cfg.Token) == "" {
-		d.problem("运行中的 hub", "配置缺少主 token；请检查 hub.json 的 token，自检不会生成或打印 token")
+		d.problem(item, i18n.T(l, "hub-doctor.running_no_token"))
 		return nil
 	}
 	get := doctorLoopback(cfg, port)
 	for _, path := range []string{"/api/v1/health", "/api/v1/endpoints"} {
 		resp, err := get(ctx, path)
 		if err != nil {
-			d.problem("运行中的 hub", "无法连接本机回环，hub 可能没运行或未监听回环地址；请启动 personad hub run 并检查 listen")
+			d.problem(item, i18n.T(l, "hub-doctor.running_unreachable"))
 			return nil
 		}
 		var body struct {
@@ -287,23 +362,25 @@ func (d *doctorReport) running(ctx context.Context, cfg *Config) []Endpoint {
 		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			d.problem(path, fmt.Sprintf("本机 hub 返回 HTTP %d；请确认运行版本、配置和主 token 一致", resp.StatusCode))
+			d.problem(path, i18n.T(l, "hub-doctor.running_http", i18n.Args{"status": resp.StatusCode}))
 			continue
 		}
 		if decodeErr != nil || (path == "/api/v1/health" && !body.OK) || (path == "/api/v1/endpoints" && body.Endpoints == nil) {
-			d.problem(path, "本机 hub 返回内容无效；请检查 hub 日志和运行版本")
+			d.problem(path, i18n.T(l, "hub-doctor.running_invalid"))
 			continue
 		}
 		if path == "/api/v1/health" {
-			d.ok("运行中的 hub", "回环 health 检查通过")
+			d.ok(item, i18n.T(l, "hub-doctor.running_ok"))
 			continue
 		}
+		endpointsItem := i18n.T(l, "hub-doctor.item_endpoints")
 		if len(body.Endpoints) == 0 {
-			d.problem("候选地址", "hub 未发布候选地址；请检查 public.advertise 和网卡地址")
+			d.problem(endpointsItem, i18n.T(l, "hub-doctor.endpoints_none"))
 		} else {
-			d.ok("候选地址", "已读取运行中的 hub 当前发布列表（不代表外部可达）")
+			d.ok(endpointsItem, i18n.T(l, "hub-doctor.endpoints_ok"))
 			for _, e := range body.Endpoints {
-				fmt.Fprintf(d.out, "  %s（%s，端口 %d，发现时间 %s）\n", e.URL, e.Kind, e.Port, e.SeenAt.Format(time.RFC3339))
+				d.note(i18n.T(l, "hub-doctor.endpoint", i18n.Args{"url": e.URL, "kind": e.Kind, "port": e.Port,
+					"seen": e.SeenAt.Format(time.RFC3339)}))
 			}
 		}
 		d.pushRoutes(ctx, get)
@@ -337,30 +414,34 @@ func doctorLoopback(cfg *Config, port string) func(ctx context.Context, path str
 // pushRoutes reports which way the running hub pushes to each device (#5998): straight to APNs, through the relay the
 // phone registered with, or not at all and why.
 func (d *doctorReport) pushRoutes(ctx context.Context, get func(context.Context, string) (*http.Response, error)) {
+	l := d.l
 	resp, err := get(ctx, "/api/v1/devices/push")
 	if err != nil {
 		return // the checks before said whether the hub answers at all
 	}
 	var body struct {
-		Direct  bool         `json:"direct"`
-		Devices []pushDevice `json:"devices"`
+		Direct  bool            `json:"direct"`
+		Devices []pushDevice    `json:"devices"`
+		Web     []webPushListed `json:"web"`
 	}
 	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body)
 	resp.Body.Close()
+	item := i18n.T(l, "hub-doctor.item_push")
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
-		d.problem("推送", "运行中的 hub 版本太旧，不会报每台设备的推送路径；升级后再查")
+		d.problem(item, i18n.T(l, "hub-doctor.push_old_hub"))
 		return
 	case resp.StatusCode != http.StatusOK || decodeErr != nil:
-		d.problem("推送", fmt.Sprintf("本机 hub 的 /api/v1/devices/push 返回 HTTP %d；请检查 hub 日志", resp.StatusCode))
+		d.problem(item, i18n.T(l, "hub-doctor.push_http", i18n.Args{"status": resp.StatusCode}))
 		return
 	}
-	way := "hub 没有 apns.json，经各台设备登记的推送中继"
+	way := i18n.T(l, "hub-doctor.push_way_relay")
 	if body.Direct {
-		way = "hub 有自己的 APNs key（apns.json），直连 APNs"
+		way = i18n.T(l, "hub-doctor.push_way_direct")
 	}
+	defer d.webPushRoutes(body.Web)
 	if len(body.Devices) == 0 {
-		d.ok("推送", way+"；还没有设备登记推送（在手机上打开 App、允许通知后会出现在这里）")
+		d.ok(item, i18n.T(l, "hub-doctor.push_no_devices", i18n.Args{"way": way}))
 		return
 	}
 	bad := 0
@@ -370,9 +451,9 @@ func (d *doctorReport) pushRoutes(ctx context.Context, get func(context.Context,
 		}
 	}
 	if bad == 0 {
-		d.ok("推送", way)
+		d.ok(item, way)
 	} else {
-		d.problem("推送", fmt.Sprintf("%s；%d 台设备收不到或上一条没推出去，见下面", way, bad))
+		d.problem(item, i18n.T(l, "hub-doctor.push_bad", i18n.Args{"way": way, "count": bad}))
 	}
 	for _, dev := range body.Devices {
 		name := dev.Name
@@ -380,41 +461,83 @@ func (d *doctorReport) pushRoutes(ctx context.Context, get func(context.Context,
 			name = dev.DeviceID
 		}
 		if dev.Kind != "" {
-			name += "（" + dev.Kind + "）"
+			name = i18n.T(l, "hub-doctor.device_kind", i18n.Args{"name": name, "kind": dev.Kind})
 		}
-		fmt.Fprintf(d.out, "  %s：%s\n", name, pushRouteLine(dev.Push))
+		d.note(i18n.T(l, "hub-doctor.item_detail", i18n.Args{"item": name, "detail": pushRouteLine(l, dev.Push)}))
 	}
 }
 
-func doctorAddressReason(a netaddr.Addr) string {
+// webPushRoutes reports the browsers with Web Push (#7459), when there are any: through which push service, and
+// whether the last push went out or the subscription was made with an earlier key.
+func (d *doctorReport) webPushRoutes(web []webPushListed) {
+	if len(web) == 0 {
+		return
+	}
+	l := d.l
+	item := i18n.T(l, "hub-doctor.item_web_push")
+	bad := 0
+	for _, b := range web {
+		if !b.Current || b.FailedAt != nil {
+			bad++
+		}
+	}
+	if bad == 0 {
+		d.ok(item, i18n.T(l, "hub-doctor.web_push_ok", i18n.Args{"count": len(web)}))
+	} else {
+		d.problem(item, i18n.T(l, "hub-doctor.web_push_bad", i18n.Args{"count": bad}))
+	}
+	for _, b := range web {
+		name := cmp.Or(b.Browser, b.Device)
+		route := i18n.T(l, "hub-doctor.web_push_route", i18n.Args{"service": cmp.Or(b.Service, "?")})
+		line := route
+		switch {
+		case !b.Current:
+			line = i18n.T(l, "hub-doctor.web_push_stale", i18n.Args{"route": route})
+		case b.FailedAt != nil:
+			line = i18n.T(l, "hub-doctor.push_reason_failed_at", i18n.Args{"route": route, "detail": b.Error,
+				"at": b.FailedAt.UTC().Format("01-02 15:04 UTC")})
+		}
+		d.note(i18n.T(l, "hub-doctor.item_detail", i18n.Args{"item": name, "detail": line}))
+	}
+}
+
+// doctorAddressReasons are the address flags that keep an address out, with their words.
+var doctorAddressReasons = []struct {
+	bit netaddr.Flags
+	key string
+}{
+	{netaddr.FlagTemporary, "hub-doctor.reason_temporary"},
+	{netaddr.FlagDeprecated, "hub-doctor.reason_deprecated"},
+	{netaddr.FlagTentative, "hub-doctor.reason_tentative"},
+	{netaddr.FlagDADFailed, "hub-doctor.reason_dad_failed"},
+}
+
+func doctorAddressReason(l i18n.Lang, a netaddr.Addr) string {
 	var reasons []string
 	if class := netaddr.Classify(a.IP); class != netaddr.GlobalIPv6 {
-		reasons = append(reasons, "非全局 IPv6（"+string(class)+"）")
+		reasons = append(reasons, i18n.T(l, "hub-doctor.reason_not_global", i18n.Args{"class": string(class)}))
 	}
 	if !a.FlagsKnown || !a.ScopeKnown {
-		reasons = append(reasons, "系统未提供地址标志或作用域，无法确认稳定性")
+		reasons = append(reasons, i18n.T(l, "hub-doctor.reason_flags_unknown"))
 	}
 	if a.ScopeKnown && a.Scope != 0 {
-		reasons = append(reasons, "作用域不是全局")
+		reasons = append(reasons, i18n.T(l, "hub-doctor.reason_scope"))
 	}
 	if a.Virtual || a.InterfaceFlags&net.FlagLoopback != 0 {
-		reasons = append(reasons, "虚拟或回环网卡")
+		reasons = append(reasons, i18n.T(l, "hub-doctor.reason_virtual"))
 	}
 	if a.InterfaceFlags&net.FlagUp == 0 {
-		reasons = append(reasons, "网卡未启用")
+		reasons = append(reasons, i18n.T(l, "hub-doctor.reason_down"))
 	}
-	for _, flag := range []struct {
-		bit   netaddr.Flags
-		label string
-	}{{netaddr.FlagTemporary, "临时隐私地址"}, {netaddr.FlagDeprecated, "已废弃地址"}, {netaddr.FlagTentative, "地址检测尚未完成"}, {netaddr.FlagDADFailed, "重复地址检测失败"}} {
+	for _, flag := range doctorAddressReasons {
 		if a.Flags&flag.bit != 0 {
-			reasons = append(reasons, flag.label)
+			reasons = append(reasons, i18n.T(l, flag.key))
 		}
 	}
 	if a.LifetimesKnown && (a.PreferredLifetime == 0 || a.ValidLifetime == 0) {
-		reasons = append(reasons, "地址有效期已结束")
+		reasons = append(reasons, i18n.T(l, "hub-doctor.reason_expired"))
 	}
-	return strings.Join(reasons, "、")
+	return strings.Join(reasons, i18n.T(l, "hub-doctor.list_separator"))
 }
 
 func doctorCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -427,49 +550,55 @@ func doctorCommand(ctx context.Context, name string, args ...string) ([]byte, er
 }
 
 func (d *doctorReport) system(ctx context.Context) {
+	l := d.l
 	if runtime.GOOS != "linux" {
-		fmt.Fprintln(d.out, "路由、防火墙：已跳过 Linux 专用检查；请在系统网络设置中核对")
+		d.info(i18n.T(l, "hub-doctor.item_routes_firewall"), i18n.T(l, "hub-doctor.routes_not_linux"))
 		return
 	}
+	routeItem := i18n.T(l, "hub-doctor.item_route")
 	for _, item := range []struct {
 		path string
 		ipv6 bool
 	}{{"/proc/net/route", false}, {"/proc/net/ipv6_route", true}} {
 		b, err := os.ReadFile(item.path)
 		if err != nil {
-			fmt.Fprintf(d.out, "路由：无法读取 %s，已跳过\n", item.path)
+			d.info(routeItem, i18n.T(l, "hub-doctor.route_unreadable", i18n.Args{"path": item.path}))
 			continue
 		}
 		ifaces := doctorRouteInterfaces(string(b), item.ipv6)
 		if len(ifaces) == 0 {
-			fmt.Fprintf(d.out, "路由：%s 未发现可检查的路由，已跳过\n", item.path)
+			d.info(routeItem, i18n.T(l, "hub-doctor.route_empty", i18n.Args{"path": item.path}))
 		}
 		for _, iface := range ifaces {
 			d.route(iface, item.path)
 		}
 	}
+	query := i18n.T(l, "hub-doctor.item_route_query")
 	if b, err := doctorCommand(ctx, "ip", "-6", "route", "get", "2001:db8::1"); err == nil {
 		fields := strings.Fields(string(b))
 		for i := 0; i+1 < len(fields); i++ {
 			if fields[i] == "dev" {
-				d.route(fields[i+1], "IPv6 路由查询")
+				d.route(fields[i+1], query)
 				break
 			}
 		}
 	} else {
-		fmt.Fprintln(d.out, "IPv6 路由查询：命令不可用或查询失败，已跳过")
+		d.info(query, i18n.T(l, "hub-doctor.route_query_skipped"))
 	}
+	firewall := i18n.T(l, "hub-doctor.item_firewall")
 	for _, command := range [][]string{{"ufw", "status"}, {"nft", "list", "ruleset"}} {
 		b, err := doctorCommand(ctx, command[0], command[1:]...)
 		if err != nil {
-			fmt.Fprintf(d.out, "防火墙：%s 不可用或无读取权限，已跳过（不使用 sudo）\n", command[0])
+			d.info(firewall, i18n.T(l, "hub-doctor.firewall_skipped", i18n.Args{"command": command[0]}))
 			continue
 		}
 		if strings.Contains(string(b), "Status: inactive") || strings.TrimSpace(string(b)) == "" {
-			d.problem("防火墙", command[0]+" 未启用或没有规则；请核对主机入站策略，对公网只放行 hub 的 TLS 端口")
+			d.problem(firewall, i18n.T(l, "hub-doctor.firewall_off", i18n.Args{"command": command[0]}))
 		} else {
-			d.ok("防火墙读取", strings.Join(command, " ")+" 已读取；是否放行 TLS 仍需核对以下规则")
-			fmt.Fprintln(d.out, string(b))
+			d.ok(i18n.T(l, "hub-doctor.item_firewall_read"), i18n.T(l, "hub-doctor.firewall_read", i18n.Args{"command": strings.Join(command, " ")}))
+			for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+				d.note(strings.TrimRight(line, " \t\r"))
+			}
 		}
 	}
 }
@@ -483,10 +612,12 @@ func (d *doctorReport) route(iface, source string) {
 	if target, err := filepath.EvalSymlinks(filepath.Join("/sys/class/net", iface)); err == nil {
 		suspect = suspect || strings.HasPrefix(target, "/sys/devices/virtual/") && iface != "lo"
 	}
+	item := i18n.T(d.l, "hub-doctor.item_route")
+	args := i18n.Args{"source": source, "interface": iface}
 	if suspect {
-		d.problem("路由", source+" 经过 "+iface+"，疑似 TUN/VPN 或虚拟网卡；TUN 代理可能吞掉入站回包（未实测）。请关闭 TUN 自动路由或配置入站连接回包直连，再用手机蜂窝网络验证")
+		d.problem(item, i18n.T(d.l, "hub-doctor.route_suspect", args))
 	} else {
-		d.ok("路由", source+" 经过 "+iface+"，未发现 TUN 特征；仍需用手机验证回包路径")
+		d.ok(item, i18n.T(d.l, "hub-doctor.route_ok", args))
 	}
 }
 
@@ -517,30 +648,30 @@ func doctorRouteInterfaces(raw string, ipv6 bool) []string {
 	return out
 }
 
-// pushRouteLine is a device's way in `hub doctor`'s words.
-func pushRouteLine(r pushRoute) string {
-	var line string
+// pushRouteLine is a device's way in `hub doctor`'s words, in l.
+func pushRouteLine(l i18n.Lang, r pushRoute) string {
+	var route string
 	switch r.Route {
 	case pushDirect:
-		line = "直连 APNs"
+		route = i18n.T(l, "hub-doctor.push_route_direct")
 	case pushRelay:
-		line = "经推送中继"
+		route = i18n.T(l, "hub-doctor.push_route_relay")
 	default:
-		line = "收不到后台推送"
+		route = i18n.T(l, "hub-doctor.push_route_none")
 	}
 	switch r.Reason {
 	case pushNoToken:
-		line += "：没有 APNs token（这台设备没允许通知，或向 APNs 登记失败）"
+		return i18n.T(l, "hub-doctor.push_reason_no_token", i18n.Args{"route": route})
 	case pushRelayFailed:
-		line += "：向推送中继登记失败（" + r.Detail + "）"
+		return i18n.T(l, "hub-doctor.push_reason_relay_failed", i18n.Args{"route": route, "detail": r.Detail})
 	case pushNoRelay:
-		line += "：hub 没有 apns.json，这台设备也没报中继（构建没配中继，或 App 太旧）"
+		return i18n.T(l, "hub-doctor.push_reason_no_relay", i18n.Args{"route": route})
 	case pushFailed:
-		at := ""
 		if r.FailedAt != nil {
-			at = r.FailedAt.UTC().Format("01-02 15:04 UTC") + " "
+			return i18n.T(l, "hub-doctor.push_reason_failed_at", i18n.Args{"route": route, "detail": r.Detail,
+				"at": r.FailedAt.UTC().Format("01-02 15:04 UTC")})
 		}
-		line += fmt.Sprintf("，但 %s上一条没推出去（%s）", at, r.Detail)
+		return i18n.T(l, "hub-doctor.push_reason_failed", i18n.Args{"route": route, "detail": r.Detail})
 	}
-	return line
+	return route
 }

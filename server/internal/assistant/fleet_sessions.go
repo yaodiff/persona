@@ -287,9 +287,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		if t := shown[list[i].SessionID].Title; t != "" && list[i].Assistant {
 			list[i].Title = t // "MMDD | type | topic", the user's own, "Persona" for the main one (titles.go)
 		}
-		if title := s.agentDisplayName(machine, list[i]); title != "" {
-			list[i].Title = title
-		}
+		s.nameAgentRow(machine, &list[i])
 		if ch := via[[2]string{machine, list[i].SessionID}]; len(ch) > 0 {
 			list[i].Channels = ch // where its messages came from (docs/extensions/channels.md "Source markers")
 		}

@@ -111,7 +111,7 @@ nonisolated struct AllDaySnapshot: Codable, Equatable, Sendable {
     /// The widget provider's read; the app never reads it back (it knows its own state).
     static func read() -> AllDaySnapshot? {
         guard let url = directory?.appending(path: fileName),
-              let data = try? Data(contentsOf: url) else { return nil } // perf-ok: the widget provider's own queue, never the app's main thread
+              let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(AllDaySnapshot.self, from: data)
     }
 

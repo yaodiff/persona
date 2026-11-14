@@ -1,6 +1,8 @@
 """Serving evidence uses VCS settings and exact installed web artifact receipts."""
 import importlib.util
 from pathlib import Path
+import os
+import subprocess
 import tempfile
 import unittest
 
@@ -58,6 +60,25 @@ class ServingReceiptTests(unittest.TestCase):
             (installed / "different.html").write_text("same bytes")
             receipt = {"commit": COMMIT, "web_sha256": action.tree_digest(built)}
             self.assertFalse(action.bundled_web_matches(receipt, COMMIT, built, installed))
+    def test_expected_version_counts_the_same_lightweight_release_tag_as_the_build(self):
+        with tempfile.TemporaryDirectory() as repo:
+            env = dict(os.environ, GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.com",
+                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.com",
+                       GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=repo, env=env, text=True).strip()
+            git("init", "-q")
+            for version, annotated, content in (("v0.3.1", True, "old"), ("v0.4.0", False, "new")):
+                Path(repo, "file.txt").write_text(content)
+                git("add", "file.txt")
+                git("commit", "-q", "-m", content)
+                git("tag", *(["-a", version, "-m", version] if annotated else [version]))
+            Path(repo, "file.txt").write_text("head")
+            git("add", "file.txt")
+            git("commit", "-q", "-m", "head")
+            head = git("rev-parse", "--short=9", "HEAD")
+            git("tag", "testflight/202611140000")
+            self.assertRegex(action.expected_version(repo), rf"^v0\.4\.0-1-g{head[:7]}[0-9a-f]*$")
 
 
 if __name__ == "__main__":

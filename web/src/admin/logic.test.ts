@@ -302,6 +302,16 @@ describe("extensions", () => {
     expect(extensionStatus({ status: "whatever" }).label).toBe("状态未知");
   });
 
+  it("says the node program's aggregate, not the idle hub process", () => {
+    const node_status = { total: 2, running: 2, starting: 0, stopped: 0, offline: 0, abnormal: 0 };
+    expect(extensionStatus({ status: "running", node_status })).toEqual({ tone: "green", label: "在 2 台机器上运行" });
+    expect(extensionRunNote({ status: "running", node_status })).toBe("");
+    const mixed = { total: 2, running: 1, starting: 0, stopped: 0, offline: 0, abnormal: 1 };
+    expect(extensionStatus({ status: "running", node_status: mixed })).toEqual({ tone: "green", label: "在 1 台机器上运行 · 1 台机器异常" });
+    const abnormalOnly = { total: 2, running: 0, starting: 0, stopped: 0, offline: 1, abnormal: 1 };
+    expect(extensionStatus({ status: "error", node_status: abnormalOnly })).toEqual({ tone: "red", label: "1 台机器异常 · 1 台机器离线" });
+  });
+
   it("says whether an attached extension is online and since when", () => {
     const at = new Date();
     at.setHours(10, 42, 0, 0);

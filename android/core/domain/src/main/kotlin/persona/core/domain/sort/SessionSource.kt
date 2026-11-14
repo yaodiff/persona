@@ -6,16 +6,16 @@ import persona.core.contracts.Session
 
 /*
  * Where a session comes from and what the phone may do with it (docs/protocol/protocol.md "Codex sources and capabilities", the same rules
- * as iOS `Session`). Older sources carry no source_kind and can do everything; a session with a source only gets
+ * as iOS `Session`). Older sources carry no source_kind and can do everything unless explicitly marked stopped; a session with a source only gets
  * what its capabilities explicitly allow, so a missing field is a refusal. The hub and the node refuse the same
  * operations: these only keep the phone from offering what would fail.
  */
 
 val Session.hasSource: Boolean get() = !sourceKind.isNullOrEmpty()
 val Session.canRead: Boolean get() = !hasSource || capabilities?.read == true
-val Session.canSend: Boolean get() = !hasSource || capabilities?.send == true
-val Session.canInterrupt: Boolean get() = !hasSource || capabilities?.interrupt == true
-val Session.canApprove: Boolean get() = !hasSource || capabilities?.approve == true
+val Session.canSend: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.send == true)
+val Session.canInterrupt: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.interrupt == true)
+val Session.canApprove: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.approve == true)
 /** A pane in a terminal engine: the terminal and its keys; closing and renaming where the node says nothing else ([canClose], [canRename]). */
 val Session.canTerminal: Boolean get() = !hasSource || capabilities?.terminal == true
 /**
@@ -133,6 +133,17 @@ val Session.agentSource: AgentSource?
     }
 // The kinds a pane id may be prefixed with: keep in step with Kinds in server/internal/host/host.go.
 private val HOST_KINDS = setOf("orca", "herdr-core", "tern", "botmux")
+
+// The engines that make a session's own worktree (#6115): worktree/status and worktree/remove take one as their kind.
+private val WORKTREE_ENGINES = setOf("herdr", "herdr-core", "orca", "tern", "paseo", "cindy")
+
+/**
+ * The engine a session runs in, which made its own worktree (Paseo makes its own): its terminal's host, else the runtime
+ * engine its space is; null when it names neither, and the computer's default decides (iOS `AgentWorktree.engine(of:)`;
+ * the web sends the session's `host`).
+ */
+val Session.worktreeKind: String?
+    get() = hostKind.takeIf { it in WORKTREE_ENGINES } ?: spaceKind?.takeIf { it in WORKTREE_ENGINES }
 
 val READ_ONLY = CoreText.of(Key.SessionReadOnly)
 private const val READ_ONLY_PREFIX = "仅查看：" // i18n-ignore: the node's prefix it strips

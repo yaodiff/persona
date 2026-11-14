@@ -15,7 +15,7 @@ import { entryPayload, ENTRY_DRAG_TYPE } from "../../lib/entry-drag";
 import { aheadBehind, dirName, fileName, gitMark, joinPath, type FsEntry, type FsListing, type GitStatus } from "../../lib/files";
 import { historyBack, historyForward, historyGo, parentPath, pathSegments, writableHere, type FilesHistory } from "../../lib/files-nav";
 import { hitFolder, hitName, nameEntries, searchNames, type NameHit } from "../../lib/files-find-name";
-import { ago, bytes, shortPath } from "../../lib/format";
+import { ago, bytes, sessionCan, shortPath } from "../../lib/format";
 import { openPanel } from "../../lib/panel";
 import { navigate } from "../../lib/router";
 import { notePlace } from "../../lib/panel-memory";
@@ -161,7 +161,8 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   const canChmod = writable && hubHas(features, FILE_CHMOD_FEATURE) && machine?.os?.toLowerCase() !== "windows";
   // Open Terminal Here (#5832): a new tab on the computer in that folder, in the session's workspace when it has one
   const canTerminal = hubHas(features, PANE_CWD_FEATURE);
-  const workspace = useStore((s) => s.sessions[mid]?.find((x) => x.session_id === sid)?.workspace_id);
+  // A runtime engine's session (Paseo's) names a workspace with no terminal: the folder decides where the tab opens.
+  const workspace = useStore((s) => { const x = s.sessions[mid]?.find((y) => y.session_id === sid); return x && sessionCan(x, "terminal") ? x.workspace_id : undefined; });
   const openTerminal = async (folder: string) => {
     try {
       const r = await api<{ terminal: string }>(`/machines/${enc(mid)}/panes`, { method: "POST", json: { cwd: folder, ...(workspace ? { workspace_id: workspace } : {}) } });

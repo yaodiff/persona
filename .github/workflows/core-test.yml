@@ -1,0 +1,42 @@
+name: Rust core CI
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core:
+    name: Shared Rust core
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Restore Cargo caches
+        id: cargo-cache
+        # Only a manual main run saves (below); other refs restore main's entries and never write their own.
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            native/app-core/target
+          key: core-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/app-core/Cargo.lock', 'native/app-core/rust-toolchain.toml') }}-${{ hashFiles('native/app-core/crates/**') }}
+          restore-keys: |
+            core-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/app-core/Cargo.lock', 'native/app-core/rust-toolchain.toml') }}-
+      - uses: actions/setup-node@v4
+        with:
+          # The ArkTS codec tests load the generated TypeScript with module.registerHooks / stripTypeScriptTypes.
+          node-version: 24
+      - name: Rust core checks
+        run: scripts/ci/core.sh
+      - name: Save Cargo caches
+        if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            native/app-core/target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}

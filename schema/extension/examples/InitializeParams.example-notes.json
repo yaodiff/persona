@@ -12,7 +12,8 @@
     "timezone": "Asia/Shanghai",
     "locale": "en",
     "capabilities": [
-      "inbox_group"
+      "inbox_group",
+      "inbox_group_state"
     ]
   },
   "extension": {

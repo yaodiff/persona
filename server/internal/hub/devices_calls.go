@@ -7,11 +7,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // ---- calls through the manager ----
+
+// deviceBusMethod keeps cancellation scoped to the long file operations whose node side supports it.
+func deviceBusMethod(method string) string {
+	if method == "file.copy" || method == "file.zip" {
+		return devicewire.MethodFileCall
+	}
+	return devicewire.MethodCall
+}
 
 // busNode is a machine's node as the hub reaches it: through the manager.
 type busNode struct {
@@ -49,7 +58,16 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 		p.TimeoutMS = managerTimeout(time.Until(dl)).Milliseconds()
 	}
 	var res json.RawMessage
-	if err := b.h.callBusAsIs(ctx, owner, devicewire.MethodCall, p, &res); err != nil {
+	busMethod := deviceBusMethod(method)
+	err = b.h.callBusAsIs(ctx, owner, busMethod, p, &res)
+	var rpcErr *rpc.Error
+	if busMethod == devicewire.MethodFileCall && errors.As(err, &rpcErr) && rpcErr.Code == bus.CodeUnknownMethod {
+		// An older manager rejects file_call before reaching the node. Preserve its existing copy / zip behavior;
+		// only this explicit refusal may repeat the request, and the fallback intentionally does not propagate cancel.
+		res = nil
+		err = b.h.callBusAsIs(ctx, owner, devicewire.MethodCall, p, &res)
+	}
+	if err != nil {
 		return deviceError(b.id, err)
 	}
 	if out != nil && len(res) > 0 {

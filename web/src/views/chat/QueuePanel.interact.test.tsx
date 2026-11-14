@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The queued messages at the top of the composer, as cindy's pending queue (#5327): each row's actions and the hub
-// requests they make, reordering from the handle by keyboard and by dragging, the fold past four rows, Send now's
-// confirmation, and relayed rows that only show. The markup checks are in ChatDock.test.tsx.
+// requests they make, reordering from the handle by keyboard and by dragging, the fold past four rows, Send now at one
+// press, and relayed rows that only show. The markup checks are in ChatDock.test.tsx.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,18 +55,25 @@ describe("QueuePanel row actions", () => {
     expect(withdrawn).toEqual(["第二条", "第三条"]);
   });
 
-  it("asks before Send now, which hands the agent every queued message", async () => {
+  it("sends every queued message at one press, with no dialog; its tooltip and description say what happens", async () => {
     vi.mocked(api).mockResolvedValue({});
     render(<QueuePanel session={session} draftKey="qp-send" canEdit />);
-    click(within(2, "[data-send-now]"));
-    expect(api).not.toHaveBeenCalled();
-    const body = document.querySelector("[data-send-now-body]")!;
-    expect(body.textContent).toContain("Claude 会马上收到");
-    expect(document.querySelector('[role="dialog"] h2')!.textContent).toBe("现在就发送排队的 3 条消息？");
-    const go = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "立即发送")!;
-    click(go);
-    await settle();
+    const send = within(2, "[data-send-now]");
+    expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Claude，不用等到下一步");
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Claude 会马上收到");
+    expect(send.title).toBe("现在就把排队的消息全部发给 Claude，不用等到下一步\nClaude 会马上收到，不用等到下一步。它正在跑的命令会转到后台继续；正在写的回复会带上你的消息重新开始。");
+    click(send);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(calls()).toEqual([["/sessions/m/s/queue/send-now", {}]]);
+    await settle();
+  });
+
+  it("says in the Persona chat's words what sending now does", () => {
+    const persona = { ...session, agent: undefined, assistant: true, queued: ["我的"] } as unknown as Session;
+    render(<QueuePanel session={persona} draftKey="qp-persona-send" canEdit persona="Nova" />);
+    const send = within(0, "[data-send-now]");
+    expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Nova，不用等到下一步");
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 会马上收到");
   });
 
   it("shows a spinner where the busy row's actions were and takes no other action meanwhile", async () => {

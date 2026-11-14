@@ -82,5 +82,15 @@
   "machine_missing": "{name}（このマシンはありません）",
   "launcher_missing": "{name}（このランチャーはありません）",
   "launchers_loading": "ランチャーを読み込み中…",
-  "from_provider": "{provider}から"
+  "from_provider": "{provider}から",
+  "node_running_one": "{count}台のマシンで実行中",
+  "node_running_other": "{count}台のマシンで実行中",
+  "node_abnormal_count_one": "{count}台のマシンに異常があります",
+  "node_abnormal_count_other": "{count}台のマシンに異常があります",
+  "node_offline_count_one": "{count}台がオフライン",
+  "node_offline_count_other": "{count}台がオフライン",
+  "node_starting_one": "{count}台のマシンで起動中",
+  "node_starting_other": "{count}台のマシンで起動中",
+  "node_stopped_one": "{count}台のマシンで停止中",
+  "node_stopped_other": "{count}台のマシンで停止中"
 }

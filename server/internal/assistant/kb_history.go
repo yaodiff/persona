@@ -25,7 +25,7 @@ import (
 // (kb_history_files.go), so a redeploy at any time loses nothing: a restart goes on from each chat's state. It reads
 // a source only when all of these hold: the knowledge base is on and writable, kb.history.enabled is true and lists
 // the source, the owner approved the source's plan in the assistant chat (kb_history_resume), there is no STOP, and
-// the source does not wait for the search index (kb.SearchIndexed). One source at a time, in the order kb.history
+// the source does not wait for the search index (historyIndexed). One source at a time, in the order kb.history
 // lists them; one request in flight, ever; every wait drawn afresh (kb_history_pace.go). A call that timed out or an
 // answer it does not know stops the whole import (STOP, a push) until a person looks; nothing is retried by itself.
 // A stop never cancels the call in flight: it takes effect before the next one.
@@ -194,14 +194,24 @@ func (s *Service) historyDriver(data string) *historyDriver {
 		},
 		calls:    &s.kb.history.calls,
 		instance: s.kb.history.instance,
-		indexed:  func() bool { return historySearchIndexed },
-		running:  &s.kb.history.running,
-		timeout:  historyCallTimeout,
+		indexed: func() bool {
+			o := s.kb.cur.Load()
+			return o != nil && historyIndexed(o.eng)
+		},
+		running: &s.kb.history.running,
+		timeout: historyCallTimeout,
 	}
 }
 
 // historySearchIndexed is kb.SearchIndexed (a var for the tests).
 var historySearchIndexed = kb.SearchIndexed
+
+// historyIndexed reports whether the knowledge base e has its search index (kb.Store.SearchIndexReady): the index
+// lane (kb_lanes.go) builds it, within its first run on an archive that never had one. Until then a source that
+// needs it waits (needs_search_index), as it did before the knowledge base kept an index at all.
+func historyIndexed(e *kb.Engine) bool {
+	return historySearchIndexed && e != nil && e.Store.SearchIndexReady()
+}
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	if d <= 0 {

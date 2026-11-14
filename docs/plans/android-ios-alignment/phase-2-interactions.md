@@ -58,7 +58,7 @@ The swipe that closes an Agents row stays on Android: the iPhone has none (only 
 
 **Today.** iOS: one trailing full swipe in `apple/Persona/Views/Inbox/InboxView.swift`, Done in the positive color or Move Back in the accent color with an undo icon, and no swipe while picking. Its context menu has Done or Move Back, the mutes and the rules; handing the item to the assistant lives on the item's page. A single item gives a tap haptic.
 
-Android: `android/feature/inbox/src/main/kotlin/persona/feature/inbox/InboxItemRow.kt` and `android/feature/inbox/src/main/kotlin/persona/feature/inbox/InboxConversationItemRow.kt` put Done or Move Back on the start side and the hand-off on the end side, and both long-press sheets offer the hand-off. The row component, `SwipeActions.kt` in the design system, wraps Material's swipe-to-dismiss: full swipes only, no accessibility actions, and color only through a status.
+Android: `android/feature/inbox/src/main/kotlin/persona/feature/inbox/InboxItemRow.kt` puts Done or Move Back on the start side and the hand-off on the end side, and the long-press sheet offers the hand-off. The row component, `SwipeActions.kt` in the design system, wraps Material's swipe-to-dismiss: full swipes only, no accessibility actions, and color only through a status.
 
 **Change.**
 

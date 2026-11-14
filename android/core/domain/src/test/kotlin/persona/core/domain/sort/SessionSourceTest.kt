@@ -27,6 +27,16 @@ class SessionSourceTest {
         assertFalse(missing.canRead || missing.canSend || missing.canInterrupt || missing.canApprove || missing.canTerminal || missing.canAttach)
     }
 
+    /** The engine an agent ran in made its own worktree, and is the one asked about it and to remove it (#6115). */
+    @Test fun theEngineThatMadeAnAgentsWorktree() {
+        assertEquals("herdr", session("""{"session_id":"s1","pane_id":"w1:p1"}""").worktreeKind)
+        assertEquals("orca", session("""{"session_id":"s1","pane_id":"orca:t1"}""").worktreeKind)
+        assertEquals("paseo", session("""{"session_id":"s1","source_kind":"runtime","space_kind":"paseo"}""").worktreeKind)
+        assertNull(session("""{"session_id":"s1","pane_id":"botmux:x1"}""").worktreeKind) // a Feishu topic, no engine
+        assertNull(session("""{"session_id":"s1","source_kind":"runtime","space_kind":"dsh"}""").worktreeKind)
+        assertNull(session("""{"session_id":"s1"}""").worktreeKind)
+    }
+
     @Test fun historyIsReadOnlyAndResumesByItsThread() {
         val history = session(
             """{"machine_id":"m","session_id":"opaque","cwd":"/tmp/project","source_kind":"codex_history","source_thread_id":"thread",""" +

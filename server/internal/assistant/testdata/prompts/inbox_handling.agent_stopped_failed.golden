@@ -1,0 +1,7 @@
+Agent 失败了（box 上的会话 s-sub）。失败原因：
+
+<persona-context kind="agent_result" title="Agent 的失败原因">
+API Error: example failed
+</persona-context>
+
+读完接着处理这件事：调 inbox_suggest 交下一步建议，同时更新 recap。

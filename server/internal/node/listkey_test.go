@@ -22,7 +22,7 @@ func listKeyFmt(list []proto.Session) string {
 			fmt.Fprintf(&b, "activity:%s/%d\n", s.Activity, unixOf(s.ActivityAt))
 		}
 		if s.SourceKind == "runtime" {
-			fmt.Fprintf(&b, "runtime-state:%q/%q/%v\n", s.Cwd, s.Launcher, s.StartedByPersona)
+			fmt.Fprintf(&b, "runtime-state:%q/%q/%v/%q\n", s.Cwd, s.Launcher, s.StartedByPersona, s.WorkspaceID)
 		}
 		fmt.Fprintf(&b, "attention:%q/%q/%s\n", s.AttentionReason, s.FailureReason, s.ExternalURL)
 		if s.Chat != "" || len(s.Dispatched) > 0 {

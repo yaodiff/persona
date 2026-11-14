@@ -65,6 +65,8 @@ const (
 	// bulkDismiss files as set aside (done_by=dismissed): Clean up all, and Dismiss all from clients before #5114.
 	bulkDismiss = "dismiss"
 	bulkReopen  = "reopen" // Move back / Undo
+	// bulkTodo files as turned into a to-do (done_by=todo): the item's to-do exists already (inbox_todo.go).
+	bulkTodo = "todo"
 )
 
 // doneByOf is done_by for the user filing an item: "Done" or "Ignore".
@@ -73,6 +75,14 @@ func doneByOf(dismiss bool) string {
 		return "dismissed"
 	}
 	return "user"
+}
+
+// doneByAction is done_by for a bulk action that files.
+func doneByAction(action string) string {
+	if action == bulkTodo {
+		return doneByTodo
+	}
+	return doneByOf(action == bulkDismiss)
 }
 
 // inboxBulkFilter picks the open items a bulk action without ids is for: what the list shows under a source / tier /
@@ -145,6 +155,12 @@ func (s *Service) setInboxDoneBulk(ctx context.Context, targets []inboxBulkTarge
 // with "Move back" on one item).
 func (s *Service) setInboxBulk(ctx context.Context, action string, targets []inboxBulkTarget, filter *inboxBulkFilter,
 	asOf, now time.Time) inboxBulkResult {
+	return s.setInboxBulkTodos(ctx, action, targets, filter, asOf, now, nil)
+}
+
+// setInboxBulkTodos is setInboxBulk; for bulkTodo, todoOf maps each item to the to-do made from it (the chain links it).
+func (s *Service) setInboxBulkTodos(ctx context.Context, action string, targets []inboxBulkTarget, filter *inboxBulkFilter,
+	asOf, now time.Time, todoOf map[string]string) inboxBulkResult {
 	done := action != bulkReopen
 	res := inboxBulkResult{Changed: []InboxItem{}, Unchanged: []string{}, Skipped: []inboxBulkSkip{}, Failed: []string{}}
 	var writes []*inboxFiling
@@ -190,9 +206,13 @@ func (s *Service) setInboxBulk(ctx context.Context, action string, targets []inb
 		case done && t.Version != "" && t.Version != inboxVersion(it):
 			res.Skipped = append(res.Skipped, inboxBulkSkip{t.ID, bulkSkipChanged})
 		default:
-			w := b.beginFiling(it, now, doneByOf(action == bulkDismiss))
+			w := b.beginFiling(it, now, doneByAction(action))
 			if done {
-				b.file(it, now, w.why)
+				if action == bulkTodo {
+					b.fileTodo(it, now, todoOf[it.ID])
+				} else {
+					b.file(it, now, w.why)
+				}
 				w.close = true
 			} else {
 				it.DoneAt, it.DoneBy = nil, ""

@@ -16,6 +16,7 @@ struct PersonaApp: App {
                 #if DEBUG && os(iOS)
                 .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
                 .overlay { HomeGalleryOverlay() } // `-showHomeWidgets YES`: every widget, every size (docs/apple/home-widgets.md)
+                .overlay { ButtonContrastOverlay() } // `-showButtonContrast YES`: secondary buttons on every surface (#6157)
                 #endif
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
@@ -102,6 +103,9 @@ struct PersonaApp: App {
                 #if os(iOS)
                 ClipboardOfferWatcher.shared.returned(model) // copied something elsewhere: offer to send it to a computer
                 RemindersImporter.shared.activate(model) // Reminders imported as to-dos, when that is on (#4009)
+                // Refresh the health summary snapshot while unlocked, so a locked-phone phone_health_summary
+                // call later can serve it instead of HealthKit's inaccessible-database error.
+                Task { await HealthTool.refreshSnapshot() }
                 #endif
             } else if new == .background {
                 #if os(iOS)
@@ -144,6 +148,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         MetaGlasses.shared.configure() // a no-op without the Meta Wearables SDK (docs/apple/meta-glasses.md)
         #if os(iOS)
         QuickAction.publish()
+        // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
+        // reports' small state file this early.
+        if WorkoutReports.deliversInBackground { WorkoutReports.shared.observe() }
         #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
@@ -310,7 +317,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         RecordingDayCatchUp.register()
         #endif
         #if DEBUG
-        RecordingSamples.showMeetingIfAsked() // `-showMeetingSample recording|paused|interrupted|minutes|pending`
+        RecordingSamples.showMeetingIfAsked() // `-showMeetingSample recording|paused|interrupted|minutes|pending|overview`
         #if os(iOS)
         Task { await RecordingSamples.installDaySampleIfAsked() } // `-showDaySample today|paused|recap|pending|failed`
         #endif

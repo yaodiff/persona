@@ -22,9 +22,9 @@ const item = (over: Partial<InboxItem> = {}): InboxItem => ({
 });
 
 describe("收件箱的行菜单", () => {
-  it("offers 已处理 alone for an open item with nothing to mute by", () => {
+  it("offers 已处理 and 加入待办 for an open item with nothing to mute by", () => {
     const m = rowMenu(item(), false);
-    expect(m.map((x) => [x.key, x.label])).toEqual([["done", "已处理"]]);
+    expect(m.map((x) => [x.key, x.label])).toEqual([["done", "已处理"], ["todo", "加入待办"]]);
     m[0].onSelect();
     expect(calls.done.at(-1)).toEqual([expect.objectContaining({ id: "lark:f1:1" }), true]);
   });
@@ -49,18 +49,18 @@ describe("收件箱的行菜单", () => {
   it("puts the mutes under a divider on the first, each muting with its own option", () => {
     const it0 = item({ mutes: [sender, chat] });
     const m = rowMenu(it0, false);
-    expect(m.map((x) => x.key)).toEqual(["done", "mute:sender:u1", "mute:chat:c1", "policy:sender:u1", "policy:chat:c1"]);
-    expect(m.map((x) => !!x.divider)).toEqual([false, true, false, true, false]);
-    expect(m[1].detail).toBeTruthy();
-    m[2].onSelect();
+    expect(m.map((x) => x.key)).toEqual(["done", "todo", "mute:sender:u1", "mute:chat:c1", "policy:sender:u1", "policy:chat:c1"]);
+    expect(m.map((x) => !!x.divider)).toEqual([false, false, true, false, true, false]);
+    expect(m[2].detail).toBeTruthy();
+    m[3].onSelect();
     expect(calls.mute.at(-1)).toEqual([it0, chat]);
   });
 
   it("adds 移到文件夹… last when the list shows folders", () => {
     expect(rowMenu(item({ mutes: [sender] }), false).some((x) => x.key === "folder")).toBe(false);
     const m = rowMenu(item({ mutes: [sender], folder: "work/alerts" }), false, true);
-    expect(m.map((x) => x.key)).toEqual(["done", "mute:sender:u1", "policy:sender:u1", "folder"]);
-    expect([m[3].label, m[3].hint, m[3].divider]).toEqual(["移到文件夹…", "work/alerts", true]);
+    expect(m.map((x) => x.key)).toEqual(["done", "todo", "mute:sender:u1", "policy:sender:u1", "folder"]);
+    expect([m[4].label, m[4].hint, m[4].divider]).toEqual(["移到文件夹…", "work/alerts", true]);
   });
 });
 

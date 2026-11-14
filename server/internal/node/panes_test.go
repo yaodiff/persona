@@ -280,6 +280,44 @@ func TestNewShellOpensAWorkspaceWhenThereIsNone(t *testing.T) {
 	}
 }
 
+// Open Terminal Here from a runtime's session (a Paseo session names its runtime's workspace, which has no terminal):
+// the shell opens in the terminal engine's workspace that holds the folder, not in the first one; with none holding it,
+// in a new workspace there.
+func TestNewShellForARuntimeWorkspaceOpensWhereTheFolderIs(t *testing.T) {
+	streamingHerdr()
+	n, f, home := herdrNode(t)
+	other := mkdir(t, filepath.Join(home, "other"))
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	paseoWorkspaceOn(n, "wks_1", cwd)
+	herdrSpaces(f, other, cwd)
+	if _, err := n.listPanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.reset()
+	herdrSpaces(f, other, cwd)
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w2:t3"}, "root_pane": map[string]any{"pane_id": "w2:p3"}})
+	if _, err := request(t, n, "panes.new", map[string]any{"workspace_id": "wks_1", "cwd": cwd}); err != nil {
+		t.Fatal(err)
+	}
+	realCwd, _ := filepath.EvalSymlinks(cwd) // the node asks herdr for the resolved folder
+	assertTrace(t, f.trace("workspace.create", "tab.create"), []string{
+		call("tab.create", map[string]any{"workspace_id": "w2", "cwd": realCwd, "label": "shell", "focus": false}),
+	})
+
+	f.reset()
+	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "other", "cwd": other}}})
+	f.reply("workspace.create", map[string]any{"workspace": map[string]any{"workspace_id": "w3"},
+		"tab": map[string]any{"tab_id": "w3:t1"}, "root_pane": map[string]any{"pane_id": "w3:p1"}})
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	if _, err := request(t, n, "panes.new", map[string]any{"workspace_id": "wks_1", "cwd": cwd}); err != nil {
+		t.Fatal(err)
+	}
+	assertTrace(t, f.trace("workspace.create", "tab.create", "tab.rename"), []string{
+		call("workspace.create", map[string]any{"cwd": realCwd, "label": "proj", "focus": false}),
+		call("tab.rename", map[string]any{"tab_id": "w3:t1", "label": "shell"}),
+	})
+}
+
 func TestPanesResponseJSON(t *testing.T) {
 	b, err := json.Marshal(proto.PanesResponse{Hosts: []proto.PaneHost{{Kind: "herdr", Panes: []proto.PaneItem{{Pane: "w1:p1", Terminal: "pane:w1:p1"}}}}})
 	if err != nil || !strings.Contains(string(b), `"terminal":"pane:w1:p1"`) || strings.Contains(string(b), "session_id") {

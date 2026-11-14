@@ -12,11 +12,6 @@ nonisolated enum Keychain {
     /// tunnel's private key (docs/operations/network.md「Connecting to hub through SSH」).
     @discardableResult
     static func save(_ data: Data, account: String, thisDeviceOnly: Bool = false) -> Bool {
-        #if os(macOS) && DEBUG
-        // Screenshots (`-macSnapshot`) never touch the keychain, writes included: one paired with a mock hub
-        // (`-pairURL`) keeps the pairing in memory instead of leaving an item in this Mac's login keychain.
-        if UserDefaults.standard.string(forKey: "macSnapshot") != nil { return false }
-        #endif
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecAttrAccount as String: account]
         SecItemDelete(query as CFDictionary)
@@ -39,11 +34,6 @@ nonisolated enum Keychain {
                                     kSecAttrAccount as String: account, kSecReturnData as String: true,
                                     kSecMatchLimit as String: kSecMatchLimitOne]
         var out: AnyObject?
-        #if os(macOS) && DEBUG
-        // As in `load`: screenshots and the PersonaMacTests host never touch the keychain.
-        if UserDefaults.standard.string(forKey: "macSnapshot") != nil { return .missing }
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return .missing }
-        #endif
         let status = SecItemCopyMatching(query as CFDictionary, &out)
         switch status {
         case errSecSuccess: return (out as? Data).map { .found($0) } ?? .failed(status)
@@ -57,22 +47,11 @@ nonisolated enum Keychain {
                                     kSecAttrAccount as String: account, kSecReturnData as String: true,
                                     kSecMatchLimit as String: kSecMatchLimitOne]
         var out: AnyObject?
-        #if os(macOS) && DEBUG
-        // Screenshots (`-macSnapshot`, Mac/App/MacSnapshot.swift) run while the Mac is locked, and reading an item another
-        // (unsigned) build wrote then blocks in securityd for good, prompt skipped or not: they use demo data, no keychain.
-        if UserDefaults.standard.string(forKey: "macSnapshot") != nil { return nil }
-        // The same for the app hosting PersonaMacTests: on a locked Mac its launch otherwise never gets past this read
-        // ("The test runner hung before establishing connection"); no unit test needs the keychain.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return nil }
-        #endif
         guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess else { return nil }
         return out as? Data
     }
 
     static func delete(account: String) {
-        #if os(macOS) && DEBUG
-        if UserDefaults.standard.string(forKey: "macSnapshot") != nil { return } // as in `save`
-        #endif
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecAttrAccount as String: account]
         SecItemDelete(query as CFDictionary)

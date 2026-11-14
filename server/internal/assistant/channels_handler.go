@@ -65,6 +65,20 @@ func (s *Service) InteractionAnnounced(_ context.Context, p InteractionAnnounced
 	s.boardChanged()
 }
 
+// heldAnnounced notes card id as announced without telling the Feishu bot or the channels: an escalation push tiering
+// holds back (ask_route.go ringAsks) is the Needs you list's, and the channels' catch-up must not post it after all.
+// The board shows it at once.
+func (s *Service) heldAnnounced(id string) {
+	c := &s.chans
+	c.mu.Lock()
+	if c.announced == nil {
+		c.announced = map[string]bool{}
+	}
+	c.announced[id] = true
+	c.mu.Unlock()
+	s.boardChanged()
+}
+
 // InteractionEnded is interaction.ended: a card is over: the Feishu card says how, the text ask stops waiting.
 func (s *Service) InteractionEnded(_ context.Context, p InteractionEnded) {
 	c := &s.chans

@@ -43,9 +43,13 @@ func (h *Hub) beginStop() {
 		}
 	}
 	// The machines as the managers report them, for the next hub process (devices_warm.go); each manager hands its
-	// own to its next process apart (internal/devices warm.go).
-	h.saveDevicesWarm(context.Background())
-	h.saveMachineEntries(context.Background()) // and what each one has, each machine last seen as of now (machine_entries.go)
+	// own to its next process apart (internal/devices warm.go). A Store call already under way may finish after the
+	// deadline, but the stop caller does not wait for it and no new machine-entries write starts after it.
+	h.shutdown.step(h, "machine handover", func(ctx context.Context) error {
+		h.saveDevicesWarm(ctx)
+		h.saveMachineEntries(ctx) // and what each one has, each machine last seen as of now (machine_entries.go)
+		return nil
+	})
 }
 
 // rememberLiveText keeps a session's message being generated (session.delta: the whole text so far, "" once it is in

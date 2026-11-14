@@ -248,8 +248,8 @@ func TestAdmissionDoesNotBlockAssistantConversation(t *testing.T) {
 	}
 }
 
-// Fail-closed: unknown load (no sample, stale sample, nil load) refuses rather than reading as zero load.
-func TestAdmissionFailClosedOnUnknownLoad(t *testing.T) {
+// Fail-closed: a managed machine with no sample at all, or a stale sample, refuses rather than being read as healthy.
+func TestAdmissionFailClosedOnMissingOrStaleMetrics(t *testing.T) {
 	s, _, d := admissionHub(t)
 	healthyIdle(d)
 	d.machines["busy"] = admissionMachine(8)
@@ -268,13 +268,73 @@ func TestAdmissionFailClosedOnUnknownLoad(t *testing.T) {
 		!strings.Contains(err.Error(), admissionText(s, "admission_stale")) {
 		t.Fatalf("stale sample must refuse: %v", err)
 	}
-	// A fresh sample whose load was not measured.
+}
+
+// A fresh sample that simply has no load average (Windows nodes never report one) skips only the load condition:
+// the start is admitted, while the memory and process lines still apply and a reported overload still denies.
+func TestAdmissionMissingLoadSkipsLoadCondition(t *testing.T) {
+	s, _, d := admissionHub(t)
+	healthyIdle(d)
+	d.machines["busy"] = admissionMachine(8)
+	ctx := context.Background()
+
+	// Fresh sample without a load reading, otherwise healthy: admitted (the Windows case from #6907).
 	noLoad := admissionSample(0.2, 16*1024*1024*1024, 2*1024*1024*1024, 1)
 	noLoad.Load = nil
 	d.samples["busy"] = noLoad
+	release, err := s.admitTaskStart(ctx, admissionPlanTask("busy", machineFixed))
+	if err != nil {
+		t.Fatalf("a missing load reading must skip the load condition, got %v", err)
+	}
+	release()
+
+	// The memory line still applies with no load reading.
+	noLoadMem := admissionSample(0.2, 16*1024*1024*1024, 15*1024*1024*1024, 1)
+	noLoadMem.Load = nil
+	d.samples["busy"] = noLoadMem
 	if _, err := s.admitTaskStart(ctx, admissionPlanTask("busy", machineFixed)); err == nil ||
-		!strings.Contains(err.Error(), admissionText(s, "admission_no_load")) {
-		t.Fatalf("nil load must refuse: %v", err)
+		!strings.Contains(err.Error(), admissionText(s, "admission_memory", i18n.Args{
+			"available": humanBytes(1024 * 1024 * 1024), "limit": humanBytes(2 * 1024 * 1024 * 1024)})) {
+		t.Fatalf("low memory must still refuse with a missing load reading, got %v", err)
+	}
+
+	// The process-cap line still applies with no load reading.
+	noLoadProcs := admissionSample(0.2, 16*1024*1024*1024, 2*1024*1024*1024, 20)
+	noLoadProcs.Load = nil
+	d.samples["busy"] = noLoadProcs
+	if _, err := s.admitTaskStart(ctx, admissionPlanTask("busy", machineFixed)); err == nil ||
+		!strings.Contains(err.Error(), admissionText(s, "admission_procs", i18n.Args{
+			"count": 20, "limit": 20})) {
+		t.Fatalf("the process cap must still refuse with a missing load reading, got %v", err)
+	}
+
+	// When the node does report a load, an overload still denies: skipping only applies to a missing reading.
+	d.samples["busy"] = admissionSample(99.0, 16*1024*1024*1024, 2*1024*1024*1024, 1)
+	if _, err := s.admitTaskStart(ctx, admissionPlanTask("busy", machineFixed)); err == nil ||
+		!strings.Contains(err.Error(), admissionText(s, "admission_load", i18n.Args{
+			"load": "99.0", "cores": 8, "multiplier": 4.0})) {
+		t.Fatalf("a reported overload must refuse, got %v", err)
+	}
+}
+
+// A machine that reports no load average stays eligible for a reroute recommendation.
+func TestAdmissionRecommendIncludesMissingLoadMachine(t *testing.T) {
+	s, _, d := admissionHub(t)
+	// The usual idle machine is over its load line, so only the no-load machine can host the work.
+	d.machines["idle"] = admissionMachine(8)
+	d.samples["idle"] = admissionSample(99.0, 16*1024*1024*1024, 2*1024*1024*1024, 1)
+	d.machines["busy"] = admissionMachine(8)
+	windowsLike := admissionSample(0, 16*1024*1024*1024, 2*1024*1024*1024, 1)
+	windowsLike.Load = nil
+	d.samples["busy"] = windowsLike
+	ctx := context.Background()
+
+	got, ok := s.recommendMachine(ctx, "calm", nil)
+	if !ok {
+		t.Fatal("the no-load machine must be recommendable")
+	}
+	if got.ID != "busy" {
+		t.Fatalf("recommendation = %q, want the no-load busy machine", got.ID)
 	}
 }
 

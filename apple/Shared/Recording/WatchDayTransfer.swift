@@ -393,7 +393,7 @@ final class WatchDayTransfer {
 
     /// A message's payload: the header, then the chunk's audio. nil when the audio can't be read.
     nonisolated static func frame(url: URL, header: RecordingDayHeader) -> Data? {
-        guard let audio = try? Data(contentsOf: url) else { return nil } // perf-ok: nonisolated, only called from Task.detached in sendMessage
+        guard let audio = try? Data(contentsOf: url) else { return nil }
         return header.frame(audio: audio)
     }
 

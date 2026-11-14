@@ -15,6 +15,7 @@ type ViewState = {
   toggled: Set<string>;
   scrollTop: number;
   chain: ChainPlace | null;
+  original: ChainPlace | null;
 };
 
 export interface InboxViewMemory {
@@ -32,6 +33,8 @@ export interface InboxViewMemory {
   setListScroll(top: number): void;
   chainOpen(itemKey: string): boolean;
   setChainOpen(itemKey: string, open: boolean): void;
+  originalOpen(itemKey: string): boolean;
+  setOriginalOpen(itemKey: string, open: boolean): void;
   /** Attach the view to the entry now current, carrying the view forward on an in-Inbox navigation. */
   attach(): void;
   /** Save outside browser history: navigate has already changed the address when an unmount cleanup runs. */
@@ -44,7 +47,7 @@ let load = uuid();
 let nextEntry = 0;
 
 function emptyState(): ViewState {
-  return { query: "", toggled: new Set(), scrollTop: 0, chain: null };
+  return { query: "", toggled: new Set(), scrollTop: 0, chain: null, original: null };
 }
 
 function copyState(state: ViewState): ViewState {
@@ -53,6 +56,7 @@ function copyState(state: ViewState): ViewState {
     toggled: new Set(state.toggled),
     scrollTop: state.scrollTop,
     chain: state.chain ? { ...state.chain } : null,
+    original: state.original ? { ...state.original } : null,
   };
 }
 
@@ -123,6 +127,14 @@ class ViewMemory implements InboxViewMemory {
 
   setChainOpen(itemKey: string, open: boolean): void {
     this.state.chain = { item: itemKey, open };
+  }
+
+  originalOpen(itemKey: string): boolean {
+    return this.state.original?.item === itemKey && this.state.original.open;
+  }
+
+  setOriginalOpen(itemKey: string, open: boolean): void {
+    this.state.original = { item: itemKey, open };
   }
 
   /** Change entries before children initialize from the view. Only Back / Forward to an item reads its saved snapshot;

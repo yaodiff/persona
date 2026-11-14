@@ -4,8 +4,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closePalette, openPalette, setPaletteQuery, usePalette } from "../lib/palette";
-import { closeHelp, toggleHelp } from "../lib/shortcut-help";
+import { closePalette, getPalette, openPalette, setPaletteQuery, usePalette } from "../lib/palette";
+import { closeHelp, toggleHelp, useHelpOpen } from "../lib/shortcut-help";
+import { helpKey, paletteKey } from "../lib/use-shortcuts";
 import { registerShortcut } from "../lib/shortcuts";
 import { Palette } from "./Palette";
 import { ShortcutHelp } from "./ShortcutHelp";
@@ -140,5 +141,68 @@ describe("the palette for assistive technology", () => {
     } finally {
       unregister();
     }
+  });
+});
+
+// Esc closed the palette only from its field: Tab to a result or the Filter, and Esc (the key its corner names) did
+// nothing, so ⌘/ then opened the shortcut help over it.
+describe("Esc anywhere in the palette", () => {
+  /** The shell's palette: its own store, closed by Esc as App.tsx closes it. */
+  function Shell() {
+    const palette = usePalette();
+    return (
+      <>
+        <Palette open={palette.open} onClose={closePalette} onNewAgent={() => {}} />
+        <ShortcutHelp />
+        <span data-help-open={String(useHelpOpen())} />
+      </>
+    );
+  }
+  const open = (mode: "jump" | "command") => {
+    act(() => openPalette(mode));
+    act(() => root.render(<Shell />));
+  };
+
+  it("closes it from a result row Tab reached, and gives the focus back to what opened it", () => {
+    open("command");
+    const row = dialog().querySelector<HTMLElement>("[role=option]")!;
+    row.focus();
+    expect(key(row, "Escape")).toBe(false);
+    expect(getPalette().open).toBe(false);
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("closes it from the Filter beside the field", () => {
+    open("jump");
+    const filter = dialog().querySelector<HTMLElement>("[data-testid=palette-agent-filter]")!;
+    filter.focus();
+    key(filter, "Escape");
+    expect(getPalette().open).toBe(false);
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("leaves it open for an Esc that ends an input method's word in the field", () => {
+    open("jump");
+    act(() => void field().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true })));
+    expect(getPalette().open).toBe(true);
+    key(field(), "Escape");
+    expect(getPalette().open).toBe(false);
+  });
+
+  it("⌘/ puts the shortcut help in its place, never over it; ⌘K puts it back", () => {
+    open("jump");
+    act(() => helpKey());
+    expect(getPalette().open).toBe(false);
+    expect(document.querySelector("[data-help-open]")!.getAttribute("data-help-open")).toBe("true");
+    expect(document.querySelectorAll('[role=dialog][aria-modal="true"]')).toHaveLength(1);
+    const help = document.querySelector<HTMLElement>("[role=dialog][aria-labelledby]")!;
+    expect(help.contains(document.activeElement)).toBe(true);
+    act(() => paletteKey("jump"));
+    expect(document.querySelector("[data-help-open]")!.getAttribute("data-help-open")).toBe("false");
+    expect(getPalette().open).toBe(true);
+    expect(document.activeElement).toBe(field());
+    // and its Esc gives the focus back to where the first of them was opened from
+    key(field(), "Escape");
+    expect(document.activeElement).toBe(opener);
   });
 });

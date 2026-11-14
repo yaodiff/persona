@@ -83,7 +83,7 @@
       }
     },
     "HubRole": {"type": "string", "enum": ["center", "member"]},
-    "HubCapability": {"type": "string", "enum": ["inbox_group"]},
+    "HubCapability": {"type": "string", "enum": ["inbox_group", "inbox_group_state"]},
     "InitializeParams": {
       "description": "What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer hubs send both.",
       "type": "object",

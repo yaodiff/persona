@@ -2,8 +2,6 @@ package assistant
 
 import (
 	"context"
-	"strconv"
-	"strings"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -178,8 +176,8 @@ func (s *Service) inboxSignalHolds(t Todo) bool {
 }
 
 // inboxSignalOf is the inbox signal of item it, whose new content the twin's pass just took; false when it is linked to
-// no task or its newest message is not someone else's. It counts the messages received since the last signal it gave
-// (receivedSince), and remembers how far it counted. Under b.mu.
+// no task or its newest message is not someone else's. It counts the messages received since the item count at the last
+// signal it gave (receivedSince), and remembers that count. Under b.mu.
 func inboxSignalOf(it *InboxItem, linked bool) (superviseSignal, bool) {
 	a := it.Agent
 	if a == nil || a.TodoID == "" || !it.open() || it.Kind == KindBot || a.SentOf != "" && a.SentOf == it.Last ||
@@ -194,24 +192,25 @@ func inboxSignalOf(it *InboxItem, linked bool) (superviseSignal, bool) {
 		Count: n}}, true
 }
 
-// receivedSince counts the messages of the item's received batches after chain entry since (the handling chain numbers
-// its entries c1, c2…), at least one, and answers the newest batch's number. since 0 (nothing counted yet in this run of
-// the manager): an item linked just now counts every batch its chain holds, any other only the newest, the one surely
-// new.
+// receivedSince counts the messages received since the item's count was last signaled, and returns the current count
+// as the next watermark. since 0 (nothing counted yet in this run of the manager): an item linked just now counts every
+// message its item count holds, any other only the newest received entry, the one surely new. A mail item's count is
+// its unread count, which can fall below the watermark when mail is read elsewhere; its next batch then counts as one
+// and still signals.
 func receivedSince(it *InboxItem, since int, linked bool) (n, seq int) {
-	seq, last := since, 0
-	for _, e := range it.Chain {
-		k, err := strconv.Atoi(strings.TrimPrefix(e.ID, "c"))
-		if e.Kind != ChainReceived || err != nil || k <= since {
-			continue
+	seq = it.Count
+	if since > 0 {
+		return max(it.Count-since, 1), seq
+	}
+	if linked {
+		return max(it.Count, 1), seq
+	}
+	for i := len(it.Chain) - 1; i >= 0; i-- {
+		if it.Chain[i].Kind == ChainReceived {
+			return max(it.Chain[i].Count, 1), seq
 		}
-		seq, last = max(seq, k), max(e.Count, 1)
-		n += last
 	}
-	if since == 0 && !linked {
-		n = last
-	}
-	return max(n, 1), seq
+	return 1, seq
 }
 
 // joinInbox is inbox signal g in the place of cur, which still waits to be told: the newest item, with the messages of

@@ -131,6 +131,9 @@ func (s *Store) PruneMoments(cutoff time.Time) int {
 			}
 		}
 	}
+	if n > 0 {
+		s.SearchIndexPurge()
+	}
 	return n
 }
 

@@ -12,6 +12,9 @@ enum HealthTool {
             if let type = HKQuantityType.quantityType(forIdentifier: identifier) { types.insert(type) }
         }
         if let sleep = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) { types.insert(sleep) }
+        #if os(iOS) || os(visionOS)
+        types.formUnion(WorkoutReader.readTypes) // phone_workouts_recent / phone_workout_detail (#2526)
+        #endif
         return types
     }
 
@@ -19,6 +22,11 @@ enum HealthTool {
         "steps": .stepCount,
         "distance": .distanceWalkingRunning,
         "active_energy": .activeEnergyBurned,
+        "resting_energy": .basalEnergyBurned,
+        "dietary_energy": .dietaryEnergyConsumed,
+        "protein": .dietaryProtein,
+        "carbs": .dietaryCarbohydrates,
+        "fat": .dietaryFatTotal,
         "heart_rate": .heartRate,
         "resting_heart_rate": .restingHeartRate,
         "weight": .bodyMass,
@@ -36,12 +44,16 @@ enum HealthTool {
                     name: "phone_health_summary",
                     description: """
                     Summarize the user's health data per day. Metrics: steps, distance (meters), \
-                    active_energy (kcal), heart_rate (bpm, average/min/max over the day), \
+                    active_energy, resting_energy, dietary_energy (kcal, daily totals), \
+                    protein, carbs, fat (grams, daily totals), heart_rate (bpm, average/min/max over the day), \
                     resting_heart_rate (bpm), sleep (hours asleep), weight (kg). Defaults to steps \
                     over the last 7 days. Only the requested metrics are read. Days run from local \
                     midnight to midnight; today's numbers are partial. Returns one row per day with \
                     only the days that have data. Read access is never reported to apps, so an empty \
-                    result can also mean the user denied read access.
+                    result can also mean the user denied read access. When the iPhone is locked the \
+                    app cannot read HealthKit: it returns the last snapshot saved while the device \
+                    was unlocked ("source": "snapshot" with "as_of"), or a device_locked error when \
+                    no snapshot exists yet.
                     """,
                     inputSchema: Schema.object([
                         "metrics": Schema.array(
@@ -115,7 +127,21 @@ enum HealthTool {
         ]))
     }
 
-    static func summary(_ args: JSONValue) async throws -> [ToolContent] {
+    /// Bilingual, machine-recognizable failure for a locked phone with no snapshot yet.
+    static let deviceLockedMessage =
+        "iPhone 已锁定且还没有健康快照（device_locked）：解锁后打开一次 Persona，之后锁屏也能返回最近的快照。" // i18n-ignore
+        + " / The iPhone is locked and no health snapshot exists yet (device_locked): unlock the phone and open Persona once, then retry."
+
+    /// HealthKit answers with this while the device is locked (the protected database is closed).
+    static func isDatabaseInaccessible(_ error: Error) -> Bool {
+        (error as? HKError)?.code == .errorDatabaseInaccessible
+    }
+
+    static func summary(
+        _ args: JSONValue,
+        snapshotStore: any HealthSnapshotStoring = HealthSnapshotStore.shared,
+        isDataAvailable: @escaping () -> Bool = HealthDataLock.isProtectedDataAvailable
+    ) async throws -> [ToolContent] {
         try HealthAccess.requireAccess()
         let days = ToolArgs.int(args, "days", fallback: 7, min: 1, max: 90)
         var requested: [String] = []
@@ -129,14 +155,17 @@ enum HealthTool {
             }
         }
         if requested.isEmpty { requested = ["steps"] }
-        if requested.contains("weight") {
-            // Body mass needs read access too; asking again is harmless and
-            // covers people who authorized the app before weight was supported.
-            _ = try? await HKHealthStore().requestAuthorization(toShare: Set<HKSampleType>(), read: readTypes)
-        }
 
         let calendar = Calendar.current
         let end = Date()
+
+        // Locked phone: never touch HealthKit (its error would be the raw OS string the old build put
+        // into every field); answer from the snapshot written while the device was unlocked.
+        if !isDataAvailable() {
+            return try await snapshotAnswer(store: snapshotStore, metrics: requested, days: days, now: end, calendar: calendar)
+        }
+
+        await requestAdditionalReadAccess(for: requested)
         let start = calendar.startOfDay(for: calendar.date(byAdding: .day, value: -(days - 1), to: end) ?? end)
 
         let store = HKHealthStore()
@@ -150,6 +179,11 @@ enum HealthTool {
                     rows = try await quantityByDay(store, metric: metric, start: start, end: end, calendar: calendar)
                 }
             } catch {
+                // The phone can lock between the check above and the query: the database closes under us.
+                // Serve the snapshot instead of dumping the English HKError into the day's fields.
+                if Self.isDatabaseInaccessible(error) {
+                    return try await snapshotAnswer(store: snapshotStore, metrics: requested, days: days, now: end, calendar: calendar)
+                }
                 // One failed metric should not sink the whole summary.
                 rows = [ToolDate.day(end): .object(["error": .string(error.localizedDescription)])]
             }
@@ -157,6 +191,9 @@ enum HealthTool {
                 byDay[day, default: [:]][metric] = value
             }
         }
+
+        // Keep the locked-phone fallback warm; throttled inside the store, never blocks the answer.
+        Task { await refreshSnapshot(snapshotStore: snapshotStore) }
 
         let sorted = byDay.keys.sorted()
         let rows: [JSONValue] = sorted.map { day in
@@ -170,7 +207,62 @@ enum HealthTool {
             ("days", .number(Double(days))),
             ("metrics", .array(requested.map { .string($0) })),
             ("data", .array(rows)),
+            ("source", .string("live")),
         ]))
+    }
+
+    /// The locked-phone answer: the stored snapshot restricted to the request, or an explicit
+    /// `device_locked` failure when nothing has been saved yet.
+    private static func snapshotAnswer(
+        store: any HealthSnapshotStoring,
+        metrics requested: [String],
+        days: Int,
+        now: Date,
+        calendar: Calendar
+    ) async throws -> [ToolContent] {
+        if let snapshot = await store.load(),
+           let answer = snapshot.response(metrics: requested, days: days, now: now, calendar: calendar) {
+            return Output.json(answer)
+        }
+        throw ToolFailure(.unavailable, deviceLockedMessage)
+    }
+
+    /// Re-reads every metric over the full snapshot window and saves it for the next locked-phone call.
+    /// Runs from the foreground hook and after successful live reads; the store throttles repeats.
+    static func refreshSnapshot(
+        snapshotStore: any HealthSnapshotStoring = HealthSnapshotStore.shared,
+        isDataAvailable: @escaping () -> Bool = HealthDataLock.isProtectedDataAvailable,
+        now: Date = Date()
+    ) async {
+        guard HKHealthStore.isHealthDataAvailable(), HealthAccess.cachedStatus() == .granted, isDataAvailable() else { return }
+        if await snapshotStore.cachedIfFresh(now: now) != nil { return }
+        await requestAdditionalReadAccess(for: metricNames)
+        let calendar = Calendar.current
+        let end = now
+        let start = calendar.startOfDay(for: calendar.date(byAdding: .day, value: -(HealthSnapshotStore.windowDays - 1), to: end) ?? end)
+        let store = HKHealthStore()
+        var rows: [String: [String: JSONValue]] = [:]
+        for metric in metricNames {
+            let metricRows: [String: JSONValue]
+            do {
+                metricRows = metric == "sleep"
+                    ? try await sleepByDay(store, start: start, end: end, calendar: calendar)
+                    : try await quantityByDay(store, metric: metric, start: start, end: end, calendar: calendar)
+            } catch {
+                if Self.isDatabaseInaccessible(error) { return } // locked mid-refresh: keep the previous snapshot
+                continue
+            }
+            for (day, value) in metricRows {
+                rows[day, default: [:]][metric] = value
+            }
+        }
+        await snapshotStore.save(HealthSnapshot(
+            asOf: end,
+            windowDays: HealthSnapshotStore.windowDays,
+            metrics: metricNames,
+            rows: rows
+        ))
+        await snapshotStore.markRefreshed(at: end)
     }
 
     /// One metric's per-day values over the last `days` days (today included), keyed "yyyy-MM-dd": the numbers the
@@ -181,10 +273,7 @@ enum HealthTool {
         guard metricNames.contains(metric), metric != "heart_rate" else {
             throw ToolFailure(.invalidArgument, "no daily trend for \"\(metric)\"")
         }
-        if metric == "weight" {
-            // As in the summary: covers people who authorized the app before weight was read.
-            _ = try? await HKHealthStore().requestAuthorization(toShare: Set<HKSampleType>(), read: readTypes)
-        }
+        await requestAdditionalReadAccess(for: [metric])
         let calendar = Calendar.current
         let end = Date()
         let start = calendar.startOfDay(for: calendar.date(byAdding: .day, value: -(max(days, 1) - 1), to: end) ?? end)
@@ -196,6 +285,25 @@ enum HealthTool {
     }
 
     // MARK: - Queries
+
+    private static func requestAdditionalReadAccess(for metrics: [String]) async {
+        // Covers people who allowed Health before weight, nutrition or resting energy were supported.
+        // Existing steps/sleep trends and widgets must not prompt just because new types were added.
+        let addedMetrics: Set<String> = ["weight", "resting_energy", "dietary_energy", "protein", "carbs", "fat"]
+        guard metrics.contains(where: addedMetrics.contains) else { return }
+        _ = try? await HKHealthStore().requestAuthorization(toShare: Set<HKSampleType>(), read: readTypes)
+    }
+
+    static func quantityUnit(for metric: String) -> HKUnit {
+        switch metric {
+        case "steps": .count()
+        case "distance": .meter()
+        case "active_energy", "resting_energy", "dietary_energy": .kilocalorie()
+        case "protein", "carbs", "fat": .gram()
+        case "weight": .gramUnit(with: .kilo)
+        default: HKUnit.count().unitDivided(by: .minute())
+        }
+    }
 
     private static func quantityByDay(
         _ store: HKHealthStore,
@@ -209,13 +317,7 @@ enum HealthTool {
             throw ToolFailure(.invalidArgument, "this iPhone does not support the metric \"\(metric)\"")
         }
         let options = statisticsOptions(for: type, metric: metric)
-        let units: HKUnit = switch metric {
-        case "steps": .count()
-        case "distance": .meter()
-        case "active_energy": .kilocalorie()
-        case "weight": .gramUnit(with: .kilo)
-        default: HKUnit.count().unitDivided(by: .minute())
-        }
+        let units = quantityUnit(for: metric)
 
         let query = HKStatisticsCollectionQuery(
             quantityType: type,
@@ -260,7 +362,7 @@ enum HealthTool {
         return out
     }
 
-    /// What a day's statistics hold: the sum of a cumulative type (steps, distance, energy), the average of a discrete one
+    /// What a day's statistics hold: the sum of a cumulative type (steps, distance, energy, nutrients), the average of a discrete one
     /// (weight, resting heart rate), heart rate's range too. An option the type cannot answer (summing weight) raises an
     /// exception inside HealthKit when the query runs, which takes the app down.
     static func statisticsOptions(for type: HKQuantityType, metric: String) -> HKStatisticsOptions {

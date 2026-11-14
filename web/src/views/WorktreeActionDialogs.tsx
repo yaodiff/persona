@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../i18n";
+import { engineName } from "../lib/engines";
 import type { WorkspaceTarget } from "../lib/workspace-target";
 import type { WorktreeMutation } from "../lib/worktree-actions-state";
 import { Button, Dialog, Loading } from "../ui/atoms";
@@ -50,7 +51,7 @@ export function DeleteWorktreeDialog({ target, machineName, model, onClose, clos
     <div className="space-y-3 text-sm text-ink">
       <div className="space-y-1 rounded-control border border-line bg-inset p-3">
         <p className="break-words font-medium">{target.label || t("worktree-actions.worktree")}</p>
-        <p className="break-words text-ink-2">{machineName || t("worktree-actions.computer")} · {target.host === "orca" ? "Orca" : "herdr"}</p>
+        <p className="break-words text-ink-2">{machineName || t("worktree-actions.computer")} · {engineName(target.host)}</p>
         <p className="break-all font-mono text-ink-2">{info?.path || target.cwd}</p>
       </div>
       {busy && <Loading label={t(state.phase === "checking" ? "worktree-actions.checking" : state.phase === "deleting" ? "worktree-actions.removing" : "worktree-actions.previewing")} />}

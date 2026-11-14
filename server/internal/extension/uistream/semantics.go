@@ -70,7 +70,7 @@ func optionalName[T any](value *T, get func(*T) string) string {
 // Native media and code line links use uncredentialed HTTPS. Legacy avatar and
 // line-link checks omit this restriction, so inspect their source properties here.
 // Native schema/strict generated shape has already excluded arbitrary guest properties.
-func checkSourcePresence(n *node) error {
+func checkSourcePresence(view []byte) error {
 	var visit func(any) error
 	visit = func(value any) error {
 		switch obj := value.(type) {
@@ -114,7 +114,7 @@ func checkSourcePresence(n *node) error {
 	}
 	var source any
 	// This is canonical native JSON, not a normalized DTO.
-	if err := json.Unmarshal(n.json(), &source); err != nil {
+	if err := json.Unmarshal(view, &source); err != nil {
 		return err
 	}
 	return visit(source)

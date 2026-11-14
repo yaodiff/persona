@@ -119,6 +119,7 @@ const (
 var snapshotOmits = []func(*prompts.SnapshotOmit){
 	func(o *prompts.SnapshotOmit) { o.Waiting = true },
 	func(o *prompts.SnapshotOmit) { o.Routines = true },
+	func(o *prompts.SnapshotOmit) { o.Following = true },
 	func(o *prompts.SnapshotOmit) { o.Followups = true },
 	func(o *prompts.SnapshotOmit) { o.OtherChats = true },
 	func(o *prompts.SnapshotOmit) { o.Working = true },
@@ -188,6 +189,10 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	snap.Asked = s.snapshotAsked(ctx)
 	if e, err := s.kbGet(ctx); err == nil {
 		snap.KB = e.Prompt(6, 8)
+	}
+	snap.FollowingEnabled = s.inboxConfig(ctx).Agent.Enabled && s.inboxReady(ctx) == nil
+	if snap.FollowingEnabled {
+		snap.Following, snap.FollowingTotal = s.snapshotFollowing(ctx, loc)
 	}
 	snap.Followups, snap.FollowupsTotal, snap.Routines, snap.RoutinesTotal, snap.Missed, snap.MissedTotal = s.snapshotSchedule(ctx, loc, now)
 	wg.Wait()
@@ -384,6 +389,75 @@ func snapshotCalendar(live []connector.SnapshotData, now time.Time) *prompts.Sna
 		sort.SliceStable(out.Events, func(i, j int) bool { return out.Events[i].Start.Before(out.Events[j].Start) })
 	}
 	return out
+}
+
+// followingInboxItems returns listed copies of the open matters waiting on the other side or back with the user for a
+// follow-up. The normal readiness path loads persisted items first, so a cold start is not mistaken for an empty inbox;
+// an unavailable store leaves the section out instead. It deliberately does not use inboxList or inboxListAt: those
+// stamp arrival times on the items they read. The lock covers both the copy and the state computation; the selection
+// itself writes no item, database or chain.
+func (s *Service) followingInboxItems(ctx context.Context) []InboxItem {
+	if s.inboxReady(ctx) != nil {
+		return nil
+	}
+	s.inbox.mu.Lock()
+	defer s.inbox.mu.Unlock()
+	var out []InboxItem
+	for _, it := range s.inbox.items {
+		if !it.open() {
+			continue
+		}
+		listed := it.listed()
+		switch listed.Now {
+		case NowWaiting, NowFollowUpAsk, NowCheckDue:
+			out = append(out, listed)
+		}
+	}
+	return out
+}
+
+// snapshotFollowing is the main conversation's short view of the matters being followed, earliest check first and
+// those without a check time last. The total counts every selected matter, not only the five lines the snapshot shows.
+func (s *Service) snapshotFollowing(ctx context.Context, loc *time.Location) ([]prompts.SnapshotFollowing, int) {
+	items := s.followingInboxItems(ctx)
+	checkAt := func(it InboxItem) *time.Time {
+		if it.Follow == nil {
+			return nil
+		}
+		return it.Follow.CheckAt
+	}
+	sort.Slice(items, func(i, j int) bool {
+		a, b := checkAt(items[i]), checkAt(items[j])
+		switch {
+		case a == nil && b != nil:
+			return false
+		case a != nil && b == nil:
+			return true
+		case a != nil && b != nil && !a.Equal(*b):
+			return a.Before(*b)
+		default:
+			return items[i].ID < items[j].ID
+		}
+	})
+	total := len(items)
+	if len(items) > 5 {
+		items = items[:5]
+	}
+	out := make([]prompts.SnapshotFollowing, 0, len(items))
+	for _, it := range items {
+		row := prompts.SnapshotFollowing{
+			Title: clip(oneLine(it.Title), 60), Where: clip(oneLine(it.Where), 40),
+			FollowUpAsk: it.Now == NowFollowUpAsk, CheckDue: it.Now == NowCheckDue,
+		}
+		if f := it.Follow; f != nil {
+			row.Who, row.Next = clip(oneLine(f.Who), 40), clip(oneLine(f.Next), 80)
+			if f.CheckAt != nil {
+				row.CheckAt = f.CheckAt.In(loc)
+			}
+		}
+		out = append(out, row)
+	}
+	return out, total
 }
 
 // snapshotSchedule is the schedule as the snapshot says it: the follow-ups to come, the daily tasks with how their

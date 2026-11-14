@@ -41,7 +41,10 @@ type Minutes struct {
 	Decisions   []MinutesItem   `json:"decisions,omitempty"`
 	Actions     []MinutesAction `json:"actions,omitempty"`
 	Open        []MinutesItem   `json:"open,omitempty"`
-	Partial     bool            `json:"partial,omitempty"` // the transcript's end was not read
+	// Overview is the same minutes as one summary card (#6563, minutes_overview.go): only when every point and
+	// decision is a bullet of one of its topics. Minutes from before it, or from an older hub, have none.
+	Overview *MinutesOverview `json:"overview,omitempty"`
+	Partial  bool             `json:"partial,omitempty"` // the transcript's end was not read
 	// Language is what they are written in, their Markdown's headings too (language.go): an i18n code (zh-Hans, en,
 	// ja); minutes written before it was kept have none, and are Chinese.
 	Language string `json:"language,omitempty"`
@@ -102,7 +105,7 @@ const (
 	minutesCallTimeout = 6 * time.Minute  // a call's at the first try, twice a summary's (minutes_timeout.go)
 	minutesJobTimeout  = 45 * time.Minute // all the calls of one recording: the knowledge-base round waits for them
 	minutesMaxItems    = 100
-	minutesTextRunes   = 400
+	minutesTextRunes   = 400  // an item's text at most, the "…" of a cut included
 	minutesLineRunes   = 4000 // a transcript line longer than this is cut (one segment, not the whole meeting)
 	// What the merging call reads of all the parts' notes: per section, at most this many items over all parts (an
 	// equal share each, at least 2), each at most minutesNoteRunes.
@@ -452,35 +455,45 @@ type minutesLine struct {
 }
 
 // minutesAnswer is the model's minutes (kb/minutes, kb/minutes_merge): items cite transcript lines, or photos, by
-// number.
+// number. The points and decisions come in topics (#6563), or outside them in the old shape; the summary card's
+// headline, conclusions and a topic's title, group and icon are lenient (modelText, modelList): malformed, they are
+// dropped rather than making the answer unusable.
 type minutesAnswer struct {
-	Title     string   `json:"title"`
-	Where     string   `json:"where"`
-	Attendees []string `json:"attendees"`
-	Points    []struct {
-		Text  string     `json:"text"`
-		Line  modelLine  `json:"line"`
-		Photo modelPhoto `json:"photo"`
-		Who   string     `json:"who"`
-	} `json:"points"`
-	Decisions []struct {
-		Text  string     `json:"text"`
-		Line  modelLine  `json:"line"`
-		Photo modelPhoto `json:"photo"`
-	} `json:"decisions"`
-	Actions []struct {
-		Who     string     `json:"who"`
-		What    string     `json:"what"`
-		By      string     `json:"by"`
-		DueDate string     `json:"due_date"`
-		Line    modelLine  `json:"line"`
-		Photo   modelPhoto `json:"photo"`
-	} `json:"actions"`
-	Open []struct {
-		Text  string     `json:"text"`
-		Line  modelLine  `json:"line"`
-		Photo modelPhoto `json:"photo"`
-	} `json:"open"`
+	Title       string                      `json:"title"`
+	Where       string                      `json:"where"`
+	Attendees   []string                    `json:"attendees"`
+	Headline    modelText                   `json:"headline"`
+	Conclusions modelList[answerConclusion] `json:"conclusions"`
+	Topics      answerTopics                `json:"topics"`
+	Points      []answerPoint               `json:"points"`
+	Decisions   []answerItem                `json:"decisions"`
+	Actions     []answerAction              `json:"actions"`
+	Open        []answerItem                `json:"open"`
+}
+
+// answerPoint is a point of the model's answer, in a topic or (the old shape) outside topics.
+type answerPoint struct {
+	Text  string     `json:"text"`
+	Line  modelLine  `json:"line"`
+	Photo modelPhoto `json:"photo"`
+	Who   string     `json:"who"`
+}
+
+// answerItem is a decision or an open question of the model's answer.
+type answerItem struct {
+	Text  string     `json:"text"`
+	Line  modelLine  `json:"line"`
+	Photo modelPhoto `json:"photo"`
+}
+
+// answerAction is an action item of the model's answer.
+type answerAction struct {
+	Who     string     `json:"who"`
+	What    string     `json:"what"`
+	By      string     `json:"by"`
+	DueDate string     `json:"due_date"`
+	Line    modelLine  `json:"line"`
+	Photo   modelPhoto `json:"photo"`
 }
 
 // modelLine is a cited line number as models write it: 12, "12", "[12]" or "L12"; anything else is 0 (no line).
@@ -560,7 +573,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 		}
 	}
 	slices.SortStableFunc(lines, func(a, b minutesLine) int { return cmp.Compare(a.At, b.At) })
-	chunks, partial := chunkLines(lines, minutesOneCall, minutesChunk, minutesMaxChunks)
+	chunks, partial := chunkLines(lines, cmp.Or(e.minutesCall, minutesOneCall), cmp.Or(e.minutesPart, minutesChunk), minutesMaxChunks)
 	if len(chunks) == 0 {
 		return nil
 	}
@@ -700,61 +713,83 @@ func clockAt(start time.Time, sec float64, zone *time.Location) string {
 	return start.Add(time.Duration(sec * float64(time.Second))).In(zone).Format("15:04:05")
 }
 
-// notesForMerge is a chunk's notes for the merging call, keeping only items citing a line or a photo of that chunk, at
-// most each of a section, each clipped to minutesNoteRunes.
+// notesForMerge is a chunk's notes for the merging call, keeping only items citing a line or a photo of that chunk,
+// each without the model's marks (the merging call marks them again) and clipped to minutesNoteRunes. Every point and
+// decision is kept, in a topic or not; one in a titled topic carries its title (#6563). Each section is put in the
+// order of what its items cite, then cut to each: a part's latest lines go, not whole topics. Its headline and
+// conclusions are not read: the merging call writes the meeting's own.
 func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Time, zone *time.Location, each int) prompts.KBMinutesPart {
-	in, photos := map[int]bool{}, map[int]bool{}
-	for _, l := range chunk {
+	lines, photos := map[int]int{}, map[int]int{} // what the chunk has, by its place in it
+	for i, l := range chunk {
 		if l.Photo > 0 {
-			photos[l.Photo] = true
+			photos[l.Photo] = i
 		} else {
-			in[l.N] = true
+			lines[l.N] = i
 		}
 	}
 	p := prompts.KBMinutesPart{Part: part, From: clockAt(start, chunk[0].At, zone), To: clockAt(start, chunk[len(chunk)-1].At, zone),
-		Where: oneLine(a.Where), Attendees: a.Attendees}
-	note := func(text string, line modelLine, photo modelPhoto, extra ...string) (prompts.KBMinutesNote, bool) {
-		text = clipRunes(text, minutesNoteRunes)
-		n := prompts.KBMinutesNote{Text: text}
-		switch {
-		case text == "":
-			return prompts.KBMinutesNote{}, false
-		case photo > 0 && photos[int(photo)]:
-			n.Photo = int(photo)
-		case in[int(line)]:
-			n.Line = int(line)
-		default:
-			return prompts.KBMinutesNote{}, false
+		Where: plainLine(a.Where)}
+	for _, n := range a.Attendees {
+		p.Attendees = append(p.Attendees, plainLine(n))
+	}
+	type placedNote struct {
+		note prompts.KBMinutesNote
+		at   int // the place in chunk of what it cites
+	}
+	// topic: the title of the topic it came in ("" none).
+	note := func(list *[]placedNote, topic, text string, line modelLine, photo modelPhoto, extra ...string) {
+		text = clipRunes(stripMarks(text), minutesNoteRunes)
+		n := prompts.KBMinutesNote{Text: text, Topic: topic}
+		var at int
+		if text == "" {
+			return
+		}
+		if i, ok := photos[int(photo)]; ok && photo > 0 {
+			n.Photo, at = int(photo), i
+		} else if i, ok := lines[int(line)]; ok {
+			n.Line, at = int(line), i
+		} else {
+			return
 		}
 		if len(extra) > 0 {
-			n.Who = oneLine(extra[0])
+			n.Who = plainLine(extra[0])
 		}
 		if len(extra) > 2 {
-			n.By, n.DueDate = oneLine(extra[1]), strings.TrimSpace(extra[2])
+			n.By, n.DueDate = plainLine(extra[1]), strings.TrimSpace(stripMarks(extra[2]))
 		}
-		return n, true
+		*list = append(*list, placedNote{n, at})
+	}
+	var points, decisions, actions, open []placedNote
+	for _, t := range a.Topics {
+		title := cardLine(string(t.Title), minutesTopicRunes)
+		for _, x := range t.Points {
+			note(&points, title, x.Text, x.Line, x.Photo, x.Who)
+		}
+		for _, x := range t.Decisions {
+			note(&decisions, title, x.Text, x.Line, x.Photo)
+		}
 	}
 	for _, x := range a.Points {
-		if n, ok := note(x.Text, x.Line, x.Photo, x.Who); ok {
-			p.Points = append(p.Points, n)
-		}
+		note(&points, "", x.Text, x.Line, x.Photo, x.Who)
 	}
 	for _, x := range a.Decisions {
-		if n, ok := note(x.Text, x.Line, x.Photo); ok {
-			p.Decisions = append(p.Decisions, n)
-		}
+		note(&decisions, "", x.Text, x.Line, x.Photo)
 	}
 	for _, x := range a.Actions {
-		if n, ok := note(x.What, x.Line, x.Photo, x.Who, x.By, x.DueDate); ok {
-			p.Actions = append(p.Actions, n)
-		}
+		note(&actions, "", x.What, x.Line, x.Photo, x.Who, x.By, x.DueDate)
 	}
 	for _, x := range a.Open {
-		if n, ok := note(x.Text, x.Line, x.Photo); ok {
-			p.Open = append(p.Open, n)
-		}
+		note(&open, "", x.Text, x.Line, x.Photo)
 	}
-	p.Points, p.Decisions, p.Actions, p.Open = firstN(p.Points, each), firstN(p.Decisions, each), firstN(p.Actions, each), firstN(p.Open, each)
+	section := func(list []placedNote) []prompts.KBMinutesNote {
+		slices.SortStableFunc(list, func(x, y placedNote) int { return cmp.Compare(x.at, y.at) })
+		var out []prompts.KBMinutesNote
+		for _, n := range firstN(list, each) {
+			out = append(out, n.note)
+		}
+		return out
+	}
+	p.Points, p.Decisions, p.Actions, p.Open = section(points), section(decisions), section(actions), section(open)
 	return p
 }
 
@@ -815,7 +850,7 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 		calendar = r.Calendar.Attendees
 	}
 	named := func(who string) string {
-		who = oneLine(who)
+		who = plainLine(who)
 		if who == "" {
 			return ""
 		}
@@ -844,12 +879,12 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 		}
 		return sec, 0, ok
 	}
-	m := &Minutes{Title: cmp.Or(r.Title, calendarTitle(r), oneLine(a.Title), untitledMinutes(r, zone, lang)),
+	m := &Minutes{Title: cmp.Or(r.Title, calendarTitle(r), plainLine(a.Title), untitledMinutes(r, zone, lang)),
 		When: minutesWhen(r, zone), Language: string(lang)}
 	m.Start, m.End = minutesSpan(r, zone)
 	if r.Calendar != nil && r.Calendar.Location != "" {
 		m.Where = r.Calendar.Location
-	} else if w := oneLine(a.Where); w != "" && strings.Contains(said, strings.ToLower(w)) {
+	} else if w := plainLine(a.Where); w != "" && strings.Contains(said, strings.ToLower(w)) {
 		m.Where = w
 	}
 	m.Attendees = append(m.Attendees, calendar...)
@@ -867,53 +902,78 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 		seen[k] = true
 		return true
 	}
-	// The citation first: an item citing nothing read must not hide a later copy of it that does.
-	for _, x := range a.Points {
-		if t := clipText(x.Text); t != "" {
+	// The citation first: an item citing nothing read must not hide a later copy of it that does. The points and
+	// decisions of the topics first, then those outside them (the old shape); each without its ** marks, which become
+	// its bold places (strongText). topic is the answer's topic it came in, -1 outside topics.
+	var points []placed[MinutesPoint]
+	var decisions []placed[MinutesItem]
+	point := func(x answerPoint, topic int) {
+		if t, strong := strongText(x.Text, minutesTextRunes); t != "" {
 			if sec, photo, ok := line(x.Line, x.Photo); ok && fresh("p", t) {
-				m.Points = append(m.Points, MinutesPoint{Text: t, At: sec, Photo: photo, Who: named(x.Who)})
+				points = append(points, placed[MinutesPoint]{MinutesPoint{Text: t, At: sec, Photo: photo, Who: named(x.Who)}, topic, strong})
 			}
 		}
 	}
-	for _, x := range a.Decisions {
-		if t := clipText(x.Text); t != "" {
+	decision := func(x answerItem, topic int) {
+		if t, strong := strongText(x.Text, minutesTextRunes); t != "" {
 			if sec, photo, ok := line(x.Line, x.Photo); ok && fresh("d", t) {
-				m.Decisions = append(m.Decisions, MinutesItem{Text: t, At: sec, Photo: photo})
+				decisions = append(decisions, placed[MinutesItem]{MinutesItem{Text: t, At: sec, Photo: photo}, topic, strong})
 			}
 		}
+	}
+	for i, t := range a.Topics {
+		for _, x := range t.Points {
+			point(x, i)
+		}
+		for _, x := range t.Decisions {
+			decision(x, i)
+		}
+	}
+	for _, x := range a.Points {
+		point(x, -1)
+	}
+	for _, x := range a.Decisions {
+		decision(x, -1)
 	}
 	day := r.StartedAt.In(zone).Format("2006-01-02")
 	for _, x := range a.Actions {
-		if t := clipText(x.What); t != "" {
+		if t := cardLine(x.What, minutesTextRunes); t != "" {
 			// The same task for two people is two actions.
-			if sec, photo, ok := line(x.Line, x.Photo); ok && fresh("a"+oneLine(x.Who), t) {
-				by := oneLine(x.By)
+			if sec, photo, ok := line(x.Line, x.Photo); ok && fresh("a"+plainLine(x.Who), t) {
+				by := plainLine(x.By)
 				due := ""
 				if by != "" { // a date only for a deadline someone said
-					due = dueDate(x.DueDate, day)
+					due = dueDate(stripMarks(x.DueDate), day)
 				}
 				m.Actions = append(m.Actions, MinutesAction{Who: named(x.Who), What: t, By: by, DueDate: due, At: sec, Photo: photo})
 			}
 		}
 	}
 	for _, x := range a.Open {
-		if t := clipText(x.Text); t != "" {
+		if t := cardLine(x.Text, minutesTextRunes); t != "" {
 			if sec, photo, ok := line(x.Line, x.Photo); ok && fresh("o", t) {
 				m.Open = append(m.Open, MinutesItem{Text: t, At: sec, Photo: photo})
 			}
 		}
 	}
-	// Nothing that cites the transcript (an empty or unrelated answer) is not minutes.
+	// Nothing that cites the transcript (an empty or unrelated answer) is not minutes. The conclusions never count.
 	if cited == 0 {
 		return nil, errMinutesUnusable
 	}
-	sort.SliceStable(m.Points, func(i, j int) bool { return m.Points[i].At < m.Points[j].At })
-	sort.SliceStable(m.Decisions, func(i, j int) bool { return m.Decisions[i].At < m.Decisions[j].At })
+	slices.SortStableFunc(points, func(x, y placed[MinutesPoint]) int { return cmp.Compare(x.item.At, y.item.At) })
+	slices.SortStableFunc(decisions, func(x, y placed[MinutesItem]) int { return cmp.Compare(x.item.At, y.item.At) })
 	sort.SliceStable(m.Actions, func(i, j int) bool { return m.Actions[i].At < m.Actions[j].At })
 	sort.SliceStable(m.Open, func(i, j int) bool { return m.Open[i].At < m.Open[j].At })
-	m.Points, m.Decisions, m.Actions, m.Open = capItems(m.Points), capItems(m.Decisions), capItems(m.Actions), capItems(m.Open)
+	points, decisions, m.Actions, m.Open = capItems(points), capItems(decisions), capItems(m.Actions), capItems(m.Open)
+	m.Points, m.Decisions = placedItems(points), placedItems(decisions)
 	for i := range m.Actions {
 		m.Actions[i].ID = "a" + strconv.Itoa(i+1)
+	}
+	// The summary card, when every point and decision kept is under a titled topic (buildOverview); otherwise the
+	// minutes are as before, and the log says why.
+	var why string
+	if m.Overview, why = buildOverview(a, points, decisions, at, photoSec, m.Title); why != "" {
+		e.logf("recording %s: minutes: no overview: %s", r.ID, why)
 	}
 	return m, nil
 }
@@ -1035,65 +1095,148 @@ func keepTodos(m, old *Minutes) {
 func MinutesTaskKey(a MinutesAction) string { return a.Who + "\x00" + a.What }
 
 // renderMinutes is minutes.md: the minutes with clock times, sections without anything left out; an item citing a
-// photo ends with its number. Its headings and fixed words are in the minutes' language (kb-minutes.json).
+// photo ends with its number. Its headings and fixed words are in the minutes' language (kb-minutes.json). Minutes
+// with an overview follow it (renderOverview).
 func renderMinutes(m *Minutes, start time.Time, zone *time.Location) string {
-	l := storedLang(m.Language)
-	at := func(sec float64) string { return "[" + clockAt(start, sec, zone) + "] " }
-	var b strings.Builder
-	end := func(photo int) {
-		if photo > 0 {
-			b.WriteString(i18n.T(l, "kb-minutes.photo", i18n.Args{"n": photo}))
-		}
-		b.WriteByte('\n')
+	if m.Overview != nil {
+		return renderOverview(m, start, zone)
 	}
-	b.WriteString("# " + m.Title + "\n\n- " + i18n.T(l, "kb-minutes.when", i18n.Args{"when": m.When}) + "\n")
-	if m.Where != "" {
-		b.WriteString("- " + i18n.T(l, "kb-minutes.where", i18n.Args{"where": m.Where}) + "\n")
-	}
-	if len(m.Attendees) > 0 {
-		names := strings.Join(m.Attendees, i18n.T(l, "kb-minutes.list_sep"))
-		b.WriteString("- " + i18n.T(l, "kb-minutes.attendees", i18n.Args{"names": names}) + "\n")
-	}
+	w := newMinutesMarkdown(m, start, zone, func(s string) string { return s })
+	b, l := &w.b, w.l
+	w.head(m)
 	if len(m.Points) > 0 {
 		b.WriteString("\n## " + i18n.T(l, "kb-minutes.points") + "\n\n")
 		for _, p := range m.Points {
-			b.WriteString("- " + at(p.At) + p.Text)
+			b.WriteString("- " + w.at(p.At) + p.Text)
 			if p.Who != "" {
 				b.WriteString(i18n.T(l, "kb-minutes.who", i18n.Args{"who": p.Who}))
 			}
-			end(p.Photo)
+			w.end(p.Photo)
 		}
 	}
-	section := func(title string, items []MinutesItem) {
-		if len(items) == 0 {
-			return
-		}
-		b.WriteString("\n## " + title + "\n\n")
-		for _, x := range items {
-			b.WriteString("- " + at(x.At) + x.Text)
-			end(x.Photo)
+	w.section(i18n.T(l, "kb-minutes.decisions"), m.Decisions)
+	w.tail(m)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderOverview is minutes.md of minutes with an overview (docs/assistant/meeting-minutes.md "Markdown"): the
+// headline, the core conclusions, then each group's topics (a topic a ## heading with one group, a ### under its
+// group's ## with several), each decision after "Decided:", then the action items and open questions as without one,
+// and the AI note last. A literal * is escaped, and the bold places are wrapped in **.
+func renderOverview(m *Minutes, start time.Time, zone *time.Location) string {
+	o := m.Overview
+	w := newMinutesMarkdown(m, start, zone, escapeStars)
+	b, l := &w.b, w.l
+	w.head(m)
+	if o.Headline != "" {
+		b.WriteString("\n" + escapeStars(o.Headline) + "\n")
+	}
+	if len(o.Conclusions) > 0 {
+		b.WriteString("\n## " + i18n.T(l, "kb-minutes.conclusions") + "\n\n")
+		for _, c := range o.Conclusions {
+			b.WriteString("- " + w.at(c.At) + cardMarkdown(c.Text, c.Strong))
+			w.end(c.Photo)
 		}
 	}
-	section(i18n.T(l, "kb-minutes.decisions"), m.Decisions)
+	topic := "\n## "
+	for _, g := range o.Groups {
+		if len(o.Groups) > 1 {
+			b.WriteString("\n## " + escapeStars(g.Title) + "\n")
+			topic = "\n### "
+		}
+		for _, t := range g.Topics {
+			b.WriteString(topic + escapeStars(t.Title) + "\n\n")
+			for _, x := range t.Bullets {
+				b.WriteString("- " + w.at(x.At))
+				if x.Decision {
+					b.WriteString(i18n.T(l, "kb-minutes.decided"))
+				}
+				b.WriteString(cardMarkdown(x.Text, x.Strong))
+				if x.Who != "" {
+					b.WriteString(i18n.T(l, "kb-minutes.who", i18n.Args{"who": escapeStars(x.Who)}))
+				}
+				w.end(x.Photo)
+			}
+		}
+	}
+	w.tail(m)
+	b.WriteString("\n*" + i18n.T(l, "kb-minutes.ai_note") + "*\n")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// minutesMarkdown writes minutes.md: esc is what every text the minutes hold goes through (the overview's layout
+// escapes a literal *, the legacy one writes them as they are).
+type minutesMarkdown struct {
+	b     strings.Builder
+	l     i18n.Lang
+	start time.Time
+	zone  *time.Location
+	esc   func(string) string
+}
+
+func newMinutesMarkdown(m *Minutes, start time.Time, zone *time.Location, esc func(string) string) *minutesMarkdown {
+	return &minutesMarkdown{l: storedLang(m.Language), start: start, zone: zone, esc: esc}
+}
+
+func (w *minutesMarkdown) at(sec float64) string { return "[" + clockAt(w.start, sec, w.zone) + "] " }
+
+// end ends an item's line, after its photo's number when it cites one.
+func (w *minutesMarkdown) end(photo int) {
+	if photo > 0 {
+		w.b.WriteString(i18n.T(w.l, "kb-minutes.photo", i18n.Args{"n": photo}))
+	}
+	w.b.WriteByte('\n')
+}
+
+// head is the title, when, where and the attendees.
+func (w *minutesMarkdown) head(m *Minutes) {
+	b, l := &w.b, w.l
+	b.WriteString("# " + w.esc(m.Title) + "\n\n- " + i18n.T(l, "kb-minutes.when", i18n.Args{"when": m.When}) + "\n")
+	if m.Where != "" {
+		b.WriteString("- " + i18n.T(l, "kb-minutes.where", i18n.Args{"where": w.esc(m.Where)}) + "\n")
+	}
+	if len(m.Attendees) > 0 {
+		names := make([]string, len(m.Attendees))
+		for i, n := range m.Attendees {
+			names[i] = w.esc(n)
+		}
+		b.WriteString("- " + i18n.T(l, "kb-minutes.attendees", i18n.Args{"names": strings.Join(names, i18n.T(l, "kb-minutes.list_sep"))}) + "\n")
+	}
+}
+
+// section is a heading over items, nothing without any.
+func (w *minutesMarkdown) section(title string, items []MinutesItem) {
+	if len(items) == 0 {
+		return
+	}
+	w.b.WriteString("\n## " + title + "\n\n")
+	for _, x := range items {
+		w.b.WriteString("- " + w.at(x.At) + w.esc(x.Text))
+		w.end(x.Photo)
+	}
+}
+
+// tail is the action items, the open questions and the partial note.
+func (w *minutesMarkdown) tail(m *Minutes) {
+	b, l := &w.b, w.l
 	if len(m.Actions) > 0 {
 		b.WriteString("\n## " + i18n.T(l, "kb-minutes.actions") + "\n\n")
 		for _, a := range m.Actions {
-			b.WriteString("- " + at(a.At))
+			b.WriteString("- " + w.at(a.At))
 			if a.Who != "" {
-				b.WriteString(i18n.T(l, "kb-minutes.owner", i18n.Args{"who": a.Who}))
+				b.WriteString(i18n.T(l, "kb-minutes.owner", i18n.Args{"who": w.esc(a.Who)}))
 			}
-			b.WriteString(a.What)
+			b.WriteString(w.esc(a.What))
 			if by := cmp.Or(a.By, a.DueDate); by != "" {
-				b.WriteString(i18n.T(l, "kb-minutes.by", i18n.Args{"by": by}))
+				b.WriteString(i18n.T(l, "kb-minutes.by", i18n.Args{"by": w.esc(by)}))
 			}
-			end(a.Photo)
+			w.end(a.Photo)
 		}
 	}
-	section(i18n.T(l, "kb-minutes.open"), m.Open)
+	w.section(i18n.T(l, "kb-minutes.open"), m.Open)
 	if m.Partial {
 		b.WriteString("\n> " + i18n.T(l, "kb-minutes.partial") + "\n")
 	}
-	return strings.TrimRight(b.String(), "\n")
 }
 
 // storeMinutes writes m for snapshot r (the revision read) unless the recording was deleted or trimmed meanwhile, then

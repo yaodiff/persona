@@ -3,6 +3,9 @@ import { t } from "../i18n";
 import { sameValue } from "./stable-lines";
 
 export const SESSIONS_LIST_FEATURE = "sessions_list";
+/** Asked for in the WebSocket URL: a `sessions_list` hint after a change also says the revision before it (`since`)
+ *  and which rows changed (`changed`), so an open chat reads its row only when it is one of them (#6685). */
+export const SESSIONS_LIST_CHANGES_FEATURE = "sessions_list_changes";
 export const PAGE_SIZE = 50;
 /** UTF-8 lexical order follows Unicode code points, not locale or JavaScript's surrogate-unit order. */
 export function compareListIds(a: string, b: string): number {
@@ -18,7 +21,9 @@ export function compareListIds(a: string, b: string): number {
 const JOURNAL_LIMIT = 16_384;
 const validCounts = (counts: ListCounts | undefined): counts is ListCounts => !!counts && typeof counts.total === "number" &&
   typeof counts.revision === "string" && !!counts.machine && !!counts.project && !!counts.group && !!counts.state;
-const FILTER_KEYS = ["state", "machine_id", "project", "group", "source", "provider", "q", "parent_session_id"] as const;
+// todo: `sessions_todo` (#6662), a to-do's id or "none"; waiting, pane_source and exclude_pane_source: the sidebar's
+// quick filters (`sessions_quick_filters`, #6662)
+const FILTER_KEYS = ["state", "machine_id", "project", "group", "source", "provider", "q", "parent_session_id", "todo", "waiting", "pane_source", "exclude_pane_source"] as const;
 /** The filters that take several values, each a machine and value pair spelled as a JSON array (`sessions_catalog`,
  * docs/protocol/protocol.md "Projects and spaces"): the rows at any of the places, in any of the spaces. */
 const PAIR_KEYS = ["place", "space"] as const;
@@ -45,6 +50,12 @@ export interface ListCounts {
   project: Record<string, number>;
   group: Record<string, number>;
   state: Record<string, number>;
+  /** By open to-do, "" for none (`sessions_todo`, #6662); absent from an older hub. */
+  todo?: Record<string, number>;
+  /** By where the session was opened (`sessions_pane_source`): terminal, feishu, desktop, unknown. */
+  pane_source?: Record<string, number>;
+  /** How many of `state.working` only wait in the background (#6045); absent when none. */
+  background_waiting?: number;
   revision: string;
 }
 export interface ListPage<T> {

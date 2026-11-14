@@ -36,6 +36,7 @@ enum InboxAsk: CaseIterable {
 /// (`safeAreaInset`), and the bar rides up with the keyboard.
 struct InboxHandOffBar: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.pushInboxChat) private var pushChat
     let item: InboxItem
     /// The Draft Reply chip (AI Draft Reply's sheet); nil where the item can't be answered from here.
     var draft: (() -> Void)?
@@ -304,7 +305,7 @@ struct InboxHandOffBar: View {
             let to = name(sent.target)
             let words = handOff.markDone ? String(localized: "Handed to \(to) · marked done") : String(localized: "Handed to \(to)")
             return Toast(words, style: .success,
-                         action: Toast.Action(title: String(localized: "View [Inbox Hand-Off]")) { handOff.open() })
+                         action: Toast.Action(title: String(localized: "View [Inbox Hand-Off]")) { openSent() })
         }
         return nil
     }
@@ -325,7 +326,21 @@ struct InboxHandOffBar: View {
 
     /// View while it waits: sends now and opens where it went.
     private func view() {
-        Task { if await handOff.sendQueued() { handOff.open() } }
+        Task { if await handOff.sendQueued() { openSent() } }
+    }
+
+    private func openSent() {
+        Self.open(sent: handOff.sent, item: item, model: model, push: pushChat, fallback: handOff.open)
+    }
+
+    /// View opens over the item wherever the Assistant stack offers its inbox route; other layouts keep the model's open.
+    @MainActor static func open(sent: (target: InboxHandOffModel.Target, key: SessionKey)?, item: InboxItem, model: AppModel,
+                                push: ((InboxChatRoute) -> Void)?, fallback: () -> Void) {
+        if let push, let sent {
+            push(InboxChatRoute(key: model.inHub(sent.key), manager: item.manager))
+        } else {
+            fallback()
+        }
     }
 
     // MARK: New Agent… (#5933)
@@ -351,6 +366,6 @@ struct InboxHandOffBar: View {
         memory.rememberStarted(item, agent: key)
         handOff.started(key, markDone: prefill.markDone)
         Haptics.success()
-        handOff.open()
+        openSent()
     }
 }

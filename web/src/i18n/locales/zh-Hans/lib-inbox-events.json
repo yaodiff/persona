@@ -17,5 +17,8 @@
   "handed_back": "已交给 AI 去做",
   "sent": "已发送，等对方回复",
   "agent_started": "Agent 已开始",
-  "filed": "已标为已处理"
+  "filed": "已标为已处理",
+  "kind_todo": "建议加个待办",
+  "add_todo": "加入待办",
+  "todo_added": "已加入待办"
 }

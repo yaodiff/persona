@@ -198,7 +198,6 @@ export interface TranscriptBatch {
 }
 
 export type TranscriptAction =
-  | { readonly kind: "schedule_fill"; readonly delayMillis: number }
   | { readonly kind: "fetch_after"; readonly afterSeq: number }
   | { readonly kind: "fetch_latest"; readonly foldWork: true }
   | { readonly kind: "subscribe"; readonly sinceSeq?: number; readonly foldWork: true }
@@ -329,6 +328,7 @@ function jsonEqual(left: JsonValue | undefined, right: JsonValue | undefined): b
 /** Reduces history pages and pushed transcript batches without transport or UI state. */
 export class TranscriptReducer {
   private readonly byId = new Map<string, TranscriptItem>();
+  private cachedPromotionIds = new Set<string>();
   private readonly openedFoldRanges = new Map<string, TranscriptItem>();
   private _history: string | null = null;
   private _covered = 0;
@@ -363,7 +363,11 @@ export class TranscriptReducer {
   restore(state: TranscriptInitialState): void {
     this.byId.clear();
     this.openedFoldRanges.clear();
-    for (const item of state.items) if (!this.byId.has(item.id)) this.byId.set(item.id, cloneItem(item));
+    this.cachedPromotionIds.clear();
+    for (const item of state.items) {
+      if (item.supervision_user === true) this.cachedPromotionIds.add(item.id);
+      this.byId.set(item.id, cloneItem(item));
+    }
     this._history = state.history;
     this._covered = Math.max(0, state.covered);
     this._hasMore = state.hasMore;
@@ -447,13 +451,18 @@ export class TranscriptReducer {
   }
 
   private merge(items: readonly TranscriptItem[], backlog = false, hasMore: boolean | null = null): void {
-    const evidence = [...this.byId.values(), ...this.openedFoldRanges.values(), ...items].filter(hasSupervisionEvidence);
-    const promotedIds = new Set(evidence.filter((item) => item.supervision_user === true).map((item) => item.id));
+    const previous = [...this.byId.values()];
+    const cached = new Map<string, TranscriptItem>();
+    for (const item of previous) cached.set(item.id, item);
+    const evidence = [...previous, ...this.openedFoldRanges.values(), ...items].filter(hasSupervisionEvidence);
+    const promotedIds = new Set([...evidence.filter((item) => item.supervision_user === true).map((item) => item.id), ...this.cachedPromotionIds]);
+    this.cachedPromotionIds.clear();
     const promotedFolds = evidence.filter((item) => item.fold !== undefined);
     const promotedWork = evidence.filter(isWorkItem);
-    for (const [id, existing] of this.byId) {
+    this.byId.clear();
+    for (const [id, existing] of cached) {
       const promoted = retainSupervisionEvidence(existing, promotedIds, promotedFolds, promotedWork);
-      if (promoted !== existing) this.byId.set(id, cloneItem(promoted));
+      this.byId.set(id, cloneItem(promoted));
     }
     const promotedItems = items.map((item) => retainSupervisionEvidence(item, promotedIds, promotedFolds, promotedWork));
     const batchWork = promotedItems.filter((item) => item.kind !== "fold" && isWorkItem(item));
@@ -515,6 +524,8 @@ export interface TranscriptSyncResult {
 export class TranscriptSync {
   private filling = false;
   private fillPages = 0;
+  private heard = 0;
+  private asked = 0;
   private loadingOlder = false;
   private openingFold: TranscriptItem | null = null;
   private rangePages = 0;
@@ -527,29 +538,38 @@ export class TranscriptSync {
   }
 
   settle(gap: TranscriptGap): readonly TranscriptAction[] {
-    if (gap === "fill") return [{ kind: "schedule_fill", delayMillis: 1_500 }];
+    if (gap === "fill") { this.heard++; return this.continueFill(); }
     if (gap === "reload") return [{ kind: "fetch_latest", foldWork: true }];
     return [];
   }
 
-  fillTimer(): readonly TranscriptAction[] {
+  /** iOS starts immediately; an in-flight fill collapses duplicates and reads again after a move heard in flight. */
+  continueFill(): readonly TranscriptAction[] {
     if (this.filling) return [];
     this.filling = true;
     this.fillPages = 0;
+    this.asked = this.heard;
     return [{ kind: "fetch_after", afterSeq: this.reducer.covered }];
   }
 
   after(batch: TranscriptBatch): TranscriptSyncResult {
+    const before = this.reducer.covered;
+    const toSeq = batch.toSeq;
     const gap = this.reducer.apply(batch);
     this.fillPages += 1;
-    const actions: readonly TranscriptAction[] = gap === "reload" || (gap === "fill" && this.fillPages >= 8)
+    const progressed = this.reducer.covered > before || toSeq !== undefined && toSeq !== null && toSeq > before;
+    const again = gap === "none" && this.heard > this.asked;
+    const actions: readonly TranscriptAction[] = gap === "reload" || ((gap === "fill" || again) && this.fillPages >= 8)
       ? [{ kind: "fetch_latest", foldWork: true }]
-      : gap === "fill"
+      : ((gap === "fill" && progressed) || again)
         ? [{ kind: "fetch_after", afterSeq: this.reducer.covered }]
         : [];
+    if (actions.length > 0) this.asked = this.heard;
     if (actions.length === 0 || actions[0].kind === "fetch_latest") this.finishFill();
     return { gap, actions };
   }
+
+  get behind(): boolean { return this.heard > this.asked; }
 
   finishFill(): void {
     this.filling = false;

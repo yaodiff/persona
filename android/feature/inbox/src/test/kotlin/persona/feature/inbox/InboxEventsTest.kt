@@ -95,11 +95,11 @@ class InboxEventsTest {
         assertEquals("改过的", confirmText(s("reply"), "改过的 "))
     }
 
-    @Test fun anEventOpensItsPageAndAnOlderItemItsSourceAsBefore() {
+    @Test fun eventAndNonEventChatRowsOpenTheCollapsedItemPage() {
         val pages = InboxItemPages()
         assertEquals(InboxEventRoute("lark:oc_demo1:100"), inboxRowPage(record("lark:oc_demo1:100"), pages))
         val old = record("lark:oc_demo1:100").copy(event = persona.core.contracts.InboxEventFields.None)
-        assertEquals(LarkRoute("oc_demo1", "lark:oc_demo1:100", 100), inboxRowPage(old, pages))
+        assertEquals(InboxEventRoute("lark:oc_demo1:100"), inboxRowPage(old, pages))
         assertEquals(true, isInboxItemSelected(InboxEventRoute("x"), "x", null))
     }
 
@@ -126,17 +126,39 @@ class InboxEventsTest {
         assertEquals(persona.core.designsystem.icons.PhIcons.Info, chainIcon("from_the_future", chat))
     }
 
-    @Test fun theChainFoldsToItsNewestEntry() {
+    @Test fun theChainFoldsToItsThreeNewestEntries() {
         val chain = record("lark:oc_demo3:300").event.chain
-        assertEquals(listOf("c6"), shownChain(chain, expanded = false).map { it.id })
+        assertEquals(listOf("c4", "c5", "c6"), shownChain(chain, expanded = false).map { it.id })
         assertEquals(chain, shownChain(chain, expanded = true))
-        assertEquals(chain.take(1), shownChain(chain.take(1), expanded = false))
+        assertEquals(chain.take(2), shownChain(chain.take(2), expanded = false))
     }
 
-    @Test fun chainTimesAreTheClockTodayAndTheDateBefore() {
+    @Test fun chainTimesUseThe24HourClockInEveryLocale() {
         val now = Instant.parse("2026-11-05T12:00:00Z")
-        assertEquals("10:00", chainTime("2026-11-05T10:00:00Z", Locale.SIMPLIFIED_CHINESE, now, ZoneOffset.UTC))
-        assertEquals("11月4日 10:00", chainTime("2026-11-04T10:00:00Z", Locale.SIMPLIFIED_CHINESE, now, ZoneOffset.UTC))
-        assertEquals("", chainTime(null, Locale.SIMPLIFIED_CHINESE, now, ZoneOffset.UTC))
+        val at = "2026-11-05T14:05:00Z"
+        assertEquals("14:05", chainTime(at, Locale.US, now, ZoneOffset.UTC))
+        assertEquals("14:05", chainTime(at, Locale.SIMPLIFIED_CHINESE, now, ZoneOffset.UTC))
+        assertEquals("14:05", chainTime(at, Locale.JAPAN, now, ZoneOffset.UTC))
+    }
+
+    @Test fun chainTimesShowTheLocalizedShortDateBeforeToday() {
+        val now = Instant.parse("2026-11-05T12:00:00Z")
+        val at = "2026-11-04T14:05:00Z"
+        assertEquals("Nov 4, 14:05", chainTime(at, Locale.US, now, ZoneOffset.UTC))
+        assertEquals("11月4日 14:05", chainTime(at, Locale.SIMPLIFIED_CHINESE, now, ZoneOffset.UTC))
+        assertEquals("11月4日 14:05", chainTime(at, Locale.JAPAN, now, ZoneOffset.UTC))
+    }
+
+    @Test fun chainTimesAreEmptyForMissingOrMalformedValues() {
+        val now = Instant.parse("2026-11-05T12:00:00Z")
+        assertEquals("", chainTime(null, Locale.US, now, ZoneOffset.UTC))
+        assertEquals("", chainTime("not-a-time", Locale.US, now, ZoneOffset.UTC))
+    }
+
+    @Test fun chainTimeUsesTheInjectedZoneAndNowToChooseToday() {
+        val now = Instant.parse("2026-11-05T00:30:00Z")
+        val at = "2026-11-04T23:45:00Z"
+        assertEquals("Nov 4, 23:45", chainTime(at, Locale.US, now, ZoneOffset.UTC))
+        assertEquals("01:45", chainTime(at, Locale.US, now, ZoneOffset.ofHours(2)))
     }
 }

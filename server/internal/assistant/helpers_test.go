@@ -35,9 +35,9 @@ func (s *Service) replyInbox(ctx context.Context, id, text string, changes ...Do
 	return s.replyInboxAs(ctx, id, text, "", changes...)
 }
 
-// replyInboxAs is replyInboxFrom from the app (not a message card).
+// replyInboxAs is the app's direct /reply route (not a message card).
 func (s *Service) replyInboxAs(ctx context.Context, id, text, clientID string, changes ...DocChange) (InboxItem, error) {
-	return s.replyInboxDo(ctx, id, text, clientID, false, true, changes...)
+	return s.replyInboxDoMode(ctx, id, text, clientID, false, true, true, changes...)
 }
 
 // linkTask is linkTaskFor on an item with no write pending.

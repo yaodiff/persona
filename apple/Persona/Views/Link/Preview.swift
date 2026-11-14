@@ -144,6 +144,13 @@ nonisolated enum PreviewLogic {
         return out
     }
 
+    /// Start… is offered for a session with a workspace and a terminal to run the server in, as on the web (a Paseo
+    /// session names its runtime's workspace, which has no terminal).
+    static func canStart(_ s: Session?) -> Bool {
+        guard let s, s.workspaceID?.isEmpty == false else { return false }
+        return s.canTerminal
+    }
+
     /// The entries launch.json has that cannot be used, for the list to say why.
     static func problems(_ res: PreviewServers?) -> [PreviewServers.Server] {
         (res?.servers ?? []).filter { $0.problem != nil }

@@ -119,6 +119,132 @@ func TestAPIPurposeRunsOnALauncher(t *testing.T) {
 	}
 }
 
+// A Codex-only install says why API purposes cannot use that login and what the user can add instead, in each language.
+func TestCodexOnlyAPIPurposeStatusExplainsTheLimitation(t *testing.T) {
+	s, _, _ := modelService(t)
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "codex", Agent: "codex", API: "responses"}})
+	for _, lang := range []i18n.Lang{i18n.Default, i18n.En, i18n.Lang("ja")} {
+		ctx := i18n.With(context.Background(), lang)
+		p, err := s.modelPurpose(ctx, "inbox.judge", s.modelProviders(ctx))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := mc(lang, modelCodexNoAPIStatus)
+		if p.Status != want || !strings.Contains(p.Status, "Codex") || !strings.Contains(p.Status, "Claude Code") {
+			t.Errorf("%s: status %q, want %q with Codex and Claude Code", lang, p.Status, want)
+		}
+	}
+}
+
+// A node-reported launcher in the stored last-seen snapshot selects the Codex explanation without an online refresh.
+func TestNoAPIStatusUsesStoredNodeLauncherSnapshot(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	if err := s.store().PutSetting(ctx, launchersZshrcKey, map[string][]proto.Launcher{
+		"server": {{Name: "cx", Source: "zshrc", Agent: "codex"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.calls)
+	if got := s.noAPIStatus(ctx); got != modelCodexNoAPIStatus {
+		t.Fatalf("status key %q, want %q", got, modelCodexNoAPIStatus)
+	}
+	for _, call := range f.calls[before:] {
+		if call.Method == DeviceLaunchersList {
+			t.Fatalf("status selection refreshed launchers on %s", call.Device)
+		}
+	}
+}
+
+// Without a model the done judge leaves a visible waiting reason on the task instead of only logging it.
+func TestUnconfiguredDoneJudgeLeavesTheReasonOnTheTask(t *testing.T) {
+	s, f, _ := modelService(t)
+	f.hello.Locale = "en"
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "codex", Agent: "codex", API: "responses"}})
+	ctx := i18n.With(context.Background(), i18n.En)
+	todo, err := s.createTodo(ctx, "Check the result", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, judgeErr := s.purposeModel("inbox.judge").Complete(ctx, "", "reply", 16)
+	if !ai.IsNotConfigured(judgeErr) {
+		t.Fatalf("judge error: %v", judgeErr)
+	}
+	s.applyTaskDone(ctx, todo, todo.CreatedAt, false, taskDoneCheck{}, judgeErr)
+	got := todoNow(s, todo.ID)
+	want := mc(i18n.En, modelCodexNoAPIStatus)
+	if got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictWaiting || got.Check.Reason != want {
+		t.Fatalf("task: done %v, check %+v, want waiting with %q", got.DoneAt, got.Check, want)
+	}
+}
+
+// An install without Codex gets the neutral no-model explanation, not an unrelated launcher limitation.
+func TestNoAPIStatusDoesNotBlameCodexWithoutIt(t *testing.T) {
+	s, _, _ := modelService(t)
+	for _, lang := range []i18n.Lang{i18n.Default, i18n.En, i18n.Lang("ja")} {
+		ctx := i18n.With(context.Background(), lang)
+		p, err := s.modelPurpose(ctx, "inbox.judge", s.modelProviders(ctx))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := mc(lang, modelNoAPIStatus); p.Status != want {
+			t.Errorf("%s: status %q, want %q", lang, p.Status, want)
+		}
+		if strings.Contains(p.Status, "Codex") {
+			t.Errorf("%s: status names Codex without a Codex launcher: %q", lang, p.Status)
+		}
+	}
+}
+
+// The task reason also stays neutral when no Codex launcher exists.
+func TestUnconfiguredDoneJudgeUsesNeutralReasonWithoutCodex(t *testing.T) {
+	s, f, _ := modelService(t)
+	f.hello.Locale = "en"
+	ctx := i18n.With(context.Background(), i18n.En)
+	todo, err := s.createTodo(ctx, "Check the result", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, judgeErr := s.purposeModel("inbox.judge").Complete(ctx, "", "reply", 16)
+	if !ai.IsNotConfigured(judgeErr) {
+		t.Fatalf("judge error: %v", judgeErr)
+	}
+	s.applyTaskDone(ctx, todo, todo.CreatedAt, false, taskDoneCheck{}, judgeErr)
+	got := todoNow(s, todo.ID)
+	if got.Check == nil || got.Check.Verdict != verdictWaiting || got.Check.Reason != mc(i18n.En, modelNoAPIStatus) {
+		t.Fatalf("task check: %+v", got.Check)
+	}
+	if strings.Contains(got.Check.Reason, "Codex") {
+		t.Fatalf("task reason names Codex without a Codex launcher: %q", got.Check.Reason)
+	}
+}
+
+// The done judge uses the last-seen launcher snapshot instead of refreshing nodes just to explain an unavailable model.
+func TestUnconfiguredDoneJudgeDoesNotRefreshLaunchers(t *testing.T) {
+	s, f, _ := modelService(t)
+	f.hello.Locale = "en"
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "codex", Agent: "codex", API: "responses"}})
+	ctx := i18n.With(context.Background(), i18n.En)
+	todo, err := s.createTodo(ctx, "Check the result", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, judgeErr := s.purposeModel("inbox.judge").Complete(ctx, "", "reply", 16)
+	if !ai.IsNotConfigured(judgeErr) {
+		t.Fatalf("judge error: %v", judgeErr)
+	}
+	before := len(f.calls)
+	s.applyTaskDone(ctx, todo, todo.CreatedAt, false, taskDoneCheck{}, judgeErr)
+	for _, call := range f.calls[before:] {
+		if call.Method == DeviceLaunchersList {
+			t.Fatalf("done judge refreshed launchers on %s just to choose its reason", call.Device)
+		}
+	}
+	if got := todoNow(s, todo.ID); got.Check == nil || got.Check.Reason != mc(i18n.En, modelCodexNoAPIStatus) {
+		t.Fatalf("task check: %+v", got.Check)
+	}
+}
+
 // Several turns go to the CLI as one transcript (tools/launcher_run_input).
 func TestGoldenLauncherRunInput(t *testing.T) {
 	golden(t, "launcher_run_input", runPrompt([]ai.Message{{Role: ai.RoleUser, Content: "first"}, {Role: ai.RoleAssistant, Content: "reply"}, {Role: ai.RoleUser, Content: "second"}}))

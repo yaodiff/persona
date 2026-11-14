@@ -47,6 +47,13 @@ REQUIRED_MEMBERS = {
     "com.jcraft.jsch.DH25519": {NO_ARGS},
     "com.jcraft.jsch.UserAuthPublicKey": {NO_ARGS},
     "com.jcraft.jsch.jce.AES128GCM": {NO_ARGS},
+    # The shared Rust core resolves these exact JNI methods by name (rustcore-android/consumer-rules.pro).
+    "persona.core.rustcore.NativeBridge": {
+        ("create", "(Lpersona/core/rustcore/HostBridge;[B)J"),
+        ("dispatch", "(J[B)Z"), ("drain", "(JLjava/lang/String;)[B"),
+        ("flush", "(JI)Z"), ("destroy", "(J)V"),
+    },
+    "persona.core.rustcore.HostBridge": {("changed", "(J)V"), ("run", "([B)V")},
 }
 ACC_INTERFACE, ACC_ABSTRACT = 0x200, 0x400
 NO_INDEX = 0xFFFFFFFF

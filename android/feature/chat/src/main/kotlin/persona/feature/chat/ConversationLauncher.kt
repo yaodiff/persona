@@ -53,6 +53,10 @@ internal fun ConversationLauncherChip(
         modelsLoading = false
     }
 
+    // Only the main conversation has a per-conversation model pick (#6911): another assistant conversation draws no
+    // chip and follows the default or what it started with. All state and reads above stay declared unconditionally.
+    if (!main) return
+
     val defaultLabel = stringResource(R.string.chat_conversation_launcher_default_named, effective)
     val overridden = pickedLauncher != null || pickedModel != null
     val pickedModelLabel = pickedModel?.let { id ->

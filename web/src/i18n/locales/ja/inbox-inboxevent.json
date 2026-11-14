@@ -18,5 +18,9 @@
   "entry_collapse": "閉じる",
   "message_sender": "{sender}：",
   "related": "関連",
-  "manager_done": "アシスタントが処理済み"
+  "manager_done": "アシスタントが処理済み",
+  "todo_title": "ToDoのタイトル",
+  "todo_day": "期限の日",
+  "todo_time": "期限の時刻",
+  "todo_all_day": "終日"
 }

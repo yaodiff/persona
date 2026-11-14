@@ -191,19 +191,28 @@ private fun LazyListScope.newAgentItems(
     }
     if (space == null) {
         item("directory") {
-            JSectionHeader(stringResource(R.string.agents_directory))
+            val picked = state.workspace
+            // A catalog workspace picked (#7259) stands in the folder's place until "Choose by folder".
+            JSectionHeader(stringResource(R.string.agents_directory), action = picked?.let {
+                { JTextButton(stringResource(R.string.agents_workspace_choose_folder), model::chooseByFolder, enabled = editable) }
+            })
             JGroupItem(GroupPosition.Single) {
-                JRow(stringResource(R.string.agents_new_choose_directory), subtitle = state.selection.cwd.takeIf { it.isNotBlank() }, leadingIcon = PhIcons.FolderSimple,
+                val icon = PhIcons.FolderSimple
+                if (picked != null) {
+                    val row = NewAgentWorkspaces.row(picked)
+                    JRow(row.title, subtitle = workspaceLine(row) + "\n" + picked.cwd, subtitleLines = 3, leadingIcon = icon)
+                } else JRow(stringResource(R.string.agents_new_choose_directory), subtitle = state.selection.cwd.takeIf { it.isNotBlank() }, leadingIcon = icon,
                     enabled = editable && state.machineId.isNotBlank(), onClick = { model.browse() })
             }
         }
         itemsIndexed(state.recent, key = { _, recent -> "recent:${recent.path}" }) { index, recent ->
             JGroupItem(GroupPosition.of(index, state.recent.size)) {
                 JRow(recent.name.ifEmpty { recent.path.substringAfterLast('/') }, subtitle = recent.path,
-                    leading = { JRadio(state.selection.cwd == recent.path, null, enabled = editable) }, enabled = editable,
-                    onClick = { model.selection(state.selection.copy(cwd = recent.path)) }, chevron = false)
+                    leading = { JRadio(state.workspace == null && state.selection.cwd == recent.path, null, enabled = editable) }, enabled = editable,
+                    onClick = { model.useFolder(recent.path) }, chevron = false)
             }
         }
+        newAgentWorkspaceItems(state, editable, model::pickWorkspace)
     }
     // A branch and a checkout of its own (#4532, iOS NewAgentWorktreeSection), for a folder in a Git repository.
     state.repo?.takeIf { state.worktreeOffered }?.let { repo -> item("worktree") {

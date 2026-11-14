@@ -66,6 +66,32 @@ internal fun AssistantBlock(key: String, raw: String, complete: Boolean, modifie
     else AssistantViewCard(key, 1L, card, live = false, modifier = modifier)
 }
 
+/**
+ * A reply's card block in a picture (Share as a picture, #7261): a ```persona-view as [AssistantBlock] draws it, outside
+ * any conversation so nothing on it answers, its replies drawn as they look; one with an HTML page, which only runs live,
+ * is its fallback. A ```persona-card is drawn as always, or its placeholder: never its JSON.
+ */
+@Composable
+internal fun AssistantPictureBlock(language: String, raw: String, complete: Boolean, index: Int, modifier: Modifier = Modifier) {
+    if (language != AssistantFences.View) {
+        val parsed = remember(language, raw, complete) { if (complete) PersonaViewBlocks.blocks.parse(language, raw) else null }
+        if (parsed != null) PersonaViewBlocks.blocks.draw(parsed) else AssistantFallback(null, modifier)
+    } else {
+        val card = remember(raw, complete, index) { if (complete && index in 0 until AssistantFences.MostPerText) AssistantCards.parse(raw) else null }
+        val legacy = remember(raw, complete, card) {
+            if (card != null || !complete || raw.contains("\"fallback\"")) null else PersonaViewBlocks.parse(PersonaViewBlocks.View, raw)
+        }
+        when {
+            legacy != null -> PersonaViewBlock(legacy, modifier)
+            card == null -> AssistantFallback(remember(raw) { AssistantFences.fallback(raw) }, modifier)
+            !card.drawsInPicture -> AssistantFallback(card.fallback, modifier)
+            else -> CompositionLocalProvider(LocalAssistantCards provides null) {
+                AssistantViewCard("picture/$index", 1L, card, live = false, modifier = modifier, picture = true)
+            }
+        }
+    }
+}
+
 /** A live card of the conversation (a feed `view` item): the hub's latest version of it, redrawn in place. */
 @Composable
 internal fun AssistantLiveCard(id: String, modifier: Modifier = Modifier) {
@@ -94,7 +120,8 @@ private data class Confirming(val item: ExtensionViewItem, val action: Assistant
  * field that is gone goes with it); what the hub recorded is what shows once it is answered.
  */
 @Composable
-internal fun AssistantViewCard(key: String, version: Long, card: AssistantCard, live: Boolean, modifier: Modifier = Modifier) {
+internal fun AssistantViewCard(key: String, version: Long, card: AssistantCard, live: Boolean, modifier: Modifier = Modifier,
+    picture: Boolean = false) {
     val host = LocalAssistantCards.current
     val feedback = LocalAppFeedback.current
     val uri = LocalUriHandler.current
@@ -147,7 +174,9 @@ internal fun AssistantViewCard(key: String, version: Long, card: AssistantCard, 
             feedback?.notice(changedText)
         }
     }
-    val presented = remember(page, card, answer, locked, words) { AssistantCardPresentation.page(page, card, answer, locked, words) }
+    // In a picture nothing answers, yet its replies and fields are drawn as the chat draws a card that can still be answered.
+    val shownLocked = locked && !picture
+    val presented = remember(page, card, answer, shownLocked, words) { AssistantCardPresentation.page(page, card, answer, shownLocked, words) }
     val initial = remember(page) { ExtensionViewText.fields(page) + card.searchValues(page) }
     val values = initial + edits.filterKeys { it in initial }
     val state = ExtensionViewState(view = presented, values = values, acting = sending.takeIf { busy })

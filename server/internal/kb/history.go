@@ -88,10 +88,11 @@ type PositionAnchor struct {
 	Mine bool      `json:"mine,omitempty"`
 }
 
-// SearchIndexed says the knowledge base keeps a persistent search index (#1273). Until it does, search reads every
-// archived line, which is too slow once millions of imported lines are in: the history import does not start a
-// source that needs the index (kb.history.sources.<id>.needs_search_index, true by default). The index work flips it.
-const SearchIndexed = false
+// SearchIndexed says the knowledge base keeps a persistent search index (#1273, search_index.go). Without one,
+// search reads every archived line, which is too slow once millions of imported lines are in: the history import
+// does not start a source that needs the index (kb.history.sources.<id>.needs_search_index, true by default) until
+// the archive has one (Store.SearchIndexReady).
+const SearchIndexed = true
 
 // Finished: the import of the chat is over and is not taken up again by itself.
 func (st HistoryState) Finished() bool {

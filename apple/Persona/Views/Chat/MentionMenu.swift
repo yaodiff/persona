@@ -1,11 +1,13 @@
 import SwiftUI
 
-// The composer's @ list (#2319), the web's (web/src/lib/mentions.ts, web/src/views/chat/MentionMenu.tsx): files this
-// chat's tools read or wrote and the session's folder (picking one types `@path `, which Claude Code and Codex read as
-// that file; a query with a slash browses that folder on the session's computer, and picking a folder keeps browsing),
-// then other agents' sessions (picking one quotes it, sent as a <persona-context> before the message). Drawn in the
-// composer's stack where the "/" list sits (`SlashMenu`), by an agent's or Persona's chat (`Composer`) and a new
-// conversation (`StarterComposer`). BeautifulUI's prompt bar keeps its own @ menu (`PromptComposer`).
+// The composer's @ list (#2319, workspaces #2599), the web's (web/src/lib/mentions.ts,
+// web/src/views/chat/ComposerPanel.tsx): files this chat's tools read or wrote and the session's folder (picking one
+// types `@path `, which Claude Code and Codex read as that file; a query with a slash browses that folder on the
+// session's computer, and picking a folder keeps browsing), then the hub's workspaces in Persona's conversations and
+// its new conversation, then other agents' sessions. A workspace or session goes as a <persona-context> before the
+// message. Drawn in the composer's stack where the "/" list sits (`SlashMenu`), by an agent's or Persona's chat
+// (`Composer`) and a new conversation (`StarterComposer`). BeautifulUI's prompt bar keeps its own @ menu
+// (`PromptComposer`).
 
 /// The `@word` being typed just before the caret (the web's `mentionAt`): at the start or after whitespace, so an
 /// e-mail address is not one. Offsets count UTF-16, as `PathInsert` and `TextSelection.cursor(utf16:)` do.
@@ -62,6 +64,8 @@ nonisolated struct MentionRow: Identifiable, Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         /// Typed in the token's place: `@path ` for a file, `@dir/` for a folder (the list then browses it).
         case file(insert: String, folder: Bool)
+        /// Sent with the message as the place Persona should work (`ContextRef`, kind "workspace").
+        case workspace(HostWorkspace)
         /// Quoted with the message (`PromptItems.quote`).
         case session(SessionKey)
     }
@@ -71,7 +75,11 @@ nonisolated struct MentionRow: Identifiable, Equatable, Sendable {
     var detail: String
     var kind: Kind
 
+    var isWorkspace: Bool { if case .workspace = kind { true } else { false } }
     var isSession: Bool { if case .session = kind { true } else { false } }
+    var isContext: Bool { isWorkspace || isSession }
+    /// Files, workspaces, then sessions: the groups a hairline separates.
+    var group: Int { isSession ? 2 : isWorkspace ? 1 : 0 }
 }
 
 /// What the @ list offers for a query, as the web's `useMentionRows`.
@@ -152,10 +160,67 @@ nonisolated enum MentionRows {
             .map { $0 }
     }
 
+    /// A workspace's name: the host's title, else its folder's (the web's `workspaceTitle`).
+    static func workspaceTitle(_ w: HostWorkspace) -> String {
+        let title = w.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty { return title }
+        let path = withoutTrailingSlashes(w.cwd)
+        let folder = (path as NSString).lastPathComponent
+        return folder.isEmpty ? w.cwd : folder
+    }
+
+    /// The web's display-only home-folder shortening; matching and the sent context keep the raw folder.
+    private static let homePathRe = try! NSRegularExpression(pattern: #"^/(Users|home|data\d*/home)/[^/]+"#)
+    static func shortPath(_ path: String) -> String {
+        let ns = path as NSString
+        guard let match = homePathRe.firstMatch(in: path, range: NSRange(location: 0, length: ns.length)) else { return path }
+        return "~" + ns.substring(from: NSMaxRange(match.range))
+    }
+
+    /// The second line of a workspace's row: computer · folder (· branch).
+    static func workspaceDetail(_ w: HostWorkspace, machineName: (MachineRef) -> String) -> String {
+        [machineName(w.machineRef), shortPath(w.cwd), w.branch].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// Workspaces matching the query, as the web's `workspaceMatches`: the first row for a computer and folder wins
+    /// before matching, title prefixes rank first, then available rows, each stable in the hub's order; at most eight.
+    static func workspaceRows(_ all: [HostWorkspace], query: String,
+                              machineName: (MachineRef) -> String, limit: Int = 8) -> [MentionRow] {
+        let q = query.lowercased()
+        var seen = Set<String>()
+        let hits = all.filter { w in
+            guard !w.cwd.isEmpty else { return false }
+            let key = w.machineRef.path + "\n" + withoutTrailingSlashes(w.cwd)
+            guard seen.insert(key).inserted else { return false }
+            return q.isEmpty || [workspaceTitle(w), w.cwd, machineName(w.machineRef), w.branch]
+                .contains { $0.lowercased().contains(q) }
+        }
+        let ranked = byPrefix(hits, name: workspaceTitle, filter: q)
+        return (ranked.filter(\.available) + ranked.filter { !$0.available }).prefix(limit).map { w in
+            let place = withoutTrailingSlashes(w.cwd)
+            return MentionRow(id: "workspace:\(w.key):\(place)", name: workspaceTitle(w),
+                              detail: workspaceDetail(w, machineName: machineName), kind: .workspace(w))
+        }
+    }
+
+    /// The context for a picked workspace. The manager expands its raw machine and folder, as it does the web's.
+    static func workspaceContext(_ w: HostWorkspace, machineName: (MachineRef) -> String) -> ContextRef {
+        let title = workspaceTitle(w)
+        var lines = [String(localized: "Workspace: \(title)"),
+                     String(localized: "Computer: \(machineName(w.machineRef))"),
+                     String(localized: "Folder: \(w.cwd)")]
+        var extra = ["machine": w.machineID, "cwd": w.cwd]
+        if !w.branch.isEmpty {
+            lines.append(String(localized: "Branch: \(w.branch)"))
+            extra["branch"] = w.branch
+        }
+        return ContextRef(kind: "workspace", title: title, url: "", text: lines.joined(separator: "\n"), extra: extra)
+    }
+
     /// The rows for a query. `listing` is the folder `folder(for:cwd:)` names, nil until it is read: browsing shows that
-    /// folder's entries alone; otherwise the chat's files, the session folder's entries, then the sessions.
+    /// folder's entries alone; otherwise the chat's files, the session folder's entries, workspaces, then the sessions.
     static func rows(query: String, cwd: String?, used: [String], listing: [FileEntry]?, sessions all: [Session],
-                     except: SessionKey?) -> [MentionRow] {
+                     except: SessionKey?, workspaces workspaceRows: [MentionRow] = []) -> [MentionRow] {
         let entries = listing ?? []
         if let target = browseTarget(query, cwd: cwd) {
             let hits = entries.filter { nameMatches($0.name, target.filter) }
@@ -186,6 +251,7 @@ nonisolated enum MentionRows {
                                   detail: e.dir ? String(localized: "Folder") : String(localized: "Session folder"),
                                   kind: .file(insert: "@\(e.name)\(e.dir ? "/" : " ")", folder: e.dir)))
         }
+        out.append(contentsOf: workspaceRows)
         for s in sessions(all, except: except, query: q) {
             out.append(MentionRow(id: "session:\(s.key.path)", name: s.displayTitle, detail: sessionDetail(s), kind: .session(s.key)))
         }
@@ -204,6 +270,8 @@ struct MentionSource {
     var files: () -> [String] = { [] }
     /// This chat, left out of the sessions.
     var except: SessionKey?
+    /// Offer the hub's workspaces: only Persona's conversations and its ordinary new conversation, never an Agent's.
+    var workspaces = false
 }
 
 /// The @ list is open over a composer: the new conversation page makes room for it, Needs You stepping aside until it
@@ -217,52 +285,152 @@ struct MentionMenuOpen: PreferenceKey {
 @MainActor @Observable
 final class MentionFolders {
     private var listings: [String: [FileEntry]] = [:]
+    private(set) var revision: UInt64 = 0
 
     /// A folder's entries; nil until read (one that could not be read has none).
     func entries(in dir: String) -> [FileEntry]? { listings[dir] }
 
+    private func publish(_ entries: [FileEntry], in dir: String) {
+        listings[dir] = entries
+        revision &+= 1
+    }
+
     /// Reads dir unless it was read, after a short pause: typing through a path asks only for where it stops.
     func load(_ dir: String, cwd: String, machine: MachineRef, api: APIClient?) async {
         guard listings[dir] == nil else { return }
-        guard let api else { listings[dir] = []; return }
+        guard let api else { publish([], in: dir); return }
         try? await Task.sleep(for: .milliseconds(120))
         guard !Task.isCancelled else { return }
         do {
-            listings[dir] = try await api.listDir(machine: machine.id, path: dir, cwd: cwd).entries
+            let entries = try await api.listDir(machine: machine.id, path: dir, cwd: cwd).entries
+            guard !Task.isCancelled else { return }
+            publish(entries, in: dir)
         } catch {
-            if !Task.isCancelled { listings[dir] = [] } // not a folder, or unreadable: no rows from it
+            if !Task.isCancelled { publish([], in: dir) } // not a folder, or unreadable: no rows from it
         }
     }
 }
 
-/// The @ list for the token being typed: reads the folder it needs from the computer, and on a pick types the file or
-/// folder in the token's place, or quotes the session and takes the token out.
+/// One active `HubLink` owns one of these: its last successful workspace snapshot, in memory only. A replacement does
+/// not accumulate history, and removing the group drops the link and this snapshot with it (performance P2 / P11).
+@MainActor
+final class MentionWorkspaceCache {
+    private(set) var workspaces: [HostWorkspace] = []
+    func replace(_ workspaces: [HostWorkspace]) { self.workspaces = workspaces }
+}
+
+/// The hub's workspaces for one opening of the @ list. The last good snapshot projects synchronously on a later opening;
+/// the catalog and current inputs are unobserved and only changed rows publish. Query changes and a late response always
+/// meet at the latest projection.
+@MainActor @Observable
+final class MentionWorkspaces {
+    @ObservationIgnored private var all: [HostWorkspace] = []
+    @ObservationIgnored private var query = ""
+    @ObservationIgnored private var machines: [Machine] = []
+    @ObservationIgnored private var cache: MentionWorkspaceCache?
+    @ObservationIgnored private var started = false
+    private(set) var rows: [MentionRow] = []
+
+    func update(query: String, machines: [Machine], cache: MentionWorkspaceCache?) {
+        if !started, self.cache !== cache {
+            self.cache = cache
+            all = cache?.workspaces ?? []
+        }
+        self.query = query
+        self.machines = machines
+        project()
+    }
+
+    /// Reads once while this menu is open. A response replaces the hub's last good snapshot; a failed read keeps it.
+    func load(api: APIClient?, group: String) async {
+        guard !started else { return }
+        started = true
+        guard let api else { return }
+        do {
+            var fetched = try await api.workspaces()
+            guard !Task.isCancelled else { return }
+            for i in fetched.indices { fetched[i].group = group }
+            cache?.replace(fetched)
+            all = fetched
+            project()
+        } catch {
+            // An old hub or an unavailable manager leaves the cached rows, if this hub has answered before, in place.
+        }
+    }
+
+    private func project() {
+        let names = Dictionary(machines.map { ($0.ref.path, $0.title) }, uniquingKeysWith: { a, _ in a })
+        let next = MentionRows.workspaceRows(all, query: query) { names[$0.path] ?? $0.id }
+        if next != rows { rows = next }
+    }
+}
+
+private struct MentionProjection: Equatable {
+    var directory: String?
+    var rows: [MentionRow] = []
+    var empty: MentionMenu.Empty = .noMatch
+}
+
+/// The @ list for the token being typed: a later opening projects its hub's last good workspaces at once, then reads
+/// the folder and workspaces once per opening. A file/folder pick types in the token's place; a workspace/session pick
+/// adds context and takes the token out. All row projection lives here, outside `body` (performance P4).
 struct ComposerMentionMenu: View {
     @Environment(AppModel.self) private var model
     var token: MentionToken
     @Binding var text: String
     @Binding var selection: TextSelection?
     var source: MentionSource
-    /// A session picked: its quote goes with the message.
+    /// A workspace or session picked: its context goes with the message.
     var quote: (ContextRef) -> Void
     @State private var folders = MentionFolders()
+    @State private var workspaces = MentionWorkspaces()
     /// The chat's files as the list opened (the web's: the chat may grow meanwhile, the rows stay put).
     @State private var used: [String]?
+    @State private var projection = MentionProjection()
 
     private var cwd: String? { source.cwd.flatMap { $0.isEmpty ? nil : $0 } }
 
     var body: some View {
-        let dir = MentionRows.folder(for: token.query, cwd: cwd)
-        let listing = dir.flatMap { folders.entries(in: $0) }
-        let rows = MentionRows.rows(query: token.query, cwd: cwd, used: used ?? source.files(), listing: listing,
-                                    sessions: model.sessionsNow, except: source.except)
-        let browsing = MentionRows.browseTarget(token.query, cwd: cwd) != nil
-        MentionMenu(rows: rows, empty: dir != nil && listing == nil ? .reading : browsing ? .noMatchInFolder : .noMatch, pick: pick)
-            .onAppear { if used == nil { used = source.files() } }
-            .task(id: dir) {
-                guard let dir else { return }
+        MentionMenu(rows: projection.rows, empty: projection.empty, offersWorkspaces: source.workspaces, pick: pick)
+            .onAppear {
+                if used == nil { used = source.files() }
+                rebuild()
+            }
+            .onChange(of: token.query, initial: true) { _, query in
+                if source.workspaces {
+                    workspaces.update(query: query, machines: model.namedMachines,
+                                      cache: model.link(source.machine.group)?.workspaceMentions)
+                }
+                rebuild()
+            }
+            .onChange(of: source.cwd ?? "") { _, _ in rebuild() }
+            .onChange(of: folders.revision) { _, _ in rebuild() }
+            .onChange(of: workspaces.rows) { _, _ in rebuild() }
+            // Agent menus do not observe machine-name changes or project an empty workspace catalog (performance P5).
+            .onChange(of: source.workspaces ? model.machineChoices : []) { _, _ in
+                workspaces.update(query: token.query, machines: model.namedMachines,
+                                  cache: model.link(source.machine.group)?.workspaceMentions)
+                rebuild()
+            }
+            .task(id: projection.directory) {
+                guard let dir = projection.directory else { return }
                 await folders.load(dir, cwd: cwd ?? "", machine: source.machine, api: model.api(source.machine.group))
             }
+            .task {
+                guard source.workspaces else { return }
+                await workspaces.load(api: model.api(source.machine.group), group: source.machine.group)
+            }
+    }
+
+    private func rebuild() {
+        let dir = MentionRows.folder(for: token.query, cwd: cwd)
+        let listing = dir.flatMap { folders.entries(in: $0) }
+        let browsing = MentionRows.browseTarget(token.query, cwd: cwd) != nil
+        let rows = MentionRows.rows(query: token.query, cwd: cwd, used: used ?? [], listing: listing,
+                                    sessions: model.sessionsNow, except: source.except, workspaces: workspaces.rows)
+        let empty: MentionMenu.Empty = dir != nil && listing == nil ? .reading : browsing ? .noMatchInFolder : .noMatch
+        let next = MentionProjection(directory: dir, rows: rows, empty: empty)
+        if next != projection { projection = next }
     }
 
     private func pick(_ row: MentionRow) {
@@ -278,6 +446,9 @@ struct ComposerMentionMenu: View {
         switch row.kind {
         case .file(let typed, _):
             insert = typed
+        case .workspace(let workspace):
+            quote(MentionRows.workspaceContext(workspace) { model.namedMachine($0)?.title ?? $0.id })
+            insert = ""
         case .session(let key):
             guard let s = model.sessionsNow.first(where: { $0.key == key }) else { return }
             quote(PromptItems.quote(s))
@@ -293,10 +464,11 @@ struct ComposerMentionMenu: View {
 /// rows it scrolls, the half row saying so, as the "/" list (`SlashMenu`).
 struct MentionMenu: View {
     /// What the list says while it has no rows.
-    enum Empty { case reading, noMatchInFolder, noMatch }
+    enum Empty: Equatable { case reading, noMatchInFolder, noMatch }
 
     var rows: [MentionRow]
     var empty: Empty
+    var offersWorkspaces = false
     var pick: (MentionRow) -> Void
     /// One row's height, as drawn (it follows the text size).
     @State private var rowHeight: CGFloat = 0
@@ -311,7 +483,7 @@ struct MentionMenu: View {
         .padding(.vertical, Theme.Space.xs)
         .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Mention a file or session")
+        .accessibilityLabel(offersWorkspaces ? String(localized: "Mention a file, workspace, or session") : String(localized: "Mention a file or session"))
         .accessibilityIdentifier("mention-menu")
     }
 
@@ -319,14 +491,14 @@ struct MentionMenu: View {
         VStack(spacing: 0) {
             if rows.isEmpty { emptyRow }
             ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
-                // A line above the sessions, after the files (the web's group line).
-                if i > 0, row.isSession, !rows[i - 1].isSession {
+                // A hairline between files, workspaces and sessions (the web's resource groups).
+                if i > 0, row.group != rows[i - 1].group {
                     Divider().padding(.horizontal, Theme.Space.m)
                 }
                 Button { pick(row) } label: { label(row) }
                     .buttonStyle(.plain)
                     .accessibilityLabel(row.name)
-                    .accessibilityHint(row.isSession ? [row.detail, String(localized: "As context")].joined(separator: ", ") : row.detail)
+                    .accessibilityHint(row.isContext ? [row.detail, String(localized: "As context")].joined(separator: ", ") : row.detail)
                     .accessibilityIdentifier("mention-menu.\(row.id)")
             }
         }
@@ -339,9 +511,9 @@ struct MentionMenu: View {
             Text(row.name).font(Theme.Font.secondaryStrong).foregroundStyle(.primary).truncationMode(.middle)
                 .layoutPriority(1)
             Text(row.detail).font(Theme.Font.caption).foregroundStyle(.secondary)
-                .truncationMode(row.isSession ? .tail : .head)
+                .truncationMode(row.isContext ? .tail : .head)
             Spacer(minLength: Theme.Space.s)
-            if row.isSession {
+            if row.isContext {
                 Text("As context").font(Theme.Font.caption).foregroundStyle(.tertiary).fixedSize()
             }
         }
@@ -354,6 +526,7 @@ struct MentionMenu: View {
     private func symbol(_ row: MentionRow) -> String {
         switch row.kind {
         case .session: Theme.Icon.agentChat
+        case .workspace: Theme.Icon.folder
         case .file(_, let folder): folder ? Theme.Icon.folder : Theme.Icon.document
         }
     }
@@ -364,7 +537,12 @@ struct MentionMenu: View {
             switch empty {
             case .reading: Text("Reading folder…")
             case .noMatchInFolder: Text("Nothing matches in this folder")
-            case .noMatch: Text("No matching files or sessions")
+            case .noMatch:
+                if offersWorkspaces {
+                    Text("No matching files, workspaces, or sessions")
+                } else {
+                    Text("No matching files or sessions")
+                }
             }
             Spacer(minLength: 0)
         }

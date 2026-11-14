@@ -1,0 +1,35 @@
+# Persona's shared client core (docs/plans/plan-rust-core.md): one Rust library under the iOS, Android and HarmonyOS
+# clients' native UIs. persona-core is pure logic; the runtime, entry points and codec generator wrap it.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+persona-core = { path = "crates/persona-core" }
+persona-core-domain = { path = "crates/persona-core", package = "persona-core" }
+persona-core-runtime = { path = "crates/persona-core-runtime" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+bincode = "1.3"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+
+# Performance first (the plan's decision 6): full optimisation and LTO. Unwinding stays on so a panic at an entry point
+# becomes an error the client reports instead of an abort.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+debug = "line-tables-only"

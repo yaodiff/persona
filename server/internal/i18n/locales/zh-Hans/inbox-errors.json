@@ -16,6 +16,12 @@
   "bulk_limit": "一次请求的内容过多，请分批操作。",
   "bulk_done_required": "请提供处理状态和内容列表。",
   "bulk_action": "请选择归档、忽略或重新打开。",
+  "todo_read_only": "此设备不能修改待办",
+  "merge_too_few_rows": "请至少选两行再合并",
+  "merge_none": "没有可合并的内容：这些行已不存在或已合并",
+  "merge_failed": "合并没能保存，未做任何改动",
+  "todo_targets": "请选择要加到待办的行",
+  "todo_suggestion": "待办需要标题，截止日期或时间也要能识别",
   "bulk_targets": "请提供内容 ID 列表或筛选条件。",
   "bulk_filter": "按筛选条件归档时需要列表时间；重新打开时请提供内容 ID。",
   "document_only": "只有文档内容能修改状态。",
@@ -37,5 +43,8 @@
   "history_limit": "limit 必须是 1–{max} 之间的数字。",
   "history_cursor": "before 必须是 RFC 3339 时间，before_id 需要与 before 一起提供。",
   "history_zone": "tz 必须是时区名称，例如 Europe/Berlin。",
-  "bad_folder": "文件夹路径里至少要有一级名称。"
+  "bad_folder": "文件夹路径里至少要有一级名称。",
+  "session_ref_required": "session 必须同时包含 machine_id 和 session_id。",
+  "handoff_kind": "kind 必须是 agent 或 conversation。",
+  "handoff_record_text": "设置 session 时，text 必须为空。"
 }

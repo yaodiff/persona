@@ -22,12 +22,21 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     var destinations: Destinations
     /// The Assistant | Agents switch over the page column, on a phone's tabs (iPhone Duo open: `pageTabSwitch`, #2623).
     var pageSwitch = false
+    #if os(iOS)
+    /// The Sidebar layout on a phone's width (#6332): the list in this drawer, the pages one stack whose root is `empty`
+    /// (`drawerLayout`); nil, the list at the stack's root as before. Set around this split only (`splitDrawer`): it is
+    /// cleared for what is inside, so a split in a page or a sheet keeps its own layout.
+    @Environment(\.splitDrawer) private var drawer
+    #endif
     @ViewBuilder var sidebar: Sidebar
     /// The detail column before anything is open.
     @ViewBuilder var empty: Empty
 
     var body: some View {
         layout.environment(\.splitPush, SplitPush { [path = $path] value in path.wrappedValue.append(value) })
+        #if os(iOS)
+            .environment(\.splitDrawer, nil)
+        #endif
     }
 
     @ViewBuilder private var layout: some View {
@@ -86,16 +95,42 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
             // On the whole split, not the detail stack: its pages are built from the destinations the sidebar
             // registered, in the sidebar's environment.
             .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1, listHidden: columns == .detailOnly, pageSwitch: pageSwitch))
-            .environment(\.splitShowList, SplitShowList { [columns = $columns] in
+            .environment(\.splitShowList, SplitShowList(show: { [columns = $columns] in
                 withAnimation(Theme.Motion.layout) { columns.wrappedValue = SplitColumns.shown }
-            })
+            }, hide: { [columns = $columns] in
+                withAnimation(Theme.Motion.layout) { columns.wrappedValue = .detailOnly }
+            }))
             #endif
         } else {
+            #if os(iOS)
+            if let drawer {
+                drawerLayout(drawer)
+            } else {
+                NavigationStack(path: $path) {
+                    sidebar.modifier(destinations)
+                }
+            }
+            #else
             NavigationStack(path: $path) {
                 sidebar.modifier(destinations)
             }
+            #endif
         }
     }
+
+    #if os(iOS)
+    /// The Sidebar layout on a phone (#6332): the list in the drawer that slides in from the left, the pages one stack
+    /// whose root is `empty` (the Persona conversation). What the list opens is that stack's first page, as beside an
+    /// iPad's column, with the drawer's button where its back would be (`SplitDetail.drawer`), and a drag to the right on
+    /// it opens the drawer as on the conversation (`AssistantDrawerLayout.firstPages`). Behind the drawer, the Agents
+    /// list's own page color: its head and foot and the list are one surface, in dark mode too.
+    private func drawerLayout(_ drawer: AssistantDrawer) -> some View {
+        AssistantDrawerLayout(drawer: drawer, enabled: path.count <= 1, backdrop: Theme.groupedPage, firstPages: true, sidebar: { sidebar }, page:
+            NavigationStack(path: $path) { empty.modifier(destinations) })
+            .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1, listHidden: true, drawer: true))
+            .environment(\.splitShowList, SplitShowList(show: { drawer.open() }))
+    }
+    #endif
 }
 
 /// What a split shows when its list is out: the list beside the page. On the Mac the list is the content column of a
@@ -182,6 +217,9 @@ struct SplitDetail: Equatable {
     var ownWindow = false
     /// The Assistant | Agents switch rides over each page of the column (a phone's tabs, `pageTabSwitch`, #3680).
     var pageSwitch = false
+    /// The Sidebar layout on a phone (#6332): the list is the drawer's, and a first page has the drawer's button where a
+    /// back would be.
+    var drawer = false
 }
 
 extension EnvironmentValues {
@@ -193,11 +231,17 @@ extension EnvironmentValues {
     @Entry var splitPush: SplitPush?
     /// Opens the list column of the split the page is in again (iOS); nil in a single stack.
     @Entry var splitShowList: SplitShowList?
+    #if os(iOS)
+    /// The drawer the next `SplitNavigation` puts its list in at a phone's width (the Sidebar layout, #6332).
+    @Entry var splitDrawer: AssistantDrawer?
+    #endif
 }
 
-/// Brings a `SplitNavigation`'s list column back.
+/// Brings a `SplitNavigation`'s list column back, or (the Sidebar layout's Persona page, its sidebar button, #6332)
+/// folds it away.
 struct SplitShowList {
     var show: () -> Void
+    var hide: (() -> Void)? = nil
 }
 
 /// Appends a value to a `SplitNavigation`'s path.
@@ -229,6 +273,8 @@ private struct SplitDetailPage: ViewModifier {
         }
         #if os(iOS)
         .modifier(PageTabSwitchInset(shown: split?.pageSwitch == true))
+        // The Sidebar layout on a phone (#6332): a first page opens the drawer where its back would be.
+        .modifier(DrawerButtonItem(shown: !ownsBack && split?.drawer == true && split?.isFirstPage == true))
         #endif
         #endif
     }
@@ -387,3 +433,27 @@ struct SplitDividerHandle: ViewModifier {
             }
     }
 }
+
+#if os(iOS)
+/// The drawer's button at the leading edge of a first page's bar in the Sidebar layout on a phone (#6332): the persona's
+/// face as on the conversation (`ShellPersonaButton`, the inbox's mark), with how many Agents need the user. Only where
+/// it shows; everywhere else the page is left exactly as it was.
+struct DrawerButtonItem: ViewModifier {
+    var shown: Bool
+    @Environment(\.splitShowList) private var showList
+
+    func body(content: Content) -> some View {
+        if shown {
+            content.toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    ShellPersonaButton(id: "sidebar-drawer-button") { showList?.show() }
+                        .overlay(alignment: .topTrailing) { SidebarWaitingBadge() }
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+        } else {
+            content
+        }
+    }
+}
+#endif

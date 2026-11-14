@@ -1,0 +1,15 @@
+{
+  "systemd_user_unavailable": "Cannot reach your systemd user instance",
+  "running_before_purge": "Another persona-link is running (not this service, or one you started yourself): stop it before --purge",
+  "node_install_failed": "The resident node service was not installed: {error}",
+  "binary_install_failed": "Cannot install {path}: {error}",
+  "binary_installed": "Installed {path}.",
+  "bootstrap_failed": "launchctl bootstrap failed: {detail}",
+  "installed": "Installed launchd user agent {label} ({path}); it is running and starts when you sign in to this Mac.",
+  "not_installed": "launchd user agent {label} is not installed.",
+  "uninstalled": "Stopped and removed launchd user agent {label}.",
+  "passive_mac_next": "Next: persona-link install --listen installs a launchd user agent that listens at login, or run persona-link run in the foreground.",
+  "status_missing": "Background service: not installed (persona-link install)",
+  "status_loaded": "Background service: launchd user agent {label} · {state} · starts at login",
+  "status_not_loaded": "Background service: launchd user agent {label} is installed but not loaded ({path}): persona-link install"
+}

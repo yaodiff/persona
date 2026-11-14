@@ -411,13 +411,14 @@ func codexModelList(w io.Writer, r io.Reader) ([]proto.AgentModel, error) {
 		}
 		var res struct {
 			Data []struct {
-				Model         string `json:"model"`
-				ID            string `json:"id"`
-				DisplayName   string `json:"displayName"`
-				Description   string `json:"description"`
-				Hidden        bool   `json:"hidden"`
-				IsDefault     bool   `json:"isDefault"`
-				DefaultEffort string `json:"defaultReasoningEffort"`
+				Model         string              `json:"model"`
+				ID            string              `json:"id"`
+				DisplayName   string              `json:"displayName"`
+				Description   string              `json:"description"`
+				Hidden        bool                `json:"hidden"`
+				IsDefault     bool                `json:"isDefault"`
+				DefaultEffort string              `json:"defaultReasoningEffort"`
+				ServiceTiers  []proto.ServiceTier `json:"serviceTiers"`
 				Efforts       []struct {
 					Effort string `json:"reasoningEffort"`
 				} `json:"supportedReasoningEfforts"`
@@ -435,7 +436,7 @@ func codexModelList(w io.Writer, r io.Reader) ([]proto.AgentModel, error) {
 			if m.Hidden || id == "" {
 				continue
 			}
-			a := proto.AgentModel{ID: id, Name: m.DisplayName, Description: m.Description, Default: m.IsDefault, DefaultEffort: m.DefaultEffort}
+			a := proto.AgentModel{ID: id, Name: m.DisplayName, Description: m.Description, Default: m.IsDefault, DefaultEffort: m.DefaultEffort, ServiceTiers: m.ServiceTiers}
 			if a.Name == "" {
 				a.Name = id
 			}

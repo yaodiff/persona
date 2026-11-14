@@ -1,0 +1,10 @@
+{
+  "unavailable": "Saved searches are not available on this hub yet. Update it and try again.",
+  "invalid": "Check the search name and query. Use up to 64 characters for the name and 1024 bytes for an Agent search query.",
+  "conflict": "Saved searches changed elsewhere. Reload them and try again.",
+  "duplicate": "A saved search already uses this name or identity. Choose another name.",
+  "limit": "You can keep up to 50 saved Agent searches. Remove one before adding another.",
+  "missing": "This saved search is no longer available. Reload the list.",
+  "read_only": "This device can read saved searches but cannot change them.",
+  "storage": "Saved searches could not be loaded or saved. Try again."
+}

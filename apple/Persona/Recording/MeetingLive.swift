@@ -48,6 +48,9 @@ final class MeetingLive {
         /// Every `200` of `…/live`: the meeting conversation keeps what it says of the room (`MeetingConversation.applyLive`)
         /// and, without the socket, reads the room's topics (`MeetingConversation.liveAccepted`).
         var report: (UUID, Answer) -> Void = { _, _ in }
+        /// The hub transcribes the meeting (#3862 phase 5, `MeetingTranscription.hubTranscribes`): the live log is its own,
+        /// and `POST …/live` would be `409 hub_transcribes`.
+        var hubTranscribes: (UUID) -> Bool = { _ in false }
     }
 
     /// Lines in one request at most (the contract's limit).
@@ -59,6 +62,8 @@ final class MeetingLive {
     @ObservationIgnored private var sending: Set<UUID> = []
     @ObservationIgnored private var again: Set<UUID> = []
     @ObservationIgnored private var failures: [UUID: Int] = [:]
+    /// Meetings the hub answered `409 hub_transcribes` for: their lines don't go, whatever the phone thought the mode was.
+    @ObservationIgnored private var hubTranscribing: Set<UUID> = []
     @ObservationIgnored private var started = false
 
     init(deps: Deps, library: RecordingLibrary = .shared) {
@@ -132,6 +137,9 @@ final class MeetingLive {
             // wait in the log until it is on again.
             guard attendance.sentRole.attends else { return }
             guard deps.settled(entry) else { return } // the upload that names the attendance goes first; it calls back
+            // In hub mode the hub writes the live log from the meeting's audio (and from the uploads' segments while it
+            // has no sentences): the phone's lines stay its own.
+            guard !deps.hubTranscribes(id), !hubTranscribing.contains(id) else { return }
             let log = attendance.live
             let from = min(states[id]?.next ?? 0, log.count)
             // The hub said all the log is in: nothing to send (an empty request only asks where it is, once).
@@ -164,6 +172,10 @@ final class MeetingLive {
             // The hub holds fewer than the phone thought: ask where it is, then go on from there.
             states[id]?.next = nil
             return true
+        case (409, "hub_transcribes"):
+            // The hub transcribes this meeting (#3862 phase 5): the live log is its.
+            hubTranscribing.insert(id)
+            return false
         case (404, "recording_not_found"), (409, "not_attending"):
             // No upload with this attendance yet: it goes first, and calls back once stored.
             deps.upload(id)
@@ -217,7 +229,8 @@ extension MeetingLive.Deps {
                  MeetingConversation.shared.applyLive(id, room: answer.room, privateMark: answer.privateMark, followup: answer.followup)
                  // The app behind has no `meeting_live`: the room's topics are read after the lines went (#3862 phase 2).
                  MeetingConversation.shared.liveAccepted(id)
-             })
+             },
+             hubTranscribes: { MeetingTranscription.shared.hubTranscribes($0) })
     }
 }
 #endif

@@ -290,7 +290,7 @@ class ChatRepositoriesTest {
         capped = true
         connection.events.emit(ItemsEvent(key.machineId, key.sessionId, listOf(item(20)), "h", 19, 20))
         runCurrent()
-        assertFalse(snapshot.verified)
+        // Filled at once since #7102 (no settling delay): the capped pages have already ended in the latest page.
         advanceTimeBy(1500)
         runCurrent()
         assertEquals(8, queries.count { it.afterSeq != null })

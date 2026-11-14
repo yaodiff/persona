@@ -155,7 +155,6 @@ struct DecisionRow: View {
     var answers: DecisionAnswers = .shared
     /// Complete Directly (#3038) goes through the briefing's actions, as `BriefAcceptRow`'s button does.
     var actions: BriefActions = .shared
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var options: [TodoAsk.Option] { ask.decisionOptions }
     private var state: DecisionAnswers.State? { answers.state(todo: todo.id, ask: ask, group: group) }
@@ -269,20 +268,14 @@ struct DecisionRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("decision.sent-back.\(todo.id)")
                 }
-                if typeSize.isAccessibilitySize {
-                    // At the accessibility sizes the whole group is one column, the recommended option first, each
-                    // label still on one line (DESIGN_SYSTEM.md 1.2 rule 3).
-                    VStack(alignment: .leading, spacing: Theme.Space.s) { controls(shown: options.count) }
-                } else {
-                    ViewThatFits(in: .horizontal) {
-                        ForEach(Array(stride(from: options.count, to: 1, by: -1)), id: \.self) { shown in
-                            HStack(spacing: Theme.Space.s) { controls(shown: shown) }
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                        // Alone and still wider than the row, the option gives way and cuts its label; it never wraps,
-                        // and "Other…" and ⋯ keep theirs.
-                        HStack(spacing: Theme.Space.s) { controls(shown: 1) }
+                ViewThatFits(in: .horizontal) {
+                    ForEach(Array(stride(from: options.count, to: 1, by: -1)), id: \.self) { shown in
+                        HStack(spacing: Theme.Space.s) { controls(shown: shown) }
+                            .fixedSize(horizontal: true, vertical: false)
                     }
+                    // Alone and still wider than the row, the option gives way and cuts its label; it never wraps,
+                    // and "Other…" and ⋯ keep theirs.
+                    HStack(spacing: Theme.Space.s) { controls(shown: 1) }
                 }
             }
         }

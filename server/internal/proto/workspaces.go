@@ -25,6 +25,9 @@ type Workspace struct {
 	Online         bool   `json:"online"`
 	Available      bool   `json:"available"`
 	LastSeen       string `json:"last_seen,omitempty"`
+	// Owned: an engine runtime's worktree that the runtime made and removes with the workspace (Paseo's, #6297), the
+	// only kind of its rows Delete worktree is offered for. Not set on a terminal host's rows.
+	Owned bool `json:"owned,omitempty"`
 }
 
 type WorkspacesResponse struct {

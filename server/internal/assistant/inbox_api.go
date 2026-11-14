@@ -33,6 +33,8 @@ func (s *Service) inboxRoutes() {
 	s.inboxFolderRoutes()
 	s.inboxParentRoutes()
 	s.inboxBulkRoutes()
+	s.inboxMergeRoutes()
+	s.inboxTodoRoutes()
 	s.inboxSuggestionRoutes()
 	s.inboxHandoffRoutes()
 	s.inboxHistoryRoutes()
@@ -57,6 +59,11 @@ func (s *Service) inboxRoutes() {
 		b := &s.inbox
 		b.mu.Lock()
 		it, ok := b.items[r.PathValue("id")]
+		if ok && it.MergedInto != "" { // a link or push naming a row merged into another opens that one
+			if sv := b.items[it.MergedInto]; sv != nil {
+				it = sv
+			}
+		}
 		var c InboxItem
 		if ok {
 			c = it.listed()
@@ -236,16 +243,21 @@ func mailTarget(it InboxItem) *inboxMailTarget {
 	return &inboxMailTarget{UID: it.Mail.UIDs[len(it.Mail.UIDs)-1], Version: hex.EncodeToString(sum[:])}
 }
 
-// replyInboxChecked is replyInboxFrom with the mail the app saw (expected_uid / expected_version), if it gave one.
+// replyInboxChecked is the direct /reply route with the mail the app saw (expected_uid / expected_version), if it gave
+// one. Except for an old-App card send, a reply with a processing conversation waits for the other side.
 func (s *Service) replyInboxChecked(ctx context.Context, id, text, clientID string, fromCard bool, uid *uint32, version *string, changes ...DocChange) (InboxItem, error) {
-	return s.replyInboxCheckedDo(ctx, id, text, clientID, fromCard, true, uid, version, changes...)
+	return s.replyInboxCheckedDoMode(ctx, id, text, clientID, fromCard, true, true, uid, version, changes...)
 }
 
 // replyInboxCheckedDo also serves a confirmed suggestion (file false): the target was bound when the suggestion was
 // created, so a read sync that changed the item's mail cannot redirect the user's confirmation to another message.
 func (s *Service) replyInboxCheckedDo(ctx context.Context, id, text, clientID string, fromCard, file bool, uid *uint32, version *string, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxCheckedDoMode(ctx, id, text, clientID, fromCard, file, false, uid, version, changes...)
+}
+
+func (s *Service) replyInboxCheckedDoMode(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, uid *uint32, version *string, changes ...DocChange) (InboxItem, error) {
 	if uid == nil && version == nil {
-		return s.replyInboxDo(ctx, id, text, clientID, fromCard, file, changes...)
+		return s.replyInboxDoMode(ctx, id, text, clientID, fromCard, file, followDirect, changes...)
 	}
 	// Collection and checked sends must not change the target between validation and sending.
 	b := &s.inbox
@@ -264,7 +276,7 @@ func (s *Service) replyInboxCheckedDo(ctx context.Context, id, text, clientID st
 	if target == nil || uid != nil && *uid != target.UID || version != nil && *version != target.Version {
 		return InboxItem{}, errMailReplyTargetChanged
 	}
-	return s.replyInboxDo(ctx, id, text, clientID, fromCard, file, changes...)
+	return s.replyInboxDoMode(ctx, id, text, clientID, fromCard, file, followDirect, changes...)
 }
 
 // inboxList is every open item and the newest of the recently done ones (inbox_list_done.go), newest first;

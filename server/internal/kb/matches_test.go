@@ -23,7 +23,7 @@ func matchesReadingEveryFile(e *Engine, kind, id, query string, limit int) []Mat
 	match := func(l string) bool { return hasAll(fold(l), ws) }
 	var out []Match
 	look := func(p string, msgs bool) {
-		raw, err := os.ReadFile(p)
+		raw, err := scanRead(p)
 		if err != nil || !hasAll(fold(string(raw)), ws) {
 			return
 		}

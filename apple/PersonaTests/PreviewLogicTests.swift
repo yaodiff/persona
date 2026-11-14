@@ -31,6 +31,19 @@ struct PreviewLogicTests {
         #expect(PreviewLogic.options(nil, ports: [ListeningPort(port: 9000)]).map(\.name) == [":9000"])
     }
 
+    /// Start… needs a workspace and a terminal to run the server in (the web's `startable`): a Paseo session names its
+    /// runtime's workspace, which has none.
+    @Test func startsOnlyWhereThereIsATerminal() throws {
+        func session(_ fields: String) throws -> Session {
+            try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"mac","session_id":"s1","status":"idle"\#(fields)}"#.utf8))
+        }
+        #expect(PreviewLogic.canStart(try session(#","workspace_id":"w1","pane_id":"w1:p1""#)))
+        let paseo = try session(#","workspace_id":"wks_1","source_kind":"runtime","host":"paseo","capabilities":{"read":true,"send":true,"terminal":false}"#)
+        #expect(!PreviewLogic.canStart(paseo))
+        #expect(!PreviewLogic.canStart(try session(#","pane_id":"w1:p1""#))) // no workspace
+        #expect(!PreviewLogic.canStart(nil))
+    }
+
     @Test func showsTheCommandAsTheNodeRunsIt() {
         let api = PreviewLogic.options(Self.res, ports: [])[1]
         #expect(PreviewLogic.commandLine(api) == "env 'MODE=a b' 'PORT=8080' go run .")

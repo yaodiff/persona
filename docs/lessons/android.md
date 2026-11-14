@@ -1,5 +1,9 @@
 # Lessons: Android
 
+## Verify intermittent test failures with the whole module
+
+An intermittent test is not verified by repeatedly running only its own class. In the hand-off recording tests, background work wrote the reply journal on `Dispatchers.IO` while the test deleted its directory, and the race appeared only under whole-module concurrency; `advanceUntilIdle()` drains the test scheduler but not those IO threads, so `cancelAndJoin()` the repository's scope before cleanup and run the whole module.
+
 ## Selecting a message's words in place: what `SelectionContainer` leaves to you (#4210 T5)
 
 `rememberSelectionState()` and `SelectionContainer(state, …)` are public in Compose Foundation 1.12: `selectAll()`, `clear()`
@@ -689,3 +693,18 @@ The composer decorator posts messages itself, so handling a successful response 
 - Drive scale, fade and blur from `transition.animateFloat` inside the content, with `EnterTransition.None` and `ExitTransition.None` on the `ContentTransform`: the content stays until those animations finish, and the order is yours. `Modifier.blur` outside the scaling `graphicsLayer` keeps its radius while the button is small, as SwiftUI's `scaleEffect(…).blur(…)` does; inside it the blur shrinks with the scale. `SizeTransform(clip = false)` keeps the slot's width glide from clipping the blur. A node's `boundsInRoot` follows the layer's scale, so a motion test can read the size from semantics; an entering animation starts one frame after the change and a leaving one up to two.
 - Pass a lambda, not a reference to a local function: `::send` compared equal to the reference from the last composition whatever each captured (a probe: `make(1) == make(2)` is true for `::f` of a local `fun f` in `make(x)`), so `ComposerActionSlot` and `SendButton` were skipped and the button kept calling the `send` from before a quote joined New chat's draft, which then went without it. Six assistant tests that tap Send failed on it (`NewChatMentionsTest`, `AssistantDraftScopeTest`, `AssistantSwitchingShotsTest`) while the design-system and chat tests passed; run the callers' suites after moving a button's call site, not only the module's own.
 - Robolectric's native graphics do draw `Modifier.blur`, a render effect (the edge of the disc ramps over about 12 px at 80 ms), so its frames show it; Haze's glass is the blur the lesson above says it does not draw. Press feedback scales the circle inside the 48 dp button and leaves the button alone, so the touch target does not move under the finger.
+
+## Compose test: state delegates need imports, and one rule takes one setContent (#6969)
+
+Two failures that only show at `compileDebugUnitTestKotlin` / first composition, both from writing a fresh Robolectric test:
+- A `by mutableStateOf(...)` property needs `androidx.compose.runtime.getValue` and `setValue` imports even when `mutableStateOf` itself is spelled fully-qualified; without them the error is "Type 'MutableState<…>' has no method 'getValue(…)'". `assertExists()` / `assertDoesNotExist()` in Compose UI Test 1.12 are member-style calls on `SemanticsNodeInteraction` with no import (the drawer shots already call them unimported); importing `androidx.compose.ui.test.assertExists` fails as an unresolved reference.
+- A `createComposeRule()` rule can host `setContent {}` only once. To change what the screen shows mid-test (a different `active` session, a swapped roster), keep the input in a `mutableStateOf` read inside the single content lambda and reassign the state, then `waitForIdle()`; a second `rule.setContent {}` throws "Activity has already set content".
+
+## Headless Android unit tests on a constrained, IPv6-only CI box (#6969)
+
+Running `./gradlew` Robolectric/JVM tests on a container without Android Studio needs explicit setup:
+- Toolchain is JDK 21 (AGP pins `gradle-daemon-jvm.properties toolchainVersion=21`); a machine whose default `java` is 8 fails sdkmanager with `UnsupportedClassVersionError`. Point `JAVA_HOME` at a 21 JDK.
+- Install the SDK via `cmdline-tools`; the platform package carries a minor suffix (`platforms;android-37.0`, not `android-37`), and write `sdk.dir` to `android/local.properties`.
+- On an IPv6-only NAT64 network curl works but the JVM throws "Network is unreachable" (it defaults to an IPv4 socket): set `_JAVA_OPTIONS=-Djava.net.preferIPv6Addresses=true` for both sdkmanager and Gradle dependency downloads.
+- In a small memory cgroup the default `-Xmx4g` daemon is OOM-killed. Constrain it: `GRADLE_OPTS="-Xmx1600m -Dorg.gradle.workers.max=1 -Dkotlin.compiler.execution.strategy=in-process"`, `--no-daemon`, and an **Groovy-syntax** init script setting every `Test` task `maxHeapSize`/`maxParallelForks = 1`. A Kotlin-syntax init (`Test::class.java`) fails with "No such property: java" — and the failure is easy to misread as a pass, so always confirm `BUILD SUCCESSFUL` and the test-results XML, never just the shell's exit code.
+- Pure-Kotlin modules (`core:domain`, `core:contracts`) expose the JVM `test` task; Android library modules expose `testDebugUnitTest`.

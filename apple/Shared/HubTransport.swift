@@ -10,6 +10,8 @@ import Foundation
 nonisolated enum HubTransport {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var routes: [String: URL] = [:]
+    /// When each hub's requests began to go through the tunnel they go through now (`since`).
+    nonisolated(unsafe) private static var routedAt: [String: Date] = [:]
 
     /// A hub address as the routes key it: without the trailing slash.
     static func key(_ url: URL) -> String {
@@ -20,7 +22,9 @@ nonisolated enum HubTransport {
     static func route(_ hub: URL, via local: URL?) {
         lock.lock()
         defer { lock.unlock() }
-        routes[key(hub)] = local
+        let k = key(hub)
+        if routes[k] != local { routedAt[k] = local == nil ? nil : Date() }
+        routes[k] = local
     }
 
     /// Requests to `hub` go straight to it again, unless another tunnel routes them by now: a hub can have more than
@@ -28,7 +32,10 @@ nonisolated enum HubTransport {
     static func unroute(_ hub: URL, from local: URL) {
         lock.lock()
         defer { lock.unlock() }
-        if routes[key(hub)] == local { routes[key(hub)] = nil }
+        if routes[key(hub)] == local {
+            routes[key(hub)] = nil
+            routedAt[key(hub)] = nil
+        }
     }
 
     /// The tunnel requests to `hub` go through, nil when they go straight to it.
@@ -38,10 +45,20 @@ nonisolated enum HubTransport {
         return routes[key(hub)]
     }
 
+    /// When requests to `hub` began to go through the tunnel they go through now; nil when they go straight to it. A
+    /// tunnel's own connection stays on the network it was made on (hub transcription's Wi-Fi rule,
+    /// `MeetingTranscriptionRule.mayStream`).
+    static func since(_ hub: URL) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        return routes[key(hub)] == nil ? nil : routedAt[key(hub)]
+    }
+
     static func clearAll() {
         lock.lock()
         defer { lock.unlock() }
         routes = [:]
+        routedAt = [:]
     }
 
     /// `url` (the hub's address or anything under it) as it is reached: the tunnel's scheme, host and port when the hub

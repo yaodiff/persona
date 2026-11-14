@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "lib": ["ES2022", "DOM"],
+    "outDir": "dist-preload",
+    "rootDir": "..",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "types": ["node"]
+  },
+  "include": ["src/preload.cts", "src/setup-preload.cts", "src/contract.cts", "src/link-contract.cts", "src/notification-permission.cts", "../spec/desktop-bridge.d.ts"]
+}

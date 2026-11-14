@@ -99,6 +99,12 @@ internal data class NewAgentState(
     val attachedOn: String = "",
     /** Why files went (they are on the computer picked before), or why picks were not taken; cleared by the next pick. */
     val attachNote: AgentText? = null,
+    /** The selected computer's Orca and Paseo workspaces by project (#7259, [NewAgentWorkspaces]); empty: none shown. */
+    val workspaces: List<NewAgentWorkspaceSection> = emptyList(),
+    /** The catalog workspace picked: the start goes into it (its folder, `workspace_id` and `host`); null: by folder. */
+    val workspace: persona.core.contracts.api.AgentWorkspace? = null,
+    /** The folder picked before [workspace], which "Choose by folder" brings back. */
+    val folderBeforeWorkspace: String = "",
 ) {
     val locked get() = !initialized || starting || pending != null || created != null
     /**
@@ -113,8 +119,11 @@ internal data class NewAgentState(
         attachments.any { it.path == null } -> AgentText(R.string.agents_attach_uploading_hold)
         else -> null
     }
-    /** The folder is in a Git repository and this is not a tab in an existing space: the worktree switch shows (#4532). */
-    val worktreeOffered: Boolean get() = space == null && repo?.path?.isNotEmpty() == true
+    /**
+     * The folder is in a Git repository and this is not a tab in an existing space, nor an existing workspace picked
+     * (#7259, the start goes into it): the worktree switch shows (#4532).
+     */
+    val worktreeOffered: Boolean get() = space == null && workspace == null && repo?.path?.isNotEmpty() == true
     val follow: ModelPurposeDetail? get() = (modelConfig as? NewAgentModelConfig.Follow)?.detail
     /** An empty launcher follows the model configuration, when the hub has one. */
     val following: Boolean get() = follow != null && selection.launcher.isEmpty()
@@ -188,6 +197,7 @@ internal class NewAgentViewModel(
     private var machineJob: Job? = null
     private var browseJob: Job? = null
     private var modelsJob: Job? = null
+    private var workspacesJob: Job? = null
     private val uploadJobs = mutableMapOf<String, Job>()
     init {
         // Whether the folder is in a Git repository, a moment after it stops changing (iOS `loadRepo`): New Agent's
@@ -240,9 +250,10 @@ internal class NewAgentViewModel(
         if (current.pending != null || current.created != null || current.starting || current.space == space) return
         machineJob?.cancel()
         browseJob?.cancel()
+        workspacesJob?.cancel()
         // The space's machine is the only choice; until it is online nothing is selected and nothing can start.
         mutable.update { it.copy(space = space, machineId = if (space != null) "" else it.machineId,
-            browsing = false, browser = null, loading = false, error = null) }
+            browsing = false, browser = null, loading = false, error = null, workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "") }
         val machine = space?.machineId ?: current.machineId
         if (current.initialized && machine.isNotEmpty()) selectMachine(machine)
     }
@@ -256,7 +267,9 @@ internal class NewAgentViewModel(
         browseJob?.cancel()
         modelsJob?.cancel()
         mutable.update { it.copy(machineId = id, selection = AgentDefaults(), launchers = emptyList(), recent = emptyList(),
-            browser = null, browsing = false, loading = true, error = null, models = NewAgentModels(), model = "", pickedSetup = null) }
+            browser = null, browsing = false, loading = true, error = null, models = NewAgentModels(), model = "", pickedSetup = null,
+            workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "") }
+        loadWorkspaces(id)
         machineJob = viewModelScope.launch {
             try {
                 val defaults = store.defaults(service.scope, id)
@@ -280,6 +293,46 @@ internal class NewAgentViewModel(
             catch (_: Exception) { mutable.update { it.copy(loading = false, error = AgentText(R.string.agents_new_error_load)) } }
             loadModels()
         }
+    }
+    /**
+     * Reads [machineId]'s catalog workspaces (#7259) once per computer picked; an answer for a computer no longer picked
+     * is dropped. A failure, an older hub or a computer without Orca or Paseo workspaces shows no choice; nothing is picked.
+     */
+    private fun loadWorkspaces(machineId: String) {
+        workspacesJob?.cancel()
+        if (state.value.space != null) return
+        workspacesJob = viewModelScope.launch {
+            val rows = try { service.workspaces(machineId) } catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
+            val sections = NewAgentWorkspaces.sections(rows, machineId)
+            mutable.update { if (it.machineId == machineId && it.space == null) it.copy(workspaces = sections) else it }
+        }
+    }
+    /** Starts in [workspace], one of the rows offered: its folder replaces the one picked until "Choose by folder". */
+    fun pickWorkspace(workspace: persona.core.contracts.api.AgentWorkspace) {
+        val current = state.value
+        if (current.locked || current.loading || current.space != null || workspace.machineId != current.machineId) return
+        browseJob?.cancel()
+        mutable.update { it.copy(workspace = workspace, folderBeforeWorkspace = if (it.workspace == null) it.selection.cwd else it.folderBeforeWorkspace,
+            selection = it.selection.copy(cwd = workspace.cwd), browsing = false, browser = null, error = null, pickedSetup = null,
+            repo = it.repo.takeIf { _ -> workspace.cwd == it.selection.cwd }) }
+    }
+    /** "Choose by folder": no workspace, and the folder picked before it back. */
+    fun chooseByFolder() {
+        if (state.value.locked) return
+        mutable.update {
+            if (it.workspace == null) it
+            else {
+                val cwd = it.folderBeforeWorkspace.ifEmpty { it.selection.cwd }
+                it.copy(workspace = null, folderBeforeWorkspace = "", selection = it.selection.copy(cwd = cwd),
+                    repo = it.repo.takeIf { _ -> cwd == it.selection.cwd })
+            }
+        }
+    }
+    /** A recent folder: the start goes there, by folder (any workspace picked is no longer). */
+    fun useFolder(path: String) {
+        if (state.value.locked || state.value.loading) return
+        mutable.update { it.copy(workspace = null, folderBeforeWorkspace = "") }
+        selection(state.value.selection.copy(cwd = path))
     }
     /**
      * Reads the model list of the launcher that will run, unless it is already there (or on its way) for that
@@ -362,7 +415,10 @@ internal class NewAgentViewModel(
     fun selection(value: AgentDefaults) {
         if (state.value.locked || state.value.loading) return
         // Another launcher has its own models: back to its default, and its list.
-        mutable.update { val next = it.copy(selection = value, error = null, pickedSetup = null,
+        mutable.update { val folder = value.cwd != it.selection.cwd
+            val next = it.copy(selection = value, error = null, pickedSetup = null,
+                // another folder is a start by folder, not in the workspace picked (#7259)
+                workspace = it.workspace.takeUnless { folder }, folderBeforeWorkspace = if (folder) "" else it.folderBeforeWorkspace,
                 // another folder: its repository is asked again (the switch never shows one folder's answer for another)
                 repo = it.repo.takeIf { _ -> value.cwd == it.selection.cwd })
             (if (next.modelLauncher != it.modelLauncher) next.copy(model = "") else next).settled() }
@@ -389,7 +445,10 @@ internal class NewAgentViewModel(
         browseJob?.cancel()
         mutable.update { it.copy(browsing = false, browser = null, loading = false, error = null,
             selection = if (use && it.browser != null) it.selection.copy(cwd = it.browser.path) else it.selection,
-            pickedSetup = if (use && it.browser != null) null else it.pickedSetup) }
+            pickedSetup = if (use && it.browser != null) null else it.pickedSetup,
+            // a folder chosen in the browser is a start by folder (#7259)
+            workspace = if (use && it.browser != null) null else it.workspace,
+            folderBeforeWorkspace = if (use && it.browser != null) "" else it.folderBeforeWorkspace) }
     }
     fun resume(session: Session) {
         val current = state.value
@@ -470,14 +529,17 @@ internal class NewAgentViewModel(
         else typed
         val async = sender != null && agentType == "claude"
         val efforts = current.modelEfforts
+        // A catalog workspace picked (#7259): the start goes into it, by its engine's id, in its folder.
+        val workspace = current.workspace?.takeIf { current.space == null }
         val request = AgentStartRequest(
-            current.machineId, worktree ?: current.selection.cwd, current.selection.launcher,
+            current.machineId, worktree ?: workspace?.cwd ?: current.selection.cwd, current.selection.launcher,
             typed.takeUnless { async }, current.selection.mode.takeIf { it.isNotEmpty() && agentType == "claude" },
             // Codex starts take no effort; Claude's only one the model that will run takes.
             current.selection.effort.takeIf { it.isNotEmpty() && agentType == "claude" && (efforts == null || it in efforts) },
-            current.space?.workspaceId, agentType.takeIf { it != "claude" }, async = true.takeIf { async },
+            current.space?.workspaceId ?: workspace?.sourceId, agentType.takeIf { it != "claude" }, async = true.takeIf { async },
             nameHint = typed.takeIf { async }, model = current.sentModel,
             ultracode = true.takeIf { current.ultracode && agentType == "claude" },
+            host = workspace?.source,
         )
         return AgentStartOperation(UUID.randomUUID().toString(), request,
             firstMessage = first.takeIf { async }, firstMessageId = UUID.randomUUID().toString().takeIf { async && first != null },
@@ -665,6 +727,8 @@ private fun NewAgentState.filled(setup: RecentSetup): NewAgentState {
         selection = selection.copy(cwd = setup.cwd, launcher = launcher, mode = if (claude) setup.mode else selection.mode,
             effort = if (claude) setup.effort else selection.effort),
         model = if (known) setup.model else "", pickedSetup = setup, focusPrompt = focusPrompt + 1,
+        // a recent setup starts by its folder (#7259)
+        workspace = null, folderBeforeWorkspace = "",
     )
 }
 

@@ -71,5 +71,12 @@
   "copied_other": "已把 {count} 项复制到「{dir}」",
   "duplicated_one": "已创建副本",
   "duplicated_other": "已为 {count} 项创建副本",
-  "compressed": "已压缩成「{name}」"
+  "compressed": "已压缩成「{name}」",
+  "file_operations": "文件操作",
+  "operations_running_one": "正在处理 {count} 项文件操作",
+  "operations_running_other": "正在处理 {count} 项文件操作",
+  "operation_preparing": "正在电脑上准备…",
+  "operation_done": "好了",
+  "copy_cancel": "取消复制「{name}」",
+  "compress_cancel": "取消压缩「{name}」"
 }

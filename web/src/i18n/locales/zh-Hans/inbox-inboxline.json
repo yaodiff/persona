@@ -4,5 +4,12 @@
   "kind_session": "Agent 会话",
   "gone": "已不在收件箱里",
   "next": "下一步",
-  "title": "线索"
+  "title": "线索",
+  "not_same": "不是同一件事",
+  "same": "是同一件事…",
+  "not_same_done": "已标为不是同一件事",
+  "linked": "已连到「{title}」",
+  "link_conflict": "这个关联不成立，请选择其他内容。",
+  "search_placeholder": "搜索标题和位置",
+  "empty": "没有符合的未处理事项"
 }

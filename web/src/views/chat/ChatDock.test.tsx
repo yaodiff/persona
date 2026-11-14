@@ -434,8 +434,9 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
     expect(claude).toContain('aria-label="拖动第 2 条排队消息调整顺序"');
     expect(claude).toContain('aria-label="编辑第 1 条排队消息"');
     expect(claude).toContain('aria-label="删除第 2 条排队消息"');
-    // it hands over the whole queue, and says so
-    expect(claude).toContain('title="现在就把排队的消息全部发给 Claude，不用等到下一步"');
+    // it hands over the whole queue at one press, and says so; its tooltip says what happens too, as the dialog did before #7155
+    expect(claude).toContain('aria-label="现在就把排队的消息全部发给 Claude，不用等到下一步"');
+    expect(claude).toMatch(/title="现在就把排队的消息全部发给 Claude，不用等到下一步\nClaude 会马上收到，不用等到下一步。/);
     const codex = panel({ session: { ...queued, agent: "codex" } });
     expect(codex).not.toContain("data-send-now");
     expect(codex.match(/data-queue-edit/g)).toHaveLength(2);

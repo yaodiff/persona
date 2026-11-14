@@ -267,7 +267,7 @@ func (s *Service) taskCompletionCurrent(ctx context.Context, t Todo, work time.T
 
 func (s *Service) taskRuntimeSettled(ctx context.Context, t Todo) bool {
 	agents, reached := s.taskAgentsReached(ctx, t)
-	return reached && taskAgentsSettled(t, agents)
+	return reached && taskAgentsSettled(t, s.rowsProven(agents))
 }
 
 // A turn that starts before this lock invalidates the judgment. One that starts

@@ -77,7 +77,7 @@ struct InboxConnectorTextView: View {
                         }
                         Text([item.accountName, connector?.reference ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                        if let label = item.kindLabel {
+                        if let label = item.kindLabel, !item.isAssistantRow { // the assistant's own row: the source line already says it
                             Chip(text: label, look: item.kind == "mention" ? .tone(StatusPalette.needsYou) : .neutral)
                         }
                     }
@@ -86,7 +86,7 @@ struct InboxConnectorTextView: View {
                 .padding(.vertical, Theme.Space.xs)
                 if let url = connector?.url.flatMap(URL.init(string:)) {
                     Button { link = LinkTarget(url: url, manager: model.linkManager(item.manager)) } label: {
-                        Label(ConnectorText.tightCJK(String(localized: "Open in \(item.accountName) [Inbox Connector Views 0e0e38]")), systemImage: Theme.Icon.safari).lineLimit(1)
+                        Label(item.isAssistantRow ? String(localized: "Open the Chat") : ConnectorText.tightCJK(String(localized: "Open in \(item.accountName) [Inbox Connector Views 0e0e38]")), systemImage: Theme.Icon.safari).lineLimit(1)
                     }
                 }
             } footer: {
@@ -101,6 +101,7 @@ struct InboxConnectorTextView: View {
                     if reread != nil { retryButton }
                 }
             }
+            if !item.onlyTitleAndSummary(context) {
             Section("Content") {
                 if let context {
                     // Nothing collected: the item's preview, as the web shows it, rather than a spinner that never ends.
@@ -111,6 +112,7 @@ struct InboxConnectorTextView: View {
                 } else {
                     ProgressView().frame(maxWidth: .infinity)
                 }
+            }
             }
         }
         .themedPage()

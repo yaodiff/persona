@@ -10,6 +10,7 @@ import {
   addressOf, buttonName, commandLine, editCommand, elementQuote, keyMessage, LAUNCH_EXAMPLE, modsOf, parseBinary, PHONE_SIZE, previewOptions,
   previewProblems, previewSocketURL, safeExternal, toPage, type PickedElement, type PreviewMessage, type PreviewOption, type PreviewServers,
 } from "../../lib/preview";
+import { sessionCan } from "../../lib/format";
 import { navigate } from "../../lib/router";
 import { useStore } from "../../lib/store";
 import { Button, cx, Dialog, IconButton, Menu, Spinner, toast, useMenu } from "../../ui/atoms";
@@ -54,6 +55,8 @@ export function PreviewPanel({ mid, sid, cwd, port, path, onClose }: { mid: stri
   const machine = useStore((s) => s.machines.find((m) => m.id === mid));
   const machineName = machine?.name || mid;
   const ports = session?.ports;
+  // A server runs in a new tab of the session's terminal workspace; a runtime engine's session (Paseo's) names a workspace with none.
+  const startable = Boolean(session?.workspace_id) && sessionCan(session, "terminal");
   const [servers, setServers] = useState<PreviewServers | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [confirm, setConfirm] = useState<PreviewOption | null>(null);
@@ -130,7 +133,7 @@ export function PreviewPanel({ mid, sid, cwd, port, path, onClose }: { mid: stri
   }, [phase, load, ports, show]);
 
   const start = async (o: PreviewOption) => {
-    if (!session?.workspace_id) return;
+    if (!startable || !session) return;
     setStarting(true);
     try {
       const res = await api<{ pane: string; terminal: string; port: number }>(`/machines/${enc(mid)}/preview/start`, {
@@ -229,7 +232,7 @@ export function PreviewPanel({ mid, sid, cwd, port, path, onClose }: { mid: stri
           }
         />
       ) : (
-        <Choose servers={servers} options={options} canStart={Boolean(session?.workspace_id)} onShow={show} onStart={setConfirm} onOther={() => setOther(true)} />
+        <Choose servers={servers} options={options} canStart={startable} onShow={show} onStart={setConfirm} onOther={() => setOther(true)} />
       )}
       <Dialog
         open={Boolean(confirm)}

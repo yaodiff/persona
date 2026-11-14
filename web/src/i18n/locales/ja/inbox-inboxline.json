@@ -4,5 +4,12 @@
   "kind_session": "エージェントのセッション",
   "gone": "受信トレイにありません",
   "next": "次",
-  "title": "経緯"
+  "title": "経緯",
+  "not_same": "別の件です",
+  "same": "同じ件…",
+  "not_same_done": "別の件として記録しました",
+  "linked": "「{title}」にまとめました",
+  "link_conflict": "この関連付けはできません。別の項目を選択してください。",
+  "search_placeholder": "タイトルと場所を検索",
+  "empty": "一致する未処理の項目はありません"
 }

@@ -4,5 +4,12 @@
   "kind_session": "Agent session",
   "gone": "No longer in the Inbox",
   "next": "Next",
-  "title": "Trail"
+  "title": "Trail",
+  "not_same": "Not the same matter",
+  "same": "Same matter as…",
+  "not_same_done": "Marked as not the same matter",
+  "linked": "Linked to “{title}”",
+  "link_conflict": "This link isn't possible. Choose something else.",
+  "search_placeholder": "Search titles and places",
+  "empty": "No open matters match"
 }

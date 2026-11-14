@@ -19,7 +19,7 @@ nonisolated struct HomeSnapshotStore: Sendable {
 
     /// The snapshot, or nil when there is none, it cannot be read, or another version wrote it.
     func read() -> HomeSnapshot? {
-        guard let url = root?.appending(path: Self.fileName), let data = try? Data(contentsOf: url) else { return nil } // perf-ok: the widgets' timeline provider, off the main thread
+        guard let url = root?.appending(path: Self.fileName), let data = try? Data(contentsOf: url) else { return nil }
         guard let snapshot = try? JSONDecoder().decode(HomeSnapshot.self, from: data), snapshot.version == HomeSnapshot.version else {
             Self.log.notice("widget snapshot unreadable (\(data.count) bytes): read as none")
             return nil

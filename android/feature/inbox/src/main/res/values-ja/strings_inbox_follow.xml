@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="inbox_now_confirm_reply">返信の確認待ち</string>
+    <string name="inbox_now_confirm_agent">Agentの開始待ち</string>
+    <string name="inbox_now_decide">あなたの判断待ち</string>
+    <string name="inbox_now_queued">AIの順番待ち</string>
+    <string name="inbox_now_looking">AIが確認中</string>
+    <string name="inbox_now_agent_working">Agentが作業中</string>
+    <string name="inbox_now_waiting">%1$sを待っています</string>
+    <string name="inbox_now_waiting_anyone">相手の返信待ち</string>
+    <string name="inbox_now_look_again">" · %1$sに再確認"</string>
+    <string name="inbox_now_next">：%1$s</string>
+    <string name="inbox_now_follow_up_ask">3回確認しても動きがありません。続けますか？</string>
+    <string name="inbox_now_check_due">再確認の時間です</string>
+    <string name="inbox_now_failed">AIが処理を終えられませんでした：%1$s</string>
+    <string name="inbox_now_failed_plain">AIの処理に失敗</string>
+    <string name="inbox_now_needs_you">要対応</string>
+    <string name="inbox_now_fyi">参考</string>
+    <string name="inbox_now_folded">折りたたみ済み</string>
+    <string name="inbox_now_done_replied">返信済み</string>
+    <string name="inbox_now_done_manager">アシスタント確認済み：対応不要</string>
+    <string name="inbox_now_done_user">処理済みにしました</string>
+    <string name="inbox_now_done_read">ほかで既読</string>
+    <string name="inbox_now_done_dismissed">無視しました</string>
+    <string name="inbox_now_done_muted">ミュート済み</string>
+    <string name="inbox_now_done_superseded">新しい項目に置き換え済み</string>
+    <string name="inbox_row_sender">%1$s：%2$s</string>
+    <string name="inbox_row_where">%1$s · %2$s</string>
+    <string name="inbox_time_tomorrow">明日</string>
+    <string name="inbox_time_yesterday">昨日</string>
+    <string name="inbox_event_assistant_says">アシスタントによると</string>
+    <string name="inbox_event_processing_chat">処理の会話 ›</string>
+</resources>

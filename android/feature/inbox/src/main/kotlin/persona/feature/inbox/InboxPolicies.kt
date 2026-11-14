@@ -150,7 +150,8 @@ internal fun muteAndRuleActions(
     res: Resources, record: InboxRecord, onMute: (InboxMuteOption) -> Unit, onRule: (InboxMuteOption) -> Unit,
 ): List<JAction> =
     record.mutes.mapIndexed { i, option ->
-        JAction(res.getString(R.string.inbox_mute_option, res.getString(option.title), option.shortName), PhIcons.Prohibit,
+        val name = if (option.tag == "chat") record.event.where?.takeIf { it.isNotBlank() } ?: option.shortName else option.shortName
+        JAction(res.getString(R.string.inbox_mute_option, res.getString(option.title), name), PhIcons.Prohibit,
             separatorBefore = i == 0) { onMute(option) }
     } + record.mutes.mapIndexed { i, option ->
         JAction(res.getString(R.string.inbox_mute_option, res.getString(option.policyTitle), option.shortName), PhIcons.Target,

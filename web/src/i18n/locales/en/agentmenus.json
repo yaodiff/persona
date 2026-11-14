@@ -27,9 +27,9 @@
   "mark_all_seen_body_other": "Mark {count} unread sessions as seen? They change on your phone and other browsers too.",
   "open_space": "Open space page",
   "archive": "Archive",
-  "archive_close": "Archive and close…",
+  "close": "Close…",
   "archive_busy": "Busy now: archive it once it's done",
-  "archive_close_busy": "Busy now: it can't be closed while it works, waits, loops or runs a server",
+  "close_busy": "Busy now: it can't be closed while it works, waits, loops or runs a server",
   "archived_agents": "Archived agents",
   "worktree_source_unavailable": "Open this repository in a terminal workspace that supports worktrees."
 }

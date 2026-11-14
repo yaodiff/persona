@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import BeautifulUI
 @testable import Persona
 
 /// A question card stays where it is, waiting, while its answer is on its way, and keeps its picks and an error with Retry
@@ -32,7 +33,22 @@ struct QuestionSendingTests {
         #expect(a.begin("ix", answer) != nil)
         #expect(a.progress("ix") == .sending)
         #expect(a.begin("ix", answer) == nil)
+        #expect(a.begin("ix", .cancelled) == nil)
         #expect(a.begin("ix", Resolution(answers: ["用哪个库？": "sqlc"])) == nil)
+    }
+
+    @Test func aSecondSkipWhileOneIsOnItsWayIsNotSent() {
+        var a = AnswerAttempts()
+        #expect(a.begin("ix", .cancelled) != nil)
+        #expect(a.begin("ix", .cancelled) == nil)
+    }
+
+    @Test func canCancelDecodesTrueFalseAndAbsent() throws {
+        for (field, expected) in [(#""can_cancel":true"#, true), (#""can_cancel":false"#, false), ("", nil)] as [(String, Bool?)] {
+            let json = #"{"id":"ix_1","machine_id":"m","session_id":"","kind":"question""# + (field.isEmpty ? "" : "," + field) + "}"
+            let ix = try JSON.decoder.decode(Interaction.self, from: Data(json.utf8))
+            #expect(ix.canCancel == expected)
+        }
     }
 
     @Test func theSameAnswerAgainKeepsItsOpAndAnotherOneIsNew() {
@@ -54,6 +70,46 @@ struct QuestionSendingTests {
     }
 
     // MARK: The model
+
+    @Test func aSkipSendsOnlyCancelAndShowsTheClosedReceipt() async throws {
+        let hub = FakeHub()
+        hub.on("POST", path, json: #"{"ok":true}"#)
+        let ix = card()
+        let model = model(hub, ix)
+        await model.resolve(ix, .cancelled)
+        let requests = hub.sent("POST", path)
+        #expect(requests.count == 1)
+        let request = try #require(requests.first)
+        let body = try #require(request.body)
+        #expect(String(data: body, encoding: .utf8) == #"{"cancel":true}"#)
+        #expect(model.pendingInteractions.isEmpty)
+        #expect(model.toast?.message == "已关闭提问，未回复")
+    }
+
+    @Test func aSkipThatFindsAnotherAnswerKeepsItsAlreadyReceipt() async {
+        let hub = FakeHub()
+        hub.on("POST", path, json: #"{"ok":true,"already":true,"status":"resolved","resolution":{"answers":{"用哪个库？":"pgx"}}}"#)
+        let ix = card()
+        let model = model(hub, ix)
+        await model.resolve(ix, .cancelled)
+        #expect(model.toast?.message.contains("pgx") == true)
+        #expect(model.toast?.message != "已关闭提问，未回复")
+    }
+
+    @Test func aFailedSkipKeepsTheCardWithItsPicks() async {
+        let hub = FakeHub()
+        let ix = card()
+        let model = model(hub, ix)
+        // BeautifulUI holds the current answers here before cancelling; a failure rebuilds its card from this value.
+        let kept = ApprovalAnswers(picks: [0: [0]], custom: [:])
+        let shown = BUIQuestionForm.shown(kept, ix.questions ?? [])
+        hub.on("POST", path) { _ in throw APIError(status: 400, message: "bad request") }
+        await model.resolve(ix, .cancelled)
+        #expect(model.pendingInteractions.count == 1)
+        #expect(model.answerFailure(ix.uid) != nil)
+        #expect(BUIQuestionForm.shown(kept, ix.questions ?? []) == shown)
+        #expect(BUIQuestionForm.answers(kept, ix.questions ?? []) == ["用哪个库？": "pgx"])
+    }
 
     @Test func theCardStaysSendingUntilTheHubHasTheAnswer() async {
         let hub = FakeHub()

@@ -128,7 +128,7 @@
     },
     {
       "name": "no_where_unchanged",
-      "description": "No where (an older hub, mail): the row's third line stays as each app draws it today; not compared here.",
+      "description": "No where (an older hub, mail): the row keeps the same three lines; its third line is each app's existing who-said-what line (as the iPhone and the web app draw it today, and Android the same), so its text is not compared here.",
       "source": [
         "docs/assistant/inbox.md: Following up"
       ],

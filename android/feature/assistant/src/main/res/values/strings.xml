@@ -86,6 +86,7 @@
     <string name="assistant_phone_tools_unavailable">Phone tools unavailable</string>
     <string name="assistant_phone_permissions_pending">Phone permissions pending</string>
     <string name="assistant_search_chats">Search chats</string>
+    <string name="assistant_search_partial">Still going through older chats; some may not show yet.</string>
     <string name="assistant_start_main">Start the main chat</string>
     <string name="assistant_main_chat">Main chat</string>
     <!-- The drawer's newest eligible chats, between 常驻 and All chats (#4922, #5196) -->

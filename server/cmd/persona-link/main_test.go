@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -16,6 +17,26 @@ import (
 	"github.com/nwverse/persona/server/internal/link"
 )
 
+// A stripped release retains the build number the manifest verifier needs on every platform, including Windows.
+// `-v` reports that same number alongside the version and channel, as personad and persona-node do.
+func TestVersionReportsReleaseBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the release connector")
+	}
+	bin := filepath.Join(t.TempDir(), "persona-link")
+	cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-s -w -X main.version=v1 -X main.channel=release -X main.build=202611141527", "-o", bin, ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	out, err := exec.Command(bin, "version", "-v").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(out), "v1\nchannel release, build 202611141527\n"; got != want {
+		t.Fatalf("version -v = %q, want %q", got, want)
+	}
+}
+
 // fakeEnv is a Linux computer with a systemd user instance, unless the test changes it; nothing it does reaches the
 // real one. calls records the commands run; onCommand answers them.
 type fakeEnv struct {
@@ -25,14 +46,12 @@ type fakeEnv struct {
 	systemd   bool // /run/systemd/system
 	linger    bool
 	onCommand func(args string) (string, error)
-	// trayCalls is what was done to the Windows tray; trayUp and trayAuto are whether it runs and starts at sign-in.
-	trayCalls        []string
-	trayUp, trayAuto bool
 }
 
 func newFakeEnv(t *testing.T) *fakeEnv {
 	t.Helper()
 	t.Setenv("PERSONA_HOME", "")
+	t.Setenv("PERSONA_LANG", "zh-Hans") // Existing Chinese-output assertions also run in a developer's en locale.
 	home := t.TempDir()
 	self := filepath.Join(t.TempDir(), "persona-link")
 	if err := os.WriteFile(self, []byte("#!/bin/sh\n# this build\n"), 0o755); err != nil {
@@ -67,28 +86,6 @@ func newFakeEnv(t *testing.T) *fakeEnv {
 	f.passthrough = func(name string, args ...string) error {
 		f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 		return nil
-	}
-	f.tray = trayControl{
-		setAutostart: func(exe string, on bool) error {
-			f.trayAuto = on
-			if !on {
-				f.trayCalls = append(f.trayCalls, "autostart off")
-				return nil
-			}
-			f.trayCalls = append(f.trayCalls, "autostart "+exe)
-			return nil
-		},
-		autostart:       func() bool { return f.trayAuto },
-		registerLinks:   func(exe string) error { f.trayCalls = append(f.trayCalls, "links "+exe); return nil },
-		unregisterLinks: func() { f.trayCalls = append(f.trayCalls, "unlinks") },
-		removeData:      func() error { f.trayCalls = append(f.trayCalls, "data"); return nil },
-		start:           func(exe string) error { f.trayCalls = append(f.trayCalls, "start "+exe); f.trayUp = true; return nil },
-		quit: func(string, time.Duration) bool {
-			f.trayCalls = append(f.trayCalls, "quit")
-			f.trayUp = false
-			return true
-		},
-		running: func(string) bool { return f.trayUp },
 	}
 	return f
 }
@@ -288,11 +285,7 @@ func TestInstallWithoutSystemd(t *testing.T) {
 
 func TestInstallElsewhere(t *testing.T) {
 	f := newFakeEnv(t)
-	f.goos = "darwin"
-	if err := install(f.env, nil); err == nil || !strings.Contains(err.Error(), "菜单栏 App") || !strings.Contains(err.Error(), "scripts/app/mac-link.sh install") {
-		t.Fatalf("mac: %v", err)
-	}
-	f.goos = "freebsd" // Windows has its scheduled task (winservice_test.go)
+	f.goos = "freebsd" // Mac and Windows have their own service tests.
 	if err := install(f.env, nil); err == nil || !strings.Contains(err.Error(), "persona-link run") {
 		t.Fatalf("freebsd: %v", err)
 	}
@@ -644,8 +637,9 @@ func TestHubText(t *testing.T) {
 }
 
 func TestStatusWithoutTheUserInstance(t *testing.T) {
+	t.Setenv("PERSONA_LANG", "zh-Hans")
 	r := report{Paired: true, Machine: "pi", HubName: "家里", Log: "/x/link.log",
-		Service: &serviceState{Unit: unitName, Installed: true, Missing: noUserInstance + "：Failed to connect to bus: No medium found"}}
+		Service: &serviceState{Unit: unitName, Installed: true, Missing: noUserInstance() + "：Failed to connect to bus: No medium found"}}
 	out := r.text(time.Now(), "pi")
 	want := "后台服务：装了 persona-link.service，但连不上你的 systemd 用户实例（Failed to connect to bus: No medium found）；" +
 		"没开 linger 时没人登录它就不在：sudo loginctl enable-linger pi\n"

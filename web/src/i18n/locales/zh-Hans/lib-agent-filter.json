@@ -5,7 +5,6 @@
   "botmux": "botmux",
   "botmux_show": "显示 botmux 会话",
   "botmux_hide": "隐藏 botmux 会话",
-  "search_placeholder": "按名称、项目、模型或 machine: 搜索…",
   "search_in": "搜索范围",
   "scope_all": "全文",
   "scope_title": "仅标题",
@@ -13,7 +12,7 @@
   "scope_user": "仅用户",
   "scope_assistant": "仅回答",
   "scope_errors": "报错异常",
-  "filter_harness": "Harness",
+  "filter_harness": "Agent 类型",
   "filter_project": "项目",
   "filter_model": "模型",
   "filter_machine": "机器",
@@ -28,5 +27,6 @@
   "role_title": "标题：",
   "filter": "筛选",
   "remove_filter": "移除{name}",
-  "search_as_code_off": "关闭代码检索"
+  "search_as_code_off": "关闭代码检索",
+  "query_chip": "搜索"
 }

@@ -1,0 +1,7 @@
+{
+  "busy_waiting": "It's waiting for your answer. Closing it now interrupts it.",
+  "busy_working": "It's still working. Closing it now interrupts it.",
+  "busy_loop": "It's running a loop. Closing it now stops the loop.",
+  "busy_server": "It's running a server. Closing it now stops the server.",
+  "close_anyway": "Close anyway"
+}

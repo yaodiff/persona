@@ -34,6 +34,32 @@ const actionLabel = (action: string) => Object.hasOwn(actionKeys, action) ? t(ac
 const conditionLabel = (condition: string) => condition === "ci_green" ? t("settings-standing.condition_ci_green")
   : condition === "no_conflicts" ? t("settings-standing.condition_no_conflicts") : condition;
 
+// A grant's source is words, not a code (#7181, as the apps' StandingAuthorizationText.source): the hub's own sentence
+// for a suggested rule confirmed with Always (assistant-rule_suggest.json "source", in the owner's language when it was
+// made) or what the assistant wrote. The ones known in en, zh-Hans or ja are worded in the page's language; anything else
+// is shown as written.
+const suggestedRule = [
+  /^Suggested rule: the same answer (\d+) times in 14 days, confirmed with Always\.$/,
+  /^建议的规则：14 天内 (\d+) 次相同的回答，点「总是」确认。$/, // i18n-ignore: the hub's sentence
+  /^提案されたルール：14 日間に同じ回答が (\d+) 回あり、「常に」で確認されました。$/, // i18n-ignore: the hub's sentence
+];
+const mainChat = ["main conversation", "the main conversation", "main chat", "the main chat",
+  "主对话", "主会话", "主聊天", "メインチャット", "メインの会話", "メイン会話"]; // i18n-ignore: the words a grant's source may hold
+const aChat = ["conversation", "a conversation", "chat", "a chat", "对话", "会话", "会話", "チャット"]; // i18n-ignore: the words a grant's source may hold
+const settings = ["settings", "设置", "設定"]; // i18n-ignore: the words a grant's source may hold
+export function sourceLabel(source: string): string {
+  const text = source.trim();
+  for (const pattern of suggestedRule) {
+    const match = pattern.exec(text);
+    if (match) return t("settings-standing.source_suggested_rule", { n: Number(match[1]) });
+  }
+  const key = text.toLowerCase().replace(/^[.。 ]+|[.。 ]+$/g, "");
+  if (mainChat.includes(key)) return t("settings-standing.source_main_chat");
+  if (aChat.includes(key)) return t("settings-standing.source_chat");
+  if (settings.includes(key)) return t("settings-standing.source_settings");
+  return text;
+}
+
 /** The parent is keyed by both manager and credential generation, like the other Persona settings. */
 export function StandingAuthorizations({ manager }: { manager: string }) {
   const [list, setList] = useState<ListState>({ kind: "loading" });
@@ -99,7 +125,7 @@ export function StandingAuthorizations({ manager }: { manager: string }) {
             <Detail label={t("settings-standing.conditions")}>{grant.conditions?.length ? <ul>{grant.conditions.map((condition, i) => <li key={i}>{conditionLabel(condition)}</li>)}</ul> : t("settings-standing.no_conditions")}</Detail>
             <Detail label={t("settings-standing.quote")} wide>{grant.quote}</Detail>
             <Detail label={t("settings-standing.granted_at")}><time dateTime={grant.granted_at} title={grant.granted_at}>{formatDate(grant.granted_at, { dateStyle: "medium", timeStyle: "short" })}</time></Detail>
-            <Detail label={t("settings-standing.source")}>{grant.source}</Detail>
+            <Detail label={t("settings-standing.source")}>{sourceLabel(grant.source)}</Detail>
             <Detail label={t("settings-standing.reversible")}>{t(grant.reversible ? "settings-standing.reversible_yes" : "settings-standing.reversible_no")}</Detail>
           </dl>
         </article>)}

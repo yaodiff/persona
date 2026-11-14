@@ -61,11 +61,14 @@ class RealInboxRepository(
     private val refreshWindowMillis: Long = 1_000,
     /** Whether the hub shows source subscriptions (#2041). */
     private val subscriptionsShownFlow: Flow<Boolean> = flowOf(false),
+    /** Whether those pages are Inbox Sources (#5278, `inbox_sources`). */
+    private val inboxSourcesShownFlow: Flow<Boolean> = flowOf(false),
     // Last, so existing callers that pass it as a trailing lambda keep compiling.
     private val download: suspend (InboxAssistantTransport, LarkPart.File) -> String,
 ) : persona.feature.inbox.InboxRepository {
     override val supportsThreadOutbox: Boolean get() = sendThread != null
     override val subscriptionsShown: Flow<Boolean> get() = subscriptionsShownFlow
+    override val inboxSourcesShown: Flow<Boolean> get() = inboxSourcesShownFlow
     override val personaOutbox = mainConversationSender?.outbox ?: MutableStateFlow(emptyList())
     override val connectionState: Flow<ConnectionState> = hubConnection?.state ?: connection.current.map {
         if (it == null) ConnectionState.Connecting else ConnectionState.Online
@@ -429,6 +432,33 @@ class RealInboxRepository(
         }
     }
 
+    private val itemReadLock = Mutex()
+
+    /**
+     * One record by app or hub id: the live list first, then the done history already paged back, finally the hub's own
+     * copy. A bare id uses its noted manager, else the default, as the hub routes any other request that names no manager.
+     */
+    override suspend fun item(itemId: String): InboxRecord? = itemReadLock.withLock {
+        recordOf(itemId)?.let { return it }
+        val hubId = InboxItemKey.hubId(itemId)
+        val manager = InboxItemKey.managerOf(itemId) ?: AssistantManagerChoice.itemManager(listOf("inbox", hubId))
+        // A bare id may name an item already cached by its manager-aware app id; never alias different managers' records.
+        if (manager != null) recordOf(InboxItemKey.appId(hubId, manager))?.let { return it }
+        val transport = requireTransport()
+        val data = try {
+            asStamped(manager) { transport.item(hubId) }
+        } catch (e: Exception) {
+            if ((e as? persona.core.contracts.api.HubCodedFailure)?.status == 404) return null
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        val stamped = if (manager.isNullOrBlank() || data["manager"] != null) data
+            else JsonObject(data + ("manager" to JsonPrimitive(manager)))
+        val record = listed(listOf(stamped), transport).firstOrNull { it.hubItemId == InboxItemKey.hubId(itemId) } ?: return null
+        notePagedBack(transport, listOf(record))
+        return record
+    }
+
     /**
      * One page of a manager's done history (#2200, #2576), its items as the list's records (the app's ids, the manager
      * stamped). Kept out of the snapshot: the inbox page merges it under Done. An old hub (404) has none.
@@ -570,6 +600,49 @@ class RealInboxRepository(
             }
         }
         return outcome
+    }
+
+    override suspend fun inboxLine(item: InboxRecord): InboxLineage? {
+        val transport = requireTransport()
+        val body = try {
+            asItem(item) { transport.tree("inbox", item.hubItemId) }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (e is UnsupportedOperationException || hubCodedFailure(e)?.status in setOf(404, 405)) return null
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        fun parent(data: JsonObject): InboxParentRef? {
+            val kind = data.optional("kind") ?: return null
+            val id = data.optional("id") ?: return null
+            if (kind.isBlank() || id.isBlank()) return null
+            return InboxParentRef(kind, id, data.optional("by"))
+        }
+        val node = body.obj("node")?.let(::parent) ?: InboxParentRef("inbox", item.hubItemId)
+        val ancestors = body.array("ancestors").mapNotNull { entry ->
+            (entry as? JsonObject)?.let { raw -> parent(raw)?.let { InboxLineAncestor(it, raw.obj("item")?.let { data -> lineageRecord(data, transport, item) }) } }
+        }
+        val children = body.array("children").mapNotNull { (it as? JsonObject)?.let { data -> lineageRecord(data, transport, item) } }
+        return InboxLineage(node, body.obj("item")?.let { data -> lineageRecord(data, transport, item) }, ancestors, children)
+    }
+
+    override suspend fun setInboxParent(item: InboxRecord, parent: InboxParentRef?) {
+        val transport = requireTransport()
+        val result = asItem(item) { transport.setParent(item.hubItemId, parent) }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        val data = result.obj("item") ?: result
+        if (data.optional("id") == item.hubItemId) refreshLock.withLock {
+            replaceRecord(lineageRecord(data, transport, item))
+        }
+    }
+
+    /** A tree is one manager's line: raw hub ids become the same app ids as the merged list, never request targets. */
+    private fun lineageRecord(data: JsonObject, transport: InboxAssistantTransport, owner: InboxRecord): InboxRecord {
+        val hubId = data.string("id")
+        val appId = InboxItemKey.appId(hubId, owner.manager)
+        val previous = current.value.records.firstOrNull { it.item.id == appId } ?: owner.takeIf { it.item.id == appId }
+        val parsed = record(data, transport, previous)
+        return parsed.copy(item = parsed.item.copy(id = appId), manager = owner.manager)
     }
 
     override suspend fun handOff(request: InboxHandOffRequest): SessionKey? {
@@ -1258,7 +1331,7 @@ class RealInboxRepository(
             InboxItem(data.string("id"), data.string("account"), data.string("kind"), data.string("title"),
                 data.optional("sender"), data.string("preview"), data.optional("summary"), data.optional("tier"),
                 data.optional("updated_at"), data.optional("done_at"), data.optional("version"),
-                notice = moment?.optional("notice"), status = event.status, urgent = event.urgent),
+                notice = moment?.optional("notice"), status = event.status, urgent = event.urgent, where = event.where),
             sourceLabel = data.optional("account_name") ?: DataText.of(if (data.string("source") == "lark") Key.SourceLark else Key.SourceMail),
             feedId = lark?.optional("feed_id"), startPosition = lark?.number("start_position"), count = data.number("count")?.toInt() ?: 0,
             agent = agent?.let { InboxAgent(it.string("state"), it.string("draft"), it.optional("note") ?: it.string("reason"),

@@ -1,5 +1,6 @@
 // The /releases/ page's logic without the DOM: which device the visitor is on, which file each device gets, and how
 // sizes, dates and areas read. page.js draws with it; site/releases.test.mjs tests it.
+import { EN_COMPONENTS, EN_DEVICES, EN_WEB_GUIDE } from "./text.js";
 
 export const GITHUB_RELEASES = "https://github.com/nwverse/persona/releases";
 export const DOWNLOAD_ORIGIN = GITHUB_RELEASES + "/download/";
@@ -26,12 +27,23 @@ export const DEVICES = [
     what: "网页版就在你的 hub 上，用浏览器打开就行：", guide: true },
 ];
 
+export function devicesFor(lang = "zh") {
+  return lang === "en" ? EN_DEVICES : DEVICES;
+}
+
+export function deviceFor(id, lang = "zh") {
+  return devicesFor(lang).find((device) => device.id === id);
+}
+
 // How to reach the web app: it is served by the hub, so there is nothing to download (docs/operations/getting-started.md).
 export const WEB_GUIDE = [
   { title: "打开 hub 的地址", text: "装 hub 时终端里打出的管理页地址，去掉末尾的 /admin 就是，比如", code: "http://<局域网地址>:18660" },
   { title: "用手机扫码登录", text: "在已连上的手机里打开「设置 › 设备 › 连接新设备」，选「浏览器」，扫网页上的二维码。" },
   { title: "装成应用（可选）", text: "Chrome、Edge 点地址栏里的「安装」；Safari 选「文件 › 添加到程序坞」。" },
 ];
+export function webGuideFor(lang = "zh") {
+  return lang === "en" ? EN_WEB_GUIDE : WEB_GUIDE;
+}
 export const GETTING_STARTED = "https://github.com/nwverse/persona/blob/main/docs/operations/getting-started.md";
 
 const ARCH = {
@@ -39,8 +51,14 @@ const ARCH = {
   windows: { amd64: "x64", arm64: "ARM" },
   linux: { amd64: "x86-64", arm64: "ARM64" },
 };
-export function archLabel(platform, arch) {
-  return (ARCH[platform] && ARCH[platform][arch]) || "";
+const ARCH_EN = {
+  macos: { arm64: "Apple silicon", amd64: "Intel" },
+  windows: { amd64: "x64", arm64: "ARM" },
+  linux: { amd64: "x86-64", arm64: "ARM64" },
+};
+export function archLabel(platform, arch, lang = "zh") {
+  const labels = lang === "en" ? ARCH_EN : ARCH;
+  return (labels[platform] && labels[platform][arch]) || "";
 }
 
 export const COMPONENTS = [
@@ -50,6 +68,9 @@ export const COMPONENTS = [
   { id: "persona-node", name: "persona-node", what: "节点：在这台电脑上跑 Agent" },
   { id: "persona-link", name: "persona-link", what: "连接器：把电脑连到 hub" },
 ];
+export function componentsFor(lang = "zh") {
+  return lang === "en" ? EN_COMPONENTS : COMPONENTS;
+}
 
 // detectPlatform reads the browser's own report. arch is a guess where browsers don't say (Safari on a Mac reports
 // Intel on Apple silicon too), so callers still show every file.
@@ -123,15 +144,31 @@ export function formatSize(bytes) {
   return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + " MB";
 }
 
-export function formatDate(iso) {
+const EN_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+export function formatDate(iso, lang = "zh") {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
+  if (lang === "en") return `${EN_MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
   return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`;
 }
 
-export function formatAge(iso, now = Date.now()) {
+export function formatAge(iso, now = Date.now(), lang = "zh") {
+  if (typeof now === "string") {
+    lang = now;
+    now = Date.now();
+  }
   const min = Math.max(0, Math.round((now - Date.parse(iso)) / 60000));
   if (!Number.isFinite(min)) return "";
+  if (lang === "en") {
+    if (min < 1) return "just now";
+    if (min < 60) return `${min} ${min === 1 ? "minute" : "minutes"} ago`;
+    if (min < 48 * 60) {
+      const hours = Math.round(min / 60);
+      return `${hours} ${hours === 1 ? "hour" : "hours"} ago`;
+    }
+    const days = Math.round(min / 1440);
+    return `${days} ${days === 1 ? "day" : "days"} ago`;
+  }
   if (min < 1) return "刚刚";
   if (min < 60) return `${min} 分钟前`;
   if (min < 48 * 60) return `${Math.round(min / 60)} 小时前`;
@@ -145,13 +182,26 @@ const AREAS = {
   kb: "知识库", knowledge: "知识库", voice: "语音", recording: "录音", mail: "邮件", extensions: "扩展", site: "官网",
   agents: "Agent", sidebar: "侧边栏", health: "健康", link: "Persona Link", hub: "hub", server: "hub", node: "电脑",
 };
-export function areaLabel(scope) {
-  return AREAS[String(scope || "").toLowerCase()] || "";
+const AREAS_EN = {
+  ios: "iPhone", apple: "Apple", watch: "Apple Watch", watchos: "Apple Watch", vision: "Vision Pro", carplay: "CarPlay",
+  android: "Android", harmony: "HarmonyOS", web: "Web", assistant: "Assistant", chat: "Chat", inbox: "Inbox", tasks: "Tasks", todos: "To-dos",
+  kb: "Knowledge base", knowledge: "Knowledge base", voice: "Voice", recording: "Recording", mail: "Mail", extensions: "Extensions", site: "Website",
+  agents: "Agent", sidebar: "Sidebar", health: "Health", link: "Persona Link", hub: "hub", server: "hub", node: "Computer",
+};
+export function areaLabel(scope, lang = "zh") {
+  const labels = lang === "en" ? AREAS_EN : AREAS;
+  return labels[String(scope || "").toLowerCase()] || "";
 }
 
-export function countsLine(counts) {
+export function countsLine(counts, lang = "zh") {
   if (!counts) return "";
   const parts = [];
+  if (lang === "en") {
+    if (counts.features) parts.push(`${counts.features} new ${counts.features === 1 ? "feature" : "features"}`);
+    if (counts.fixes) parts.push(`${counts.fixes} ${counts.fixes === 1 ? "fix" : "fixes"}`);
+    if (!parts.length && counts.other) parts.push(`${counts.other} ${counts.other === 1 ? "change" : "changes"}`);
+    return parts.join(" · ");
+  }
   if (counts.features) parts.push(`${counts.features} 项新功能`);
   if (counts.fixes) parts.push(`${counts.fixes} 项修复`);
   if (!parts.length && counts.other) parts.push(`${counts.other} 项改动`);

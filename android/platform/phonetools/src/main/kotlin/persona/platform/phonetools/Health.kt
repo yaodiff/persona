@@ -5,8 +5,10 @@ import android.content.Intent
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.BasalMetabolicRateRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
@@ -36,7 +38,7 @@ import kotlin.reflect.KClass
  * usually don't have — then the tool says so instead of failing.
  */
 object Health {
-    /** Record types per metric, in iOS's order of the description (steps … weight). */
+    /** Record types per metric, in the shared phone-tool schema's order. */
     val recordTypes: Map<String, KClass<out Record>> = linkedMapOf(
         "steps" to StepsRecord::class,
         "distance" to DistanceRecord::class,
@@ -45,6 +47,11 @@ object Health {
         "resting_heart_rate" to RestingHeartRateRecord::class,
         "sleep" to SleepSessionRecord::class,
         "weight" to WeightRecord::class,
+        "dietary_energy" to NutritionRecord::class,
+        "protein" to NutritionRecord::class,
+        "carbs" to NutritionRecord::class,
+        "fat" to NutritionRecord::class,
+        "resting_energy" to BasalMetabolicRateRecord::class,
     )
 
     /** What Settings › Phone data › Health asks for: read access to every metric, nothing to write. */
@@ -171,11 +178,17 @@ object Health {
         }.toString())
     }
 
-    private suspend fun quantity(client: HealthConnectClient, metric: String, start: Instant, end: Instant, zone: ZoneId): Map<String, JsonElement> {
+    internal suspend fun quantity(client: HealthConnectClient, metric: String, start: Instant, end: Instant, zone: ZoneId): Map<String, JsonElement> {
         val wanted = when (metric) {
             "steps" -> setOf(StepsRecord.COUNT_TOTAL)
             "distance" -> setOf(DistanceRecord.DISTANCE_TOTAL)
             "active_energy" -> setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL)
+            // Aggregate basal calories over the window; the record's raw BMR is a power, not an energy total.
+            "resting_energy" -> setOf(BasalMetabolicRateRecord.BASAL_CALORIES_TOTAL)
+            "dietary_energy" -> setOf(NutritionRecord.ENERGY_TOTAL)
+            "protein" -> setOf(NutritionRecord.PROTEIN_TOTAL)
+            "carbs" -> setOf(NutritionRecord.TOTAL_CARBOHYDRATE_TOTAL)
+            "fat" -> setOf(NutritionRecord.TOTAL_FAT_TOTAL)
             "heart_rate" -> setOf(HeartRateRecord.BPM_AVG, HeartRateRecord.BPM_MIN, HeartRateRecord.BPM_MAX)
             "resting_heart_rate" -> setOf(RestingHeartRateRecord.BPM_AVG)
             "weight" -> setOf(WeightRecord.WEIGHT_AVG)
@@ -196,6 +209,11 @@ object Health {
                 "steps" -> r[StepsRecord.COUNT_TOTAL]?.let { JsonPrimitive(it) }
                 "distance" -> r[DistanceRecord.DISTANCE_TOTAL]?.let { JsonPrimitive(round1(it.inMeters)) }
                 "active_energy" -> r[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.let { JsonPrimitive(round1(it.inKilocalories)) }
+                "resting_energy" -> r[BasalMetabolicRateRecord.BASAL_CALORIES_TOTAL]?.let { JsonPrimitive(round1(it.inKilocalories)) }
+                "dietary_energy" -> r[NutritionRecord.ENERGY_TOTAL]?.let { JsonPrimitive(round1(it.inKilocalories)) }
+                "protein" -> r[NutritionRecord.PROTEIN_TOTAL]?.let { JsonPrimitive(round1(it.inGrams)) }
+                "carbs" -> r[NutritionRecord.TOTAL_CARBOHYDRATE_TOTAL]?.let { JsonPrimitive(round1(it.inGrams)) }
+                "fat" -> r[NutritionRecord.TOTAL_FAT_TOTAL]?.let { JsonPrimitive(round1(it.inGrams)) }
                 "heart_rate" -> r[HeartRateRecord.BPM_AVG]?.let { avg ->
                     buildJsonObject {
                         put("average", round1(avg.toDouble()))

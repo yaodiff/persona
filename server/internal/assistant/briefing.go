@@ -27,6 +27,8 @@ const (
 	briefModelRows = 30
 	// briefProgressMax is the most tasks "in progress" lists.
 	briefProgressMax = 8
+	// briefFollowingMax is the most Inbox matters in each model-only follow-up list.
+	briefFollowingMax = 5
 )
 
 // briefFleetWait is how many seconds a run waits for the pending cards to be read after a restart (FleetUp) before it
@@ -76,6 +78,9 @@ type briefFacts struct {
 	Asks map[string]acceptAsk
 	// Leaders: one line per current leader (direction_progress.go briefLeaders), for the model only.
 	Leaders []prompts.BriefLeader
+	// InboxWaiting are matters waiting on the other side for over a day; InboxDue are matters to look at again today,
+	// for the model only. Each list has at most briefFollowingMax rows.
+	InboxWaiting, InboxDue []prompts.BriefFollow
 	// Briefs, BriefsDone: the pieces of work handed out that need the owner or changed since the last briefing, and
 	// those that ended since, from their briefs (task_brief_digest.go), for the model only.
 	Briefs, BriefsDone []prompts.BriefTask
@@ -135,10 +140,85 @@ func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) 
 	f.Confirmations = s.briefConfirmationsAt(ctx, now, loc)
 	f.ConfirmationLines = s.confirmationLines(l, f.Confirmations)
 	f.Leaders = s.briefLeaders(ctx, now)
+	f.InboxWaiting, f.InboxDue = briefFollowing(s.followingInboxItems(ctx), now, loc)
 	if self == "evening" { // the day's recap was written for it, 30 minutes before (kb_day.go)
 		f.Day = s.briefDay(ctx, now, loc)
 	}
 	return f
+}
+
+// briefFollowing makes the model's two read-only Inbox follow-up lists. waiting is the longest-waiting matters over a
+// day old; due is today's checks in the owner's zone, plus matters already handed back for a check or a follow-up call.
+// One matter may belong in both lists. Neither the input's order nor any item is changed.
+func briefFollowing(items []InboxItem, now time.Time, loc *time.Location) (waiting, due []prompts.BriefFollow) {
+	day := dayStart(now.In(loc))
+	nextDay := dayStart(day.AddDate(0, 0, 1))
+	waitedBefore := now.Add(-24 * time.Hour)
+	var waitingItems, dueItems []InboxItem
+	for _, it := range items {
+		if !it.open() {
+			continue
+		}
+		if it.Now == NowWaiting && it.Handling != nil && it.Handling.Since != nil && it.Handling.Since.Before(waitedBefore) {
+			waitingItems = append(waitingItems, it)
+		}
+		isDue := it.Now == NowCheckDue || it.Now == NowFollowUpAsk
+		if it.Now == NowWaiting && it.Follow != nil && it.Follow.CheckAt != nil {
+			at := it.Follow.CheckAt
+			isDue = isDue || !at.Before(day) && at.Before(nextDay)
+		}
+		if isDue {
+			dueItems = append(dueItems, it)
+		}
+	}
+	slices.SortStableFunc(waitingItems, func(a, b InboxItem) int {
+		if c := a.Handling.Since.Compare(*b.Handling.Since); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	checkAt := func(it InboxItem) *time.Time {
+		if it.Follow == nil {
+			return nil
+		}
+		return it.Follow.CheckAt
+	}
+	slices.SortStableFunc(dueItems, func(a, b InboxItem) int {
+		aAt, bAt := checkAt(a), checkAt(b)
+		switch {
+		case aAt == nil && bAt == nil:
+			return strings.Compare(a.ID, b.ID)
+		case aAt == nil:
+			return 1
+		case bAt == nil:
+			return -1
+		}
+		if c := aAt.Compare(*bAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	row := func(it InboxItem) prompts.BriefFollow {
+		r := prompts.BriefFollow{Title: clip(oneLine(it.Title), 60)}
+		if it.Follow != nil {
+			r.Who = clip(oneLine(it.Follow.Who), 80)
+			r.Next = clip(oneLine(it.Follow.Next), 80)
+		}
+		return r
+	}
+	for i, it := range waitingItems {
+		if i >= briefFollowingMax {
+			break
+		}
+		waiting = append(waiting, row(it))
+	}
+	for i, it := range dueItems {
+		if i >= briefFollowingMax {
+			break
+		}
+		due = append(due, row(it))
+	}
+	return waiting, due
 }
 
 // briefProgress are the open tasks whose Agents are working, the longest open first (those waiting to be verified are
@@ -158,8 +238,9 @@ func (s *Service) briefProgress(ctx context.Context, skip map[string]bool) ([]br
 	})
 	var out []briefProgress
 	total := 0
+	lists := machineSessions{}
 	for _, t := range open {
-		if st := taskState(t, s.taskAgents(ctx, t)); st != "working" && st != "waiting" { // under way either way (#3274)
+		if st := taskState(t, s.taskAgentsIn(ctx, t, lists)); st != "working" && st != "waiting" { // under way either way (#3274)
 			continue
 		}
 		total++
@@ -369,7 +450,8 @@ func (s *Service) briefingGrace(ctx context.Context, local time.Time, start int)
 	return 0
 }
 
-// modelText is the facts as the model is given them (prompts assistant/routine_facts): the same rows the card lists.
+// modelText is the facts as the model is given them (prompts assistant/routine_facts): the card's rows plus the
+// model-only follow-ups, briefs and optional day recap.
 func (f *briefFacts) modelText() string {
 	b := prompts.BriefFacts{Hours: int(briefWindow / time.Hour), WaitingTotal: len(f.Waiting), DoneTotal: f.DoneTotal,
 		FailedTotal: f.FailedTotal, AcceptTotal: len(f.Accept), LaterTotal: f.LaterTotal, WaitingUnknown: f.WaitingUnknown, Card: f.Card}
@@ -388,6 +470,7 @@ func (f *briefFacts) modelText() string {
 	b.ConfirmationSummary = f.Confirmations.summary(f.l)
 	b.Confirmations = f.ConfirmationLines
 	b.ProgressTotal, b.Leaders = f.ProgressTotal, f.Leaders
+	b.InboxWaiting, b.InboxDue = f.InboxWaiting, f.InboxDue
 	b.Briefs, b.BriefsDone, b.Day = f.Briefs, f.BriefsDone, f.Day
 	b.Setup = f.Setup.lines()
 	for _, p := range f.Progress {

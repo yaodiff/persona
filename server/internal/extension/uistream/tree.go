@@ -368,22 +368,29 @@ func integerProjection(v any) any {
 	return v
 }
 func decodeDTO(raw []byte, out any) error {
+	_, err := decodeNormalizedDTO(raw, out)
+	return err
+}
+
+// decodeNormalizedDTO is decodeDTO that also gives the normalized bytes it
+// decoded out from, which are canonical(raw, true) once it succeeds.
+func decodeNormalizedDTO(raw []byte, out any) (json.RawMessage, error) {
 	var source any
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	if err := dec.Decode(&source); err != nil {
-		return err
+		return nil, err
 	}
 	if err := exactShape(source, reflect.TypeOf(out)); err != nil {
-		return err
+		return nil, err
 	}
 	normalized, err := json.Marshal(integerProjection(source))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dec = json.NewDecoder(bytes.NewReader(normalized))
 	dec.DisallowUnknownFields()
-	return dec.Decode(out)
+	return normalized, dec.Decode(out)
 }
 
 var shapeFields sync.Map // reflect.Type -> exact generated JSON name/type map
@@ -450,18 +457,23 @@ func exactShape(source any, typ reflect.Type) error {
 func parseNode(raw []byte, kind, rootKey string) *node {
 	var props map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &props)
+	n := &node{kind: kind, props: props, key: rootKey}
+	// The children's field comes out before the other properties are made
+	// canonical: each child makes its own properties canonical, and canonical
+	// is idempotent, so the subtree is not encoded again at every level.
+	field := n.childField()
+	var children []json.RawMessage
+	if field != "" {
+		_ = json.Unmarshal(props[field], &children)
+		delete(props, field)
+	}
 	for k, v := range props {
 		props[k] = canonical(v, false)
 	}
-	n := &node{kind: kind, props: props, key: rootKey}
 	if kind != "view" {
 		_ = json.Unmarshal(props["key"], &n.key)
 	}
-	field := n.childField()
 	if field != "" {
-		var children []json.RawMessage
-		_ = json.Unmarshal(props[field], &children)
-		delete(props, field)
 		childKind := map[string]string{"view": "section", "section": "item", "item": "tile"}[kind]
 		for _, child := range children {
 			n.children = append(n.children, parseNode(child, childKind, ""))
@@ -544,17 +556,22 @@ func (t *Tree) check(validated []byte) error {
 	// Unknown native nested fields must not hide code/config behind legacy schemas
 	// that intentionally tolerate additional properties on snapshot-only models.
 	var v wire.View
-	if err := decodeDTO(raw, &v); err != nil {
+	normalized, err := decodeNormalizedDTO(raw, &v)
+	if err != nil {
 		return err
 	}
-	// CheckViewJSON uses the source, not Component.MarshalJSON.
-	if err := wire.CheckViewJSON(canonical(raw, true)); err != nil {
+	// CheckViewJSON's checks on the source, not Component.MarshalJSON:
+	// normalized is canonical(raw, true), made by the same decode, projection
+	// and encoding. The frame above held to UIStreamSnapshot, whose view is
+	// View narrowed, and normalized only writes integral numbers as integers,
+	// so its View schema walk is not repeated.
+	if err := wire.CheckValidatedViewJSON(normalized); err != nil {
 		return err
 	}
 	if err := checkBindings(&v); err != nil {
 		return err
 	}
-	if err := checkSourcePresence(t.root); err != nil {
+	if err := checkSourcePresence(t.view); err != nil { // t.view is t.root.json(), made above
 		return err
 	}
 	seen := map[string]bool{}

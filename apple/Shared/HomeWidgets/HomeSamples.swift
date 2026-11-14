@@ -59,6 +59,8 @@ enum HomeSamples {
                 .init(title: t("Movie with Sam", "和小林看电影"), start: at(19, 0), end: at(21, 0)),
             ],
             source: .calendar)
+        let todays = s.today?.events ?? []
+        s.today?.days = days(zh: zh, now: now, today: todays)
         s.todos = .init(
             items: [
                 .init(id: "t1", title: t("Renew the passport", "续签护照"), due: at(9, 0), overdue: true),
@@ -97,11 +99,43 @@ enum HomeSamples {
         return s
     }
 
+    /// The weeks around the sample's day for the Calendar widget's week and month: a made-up calendar of meetings,
+    /// errands and evenings at their clock times; today's are `today` (the widget's list) and a stand-up already over.
+    static func days(zh: Bool, now: Date, today: [HomeSnapshot.Event]) -> HomeSnapshot.Days {
+        func t(_ en: String, _ cn: String) -> String { zh ? cn : en }
+        let made: [(day: Int, title: String, hour: Int, minute: Int, minutes: Int)] = [
+            (-10, t("Team sync", "周会"), 9, 30, 30), (-9, t("Dentist check-up", "牙医复查"), 15, 0, 30),
+            (-7, t("Dinner with Sam", "和小林吃饭"), 19, 0, 120), (-3, t("Team sync", "周会"), 9, 30, 30),
+            (-2, t("Pay the rent", "交房租"), 0, 0, -1), (-1, t("Lunch with Sam", "和小林吃午饭"), 12, 0, 60),
+            (1, t("Mom's birthday", "妈妈生日"), 0, 0, -1), (1, t("Dentist", "牙医"), 9, 0, 30),
+            (2, t("Quarterly review", "季度复盘"), 15, 0, 90), (3, t("Badminton", "羽毛球"), 10, 0, 120),
+            (4, t("Team sync", "周会"), 9, 30, 30), (5, t("Check-up", "体检"), 8, 0, 60),
+            (7, t("Dinner party", "朋友聚餐"), 18, 0, 180), (8, t("Trip", "出差"), 0, 0, -1),
+            (11, t("Team sync", "周会"), 9, 30, 30), (13, t("Concert", "音乐会"), 20, 0, 120),
+        ]
+        let calendar = Calendar.current
+        let midnight = calendar.startOfDay(for: now)
+        func day(_ offset: Int) -> Date { calendar.date(byAdding: .day, value: offset, to: midnight) ?? midnight }
+        var events = made.map { m -> HomeSnapshot.Event in
+            let start = day(m.day)
+            if m.minutes < 0 {
+                return .init(title: m.title, start: start.timeIntervalSince1970, end: day(m.day + 1).timeIntervalSince1970, allDay: true)
+            }
+            let at = start.timeIntervalSince1970 + Double(m.hour * 3600 + m.minute * 60)
+            return .init(title: m.title, start: at, end: at + Double(m.minutes) * 60)
+        }
+        let standUp = max(midnight.timeIntervalSince1970, now.timeIntervalSince1970 - 2 * 3600)
+        events.append(.init(title: t("Stand-up", "站会"), start: standUp, end: standUp + 15 * 60))
+        events += today
+        return HomeDays.build(events, range: HomeDays.range(around: now, calendar: calendar), calendar: calendar)
+    }
+
     /// The same day with nothing to show: every widget's empty state.
     static func empty(zh: Bool = false) -> HomeSnapshot {
         var s = busy(zh: zh)
         s.agents = .init()
         s.today?.events = []
+        s.today?.days = HomeDays.build([], range: HomeDays.range(around: now))
         s.todos = .init()
         s.inbox = .init(needsYou: 0, unread: 0, latest: [])
         return s

@@ -79,6 +79,7 @@ extension RuntimeCLI {
             if let holder { out["in"] = holder }
             // Its custom actions (VoiceOver's Actions rotor), by name: what `activate` `action:` performs.
             if let actions = object.accessibilityCustomActions, !actions.isEmpty { out["actions"] = actions.map(\.name) }
+            if let hint = object.accessibilityHint, !hint.isEmpty { out["hint"] = hint }
             return out
         }
     }

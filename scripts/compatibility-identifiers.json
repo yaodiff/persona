@@ -147,23 +147,7 @@
       "path_tokens": [],
       "external_refs": []
     },
-    "apple/Mac/Resources/Info.plist": {
-      "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
-      "tokens": [
-        "jarvis"
-      ],
-      "path_tokens": [],
-      "external_refs": []
-    },
     "apple/Persona/Resources/Info.plist": {
-      "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
-      "tokens": [
-        "jarvis"
-      ],
-      "path_tokens": [],
-      "external_refs": []
-    },
-    "apple/PersonaLink/Info.plist": {
       "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
       "tokens": [
         "jarvis"
@@ -274,6 +258,38 @@
         "JARVIS_DATABASE_URL",
         "JARVIS_DB_PASSWORD_FILE",
         "JARVIS_HOME",
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "desktop/src/link-contract.cts": {
+      "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "desktop/src/main.ts": {
+      "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "desktop/src/pairing.ts": {
+      "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "desktop/src/urls.ts": {
+      "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
+      "tokens": [
         "jarvis"
       ],
       "path_tokens": [],

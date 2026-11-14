@@ -1,0 +1,236 @@
+{
+  "apple/LiveActivity/FleetPersona.swift" : {
+    "directory-listing" : {
+      "main" : 2
+    },
+    "file-read" : {
+      "main" : 1
+    },
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/App/DemoHub.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/App/PhonePasteboard.swift" : {
+    "image-decode" : {
+      "main" : 2
+    }
+  },
+  "apple/Persona/Glasses/MetaGlasses.swift" : {
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Persona/PersonaStore.swift" : {
+    "directory-listing" : {
+      "main" : 4
+    },
+    "file-read" : {
+      "main" : 2
+    },
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/PhoneTools/PhotosTool.swift" : {
+    "image-decode" : {
+      "main" : 1
+    },
+    "photos-fetch" : {
+      "main" : 2
+    }
+  },
+  "apple/Persona/PhoneTools/WorkoutReports.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Recording/RecordingDayStore.swift" : {
+    "directory-listing" : {
+      "unknown" : 1
+    },
+    "file-read" : {
+      "unknown" : 6
+    }
+  },
+  "apple/Persona/Recording/RecordingSync.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Assistant/AssistantView.swift" : {
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Chat/AttachSheet.swift" : {
+    "image-decode" : {
+      "unknown" : 1
+    },
+    "photos-fetch" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Chat/PasteImageChip.swift" : {
+    "image-decode" : {
+      "unknown" : 1
+    }
+  },
+  "apple/Persona/Views/Chat/PhotoAttach.swift" : {
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Chat/VideoAttach.swift" : {
+    "directory-listing" : {
+      "main" : 2
+    }
+  },
+  "apple/Persona/Views/Inbox/Lark/LarkAttachment.swift" : {
+    "directory-listing" : {
+      "main" : 1
+    },
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Inbox/Lark/LarkAttachmentView.swift" : {
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Inbox/Lark/LarkConversationsModel.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Machines/BrowserLoginsSection.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Machines/ClipboardSection.swift" : {
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Machines/ScreenCredentials.swift" : {
+    "keychain-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Session/CompareView.swift" : {
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Session/SessionPanes.swift" : {
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Settings/ExtensionThemesModel.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Persona/Views/Settings/StorageView.swift" : {
+    "directory-listing" : {
+      "main" : 1
+    }
+  },
+  "apple/PersonaWatch/WatchPetView.swift" : {
+    "directory-listing" : {
+      "main" : 1
+    },
+    "file-read" : {
+      "main" : 2
+    },
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/PersonaWatchWidgets/PetComplicationView.swift" : {
+    "image-decode" : {
+      "main" : 1
+    }
+  },
+  "apple/Shared/APIClient.swift" : {
+    "file-read" : {
+      "main" : 2
+    }
+  },
+  "apple/Shared/ChatStore.swift" : {
+    "directory-listing" : {
+      "main" : 1
+    },
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Shared/ErrorReports.swift" : {
+    "directory-listing" : {
+      "main" : 1
+    }
+  },
+  "apple/Shared/ExtensionSurfaceStore.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Shared/HomeWidgets/HomeSnapshotStore.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Shared/Keychain.swift" : {
+    "keychain-read" : {
+      "main" : 2
+    }
+  },
+  "apple/Shared/NativeStateMigration.swift" : {
+    "keychain-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Shared/PushCrypto.swift" : {
+    "keychain-read" : {
+      "main" : 2
+    }
+  },
+  "apple/Shared/Recording/AllDaySnapshot.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Shared/Recording/RecordingLibrary.swift" : {
+    "directory-listing" : {
+      "main" : 2
+    },
+    "file-read" : {
+      "main" : 2
+    }
+  },
+  "apple/Shared/Recording/RecordingSegmentWriter.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Shared/StateCache.swift" : {
+    "directory-listing" : {
+      "main" : 1
+    },
+    "file-read" : {
+      "main" : 1
+    }
+  },
+  "apple/Shared/WatchPetSnapshot.swift" : {
+    "file-read" : {
+      "main" : 1
+    }
+  }
+}

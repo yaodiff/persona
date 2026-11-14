@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="inbox_line_title">経緯</string>
+    <string name="inbox_line_kind_inbox">イベント</string>
+    <string name="inbox_line_kind_todo">ToDo</string>
+    <string name="inbox_line_kind_session">エージェントのセッション</string>
+    <string name="inbox_line_next">次へ</string>
+    <!-- The web's wording; iOS uses the longer equivalent 「受信トレイにはもうありません」. -->
+    <string name="inbox_line_gone">受信トレイにありません</string>
+    <string name="inbox_line_not_same">別の件です</string>
+    <string name="inbox_line_not_same_done">別の件として記録しました</string>
+    <string name="inbox_line_same">同じ件…</string>
+    <string name="inbox_line_linked">「%1$s」にまとめました</string>
+    <string name="inbox_line_search_placeholder">タイトルと場所を検索</string>
+    <string name="inbox_line_empty">一致する未処理の項目はありません</string>
+    <string name="inbox_line_legacy_meta">%1$s：%2$s</string>
+    <string name="inbox_line_say">ひとこと伝える</string>
+    <string name="inbox_line_retry">もう一度試す</string>
+    <string name="inbox_line_retry_text">もう一度試してください。</string>
+    <string name="inbox_line_instructed">AI に伝えました。新しい提案を待っています</string>
+    <string name="inbox_line_link_conflict">この関連付けはできません。別の項目を選択してください。</string>
+</resources>

@@ -13,5 +13,6 @@
   "use_as_context": "Use as context",
   "context_title": "{title} · Message",
   "fork_chat": "Start a new chat",
-  "cut_short": "This reply did not complete. Its content is for reference only."
+  "cut_short": "This reply did not complete. Its content is for reference only.",
+  "save_as_prompt": "Save as Prompt…"
 }

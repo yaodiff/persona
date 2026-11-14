@@ -1139,7 +1139,7 @@ private struct StreamingMarkdown: View {
 }
 
 /// Drives `StreamReveal` with the display's frames: a display link runs only while received text waits to be shown
-/// (P9), at most 60 times a second, and stops when the view goes. On the Mac (frozen, docs/apple/mac.md) the text shows
+/// (P9), at most 30 times a second, and stops when the view goes. On the Mac (frozen, docs/apple/mac.md) the text shows
 /// as it comes.
 @MainActor @Observable
 final class StreamRevealClock {
@@ -1198,7 +1198,9 @@ final class StreamRevealClock {
         guard link == nil else { return }
         // The link holds its target strongly: a weak hop, so a view gone without onDisappear frees this.
         let link = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick(_:)))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        // 30, not 60: each change re-measures the chat list's rows (about 4.5 ms); at 60 the main thread spent
+        // 307 ms a second on a streaming reply, at 30 about 190, and the steps are still a few characters (#7135).
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
         link.add(to: .main, forMode: .common)
         self.link = link
     }

@@ -109,9 +109,9 @@ func TestInboxSuggestionConfirmReply(t *testing.T) {
 	}
 	h.inbox.mu.Lock()
 	kinds := chainKinds(it)
-	confirmed := it.Chain[len(it.Chain)-2]
+	confirmed := it.Chain[len(it.Chain)-3]
 	h.inbox.mu.Unlock()
-	if kinds[len(kinds)-2] != ChainConfirmed || kinds[len(kinds)-1] != ChainSent || !confirmed.Edited || confirmed.Detail != "可以，周五上午给你" ||
+	if kinds[len(kinds)-3] != ChainConfirmed || kinds[len(kinds)-2] != ChainSent || kinds[len(kinds)-1] != ChainWaiting || !confirmed.Edited || confirmed.Detail != "可以，周五上午给你" ||
 		confirmed.Text != "你确认了（改过文字）" {
 		t.Fatalf("chain: %v %+v", kinds, confirmed)
 	}

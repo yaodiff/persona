@@ -17,5 +17,8 @@
   "handed_back": "Handed to the AI",
   "sent": "Sent, waiting for a reply",
   "agent_started": "Agent started",
-  "filed": "Marked as done"
+  "filed": "Marked as done",
+  "kind_todo": "Suggested to-do",
+  "add_todo": "Add to to-dos",
+  "todo_added": "Added to your to-dos"
 }

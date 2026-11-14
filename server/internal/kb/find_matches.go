@@ -92,10 +92,19 @@ func (e *Engine) Matches(kind, id, query string, limit int) []Match {
 			// without every word costs a stat there instead of a read and a fold, which for a rare word would be every
 			// day the chat has. The days that have them are read again by look, as before. Like Search, this leaves
 			// pruning to Find.
+			// The search index (search_index.go) rules out the days it read that cannot hold the words: a stat each.
 			gen := e.find.begin()
+			filter := e.searchFilter(ws)
 			days := e.Store.Days(id)
 			for i := len(days) - 1; i >= 0 && len(out) < limit; i-- {
 				p := e.Store.path(KindChat, id, "messages", days[i]+".md")
+				if filter != nil {
+					if rel, err := filepath.Rel(e.Store.Dir, p); err == nil {
+						if st := statFile(p); st.ok && filter.skip(filepath.ToSlash(rel), st) {
+							continue
+						}
+					}
+				}
 				if t, _, ok := e.find.text(p, gen); !ok || !hasAll(t.lower, ws) {
 					continue
 				}

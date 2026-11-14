@@ -104,10 +104,14 @@ func (b *inboxBook) applyMigrated(id string, things []connector.InboxThing, now 
 				open.Read = false
 				changed = append(changed, open)
 			case blocksDiffer(open, t.Extra):
-				// The same move, read further (a chat's read position) or read again (a document's rows): blocks only.
+				// The same move, read further (a chat's read position) or read again (a document's rows): blocks and a
+				// renamed chat, not a new move.
 				b.roundWrite(open)
 				wrote = true
 				setBlocks(open, t.Extra)
+				if where := whereOf(t.Tags); where != "" {
+					open.Where = where
+				}
 				changed = append(changed, open)
 			}
 			if t.Tier != "" && (open.Tier != string(t.Tier) || open.Reason != t.Why) {
@@ -168,9 +172,34 @@ func fillMigrated(it *InboxItem, t connector.InboxThing) {
 	it.UpdatedAt, it.Last, it.Rules = t.At, t.Last, t.Rules
 	it.Avatar, it.Count = t.Extra.Avatar, max(t.Extra.Count, 1)
 	setBlocks(it, t.Extra)
+	if where := whereOf(t.Tags); where != "" {
+		it.Where = where
+	}
 	if t.Tier != "" {
 		setRuleTier(it, t)
 	}
+}
+
+// whereOf is the chat tag's display name, or else the repository tag's name or value, trimmed.
+func whereOf(tags []connector.Tag) string {
+	for _, tag := range tags {
+		if tag.Key == connector.TagChat {
+			if name := strings.TrimSpace(tag.Name); name != "" {
+				return name
+			}
+		}
+	}
+	for _, tag := range tags {
+		if tag.Key == connector.TagRepo {
+			if name := strings.TrimSpace(tag.Name); name != "" {
+				return name
+			}
+			if value := strings.TrimSpace(tag.Value); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func setBlocks(it *InboxItem, x *connector.ThingExtra) {

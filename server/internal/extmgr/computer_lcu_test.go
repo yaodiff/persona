@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/mcpwait"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -37,6 +38,45 @@ func TestLCUCallsAreJavaScript(t *testing.T) {
 	last := calls[len(calls)-1]
 	if last.Tool != "js" || !strings.Contains(last.Args["code"].(string), `getApp("Calculator")`) || last.Session != "persona-conv1234" {
 		t.Fatalf("state is one js call: %+v", last)
+	}
+}
+
+func TestLCUElicitationWaitKindSemantics(t *testing.T) {
+	native := json.RawMessage(`{"mode":"form","message":"Allow Calculator?","requestedSchema":{"type":"object","properties":{}},"_meta":{"codex_approval_kind":"mcp_tool_call","connector_id":"computer-use","tool_params":{"app":"com.apple.calculator"},"persist":["always","session"]}}`)
+	enum := json.RawMessage(`{"mode":"form","message":"Pick one","requestedSchema":{"type":"object","properties":{"choice":{"type":"string","enum":["alpha","beta"]}},"required":["choice"]}}`)
+	for _, tc := range []struct {
+		name         string
+		params       json.RawMessage
+		wantKind     proto.MCPWaitKind
+		wantOverride bool
+	}{
+		{name: "native permission with four choices", params: native, wantKind: proto.MCPWaitApproval, wantOverride: true},
+		{name: "genuine enum question", params: enum, wantKind: proto.MCPWaitUnknown, wantOverride: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := extensionTestHub(t)
+			_, _ = computerMac(t, h, "mac")
+			mac := h.machineByName("mac")
+			var gotKind proto.MCPWaitKind
+			var gotOverride bool
+			h.opts.Ask = func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+				if ix.Kind != proto.IxQuestion || len(ix.Questions) != 1 {
+					t.Fatalf("presentation changed: %+v", ix)
+				}
+				gotKind, gotOverride = mcpwait.InteractionKindFrom(ctx, ix.ID)
+				return proto.Resolution{Dismiss: true}, nil
+			}
+			raw, err := json.Marshal(map[string]any{"conversation": "conv-assistant", "params": tc.params})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.answerComputerElicit(context.Background(), mac, raw); err != nil {
+				t.Fatal(err)
+			}
+			if gotOverride != tc.wantOverride || (gotOverride && gotKind != tc.wantKind) {
+				t.Fatalf("wait-kind override = %q, %v; want %q, %v", gotKind, gotOverride, tc.wantKind, tc.wantOverride)
+			}
+		})
 	}
 }
 

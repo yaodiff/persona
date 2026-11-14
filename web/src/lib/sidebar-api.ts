@@ -4,8 +4,19 @@ import { storedValue, storeValue } from "./compatibility";
 // `onGrouping` and marks its list `data-sidebar-rows`, and the shortcuts call the rest. Kept out of the sidebar's views
 // so they only gain the few lines that listen.
 import { AGENT_GROUPINGS, agentGrouping, type AgentGrouping } from "./agent-groups";
+import { noteFoldAll } from "./fold-all";
 
 export const GROUPING_KEY = "persona.agentGrouping";
+
+/** Whether the Agents block draws the hub's paged list (`BoundedAgentsBlock`) rather than the complete one (#6662): every
+ *  grouping but By repository, whose worktree level needs every session, and By to-do only on a hub that lists sessions by
+ *  to-do; pins and several assistants' scopes need the complete list. ⌘K's "Filter Agents list" asks it too (#6589). */
+export function pagedAgentList(o: { bounded: boolean; byTodo: boolean; todosSupported: boolean; pins: { sessions: string[]; spaces: string[] }; stored: string | null; several: boolean }): boolean {
+  const grouping = agentGrouping(o.stored);
+  // a hub without todos shows by machine, a by-todo choice kept for when it has them
+  const shown = !o.todosSupported && grouping === "todo" ? "machine" : grouping;
+  return o.bounded && !o.several && o.pins.sessions.length === 0 && o.pins.spaces.length === 0 && shown !== "repo" && (shown !== "todo" || o.byTodo);
+}
 
 // ── fold all / open all ──────────────────────────────────
 
@@ -20,8 +31,10 @@ export function onFoldAll(listener: (folded: boolean) => void, scope?: string): 
   return () => void foldListeners.delete(listener);
 }
 
-/** Folds or opens every group, or only those of `scope`. */
+/** Folds or opens every group, or only those of `scope`: the ones mounted now, and those not drawn now (under a folded
+ *  group, in a long group's parts out of view) when they are next drawn (lib/fold-all.ts). */
 export function setAllFolded(folded: boolean, scope?: string) {
+  noteFoldAll(folded, scope);
   foldListeners.forEach((s, f) => (scope === undefined || s === scope) && f(folded));
 }
 

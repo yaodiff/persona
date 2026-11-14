@@ -417,15 +417,25 @@ func isHistory(line string) bool {
 		!selectedRE.MatchString(line) && !submitRE.MatchString(strings.TrimSpace(line))
 }
 
+// withoutBlankTail is lines without the blank rows they end in.
+func withoutBlankTail(lines []string) []string {
+	n := len(lines)
+	for n > 0 && strings.TrimSpace(lines[n-1]) == "" {
+		n--
+	}
+	return lines[:n]
+}
+
 // dialogTop is the first row of the dialog at the bottom of the screen, on a plain screen's lines: the first row under
 // the highest rule (or a picker's ▔ edge) between the dialog's footer and the conversation above it, else the first row
 // after the conversation. Everything above it is the conversation, and every reader of the dialog starts there — an
 // agent's own answer is often a numbered list (#2872: its numbers were read as the notice's options, so dismiss_notice
 // refused the notice and the phone offered the agent's prose as buttons).
 func dialogTop(lines []string) int {
-	top := max(0, len(lines)-DialogLines)
+	end := len(withoutBlankTail(lines)) // blank rows under the dialog are no part of it (ParseDialog)
+	top := max(0, end-DialogLines)
 	start := top
-	for i := len(lines) - 1; i >= top; i-- {
+	for i := end - 1; i >= top; i-- {
 		if isHistory(lines[i]) {
 			if start == top {
 				start = i + 1

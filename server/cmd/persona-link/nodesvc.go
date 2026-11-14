@@ -17,9 +17,9 @@ import (
 )
 
 // The resident node (`personad node --attach`, docs/server/server.md "Persistent node") is what the connector forwards to. Setting
-// it up here is packaging only, so that one command (Linux: `persona-link install`) or one app (the Mac menu bar app)
-// sets a computer up as the node service: it writes the same service scripts/deploy/node-launchd.sh does, and leaves one
-// that is already there as it is. What the node does stays in personad.
+// it up here is packaging only: `persona-link install` sets up a computer's node service alongside the connector on
+// every supported platform. It writes the same service scripts/deploy/node-launchd.sh does and leaves an existing one
+// as it is. What the node does stays in personad.
 
 const (
 	nodeUnitName = "personad-node.service" // systemd user unit (Linux), as scripts/deploy/node-launchd.sh names it

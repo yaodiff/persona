@@ -121,8 +121,6 @@ internal fun AgentsScreen(
     val starState = starPrompt?.state?.collectAsStateWithLifecycle()?.value
     val context = androidx.compose.ui.platform.LocalContext.current
     var menu by remember { mutableStateOf(false) }
-    // The grouping pill's Group By picker (iOS's), groupings only (#4338 A4).
-    var groupingMenu by remember { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val homeChrome = LocalHomeChrome.current != null
     val firstPageIncomplete = !page.loaded && page.list.groups.isEmpty()
@@ -378,11 +376,17 @@ internal fun AgentsScreen(
             item("quick-filters") {
                 // "Lark groups" / "Terminal" (#2526) only while they have agents (or are chosen), as iOS and the web.
                 val shown = AgentQuickFilter.shown(page.settings.quick, quickCounts)
-                HomeAgentFilters(shown.map { filter ->
+                val bays = shown.map { filter ->
                     Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else quickCounts[filter] ?: 0, filter.state?.designStatus,
                         icon = PersonaIcons.backgroundWaiting.takeIf { filter == AgentQuickFilter.BackgroundWaiting },
                         waiting = filter == AgentQuickFilter.BackgroundWaiting)
-                }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
+                }
+                if (homeChrome) JAgentFilterCapsule(bays, shown.indexOf(page.settings.quick), { model.filter(shown[it]) },
+                    groupLabel = "${stringResource(R.string.agents_group_by)}: ${page.preferences.grouping.label}",
+                    groupActions = groupings.map { grouping ->
+                        JAction(grouping.label, checked = page.preferences.grouping == grouping, onClick = { model.grouping(grouping) })
+                    }, modifier = Modifier.padding(vertical = Tokens.Space.s))
+                else HomeAgentFilters(bays, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
             }
             // The computer the list is narrowed to (iOS's "Only <computer>", #1659): with the shared home chrome the computer
             // is chosen in a sheet and its chips don't show, so nothing else on the page says so. A tap shows every computer.
@@ -394,13 +398,6 @@ internal fun AgentsScreen(
                         .semantics { onClick(label = hint) { model.machine(""); onMachineSelected(""); true } },
                         selected = true, onClick = { model.machine(""); onMachineSelected("") },
                         role = Role.Button, trailingIcon = persona.core.designsystem.icons.PersonaIcons.clear)
-                }
-            }
-            if (homeChrome) item("grouping") {
-                Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
-                    // As iOS: the grouping's own icon, its name and a chevron, opening a Group By picker.
-                    JChip(page.preferences.grouping.label, onClick = { groupingMenu = true }, icon = page.preferences.grouping.icon,
-                        role = Role.Button, trailingIcon = PersonaIcons.expand)
                 }
             }
             // "botmux" (web #2786): show or hide botmux's sessions in this list, kept on this phone.
@@ -722,9 +719,6 @@ internal fun AgentsScreen(
         if (requestsInMenu) add(JAction(stringResource(R.string.agents_requests_history), icon = PersonaIcons.waitsForYou,
             onClick = { allRequests = true }))
     }, { menu = false }, title = stringResource(R.string.agents_action_list_settings), note = stringResource(R.string.agents_menu_note))
-    if (groupingMenu) JActionSheet(groupings.map { grouping ->
-        JAction(grouping.label, grouping.icon, checked = page.preferences.grouping == grouping, onClick = { model.grouping(grouping) })
-    }, { groupingMenu = false }, title = stringResource(R.string.agents_group_by))
     archiveTarget?.let { target ->
         JDialog(onDismiss = { archiveTarget = null }, title = stringResource(R.string.agents_action_archive),
             text = stringResource(R.string.agents_archive_confirm, target.displayTitle),

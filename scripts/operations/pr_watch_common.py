@@ -113,6 +113,32 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
     return data
 
 
+class VerificationError(WatchError):
+    """A completed failed check with enough information for a base comparison."""
+    def __init__(self, message, command=None, output="", failures=None, checks=None):
+        super().__init__(message)
+        self.command = command
+        self.output = output
+        self.failures = failures or []
+        self.checks = checks or []
+
+
+def test_or_fix(pr, names):
+    """Maintainer policy: test/fix titles and test-only changes need no screenshots."""
+    if re.match(r"^(?:test|fix)(?:\([^)]*\))?:\s+", pr.get("title", ""), re.I):
+        return True
+    TEST_PARTS = {"test", "tests", "testdata", "fixtures", "__tests__", "e2e"}
+    def test_file(name):
+        path = Path(name)
+        parts = path.parts
+        if len(parts) > 1 and parts[1] in ("PersonaTests", "PersonaUITests"):
+            return True
+        if path.name.endswith(("_test.go", "_test.py", ".test.ts", ".test.tsx", ".test.js", ".test.mjs")):
+            return True
+        return any(part.lower() in TEST_PARTS and "test" in path.name.lower() for part in parts)
+    return bool(names) and all(test_file(name) for name in names)
+
+
 def verification_env():
     """Allow only non-secret process/toolchain inputs into PR-controlled builds."""
     import shutil

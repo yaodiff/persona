@@ -73,9 +73,16 @@ def bundled_web_matches(receipt, commit, built, installed):
         return False
 
 
+def expected_version(worktree):
+    # The same lightweight-release-tag rule as scripts/deploy/deploy.sh (#7201, #7226).
+    return subprocess.check_output(
+        ["git", "describe", "--tags", "--match", "v[0-9]*", "--always", "--dirty"],
+        cwd=worktree, text=True).strip()
+
+
 def verify(commit, worktree):
     root = state_root()
-    expected_version = subprocess.check_output(["git", "describe", "--always", "--dirty"], cwd=worktree, text=True).strip()
+    expected_version = globals()["expected_version"](worktree)
     expected_binary = worktree / "server/bin/personad-linux-amd64"
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:

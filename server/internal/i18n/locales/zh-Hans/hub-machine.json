@@ -9,6 +9,7 @@
   "node_no_engine_hosts": "这台电脑的 node 还不支持选择引擎新建会话，请更新 node",
   "node_no_secret_run": "这台电脑的 node 还不支持密码卡片执行命令，请更新 node",
   "node_no_assistant_config_dir": "这台电脑的 node 还不支持选择助手配置目录，请更新 node",
+  "node_no_assistant_service_tier": "这台电脑的 node 还不支持从对话的第一条消息起使用 Fast，请更新 node",
   "node_no_secret_env": "这台电脑的 node 还不能把密钥交给 Agent 启动：请更新 node，并以常驻方式运行（Persona Link，或 personad node --attach）",
   "node_no_launcher_switch": "这台电脑的 node 还不支持把运行中的 Agent 换到另一个模型供应商，请更新 node",
   "node_no_launcher_switch_now": "这台电脑的 node 还不支持替 Persona 把运行中的 Agent 换到另一个模型供应商，请更新 node",

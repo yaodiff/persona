@@ -2,141 +2,47 @@
  "apple/LiveActivity/FleetIslandViews.swift": {
   "localized-lookup": 4
  },
- "apple/LiveActivity/FleetPersona.swift": {
-  "directory-listing": 2,
-  "file-read": 1,
-  "image-decode": 1
- },
- "apple/Mac/App/MacDemoSnapshotBatch.swift": {
-  "file-read": 1
- },
- "apple/Mac/App/MacExtensionSnapshotBatch.swift": {
-  "file-read": 1
- },
- "apple/Mac/App/MacRichSnapshotBatch.swift": {
-  "file-read": 1
- },
  "apple/Packages/BeautifulUI/Sources/BeautifulUI/Components/PromptBar.swift": {
   "unpaused-animation": 1
  },
- "apple/Persona/App/DemoHub.swift": {
-  "file-read": 1
+ "apple/Persona/DesignSystem/Toasts.swift": {
+  "window-frame": 1
  },
- "apple/Persona/App/PhonePasteboard.swift": {
-  "image-decode": 2
+ "apple/Persona/Views/Assistant/Tasks/SentViews.swift": {
+  "window-frame": 1
  },
- "apple/Persona/Glasses/MetaGlasses.swift": {
-  "image-decode": 1
+ "apple/Persona/Views/Assistant/Tasks/TaskViews.swift": {
+  "window-frame": 1
  },
- "apple/Persona/Persona/PersonaStore.swift": {
-  "directory-listing": 4,
-  "file-read": 2,
-  "image-decode": 1
+ "apple/Persona/Views/Chat/ChatPin.swift": {
+  "window-frame": 1
  },
- "apple/Persona/PhoneTools/PhotosTool.swift": {
-  "image-decode": 1,
-  "photos-fetch": 2
+ "apple/Persona/Views/Chat/ChatView.swift": {
+  "window-frame": 4
  },
- "apple/Persona/PhoneTools/WorkoutReports.swift": {
-  "file-read": 1
+ "apple/Persona/Views/Chat/InjectedLine.swift": {
+  "window-frame": 2
  },
- "apple/Persona/Recording/RecordingSync.swift": {
-  "file-read": 1
+ "apple/Persona/Views/Chat/MessageLift.swift": {
+  "window-frame": 2
  },
- "apple/Persona/Views/Assistant/AssistantView.swift": {
-  "image-decode": 1
+ "apple/Persona/Views/Chat/MessageMenu.swift": {
+  "window-frame": 1
  },
- "apple/Persona/Views/Chat/AttachSheet.swift": {
-  "photos-fetch": 2
+ "apple/Persona/Views/Chat/MessageViews.swift": {
+  "window-frame": 1
  },
- "apple/Persona/Views/Chat/ChatImageLoader.swift": {
-  "file-read": 1,
-  "image-decode": 1
+ "apple/Persona/Views/Chats/AgentsHeader.swift": {
+  "window-frame": 1
  },
- "apple/Persona/Views/Chat/PhotoAttach.swift": {
-  "image-decode": 1
+ "apple/Persona/Views/Chats/ChatsView.swift": {
+  "window-frame": 3
  },
- "apple/Persona/Views/Chat/QuickLookFile.swift": {
-  "file-read": 2
+ "apple/Persona/Views/Inbox/Lark/LarkConversationsView.swift": {
+  "window-frame": 1
  },
- "apple/Persona/Views/Chat/VideoAttach.swift": {
-  "directory-listing": 2
- },
- "apple/Persona/Views/Inbox/Lark/LarkAttachment.swift": {
-  "directory-listing": 1,
-  "file-read": 2
- },
- "apple/Persona/Views/Inbox/Lark/LarkAttachmentView.swift": {
-  "image-decode": 1
- },
- "apple/Persona/Views/Inbox/Lark/LarkConversationsModel.swift": {
-  "file-read": 1
- },
- "apple/Persona/Views/Inbox/Lark/LarkMedia.swift": {
-  "file-read": 1,
-  "image-decode": 2
- },
- "apple/Persona/Views/Inbox/Lark/LarkOutboxIdentity.swift": {
-  "file-read": 1
- },
- "apple/Persona/Views/Inbox/Lark/LarkOutboxStore.swift": {
-  "directory-listing": 2,
-  "file-read": 1
- },
- "apple/Persona/Views/Machines/BrowserLoginsSection.swift": {
-  "file-read": 1
- },
- "apple/Persona/Views/Machines/ClipboardSection.swift": {
-  "image-decode": 1
- },
- "apple/Persona/Views/Machines/ScreenCredentials.swift": {
-  "keychain-read": 1
- },
- "apple/Persona/Views/Session/CompareView.swift": {
-  "image-decode": 1
- },
- "apple/Persona/Views/Session/SessionPanes.swift": {
-  "image-decode": 1
- },
- "apple/Persona/Views/Settings/AvatarUploadModel.swift": {
-  "file-read": 1
- },
- "apple/Persona/Views/Settings/ExtensionThemesModel.swift": {
-  "file-read": 1
- },
- "apple/Persona/Views/Settings/StorageView.swift": {
-  "directory-listing": 2
- },
- "apple/PersonaLink/Sources/PersonaLink/LinkModel.swift": {
-  "file-read": 1
- },
- "apple/PersonaLink/Sources/PersonaLink/LinkStatePaths.swift": {
-  "file-read": 1
- },
- "apple/PersonaLink/Sources/PersonaLink/NativeCompatibility.swift": {
-  "keychain-read": 1
- },
- "apple/PersonaWatch/WatchPetView.swift": {
-  "directory-listing": 1,
-  "file-read": 2,
-  "image-decode": 1
- },
- "apple/PersonaWatchWidgets/PetComplicationView.swift": {
-  "image-decode": 1
- },
- "apple/Shared/APIClient.swift": {
-  "file-read": 2
- },
- "apple/Shared/ChatStore.swift": {
-  "directory-listing": 1,
-  "file-read": 1
- },
- "apple/Shared/ErrorReports.swift": {
-  "directory-listing": 1,
-  "file-read": 1
- },
- "apple/Shared/ExtensionSurfaceStore.swift": {
-  "file-read": 1
+ "apple/Persona/Views/SplitNavigation.swift": {
+  "window-frame": 3
  },
  "apple/Shared/ExtensionSystemWidget.swift": {
   "localized-lookup": 5
@@ -144,30 +50,10 @@
  "apple/Shared/FleetState.swift": {
   "localized-lookup": 31
  },
- "apple/Shared/Keychain.swift": {
-  "keychain-read": 2
- },
- "apple/Shared/NativeStateMigration.swift": {
-  "keychain-read": 1
- },
  "apple/Shared/PasswordLogin.swift": {
   "localized-lookup": 7
  },
- "apple/Shared/PushCrypto.swift": {
-  "keychain-read": 2
- },
- "apple/Shared/Recording/RecordingLibrary.swift": {
-  "directory-listing": 2,
-  "file-read": 2
- },
- "apple/Shared/StateCache.swift": {
-  "directory-listing": 1,
-  "file-read": 1
- },
  "apple/Shared/StateNames.swift": {
   "localized-lookup": 16
- },
- "apple/Shared/WatchPetSnapshot.swift": {
-  "file-read": 1
  }
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 )
 
@@ -16,7 +17,7 @@ import (
 // (it keeps its last status on disk, link.status.json) and without touching the resident node (a connection to its
 // socket would take the node from the hub).
 type report struct {
-	// Running: a persona-link holds the run lock (whoever started it: the service, the menu bar app, a person).
+	// Running: a persona-link holds the run lock (whoever started it: the service, a compatible parent or a person).
 	Running bool `json:"running"`
 	// Mode: active (this computer dials the hub) | passive (the hub dials it).
 	Mode string `json:"mode"`
@@ -39,7 +40,6 @@ type report struct {
 	// Passive is passive mode's pairing, whichever mode is on.
 	Passive *passiveReport `json:"passive,omitempty"`
 	Service *serviceState  `json:"service,omitempty"`
-	Tray    *trayState     `json:"tray,omitempty"` // Windows
 	Config  string         `json:"config"`
 	Log     string         `json:"log"`
 	Error   string         `json:"error,omitempty"` // link.json there but unreadable
@@ -58,15 +58,9 @@ type passiveReport struct {
 	FP          string     `json:"fp,omitempty"`           // the connector's pin (public: anyone reaching the port sees the key)
 }
 
-// trayState is the Windows tray: running now, and started at sign-in.
-type trayState struct {
-	Running   bool `json:"running"`
-	Autostart bool `json:"autostart"`
-}
-
-// serviceState is the systemd user service (Linux) or the scheduled task (Windows).
+// serviceState is the systemd user service (Linux), launchd user agent (Mac) or scheduled task (Windows).
 type serviceState struct {
-	Manager   string `json:"manager"` // systemd, schtasks
+	Manager   string `json:"manager"` // systemd, launchd, schtasks
 	Unit      string `json:"unit"`    // the unit, the task's name
 	File      string `json:"file"`
 	Installed bool   `json:"installed"`
@@ -124,9 +118,11 @@ func gather(e *env) report {
 		}
 		r.Service = s
 	}
+	if e.goos == "darwin" {
+		r.Service = e.macServiceState() // service_mac.go
+	}
 	if e.goos == "windows" {
 		r.Service = e.taskState() // winservice.go
-		r.Tray = trayStatus(e)
 	}
 	return r
 }
@@ -172,7 +168,6 @@ func (r report) text(now time.Time, user string) string {
 	if r.Mode == link.ModePassive {
 		r.passiveText(line, now, live)
 		r.serviceText(line, user)
-		r.trayText(line)
 		if live {
 			line("进程：pid %d · 版本 %s", st.PID, st.Version)
 		}
@@ -265,7 +260,6 @@ func (r report) text(now time.Time, user string) string {
 		}
 	}
 	r.serviceText(line, user)
-	r.trayText(line)
 	if live {
 		line("进程：pid %d · 版本 %s", st.PID, st.Version)
 	}
@@ -343,31 +337,27 @@ func (r report) passiveText(line func(string, ...any), now time.Time, live bool)
 	}
 }
 
-// trayText is the report's line about the Windows tray.
-func (r report) trayText(line func(string, ...any)) {
-	t := r.Tray
-	if t == nil {
-		return
-	}
-	running, at := "没在运行（persona-link tray，或者重新 install）", "登录时不启动"
-	if t.Running {
-		running = "在运行"
-	}
-	if t.Autostart {
-		at = "登录时启动"
-	}
-	line("托盘图标：%s · %s", running, at)
-}
-
-// serviceText is the report's line about the systemd user service or the scheduled task.
+// serviceText is the report's line about the connector's platform service.
 func (r report) serviceText(line func(string, ...any), user string) {
 	if s := r.Service; s != nil && s.Manager == "schtasks" {
 		taskText(s, line)
+	} else if s != nil && s.Manager == "launchd" {
+		text := func(key string, args ...i18n.Args) string {
+			return i18n.T(i18n.Terminal(), key, args...)
+		}
+		switch {
+		case !s.Installed:
+			line("%s", text("link-service.status_missing"))
+		case s.Active != "":
+			line("%s", text("link-service.status_loaded", i18n.Args{"label": s.Unit, "state": s.Active}))
+		default:
+			line("%s", text("link-service.status_not_loaded", i18n.Args{"label": s.Unit, "path": s.File}))
+		}
 	} else if s != nil {
 		switch {
-		case strings.HasPrefix(s.Missing, noUserInstance) && s.Installed && !s.Linger:
+		case strings.HasPrefix(s.Missing, noUserInstance()) && s.Installed && !s.Linger:
 			line("后台服务：装了 %s，但%s（%s）；没开 linger 时没人登录它就不在：sudo loginctl enable-linger %s",
-				s.Unit, noUserInstance, strings.TrimPrefix(s.Missing, noUserInstance+"："), user)
+				s.Unit, noUserInstance(), strings.TrimPrefix(s.Missing, noUserInstance()+"："), user)
 		case s.Missing != "":
 			line("后台服务：没有 systemd 用户服务（%s）", s.Missing)
 		case !s.Installed:

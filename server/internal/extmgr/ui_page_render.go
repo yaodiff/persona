@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sync/atomic"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/uistream"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 type pageRenderState struct {
@@ -19,6 +21,36 @@ type pageRenderState struct {
 	slot       extension.UISlot
 	params     extension.UIParams
 	tree       *uistream.Tree
+	fit        *pageFitMemo
+}
+
+// pageFitMemo keeps a session's last FitNative answer. FitNative reads only its
+// inputs, and a page source redraws the same view often, so the same inputs
+// give the answer back without fitting again. A session's worker and its
+// fences may prepare at once, hence the atomic swap of an immutable answer.
+type pageFitMemo struct{ last atomic.Pointer[pageFit] }
+
+type pageFit struct {
+	raw     json.RawMessage
+	slot    extension.UISlot
+	version int
+	lang    i18n.Lang
+	fitted  json.RawMessage
+}
+
+// fitNative is extension.FitNative through m (nil: no memo). Only an accepted
+// view is kept; a refused one is fitted, and refused, again.
+func (m *pageFitMemo) fitNative(raw []byte, slot extension.UISlot, version int, lang i18n.Lang) (json.RawMessage, error) {
+	if m != nil {
+		if f := m.last.Load(); f != nil && f.slot == slot && f.version == version && f.lang == lang && bytes.Equal(f.raw, raw) {
+			return f.fitted, nil
+		}
+	}
+	fitted, err := extension.FitNative(raw, slot, version, lang)
+	if err == nil && m != nil {
+		m.last.Store(&pageFit{raw: bytes.Clone(raw), slot: slot, version: version, lang: lang, fitted: fitted})
+	}
+	return fitted, err
 }
 
 func pageRenderInput(s *pageSession) pageRenderState {
@@ -28,7 +60,7 @@ func pageRenderInput(s *pageSession) pageRenderState {
 		// private callback tree needs canonical keys. Downgrade only its response.
 		params.UIVersion = extension.UIVersion
 	}
-	return pageRenderState{id: s.id, epoch: s.epoch, native: s.native, manifest: s.manifest, item: s.item, components: s.components, slot: s.slot, params: params, tree: s.tree}
+	return pageRenderState{id: s.id, epoch: s.epoch, native: s.native, manifest: s.manifest, item: s.item, components: s.components, slot: s.slot, params: params, tree: s.tree, fit: &s.fit}
 }
 
 // pagePrepare is pure bounded tree work, independent of session mutation and RPC.
@@ -46,7 +78,7 @@ func (h *Manager) pagePrepare(s pageRenderState, fence bool, request string) (*u
 			return nil, nil, err
 		}
 	}
-	fitted, err := extension.FitNative(n.View, s.slot, s.params.UIVersion, h.uiFallbackLang(context.Background(), s.params.Locale))
+	fitted, err := s.fit.fitNative(n.View, s.slot, s.params.UIVersion, h.uiFallbackLang(context.Background(), s.params.Locale))
 	if err != nil {
 		return nil, nil, err
 	}

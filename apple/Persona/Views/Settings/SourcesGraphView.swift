@@ -234,7 +234,6 @@ private struct SourcesGraphContent: View {
     var assistant: String?
     var manager: String?
     @Environment(AppModel.self) private var app
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         LoadableContent(state: state, retry: { Task { await model.load() } }) { _ in
@@ -260,8 +259,7 @@ private struct SourcesGraphContent: View {
         }
         .sheet(item: Binding(get: { model.pickedSource }, set: { model.picked = $0?.id })) { s in
             SourcesGraphDetails(model: model, source: s, assistant: assistant, manager: manager)
-                // At accessibility sizes half the screen holds only the name and a step: the sheet opens full height.
-                .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
+                .presentationDetents([.medium, .large])
                 // A solid panel, as the web's details card: on the half-height glass sheet the page's badges showed
                 // through behind its words.
                 .presentationBackground(Theme.card)
@@ -302,7 +300,6 @@ private struct SourcesGraphGroup: View {
     var model: SourcesGraphModel
     var group: SourcesGraphModel.Group
     @ScaledMetric(relativeTo: .body) private var rail: CGFloat = 15
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -328,26 +325,15 @@ private struct SourcesGraphGroup: View {
         .surface(in: .rect(cornerRadius: Theme.Radius.card))
     }
 
-    /// The extension's tile, name and count; at accessibility sizes the count goes under the name, which then has the
-    /// whole line ("Persona Built-in" never breaks inside a word).
+    /// The extension's tile, name and count.
     @ViewBuilder private var header: some View {
         let tile = IconTile(group.ext.id == "persona" ? Theme.Icon.persona : Theme.Icon.plugins, tint: Theme.accent)
         let count = Text(group.ext.line).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                HStack(spacing: Theme.Space.sm) {
-                    tile
-                    Text(group.ext.name).font(Theme.Font.bodyStrong).lineLimit(3)
-                }
-                count
-            }
-        } else {
-            HStack(spacing: Theme.Space.sm) {
-                tile
-                Text(group.ext.name).font(Theme.Font.bodyStrong).lineLimit(2)
-                Spacer(minLength: Theme.Space.s)
-                count
-            }
+        HStack(spacing: Theme.Space.sm) {
+            tile
+            Text(group.ext.name).font(Theme.Font.bodyStrong).lineLimit(2)
+            Spacer(minLength: Theme.Space.s)
+            count
         }
     }
 }
@@ -381,35 +367,22 @@ private struct SourcesGraphRail: View {
     static func line(_ reading: Bool) -> Color { Color.secondary.opacity(reading ? 0.45 : 0.2) }
 }
 
-/// A source: how it is read, its name and badge, and where its things go. At accessibility sizes they stack, the
-/// destinations last, so nothing beside the name pushes the row wider than the screen.
+/// A source: how it is read, its name and badge, and where its things go.
 private struct SourcesGraphRow: View {
     var model: SourcesGraphModel
     var source: SourcesGraph.Source
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let read = model.read(of: source)
         let tool = read.map { $0.direct ? String(localized: "Direct [Source Relationships]") : $0.title } ?? ""
-        let ax = typeSize.isAccessibilitySize
-        let layout = ax ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.xs)) : AnyLayout(HStackLayout(spacing: Theme.Space.sm))
         HStack(spacing: Theme.Space.sm) {
-            layout {
-                if ax {
-                    Text(tool).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2)
-                } else {
-                    Chip(text: tool, look: .outline, compact: true)
-                }
-                Text(source.name).font(Theme.Font.bodyStrong).foregroundStyle(.primary).lineLimit(ax ? 3 : 1)
-                if let b = source.badge {
-                    Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone)), shrinks: ax)
-                }
-                if ax { goes(only: true) }
+            Chip(text: tool, look: .outline, compact: true)
+            Text(source.name).font(Theme.Font.bodyStrong).foregroundStyle(.primary).lineLimit(1)
+            if let b = source.badge {
+                Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone)))
             }
-            if !ax {
-                Spacer(minLength: Theme.Space.s)
-                goes(only: false)
-            }
+            Spacer(minLength: Theme.Space.s)
+            goes()
         }
         .padding(.vertical, Theme.Space.s)
         .frame(minHeight: Theme.Size.tapTarget)
@@ -417,11 +390,11 @@ private struct SourcesGraphRow: View {
         .accessibilityValue(model.destinations(of: source))
     }
 
-    /// The Inbox and knowledge base icons, blue while the source reads; beside the name both always hold their place
-    /// (the icons line up down the card), under it only the ones it goes to.
-    private func goes(only: Bool) -> some View {
+    /// The Inbox and knowledge base icons, blue while the source reads; both always hold their place (the icons line up
+    /// down the card).
+    private func goes() -> some View {
         HStack(spacing: Theme.Space.xs) {
-            ForEach(["inbox", "kb"].filter { !only || source.to.contains($0) }, id: \.self) { d in
+            ForEach(["inbox", "kb"], id: \.self) { d in
                 ThemedIcon(d == "kb" ? Theme.Icon.knowledge : Theme.Icon.inbox)
                     .font(Theme.Font.label)
                     .foregroundStyle(source.reading ? Theme.accent : Color.secondary)
@@ -440,7 +413,6 @@ private struct SourcesGraphDetails: View {
     var manager: String?
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let read = model.read(of: source)
@@ -452,17 +424,15 @@ private struct SourcesGraphDetails: View {
             (String(localized: "How it's read"), how),
             (String(localized: "Goes to"), model.destinations(of: source)),
         ]
-        let ax = typeSize.isAccessibilitySize
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                // At accessibility sizes the badge goes under the name, which wraps instead of truncating.
-                (ax ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.xs)) : AnyLayout(HStackLayout(spacing: Theme.Space.sm))) {
+                HStack(spacing: Theme.Space.sm) {
                     HStack(spacing: Theme.Space.sm) {
                         ThemedIcon(ExtensionUIStyle.icon(source.icon)).font(Theme.Font.heading).foregroundStyle(Theme.accent)
-                        Text(source.name).font(Theme.Font.heading).lineLimit(ax ? nil : 2)
+                        Text(source.name).font(Theme.Font.heading).lineLimit(2)
                     }
                     if let b = source.badge {
-                        Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone)), shrinks: ax)
+                        Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone)))
                     }
                 }
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -503,9 +473,6 @@ private struct SourcesGraphDetails: View {
                         Text("Open Settings [Source Relationships]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
                     }
                     .themedButton()
-                    // In the text color: the accent on the glass button's gray read at 2.4:1 in dark, under the 3:1
-                    // StyleSpecTests holds the accent to.
-                    .tint(Theme.primaryText)
                     .accessibilityIdentifier("graph.open")
                 }
             }

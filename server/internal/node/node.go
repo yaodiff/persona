@@ -31,6 +31,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/screenlink"
 	"github.com/nwverse/persona/server/internal/streams"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -103,6 +104,11 @@ type Node struct {
 	logger   *log.Logger
 	// hubPersonaContracts is connection-local: Attach makes a fresh Node on each reconnect.
 	hubPersonaContracts atomic.Bool
+	// hubMCPWait gates the opt-in interim local-socket lines on the authenticated hub's advertised feature.
+	hubMCPWait atomic.Bool
+	// mcpWaits are only the local calls that asked for progress updates, by their opaque per-call id.
+	mcpWaitMu sync.Mutex
+	mcpWaits  map[string]*pendingMCPWait
 	// lcu drives amontlabs/lcu for the computer-use plugin when that backend is selected (lcu_mcp.go).
 	lcuMu   sync.Mutex
 	lcuSess *lcuSession
@@ -166,6 +172,7 @@ type Node struct {
 	events    *herdrEvents               // herdr's event stream (herdrevents.go)
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
+	cfiles    claudeFiles                // every claude's sessions/<pid>.json as last parsed (claudefiles.go)
 	hooks     *hookTurns                 // per-session turn counters from Persona's hooks (hookturn.go)
 	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
 	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
@@ -182,9 +189,10 @@ type Node struct {
 	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
 	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
 	freshForks map[string]bool
-	starts     startLog  // sessions starting in the background (starting.go)
-	ups        uploads   // files arriving from the phone (upload.go)
-	sysOnce    sync.Once // system: read once (metrics.go)
+	starts     startLog       // sessions starting in the background (starting.go)
+	ups        uploads        // files arriving from the phone (upload.go)
+	fileOps    fileOperations // copy / zip progress polled by the phone and web (fileoperation.go)
+	sysOnce    sync.Once      // system: read once (metrics.go)
 	sys        proto.System
 
 	// share: what the node keeps of launcher switches outside the state records, shared by a resident node's Nodes
@@ -295,11 +303,16 @@ type Node struct {
 	restores      restoreMarks // "back to the configured model" asked, until newer model evidence (model_restore.go)
 	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
 
+	// dialogWait: first messages waiting for the dialog that kept them out to be answered (firstprompt.go).
+	dialogWait sync.WaitGroup
 	// screens: live-screen hardware video channel (#3954). Login binding per `pair` and the busy count (screen.go).
 	// screenStart starts the capture/encode helper (Persona Screen.app) for a stream: startScreenHelper on a Mac
 	// (screenhelper.go), nil elsewhere, where screen.dial returns video_unavailable and the screen stays RFB only.
+	// links: the screen sessions (#6398, screenlink): a live screen whose phone asked for one has its RFB and video
+	// streams as channels of one session, so they can move between routes without losing a byte. nil: never.
 	screens     *screenLogins
-	screenStart func(ctx context.Context, id, pair string, keepAwake bool, done func()) error
+	screenStart func(ctx context.Context, id, pair string, keepAwake, link bool, done func()) (linked bool, err error)
+	links       *screenlink.Registry
 }
 
 func New(version string) (*Node, error) {
@@ -358,6 +371,14 @@ func New(version string) (*Node, error) {
 	if runtime.GOOS == "darwin" {
 		n.screenStart = n.startScreenHelper // Persona Screen, the live screen's video helper (#3954)
 	}
+	n.links = screenlink.NewRegistry(screenlink.DefaultLimits, n.logger.Printf)
+	// Direct routes (#6398): a listener on this computer's LAN and Tailscale addresses, only while a screen session is
+	// live, and never when the macOS firewall would ask about it.
+	if d, err := screenlink.NewDirect(n.logger.Printf); err != nil {
+		n.logger.Printf("screen: no direct routes: %v", err)
+	} else {
+		n.links.EnableDirect(d)
+	}
 	n.configureCodex(proto.CodexConfig{})
 	n.hosts = host.NewRegistry(nodeHosts(proto.EngineHerdr, false, n.logger.Printf)...) // herdr until engine.use, botmux until the hub says
 	n.resetSignals()
@@ -405,7 +426,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	defer n.streams.CloseAll()
 	defer n.closeFulls() // none of the web's full herdr clients outlives this hub connection (fullclient.go)
 	n.peer.OnEvent = func(event string, params json.RawMessage) {
-		if !n.streams.Event(event, params) && !n.onFullEvent(event, params) {
+		if !n.onMCPWait(event, params) && !n.streams.Event(event, params) && !n.onFullEvent(event, params) {
 			n.onTerminalEvent(event, params)
 		}
 	}
@@ -965,6 +986,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if c.HubFeatures != nil || c.MachineID != "" {
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
+			n.hubMCPWait.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.MCPWait))
 		}
 		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
@@ -1099,7 +1121,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		list := n.sessionList(ctx, true)
 		// update_busy: node.update.commit would refuse now; the manager waits on it before sending a build (node_update_idle).
-		return map[string]any{"sessions": list, "update_busy": updateWouldCut(AssistantsBusy(), list)}, nil
+		return map[string]any{"sessions": list, "update_busy": updateWouldCut(AssistantsBusy(), list, n.starts.listed(nil))}, nil
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
@@ -1209,7 +1231,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// still there (stopped.go).
 			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)
 		}
-		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, "", p.AgentType, r.execution)
+		// A hub that named the session id gets exactly that session (the async branch above already does): the hub
+		// uses it to reconcile a start whose answer never comes back by exact id. Only Claude starts run under a
+		// caller's id; the other agents pick their own inside n.start, which leaves an empty id to that path. An old
+		// hub sends nothing, so the behavior there is unchanged.
+		newID := ""
+		if validID(p.SessionID) {
+			newID = p.SessionID
+		}
+		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
 		if err == nil && p.ResumeSessionID != "" {
 			n.forkStarted(p.ResumeSessionID)
 		}
@@ -1253,7 +1283,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &opts)
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		send := func() (string, error) {
-			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, ConfigDir: p.ConfigDir, Interject: p.Interject})
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, ConfigDir: p.ConfigDir, Interject: p.Interject})
 		}
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
@@ -1540,6 +1570,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			Force        bool   `json:"force"`
 		}
 		_ = json.Unmarshal(params, &a)
+		ctx = worktreeComposerContext(ctx, params) // its refusals in the request's language (the hub sends it)
 		switch method {
 		case "worktree.add":
 			return n.worktreeAdd(ctx, p.Kind, p.Cwd, p.Branch, a.NameHint)
@@ -1731,7 +1762,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.uploadCall(method, params)
 	case "file.rename", "file.move", "file.trash", "file.restore":
 		return n.fileEditCall(method, params)
-	case "file.mkdir", "file.write", "file.zip", "file.copy", "file.chmod": // new folders, text files, zips, copies, permissions (filemake.go, filecopy.go)
+	case "file.mkdir", "file.write", "file.zip", "file.copy", "file.chmod", "file.operation": // new folders, text files, zips, copies, permissions and their progress (filemake.go, filecopy.go)
 		return n.fileMake(ctx, method, params)
 	case "health.reports.list", "health.reports.delete":
 		return n.healthReportsCall(method, params)
@@ -1787,8 +1818,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return map[string]any{"ok": true, "name": name}, nil
-	case "worktree.rename":
-		return ok(n.renameWorktree(ctx, p.Kind, p.WorkspaceID, p.Name))
+	case "worktree.rename": // its refusals in the request's language (the hub sends it)
+		return ok(n.renameWorktree(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
 	case "todo.sync_session_tokens":

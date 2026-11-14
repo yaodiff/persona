@@ -33,7 +33,9 @@ struct InboxActionBar: View {
                         openURL(url)
                     }
                 }
-                action(String(localized: "Hand to AI"), symbol: Theme.Icon.handToAI, prominent: false, perform: handOff)
+                if !item.isAssistantRow { // the row already is the assistant's own chat
+                    action(String(localized: "Hand to AI"), symbol: Theme.Icon.handToAI, prominent: false, perform: handOff)
+                }
             }
         }
         .padding(.horizontal, Theme.Space.l)

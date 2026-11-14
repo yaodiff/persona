@@ -147,7 +147,8 @@ to-do with priority `high`, still asks the owner with the card, as before.
 Just finished used to empty itself only by time: a to-do the owner had already looked at stayed there for 24 hours, on
 top of the list (#5707). Now the owner files it:
 
-- **Got it** on a Just finished row (a button under its words, and on iOS a leading swipe action) marks it seen. The row
+- **Got it** on a Just finished row (on the web a small button at the end of its status line, under the time, #6578; on
+  iOS a button under its words, moving to the web's place in #7148, and a leading swipe action) marks it seen. The row
   goes to Done at once, before the hub answers; a toast says so with **Undo**, which takes the mark off. A failed write
   puts the row back and says why.
 - **Opening it** counts too: the iPhone marks it seen when its page opens (the list behind has it in Done on the way
@@ -169,14 +170,29 @@ top of the list (#5707). Now the owner files it:
 
 ## Header count
 
-The web's header reads "N open · N shelved · N done" beside the title on wider screens (a phone leaves it out); it counts what the list's filter shows, whatever is searched (#3740). The iOS and
+The web's header reads "N open · N parked · N inactive · N done" beside the title on wider screens (a phone leaves it out); it counts what the list's filter shows, whatever is searched (#3740). The iOS and
 Android lists have no such line (#3712): it said again what the sections say, so each section's title carries the number of
 to-dos its rows list (a merged row's related ones too), in the section's state color, and the counts follow a search and the
 list's filter (#3740). **Open** counts to-dos that are not closed, not accepted or deployed,
 and not shelved: Waiting on you, Working, PR to merge, Other open, and Just finished rows still open (a finished turn
 is not a closed to-do; only a review or the user closes it; once the owner has seen it, rule 9a, it is in Done and not
-counted). **Done** counts closed, accepted and deployed ones. The
+counted). **Parked**, **inactive** and **done** count the to-dos in the Parked, Shelved and Done sections as their titles
+do (a merged row's related to-dos under the row's section), so the header and each section's title say the same number;
+what closed in the last 24 hours and was not seen yet is under Just finished and counted there, not as done. The
 sidebar's To-dos badge shows the same open count without quiet tasks (#1731), as before; the page lists and counts them. A task whose agent never started (rule 1) counts as open while it waits on the owner.
+
+The counts are the same whatever the list is grouped by (web audit item 12), and so is where each to-do is:
+
+- **By folder**: the folders hold every to-do the status sections place outside Done (a merged row's to-dos where the
+  row is), each in its own reading: a failed start waiting on the owner open, with why it did not start, and its folder
+  says Needs you; a to-do closed in the last 24 hours struck through, with **Got it**, until it is seen. The folded
+  **Done** at the bottom holds the Done section's.
+- **By pinned direction**: the directions hold the open to-dos the hub's tree lists (it lists only what counts as open);
+  a line says how many open ones no direction lists; the rest outside Done (closed in the last 24 hours, accepted,
+  deployed, shelved) keep their status sections below the directions, as Android's list does, so a to-do ticked there
+  moves to Just finished instead of leaving the list; the folded **Done** holds the Done section's.
+
+Before the first read of the to-dos lands the header shows no counts, not zeros (audit item 83).
 
 ## Shelving
 
@@ -229,7 +245,7 @@ Every client follows this document with its own copy of the rules, each with the
 | Client | Rules | Tests | Page |
 | :--- | :--- | :--- | :--- |
 | Web | `web/src/lib/todo-triage.ts` | `web/src/lib/todo-triage.test.ts` | `web/src/views/Todos.tsx` |
-| iOS / Mac | `apple/Shared/TodoTriage.swift` (`TodoTriageLogic`) | `apple/PersonaTests/TodoTriageTests.swift` | `apple/Persona/Views/Todos/TodosView.swift`, `apple/Mac/Todos/MacTodosPage.swift` |
+| iOS / Mac | `apple/Shared/TodoTriage.swift` (`TodoTriageLogic`) | `apple/PersonaTests/TodoTriageTests.swift` | `apple/Persona/Views/Todos/TodosView.swift` |
 | Android | `android/core/domain/src/main/kotlin/persona/core/domain/tasks/TodoTriage.kt` | `android/core/domain/src/test/kotlin/persona/core/domain/tasks/TodoTriageTest.kt` | `android/feature/agents/src/main/kotlin/persona/feature/agents/TodosScreen.kt` |
 | Hub | `server/internal/assistant/todo_triage.go` | `server/internal/assistant/todo_triage_test.go` | none: it tells when a leader's task is stuck (#3483) |
 

@@ -50,6 +50,7 @@
             }
           ],
           "version": "d45aefe6809ea192",
+          "now": "confirm_reply",
           "status": "action",
           "handling": {
             "owner": "manager",
@@ -75,14 +76,16 @@
               "link": {
                 "type": "source",
                 "position": "10"
-              }
+              },
+              "via": "lark"
             },
             {
               "id": "c2",
               "at": "2026-01-02T03:04:05Z",
               "kind": "triaged",
               "text": "分拣：需要你",
-              "detail": "需要你"
+              "detail": "需要你",
+              "via": "assistant"
             }
           ]
         },
@@ -122,6 +125,7 @@
             }
           ],
           "version": "e9cde9aed8019733",
+          "now": "done_user",
           "chain": [
             {
               "id": "c1",
@@ -132,7 +136,8 @@
               "link": {
                 "type": "source",
                 "uid": 11
-              }
+              },
+              "via": "mail"
             }
           ]
         }

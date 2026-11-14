@@ -270,6 +270,28 @@ struct TodoTriageTests {
         #expect(!TodoTriageLogic.checksAsOpen(done, r.groups(.justDone)[0].triage["done1"]))
     }
 
+    /// A checkbox outside the list (a meeting's action item, #6563) reads a to-do as the list does: a failed start still
+    /// waiting on the owner is open, so a tick closes it rather than reopening it; superseded, or simply closed, it is
+    /// done. The other to-dos and the sessions are read only for a closed failed start.
+    @Test func aCheckboxOutsideTheListReadsAFailedStartAsTheListDoes() {
+        let failed = todo("f1", title: "Deploy the self-hosted panel", done: 1) { $0.planID = "p1"; $0.startError = "no launcher" }
+        let finished = todo("done1", title: "Panel: verify it on the hub", done: 2) { $0.planID = "p1"; $0.doneBy = "review" }
+        let lone = todo("f2", title: "Rotate the backup keys", done: 3) { $0.startError = "no launcher" }
+        let open = todo("o1"), done = todo("d1", done: 1)
+        var reads = 0
+        func list(_ todos: [TodoItem]) -> () -> [TodoItem] { { reads += 1; return todos } }
+        func opened(_ t: TodoItem, _ all: [TodoItem]) -> Bool {
+            TodoTriageLogic.checksAsOpen(t, among: list(all), lookup: { lookup }, now: now)
+        }
+        #expect(opened(lone, [lone]), "a failed start waiting on the owner reads open")
+        #expect(opened(lone, [lone]) == TodoTriageLogic.checksAsOpen(lone, at(lone)))
+        #expect(!opened(failed, [failed, finished]), "superseded by its finished work, it is done")
+        #expect(opened(failed, [failed]))
+        reads = 0
+        #expect(opened(open, [open]) && !opened(done, [done]) && !opened(finished, [finished]))
+        #expect(reads == 0, "the other to-dos were read for a to-do that is not a closed failed start")
+    }
+
     @Test func failedStartWaitingOnTheOwnerCountsAsOpen() {
         let r = TodoTriageLogic.triageTodos([todo("f", done: 1) { $0.startError = "no launcher" }], lookup: lookup, now: now)
         #expect(r.groups(.waiting).map(\.lead.id) == ["f"])

@@ -27,8 +27,22 @@ nonisolated extension ContextRef {
         return there ? nil : refs + [ref]
     }
 
-    /// What the user picked to go with a message (a message, a page's text, a session, a recording…), shown as a quote.
-    var isQuote: Bool { ["quote", "context", "edit", ForwardMessage.kind].contains(kind) }
+    /// A row picked in the @ menu, or nil when it is already over the box. Workspaces have an empty URL like an
+    /// ordinary quote, so their dedupe is kind + URL + body (the web's rule), never that shared URL alone. Other
+    /// mention kinds keep their existing URL-only behavior among themselves.
+    static func addingMention(_ ref: ContextRef, to refs: [ContextRef]) -> [ContextRef]? {
+        let there = refs.contains { old in
+            if ref.kind == "workspace" || old.kind == "workspace" {
+                return ref.kind == "workspace" && old.kind == "workspace" && old.url == ref.url && old.text == ref.text
+            }
+            return old.url == ref.url
+        }
+        return there ? nil : refs + [ref]
+    }
+
+    /// What the user picked to go with a message (a message, a page's text, a workspace, a session, a recording…),
+    /// shown as a quote.
+    var isQuote: Bool { ["quote", "context", "edit", "workspace", ForwardMessage.kind].contains(kind) }
 
     var isForward: Bool { kind == ForwardMessage.kind }
 
@@ -78,6 +92,7 @@ nonisolated extension ContextRef {
             if mine { return String(localized: "Quoting your message") }
             return String(localized: "Quoting \(who)")
         case "edit": return String(localized: "Text to change · \(label)")
+        case "workspace": return String(localized: "Workspace · \(label)")
         case ForwardMessage.kind: return ForwardMessage.heading(self)
         default:
             if isSession { return String(localized: "Quoting session \(label)") }
@@ -90,7 +105,7 @@ nonisolated extension ContextRef {
     var quoteSummary: String {
         if isWholePage { return host }
         var flat = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        if isSession, flat.count > 1 { flat.removeFirst() } // 「另一个会话：…」: the heading names it already
+        if isSession || kind == "workspace", flat.count > 1 { flat.removeFirst() } // the heading names it already
         let joined = flat.joined(separator: " ")
         return joined.isEmpty ? String(localized: "No content") : String(joined.prefix(240))
     }
@@ -110,6 +125,11 @@ extension Theme {
         static let fillOpacity = 0.12
         /// The band left on the message a quote led back to, as it starts to fade.
         static let flashOpacity = 0.18
+        /// How long the band stays before it fades (`Theme.Motion.layout`): a quote's tap, where you just looked.
+        static let flashHold: Duration = .milliseconds(700)
+        /// The band on a message a chat opened at (a search result, a hub link, #6284): the chat has just appeared, so
+        /// it stays long enough to find, as the web's ring does (#6446).
+        static let landingHold: Duration = .milliseconds(1600)
     }
 
     /// The user's own bubble as it is drawn, and the colors of what sits in it (#5204). Persona's main conversation
@@ -442,13 +462,14 @@ struct ForwardGroupBlock: View {
 
 /// The band a quote's tap leaves on the message it led back to, fading on its own.
 struct QuoteFlash: View {
+    var hold: Duration = Theme.Quote.flashHold
     @State private var on = true
 
     var body: some View {
         Rectangle().fill(Theme.accent.opacity(on ? Theme.Quote.flashOpacity : 0))
             .allowsHitTesting(false)
             .task {
-                try? await Task.sleep(for: .milliseconds(700))
+                try? await Task.sleep(for: hold)
                 withAnimation(Theme.Motion.layout) { on = false }
             }
     }
@@ -554,6 +575,8 @@ struct UserBubbleBody: View {
 struct QuoteFlashMark: Equatable {
     var line: String
     var id = UUID()
+    /// How long it stays lit before fading: `Theme.Quote.flashHold`, or `landingHold` where a chat opened at it.
+    var hold: Duration = Theme.Quote.flashHold
 }
 
 /// Plain text (a message you sent) with the paths that are there on the conversation's machine as underlined links

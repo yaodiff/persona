@@ -153,6 +153,14 @@ export function useDirectionNames(key: string): ReadonlyMap<string, string> {
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
+/** The direction name of one conversation, or undefined when it leads none (or the names are not in yet): what its page's
+ *  header calls a leader conversation, as the sidebar's row does. Reads what the tree or the sidebar asked for, asks for
+ *  nothing itself. */
+export function useDirectionName(id: string): string | undefined {
+  const name = () => names.get(id);
+  return useSyncExternalStore(subscribe, name, name);
+}
+
 const countsSnapshot = () => counts;
 
 /** The current leaders' counts (read with useDirectionNames, which asks for them). */

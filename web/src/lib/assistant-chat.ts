@@ -9,6 +9,7 @@ import { t } from "../i18n";
 import { managedProvider } from "./compatibility";
 import { shellPath } from "./format";
 import { modelName } from "./launcher-models";
+import { onManagerChoice } from "./manager-choice";
 
 export const NEW_CONVERSATION = "new";
 
@@ -128,12 +129,32 @@ export function usePickedEffort(key: string): string | undefined {
   return useSyncExternalStore(subscribe, () => efforts.get(key));
 }
 
-/** Drop key's whole pick, launcher, model and effort together: none of it outlives the others (the new-conversation
- *  page's would go with the start, and a hub that keeps picks would keep what nobody chose). */
+/** Fast picked for the one new-conversation draft; false: Codex's own default. Independent of effort. */
+let startFast = false;
+
+export function pickedFast(): boolean {
+  return startFast;
+}
+
+export function pickFast(on: boolean) {
+  startFast = on;
+  listeners.forEach((l) => l());
+}
+
+export function usePickedFast(): boolean {
+  return useSyncExternalStore(subscribe, () => startFast);
+}
+
+// A speed was validated against one manager's catalog and start capability; never carry it to another, even with no pill mounted.
+onManagerChoice(() => pickFast(false));
+
+/** Drop key's whole pick, launcher, model, effort and speed together: none of it outlives the others (the
+ *  new-conversation page's would go with the start, and a hub that keeps picks would keep what nobody chose). */
 export function dropPick(key: string) {
   picks.delete(key);
   models.delete(key);
   efforts.delete(key);
+  if (key === NEW_CONVERSATION) startFast = false;
   listeners.forEach((l) => l());
 }
 

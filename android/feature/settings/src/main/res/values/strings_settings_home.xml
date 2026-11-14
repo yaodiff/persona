@@ -28,4 +28,8 @@
     <string name="settings_model_how_runs_detail">Manage credentials and how each provider connects in Model providers. Changing a model does not change your interface or enabled features.</string>
     <string name="settings_home_extensions_detail">Manage extra capabilities</string>
     <string name="settings_home_connectors_detail">Mail, messages and phone data</string>
+    <!-- Inbox Sources (#5308): the same words as iOS and the web. -->
+    <string name="settings_inbox_sources">Inbox Sources</string>
+    <string name="settings_inbox_sources_detail">What brings new things into your Inbox</string>
+    <string name="settings_search_inbox_sources_aliases">inbox sources subscriptions recommended mail muted</string>
 </resources>

@@ -20,6 +20,7 @@
   "ultracode_skipped": "没开 ultracode 就启动了：{reason}",
   "task_failed_title": "「{name}」没开起来",
   "task_failed_title_health": "任务没开起来",
+  "ask_held_title": "「{name}」有卡片在等督办处理",
   "task_failed_body": "{reason}。打开对话点『重试』，或换一台电脑再派",
   "task_failed_body_no_reason": "打开对话点『重试』，或换一台电脑再派",
   "not_retryable": "只有没开起来、或被模型服务出错打断的任务能重试",
@@ -43,7 +44,6 @@
   "start_remedy_notice": "没开起来：「{title}」。{reason}",
   "admission_no_metrics": "这台电脑还没有上报过资源指标。",
   "admission_stale": "这台电脑的资源指标已经过期。",
-  "admission_no_load": "这台电脑没有上报负载。",
   "admission_no_cores": "这台电脑没有上报核数。",
   "admission_memory_ambiguous": "这台电脑的内存数据缺失或无法判断。",
   "admission_memory": "可用内存只剩 {available}，低于闸线 {limit}。",
@@ -52,5 +52,10 @@
   "admission_direction_full": "这个方向已经有 {running} 个 Agent 在跑，达到上限 {limit}。",
   "admission_refused": "电脑 {machine} 现在不能启动这个 Agent：{reason}{recommend}",
   "admission_recommend": "推荐电脑：{machine}。",
-  "admission_reroute": "已从 {from} 改派到 {to}：{reason}"
+  "admission_reroute": "已从 {from} 改派到 {to}：{reason}",
+  "admission_queued": "排队中，hub 会自动重试：{reason}",
+  "admission_queue_timeout": "排队等待超过 {limit} 仍未启动，放弃本次启动。最后一次原因：{reason}",
+  "start_link_lost": "和「{machine}」的连接断了，重连后也没看到任务起来：{reason}",
+  "start_machine_busy": "「{machine}」一直连着，但在等待时间内没回应（电脑可能太忙）：{reason}",
+  "start_link_down": "和「{machine}」的连接断了，等了一阵也没重连上：{reason}"
 }

@@ -164,10 +164,10 @@ type KBMinutesInput struct {
 func RenderKBMinutesInput(in KBMinutesInput) string { return render("kb/minutes_input", in) }
 
 // KBMinutesNote is an item of a part's notes: Line the transcript line it cites, or Photo the photo (Line 0 then); Who,
-// By and DueDate as the part said.
+// By and DueDate as the part said; Topic the title of the part's topic a point or decision is in ("" none, #6563).
 type KBMinutesNote struct {
-	Line, Photo            int
-	Text, Who, By, DueDate string
+	Line, Photo                   int
+	Text, Who, By, DueDate, Topic string
 }
 
 // KBMinutesPart is a part's notes, From and To its first and last lines' clock times.

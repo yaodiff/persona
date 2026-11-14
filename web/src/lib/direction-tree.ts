@@ -274,11 +274,6 @@ export function subscribeDirectionTree(l: () => void): () => void {
 }
 const snapshot = () => tree;
 
-/** Whether the last tree read has a leader to group by (the grouping shortcut offers "By pinned" then). */
-export function directionTreeGroups(): boolean {
-  return groupsByDirection(tree);
-}
-
 /** The tree as last read, outside React. */
 export const directionTreeNow = snapshot;
 

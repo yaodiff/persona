@@ -212,6 +212,9 @@ func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 		rule = connector.Tier(t.Extra.RuleTier) // its fallback (capability fallback): the model still sorts it first
 	}
 	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply, RuleTier: string(rule), Tags: t.Tags}
+	if where := whereOf(t.Tags); where != "" {
+		it.Where = where
+	}
 	if t.Tier != "" {
 		setRuleTier(it, t)
 	}

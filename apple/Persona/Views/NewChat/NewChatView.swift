@@ -81,6 +81,9 @@ struct NewChatView: View {
     @State private var starting = false
     @State private var error: String?
     @State private var workspaceCatalog = WorkspaceCatalog()
+    /// The selected computer's workspaces New Agent offers, by project (#7259): derived when the computer or the catalog
+    /// changes, not as the form draws.
+    @State private var workspaceGroups: [WorkspaceStart.Group] = []
     @State private var pickedWorkspace: HostWorkspace?
     @State private var childSource: HostWorkspace?
     /// The picked folder's repository, as its computer says (#6115); nil: not in one, or it cannot say.
@@ -116,9 +119,6 @@ struct NewChatView: View {
     private var ref: MachineRef { MachineRef(path: machineID) }
     private var machine: Machine? { model.machine(ref) }
     private var targetPreset: SpacePreset? { SpacePreset.destination(preset: preset, workspace: pickedWorkspace) }
-    private var workspaceChoices: [HostWorkspace] {
-        workspaceCatalog.workspaces.filter { $0.machineRef == ref && $0.source == "orca" }
-    }
 
     /// The launcher that will run: the one picked, or Model Settings'.
     private var runLauncher: String { launcher.isEmpty && unifiedModels ? defaultLauncher : launcher }
@@ -275,23 +275,29 @@ struct NewChatView: View {
                     .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.page, bottom: Theme.Space.s, trailing: Theme.Space.page))
                 } header: { Text("Machines") }
 
-                if !workspaceChoices.isEmpty {
+                if !workspaceGroups.isEmpty || pickedWorkspace != nil {
                     Section {
                         NavigationLink {
-                            WorkspacePicker(workspaces: workspaceChoices, selectedID: pickedWorkspace?.sourceID, allowDirectory: true) { picked in
+                            WorkspaceStartPicker(groups: workspaceGroups, selectedKey: pickedWorkspace?.key, home: machine?.home) { picked in
                                 pickedWorkspace = picked
                                 if let picked { cwd = picked.cwd; cwdPicked = true }
                             }
                         } label: {
-                            LabeledContent(String(localized: "workspace.target", defaultValue: "Worktree"),
-                                           value: pickedWorkspace?.title ?? String(localized: "workspace.useDirectory", defaultValue: "Choose by Folder"))
+                            LabeledContent(String(localized: "workspace.start", defaultValue: "Workspace"),
+                                           value: pickedWorkspace.map(WorkspaceStart.title) ?? String(localized: "workspace.useDirectory", defaultValue: "Choose by Folder"))
                         }
                         .accessibilityIdentifier("newChat.workspace")
-                        if let pickedWorkspace {
+                        // A Git workspace can make a worktree first; Orca nests it under this one, Paseo has no nesting.
+                        if let pickedWorkspace, WorkspaceStart.kind(pickedWorkspace) != .folder {
                             Button { childSource = pickedWorkspace } label: {
-                                Label(String(localized: "workspace.newChild", defaultValue: "New Child Worktree…"), systemImage: Theme.Icon.newWorktree)
+                                Label(pickedWorkspace.source == "orca" ? String(localized: "workspace.newChild", defaultValue: "New Child Worktree…")
+                                                                        : String(localized: "New Worktree…"), systemImage: Theme.Icon.newWorktree)
                             }
                             .accessibilityIdentifier("newChat.newChild")
+                        }
+                    } footer: {
+                        if let pickedWorkspace {
+                            Text(WorkspaceStartRow.detail(pickedWorkspace, home: machine?.home))
                         }
                     }
                 }
@@ -521,6 +527,9 @@ struct NewChatView: View {
                 desktopProjects = desktopStart ? DesktopStart.projectsFolder(model.sessionsByMachine[ref] ?? [], codex: codex) ?? "" : ""
             }
             .task(id: machineID) { await workspaceCatalog.refresh([ref.group]) { model.api($0) } }
+            .task(id: "\(machineID)|\(workspaceCatalog.revision)") {
+                workspaceGroups = WorkspaceStart.groups(WorkspaceStart.choices(workspaceCatalog.workspaces, machine: ref))
+            }
             // A provider added from a grayed-out launcher's help (Add Provider): this computer's list again.
             .onChange(of: model.launchersRevision) { _, _ in Task { await loadMachine() } }
             #if DEBUG

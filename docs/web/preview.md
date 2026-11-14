@@ -40,7 +40,7 @@ web panel  ──WebSocket──▶  hub …/preview/connect  ──stream (stre
 - `cwd` is relative to the project (the folder holding `.claude`; `${workspaceFolder}` works), `env` is added in front of the command.
 - Each entry comes back with `listening` and the page's `title` (the same probe as port discovery). Entries that cannot be used come last with a `problem`: `no_name`, `no_port`, `not_local` (a `url` on another computer: a preview only shows this one), `no_run` (no command and no `url`), `bad_env`. A file that is not JSON or too big comes back as `error`, with no entries.
 
-**Start** (`preview.start {cwd, name, workspace, kind?}`): the panel shows the exact command (and folder, variables) and asks first. The node reads the file again (what runs is what the file says now), opens a new terminal tab in the session's workspace named after the entry, in its folder, and types the command: each word shell-quoted, `env K=V …` in front for its `env`, never a shell string from the file. The output is in that tab (the terminal page, herdr on the computer), and Ctrl-C there stops it. The panel then waits for the port: it reads `…/preview/servers` every 1.5 s for 90 s, one read at a time and none while the browser tab is hidden, and after Cancel a read still out changes nothing.
+**Start** (`preview.start {cwd, name, workspace, kind?}`): offered for a session with a workspace and a terminal (a Paseo session has neither of its own: its workspace is Paseo's). The panel shows the exact command (and folder, variables) and asks first. The node reads the file again (what runs is what the file says now), opens a new terminal tab in the session's workspace named after the entry, in its folder, and types the command: each word shell-quoted, `env K=V …` in front for its `env`, never a shell string from the file. The output is in that tab (the terminal page, herdr on the computer), and Ctrl-C there stops it. The panel then waits for the port: it reads `…/preview/servers` every 1.5 s for 90 s, one read at a time and none while the browser tab is hidden, and after Cancel a read still out changes nothing.
 
 ## A preview (`preview.go`)
 
@@ -113,7 +113,8 @@ the Mac app is frozen and has none of it.
   entries first, then the session's own ports, then the entries that cannot be used and why; with nothing, the launch.json
   example to copy. A running one opens in the link card (`POST …/ports/{port}/open`, then the forwarding); Another Port…
   opens a port typed in. The card's subtitle (`MacBook :5173 · web ⌄`) opens the same list to switch.
-- **Start…** shows the command as the node runs it (`env K=V …`, each word quoted) and the folder, and asks first; then
+- **Start…**, offered as on the web only for a session with a workspace and a terminal (`PreviewLogic.canStart`: not a
+  Paseo session's), shows the command as the node runs it (`env K=V …`, each word quoted) and the folder, and asks first; then
   `POST …/preview/start` with the session's workspace and its host kind, and a look at the servers every 1.5 s for 90 s
   until the port answers (an Agent's port counts too). The row says what it waits for and can be cancelled; the page opens
   once the port answers. `PreviewModel` holds this; `PreviewLogic` (`Preview.swift`) is the web's `lib/preview.ts`.

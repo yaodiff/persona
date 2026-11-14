@@ -43,7 +43,9 @@ class InboxUnreadBadgeShotsTest {
     @get:Rule val rule = createEmptyComposeRule()
     @Test fun realSidebarHidesZeroAndKeepsReadItemsPending() {
         val pending = InboxRecord(InboxItem("pending", tier = "action"), read = true)
-        var records by mutableStateOf(listOf(InboxRecord(InboxItem("unread", tier = "action")), pending,
+        val unread = InboxRecord(InboxItem("unread", tier = "action"), feedId = "room", source = "lark")
+        val second = InboxRecord(InboxItem("second", tier = "action"), feedId = "room", source = "lark")
+        var records by mutableStateOf(listOf(unread, second, pending,
             pending.copy(item = pending.item.copy(id = "done", doneAt = "2026-11-10T00:00:00Z")),
             InboxRecord(InboxItem("fyi", tier = "fyi")), InboxRecord(InboxItem("noise", tier = "noise"))))
         var dark by mutableStateOf(false)
@@ -62,10 +64,11 @@ class InboxUnreadBadgeShotsTest {
                 scenario.onActivity { activity -> activity.setContent {
                     CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
                         PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                            val conversations = remember(records) { buildInboxConversations("paired", InboxSnapshot(records = records)) }
                             Box(Modifier.testTag("shot").width(400.dp).height(1200.dp).background(PersonaTheme.palette.background)) {
                                 AssistantSidebarContent(snapshot, repository, null, operations, demo = false,
                                     onOpen = {}, onAction = {}, onSettings = {}, onInbox = {}, onKnowledge = {},
-                                    onTodos = null, todoCount = 0, showTodos = false, inboxCount = inboxUnreadCount(records),
+                                    onTodos = null, todoCount = 0, showTodos = false, inboxCount = inboxUnreadCount(records, conversations),
                                     settingsCount = 0, settingsDot = false, settingsBadge = null, pages = emptyList(),
                                     onPage = {}, onRetired = {})
                             }
@@ -74,19 +77,19 @@ class InboxUnreadBadgeShotsTest {
                 } }
                 for (choice in AppStyle.entries) for (night in listOf(false, true)) for (scale in listOf(1f, 2f)) {
                     rule.runOnIdle { style = choice; dark = night; fontScale = scale; records = records.map {
-                        if (it.item.id == "unread") it.copy(read = false) else it
+                        if (it.item.id in setOf("unread", "second")) it.copy(read = false) else it
                     } }
                     rule.onNodeWithText("Inbox").assertExists()
-                    rule.onNodeWithText("1").assertExists()
+                    rule.onNodeWithText("2").assertExists()
                     capture("${choice.name}-$night-$scale-unread")
                     rule.runOnIdle { records = records.map {
-                        if (it.item.id == "unread") it.copy(read = true) else it
+                        if (it.item.id in setOf("unread", "second")) it.copy(read = true) else it
                     } }
-                    rule.onNodeWithText("1").assertDoesNotExist()
+                    rule.onNodeWithText("2").assertDoesNotExist()
                     rule.onNodeWithText("0").assertDoesNotExist()
-                    assertEquals(4, records.count { !it.item.isDone })
+                    assertEquals(5, records.count { !it.item.isDone })
                     assertTrue(records.filter { it.item.id in setOf("fyi", "noise") }.none { it.read })
-                    capture("${choice.name}-$night-$scale-read-pending")
+                    capture("${choice.name}-$night-$scale-read")
                 }
             }
         } finally { operations.cancel() }

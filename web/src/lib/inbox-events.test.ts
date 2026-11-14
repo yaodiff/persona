@@ -10,7 +10,7 @@ vi.mock("../ui/atoms", () => ({ toast: vi.fn() }));
 import { toast } from "../ui/atoms";
 import { badgeCount, getInbox, reloadInbox, resetInboxForTests, sections, suggestionAct, TIERS, type InboxItem } from "./inbox";
 import {
-  actOnSuggestion, chainRows, chainTap, chainTime, firstLine, handlingWord, hasEvent, itemAtUid, preparing, statusOf, suggestionButtons, suggestionTitle,
+  actOnSuggestion, canExpand, chainRows, chainTap, chainTime, firstLine, handlingWord, hasEvent, itemAtUid, preparing, statusOf, suggestionButtons, suggestionTitle,
 } from "./inbox-events";
 
 const fixture = JSON.parse(readFileSync(join(__dirname, "../../../scripts/mock/inbox_events.json"), "utf8")) as { items: InboxItem[] };
@@ -92,8 +92,8 @@ describe("收件箱事件：建议的按钮", () => {
 });
 
 describe("收件箱事件：处理链条", () => {
-  it("folds to the newest entry", () => {
-    expect(ids(chainRows(waiting.chain, false))).toEqual(["c6"]);
+  it("folds to the three newest entries", () => {
+    expect(ids(chainRows(waiting.chain, false))).toEqual(["c4", "c5", "c6"]);
     expect(ids(chainRows(waiting.chain, true))).toEqual(["c1", "c2", "c3", "c4", "c5", "c6"]);
     expect(chainRows(undefined, false)).toEqual([]);
   });
@@ -110,6 +110,18 @@ describe("收件箱事件：处理链条", () => {
     expect(chainTap({ id: "x", kind: "related", text: "有关", link: { type: "item", id: "mail:a1:review:55" } }, conv)).toEqual({ kind: "route", route: { name: "inbox", id: "mail:a1:review:55" } });
     // an unknown link and nothing to expand: nothing happens
     expect(chainTap({ id: "x", kind: "future", text: "以后的", link: { type: "elsewhere" } }, conv)).toEqual({ kind: "none" });
+  });
+  it("keeps detail and messages expandable for reported and other kinds", () => {
+    const conv = (mid: string, sid: string) => ({ name: "session", mid, sid }) as const;
+    const reported = { id: "r", kind: "reported", text: "Assistant says: sent", detail: "Sent" };
+    expect(canExpand(reported)).toBe(true);
+    expect(chainTap(reported, conv)).toEqual({ kind: "expand" });
+    const withMessages = { ...reported, messages: [{ text: "Original message" }] };
+    expect(canExpand(withMessages)).toBe(true);
+    expect(chainTap(withMessages, conv)).toEqual({ kind: "expand" });
+    const other = { id: "t", kind: "triaged", text: "Sorted", detail: "The basis" };
+    expect(canExpand(other)).toBe(true);
+    expect(chainTap(other, conv)).toEqual({ kind: "expand" });
   });
   it("writes the time, with the day when it is not today", () => {
     const now = new Date(2026, 10, 5, 12, 0);

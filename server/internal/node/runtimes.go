@@ -97,6 +97,10 @@ type runtimeHello struct {
 		// Readonly: a session.start with permission_mode "plan" either starts in a read-only mode before its first
 		// prompt runs or is refused with readonly_unsupported; it never falls back to a writable provider (#3238).
 		Readonly bool `json:"readonly"`
+		// Workspaces: it keeps workspaces of its own, pushes them (runtime.workspaces) and makes worktrees as its
+		// workspaces (workspace.prepare, workspace.create): as the machine's engine, they are the catalog's and its
+		// worktrees are made by it (runtimeworkspaces.go).
+		Workspaces bool `json:"workspaces"`
 	} `json:"caps"`
 }
 
@@ -121,6 +125,10 @@ type runtimeConn struct {
 	resume       map[string][]string
 	transcripts  map[string]string
 	codexThreads map[string]string
+	// workspaces are its own workspaces, as its last runtime.workspaces said (caps.workspaces, runtimeworkspaces.go);
+	// workspacesSaid: it said them on this connection (a workspace missing from them is gone).
+	workspaces     []runtimeWorkspace
+	workspacesSaid bool
 	// daemon is its id in daemons.json when the node dialed it (daemons.go), "" for a runtime on the socket.
 	daemon string
 	// pid is the process at the other end of the runtime socket; 0 when not known (a daemon's link, the Orca bridge,

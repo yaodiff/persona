@@ -3,16 +3,13 @@ import SwiftUI
 
 /// The typed question's field and send button (#4486, DESIGN_SYSTEM.md 4.4), one view for the live sheet's bar
 /// (`RecordingLiveBar`) and the meeting page's (`MeetingPageBar`, #3862), so the two never drift apart: the composer's field
-/// (`ComposerSurface`, a vertical `TextField` that grows to `Theme.Recording.askLines` lines, `askLinesLargeType` at
-/// accessibility sizes) and its round send button (`ComposerRoundButton`), which stays in place dimmed
+/// (`ComposerSurface`, a vertical `TextField` that grows to `Theme.Recording.askLines` lines) and its round send button (`ComposerRoundButton`), which stays in place dimmed
 /// (`Theme.Recording.askSendIdle`) until there is something it can send. Return typed at the end of the field sends too.
 ///
-/// At standard sizes `beside` (the meeting page's [+]), the field and send sit on one row. At accessibility sizes the
-/// field takes the whole width and the row under it holds `under` (the live bar's Cancel, the meeting page's controls)
-/// with send at its trailing edge. The two rows join the stack of the bar that holds the view, with its spacing.
+/// `beside` (the meeting page's [+]), the field and send sit on one row.
 /// `instead` (the meeting page's Talk, #3862 phase 4) takes send's place while `showsInstead` (the field is empty), as
 /// the chat's voice button does.
-struct MeetingQuestionField<Beside: View, Under: View, Instead: View>: View {
+struct MeetingQuestionField<Beside: View, Instead: View>: View {
     @Binding var text: String
     var focus: FocusState<Bool>.Binding
     var placeholder: String
@@ -21,33 +18,19 @@ struct MeetingQuestionField<Beside: View, Under: View, Instead: View>: View {
     var canSend: Bool
     /// The field takes no words now (the bar's caption says why): a tap doesn't bring the keyboard up.
     var disabled = false
-    /// Spoken with the field at accessibility sizes, where the words that explain it step aside while it has the keyboard.
-    var largeTypeHint = ""
     /// The keyboard comes up as the field appears (the live bar opens its row for typing).
     var focusOnAppear = false
     /// `instead` stands where send is.
     var showsInstead = false
     var send: () -> Void
     @ViewBuilder var beside: () -> Beside
-    @ViewBuilder var under: () -> Under
     @ViewBuilder var instead: () -> Instead
 
-    @Environment(\.dynamicTypeSize) private var size
-
     var body: some View {
-        if size.isAccessibilitySize {
+        HStack(alignment: .bottom, spacing: Theme.Space.xs) {
+            beside()
             field
-            HStack(spacing: Theme.Space.m) {
-                under()
-                Spacer(minLength: Theme.Space.s)
-                trailing
-            }
-        } else {
-            HStack(alignment: .bottom, spacing: Theme.Space.xs) {
-                beside()
-                field
-                trailing
-            }
+            trailing
         }
     }
 
@@ -58,7 +41,7 @@ struct MeetingQuestionField<Beside: View, Under: View, Instead: View>: View {
     private var field: some View {
         TextField(placeholder, text: $text, axis: .vertical)
             .font(Theme.Font.body)
-            .lineLimit(1...(size.isAccessibilitySize ? Theme.Recording.askLinesLargeType : Theme.Recording.askLines))
+            .lineLimit(1...Theme.Recording.askLines)
             .focused(focus)
             .submitLabel(.send)
             .onSubmit { send() }
@@ -76,7 +59,6 @@ struct MeetingQuestionField<Beside: View, Under: View, Instead: View>: View {
             .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
             .onTapGesture { if !disabled { focus.wrappedValue = true } }
             .disabled(disabled)
-            .accessibilityHint(size.isAccessibilitySize ? Text(largeTypeHint) : Text(verbatim: ""))
             .accessibilityIdentifier("meeting-ask-field")
             .onAppear { if focusOnAppear { focus.wrappedValue = true } }
     }
@@ -89,13 +71,11 @@ struct MeetingQuestionField<Beside: View, Under: View, Instead: View>: View {
 }
 
 extension MeetingQuestionField where Beside == EmptyView, Instead == EmptyView {
-    /// Nothing beside the field at standard sizes (the live bar's row), and send always.
+    /// Nothing beside the field (the live bar's row), and send always.
     init(text: Binding<String>, focus: FocusState<Bool>.Binding, placeholder: String, sendLabel: String, canSend: Bool,
-         disabled: Bool = false, largeTypeHint: String = "", focusOnAppear: Bool = false, send: @escaping () -> Void,
-         @ViewBuilder under: @escaping () -> Under) {
+         disabled: Bool = false, focusOnAppear: Bool = false, send: @escaping () -> Void) {
         self.init(text: text, focus: focus, placeholder: placeholder, sendLabel: sendLabel, canSend: canSend, disabled: disabled,
-                  largeTypeHint: largeTypeHint, focusOnAppear: focusOnAppear, send: send, beside: { EmptyView() }, under: under,
-                  instead: { EmptyView() })
+                  focusOnAppear: focusOnAppear, send: send, beside: { EmptyView() }, instead: { EmptyView() })
     }
 }
 #endif

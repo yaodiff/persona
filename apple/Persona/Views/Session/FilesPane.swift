@@ -40,7 +40,7 @@ struct FilesPane: View {
     /// The item to mark after opening a folder (a found file, Show in Files Page, a link's real location).
     @State private var highlight: String?
     @AppStorage("files.showHidden") private var showHidden = false
-    @State private var transfers = FolderTransfers()
+    @State private var transfers: FolderTransfers
     @State private var pickingFiles = false
     @State private var pickingPhotos = false
     @State private var photoPicks: [PhotosPickerItem] = []
@@ -56,6 +56,21 @@ struct FilesPane: View {
     @State private var query = ""
     @FocusState private var findFocused: Bool
     @State private var finder = FilesFinder()
+
+    init(machineID: String, group: String = "", cwd: String, git: GitStatus? = nil, key: SessionKey? = nil,
+         reloadGit: (() async -> Void)? = nil, reveal: Binding<String?> = .constant(nil), transfers: FolderTransfers? = nil) {
+        self.machineID = machineID
+        self.group = group
+        self.cwd = cwd
+        self.git = git
+        self.key = key
+        self.reloadGit = reloadGit
+        self.reveal = reveal
+        let transfers = transfers ?? FolderTransfers()
+        transfers.session = key
+        _transfers = State(initialValue: transfers)
+    }
+
     /// New Folder / New Text File waiting for a name (#5828).
     @State private var naming: NewItem?
     @State private var newItemName = ""
@@ -141,7 +156,7 @@ struct FilesPane: View {
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: Theme.Space.s) {
-                    if !transfers.items.isEmpty {
+                    if !transfers.visibleItems.isEmpty {
                         FolderTransfersBar(transfers: transfers)
                     }
                     if selecting { selectionBar }
@@ -198,15 +213,8 @@ struct FilesPane: View {
                 upload(got.urls, owned: true)
             }
         }
-        // An alert, not a confirmation dialog: from a list that one is a popover with no Cancel (lessons/ios.md, #1830).
-        .alert(String(localized: "“\(transfers.conflictName)” already exists"),
-               isPresented: Binding(get: { transfers.conflict != nil }, set: { if !$0 { transfers.answer(.cancel) } })) {
-            Button("Replace") { transfers.answer(.replace) }
-            Button("Keep Both") { transfers.answer(.keep) }
-            Button("Cancel", role: .cancel) { transfers.answer(.cancel) }
-        } message: {
-            Text("This folder already has a file with that name. Replace overwrites it; Keep Both saves the new file as “name 2”.")
-        }
+        // The transfers' "already exists" questions, one after another in the order asked (#6113).
+        .background { FolderTransferQuestion(transfers: transfers) }
         .fileMover(isPresented: Binding(get: { transfers.saving != nil }, set: { if !$0 { transfers.saved() } }),
                    file: transfers.saving) { _ in transfers.saved() }
         .alert("Rename [Chats View 0d0cba]", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
@@ -262,13 +270,16 @@ struct FilesPane: View {
                 selecting = false
                 selection = []
                 if copyingPick {
-                    edits.copy(names.map(full), into: dir, cwd: cwd, machine: machine, model: model) { Task { await load() } }
+                    transfers.copy(names.map(full), into: dir, cwd: cwd, machine: machine, model: model) { Task { await load() } }
                 } else {
                     edits.move(names.map(full), into: dir, cwd: cwd, machine: machine, model: model) { Task { await load() } }
                 }
             }
         }
-        .onDisappear { transfers.stop() }
+        // Control Center, a call or the app switcher change the scene, not the page: they only pause progress polling.
+        // Leaving the page is what answers questions, stops downloads and drops a file waiting for Save to Files (#6113).
+        .onTabVisibility(sceneAware: true, appear: { transfers.resumePolling() }, disappear: { transfers.pausePolling() })
+        .onTabVisibility(appear: {}, disappear: { transfers.stop() })
         #if DEBUG
         .task { // `-showFilesDrop YES`: the folder looks as it does with files dragged over it (iPad), for screenshots
             if UserDefaults.standard.bool(forKey: "showFilesDrop") { dropping = true }
@@ -565,7 +576,7 @@ struct FilesPane: View {
     private func compress(_ names: [String]) {
         selecting = false
         selection = []
-        edits.compress(names.map(full), cwd: cwd, machine: machine, model: model) { made in
+        transfers.compress(names.map(full), cwd: cwd, machine: machine, model: model) { made in
             Task {
                 await load()
                 show(full(made), dir: false)
@@ -852,7 +863,7 @@ struct FilesPane: View {
 
     /// Copies names beside themselves ("name 2.ext"), the first copy marked.
     private func duplicate(_ names: [String]) {
-        edits.duplicate(names.map(full), cwd: cwd, machine: machine, model: model) { made in
+        transfers.duplicate(names.map(full), cwd: cwd, machine: machine, model: model) { made in
             Task {
                 await load()
                 if let first = made.first { show(full(first), dir: false) }
@@ -939,6 +950,59 @@ struct FilesPane: View {
             if listed != target { listing = nil }
             self.error = error.shown
         }
+    }
+}
+
+/// The "already exists" alert for the transfers' first question, one question at a time. Its buttons answer the question
+/// it shows, never the next one in line. After the first, each opening waits `Theme.Motion.alertHandoff` (UIKit presents
+/// one at a time), and a question whose alert UIKit dropped (another alert, sheet or picker was up) is asked again.
+private struct FolderTransferQuestion: View {
+    let transfers: FolderTransfers
+    /// The question the alert is open (or opening) for.
+    @State private var shown: FolderTransfers.Conflict.ID?
+    /// Its name, kept after it closes so the title does not go blank on the way out (lessons/ios.md, #1830).
+    @State private var name = ""
+    /// This view has opened the alert before: the next opening waits for that one to have closed.
+    @State private var opened = false
+    /// Bumped when the alert closed with its question still waiting, to ask again.
+    @State private var retry = 0
+
+    private struct Opening: Hashable {
+        var question: FolderTransfers.Conflict.ID?
+        var retry: Int
+    }
+
+    var body: some View {
+        let question = transfers.conflict.flatMap { $0.id == shown ? $0 : nil }
+        // An alert, not a confirmation dialog: from a list that one is a popover with no Cancel (lessons/ios.md, #1830).
+        // Closing it never answers: SwiftUI also writes false when UIKit drops a presentation, and that must not turn
+        // into Cancel. Every answer is a button, the row's Cancel, or leaving the page.
+        Color.clear
+            .allowsHitTesting(false)
+            .task(id: Opening(question: transfers.conflict?.id, retry: retry)) {
+                guard let next = transfers.conflict else { return }
+                if opened {
+                    try? await Task.sleep(for: Theme.Motion.alertHandoff)
+                    guard !Task.isCancelled, transfers.conflict?.id == next.id else { return }
+                }
+                opened = true
+                name = next.name
+                shown = next.id
+            }
+            .alert(String(localized: "“\(name)” already exists"),
+                   isPresented: Binding(get: { question != nil }, set: { presented in
+                       guard !presented, let id = shown, transfers.conflict?.id == id else { return }
+                       shown = nil
+                       retry += 1
+                   })) {
+                if let question {
+                    Button("Replace") { transfers.answer(.replace, to: question.id) }
+                    Button("Keep Both") { transfers.answer(.keep, to: question.id) }
+                    Button("Cancel", role: .cancel) { transfers.answer(.cancel, to: question.id) }
+                }
+            } message: {
+                Text("This folder already has a file with that name. Replace overwrites it; Keep Both saves the new file as “name 2”.")
+            }
     }
 }
 

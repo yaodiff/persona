@@ -1,6 +1,8 @@
 package persona.core.hub
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import persona.core.contracts.api.RequestManager
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import persona.core.contracts.JsonCodec
@@ -12,6 +14,35 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InboxAssistantTransportTest {
+    @Test fun itemReadsAnySourceByIdWithoutAListFilter() = runBlocking {
+        MockWebServer().use { server ->
+            val transport = HttpInboxAssistantTransport("scope", server.url("/").toString(), "test-token", OkHttpClient())
+            val response = """{"id":"item/with#separator","source":"github","kind":"issue","title":"A connector item","connector":{"thread":"example/repo#1"}}"""
+            server.enqueue(MockResponse().setBody(response))
+            assertEquals(JsonCodec.parseToJsonElement(response).jsonObject, transport.item("item/with#separator"))
+            val request = server.takeRequest()
+            assertEquals("GET", request.method)
+            assertEquals("/api/v1/inbox/item%2Fwith%23separator", request.path)
+            assertNull(request.requestUrl?.queryParameter("sources"))
+
+            server.enqueue(MockResponse().setBody("""{"id":"item"}"""))
+            withContext(RequestManager("m-2")) { transport.item("item") }
+            assertEquals("m-2", server.takeRequest().requestUrl?.queryParameter(ManagerQuery))
+        }
+    }
+
+    @Test fun itemFailuresKeepTheirHttpStatus() = runBlocking {
+        MockWebServer().use { server ->
+            val transport = HttpInboxAssistantTransport("scope", server.url("/").toString(), "test-token", OkHttpClient())
+            for (status in listOf(404, 502)) {
+                server.enqueue(MockResponse().setResponseCode(status).setBody("""{"error":"unavailable"}"""))
+                try { transport.item("item"); fail("The caller must handle HTTP $status") }
+                catch (e: HubFailure) { assertEquals(status, e.status) }
+                assertEquals("/api/v1/inbox/item", server.takeRequest().path)
+            }
+        }
+    }
+
     @Test fun handOffPostsTheItemAndStableAttemptIdAndReturnsItsSession() = runBlocking {
         MockWebServer().use { server ->
             val transport = HttpInboxAssistantTransport("scope", server.url("/").toString(), "test-token", OkHttpClient())

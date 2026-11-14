@@ -4,6 +4,8 @@
 
 Android 没有统一的系统提醒事项接口，故不注册 `phone_reminders_*`。健康数据通过 Health Connect 提供每天的汇总（`phone_health_summary`，安卓 14 起系统自带；写入健康数据 `phone_health_write_sample` 为 iOS 独有）。不申请通知监听权限，不读取其他 App 的通知。`phone_notifications_list` 是 Android 新增工具，只返回本应用当前显示的通知，不包含操作确认通知。
 
+Dietary metrics use `NutritionRecord` totals per local day: `dietary_energy` in kcal and `protein`, `carbs`, and `fat` in g. `resting_energy` uses `BasalMetabolicRateRecord.BASAL_CALORIES_TOTAL` in kcal. Today's totals end at the query time. The new read permissions are `READ_NUTRITION` and `READ_BASAL_METABOLIC_RATE`; existing users can grant them under Settings › Phone data › Health.
+
 ## 和 iOS 对齐（2026-11-02）
 
 hub 把各台手机同名的工具合并成一份定义（`server/internal/hub/hub.go` 的 `mcpTools` 取说明更长的那份），调用却可能发给任一台声明了它的手机（`phoneClient`）。所以除 `phone_notifications_list` 外，每个工具的名字、英文说明、参数（类型、说明、最小 / 最大值）和必填项都照 `apple/Persona/PhoneTools/*.swift` 逐字写（`PhoneToolCatalog`），连 iOS 说明里的「iOS version」「Allow Paste?」也不改。`PhoneToolCatalogTest` 拿 `src/test/resources/ios-phone-tools.json` 逐个比，夹具由 `python3 scripts/assets/export_ios_phone_tools.py` 从 iOS 源码导出（`--check` 只检查是否过期；iOS 独有的提醒事项和写健康数据不导出）。

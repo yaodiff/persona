@@ -271,6 +271,12 @@
     <string name="agents_new_parent">上一级</string>
     <string name="agents_new_no_subdirectories">这个目录下没有子目录</string>
     <string name="agents_new_git_repo">Git 仓库</string>
+    <string name="agents_workspace_title">工作区</string>
+    <string name="agents_workspace_main">主检出</string>
+    <string name="agents_workspace_folder">文件夹</string>
+    <string name="agents_workspace_other">其他工作区</string>
+    <string name="agents_workspace_choose_folder">按文件夹选择</string>
+    <string name="agents_workspace_kind_branch">%1$s · %2$s</string>
     <string name="agents_new_retry_open">重试打开</string>
     <string name="agents_new_tab_in">在「%1$s」开新标签</string>
     <string name="agents_new_online">在线</string>

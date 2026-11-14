@@ -6,6 +6,7 @@ struct TodoDetailView: View {
     @Environment(\.tabIsActive) private var inFront
     @Environment(\.dismiss) private var dismiss
     var todoID: String
+    var openAgent: ((SessionKey) -> Void)? = nil
 
     @State private var store = TodoStore.shared
     @State private var text = TodoEditorText()
@@ -401,8 +402,12 @@ struct TodoDetailView: View {
         }()
 
         return Button {
-            dismiss()
-            openTodoAgentChat(key, in: model)
+            if let openAgent {
+                openAgent(key)
+            } else {
+                dismiss()
+                openTodoAgentChat(key, in: model)
+            }
         } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 if isFailed {

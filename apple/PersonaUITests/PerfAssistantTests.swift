@@ -39,15 +39,23 @@ final class PerfAssistantTests: PerfTestCase {
     /// Real replies streamed at the cadence a phone gets them (#6651): the model's recorded token times
     /// (`scripts/mock/stream_traces/`), sent as the node sends them (`node=trail`; `PERSONA_PERF_STREAM_NODE=lead` for the
     /// node before #6651). The frames record the gaps between visible text changes (`StreamCadence`).
+    /// Opened as `StreamingScrollTests` does (`-openChatsFresh`, a conversation of its own): the main conversation opens
+    /// on its card page here, where nothing of the stream is drawn (#6991).
     @MainActor func testStreamingTraceMarkdown() throws {
-        openMain()
-        measureIdle(push: "say?trace=markdown&node=" + Self.streamNode, seconds: 24)
+        openStreaming()
+        measureIdle(push: "say?trace=markdown&user=%E5%86%99%E4%B8%80%E4%B8%8B&node=" + Self.streamNode, seconds: 24)
     }
 
     /// A long reply of plain paragraphs, likewise.
     @MainActor func testStreamingTraceProse() throws {
-        openMain()
-        measureIdle(push: "say?trace=prose&node=" + Self.streamNode, seconds: 44)
+        openStreaming()
+        measureIdle(push: "say?trace=prose&user=%E5%86%99%E4%B8%80%E4%B8%8B&node=" + Self.streamNode, seconds: 44)
+    }
+
+    @MainActor private func openStreaming() {
+        _ = launch(["-dev.openChat", "", "-openChatsFresh", "YES", "-tab", "assistant", "-openAssistant",
+                "server/b2e4d6f8-0000-4000-8000-000000000004"])
+        sleep(4)
     }
 
     static var streamNode: String { ProcessInfo.processInfo.environment["PERSONA_PERF_STREAM_NODE"] ?? "trail" }
@@ -140,6 +148,21 @@ final class PerfAssistantTests: PerfTestCase {
             wait(app.buttons["assistant-sidebar-button"])
             sleep(1)
         }
+    }
+
+    /// The same switch with nothing of XCTest's inside the measured frames: the app changes pages on a cue
+    /// (`FrameProbe.switchPages`) and the test only sleeps. `testTabSwitchAssistantAgents` taps and waits through the
+    /// accessibility tree, and each of those queries runs on the app's main thread; what this one reports is the app's.
+    @MainActor func testTabSwitchAssistantAgentsByCue() throws {
+        openMain()
+        see(app.buttons["shell-agents"].firstMatch, "the Agents switch")
+        measureTransition(navigation: false) {
+            darwinPost("com.persona.perf.shell.switch")
+            sleep(2)
+            darwinPost("com.persona.perf.shell.switch")
+            sleep(2)
+        }
+        see(app.buttons["assistant-sidebar-button"], "Assistant in front again after an even number of switches", timeout: 10)
     }
 
     /// The task board sheet from the action bar's Progress tray (#2879), presented and closed.

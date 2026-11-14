@@ -131,21 +131,24 @@ struct BriefCardTests {
         func page(_ id: String) -> BriefBody.Setup.Page? { BriefBody.Setup(id: id, text: "x").page }
         #expect(["triage_decide", "triage_auto_continue", "triage_wake"].map(page) == [.triage, .triage, .triage])
         #expect(page("supervisor_tier") == .superviseModel)
+        #expect(page("standing_authorizations") == .standingAuthorizations)
         // Not turned on at a page of this app: a remembered kind of task (a plan card's own checkbox; Auto-Start Tasks
-        // only lists and removes them), standing authorizations (the web app's), leader conversations (Pin in a chat's
-        // menu), the spot-check share (asked of Persona) and the two the assistant's configuration file holds.
-        let none = ["task_trust", "standing_authorizations", "leaders", "review_sample", "delegate", "independent_review", ""]
+        // only lists and removes them), leader conversations (Pin in a chat's menu), the spot-check share (asked of
+        // Persona) and the two the assistant's configuration file holds.
+        let none = ["task_trust", "leaders", "review_sample", "delegate", "independent_review", ""]
         #expect(none.allSatisfy { page($0) == nil })
-        // Only the line whose page the hub names in Settings, and that only the web app has, says so.
-        let onTheWeb = (none + ["triage_wake", "supervisor_tier"]).filter { BriefBody.Setup(id: $0, text: "x").isOnTheWebOnly }
-        #expect(onTheWeb == ["standing_authorizations"])
         // Settings opens on the mechanism's page.
         var triage = NavigationPath()
         triage.append(SettingsPage.triage)
         var model = NavigationPath()
         model.append(SettingsPage.modelConfiguration)
         model.append(ModelPurposeRoute(id: "assistant.supervise"))
+        // Standing authorizations are in the assistant's profile: Back goes there.
+        var standing = NavigationPath()
+        standing.append(SettingsPage.assistant)
+        standing.append(SettingsPage.standingAuthorizations)
         #expect(BriefSetupPages.path(.triage) == triage && BriefSetupPages.path(.superviseModel) == model)
+        #expect(BriefSetupPages.path(.standingAuthorizations) == standing)
     }
 
     /// A briefing with the block is still one line of its conversation, where its time puts it.

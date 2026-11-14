@@ -169,7 +169,9 @@ final class MeetingSpeaker {
     /// Its audio began: the stretch Persona speaks in starts here.
     private func began(_ run: Int) {
         guard self.run == run, spanStart == nil else { return }
-        spanStart = deps.timeline()
+        let at = deps.timeline()
+        spanStart = at
+        if let recording { deps.speaking(recording, true, at, pending?.text) }
     }
 
     /// The answer ended (played out, or cut by an interruption).
@@ -183,7 +185,10 @@ final class MeetingSpeaker {
     /// dropped.
     private func finished() {
         run += 1
-        if let id = recording, let span = openSpan(for: id) { deps.spoken(id, span) }
+        if let id = recording, let span = openSpan(for: id) {
+            deps.spoken(id, span)
+            deps.speaking(id, false, span.end, nil)
+        }
         if overrodeOutput {
             deps.restoreOutput()
             overrodeOutput = false
@@ -255,6 +260,9 @@ extension MeetingSpeaker {
         var timeline: () -> Double
         /// Marks a stretch Persona spoke in on the recording.
         var spoken: (_ recording: UUID, _ span: RecordingSpan) -> Void
+        /// Persona began (`on`, saying `text`) or stopped saying an answer at `at`: the audio socket says so in hub mode
+        /// (#3862 phase 5, `MeetingTranscription.speaking`), so the hub holds back what may be its echo.
+        var speaking: (_ recording: UUID, _ on: Bool, _ at: Double, _ text: String?) -> Void = { _, _, _, _ in }
         /// Moves the voice to the loudspeaker when nothing else would play it (`VoiceRoute.output`); whether it did.
         var routeToSpeaker: () -> Bool
         var restoreOutput: () -> Void
@@ -274,6 +282,7 @@ extension MeetingSpeaker.Deps {
              maySpeak: { MeetingAsk.shared.deps.maySpeak($0) },
              timeline: { RecordingCapture.shared.timeline },
              spoken: { id, span in RecordingLibrary.shared.change(id) { entry in entry.attendance?.spoken.append(span) } },
+             speaking: { id, on, at, text in MeetingTranscription.shared.speaking(id, voice: .answer, on: on, at: at, text: text) },
              routeToSpeaker: {
                  let session = AVAudioSession.sharedInstance()
                  guard VoiceRoute.output(PhoneVoiceAudio.snapshot(session)).speaker else { return false }

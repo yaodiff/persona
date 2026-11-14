@@ -15,7 +15,7 @@ import persona.core.contracts.api.*
 @OptIn(ExperimentalCoroutinesApi::class)
 class InboxSwipeRegressionTest {
     private class Transport(val now: () -> Long, override val scope: String = "synthetic/generation") : InboxAssistantTransport {
-        var items = listOf(item("a"), item("b"), item("c"))
+        var items = listOf(itemRow("a"), itemRow("b"), itemRow("c"))
         var lastWriteAt = 0L
         var lists = 0
         var writes = 0
@@ -40,10 +40,10 @@ class InboxSwipeRegressionTest {
             onWrite()
             lastWriteAt = now()
             if (failWrite) throw IOException("Synthetic write failure")
-            val changed = items.map { target -> item(target.id, done = action != InboxBulkAction.Reopen) }
+            val changed = items.map { target -> itemRow(target.id, done = action != InboxBulkAction.Reopen) }
             if (conflict) {
                 this.items = this.items.map { old ->
-                    if (items.any { it.id == old["id"]?.jsonPrimitive?.content }) item(old.getValue("id").jsonPrimitive.content, version = "v2") else old
+                    if (items.any { it.id == old["id"]?.jsonPrimitive?.content }) itemRow(old.getValue("id").jsonPrimitive.content, version = "v2") else old
                 }
                 return buildJsonObject { put("skipped", JsonArray(items.map { target -> buildJsonObject { put("id", target.id); put("reason", "changed") } })) }
             }
@@ -60,7 +60,7 @@ class InboxSwipeRegressionTest {
         override suspend fun media(ref: String) = error("No media")
     }
     companion object {
-        private fun item(id: String, done: Boolean = false, version: String = "v1", manager: String? = null) = buildJsonObject {
+        private fun itemRow(id: String, done: Boolean = false, version: String = "v1", manager: String? = null) = buildJsonObject {
             put("id", id); put("version", version); put("source", "mail"); put("kind", "mail"); put("title", id)
             if (done) put("done_at", "2026-11-09T00:00:00Z")
             manager?.let { put("manager", it) }
@@ -165,7 +165,7 @@ class InboxSwipeRegressionTest {
                 val write = async { runCatching { repository.bulk(listOf(InboxDoneTarget("a", "v1")), InboxBulkAction.Done) } }
                 runCurrent()
                 assertTrue(repository.snapshot.value.records.first { it.item.id == "a" }.item.isDone)
-                f.transport.items = listOf(item("a", version = "v2"), item("b"), item("c"))
+                f.transport.items = listOf(itemRow("a", version = "v2"), itemRow("b"), itemRow("c"))
                 repository.refresh()
                 assertFalse(repository.snapshot.value.records.first { it.item.id == "a" }.item.isDone)
                 release.complete(Unit)
@@ -183,7 +183,7 @@ class InboxSwipeRegressionTest {
         val f = Fixture(this)
         try {
             AssistantManagerChoice.choose("synthetic", null, "default")
-            f.transport.items = listOf(item("same", manager = "default"), item("same", manager = "other"))
+            f.transport.items = listOf(itemRow("same", manager = "default"), itemRow("same", manager = "other"))
             val repository = f.start()
             val other = repository.snapshot.value.records.single { it.manager == "other" }
             repository.bulk(listOf(InboxDoneTarget(other.item.id, "v1")), InboxBulkAction.Done)
@@ -220,7 +220,7 @@ class InboxSwipeRegressionTest {
     @Test fun sixWritesAreOptimisticButNetworkConcurrencyIsBounded() = runTest {
         val f = Fixture(this)
         try {
-            f.transport.items = (1..6).map { item(it.toString()) }
+            f.transport.items = (1..6).map { itemRow(it.toString()) }
             val repository = f.start()
             val writes = (1..6).map { id -> async { repository.bulk(listOf(InboxDoneTarget(id.toString(), "v1")), InboxBulkAction.Done) } }
             runCurrent()

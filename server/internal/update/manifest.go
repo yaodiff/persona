@@ -37,6 +37,9 @@ type Manifest struct {
 	// "linux-amd64" -> its download. A manager sends one to a node that runs it (docs/operations/node-update.md); personad's own
 	// downloads (Files) run a node too. Older hubs ignore them.
 	Nodes map[string]map[string]File `json:"nodes,omitempty"`
+	// Links are the independently installed persona-link connectors, by platform. They are downloaded and installed
+	// explicitly, never swapped by a hub or manager. Old hubs ignore this field.
+	Links map[string]File `json:"links,omitempty"`
 	// NodeProtocol, NodeProtocolMin and NodeCapabilities are what this release's nodes announce in node.info
 	// (internal/nodeproto, docs/protocol/protocol.md "Node handshake"): a manager of another build sends one only when it
 	// drives such a node. Releases from before leave them out (0: unknown, never taken in another build's place).
@@ -147,8 +150,8 @@ func ParseManifest(b []byte) (*Manifest, error) {
 }
 
 // BuildManifest describes the downloads in dir: every personad-<os>-<arch>.gz there, every program's
-// <program>-<os>-<arch>.gz and every node program's (persona-node-<os>-<arch>.gz), with its hashes and the hash of
-// what it unpacks to.
+// <program>-<os>-<arch>.gz, every node program's (persona-node-<os>-<arch>.gz) and the independent connector's
+// (persona-link-<os>-<arch>[.exe].gz), with its hashes and the hash of what it unpacks to.
 func BuildManifest(dir string, m Manifest) (*Manifest, error) {
 	gzs, err := manifestArtifacts(dir)
 	if err != nil {
@@ -172,6 +175,23 @@ func BuildManifest(dir string, m Manifest) (*Manifest, error) {
 			}
 			m.Nodes[p][strings.TrimSuffix(strings.TrimPrefix(filepath.Base(gz), p+"-"), ".gz")] = f
 		}
+	}
+	links, err := filepath.Glob(filepath.Join(dir, "persona-link-*-*.gz"))
+	if err != nil {
+		return nil, err
+	}
+	m.Links = map[string]File{}
+	for _, link := range links {
+		f, err := describe(link)
+		if err != nil {
+			return nil, err
+		}
+		platform := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(link), "persona-link-"), ".gz")
+		platform = strings.TrimSuffix(platform, ".exe")
+		m.Links[platform] = f
+	}
+	if len(m.Links) == 0 {
+		m.Links = nil
 	}
 	m.Files = map[string]File{}
 	for _, p := range gzs {

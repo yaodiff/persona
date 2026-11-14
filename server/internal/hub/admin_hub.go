@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -215,10 +214,14 @@ func (h *Hub) adminHubRoutes(mux *http.ServeMux) {
 		defer h.admin.doctorMu.Unlock()
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		var out bytes.Buffer
-		_ = Doctor(ctx, &out)
-		items, next := parseDoctor(out.String())
-		writeJSON(w, map[string]any{"items": items, "next": next, "ran_at": time.Now().UTC()})
+		// The same checks as `personad hub doctor`, worded in the page's language (#5520) rather than parsed back out
+		// of the terminal's text.
+		dir := h.cfg.dir
+		if dir == "" {
+			dir = dataDir()
+		}
+		d := runDoctor(ctx, dir, h.requestLang(r))
+		writeJSON(w, map[string]any{"items": d.itemsOrEmpty(), "next": d.nextOrEmpty(), "ran_at": time.Now().UTC()})
 	})
 	mux.HandleFunc("POST /api/v1/admin/restart", func(w http.ResponseWriter, r *http.Request) {
 		if !h.supervised() {
@@ -235,47 +238,4 @@ func (h *Hub) adminHubRoutes(mux *http.ServeMux) {
 			h.restartHub()
 		}()
 	})
-}
-
-type doctorItem struct {
-	Level  string `json:"level"` // ok | problem | info
-	Item   string `json:"item"`
-	Detail string `json:"detail"`
-}
-
-// parseDoctor turns `personad hub doctor`'s report (doctor.go: "OK | item: detail", "Problem | item: action", then "Next:"
-// and its - lines) into items for the page; any other line is information about the item before it.
-func parseDoctor(text string) (items []doctorItem, next []string) {
-	items, next = []doctorItem{}, []string{}
-	inNext := false
-	for _, line := range strings.Split(text, "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case trimmed == "":
-			continue
-		case trimmed == "下一步：":
-			inNext = true
-			continue
-		case inNext && strings.HasPrefix(trimmed, "- "):
-			next = append(next, strings.TrimPrefix(trimmed, "- "))
-			continue
-		}
-		level, rest := "info", trimmed
-		if after, ok := strings.CutPrefix(trimmed, "正常｜"); ok {
-			level, rest = "ok", after
-		} else if after, ok := strings.CutPrefix(trimmed, "有问题｜"); ok {
-			level, rest = "problem", after
-		}
-		if level == "info" && strings.HasPrefix(line, "  ") && len(items) > 0 {
-			last := &items[len(items)-1]
-			last.Detail = strings.TrimSpace(last.Detail + "\n" + trimmed)
-			continue
-		}
-		item, detail, found := strings.Cut(rest, "：")
-		if !found {
-			item, detail = "", rest
-		}
-		items = append(items, doctorItem{Level: level, Item: item, Detail: detail})
-	}
-	return items, next
 }

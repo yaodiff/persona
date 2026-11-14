@@ -669,7 +669,7 @@ final class DemoHub {
         sockets.removeAll { $0.socket == nil }
         sockets.append(WeakSocket(socket: s))
         s.send(["type": "hello", "server_version": "demo", "client_id": "demo",
-                "features": ["file_upload", "terminal_stream", "task_push", .string(ProviderScopeForm.feature)]])
+                "features": ["file_upload", "terminal_stream", "task_push", "task_inbox", .string(ProviderScopeForm.feature)]])
         s.send(["type": "machines", "machines": .array(machines)])
         for m in Set(sessions.compactMap { $0["machine_id"]?.string }).sorted() {
             s.send(["type": "sessions", "machine_id": .string(m), "sessions": .array(sessions.filter { $0["machine_id"]?.string == m })])

@@ -233,6 +233,17 @@ nonisolated enum TodoTriageLogic {
         return todo.failedToStart && t?.rule == .failedStart && t?.section == .waiting
     }
 
+    /// `checksAsOpen` for a checkbox drawn outside the To-dos list (a meeting's action item, #6563), with the triage the
+    /// list gives the to-do. Only a closed failed start needs it, so only then are `all` (whose finished work may have
+    /// superseded it) and `lookup` read.
+    static func checksAsOpen(_ todo: TodoItem, among all: () -> [TodoItem], lookup: () -> TodosLogic.SessionLookup?,
+                             now: Date, calendar: Calendar = .current) -> Bool {
+        guard todo.doneAt != nil, todo.failedToStart else { return todo.doneAt == nil }
+        let t = triage(todo, lookup: lookup(), now: now, superseded: supersededFailedStarts(all()).contains(todo.id),
+                       calendar: calendar)
+        return checksAsOpen(todo, t)
+    }
+
     /// Where a to-do stands for every count of open work (#3331): the To-dos page's "Not done" and the assistant's
     /// Progress entry read this one rule, so the two numbers agree (the web's `todoBucket`).
     static func bucket(_ todo: TodoItem, lookup: TodosLogic.SessionLookup?, now: Date, restoredAt: Date? = nil,

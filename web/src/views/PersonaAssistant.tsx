@@ -13,7 +13,8 @@ import { codedFailure, helpTopic, passesBySelf, refreshReadiness, type CodedFail
 import { conversationPage } from "../lib/conversation-page";
 import { navigate } from "../lib/router";
 import { hubHas, refreshAssistant, useStore } from "../lib/store";
-import { effectiveLauncher, NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickEffort, pickLauncher, usePickedLauncher } from "../lib/assistant-chat";
+import { effectiveLauncher, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel, pickEffort, pickFast, pickLauncher, usePickedLauncher } from "../lib/assistant-chat";
+import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../lib/assistant-models";
 import { adoptedConversation, noteSent, outboxMessage } from "../lib/outbox";
 import { CLEAR_MAIN_FEATURE, isClearCommand, mainCommands, useMainCleared } from "../lib/main-clear";
 import { Button, cx, EASE, IconButton, Loading } from "../ui/atoms";
@@ -252,6 +253,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
   const docked = Boolean(sending) || Boolean(main && cleared);
   // /clear on the main conversation's page while there is none: nothing to clear, and never its first message
   const clearable = useStore((s) => Boolean(main) && hubHas(s.features, CLEAR_MAIN_FEATURE));
+  const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const commands = useMemo(() => (clearable && docked ? mainCommands() : []), [clearable, docked]);
   // the box is the same element in both layouts (a refused start gets its words and pictures back in it): it moves
   const box = useRef<HTMLDivElement>(null);
@@ -280,11 +282,11 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
   };
 
   const startOnce = async (out: Outgoing): Promise<boolean> => {
-    // what the model pill picked for this new chat (#5033): the launcher, its model, the effort
+    // what the model pill picked for this new chat (#5033): launcher, model, effort and native speed stay independent
     const launcher = pickedLauncher(NEW_CONVERSATION);
-    const body = { prompt: out.text, images: out.images.length ? out.images : undefined, launcher, model: launcher ? pickedModel(NEW_CONVERSATION) : undefined, effort: pickedEffort(NEW_CONVERSATION), main: main || undefined };
     // written for the manager shown now: its retries go there even if the switcher moves meanwhile
     const chosen = chosenManager() ?? undefined;
+    const body = { prompt: out.text, images: out.images.length ? out.images : undefined, launcher, model: launcher ? pickedModel(NEW_CONVERSATION) : undefined, effort: pickedEffort(NEW_CONVERSATION), service_tier: startServiceTier && !chosen && pickedFast() ? "priority" : undefined, main: main || undefined };
     const headers = ownerHeaders(chosen);
     const from = shownManager();
     // one op id for this message, its quiet retries included (#1382); sent again after a refusal, it gets a new one
@@ -299,6 +301,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
         noteSent(r.session.machine_id, r.session.session_id, out);
         if (launcher) pickLauncher(NEW_CONVERSATION, undefined);
         pickEffort(NEW_CONVERSATION, undefined);
+        pickFast(false);
         void refreshAssistant().catch(() => {});
         navigate(conversationPage(r.session.session_id, r.session.machine_id, from));
         return true;

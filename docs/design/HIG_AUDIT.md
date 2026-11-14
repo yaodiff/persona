@@ -57,7 +57,7 @@ Severity:
 
 Checked: touch targets, Dynamic Type, dark mode, contrast, VoiceOver labels and traits, Reduce Motion and Reduce Transparency, SF Symbols, system components, navigation, safe areas, feedback and haptics, notifications and permissions, plus the watch app, complications, widgets, Live Activity, Mac and visionOS code.
 
-Limitations: static review only. Hit areas, contrast ratios and heights were computed from code, not measured on a device. Increase Contrast rendering and real safe-area and keyboard behavior were not exercised on a device; the layout, safe-area and keyboard dimension was reviewed by reading the code and yielded three P2 findings (HIG-083 to HIG-085), with no safe-area or keyboard-overlap defect found beyond them. The Mac app is frozen (see `docs/apple/mac-design.md`), so Mac findings matter only for bug fixes. Findings that failed verification are listed in the appendix.
+Limitations: static review only. Hit areas, contrast ratios and heights were computed from code, not measured on a device. Increase Contrast rendering and real safe-area and keyboard behavior were not exercised on a device; the layout, safe-area and keyboard dimension was reviewed by reading the code and yielded three P2 findings (HIG-083 to HIG-085), with no safe-area or keyboard-overlap defect found beyond them. The native Mac app was frozen (see `docs/archive/apple/mac-design.md`), so Mac findings mattered only for bug fixes. Findings that failed verification are listed in the appendix.
 
 ## 3. Checklist
 
@@ -280,7 +280,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-024 Mac composer thumbnail Remove button is 18pt and hover-only
 - **Severity**: P2. **Platform**: macOS (frozen).
-- **Location**: `apple/Mac/Chat/MacComposerThumb.swift:21`, `apple/Mac/Chat/MacComposerThumb.swift:31`, `apple/Mac/Chat/MacComposerThumb.swift:39`.
+- **Location**: the retired native Mac composer thumbnail source (removed with the target).
 - **Violates**: [Accessibility][a11y]: macOS minimum 20x20 (default 28).
 - **Problem**: the badge is `Theme.Size.badge` (18) at zero opacity until hover or keyboard focus. It has a label and a focus path.
 - **Evidence**: `.scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge) ... .opacity(shown ? 1 : 0)`.
@@ -308,7 +308,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Violates**: [Typography][typo]: minimize truncation; stack at large sizes.
 - **Problem**: about 95 `minimumScaleFactor` uses. The stage bar draws six stage names at 0.7 in one sixth of the width each; the checklist sentence is one line at 0.8. Scaling happens only on overflow (likely at large sizes or long translations), where it can pass below 11pt. Shrinking a numeric cell (`UsageCharts.swift`) is fine.
 - **Evidence**: `.lineLimit(1).minimumScaleFactor(0.7)` on `Theme.Font.caption`.
-- **Fix**: let sentences wrap; show only the current stage (or stack) when `isAccessibilitySize`; limit shrink to about 0.85 (the stage bar is done, #5892: at the accessibility sizes its dots have no names and one line names the current step and its place).
+- **Fix**: let sentences wrap; show only the current stage (or stack) when `isAccessibilitySize`; limit shrink to about 0.85 (the stage bar is done, #5892: where the names do not fit their sixths, by width, its dots have no names and one line names the current step and its place).
 
 #### HIG-028 Fixed-size text below 11pt ignores Dynamic Type
 - **Severity**: P2. **Platform**: iOS.
@@ -528,12 +528,12 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Fix**: move to the system soft top edge effect, or document the fog with a solid reduced-transparency fallback.
 
 #### HIG-055 Symbol vocabulary leaks in unscanned targets
-- **Severity**: P2. **Platform**: macOS helper, widgets.
-- **Location**: `apple/PersonaLink/Sources/PersonaLink/PairView.swift:145`, `apple/PersonaLink/Sources/PersonaLink/PairView.swift:226`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:163`, `apple/PersonaWidgets/PersonaControls.swift:13`, `apple/PersonaWidgets/FleetLiveActivity.swift:409`, `apple/PersonaTests/IconVocabularyTests.swift:38`.
+- **Severity**: P2. **Platform**: widgets (the separate Mac menu bar package was retired in #6770).
+- **Location**: `apple/PersonaWidgets/PersonaControls.swift:13`, `apple/PersonaWidgets/FleetLiveActivity.swift:409`, `apple/PersonaTests/IconVocabularyTests.swift:38`.
 - **Violates**: [Icons][icons]: use consistent standard symbols (the one-meaning rule is a project rule, see `docs/apple/icons.md`).
-- **Problem**: the test scans only three source folders; the Mac helper uses a retired failure symbol, and widgets use raw strings that duplicate `Theme.Icon` entries. PersonaLink is a separate package and may not see `Icons.swift`.
+- **Problem**: the test scans only three source folders, and widgets use raw strings that duplicate `Theme.Icon` entries.
 - **Evidence**: `Image(systemName: result.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")`.
-- **Fix**: use the app tokens in widgets (Shared is compiled in); extend the test to those targets; give the package a small local copy with a comparison test.
+- **Fix**: use the app tokens in widgets (Shared is compiled in) and extend the test to those targets.
 
 #### HIG-056 Hidden custom spinner and overloaded trash symbol
 - **Severity**: P2. **Platform**: iOS.
@@ -601,7 +601,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-064 iPad has no menu-bar commands and little pointer support
 - **Severity**: P2. **Platform**: iPadOS.
-- **Location**: `apple/Mac/App/PersonaMacApp.swift:27`, `apple/Mac/App/PersonaMacApp.swift:127`, `apple/Persona/DesignSystem/ShellComposerBar.swift:213`, `apple/Persona/DesignSystem/Styling.swift:45`, `apple/Persona/DesignSystem/MacHover.swift:33`, `apple/Persona/Views/Session/Terminal/TerminalInput.swift:262`.
+- **Location**: the retired native Mac app command set, `apple/Persona/DesignSystem/ShellComposerBar.swift:213`, `apple/Persona/DesignSystem/Styling.swift:45`, `apple/Persona/DesignSystem/MacHover.swift:33`, `apple/Persona/Views/Session/Terminal/TerminalInput.swift:262`.
 - **Violates**: [Design principles][dp] ("Consider a variety of input methods"); the keyboard and pointing pages were not in the digest, so this is a recommendation.
 - **Problem**: the Mac app has full commands; the iOS target has none, so the iPad shortcut overlay lacks New Chat, Search, Settings or tab switching. Hover effects are visionOS only; system buttons and glass `.interactive()` still respond, so the gap is custom tappable rows.
 - **Evidence**: `.hoverEffect(isEnabled: interactive)` inside a visionOS block only.
@@ -681,7 +681,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-074 Camera purpose string shows a CLI command
 - **Severity**: P2. **Platform**: iOS, macOS, visionOS.
-- **Location**: `apple/Persona/Resources/Info.plist:57`, `apple/Mac/Resources/Info.plist:56`, `apple/Vision/Resources/Info.plist:48`, `apple/project.yml:177`, `apple/project.yml:273`, `apple/project.yml:361`.
+- **Location**: `apple/Persona/Resources/Info.plist:57`, the retired native Mac Info.plist, `apple/Vision/Resources/Info.plist:48`, `apple/project.yml:177`, `apple/project.yml:273`, `apple/project.yml:361`.
 - **Violates**: [Privacy][priv]: clear purpose string; [Writing][writing]: avoid jargon.
 - **Problem**: the camera usage text includes a backticked shell command. The strings are declared in `project.yml` as well as the plists, so editing only one drifts. Whether Mac and Vision need their other usage strings was not checked.
 - **Evidence**: `Persona uses the camera to scan the pairing QR code printed by ...`.
@@ -711,13 +711,13 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Evidence**: `static let surface = Color.clear`.
 - **Fix**: a system background for system families and clear only for accessory families; check light, dark, tinted and clear.
 
-#### HIG-078 PersonaLink menu mixes hard-coded Chinese with localized strings
-- **Severity**: P2. **Platform**: macOS helper.
-- **Location**: `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:24`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:57`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:105`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:166`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:186`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:287`, `apple/PersonaLink/Sources/PersonaLink/Attention.swift:277`.
+#### HIG-078 Retired PersonaLink menu mixed hard-coded Chinese with localized strings
+- **Severity**: P2 (historical). **Platform**: retired macOS menu bar UI, removed in #6770.
+- **Location**: the retired Mac menu bar UI, retained in git history rather than as a current repository path.
 - **Violates**: [Layout](https://developer.apple.com/design/human-interface-guidelines/layout): test localizations; [Writing][writing]: one consistent voice.
-- **Problem**: the row title is a plain string, so literals (status, state pill, reconnect and quit rows, and more) are never looked up in the catalog. The same panel then alternates languages for English users. Counts of lines with CJK text: 44 in the menu view, 36 in the pairing view, 5 in the rename view.
+- **Problem**: row titles used plain strings, bypassing the retired package's catalog. The desktop setup now uses its three-language resources, and the connector uses terminal localization.
 - **Evidence**: `MenuRow(title: <hard-coded Chinese>, ...)` versus `MenuRow(title: linkText("Set Web Address…"), ...)`.
-- **Fix**: route every visible string through `linkText(...)` with English keys and en, zh-Hans and ja entries; changing the parameter to a localized key alone would miss this package's bundle. The owner should decide whether the helper is Chinese-first.
+- **Resolution**: the menu bar UI and its separate catalog are removed, not carried into Electron.
 
 #### HIG-079 Live Activity secondary text is regular weight
 - **Severity**: P2. **Platform**: Live Activity.
@@ -727,17 +727,17 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Evidence**: `Text(FleetText.line(item)).font(.caption).foregroundStyle(secondary).lineLimit(1)`.
 - **Fix**: a shared medium-weight caption style, starting with the needs-you request line; use one secondary opacity.
 
-#### HIG-080 PersonaLink menu rows highlight only on hover
-- **Severity**: P2. **Platform**: macOS helper.
-- **Location**: `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:306`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:286`, `apple/PersonaLink/Sources/PersonaLink/PersonaLinkApp.swift:14`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:58`.
+#### HIG-080 Retired PersonaLink menu rows highlighted only on hover
+- **Severity**: P2 (historical). **Platform**: retired macOS menu bar UI, removed in #6770.
+- **Location**: the retired Mac menu bar UI, retained in git history rather than as a current repository path.
 - **Violates**: [Buttons][btn]: always include a press state for a custom button; [Accessibility][a11y]: support Full Keyboard Access.
-- **Problem**: rows are plain buttons whose accent fill comes only from hover; keyboard focus gets no highlight and there is no arrow-key navigation (only a quit key equivalent). Rows have visible title text, so VoiceOver is fine.
+- **Problem**: rows were plain buttons whose accent fill came only from hover; keyboard focus had no highlight.
 - **Evidence**: `Button(action: action) { content(hover && !disabled) }.buttonStyle(.plain).onHover { hover = $0 }`.
-- **Fix**: drive the highlight from hover or focus; optionally add arrow-key handling.
+- **Resolution**: the custom menu bar interaction is removed; Link controls live in the Electron setup window and its keyboard/accessibility behavior.
 
 #### HIG-081 Mac Link panel header buttons rely on tooltips
 - **Severity**: P2. **Platform**: macOS.
-- **Location**: `apple/Mac/Link/MacLinkPanel.swift:183`, `apple/Mac/Link/MacLinkPanel.swift:202`, `apple/Mac/Link/MacLinkPanel.swift:220`.
+- **Location**: the retired native Mac link panel source (removed with the target).
 - **Violates**: [VoiceOver][vo]: labels for custom elements.
 - **Problem**: Back, Forward, Reload and More are bare images with only a tooltip (4 of 6 icon buttons; Add context and Close have labels).
 - **Evidence**: `Button { web?.goBack() } label: { Image(systemName: Theme.Icon.back) }.help("Back")`.

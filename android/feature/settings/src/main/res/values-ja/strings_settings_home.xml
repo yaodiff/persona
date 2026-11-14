@@ -28,4 +28,8 @@
     <string name="settings_model_how_runs_detail">モデルプロバイダーで認証情報や接続方法を管理します。モデルを変更しても、表示や有効な機能は変わりません。</string>
     <string name="settings_home_extensions_detail">追加機能を管理</string>
     <string name="settings_home_connectors_detail">メール、メッセージ、スマホのデータ</string>
+    <!-- Inbox Sources (#5308): the same words as iOS and the web. -->
+    <string name="settings_inbox_sources">受信箱のソース</string>
+    <string name="settings_inbox_sources_detail">受信箱に新しいものを入れるソース</string>
+    <string name="settings_search_inbox_sources_aliases">受信箱 ソース 購読 おすすめ メール ミュート</string>
 </resources>

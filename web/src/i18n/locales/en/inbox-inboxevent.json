@@ -11,12 +11,16 @@
   "say_placeholder": "Tell the AI what to change, e.g. \"ask for a time first\"",
   "reject": "Reject",
   "edit": "Edit",
-  "chain": "Handling",
+  "chain": "Timeline",
   "chain_collapse": "Collapse",
   "chain_expand": "Show all ({count})",
   "entry_expand": "Expand",
   "entry_collapse": "Collapse",
   "message_sender": "{sender}: ",
   "related": "Related",
-  "manager_done": "Handled by the assistant"
+  "manager_done": "Handled by the assistant",
+  "todo_title": "To-do title",
+  "todo_day": "Due day",
+  "todo_time": "Due time",
+  "todo_all_day": "All day"
 }

@@ -824,7 +824,7 @@ func (h *Manager) toolSubscriptionRun(ctx context.Context, args json.RawMessage)
 		if err != nil {
 			return nil, err
 		}
-		if len(runs) > 0 && !runs[0].At.Before(asked) {
+		if len(runs) > 0 && runs[0].Trigger == subscriptions.TriggerNow && !runs[0].At.Before(asked) {
 			run := runs[0]
 			items := []heldSample{}
 			if run.New > 0 {

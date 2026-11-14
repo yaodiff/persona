@@ -226,7 +226,10 @@ type workBook struct {
 	// (a redelivered webhook, a second tap, phone and watch together) is the same answer, not a second one.
 	answering map[string]bool
 	writes    map[[2]string]*sync.Mutex
-	switches  *TriageSwitches // the saved switches, once read (nil: not read yet)
+	// gone is when the session of a card (by its id) was first found missing from its machine's list, the machine up
+	// and listing (cardSessionGone): kept in memory only, a restart starts the wait over.
+	gone     map[string]time.Time
+	switches *TriageSwitches // the saved switches, once read (nil: not read yet)
 	// delegated are the questions the assistant answered for the user, by session (fleet_delegate.go), read back
 	// from the events once (delegatedLoaded): the same question again is the user's.
 	delegated       map[[2]string][]delegatedAsk
@@ -258,6 +261,7 @@ func (b *workBook) init() {
 		b.approved = map[[2]string]approval{}
 		b.answering = map[string]bool{}
 		b.writes = map[[2]string]*sync.Mutex{}
+		b.gone = map[string]time.Time{}
 	}
 }
 
@@ -595,15 +599,43 @@ func (s *Service) putWork(_ context.Context, e db.SessionWork) {
 	s.work.mu.Lock()
 	s.work.init()
 	key := [2]string{e.MachineID, e.SessionID}
-	if current := s.work.entries[key]; current != nil && current.Work.Deferred && current.TurnAt.Equal(e.TurnAt) {
+	current := s.work.entries[key]
+	if current != nil && current.Work.Deferred && current.TurnAt.Equal(e.TurnAt) {
 		e.Work.Deferred = true
 		e.InteractionID, e.Work.InteractionID, e.WakeAt, e.Work.WakeAt = "", "", nil, nil
 	}
+	old, out := s.supersededCardLocked(current, e)
 	c := e
 	s.work.entries[key] = &c
 	s.work.mu.Unlock()
+	s.cardSuperseded(e, old, out)
 	s.saveWork(e)
 	s.publishSoon()
+}
+
+// supersededCardLocked takes down the card current still has when e, the work of a later turn of the same session,
+// replaces it (a turn whose start the manager did not hear of, triaged afterwards): one card per session, the latest
+// turn's (#6709). Returns the card's id ("" when none goes) and whether it was out. Callers hold s.work.mu.
+func (s *Service) supersededCardLocked(current *db.SessionWork, e db.SessionWork) (string, bool) {
+	if current == nil || current.InteractionID == "" || current.InteractionID == e.InteractionID || !e.TurnAt.After(current.TurnAt.Add(2*time.Second)) {
+		return "", false
+	}
+	_, out := s.work.cards[current.InteractionID]
+	delete(s.work.cards, current.InteractionID)
+	return current.InteractionID, out
+}
+
+// cardSuperseded records the card supersededCardLocked took down for e's later turn. One that was out ends as the
+// snapshot leaves it out; one read back and not out yet ends in the history here.
+func (s *Service) cardSuperseded(e db.SessionWork, id string, out bool) {
+	if id == "" {
+		return
+	}
+	if !out {
+		s.recordEnd(id, "cancelled", nil)
+	}
+	s.logf("work %s/%s: card %s withdrawn: a later turn's work replaces it", e.MachineID, short(e.SessionID), id)
+	s.workEvent(e.MachineID, e.SessionID, "withdrawn", map[string]any{"by": "turn"})
 }
 
 // putTriageWork commits a scheduled external wait only if no session activity
@@ -621,9 +653,11 @@ func (s *Service) putTriageWork(e db.SessionWork, generation uint64) bool {
 		e.WakeAt, e.Work.WakeAt, e.Work.CI = nil, nil, nil
 	}
 	e.UpdatedAt = time.Now().UTC()
+	old, out := s.supersededCardLocked(current, e)
 	saved := e
 	s.work.entries[key] = &saved
 	s.work.mu.Unlock()
+	s.cardSuperseded(e, old, out)
 	s.saveWork(e)
 	s.publishSoon()
 	return true

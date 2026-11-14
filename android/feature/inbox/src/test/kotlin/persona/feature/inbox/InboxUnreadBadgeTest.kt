@@ -45,22 +45,26 @@ class InboxUnreadBadgeTest {
         assertEquals(1, inboxUnreadCount(excluded + record("reclassified-action", tier = "fyi", status = "action")))
     }
 
-    @Test fun fyiConversationsDoNotCountAndReconciledSectionsWin() {
+    @Test fun hubStatusDecidesEachItemRatherThanItsConversationRow() {
         val records = listOf(record("fyi", tier = "fyi").copy(feedId = "room"),
             record("noise", tier = "noise").copy(feedId = "room"))
         val grouped = buildInboxConversations("paired", InboxSnapshot(records = records))
         assertEquals(InboxConversationSection.Fyi, grouped.rows.single().section)
         assertEquals(0, inboxUnreadCount(records, grouped))
-        val actionable = grouped.copy(rows = grouped.rows.map { it.copy(section = InboxConversationSection.Action) })
-        assertEquals(1, inboxUnreadCount(records, actionable))
+        val promoted = record("promoted", tier = "fyi", status = "action").copy(feedId = "room")
+        val withPromoted = buildInboxConversations("paired", InboxSnapshot(records = records + promoted))
+        assertEquals(1, inboxUnreadCount(records + promoted, withPromoted))
+        assertEquals(0, inboxUnreadCount(listOf(record("demoted", status = "fyi").copy(feedId = "other"))))
     }
 
-    @Test fun conversationsCountOnceAndReadPendingNeverCounts() {
+    @Test fun everyUnreadActionItemCountsAndReadPendingNeverCounts() {
         val records = listOf(record("a").copy(feedId = "room"), record("b").copy(feedId = "room"), record("document"))
         val grouped = buildInboxConversations("paired", InboxSnapshot(records = records))
-        assertEquals(2, inboxUnreadCount(records, grouped))
+        assertEquals(3, inboxUnreadCount(records, grouped))
         assertEquals(1, inboxUnreadCount(records.filter { it.item.id == "document" }, grouped))
         assertEquals(0, inboxUnreadCount(emptyList(), grouped))
+        val oneRead = listOf(records[0].copy(read = true), records[1], records[2])
+        assertEquals(2, inboxUnreadCount(oneRead, buildInboxConversations("paired", InboxSnapshot(records = oneRead))))
         val read = buildInboxConversations("paired", InboxSnapshot(records = records),
             setOf(InboxReadVersion("a", null), InboxReadVersion("b", null)))
         assertEquals(1, inboxUnreadCount(records, read))

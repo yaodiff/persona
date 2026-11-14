@@ -7,9 +7,11 @@ final class FakeHub: @unchecked Sendable {
     /// Model-test handlers capture actor-owned fixtures. Preserve that contract
     /// across the asynchronous, Sendable API transport boundary.
     typealias Route = @MainActor (LocalRequest) throws -> Data
+    typealias AsyncRoute = @MainActor (LocalRequest) async throws -> Data
 
     private let lock = NSLock()
     private var routes: [String: Route] = [:]
+    private var asyncRoutes: [String: AsyncRoute] = [:]
     private(set) var requests: [LocalRequest] = []
     /// The address its client says it is at: two hubs (two groups) are told apart by it.
     let url: URL
@@ -28,6 +30,11 @@ final class FakeHub: @unchecked Sendable {
         lock.withLock { routes["\(method) \(path)"] = make }
     }
 
+    /// Answers after awaiting a controllable asynchronous route (for cancellation and progress tests).
+    func onAsync(_ method: String, _ path: String, _ make: @escaping AsyncRoute) {
+        lock.withLock { asyncRoutes["\(method) \(path)"] = make }
+    }
+
     var client: APIClient {
         var c = APIClient(config: ServerConfig(url: url, token: "t"))
         c.transport = { [self] req in try await self.answer(req) }
@@ -38,11 +45,12 @@ final class FakeHub: @unchecked Sendable {
         lock.withLock { requests.filter { $0.method == method && $0.path == path } }
     }
 
-    @MainActor private func answer(_ req: LocalRequest) throws -> Data {
-        let route = lock.withLock { () -> Route? in
+    @MainActor private func answer(_ req: LocalRequest) async throws -> Data {
+        let (route, asyncRoute) = lock.withLock { () -> (Route?, AsyncRoute?) in
             requests.append(req)
-            return routes["\(req.method) \(req.path)"]
+            return (routes["\(req.method) \(req.path)"], asyncRoutes["\(req.method) \(req.path)"])
         }
+        if let asyncRoute { return try await asyncRoute(req) }
         guard let route else { throw APIError(status: 404, message: "FakeHub: no route for \(req.method) \(req.path)") }
         return try route(req)
     }

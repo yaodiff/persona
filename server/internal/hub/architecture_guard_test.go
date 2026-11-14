@@ -2,6 +2,8 @@ package hub
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -75,10 +77,12 @@ func readList(t *testing.T, name string) []string {
 	return out
 }
 
-// The routes the hub answers itself (registered with a literal pattern in this package, minus the manager's it
-// relays) are exactly testdata/hub_routes_allowed.txt.
+// The routes the hub answers itself are exactly testdata/hub_routes_allowed.txt. A route counts when this package
+// registers it with a string literal (or a concatenation of them), or by ranging a list of string literals. Ranging a
+// wire table the hub only relays does not: those patterns are the manager's. Ranging any other name fails the guard,
+// so a route cannot hide behind an identifier.
 func TestHubAnswersOnlyItsOwnRoutes(t *testing.T) {
-	relayed := slices.Concat(assistantwire.Routes, assistantwire.InboxRoutes, assistantwire.SocketRoutes, devicewire.Routes, devicewire.ShareRoutes, devicewire.MetricsRoutes, extwire.Routes)
+	relayed := relayedHubRoutes()
 	own := map[string]string{} // pattern -> file
 	for name, f := range hubSources(t) {
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -98,6 +102,9 @@ func TestHubAnswersOnlyItsOwnRoutes(t *testing.T) {
 			}
 			return true
 		})
+		if err := noteRangedRoutes(name, f, relayed, own); err != nil {
+			t.Error(err)
+		}
 	}
 	allowed := readList(t, "hub_routes_allowed.txt")
 	for _, p := range slices.Sorted(func(yield func(string) bool) {
@@ -119,6 +126,242 @@ func TestHubAnswersOnlyItsOwnRoutes(t *testing.T) {
 		if _, ok := own[p]; !ok {
 			t.Errorf("testdata/hub_routes_allowed.txt lists %q, which the hub no longer answers itself: delete the line", p)
 		}
+	}
+}
+
+// relayedHubRoutes are the manager's routes the hub only forwards. A loop over one of these tables is not the hub
+// answering the route itself. extwire.KeptRoutes is not here: nothing ranges it to register a route.
+func relayedHubRoutes() []string {
+	return slices.Concat(
+		assistantwire.Routes, assistantwire.InboxRoutes, assistantwire.SocketRoutes,
+		devicewire.Routes, devicewire.ShareRoutes, devicewire.MetricsRoutes,
+		devicewire.TransferRoutes, devicewire.UsageRoutes, devicewire.AdminUsageRoutes,
+		extwire.Routes)
+}
+
+// noteRangedRoutes records routes registered by ranging a list of string literals (minus relayed). A loop that
+// registers through any other name must name one of the relayed wire tables; mergedLists is the one in-package map,
+// and only while every key is already a relayed route.
+func noteRangedRoutes(file string, f *ast.File, relayed []string, own map[string]string) error {
+	var errs []error
+	ast.Inspect(f, func(n ast.Node) bool {
+		rng, ok := n.(*ast.RangeStmt)
+		if !ok || !bodyRegistersRangeIdent(rng.Body, rangeNames(rng)) {
+			return true
+		}
+		switch x := rng.X.(type) {
+		case *ast.CompositeLit:
+			lits, ok := compositeStringLits(x)
+			if !ok {
+				errs = append(errs, fmt.Errorf("%s registers a route by ranging over a composite literal the guard cannot read as string patterns. Use a list of string literals, or range a relayed wire table; %s", file, guardDoc))
+				return true
+			}
+			for _, p := range lits {
+				if !slices.Contains(relayed, p) {
+					own[p] = file
+				}
+			}
+		case *ast.Ident:
+			if x.Name == "mergedLists" {
+				if err := mergedListsCovered(relayed); err != nil {
+					errs = append(errs, fmt.Errorf("%s: %w", file, err))
+				}
+				return true
+			}
+			errs = append(errs, errors.New(rangeHint(file, x.Name)))
+		case *ast.SelectorExpr:
+			if !relayedRangeSelector(x) {
+				errs = append(errs, errors.New(rangeHint(file, selectorString(x))))
+			}
+		default:
+			errs = append(errs, errors.New(rangeHint(file, fmt.Sprintf("%T", rng.X))))
+		}
+		return true
+	})
+	return errors.Join(errs...)
+}
+
+func rangeHint(file, what string) string {
+	return fmt.Sprintf("%s registers a route by ranging over %s, which is not a relayed wire table "+
+		"(assistantwire.Routes / InboxRoutes / SocketRoutes, devicewire.Routes / ShareRoutes / MetricsRoutes / "+
+		"TransferRoutes / UsageRoutes / AdminUsageRoutes, extwire.Routes). Range one of those, or register the route "+
+		"with a string literal; %s", file, what, guardDoc)
+}
+
+func rangeNames(rng *ast.RangeStmt) map[string]bool {
+	names := map[string]bool{}
+	for _, e := range []ast.Expr{rng.Key, rng.Value} {
+		id, ok := e.(*ast.Ident)
+		if ok && id.Name != "_" && id.Name != "" {
+			names[id.Name] = true
+		}
+	}
+	return names
+}
+
+func bodyRegistersRangeIdent(body ast.Stmt, names map[string]bool) bool {
+	if body == nil || len(names) == 0 {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 2 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") {
+			return true
+		}
+		id, ok := call.Args[0].(*ast.Ident)
+		if ok && names[id.Name] {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func compositeStringLits(lit *ast.CompositeLit) ([]string, bool) {
+	if lit == nil || len(lit.Elts) == 0 {
+		return nil, false
+	}
+	out := make([]string, 0, len(lit.Elts))
+	for _, elt := range lit.Elts {
+		basic, ok := elt.(*ast.BasicLit)
+		if !ok || basic.Kind != token.STRING {
+			return nil, false
+		}
+		s, err := strconv.Unquote(basic.Value)
+		if err != nil {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+// relayedRangeSelector reports whether e is one of the wire tables a registration loop may range. KeptRoutes is
+// absent on purpose: it is never ranged to register a route.
+func relayedRangeSelector(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch pkg.Name + "." + sel.Sel.Name {
+	case "assistantwire.Routes", "assistantwire.InboxRoutes", "assistantwire.SocketRoutes",
+		"devicewire.Routes", "devicewire.ShareRoutes", "devicewire.MetricsRoutes",
+		"devicewire.TransferRoutes", "devicewire.UsageRoutes", "devicewire.AdminUsageRoutes",
+		"extwire.Routes":
+		return true
+	default:
+		return false
+	}
+}
+
+func selectorString(e *ast.SelectorExpr) string {
+	if id, ok := e.X.(*ast.Ident); ok {
+		return id.Name + "." + e.Sel.Name
+	}
+	return e.Sel.Name
+}
+
+// mergedListsCovered checks the loop `for pattern, key := range mergedLists`. The key is registered only when it is
+// already a relayed route, either as written or with the method prefix removed (extwire.Routes has no method).
+func mergedListsCovered(relayed []string) error {
+	var missing []string
+	for pattern := range mergedLists {
+		if slices.Contains(relayed, pattern) {
+			continue
+		}
+		if path, ok := cutMethod(pattern); ok && slices.Contains(relayed, path) {
+			continue
+		}
+		missing = append(missing, pattern)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	slices.Sort(missing)
+	return fmt.Errorf("mergedLists registers %s, which is not in a relayed wire table. Add it to assistantwire / devicewire / extwire before ranging it; %s", strings.Join(missing, ", "), guardDoc)
+}
+
+func cutMethod(pattern string) (string, bool) {
+	method, path, ok := strings.Cut(pattern, " ")
+	if !ok || !strings.HasPrefix(path, "/") {
+		return "", false
+	}
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+		return path, true
+	default:
+		return "", false
+	}
+}
+
+func parseHubSnippet(t *testing.T, src string) *ast.File {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "snippet.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func TestRangeOverAnUnknownIdentifierFailsTheGuard(t *testing.T) {
+	f := parseHubSnippet(t, `package hub
+func register(mux interface{ HandleFunc(string, any) }) {
+	for _, pattern := range notAWireTable {
+		mux.HandleFunc(pattern, nil)
+	}
+}`)
+	err := noteRangedRoutes("snippet.go", f, nil, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "notAWireTable") || !strings.Contains(err.Error(), "relayed wire table") {
+		t.Fatalf("got %v, want a hint naming notAWireTable", err)
+	}
+}
+
+func TestMergedListsRangeDoesNotTripTheGuard(t *testing.T) {
+	relayed := relayedHubRoutes()
+	if err := mergedListsCovered(relayed); err != nil {
+		t.Fatal(err)
+	}
+	f := parseHubSnippet(t, `package hub
+func register(mux interface{ HandleFunc(string, any) }) {
+	for pattern, key := range mergedLists {
+		mux.HandleFunc(pattern, key)
+	}
+}`)
+	own := map[string]string{}
+	if err := noteRangedRoutes("snippet.go", f, relayed, own); err != nil {
+		t.Fatal(err)
+	}
+	if len(own) != 0 {
+		t.Fatalf("mergedLists routes are relayed, got %#v", own)
+	}
+}
+
+func TestLiteralListRangeCountsAsTheHubsOwnRoute(t *testing.T) {
+	f := parseHubSnippet(t, `package hub
+func register(mux interface{ HandleFunc(string, any) }) {
+	for _, pattern := range []string{"/api/v1/admin/plugins", "/kept"} {
+		mux.HandleFunc(pattern, nil)
+	}
+	for _, pattern := range devicewire.UsageRoutes {
+		mux.HandleFunc(pattern, nil)
+	}
+}`)
+	own := map[string]string{}
+	if err := noteRangedRoutes("snippet.go", f, []string{"/kept"}, own); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := own["/api/v1/admin/plugins"]; !ok || len(own) != 1 {
+		t.Fatalf("want only the non-relayed literal, got %#v", own)
 	}
 }
 

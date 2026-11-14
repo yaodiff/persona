@@ -71,5 +71,12 @@
   "copied_other": "{count} 項目を「{dir}」にコピーしました",
   "duplicated_one": "複製しました",
   "duplicated_other": "{count} 項目を複製しました",
-  "compressed": "「{name}」に圧縮しました"
+  "compressed": "「{name}」に圧縮しました",
+  "file_operations": "ファイル操作",
+  "operations_running_one": "{count} 件のファイル操作を実行中",
+  "operations_running_other": "{count} 件のファイル操作を実行中",
+  "operation_preparing": "コンピュータで準備中…",
+  "operation_done": "完了",
+  "copy_cancel": "「{name}」のコピーをキャンセル",
+  "compress_cancel": "「{name}」の圧縮をキャンセル"
 }

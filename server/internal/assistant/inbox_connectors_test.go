@@ -429,8 +429,8 @@ func TestAMoveCountsWhatItBringsWhereTheSourceSaysSo(t *testing.T) {
 		}
 		if counts {
 			last := it.Chain[len(it.Chain)-1]
-			if last.Kind != ChainReceived || last.Count != 2 {
-				t.Fatalf("the move's chain entry: %+v", last)
+			if last.Kind != ChainReceived || last.Count != want[1] {
+				t.Fatalf("the merged received entry: %+v", last)
 			}
 		}
 	}

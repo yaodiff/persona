@@ -72,8 +72,10 @@ func TestTranscriptionModeOnUpload(t *testing.T) {
 	if tr, _ := out["transcription"].(map[string]any); tr["mode"] != "device" || out["revs"] != nil {
 		t.Fatalf("POST …/live: %v", out)
 	}
+	// Not closed after gaps: the not-ready transcription above ends the hub run, which may already have turned on the
+	// phone's fallback ("fallback":true follows gaps) by now.
 	d, err := h.engine().Get(kb.KindRecording, meetingRec, 0)
-	if err != nil || !strings.Contains(string(d.Meta), `"transcription":{"mode":"hub","state":"live","gaps":[]}`) {
+	if err != nil || !strings.Contains(string(d.Meta), `"transcription":{"mode":"hub","state":"live","gaps":[]`) {
 		t.Fatalf("detail.meta: %s %v", d.Meta, err)
 	}
 }

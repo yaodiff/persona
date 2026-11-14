@@ -10,6 +10,8 @@ export interface HostWorkspace {
   parent_source_id?: string; project_id?: string; project_name?: string; project_path?: string;
   is_main?: boolean; unread?: boolean; sidebar_status?: string; workspace_kind?: string;
   head?: string; index?: number; branch?: string; online?: boolean; available?: boolean; last_seen?: string;
+  /** An engine runtime's worktree that the runtime made and removes with it (Paseo's, #6297): the ones it deletes. */
+  owned?: boolean;
 }
 /** Discovered targets always carry their credential/manager partition and human label. */
 export interface WorkspaceTarget extends RuntimeWorkspaceTarget {

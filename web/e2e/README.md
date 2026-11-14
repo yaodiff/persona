@@ -16,6 +16,36 @@ node web/e2e/ask-card-dock.mjs <loopback-web-origin> <artifact-directory> [--chr
 
 Opens the real app against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data. The main conversation shows an ask_user card with four described options in the Pending tray at 1280 × 600, 1024 × 520, 390 × 664 and 360 × 560 (touch), light and dark. It checks the card's send button and the three tray entries are not under the composer before any scrolling, and that "Or write your own" is fully visible (not under the sticky answer row or the tray's title) once tapped and typed into. Writes `results.json` and before/after-typing screenshots; exits nonzero on failure or the four-minute timeout.
 
+## Waiting cards cut off below the dock (audit item 10)
+
+```sh
+node web/e2e/pending-cards-cut.mjs <loopback-web-origin> <artifact-directory> [--chromium <executable>]
+```
+
+Opens the real app on an Agent's session page against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data (an Agent with a question and a Bash approval at once); no card is answered. At 1440 × 900 and 1280 × 820 the approval's answers stand at the bottom edge of the dock's box (its 55% cap) while its title and command are above it; at 1024 × 700 the question alone fills the box; 1440 × 1600 fits both. Light and dark. It checks that wherever the approval's Allow is in view, its title and command are too (in the card, or on the answer row's `data-card-answers` line), that the first card says "2 pending" while the stack is cut off, that the line brings the whole approval into view with the focus on it, that scrolling the box brings an approval wholly below it into view, and that neither the line nor the count is drawn when both cards fit. Writes `results.json` and screenshots; a four-minute watchdog ends the run with a timeout verdict, and the last line is the verdict.
+
+## Chat content: sent lines, tables, bubble actions, model pill, runtime line, long folds
+
+```sh
+MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/chat-content.mjs <loopback-web-origin> <artifact-directory> [--big] [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in Simplified Chinese, light and dark. It
+checks what jsdom cannot show from the web usability audit of 2026-11-14: Persona's message to a task folds to its first
+line without Markdown marks and opens drawn as Markdown, and the supervisor's rework note keeps its lines apart (item 7);
+the main chat's runtime line is absent when nothing is known and reads just "主对话 · 运行中" for a report intercepted in
+the browser, whose place and harness Settings › Assistant shows instead (item 80); the model pill's name is not cut under
+a 600 px composer and a phone keeps the 64 px tile and chevron (item 50); in a 390 px window with a pointer, Tab reaches
+your bubble's first action inside the window, the bar under the bubble stays while the pointer goes down to it and takes
+no clicks once hidden, and in a 1440 px window the bar stays beside the bubble (item 73); on a 390 px phone a "#" column is at most 40 px and the table copy button
+covers no header words of a table that fits (item 77). `--big` runs against the mock started with `MOCK_BIG=1` instead
+(item 90): opening the "worked 1 h 10 min" fold, no animation frame draws more than 60 rows at once, all 650 rows are
+drawn after it with the header where it was tapped, and a search for `make step-600` lands on that row inside the closed
+fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
+(`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
+
 ## User-input navigation acceptance
 
 With web dependencies and Chrome already available, point the runner at an **already-running, exclusively owned loopback web server** backed by `scripts/mock/mock_hub.py`. Start the mock on an unused loopback port and configure the web server's `PERSONA_HUB_URL` for that mock; a Vite server proxying a real hub is not acceptable. The runner does not install dependencies, start services, create conversations, or stop the caller's services.
@@ -50,17 +80,57 @@ node web/e2e/user-history-navigation.mjs <loopback-web-origin> <artifact-directo
 
 The production-built app uses only synthetic intercepted HTTP/WebSocket responses, not a live hub. The default fixture has 678 genuine inputs, with automated supervision and compaction records between them, and only two input bodies in its first page. In wide/narrow light/dark runs it verifies 50 initial marks with full-history ordinals, no body reads on metadata loading or hover, unloaded-target landing through backward pages, and more marks after upward scrolling. Pass `36` for the same short-history check: all 36 marks are present. Pass `120 main 120` to restore a complete larger first page: it still starts at 50 marks, and reaching its earlier body content reveals the remainder without an unnecessary backward request. It saves inspected-state screenshots and `results.json`, and ends with a pass/fail/timeout verdict.
 
-## The paged Agents list by group (#6348)
+## The sidebar's Agents groupings on a paging hub (#6662)
 
 ```sh
-MOCK_SESSIONS_LIST=1 MOCK_SESSIONS_CATALOG=1 MOCK_SESSIONS_MANY=14 MOCK_MANAGERS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+MOCK_SESSIONS_LIST=1 MOCK_SESSIONS_CATALOG=1 MOCK_MANAGERS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
 (cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
-node web/e2e/agents-browse-by.mjs <loopback-web-origin> <artifact-directory> [--hub http://127.0.0.1:<port>] [--channel chrome]
+node web/e2e/agents-paged-groupings.mjs <loopback-web-origin> <artifact-directory> [--before] [--channel chrome]
 ```
 
-Run against an exclusively owned mock-backed web server. `MOCK_SESSIONS_CATALOG=1` gives the mock the hub's catalog (`catalog=1`, `place`, `space`), a Windows PC, one repository checked out on two computers and a notes folder that is no repository on two; `MOCK_MANAGERS=1` keeps one assistant, since with several the sidebar reads the complete list. The runner clears the mock's default pins for the run (they also keep the complete list) and puts them back.
+Run against an exclusively owned mock-backed web server. It checks the one grouping bar (待办 / 机器 / 仓库 / 项目 / 状态) over the paged and the complete list, By to-do paged as a section per open to-do (open) and 没挂待办的 (folded) against the mock's `todo` counts, By machine and By state paged, and By repository and a pin taking the complete list; it saves light and dark screenshots. `MOCK_MANAGERS=1` keeps one assistant, since with several the sidebar reads the complete list. The runner clears the mock's default pins for the run (they also keep the complete list), sets one for the pinned case, and puts them back. `--before` takes the same screenshots of a build from before #6662 with no checks. (It replaces `agents-browse-by.mjs`, whose sidebar view by catalog project the sidebar no longer offers; `PagedSessionList.groups.test.tsx` still covers that view.)
 
 It reads the mock's own catalog and holds the page to it, in English at 1280 x 900 (light and dark), a 240 px sidebar and a 390 px touch phone: Browse by Computer draws one section per computer, the busiest first, the first three open on their newest six sessions and the counts adding up to the list's total; Project lists the catalog's projects in its order, the repository on two computers as one section with its remote and both directories and the sessions of both; the value pill's menu is as wide as its pill and names each computer under the project; a picked project is the one flat list of its sessions; Space names each computer's spaces, tells two of one name apart and ends with the sessions in no space; the chosen Browse by survives a reload; Recently updated is the flat list. With `--hub` it also drives 20 s of the mock's churn while the list is drawn by project and prints the mock's read counters by kind, failing when the groups were read more than once per 1.5 s or a complete list was read. Screenshots of each step go to the artifact directory. A three-minute watchdog ends the run with a timeout verdict. Browser and mock checks only: no real hub, node or Git repository is involved.
+
+## Machines and Overview at desktop widths (web audit items 3, 25, 30 and 76)
+
+```sh
+MOCK_SESSIONS_LIST=1 [MOCK_MANAGERS=1] PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/overview-machines-layout.mjs http://127.0.0.1:<web port> <artifact-directory> [--channel chrome]
+```
+
+Run against an exclusively owned mock-backed web server, once with `MOCK_MANAGERS=1` (one assistant) and once with the mock's default roster (several assistants); `MOCK_SESSIONS_MANY=300` adds a list longer than its first page. The runner reads the mock's own complete session list (every page, `roots=1`) and holds each Machines card to it: the agents that are not offline, without the assistant's conversations, on a hub that pushes no sessions. At 768, 1024, 1280 and 1920 px, light and dark, it checks every online card's count, a gap of at least 8 px between the card's state line and its versions, and that no metric value is cut (the text's own width against its box, since `scrollWidth` rounds away the half pixel Chrome already cuts with "…"), with the widest rate a card can show ("↓ 1023 MB/s", "↑ 1000 KB/s") answered for one computer in the browser, and that a card's metrics are one row or two columns, never three with one left alone (one row at 1280 and 1920 px). On Overview it answers an example extension's overview card in the browser (its place, list and view, with the UI-slot features added to the hub's hello) and checks that a lone card is the page's width at 1280 px and one of two columns at 1440, 1680 and 1920 px. Then it fails the list Overview counts from in the browser (the paged list's reads with one assistant, the complete list's with several) and checks that the summary says it couldn't read the agents, in the line's live region, with **Retry**, with no **All set** and no computer count; after the route is lifted, **Retry** brings the summary back, its counts outside the live region (left empty), and each online computer's count matches the mock's, or, while the paged list has more pages, no count. Nothing is written to the hub. It saves a screenshot of each page and size, prints one line per check, and ends with a verdict; it exits 1 on a failed check and 2 on its three-minute timeout.
+
+## To-dos with a keyboard, narrow and wide (web audit items 2, 74, 75, 88)
+
+```sh
+MOCK_TASKS=1 MOCK_TODO_ASKS=1 MOCK_LEADERS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/todos-keyboard-layout.mjs <loopback-web-origin> [--shots <artifact-directory>] [--executable <chromium>]
+```
+
+Run against an exclusively owned mock-backed web server; the date checks save to the mock, so use a disposable one. In Chinese, light and dark, it types a due day and a reminder hour segment by segment in the to-do's page (1280 × 820) and checks the field keeps the focus and nothing is saved until the field is left or Enter is pressed, then the typed value is saved once, also when the field is left right after Enter; at 390 × 844 it opens a to-do from a focused row with Enter (the focus lands on Back), checks Esc in the title field stays there, and goes back by Esc, Back and the browser's Back, each time with the list scrolled where it was and the focus on that row, and Esc on a to-do opened by a link puts the focus on its row; at 1920 × 1080 it checks the detail is at most 760 px wide and centered; at 1440 × 700 it leaves the page for Machines and comes back with the browser's Back, the list scrolled where it was and the open row in view. A part that throws counts as a failed check and the run goes on; one line per check, a final verdict, exit 1 on a failure or after four minutes. `--shots` saves the typed date field, the narrow detail and list, the wide detail and the list after Back. Browser and mock checks only.
+
+## Knowledge kind chips stay put
+
+```sh
+PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/knowledge-kind-chips.mjs <loopback-web-origin> <artifact-directory> [--channel chrome]
+```
+
+Run against an exclusively owned mock-backed web server; the runner only reads. On `/kb/projects` it checks that every kind chip reads its kind's name alone, then picks each other kind by clicking its chip and holds that kind's list read (`page.route`), so the kind is still loading: **Loading** must show under the chips, and every chip's box is measured. It then lets the read through and measures again once the list is drawn: no chip may move, change or go. It runs at 1280 x 820 and on a 390 x 844 touch phone, light and dark in Chinese and light in English, and saves the chip row with the first and the last kind picked, and with the last kind while it loads. A three-minute watchdog ends the run with a timeout verdict; it exits 1 on a failed check. Browser and mock checks only.
+
+## The complete Agents list with hundreds of Agents
+
+```sh
+MOCK_SESSIONS_LIST=1 MOCK_SESSIONS_MANY=400 MOCK_LEADERS=1 MOCK_TASKS=1 MOCK_RECENT=1 MOCK_HISTORY=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && npx vite build && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite preview --port <web port> --strictPort &)
+node web/e2e/sidebar-many-agents.mjs <loopback-web-origin> <artifact-directory>
+```
+
+Run against an exclusively owned mock with 400 extra Agents on no to-do (the mock's default pins keep the complete list). A dev server works too; the production build is what the long-task numbers are for. With By to-do and 4x CPU it checks, at 390 × 844 touch: no row under a folded group (`aside [inert] a` is 0, the sidebar under 2,000 elements), none of Not on a to-do's rows on the Agents page while it is folded, at most 90 of its 400 rows once opened, its heading stuck under the Agents controls and rows (not empty boxes) on screen in the middle of the list, and the last rows drawn at its end with the count still bounded. At 1280 × 800 with the group open in the sidebar: a bounded number of rows, Tab walking the rows in order across the parts, and an open Agent far down the group (Session 330) drawn and scrolled into view, also when it is opened from elsewhere while the group is folded (the group opens for it). By machine, with the mock's 400 Agents as tabs of one open workspace at 390 × 844: a bounded number of its tab rows in the sidebar and on the Agents page, and the sidebar under 3,000 elements. It prints the long tasks of a cold Overview and Agents page and of a By machine page switch, saves five screenshots and `results.json`, prints one line per check and a verdict, and exits nonzero on a failure or its four-minute timeout. Browser and mock only.
 
 ## Bounded list verification
 
@@ -155,3 +225,97 @@ checked and sends nothing, that Auto is posted and shown at once, and that Full 
 asks first. It then checks that the session waits (`bypass_pending`, the chip still on the mode it runs in) until the
 mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
 its five-minute timeout.
+
+## Settings: hints, search, provider errors, disconnect, hubs and lists (web audit)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_CHANNELS=1 MOCK_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/settings-audit.mjs <loopback-web-origin> <artifact-directory>
+```
+
+Run against an exclusively owned mock-backed web server; a server proxying a real hub is refused (the runner checks the
+mock's health reply). Each check opens a fresh headless Chrome context signed in to the mock; requests to other origins
+are blocked, and a write that revokes a token or saves a provider is answered in the browser with an error and never
+reaches the mock. It checks, in light and dark:
+
+- General's setting sentences wrap instead of being cut at one line (1280 and a 390 phone), Translation's note keeps
+  its spacing above Agent preferences, and on a phone the language menu sits under its sentence; in English, Chinese
+  and Japanese nothing in General is cut off with an ellipsis on a 390 phone (audit item 17).
+- In English, Chinese and Japanese, typing a setting's name ("Language") in the settings search lists that setting
+  first, Enter scrolls to its row and lights it, and Esc clears the box; the settings of the other pages are found by
+  their labels (thinking effort, time zone, default permissions, quiet hours, continue after errors, secrets, device
+  tokens, revoke; in Chinese also the audit's own words, in English "timezone" and "effort"), Revoke is listed as
+  Revoke, and an agent's setting opens that agent's section (audit item 18); the hub's category reads "This hub" and
+  Models and Knowledge selection have different icons (audit item 66).
+- Next on an empty custom gateway focuses the first field with a problem, marks it invalid, and its note is inside
+  the dialog's visible area at 1280 x 600; every field that needs something says so, the others with a red edge;
+  nothing is saved (audit item 19).
+- Disconnect this browser asks first, saying pairing is needed again; Cancel revokes nothing and keeps the sign-in.
+  With the question's chunk refused (a redeploy), Disconnect from the account menu leaves the app drawn, says
+  reloading should fix it and revokes nothing (audit item 20).
+- Add hub refuses "not a url" and an escaped host under the field and keeps the list as it was, and still adds a real
+  address (audit item 67).
+- On a 390 phone a connector's page, Sent and an extension's page each draw one Back, the top bar's, which goes to the
+  category; so do the market's catalog, one of its extensions and the list of markets, whose Back goes to the catalog;
+  under the Lark bot's address the top bar's Back goes to Settings; a wide screen keeps the page's own Back (audit
+  item 64).
+- With the list beside an open extension or connector, the open row is the only one marked `aria-current`, its name is
+  whole and its state sits under it; a list on its own marks nothing (audit item 68).
+
+It prints one line per check and a final verdict, writes `results.json` and screenshots to the artifact directory, and
+exits nonzero on a failure or its five-minute timeout. Against a build from before these fixes nearly every check fails.
+
+## The app shell's connection states, dead links and keyboard focus (web usability audit)
+
+```sh
+MOCK_TASKS=1 MOCK_SESSIONS_LIST=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/shell-connection.mjs http://127.0.0.1:<web port> http://127.0.0.1:<port> <artifact directory>
+```
+
+Needs a fake hub of its own: the runner takes it down (`/mock/down`) and refuses this browser's credential for a while
+(`/mock/reject`), and puts both back at the end. In Chrome, light and dark, it checks that folding the sidebar to its
+rail by the keyboard leaves the focus on the rail's expand button and opening it again on the collapse button; that an
+Agent's page names its browser tab after the session's title; that an unknown address says **Page not found** and
+keeps the address, a knowledge entry the hub doesn't have says **Entry not found** in the shared empty state (no
+title made of its id, no disabled buttons), and `/a/<missing>` says the conversation isn't there once, under the list's
+name, with no message box left loading; that the
+first key press makes no `AudioContext` while the alert sound is off and one when it is on; that the reconnect pill
+covers none of the to-dos' fields, buttons or titles at 390 px and 1280 px, and its details open over the page; that
+the English Offline line wraps only between words; and that a credential refused while the page is open reaches the
+sign-in page with "signed out" within 25 seconds. Each block of checks fails on its own and the run goes on; it prints
+one line per check and a verdict, saves screenshots in the artifact directory, and exits 1 on a failure and 2 on its
+five-minute timeout.
+
+## Keyboard around the overlays
+
+```sh
+MOCK_RECENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/keyboard-overlays.mjs <loopback-web-origin> [--shots <dir>] [--executable <chromium>]
+```
+
+Run against an exclusively owned mock-backed web server, in Chinese, light and dark, a fresh browser context each. It checks that the session ⋯ menu shows every row at 1280 × 820, and at 1280 × 560 (too short for it) opens beside its button (not over it) with a fade at the edge where rows are cut and End scrolling the last row into view; that Escape anywhere in the ⌘K palette closes it and gives the focus back to the composer it was opened from; that ⌘/ and ⌘K replace one another instead of stacking two dialogs; that Tab in the shortcut help reaches "Change in Settings" after the scrolling list and wraps to Close; that Escape out of a menu's Rename leaves the focus on the row with the Rename row highlighted, so Enter renames again; that Escape clears the To-dos search; and that a theme, theme color or language picked in one tab reaches the other, the language's reload waiting (with a toast) while that tab holds a draft. Every hub write except the sign-in is answered in the browser. It prints one line per check and a verdict, and exits nonzero on a failure or its three-minute timeout.
+
+## The Inbox by keyboard, its filtered empty state and long lists (web usability audit)
+
+```sh
+PORT=<port> MOCK_INBOX_EXTRA=300 MOCK_INBOX_HISTORY=busy python3 scripts/mock/mock_hub.py &
+(cd web && npx vite build --outDir <scratch>/dist && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite preview --outDir <scratch>/dist --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/inbox-keyboard-long-list.mjs http://127.0.0.1:<web port> <artifact-directory>
+```
+
+Run against an exclusively owned web server backed by the mock hub with the flags above (`npx vite` works too; a
+production build is what the timings mean). It uses only the mock's invented data and answers the read failure in the
+browser. In English, light and dark, at 1280 x 820 unless named: chips that leave nothing show the neutral filtered
+empty state with no green check and **Clean up all** without "Nothing to do", and **Clear filters** brings the rows
+back with the keyboard on the **All** chip; a failed read has its own **Retry** and a Clean up all with no scope; the detail's small line has the time right
+after its words, not at the line's end; **Edit** on a drafted reply puts the caret at the end of the text; Select and
+Done keep the keyboard on the one button, also after Esc on a row's tick; at 390 x 844 a row opened by keyboard moves
+the focus to the item's title, with its focus ring, and Esc or the browser's Back returns it to that row. With Done
+open, **Done** in an opened item's header leaves the list where it was (it used to jump to the row filed under Done), at
+1280 and at 390, and at 390 the focus lands on the row now in the item's place. Last, a 390 x 844 touch phone at CPU 4x
+opens the long Inbox and records how many rows were there at the first draw (at most 100), that all of them come in the
+end, the elements under `main` and the long tasks. Screenshots and `results.json` go to the artifact directory; a
+four-minute watchdog ends the run, and it prints a final pass / fail / timeout line.

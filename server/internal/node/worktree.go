@@ -231,6 +231,12 @@ func (n *Node) worktreesDir(h host.Host, repo string) string {
 // worktreePrepare is what the dialog starts from: the repository, the branch the workspace is on, and the directory
 // checkouts of this repository go under.
 func (n *Node) worktreePrepare(ctx context.Context, kind, workspace, cwd string) (proto.WorktreePrepare, error) {
+	if rt, runtime, err := n.worktreeRuntime(ctx, kind); runtime { // an engine runtime makes them (runtimeworkspaces.go)
+		if err != nil {
+			return proto.WorktreePrepare{}, err
+		}
+		return n.runtimeWorktreePrepare(ctx, rt, workspace, cwd)
+	}
 	h, _, repo, err := n.repoOfWorkspace(ctx, kind, workspace, cwd)
 	if err != nil {
 		return proto.WorktreePrepare{}, err
@@ -298,6 +304,12 @@ func within(p, dir string) bool {
 func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch, path string, parents ...string) (proto.WorktreeCreateResult, error) {
 	var res proto.WorktreeCreateResult
 	branch = strings.TrimSpace(branch)
+	if rt, runtime, err := n.worktreeRuntime(ctx, kind); runtime { // an engine runtime makes them (runtimeworkspaces.go)
+		if err != nil {
+			return res, err
+		}
+		return n.runtimeWorktreeCreate(ctx, rt, workspace, cwd, branch, path, firstOf(parents...))
+	}
 	h, workspace, repo, err := n.repoOfWorkspace(ctx, kind, workspace, cwd)
 	if err != nil {
 		return res, err
@@ -372,6 +384,12 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 // Explicit names continue through worktreeCreate and retain all its branch/path checks.
 func (n *Node) worktreeCreateAutomatic(ctx context.Context, kind, workspace, cwd, parent string) (proto.WorktreeCreateResult, error) {
 	var res proto.WorktreeCreateResult
+	if rt, runtime, err := n.worktreeRuntime(ctx, kind); runtime { // the runtime names them (runtimeworkspaces.go)
+		if err != nil {
+			return res, err
+		}
+		return n.runtimeWorktreeCreateAutomatic(ctx, rt, workspace, cwd, parent)
+	}
 	h, workspace, repo, err := n.repoOfWorkspace(ctx, kind, workspace, cwd)
 	if err != nil {
 		return res, err

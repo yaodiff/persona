@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"testing"
 	"time"
 )
@@ -119,5 +120,110 @@ func TestAssistantSearchIndex(t *testing.T) {
 	}
 	if n, _ := d.SearchReset(ctx); n != 2 {
 		t.Fatalf("a purge counted as a reset: %d", n)
+	}
+}
+
+// 0513 (#7072) empties the index built before replies were kept without Markdown, and counts a reset as
+// `assistant search-reindex` does, so a running manager reads every conversation again; over a database with no index
+// it writes nothing (a new manager's own database stays empty until the move fills it).
+func TestAssistantSearchPlainMigrationEmptiesTheIndex(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, freshDatabase(t), ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	sql, err := fs.ReadFile(migrations, "migrations/manager/0513_assistant_search_plain.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.pool.Exec(ctx, string(sql)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := d.SearchReset(ctx); err != nil || n != 0 {
+		t.Fatalf("no index, yet resets %d, %v", n, err)
+	}
+	row := SearchItemRow{Seq: 1, ItemID: "i1#0", Role: "assistant", TS: time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC), Body: "**粗**", Folded: "**粗**"}
+	if err := d.PutSearchItems(ctx, "server", "trip", "h1", 1, []SearchItemRow{row}, false); err != nil {
+		t.Fatal(err)
+	}
+	before, err := d.SearchReset(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.pool.Exec(ctx, string(sql)); err != nil {
+		t.Fatal(err)
+	}
+	cursors, err := d.SearchCursors(ctx)
+	if err != nil || len(cursors) != 0 {
+		t.Fatalf("cursors %+v, %v", cursors, err)
+	}
+	if hits, err := d.SearchAssistantItems(ctx, []string{"server"}, []string{"trip"}, []string{"粗"}, 5); err != nil || len(hits) != 0 {
+		t.Fatalf("hits %+v, %v", hits, err)
+	}
+	if n, err := d.SearchReset(ctx); err != nil || n != before+1 {
+		t.Fatalf("resets %d (before %d), %v", n, before, err)
+	}
+}
+
+// 0514 (#7195) rewinds each conversation whose indexed replies may still hold markup to just before the first of them,
+// so a manager reads it again from there; the user's words, other conversations and the rows themselves stay, the
+// resets' count does not move, and over a database with no index it writes nothing.
+func TestAssistantSearchStrongMigrationRewindsOnlyWhatMayChange(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, freshDatabase(t), ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	sql, err := fs.ReadFile(migrations, "migrations/manager/0514_assistant_search_strong.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.pool.Exec(ctx, string(sql)); err != nil {
+		t.Fatal(err)
+	}
+	if cursors, err := d.SearchCursors(ctx); err != nil || len(cursors) != 0 {
+		t.Fatalf("no index, yet cursors %+v, %v", cursors, err)
+	}
+	at := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	row := func(seq int, role, body string) SearchItemRow {
+		return SearchItemRow{Seq: seq, ItemID: fmt.Sprintf("i%d#0", seq), Role: role, TS: at, Body: body, Folded: body}
+	}
+	put := func(session string, after int, rows ...SearchItemRow) {
+		t.Helper()
+		if err := d.PutSearchItems(ctx, "server", session, "h1", after, rows, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("bold", 20, row(3, "user", "**不是** Markdown"), row(5, "assistant", "没有标记"), row(8, "assistant", "**先跑 go vet 再提交**"), row(12, "assistant", "a_b"))
+	put("plain", 9, row(2, "user", "*星*"), row(4, "assistant", "没有标记"))
+	put("first", 3, row(1, "assistant", "[文档]"))
+	put("behind", 6, row(7, "assistant", "~~旧~~")) // its cursor is already before the row: left as it is
+	before, err := d.SearchReset(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // once is enough: a second run changes nothing
+		if _, err := d.pool.Exec(ctx, string(sql)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursors, err := d.SearchCursors(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, c := range cursors {
+		got[c.SessionID] = c.AfterSeq
+	}
+	if want := map[string]int{"bold": 7, "plain": 9, "first": 0, "behind": 6}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("cursors %v, want %v", got, want)
+	}
+	if hits, err := d.SearchAssistantItems(ctx, []string{"server", "server"}, []string{"bold", "plain"}, []string{"没有标记"}, 5); err != nil || len(hits) != 2 {
+		t.Fatalf("rows went: %+v, %v", hits, err)
+	}
+	if n, err := d.SearchReset(ctx); err != nil || n != before {
+		t.Fatalf("resets %d (before %d), %v", n, before, err)
 	}
 }

@@ -95,6 +95,16 @@ type InboxItem struct {
 	TitleBy string       `json:"title_by,omitempty"`
 	Follow  *InboxFollow `json:"follow,omitempty"`
 	Now     string       `json:"now,omitempty"`
+	// MergedFrom lists the rows merged into this one by hand (listed); MergedInto, on such a row, names this one and hides
+	// it (kept, not listed). PreMergeTier is the tier this row had before (inbox_merge.go, #6480).
+	MergedFrom   []InboxMergeRef `json:"merged_from,omitempty"`
+	MergedInto   string          `json:"merged_into,omitempty"`
+	PreMergeTier string          `json:"pre_merge_tier,omitempty"`
+	// PreMergeTitle and PreMergeTitleBy are the title this row had before the model wrote one for the merged row
+	// (MergeTitle), so Undo puts it back (inbox_merge_title.go, #7229). Kept, not listed.
+	PreMergeTitle   string `json:"pre_merge_title,omitempty"`
+	PreMergeTitleBy string `json:"pre_merge_title_by,omitempty"`
+	MergeTitle      string `json:"merge_title,omitempty"`
 	// Parent is what the item grew out of: another item, a todo or an agent session (inbox_parent.go, #2128).
 	Parent *InboxParent `json:"parent,omitempty"`
 	// Folder is the "/"-separated folder path the item is filed under ("" none); FolderBy says who filed it, "model"
@@ -180,7 +190,8 @@ type InboxMail struct {
 	Thread    string      `json:"thread"`           // normalized subject: replies join the same item
 }
 
-func (it *InboxItem) open() bool { return it.DoneAt == nil }
+// open: not filed, and not a member of a merged row (inbox_merge.go): a member is hidden and its survivor stands for it.
+func (it *InboxItem) open() bool { return it.DoneAt == nil && it.MergedInto == "" }
 
 // conversationOf is where a chat item opens in its messaging source: the source is the connector's id ("lark", the
 // Lark extension's source of the same id), the account the one the apps would pass as ol_account.
@@ -205,6 +216,7 @@ func (it *InboxItem) listed() InboxItem {
 	c.ChainSeq, c.SuggestSeq = 0, 0
 	c.Status = it.status()
 	c.Now, c.TitleBy = it.nowKey(), ""
+	c.PreMergeTitle, c.PreMergeTitleBy, c.MergeTitle = "", "", ""
 	if it.Follow != nil {
 		f := *it.Follow
 		c.Follow = &f
@@ -231,6 +243,7 @@ func (it *InboxItem) listed() InboxItem {
 	if it.Agent != nil { // the copy is encoded after the lock is released
 		a := *it.Agent
 		a.Pending, a.Wake, a.SentOf, a.Lost = nil, false, "", nil
+		a.DeferredAt, a.WakeSlot = nil, false
 		c.Agent = &a
 	}
 	if it.Mail != nil {

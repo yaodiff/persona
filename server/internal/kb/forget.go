@@ -30,6 +30,7 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 			return Forgotten{}, fmt.Errorf("invalid archive source %q", name)
 		}
 	}
+	defer e.Store.SearchIndexPurge() // what is forgotten leaves the search index at its next update
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
 	e.Store.ingestMu.Lock()

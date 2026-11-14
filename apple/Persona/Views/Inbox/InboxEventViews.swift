@@ -1,10 +1,12 @@
 import BeautifulUI
 import SwiftUI
 
-// Inbox phase 1 (docs/assistant/inbox.md): what an event adds to the inbox's screens — the row's mark, and in the detail
-// recap, the suggestion card with its buttons, the chain and related items. The iPhone draws them as a page of their own
-// (`InboxEventPage`, the source behind 'view original'); the Mac in the detail's action column (`MacInboxActions`), beside
-// the source. An item without any of the new fields (an older hub) never reaches these.
+// Inbox phase 1 (docs/assistant/inbox.md): what an event adds to the inbox's screens — the row's mark and the detail's
+// blocks. On iPhone and iPad they run from the current state and processing conversation through the AI summary, suggestion,
+// background recap, chain and related items. The Mac keeps its own summary and its original state, recap, suggestion, chain
+// and related order. The iPhone draws them as a page of their own (`InboxEventPage`, the source behind 'view original'); the
+// Mac in the detail's action column (`MacInboxActions`), beside the source. An older hub's item without these fields never
+// reaches them.
 
 // MARK: - Row
 
@@ -40,13 +42,41 @@ struct InboxSpinner: View {
     }
 }
 
+/// The one rendering of `InboxNow.symbol(for:)`, used by both the list row and the event detail.
+struct InboxNowSymbol: View {
+    var symbol: InboxNow.Symbol?
+
+    var body: some View {
+        switch symbol {
+        case .time?:
+            ThemedIcon(Theme.Icon.time).font(Theme.Font.label).foregroundStyle(.secondary)
+                .accessibilityIdentifier("inbox.now.symbol.time")
+        case .spinner?:
+            InboxSpinner().accessibilityIdentifier("inbox.now.symbol.spinner")
+        case .needsYou?:
+            ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.label).foregroundStyle(StatusPalette.needsYou.text)
+                .accessibilityIdentifier("inbox.now.symbol.needsYou")
+        case .failed?:
+            ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.label).foregroundStyle(Theme.danger)
+                .accessibilityIdentifier("inbox.now.symbol.failed")
+        case nil:
+            EmptyView()
+        }
+    }
+}
+
 // MARK: - Blocks
 
-/// recap, the suggestion (or why there is none yet), the chain and related items, one under another: the iPhone's event page and
-/// the Mac's action column.
+/// The event's blocks, one under another. With `showsSummary`, the order is state, summary, suggestion (or notice), recap,
+/// chain and related items; without it, the Mac's original state, recap, suggestion (or notice), chain and related order stays.
+/// `showsConversation` adds the processing conversation after the state when the hub supplies its session.
 struct InboxEventBlocks: View {
     var item: InboxItem
     var model: InboxSuggestionModel
+    /// The iPhone detail puts its AI summary below the state and its background recap after the suggestion.
+    var showsSummary = false
+    /// The iPhone detail also links to the processing conversation when the hub supplies one.
+    var showsConversation = false
     /// The source is on screen beside them (the Mac): a link to just the source opens nothing more.
     var sourceShown = false
     /// Narrow (the Mac's strip over the item): recap cut to a few lines.
@@ -56,27 +86,33 @@ struct InboxEventBlocks: View {
     /// beside the detail's stack, not in it).
     var openItem: ((InboxItem) -> Void)?
     var openSource: ((InboxSourceRoute) -> Void)?
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.pushInboxChat) private var pushChat
+    @State private var saying = false
+    @State private var words = ""
+
+    private var canSay: Bool { !item.isDone && item.currentSuggestion == nil }
+    private var failed: Bool { canSay && (item.now == "failed" || item.handling?.state == "failed") }
+    private var nowSymbol: InboxNow.Symbol? { InboxNow.symbol(for: item) }
+    private var handlingConversationKey: SessionKey? {
+        showsConversation ? Self.conversationKey(for: item) : nil
+    }
+
+    /// The processing conversation attached to the item, shared by the view and its tests.
+    static func conversationKey(for item: InboxItem) -> SessionKey? {
+        item.handling?.sessionKey
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.l) {
-            status
-            if let recap = item.recap, !recap.isEmpty {
-                VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    InboxBlockTitle(title: String(localized: "Recap"))
-                    Text(recap)
-                        .font(Theme.Font.secondary)
-                        .lineHeight(.secondary)
-                        .lineLimit(compact ? 3 : nil)
-                        .fixedSize(horizontal: false, vertical: !compact)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .accessibilityElement(children: .combine)
-            }
-            if !item.isDone, let s = item.currentSuggestion {
-                InboxSuggestionCard(item: item, suggestion: s, model: model, edit: edit)
-            } else if let notice = model.notice {
-                Label(notice, systemImage: Theme.Icon.info).font(Theme.Font.captionMedium).foregroundStyle(Theme.caution).lineLimit(1)
+            statusAndInstruction
+            if showsSummary {
+                summary
+                suggestionOrNotice
+                recap
+            } else {
+                recap
+                suggestionOrNotice
             }
             InboxChainSection(item: item, sourceShown: sourceShown, openItem: openItem, openSource: openSource)
             InboxRelatedSection(item: item, openItem: openItem)
@@ -92,22 +128,249 @@ struct InboxEventBlocks: View {
         #endif
     }
 
-    /// The processing conversation's state, when it has something to say: still at it, waiting, or failed (with why).
+    /// The short AI summary, below the state rather than above the metadata on iPhone and iPad.
+    @ViewBuilder private var summary: some View {
+        if let s = item.summary, !s.isEmpty {
+            (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + s))
+                .font(Theme.Font.secondary)
+                .lineHeight(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("inbox.summary")
+        }
+    }
+
+    /// The manager's longer background recap, after the suggestion on iPhone and before it on the Mac.
+    @ViewBuilder private var recap: some View {
+        if let recap = item.recap, !recap.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                InboxBlockTitle(title: String(localized: "Recap"))
+                Text(recap)
+                    .font(Theme.Font.secondary)
+                    .lineHeight(.secondary)
+                    .lineLimit(compact ? 3 : nil)
+                    .fixedSize(horizontal: false, vertical: !compact)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("inbox.recap")
+        }
+    }
+
+    @ViewBuilder private var suggestionOrNotice: some View {
+        if !item.isDone, let s = item.currentSuggestion {
+            InboxSuggestionCard(item: item, suggestion: s, model: model, edit: edit)
+                .id(s.version)
+        } else if let notice = model.notice {
+            Label(notice, systemImage: Theme.Icon.info).font(Theme.Font.captionMedium).foregroundStyle(Theme.caution).lineLimit(1)
+        }
+    }
+
+    /// The processing state, its processing-conversation link, and the no-suggestion instruction in the same place as the
+    /// web's status actions. Without a link, the status and instruction button keep their original shared row.
+    @ViewBuilder private var statusAndInstruction: some View {
+        if canSay {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                HStack(alignment: failed ? .top : .center, spacing: Theme.Space.s) {
+                    status
+                    Spacer(minLength: 0)
+                    instructionButton
+                }
+                .disabled(model.busy != nil)
+                if saying && !failed { instructionEditor }
+                if let error = model.error {
+                    Label(error, systemImage: Theme.Icon.error)
+                        .font(Theme.Font.caption).foregroundStyle(Theme.danger)
+                        .accessibilityIdentifier("inbox.instruction.error")
+                }
+            }
+        } else {
+            status
+        }
+    }
+
+    @ViewBuilder private var instructionButton: some View {
+        if failed {
+            InboxSuggestionButton(title: InboxEventText.tryAgain, symbol: Theme.Icon.retry, prominent: false,
+                                  spinning: model.busy == "instruct") { instruct(InboxEventText.retryInstruction) }
+                .accessibilityIdentifier("inbox.instruction.retry")
+        } else if !saying {
+            InboxSuggestionButton(title: InboxEventText.saySomething, symbol: Theme.Icon.instructed, prominent: false, spinning: false) {
+                saying = true
+            }
+            .accessibilityIdentifier("inbox.instruction.say")
+        }
+    }
+
+    /// The processing conversation opens through the same shell route as a chain's conversation.
+    private func conversation(_ key: SessionKey) -> some View {
+        Button {
+            InboxEventOpen.session(key, manager: true, owner: item.manager, model: appModel, push: pushChat)
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                Text(String(localized: "Conversation"))
+                    .lineLimit(1)
+                    .fixedSize()
+                ThemedIcon(Theme.Icon.disclosure)
+            }
+            .font(Theme.Font.captionMedium)
+            .foregroundStyle(Theme.accent)
+            .contentShape(.rect)
+            .tapTargetOutset()
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("inbox.now.conversation")
+    }
+
+    /// The shared current-state sentence when the hub supplies a key; otherwise the old processing / done line.
     @ViewBuilder private var status: some View {
-        if let filed = InboxEventText.doneBy(item) {
-            Label(filed, systemImage: Theme.Icon.done).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.positive).lineLimit(1)
+        if let words = InboxNow.text(for: item) {
+            if let key = handlingConversationKey {
+                statusWithConversation(key: key) {
+                    InboxNowSymbol(symbol: nowSymbol)
+                } content: {
+                    Text(words)
+                        .font(Theme.Font.secondary)
+                        .lineHeight(.secondary)
+                        .foregroundStyle(nowSymbol == .failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("inbox.now")
+            } else {
+                HStack(alignment: .top, spacing: Theme.Space.sm) {
+                    InboxNowSymbol(symbol: nowSymbol)
+                    Text(words)
+                        .font(Theme.Font.secondary)
+                        .lineHeight(.secondary)
+                        .foregroundStyle(nowSymbol == .failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("inbox.now")
+            }
+        } else if let filed = InboxEventText.doneBy(item) {
+            if let key = handlingConversationKey {
+                statusWithConversation(key: key) {
+                    ThemedIcon(Theme.Icon.done).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.positive)
+                } content: {
+                    Text(filed).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.positive).lineLimit(1)
+                }
+            } else {
+                Label(filed, systemImage: Theme.Icon.done).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.positive).lineLimit(1)
+            }
         } else if !item.isDone, let mark = InboxEventText.mark(item) {
             switch mark {
-            case .suggestion: EmptyView() // the card says it
+            case .suggestion:
+                if let key = handlingConversationKey { conversation(key) } // the card says the state
             case .failed(let words):
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Label(words, systemImage: Theme.Icon.error).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger).lineLimit(1)
-                    if let why = item.handling?.error, !why.isEmpty {
-                        Text(why).font(Theme.Font.caption).foregroundStyle(.secondary)
+                if let key = handlingConversationKey {
+                    statusWithConversation(key: key) {
+                        ThemedIcon(Theme.Icon.error).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger)
+                    } content: {
+                        Text(words).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger).lineLimit(1)
+                        if let why = item.handling?.error, !why.isEmpty {
+                            Text(why).font(Theme.Font.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        Label(words, systemImage: Theme.Icon.error).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger).lineLimit(1)
+                        if let why = item.handling?.error, !why.isEmpty {
+                            Text(why).font(Theme.Font.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             default:
+                if let key = handlingConversationKey {
+                    markWithConversation(mark, key: key)
+                } else {
+                    InboxEventMarkLine(mark: mark)
+                }
+            }
+        }
+    }
+
+    /// The conversation sits under the words, aligned with the text rather than the state symbol.
+    @ViewBuilder private func statusWithConversation<Leading: View, Content: View>(
+        key: SessionKey,
+        @ViewBuilder leading: () -> Leading,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(alignment: .top, spacing: Theme.Space.sm) {
+            leading()
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                content()
+                conversation(key)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// The older processing mark keeps its icon and words together when no conversation is present.
+    @ViewBuilder private func markWithConversation(_ mark: InboxEventText.Mark, key: SessionKey) -> some View {
+        switch mark {
+        case .preparing:
+            statusWithConversation(key: key) {
+                InboxSpinner()
+            } content: {
+                Text("AI is preparing a suggestion").font(Theme.Font.labelStrong).foregroundStyle(Theme.ai).lineLimit(1)
+            }
+        case .working(let word):
+            statusWithConversation(key: key) {
+                ThemedIcon(Theme.Icon.inProgress).font(Theme.Font.label).foregroundStyle(.secondary)
+            } content: {
+                Text(word).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+            }
+        default:
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 InboxEventMarkLine(mark: mark)
+                conversation(key)
+            }
+        }
+    }
+
+    /// The same input pattern as the suggestion editor, but version zero addresses an item with no suggestion.
+    private var instructionEditor: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            TextField(String(localized: "Say a word, e.g. “Don't reply like that, ask about the time first”"), text: $words, axis: .vertical)
+                .lineLimit(1...3)
+                .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
+                .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control))
+                .disabled(model.busy != nil)
+                .onSubmit { instruct(words) }
+                .accessibilityIdentifier("inbox.instruction.text")
+            HStack(spacing: Theme.Space.s) {
+                Spacer(minLength: 0)
+                InboxSuggestionButton(title: String(localized: "Cancel"), prominent: false, spinning: false) {
+                    words = ""
+                    saying = false
+                }
+                .accessibilityIdentifier("inbox.instruction.cancel")
+                InboxSuggestionButton(title: InboxEventText.saySomething, prominent: true, spinning: model.busy == "instruct") {
+                    instruct(words)
+                }
+                .disabled(model.busy != nil || words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("inbox.instruction.send")
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func instruct(_ text: String) {
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return }
+        Task {
+            guard let outcome = await model.instruct(.withoutSuggestion, words) else { return }
+            switch outcome {
+            case .done(_), .stale(_):
+                self.words = ""
+                saying = false
+            case .failed:
+                break // the error stays beside the recoverable words
             }
         }
     }
@@ -130,6 +393,23 @@ struct InboxSuggestionCard: View {
     var suggestion: InboxItem.Suggestion
     var model: InboxSuggestionModel
     var edit: () -> Void
+    // A to-do suggestion's fields (#6480): its title, due day, All Day and time, sent as they stand
+    @State private var todoTitle: String
+    @State private var todoDay: Date?
+    @State private var todoAllDay: Bool
+    @State private var todoTime: Date
+
+    init(item: InboxItem, suggestion: InboxItem.Suggestion, model: InboxSuggestionModel, edit: @escaping () -> Void) {
+        self.item = item
+        self.suggestion = suggestion
+        self.model = model
+        self.edit = edit
+        let due = InboxDue.parts(suggestion.due)
+        _todoTitle = State(initialValue: suggestion.text)
+        _todoDay = State(initialValue: due.day)
+        _todoAllDay = State(initialValue: due.time == nil)
+        _todoTime = State(initialValue: due.time ?? Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: .now) ?? .now)
+    }
 
     var body: some View {
         let s = suggestion
@@ -146,12 +426,16 @@ struct InboxSuggestionCard: View {
                 Label(notice, systemImage: Theme.Icon.info).font(Theme.Font.captionMedium).foregroundStyle(Theme.caution).lineLimit(1)
                     .accessibilityIdentifier("inbox.suggestion.stale")
             }
-            Text(s.text)
-                .font(Theme.Font.secondary)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if s.kind == "todo" && !s.isHandback {
+                InboxTodoFields(title: $todoTitle, day: $todoDay, allDay: $todoAllDay, time: $todoTime)
+            } else {
+                Text(s.text)
+                    .font(Theme.Font.secondary)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let note = s.note, !note.isEmpty {
                 Text(note).font(Theme.Font.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -197,7 +481,12 @@ struct InboxSuggestionCard: View {
                 .accessibilityIdentifier("inbox.suggestion.edit")
         case .confirm(let title):
             InboxSuggestionButton(title: title, prominent: true, spinning: model.busy == "confirm", fill: fill) {
-                Task { await model.confirm(s) }
+                if s.kind == "todo" && !s.isHandback {
+                    let due = InboxDue.string(day: todoDay, allDay: todoAllDay, time: todoTime)
+                    Task { await model.confirm(s, text: todoTitle, due: due) }
+                } else {
+                    Task { await model.confirm(s) }
+                }
             }
             .accessibilityIdentifier("inbox.suggestion.confirm")
         }
@@ -207,6 +496,7 @@ struct InboxSuggestionCard: View {
 /// One of the card's buttons: one line always, in the current style's buttons.
 struct InboxSuggestionButton: View {
     var title: String
+    var symbol: String? = nil
     var prominent: Bool
     var spinning: Bool
     /// As wide as the column (stacked buttons).
@@ -217,6 +507,7 @@ struct InboxSuggestionButton: View {
         let button = Button(action: perform) {
             HStack(spacing: Theme.Space.xs) {
                 if spinning { InboxSpinner() }
+                if let symbol { ThemedIcon(symbol).font(Theme.Font.label) }
                 Text(title).lineLimit(1).fixedSize()
             }
             .frame(maxWidth: fill ? .infinity : nil)
@@ -328,7 +619,24 @@ struct InboxSuggestionEditor: View {
 
 // MARK: - chain
 
-/// The chain: collapsed to the newest entry with 'show all (N)'; each row time · icon · words, and a tap goes
+nonisolated extension InboxEventText {
+    /// The newest entry for each linked Agent session, across the whole chain rather than only its visible rows.
+    internal static func liveStateEntries(_ chain: [InboxItem.ChainEntry]) -> Set<String> {
+        var latest: [SessionKey: String] = [:]
+        for e in chain where e.kind == "agent" || e.kind == "agent_stopped" {
+            guard let key = e.link?.sessionKey else { continue }
+            latest[key] = e.id
+        }
+        return Set(latest.values)
+    }
+
+    /// Plain reported detail has no expansion to reveal it, so it stays readable in full instead of being clipped.
+    internal static func chainLineLimit(_ e: InboxItem.ChainEntry, open: Bool) -> Int? {
+        open || (e.detailIsInLine && e.link == nil && (e.messages ?? []).isEmpty) ? nil : 2
+    }
+}
+
+/// The chain: collapsed to the three newest entries with 'show all (N)'; each row time · source icon · words, and a tap goes
 /// where its link says (the source at that message, a conversation, another item) or opens its detail in place.
 struct InboxChainSection: View {
     @Environment(AppModel.self) private var model
@@ -340,18 +648,21 @@ struct InboxChainSection: View {
     var openSource: ((InboxSourceRoute) -> Void)?
     @State private var all = false
     @State private var opened: Set<String> = []
+    /// The to-do a chain entry links (the row was added to to-dos, #6480), opened in a sheet.
+    @State private var todo: TodoDetailRoute?
     /// The whole chain of an item listed with part of it (`InboxItem.chainCut`, #4742), read when the section appears.
     @State private var whole: [InboxItem.ChainEntry]?
 
     var body: some View {
         let chain = item.chainCut ? whole ?? item.chain ?? [] : item.chain ?? []
+        let liveStateEntries = InboxEventText.liveStateEntries(chain)
         let count = max(chain.count, item.chainCount ?? 0)
         if !chain.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(spacing: Theme.Space.s) {
                     InboxBlockTitle(title: String(localized: "Timeline [Inbox Event Views 49991a]"))
                     Spacer(minLength: 0)
-                    if count > 1 {
+                    if count > 3 {
                         Button(all ? String(localized: "Collapse") : String(localized: "Show all (\(count))")) {
                             withAnimation(Theme.Motion.layout) { all.toggle() }
                         }
@@ -361,12 +672,19 @@ struct InboxChainSection: View {
                         .accessibilityIdentifier("inbox.chain.all")
                     }
                 }
-                ForEach(all ? chain : Array(chain.suffix(1))) { e in
-                    entry(e)
+                ForEach(InboxEventText.chainRows(chain, expanded: all)) { e in
+                    entry(e, showsLiveState: liveStateEntries.contains(e.id))
                 }
             }
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inbox.chain")
             .task(id: CutChain(key: item.key, count: item.chainCount)) { await readWhole() }
+            .sheet(item: $todo) { r in
+                NavigationStack { TodoDetailView(todoID: r.id).macSheetDone { todo = nil } }
+                #if os(macOS)
+                .macSheet()
+                #endif
+            }
         }
     }
 
@@ -381,12 +699,12 @@ struct InboxChainSection: View {
         if let full = try? await api.inboxItem(item.id).chain, !Task.isCancelled { whole = full }
     }
 
-    @ViewBuilder private func entry(_ e: InboxItem.ChainEntry) -> some View {
+    @ViewBuilder private func entry(_ e: InboxItem.ChainEntry, showsLiveState: Bool) -> some View {
         let target = InboxChainTarget.of(e, sourceShown: sourceShown)
         let open = opened.contains(e.id)
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                tappable(e, target) { line(e, target: target, open: open) }
+                tappable(e, target) { line(e, target: target, open: open, showsLiveState: showsLiveState) }
                 // An entry that goes somewhere and has messages too: they open here with the chevron.
                 if target.navigates && e.expandable {
                     Button { toggle(e) } label: {
@@ -402,20 +720,25 @@ struct InboxChainSection: View {
             if open { expansion(e).transition(.opacity) }
         }
         .padding(.vertical, Theme.Space.xs)
+        .accessibilityValue(e.id)
     }
 
-    private func line(_ e: InboxItem.ChainEntry, target: InboxChainTarget, open: Bool) -> some View {
+    private func line(_ e: InboxItem.ChainEntry, target: InboxChainTarget, open: Bool, showsLiveState: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             Text(LarkTime.short(e.at)).font(Theme.Font.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
-            ThemedIcon(InboxEventText.symbol(e))
-                .font(Theme.Font.label)
-                .foregroundStyle(tint(e))
-                .scaledFrame(width: Theme.Size.iconXS)
-            Text(e.text.isEmpty ? e.kind : e.text)
+            chainIcon(e)
+            if e.kind == "reported" {
+                Chip(text: InboxEventText.assistantSays, look: .neutral, compact: true)
+                    .accessibilityIdentifier("inbox.chain.reported")
+            }
+            Text(InboxEventText.chainText(e))
                 .font(Theme.Font.secondary)
-                .foregroundStyle(.primary)
-                .lineLimit(open ? nil : 2)
+                .foregroundStyle(e.kind == "reported" ? .secondary : .primary)
+                .lineLimit(InboxEventText.chainLineLimit(e, open: open))
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if showsLiveState, let key = e.link?.sessionKey {
+                InboxChainAgentState(key: key)
+            }
             switch target {
             case .inline:
                 ThemedIcon(open ? Theme.Icon.collapse : Theme.Icon.expand).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
@@ -426,6 +749,23 @@ struct InboxChainSection: View {
             }
         }
         .contentShape(.rect)
+    }
+
+    @ViewBuilder private func chainIcon(_ e: InboxItem.ChainEntry) -> some View {
+        if let brand = sourceBrand(e) {
+            BrandMark(brand, side: Theme.Size.iconXS).foregroundStyle(tint(e))
+        } else {
+            ThemedIcon(InboxEventText.symbol(e))
+                .font(Theme.Font.label)
+                .foregroundStyle(tint(e))
+                .scaledFrame(width: Theme.Size.iconXS)
+        }
+    }
+
+    /// A `via` source id uses that source's own mark, not the item's by assumption; a generic source keeps its symbol.
+    private func sourceBrand(_ e: InboxItem.ChainEntry) -> String? {
+        guard InboxEventText.iconMeaning(e) == "source", let via = e.via else { return nil }
+        return via == "lark" ? Theme.Brand.lark : ConnectorText.brand(via)
     }
 
     /// The row as what it opens: a page pushed on the stack, a conversation, a link; or itself expanding.
@@ -458,6 +798,9 @@ struct InboxChainSection: View {
             } else {
                 label() // not in the inbox any more
             }
+        case .todo(let id):
+            Button { todo = TodoDetailRoute(id: id) } label: { label() }.buttonStyle(.plain)
+                .accessibilityIdentifier("inbox.chain.todo")
         case .inline:
             Button { toggle(e) } label: { label() }.buttonStyle(.plain)
                 .accessibilityIdentifier("inbox.chain.expand")
@@ -480,7 +823,7 @@ struct InboxChainSection: View {
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let d = e.detail, !d.isEmpty {
+            if let d = InboxEventText.expansionDetail(e) {
                 Text(d).font(Theme.Font.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -496,6 +839,23 @@ struct InboxChainSection: View {
         case "confirmed", "sent", "concluded", "done": Theme.positive
         case "handling", "agent", "instructed": Theme.ai
         default: .secondary
+        }
+    }
+}
+
+/// One Agent step's live state, reading only its own session cell rather than the session list (performance P5).
+private struct InboxChainAgentState: View {
+    @Environment(AppModel.self) private var model
+    var key: SessionKey
+
+    var body: some View {
+        if let session = model.session(model.inHub(key)) {
+            Text(session.state.label)
+                .font(Theme.Font.caption)
+                .foregroundStyle(session.state.tone.text)
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityIdentifier("inbox.chain.agentState")
         }
     }
 }
@@ -575,6 +935,28 @@ struct InboxSourceRoute: Hashable {
 
 /// The source as the inbox detail drew it before events: 'view original', a chain entry's link.
 struct InboxSourcePage: View {
+    /// What the page draws, in the source's existing order. The native-chat branch skips the extension's intermediate page.
+    @MainActor enum Selection: Equatable {
+        case chat(LarkConversation)
+        case slot(Slot)
+
+        enum Slot: Equatable {
+            case document, connector, moment, mail, empty
+        }
+
+        static func of(item: InboxItem, position: String? = nil) -> Selection {
+            if item.doc != nil { return .slot(.document) }
+            if item.connector != nil { return .slot(.connector) }
+            if item.moment != nil { return .slot(.moment) }
+            if var conversation = item.larkConversation {
+                if let position { conversation.focus = position }
+                return .chat(conversation)
+            }
+            if item.mail != nil { return .slot(.mail) }
+            return .slot(.empty)
+        }
+    }
+
     var route: InboxSourceRoute
     var accounts: [MailAccount]
     @Environment(AppModel.self) private var model
@@ -587,33 +969,39 @@ struct InboxSourcePage: View {
     }
 
     private var item: InboxItem { route.item }
+    private var selection: Selection { .of(item: item, position: route.position) }
 
     var body: some View {
-        InboxItemSlotContent(item: item, slot: slot) { content }
-            .navigationTitle(item.title)
+        Group {
+            switch selection {
+            case .chat(let conversation):
+                LarkChatView(conversation: conversation, manager: model.linkManager(item.manager))
+            case .slot(let plain):
+                InboxItemSlotContent(item: item, slot: slot) { content(plain) }
+            }
+        }
+        .navigationTitle(item.title)
     }
 
-    @ViewBuilder private var content: some View {
-        if item.doc != nil {
+    @ViewBuilder private func content(_ body: Selection.Slot) -> some View {
+        switch body {
+        case .document:
             InboxDocDetailView(item: item)
-        } else if item.connector != nil {
+        case .connector:
             InboxConnectorDetailView(item: item)
-        } else if let m = item.moment {
-            LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(item.manager))
-        } else if let c = conversation {
-            LarkChatView(conversation: c, manager: model.linkManager(item.manager))
-        } else if let m = mail {
-            MailDetailView(summary: m, accounts: accounts)
-        } else {
+        case .moment:
+            if let moment = item.moment {
+                LarkMomentsPostView(postID: moment.postID, pushed: true, manager: model.linkManager(item.manager))
+            }
+        case .mail:
+            if let mail {
+                MailDetailView(summary: mail, accounts: accounts)
+            } else {
+                EmptyStateView(symbol: Theme.Icon.info, title: item.title, message: item.preview)
+            }
+        case .empty:
             EmptyStateView(symbol: Theme.Icon.info, title: item.title, message: item.preview)
         }
-    }
-
-    /// The Feishu chat, at the link's message when it names one.
-    private var conversation: LarkConversation? {
-        guard var c = item.larkConversation else { return nil }
-        if let p = route.position { c.focus = p }
-        return c
     }
 
     /// The mail the link names, else the thread's newest.
@@ -626,9 +1014,10 @@ struct InboxSourcePage: View {
 
 // MARK: - iPhone
 
-/// One event opened on the iPhone: the summary with 'view original', the processing state, recap, the suggestion and its buttons,
-/// the chain, the thread line and related items; Hand to AI (with Draft Reply among its chips) is the bar along the bottom
-/// (`InboxHandOffBar`). The source is a push away (view original, the received entry).
+/// One event opened on the iPhone or iPad: metadata with 'view original'; the current state, processing conversation and
+/// instruction; the AI summary; the suggestion and its buttons; the background recap; the chain and related items; then the
+/// thread line. Hand to AI (with Draft Reply among its chips) is the bar along the bottom (`InboxHandOffBar`). The source is
+/// a push away (view original, the received entry).
 struct InboxEventPage: View {
     var item: InboxItem
     var accounts: [MailAccount]
@@ -648,7 +1037,7 @@ struct InboxEventPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
                 header
-                InboxEventBlocks(item: item, model: suggestion, edit: { editing = true })
+                InboxEventBlocks(item: item, model: suggestion, showsSummary: true, showsConversation: true, edit: { editing = true })
                 InboxLineSection(tree: line)
             }
             .padding(.horizontal, Theme.Space.page)
@@ -674,29 +1063,26 @@ struct InboxEventPage: View {
         #endif
     }
 
-    /// the summary, and 'view original' to the source.
+    /// Where it happens and who said the newest line, with 'view original' at the trailing edge.
     private var header: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if let s = item.summary, !s.isEmpty {
-                (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + s))
-                    .font(Theme.Font.heading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: Theme.Space.s) {
+            Text(InboxEventPage.from(item))
+                .font(Theme.Font.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .accessibilityIdentifier("inbox.detail.meta")
+            Spacer(minLength: 0)
+            NavigationLink(value: InboxSourceRoute(item: item, position: nil, uid: nil)) {
+                Label("View original", systemImage: Theme.Icon.openDocument).font(Theme.Font.captionMedium).lineLimit(1).fixedSize()
             }
-            HStack(spacing: Theme.Space.s) {
-                Text(InboxEventPage.from(item)).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-                Spacer(minLength: 0)
-                NavigationLink(value: InboxSourceRoute(item: item, position: nil, uid: nil)) {
-                    Label("View original", systemImage: Theme.Icon.openDocument).font(Theme.Font.captionMedium).lineLimit(1).fixedSize()
-                }
-                .buttonStyle(.borderless)
-                .accessibilityIdentifier("inbox.viewSource")
-            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("inbox.viewSource")
         }
     }
 
-    /// Where it came from: Feishu · a name / the mail account.
+    /// Where it happens and who said the newest line; without `where`, the source and title as before.
     static func from(_ it: InboxItem) -> String {
+        if let meta = InboxNow.meta(it, lang: interfaceTextLocale.identifier) { return meta }
         let source = it.isLark ? String(localized: "Lark [Inbox Event Views 7e4419]") : it.accountName
         return [source, it.title].filter { !$0.isEmpty }.joined(separator: " · ")
     }

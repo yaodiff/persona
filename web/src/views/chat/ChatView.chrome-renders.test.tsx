@@ -55,7 +55,7 @@ vi.mock("./chat-actions", async (load) => {
 vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
-import { applyCompleteSessions, reset, type ItemsEvent } from "../../lib/store";
+import { applyCompleteSessions, getState, reset, type ItemsEvent } from "../../lib/store";
 import { whenComposer } from "../../lib/links";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
@@ -227,10 +227,17 @@ it("the assistant: the header draws again only when what its face reads changes"
   expect(renders.chips).toBe(0);
 });
 
-it("a Persona conversation's composer has the model pill, an Agent's too (#5032, #5033)", async () => {
+it("the main conversation's composer has the model pill; another Persona conversation's has none (#5032, #5033, #6911)", async () => {
+  getState().assistant = { machine_id: "mac", launcher: "claude", main: "s1", conversations: [] };
   await open(<ChatView mid="mac" sid="s1" assistant />);
   expect(host.querySelector("button[data-model-pill]")).not.toBeNull();
   expect(host.querySelector(`button[title="${t("chat-sessiondialogs.effort")}"]`)).toBeNull(); // no effort chip
+  // A leader, the supervisor or another assistant conversation is not the main one: no per-conversation picker.
+  act(() => root.render(<></>));
+  getState().assistant = { machine_id: "mac", launcher: "claude", main: "other", conversations: [] };
+  await open(<ChatView mid="mac" sid="s1" assistant />);
+  expect(host.querySelector("[data-model-pill]")).toBeNull();
+  // An Agent's session still gets its own pill.
   act(() => root.render(<></>));
   await open(<ChatView mid="mac" sid="s1" inPage />);
   expect(host.querySelector("[data-model-pill]")).not.toBeNull();

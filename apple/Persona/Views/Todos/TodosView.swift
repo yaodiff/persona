@@ -10,6 +10,8 @@ struct TodosView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var store = TodoStore.shared
+    /// The knowledge-base projects Group By › Project names its sections after.
+    @State private var projects = TodoProjects.shared
     @State private var query = ""
     @State private var showCreate = false
     @State private var creatingTitle = ""
@@ -57,7 +59,8 @@ struct TodosView: View {
 
     var body: some View {
         VStack(spacing: Theme.Space.flush) {
-            TodosModeBar(view: $viewMode, mode: $calendarMode, grouping: model.directionTree == nil ? nil : $grouping) {
+            TodosModeBar(view: $viewMode, mode: $calendarMode, grouping: $grouping,
+                         groupings: TodosGrouping.offered(hasTree: model.directionTree != nil)) {
                 listControls
             }
             if viewMode == .calendar {
@@ -111,6 +114,8 @@ struct TodosView: View {
             openedGroups = []
         }
         .navigationDestination(item: $pushed) { r in TodoDetailView(todoID: r.id) }
+        // read when the page opens, and for the assistant made current (a project made meanwhile shows up)
+        .task(id: model.assistantSwitches) { await projects.load(model.api?.currentAssistantSettings()) }
     }
 
     private var list: some View {
@@ -141,8 +146,11 @@ struct TodosView: View {
             if result.isEmpty {
                 emptySection
             } else {
-                if TodosGrouping.resolved(grouping, hasTree: model.directionTree != nil) == .direction, let tree = model.directionTree {
+                let shown = TodosGrouping.resolved(grouping, hasTree: model.directionTree != nil)
+                if shown == .direction, let tree = model.directionTree {
                     directionSections(tree, result: result)
+                } else if shown == .project {
+                    projectSections(result)
                 } else {
                     ForEach(TodoSection.allCases, id: \.self) { section in
                         let groups = TodoListLogic.sorted(result.groups(section), by: listSort, calendar: calendar)
@@ -242,6 +250,38 @@ struct TodosView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("todos.direction")
+            }
+        }
+        let done = TodoListLogic.sorted(result.groups(.done), by: listSort, calendar: calendar)
+        if !done.isEmpty {
+            let folded = TodoSection.done.startsFolded && !isUnfolded(.done)
+            sectionView(.done, groups: done, count: done.reduce(0) { $0 + $1.members.count }, folded: folded)
+                .listSectionSpacing(folded ? .custom(Theme.Space.flush) : .compact)
+        }
+    }
+
+    /// By project (#7077, the web's grouping by project): a section per knowledge-base project with open to-dos, where its
+    /// most pressing one comes in the list, then Unsorted; then Done, folded, as by status. The search and the filter
+    /// narrow them as they narrow the sections.
+    @ViewBuilder private func projectSections(_ result: TodoTriageResult) -> some View {
+        let calendar = TodoCalendar.userCalendar
+        let open = TodoSection.allCases.filter { $0 != .done }.flatMap { section in
+            TodoListLogic.sorted(result.groups(section), by: listSort, calendar: calendar).flatMap(\.members)
+        }
+        let triage = result.sections.values.joined().reduce(into: [String: TodoTriage]()) { all, g in
+            all.merge(g.triage) { first, _ in first }
+        }
+        ForEach(TodoProjectLogic.sections(open, projects: projects.list)) { p in
+            Section {
+                ForEach(p.todos) { todo in todoRow(todo, triage: triage[todo.id]) }
+            } header: {
+                SectionHeader(title: p.title, count: p.todos.count, tone: StatusPalette.idle)
+                    .font(Theme.Font.sectionHeader)
+                    .textCase(nil)
+                    .lineLimit(1)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("todos.project")
             }
         }
         let done = TodoListLogic.sorted(result.groups(.done), by: listSort, calendar: calendar)

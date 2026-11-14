@@ -128,7 +128,73 @@ struct TabActiveTaskTests {
         }
     }
 
+    private struct VisibilityPage: View {
+        let front: Front
+        let calls: Calls
+        let sceneAware: Bool
+
+        var body: some View {
+            Color.clear
+                .onTabVisibility(sceneAware: sceneAware,
+                                 appear: { calls.log.append("appear") },
+                                 disappear: { calls.log.append("disappear") })
+                .environment(\.tabIsActive, front.active)
+                .environment(\.scenePhase, front.phase)
+        }
+    }
+
     private func settle() async { try? await Task.sleep(for: .milliseconds(300)) }
+
+    @Test func tabOnlyVisibilityKeepsBusinessLifecycleAcrossSceneTransitions() async {
+        let front = Front(), calls = Calls()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        window.rootViewController = UIHostingController(rootView: VisibilityPage(front: front, calls: calls, sceneAware: false))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        await settle()
+        #expect(calls.log == ["appear"])
+
+        // Voice and other business lifecycles end on a real page departure, not Control Center or a scene transition.
+        front.phase = .inactive
+        await settle()
+        #expect(calls.log == ["appear"])
+        front.phase = .background
+        await settle()
+        #expect(calls.log == ["appear"])
+        front.phase = .active
+        await settle()
+        #expect(calls.log == ["appear"])
+        front.active = false
+        await settle()
+        #expect(calls.log == ["appear", "disappear"])
+    }
+
+    @Test func sceneAwareVisibilityPausesAndResumesPolling() async {
+        let front = Front(), calls = Calls()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        window.rootViewController = UIHostingController(rootView: VisibilityPage(front: front, calls: calls, sceneAware: true))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        await settle()
+        #expect(calls.log == ["appear"])
+
+        front.phase = .inactive
+        await settle()
+        #expect(calls.log == ["appear", "disappear"])
+        front.phase = .active
+        await settle()
+        #expect(calls.log == ["appear", "disappear", "appear"])
+        front.active = false
+        await settle()
+        front.phase = .inactive
+        await settle()
+        front.active = true
+        await settle()
+        #expect(calls.log == ["appear", "disappear", "appear", "disappear"])
+        front.phase = .active
+        await settle()
+        #expect(calls.log == ["appear", "disappear", "appear", "disappear", "appear"])
+    }
 
     @Test func aPageStillInTheWindowStopsItsWorkWhenItGoesToTheBack() async {
         let front = Front(), calls = Calls()

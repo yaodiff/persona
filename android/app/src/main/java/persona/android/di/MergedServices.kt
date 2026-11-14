@@ -151,6 +151,8 @@ internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRe
         override suspend fun loadOlder(session: SessionKey) = stacks.use(session) { it.repositories.chats.loadOlder(it.names.raw(session)) }
         override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int) =
             stacks.use(session) { it.repositories.chats.expandFold(it.names.raw(session), fromSeq, toSeq) }
+        override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int) =
+            stacks.use(session) { it.repositories.chats.loadRange(it.names.raw(session), fromSeq, throughSeq) }
         override suspend fun loadImage(session: SessionKey, itemId: String) =
             stacks.use(session) { it.repositories.chats.loadImage(it.names.raw(session), itemId) }
         override suspend fun fullText(session: SessionKey, itemId: String) =
@@ -287,6 +289,10 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).panes(GroupKeys.raw(machineId)) }
         override suspend fun newTab(machineId: String, workspaceId: String, kind: String?, cwd: String?) =
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).newTab(GroupKeys.raw(machineId), workspaceId, kind, cwd) }
+        override suspend fun close(machineId: String, pane: String) =
+            stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).close(GroupKeys.raw(machineId), pane) }
+        override suspend fun closeFinished(machineId: String, preview: Boolean, panes: List<String>) =
+            stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).closeFinished(GroupKeys.raw(machineId), preview, panes) }
     }
 
     val files: SessionFiles = routedFiles { stacks.of(it)?.files }
@@ -433,11 +439,13 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         override suspend fun newAgentModel() = creations.getOrNull(chosen)?.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             creation(of(machineId)).launcherModels(machineId, launcher, refresh)
-        override suspend fun worktreeStatus(machineId: String, cwd: String) = creation(of(machineId)).worktreeStatus(machineId, cwd)
-        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String) =
-            creation(of(machineId)).addWorktree(machineId, cwd, nameHint, branch)
-        override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean) =
-            creation(of(machineId)).removeWorktree(machineId, path, deleteBranch, force)
+        override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?) = creation(of(machineId)).worktreeStatus(machineId, cwd, kind)
+        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?) =
+            creation(of(machineId)).addWorktree(machineId, cwd, nameHint, branch, kind)
+        override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean, kind: String?) =
+            creation(of(machineId)).removeWorktree(machineId, path, deleteBranch, force, kind)
+        // A computer's catalog workspaces come from the hub that owns it; none when no hub does.
+        override suspend fun workspaces(machineId: String) = of(machineId)?.let { creations[it] }?.workspaces(machineId).orEmpty()
     }
     return AgentsWiringState(
         scope = scope,

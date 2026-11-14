@@ -89,7 +89,8 @@ func fakeModelServer(t *testing.T, in io.Reader, out io.WriteCloser) {
 			reply(`{"userAgent":"codex"}`)
 		case req.Method == "model/list" && req.Params["cursor"] == nil:
 			reply(`{"data":[{"id":"preset-a","model":"model-a","displayName":"Model A","description":"default one","isDefault":true,"hidden":false,` +
-				`"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}]},` +
+				`"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],` +
+				`"serviceTiers":[{"id":"priority","name":"Fast","description":"Increased usage"}]},` +
 				`{"id":"old","model":"old","displayName":"Old","hidden":true}],"nextCursor":"p2"}`)
 		case req.Method == "model/list" && req.Params["cursor"] == "p2":
 			reply(`{"data":[{"id":"gateway/model-b","model":"gateway/model-b","displayName":"","hidden":false}],"nextCursor":null}`)
@@ -114,6 +115,10 @@ func TestCodexModelListPagesAndHides(t *testing.T) {
 	a, b := got[0], got[1]
 	if a.ID != "model-a" || a.Name != "Model A" || !a.Default || a.DefaultEffort != "medium" || !slices.Equal(a.Efforts, []string{"low", "medium", "high"}) {
 		t.Fatalf("first %+v", a)
+	}
+	raw, _ := json.Marshal(a)
+	if !strings.Contains(string(raw), `"service_tiers":[{"id":"priority","name":"Fast","description":"Increased usage"}]`) {
+		t.Fatalf("first lost its native speed choices: %s", raw)
 	}
 	if b.ID != "gateway/model-b" || b.Name != "gateway/model-b" || b.Default {
 		t.Fatalf("second %+v", b)

@@ -3,6 +3,7 @@
 package node
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"os/exec"
@@ -39,15 +40,10 @@ fi
 			if err := os.WriteFile(cli, []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			child := exec.Command("sleep", "60")
-			child.Env = append(withoutEnv(os.Environ(), []string{"ORCA_CLI_COMMAND", "ORCA_TERMINAL_HANDLE", orcaPaneEnv}),
+			env := append(withoutEnv(os.Environ(), []string{"ORCA_CLI_COMMAND", "ORCA_TERMINAL_HANDLE", orcaPaneEnv}),
 				"ORCA_CLI_COMMAND="+cli, "ORCA_TERMINAL_HANDLE=test-handle", orcaPaneEnv+"=test-tab:test-leaf",
 				"MARKER="+marker, "COUNTER="+counter, "CHANGE="+map[bool]string{true: "true", false: "false"}[changed])
-			if err := child.Start(); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
-			writer := codexWriter{child.Process.Pid, procStartMark(child.Process.Pid)}
+			writer := startTakeoverWriter(t, env)
 			// The node's own terminal must never be used as a fallback.
 			t.Setenv("ORCA_CLI_COMMAND", "/does-not-exist")
 			t.Setenv("ORCA_TERMINAL_HANDLE", "unrelated")
@@ -95,15 +91,35 @@ func TestCodexTakeoverRejectsBridgeForADifferentPane(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("ORCA_USER_DATA_PATH", dir)
-	child := exec.Command("sleep", "60")
-	child.Env = append(withoutEnv(os.Environ(), []string{orcaPaneEnv}), orcaPaneEnv+"=other:pane")
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = child.Process.Kill(); _ = child.Wait() }()
-	w := codexWriter{child.Process.Pid, procStartMark(child.Process.Pid)}
+	w := startTakeoverWriter(t, append(withoutEnv(os.Environ(), []string{orcaPaneEnv}), orcaPaneEnv+"=other:pane"))
 	_, err := codexQuitTerminal(context.Background(), w, "expected:pane")
 	if err == nil || !strings.Contains(refusalCode(err), "codex_takeover_") {
 		t.Fatalf("an unrelated terminal was accepted: %v", err)
 	}
+}
+
+// startTakeoverWriter starts a stand-in Codex writer with env and returns once it runs its own code.
+// exec.Cmd.Start returns as soon as the new program's close-on-exec has run, before the kernel has laid out that
+// program's environment, so /proc/<pid>/environ can still read empty and the takeover rightly refuses a writer it
+// cannot verify (codex_takeover_unavailable). A real writer has long been running when it is taken over. read is a
+// shell builtin blocked on the open stdin pipe: the shell never execs again and ends when the test closes that pipe.
+func startTakeoverWriter(t *testing.T, env []string) codexWriter {
+	t.Helper()
+	child := exec.Command("/bin/sh", "-c", "echo ready; read -r line")
+	child.Env = env
+	if _, err := child.StdinPipe(); err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	if _, err := bufio.NewReader(stdout).ReadString('\n'); err != nil {
+		t.Fatalf("stand-in writer did not start: %v", err)
+	}
+	return codexWriter{child.Process.Pid, procStartMark(child.Process.Pid)}
 }

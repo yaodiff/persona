@@ -74,6 +74,13 @@ wide symbol must scale down), in the style's icon language (`docs/apple/icons.md
 2. A new Swift file that draws sidebar rows goes into `SidebarMetricsTests.files`.
 3. Screenshot it in en and zh-Hans, light and dark (iPhone, iPad, Mac, web as it applies) and look at it.
 
+## The Sidebar layout's headings
+
+The Sidebar layout (#6332, `docs/apple/ios.md` "Sidebar layout (#6332)") heads its sections with a fold button: the name in
+`captionStrong`, a chevron, what the folded section still counts, and the section's own buttons (Persona Chats' ✎). The
+button is a sidebar row by size (`Theme.Sidebar.rowPadding`, `Theme.Sidebar.row`), so a finger always finds it and the
+words sit as the rows' do; the fold is remembered on the device (`sidebar.fold.places`, `sidebar.fold.chats`).
+
 ## Pinned directions
 
 The leader conversations (`assistant.leaders`) are the group headed **Pinned** (zh-Hans 常驻, ja 常駐; the catalog key
@@ -113,6 +120,6 @@ Pinned group at all.
 | Test | Guards |
 | --- | --- |
 | `apple/PersonaTests/SidebarMetricsTests.swift` | Rows' `minHeight` is only `Theme.Sidebar.row` (headings: `HeadingMenu.minHeight`); each has `Theme.Sidebar.rowPadding`; no literal heights, vertical paddings or point sizes; the iOS row is 44 pt; a line of body text in SF and PingFang fits the row |
-| `apple/PersonaMacTests/MacSidebarMetricsTests.swift` | The Mac row is 24 / 28 / 32 pt for the system's small / medium / large Sidebar icon size; body text in SF and PingFang fits the smallest |
+| Retired native Mac sidebar tests | Historical only: the Mac row was 24 / 28 / 32 pt for the system's small / medium / large Sidebar icon size; the target and its tests were removed |
 | `web/src/views/SidebarRowTokens.test.ts` | `--sidebar-row` is 32 px; every sidebar row uses `sidebar-row` with no `py-*`; no heading is uppercased or letter-spaced |
 | `apple/PersonaTests/TokenRatchetTests.swift` | Literal paddings, frames and radii in views only go down |

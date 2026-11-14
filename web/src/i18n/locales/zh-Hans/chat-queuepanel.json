@@ -17,8 +17,6 @@
   "deleted": "已从队列删除",
   "pulled_back": "已撤回到输入框，改好再发送",
   "failed": "没改成：{error}",
-  "send_now": "立即发送",
-  "send_now_title_other": "现在就发送排队的 {count} 条消息？",
   "send_now_body": "{agent} 会马上收到，不用等到下一步。它正在跑的命令会转到后台继续；正在写的回复会带上你的消息重新开始。",
   "send_now_body_persona": "{agent} 会马上收到，不用等到下一步。它手头的这一步会停下，能转到后台的会在后台继续，然后带上你的消息重新开始。",
   "sent_now": "已发给 {agent}",

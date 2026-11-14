@@ -20,6 +20,7 @@
   "ultracode_skipped": "ultracode なしで開始しました：{reason}",
   "task_failed_title": "「{name}」を開始できませんでした",
   "task_failed_title_health": "タスクを開始できませんでした",
+  "ask_held_title": "「{name}」のカードが監督の対応を待っています",
   "task_failed_body": "{reason}。会話を開いて「再試行」をタップするか、別のパソコンに割り当ててください",
   "task_failed_body_no_reason": "会話を開いて「再試行」をタップするか、別のパソコンに割り当ててください",
   "not_retryable": "再試行できるのは、開始できなかったタスクか、モデルサービスのエラーで中断されたタスクだけです",
@@ -43,7 +44,6 @@
   "start_remedy_notice": "開始できませんでした：「{title}」。{reason}",
   "admission_no_metrics": "このコンピューターはリソース指標をまだ報告していません。",
   "admission_stale": "このコンピューターのリソース指標が古くなっています。",
-  "admission_no_load": "このコンピューターの負荷が報告されていません。",
   "admission_no_cores": "このコンピューターのコア数が報告されていません。",
   "admission_memory_ambiguous": "このコンピューターのメモリー値が欠落しているか判別できません。",
   "admission_memory": "空きメモリーは {available} しかなく、上限 {limit} を下回っています。",
@@ -52,5 +52,10 @@
   "admission_direction_full": "この方向のエージェントは既に {running} 個実行中で、上限 {limit} に達しています。",
   "admission_refused": "コンピューター {machine} ではこのエージェントを開始できません：{reason}{recommend}",
   "admission_recommend": " 推奨コンピューター：{machine}。",
-  "admission_reroute": "{from} から {to} に変更しました：{reason}"
+  "admission_reroute": "{from} から {to} に変更しました：{reason}",
+  "admission_queued": "順番待ちです。hub が自動で再試行します：{reason}",
+  "admission_queue_timeout": "{limit} 待っても開始できなかったため、開始を中止します。最後の理由：{reason}",
+  "start_link_lost": "「{machine}」との接続が切れ、再接続後もタスクは起動していませんでした：{reason}",
+  "start_machine_busy": "「{machine}」は接続されたままですが、待機時間内に応答がありませんでした（混雑している可能性があります）：{reason}",
+  "start_link_down": "「{machine}」との接続が切れ、しばらく待っても再接続できませんでした：{reason}"
 }

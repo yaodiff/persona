@@ -3,7 +3,7 @@
 // to the trash (asked first, then "Moved to trash · Undo"). Both views share it: the drill-in list (FilesPanel) and the
 // tree (FilesTree). Each action shows only when the hub says it can (`upload_dir`, `file_edit`).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { api, credentialOwner, enc, errorText, fileDownloadURL, getToken, isAbort, subscribeCredentialOwner } from "../../../lib/api";
+import { api, credentialOwner, enc, errorText, fileDownloadURL, getToken, isAbort, onCredentialChange, subscribeCredentialOwner } from "../../../lib/api";
 import { onManagerChoice, shownManager, useShownManager } from "../../../lib/manager-choice";
 import { t } from "../../../i18n";
 import {
@@ -11,6 +11,7 @@ import {
   FILE_COPY_FEATURE,
   FILE_EDIT_FEATURE,
   FILE_ZIP_FEATURE,
+  fileOperation,
   isNameTaken,
   moveEntries,
   nameProblem,
@@ -28,7 +29,7 @@ import {
   type UploadCredential,
 } from "../../../lib/file-ops";
 import { joinPath, type FsListing } from "../../../lib/files";
-import { baseName, bytes, shortPath } from "../../../lib/format";
+import { baseName, bytes, shortPath, uuid } from "../../../lib/format";
 import { hubHas, useStore } from "../../../lib/store";
 import { contextMenuProps } from "../../../ui/context-menu";
 import type { MenuAt, MenuItem } from "../../../ui/menu-model";
@@ -55,6 +56,42 @@ interface Upload {
   error?: string;
   ac?: AbortController;
 }
+
+interface RemoteOperation {
+  id: number;
+  operationId: string;
+  kind: "copy" | "zip";
+  duplicate: boolean;
+  name: string;
+  targets: OpTarget[];
+  dir: string;
+  owner: MutationOwner;
+  state: "running" | "conflict" | "done";
+  conflictName?: string;
+  shown: boolean;
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+}
+
+interface ActiveRemoteOperation {
+  ac: AbortController;
+  operationId: string;
+  owner: MutationOwner;
+  shown: boolean;
+}
+
+// The authoritative POST outlives a panel, but not its credential. Keep only the opaque owner and controller outside
+// React: navigation can hide every visible row without making a later sign-out unable to retire the request.
+const remotePostCredentials = new Map<AbortController, string>();
+onCredentialChange((nextOwner) => {
+  remotePostCredentials.forEach((owner, ac) => {
+    if (owner === nextOwner) return;
+    ac.abort();
+    remotePostCredentials.delete(ac);
+  });
+});
 
 /** A question waiting for the user: replace or keep both, for an upload or a move. */
 interface NameAsk {
@@ -162,10 +199,14 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
     && candidate.credential.token === getToken() && candidate.manager === shownManager(), []);
   const currentOwner = useCallback((candidate: MutationOwner) => liveOwner.current === candidate && currentWorkspace(candidate.workspaceOwner), [currentWorkspace]);
   const [uploads, setUploads] = useState<Upload[]>([]);
+  const [remoteOperations, setRemoteOperations] = useState<RemoteOperation[]>([]);
+  const activeRemote = useRef(new Map<number, ActiveRemoteOperation>());
   const ownedUploads = uploads.filter((u) => u.credential.owner === owner);
+  const ownedRemoteOperations = remoteOperations.filter((op) => op.owner.workspaceOwner === workspaceOwner && op.owner.path === path);
   const active = useRef(new Map<number, AbortController>());
   const nextId = useRef(0);
   const patch = useCallback((id: number, p: Partial<Upload>) => setUploads((us) => us.map((u) => (u.id === id ? { ...u, ...p } : u))), []);
+  const patchRemote = useCallback((id: number, p: Partial<RemoteOperation>) => setRemoteOperations((ops) => ops.map((op) => op.id === id ? { ...op, ...p } : op)), []);
   const enqueue = useCallback((files: File[], dir: string, selectedOwner: string) => {
     const token = getToken();
     if (!files.length || !token || selectedOwner !== credentialOwner()) return;
@@ -177,6 +218,16 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   useEffect(() => {
     setUploads((us) => us.filter((u) => u.credential.owner === owner));
   }, [owner]);
+  useEffect(() => {
+    activeRemote.current.forEach((operation, id) => {
+      if (operation.owner.workspaceOwner === workspaceOwner) return;
+      const credential = operation.owner.credential;
+      if (credential.owner !== credentialOwner() || credential.token !== getToken()) operation.ac.abort();
+      // A different workspace hides the row and drops its handle. The authoritative POST continues unless credentials died.
+      activeRemote.current.delete(id);
+    });
+    setRemoteOperations((ops) => ops.filter((op) => op.owner.workspaceOwner === workspaceOwner));
+  }, [workspaceOwner]);
   const sending = ownedUploads.find((u) => u.state === "sending");
   const next = ownedUploads.find((u) => u.state === "queued");
   useEffect(() => {
@@ -206,10 +257,11 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
     const id = setTimeout(() => setUploads((us) => us.filter((u) => u.state !== "done")), 1600);
     return () => clearTimeout(id);
   }, [uploads]);
-  // what everyone waits on goes when the panel does
+  // Uploads stop with the panel. Remote POSTs continue: dropping their handles only stops polling and hides the UI.
   useEffect(() => () => {
     active.current.forEach((ac) => ac.abort());
     active.current.clear();
+    activeRemote.current.clear();
   }, []);
 
   // ── the name question: the first upload waiting on it, else a move's ──
@@ -228,7 +280,6 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
         },
       }
     : null;
-  const ask = uploadAsk ?? (moveAsk?.intent.owner === mutationOwner && currentOwner(moveAsk.intent.owner) ? moveAsk.ask : null);
 
   // ── the chooser ──
   const input = useRef<HTMLInputElement>(null);
@@ -245,6 +296,120 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   const say = useCallback((candidate: WorkspaceOwner, text: string, tone: Notice["tone"], action?: ToastAction) => {
     if (currentWorkspace(candidate)) setNotice({ owner: candidate, id: ++noticeId.current, text, tone, action });
   }, [currentWorkspace]);
+
+  // ── remote copies and zips: the long POST is authoritative; polling only paints its progress ──
+  // Requests live at workspace scope. The current path controls only row visibility and polling, so a return restores Cancel.
+  const executeRemote = useCallback(async (op: RemoteOperation, conflict?: Conflict) => {
+    const previous = activeRemote.current.get(op.id);
+    const ac = new AbortController();
+    const operationId = uuid();
+    activeRemote.current.set(op.id, { ac, operationId, owner: op.owner, shown: previous?.shown ?? op.shown });
+    patchRemote(op.id, { operationId, state: "running", bytesDone: 0, bytesTotal: 0, filesDone: 0, filesTotal: 0 });
+    const candidate = op.owner;
+    remotePostCredentials.set(ac, candidate.credential.owner);
+    const auth = { ...candidate.credential, isAuthContextCurrent: () => currentWorkspace(candidate.workspaceOwner) };
+    let settled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const current = () => !settled && !ac.signal.aborted && activeRemote.current.get(op.id)?.operationId === operationId;
+    const visible = () => currentWorkspace(candidate.workspaceOwner) && liveOwner.current?.path === candidate.path;
+    const poll = async () => {
+      if (!current()) return;
+      if (visible()) {
+        try {
+          const status = await fileOperation(candidate.mid, operationId, auth, ac.signal);
+          if (current() && visible()) {
+            const active = activeRemote.current.get(op.id);
+            if (active) active.shown = true;
+            patchRemote(op.id, {
+              shown: true,
+              bytesDone: status.bytes_done,
+              bytesTotal: status.bytes_total,
+              filesDone: status.files_done,
+              filesTotal: status.files_total,
+            });
+          }
+        } catch {
+          // The POST remains authoritative; an old node or a transient read failure only leaves progress unknown.
+        }
+      }
+      if (current()) pollTimer = setTimeout(() => void poll(), 250);
+    };
+    const showTimer = setTimeout(() => {
+      if (current()) void poll();
+    }, 1000);
+    try {
+      let archiveName = op.name;
+      if (op.kind === "copy") {
+        await copyEntries(candidate.mid, op.targets.map((x) => x.path), candidate.cwd, op.dir, conflict, auth, { operationId, signal: ac.signal });
+      } else {
+        const zipped = await zipEntries(candidate.mid, op.targets.map((x) => x.path), candidate.cwd, op.name, op.dir, auth, { operationId, signal: ac.signal });
+        archiveName = zipped.name;
+      }
+      if (!current()) return;
+      const shown = activeRemote.current.get(op.id)?.shown ?? false;
+      activeRemote.current.delete(op.id);
+      if (!currentWorkspace(candidate.workspaceOwner)) return;
+      if (shown) {
+        patchRemote(op.id, { state: "done" });
+        setTimeout(() => setRemoteOperations((ops) => ops.filter((x) => x.id !== op.id)), 1600);
+      } else {
+        setRemoteOperations((ops) => ops.filter((x) => x.id !== op.id));
+      }
+      changed.current([op.dir]);
+      say(candidate.workspaceOwner, op.kind === "copy"
+        ? t(op.duplicate ? "files-ops.duplicated" : "files-ops.copied", { count: op.targets.length, dir: shortPath(op.dir) })
+        : t("files-ops.compressed", { name: archiveName }), "ok");
+    } catch (e) {
+      if (!current()) return;
+      if (op.kind === "copy" && isNameTaken(e) && !conflict) {
+        const name = typeof (e as { body?: { name?: unknown } }).body?.name === "string" ? String((e as { body: { name: string } }).body.name) : op.name;
+        patchRemote(op.id, { state: "conflict", conflictName: name });
+        return;
+      }
+      activeRemote.current.delete(op.id);
+      setRemoteOperations((ops) => ops.filter((x) => x.id !== op.id));
+      if (isAbort(e) || !currentWorkspace(candidate.workspaceOwner)) return;
+      say(candidate.workspaceOwner, op.kind === "copy" ? opErrorText(e) : t("files-ops.zip_failed", { error: opErrorText(e) }), "error");
+    } finally {
+      settled = true;
+      remotePostCredentials.delete(ac);
+      clearTimeout(showTimer);
+      if (pollTimer) clearTimeout(pollTimer);
+    }
+  }, [currentWorkspace, patchRemote, say]);
+
+  const startRemote = useCallback((kind: RemoteOperation["kind"], owner: MutationOwner, targets: OpTarget[], dir: string, name: string, conflict?: Conflict, duplicate = false) => {
+    const op: RemoteOperation = {
+      id: ++nextId.current,
+      operationId: "",
+      kind,
+      duplicate,
+      name,
+      targets: targets.map((target) => ({ ...target })),
+      dir,
+      owner,
+      state: "running",
+      shown: false,
+      filesDone: 0,
+      filesTotal: 0,
+      bytesDone: 0,
+      bytesTotal: 0,
+    };
+    setRemoteOperations((ops) => [...ops, op]);
+    void executeRemote(op, conflict);
+  }, [executeRemote]);
+
+  const cancelRemote = useCallback((id: number) => {
+    activeRemote.current.get(id)?.ac.abort();
+    activeRemote.current.delete(id);
+    setRemoteOperations((ops) => ops.filter((op) => op.id !== id));
+  }, []);
+
+  const retryRemote = useCallback((op: RemoteOperation, conflict: Conflict | null) => {
+    if (op.state !== "conflict" || activeRemote.current.get(op.id)?.owner !== op.owner) return;
+    if (!conflict) return cancelRemote(op.id);
+    void executeRemote(op, conflict);
+  }, [cancelRemote, executeRemote]);
 
   // ── move, trash, download ──
   const [moving, setMoving] = useState<MutationIntent | null>(null);
@@ -297,13 +462,12 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
       const from = [...new Set(targets.map((x) => parentOf(x.path)))];
       try {
         const auth = { ...candidate.credential, isAuthContextCurrent: () => activeMove(intent) };
-        if (intent.copy) await copyEntries(candidate.mid, targets.map((x) => x.path), candidate.cwd, dir, conflict, auth);
-        else await moveEntries(candidate.mid, targets.map((x) => x.path), candidate.cwd, dir, conflict, auth);
+        await moveEntries(candidate.mid, targets.map((x) => x.path), candidate.cwd, dir, conflict, auth);
         if (!activeMove(intent)) return;
         movingRef.current = null;
         setMoving(null);
-        changed.current(intent.copy ? [dir] : [...from, dir]);
-        say(candidate.workspaceOwner, t(intent.copy ? "files-ops.copied" : "files-ops.moved", { count: targets.length, dir: shortPath(dir) }), "ok");
+        changed.current([...from, dir]);
+        say(candidate.workspaceOwner, t("files-ops.moved", { count: targets.length, dir: shortPath(dir) }), "ok");
       } catch (e) {
         if (!activeMove(intent)) return;
         if (isNameTaken(e) && !conflict) {
@@ -330,6 +494,17 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
     },
     [activeMove, say],
   );
+
+  const doCopy = useCallback((intent: MutationIntent, dir: string) => {
+    if (!intent.copy || !activeMove(intent)) return;
+    movingRef.current = null;
+    moveQuestion.current = null;
+    setMoving(null);
+    setMoveAsk(null);
+    setMoveBusy(null);
+    setMoveFailure(null);
+    startRemote("copy", intent.owner, intent.targets, dir, intent.targets.map((x) => x.name).join(", "));
+  }, [activeMove, startRemote]);
 
   const doTrash = useCallback(async (intent: MutationIntent) => {
     if (!activeTrash(intent) || trashRequest.current === intent) return;
@@ -407,26 +582,14 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   const duplicate = useCallback((targets: OpTarget[]) => {
     if (!targets.length || !currentOwner(mutationOwner)) return;
     const dir = parentOf(targets[0].path);
-    const candidate = mutationOwner;
-    copyEntries(candidate.mid, targets.map((x) => x.path), candidate.cwd, dir, "keep", { ...candidate.credential, isAuthContextCurrent: () => currentOwner(candidate) })
-      .then(() => {
-        changed.current([dir]);
-        say(candidate.workspaceOwner, t("files-ops.duplicated", { count: targets.length }), "ok");
-      })
-      .catch((e) => !isAbort(e) && say(candidate.workspaceOwner, opErrorText(e), "error"));
-  }, [currentOwner, mutationOwner, say]);
+    startRemote("copy", mutationOwner, targets, dir, targets.map((x) => x.name).join(", "), "keep", true);
+  }, [currentOwner, mutationOwner, startRemote]);
   const compress = useCallback((targets: OpTarget[]) => {
     if (!targets.length || !currentOwner(mutationOwner)) return;
     const dir = parentOf(targets[0].path);
-    const candidate = mutationOwner;
     const name = targets.length === 1 ? `${targets[0].name.replace(/\.[^./]+$/, "") || targets[0].name}.zip` : t("files-ops.archive_name");
-    zipEntries(candidate.mid, targets.map((x) => x.path), candidate.cwd, name, dir, { ...candidate.credential, isAuthContextCurrent: () => currentOwner(candidate) })
-      .then((z) => {
-        changed.current([dir]);
-        say(candidate.workspaceOwner, t("files-ops.compressed", { name: z.name }), "ok");
-      })
-      .catch((e) => !isAbort(e) && say(candidate.workspaceOwner, t("files-ops.zip_failed", { error: opErrorText(e) }), "error"));
-  }, [currentOwner, mutationOwner, say]);
+    startRemote("zip", mutationOwner, targets, dir, name);
+  }, [currentOwner, mutationOwner, startRemote]);
 
   const rowItems = useCallback(
     (x: OpTarget, open: () => void): MenuItem[] => {
@@ -480,6 +643,14 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
     [canUpload, canEdit, canZip, canCopy, download, choose, currentOwner, mutationOwner, openMove, openTrash, duplicate, compress],
   );
 
+  const remoteConflict = ownedRemoteOperations.find((op) => op.state === "conflict");
+  const remoteAsk: NameAsk | null = remoteConflict ? {
+    name: remoteConflict.conflictName ?? remoteConflict.name,
+    dir: remoteConflict.dir,
+    more: 0,
+    answer: (choice) => retryRemote(remoteConflict, choice),
+  } : null;
+  const ask = uploadAsk ?? remoteAsk ?? (moveAsk?.intent.owner === mutationOwner && currentOwner(moveAsk.intent.owner) ? moveAsk.ask : null);
   const visibleMove = moving?.owner === mutationOwner && currentOwner(moving.owner) ? moving : null;
   const visibleTrash = trashing?.owner === mutationOwner && currentOwner(trashing.owner) ? trashing : null;
   const visibleNotice = notice?.owner === workspaceOwner && currentWorkspace(notice.owner) ? notice : null;
@@ -502,8 +673,10 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
       />
       <UploadTray
         uploads={ownedUploads}
+        operations={ownedRemoteOperations}
         // a sending one is aborted (and goes when its request does), a waiting or failed one goes at once
         onCancel={(u) => (u.ac ? u.ac.abort() : setUploads((us) => us.filter((x) => x.id !== u.id)))}
+        onCancelRemote={cancelRemote}
         onRetry={(u) => { if (u.credential.owner === credentialOwner()) patch(u.id, { state: "queued", error: undefined }); }}
       />
       <PanelNotice notice={visibleNotice} onDone={(id) => setNotice((n) => (n?.id === id ? null : n))} />
@@ -521,7 +694,7 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
           setMoveAsk(null);
           setMoving(null);
         }}
-        onMove={(dir) => void doMove(visibleMove, dir)}
+        onMove={(dir) => visibleMove.copy ? doCopy(visibleMove, dir) : void doMove(visibleMove, dir)}
       />}
       {visibleTrash && <TrashDialog targets={visibleTrash.targets} busy={trashBusy === visibleTrash} onClose={() => {
         if (!activeTrash(visibleTrash) || trashRequest.current === visibleTrash) return;
@@ -533,15 +706,23 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
 
   return { scope: mutationOwner, canUpload, canEdit, canZip, canCopy, upload, choose, rowItems, move: openMove, copy: (targets: OpTarget[]) => openMove(targets, true), duplicate, compress, trash: openTrash, download, ui };
 }
-/** The uploads at the panel's foot: each with its progress and a cancel; a failed one says why and can go again. */
-function UploadTray({ uploads, onCancel, onRetry }: { uploads: Upload[]; onCancel: (u: Upload) => void; onRetry: (u: Upload) => void }) {
+/** Uploads and remote operations at the panel's foot: progress and cancel, with upload failure retry. */
+function UploadTray({ uploads, operations, onCancel, onCancelRemote, onRetry }: {
+  uploads: Upload[];
+  operations: RemoteOperation[];
+  onCancel: (u: Upload) => void;
+  onCancelRemote: (id: number) => void;
+  onRetry: (u: Upload) => void;
+}) {
   const shown = uploads.filter((u) => u.state !== "conflict");
-  if (!shown.length) return null;
+  const remoteShown = operations.filter((op) => op.shown && op.state !== "conflict");
+  if (!shown.length && !remoteShown.length) return null;
   const left = shown.filter((u) => u.state === "queued" || u.state === "sending").length;
+  const remoteLeft = remoteShown.filter((op) => op.state === "running").length;
   return (
-    <section aria-label={t("files-ops.uploads")} className="shrink-0 border-t border-line bg-inset px-3 py-2">
+    <section aria-label={shown.length ? t("files-ops.uploads") : t("files-ops.file_operations")} className="shrink-0 border-t border-line bg-inset px-3 py-2">
       <p className="pb-1 text-[11.5px] font-medium text-ink-2" aria-live="polite">
-        {left ? t("files-ops.uploading", { count: left }) : t("files-ops.uploads_done")}
+        {left ? t("files-ops.uploading", { count: left }) : remoteLeft ? t("files-ops.operations_running", { count: remoteLeft }) : t("files-ops.uploads_done")}
       </p>
       <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
         {shown.map((u) => {
@@ -581,8 +762,46 @@ function UploadTray({ uploads, onCancel, onRetry }: { uploads: Upload[]; onCance
             </li>
           );
         })}
+        {remoteShown.map((op) => <RemoteOperationRow key={op.id} operation={op} onCancel={() => onCancelRemote(op.id)} />)}
       </ul>
     </section>
+  );
+}
+
+function RemoteOperationRow({ operation: op, onCancel }: { operation: RemoteOperation; onCancel: () => void }) {
+  const pct = op.state === "done" ? 100 : op.bytesTotal > 0 ? Math.min(100, Math.round((op.bytesDone / op.bytesTotal) * 100)) : op.filesTotal > 0 ? Math.min(100, Math.round((op.filesDone / op.filesTotal) * 100)) : 0;
+  const name = op.kind === "zip" ? op.name : op.targets[0]?.name ?? op.name;
+  const files = op.filesTotal > 0 ? `${op.filesDone} / ${op.filesTotal}` : "";
+  const detail = op.state === "done" ? t("files-ops.operation_done") : op.bytesTotal > 0 ? `${files}${files ? " · " : ""}${bytes(op.bytesDone)} / ${bytes(op.bytesTotal)}` : files || t("files-ops.operation_preparing");
+  return (
+    <li className="flex items-center gap-2">
+      <FileGlyph name={name} />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2">
+          <span className="truncate text-xs text-ink" title={op.dir}>{op.name}</span>
+          <span className="ml-auto shrink-0 text-xs text-ink-3 tabular-nums">{op.state === "done" ? t("files-ops.operation_done") : `${pct}%`}</span>
+        </span>
+        <span
+          role="progressbar"
+          aria-label={op.targets[0]?.name ?? op.name}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          aria-valuetext={`${pct}% · ${detail}`}
+          className="mt-1 block h-1 overflow-hidden rounded-full bg-field"
+        >
+          <span className={cx("block h-full rounded-full transition-[width] duration-200", op.state === "done" ? "bg-green" : "bg-accent")} style={{ width: `${pct}%` }} />
+        </span>
+        <span className="mt-1 block truncate text-xs text-ink-3" title={detail}>{detail}</span>
+      </span>
+      {op.state !== "done" && <IconButton
+        icon="x"
+        label={t(op.kind === "copy" ? "files-ops.copy_cancel" : "files-ops.compress_cancel", { name: op.name })}
+        onClick={onCancel}
+        size={26}
+        iconSize={13}
+      />}
+    </li>
   );
 }
 

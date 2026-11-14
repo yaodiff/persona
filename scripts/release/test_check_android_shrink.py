@@ -59,6 +59,8 @@ def kept_release():
         "persona.core.hub.HubFailure": DexClass(
             "java.io.IOException", methods=set(shrink.REQUIRED_MEMBERS["persona.core.hub.HubFailure"])),
         **{name: DexClass("java.lang.Object", methods=set(init)) for name in SSH_ALGORITHMS},
+        **{name: DexClass("java.lang.Object", methods=set(shrink.REQUIRED_MEMBERS[name]))
+           for name in ("persona.core.rustcore.NativeBridge", "persona.core.rustcore.HostBridge")},
         "androidx.room.RoomDatabase": DexClass("java.lang.Object", access=shrink.ACC_ABSTRACT),
         "persona.core.data.ItemsDatabase": DexClass("androidx.room.RoomDatabase", access=shrink.ACC_ABSTRACT),
         "persona.core.data.ItemsDatabase_Impl": DexClass("persona.core.data.ItemsDatabase", methods=set(init)),

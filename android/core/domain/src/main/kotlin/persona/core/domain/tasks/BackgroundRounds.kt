@@ -6,6 +6,7 @@ import kotlinx.serialization.json.contentOrNull
 import persona.core.contracts.Item
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.MessageSource
+import persona.core.domain.injectedOf
 import persona.core.domain.isPersonaTool
 import persona.core.domain.lines.ChatLine
 
@@ -74,11 +75,15 @@ fun supervisionTool(name: String?): String? {
 /**
  * Whether a round must stay shown (web `supervisionVisible`, #1988): it told or asked the user something (a successful
  * `ask_user` / `notify_user`, or an `ask_user` still waiting while the round runs), ended in a task review verdict card
- * (`accepted` / `needs_user`), finished its supervision with user visibility, or the hub's fold says so. Arguments alone
- * never prove success: a call counts by its result. [results] maps a tool call's id to its result.
+ * (`accepted` / `needs_user`), finished its supervision with user visibility, the hub's fold says so, or the round's
+ * injected supervision is marked `level="user"` (the same two marks the web and iOS read). Arguments alone never prove
+ * success: a call counts by its result. [results] maps a tool call's id to its result.
  */
 fun supervisionVisible(ordered: List<Item>, results: Map<String, Item>, live: Boolean): Boolean {
-    if (ordered.any { it.fold?.supervisionUser == true }) return true
+    if (ordered.any {
+            it.fold?.supervisionUser == true ||
+                injectedOf(it)?.let { injected -> injected.state == "supervise" && injected.level == "user" } == true
+        }) return true
     for (use in ordered) {
         if (use.kind != "tool_use") continue
         val name = supervisionTool(use.toolName) ?: continue

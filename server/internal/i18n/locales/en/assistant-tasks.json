@@ -20,6 +20,7 @@
   "ultracode_skipped": "started without ultracode: {reason}",
   "task_failed_title": "“{name}” couldn’t be started",
   "task_failed_title_health": "Task couldn’t be started",
+  "ask_held_title": "A card in “{name}” waits for its supervisor",
   "task_failed_body": "{reason}. Open the conversation to tap “Retry”, or assign to another computer",
   "task_failed_body_no_reason": "Open the conversation to tap “Retry”, or assign to another computer",
   "not_retryable": "Only a task that didn’t start, or was interrupted by a model service error, can be retried",
@@ -43,7 +44,6 @@
   "start_remedy_notice": "Didn’t start: “{title}”. {reason}",
   "admission_no_metrics": "This computer has not reported resource metrics.",
   "admission_stale": "This computer's resource metrics are stale.",
-  "admission_no_load": "This computer's load is not reported.",
   "admission_no_cores": "This computer's core count is not reported.",
   "admission_memory_ambiguous": "This computer's memory figures are missing or ambiguous.",
   "admission_memory": "Only {available} of free memory left, below its limit of {limit}.",
@@ -52,5 +52,10 @@
   "admission_direction_full": "This direction already has {running} agents running, at its limit of {limit}.",
   "admission_refused": "Computer {machine} cannot start this agent: {reason}.{recommend}",
   "admission_recommend": " Recommended computer: {machine}.",
-  "admission_reroute": "Moved from {from} to {to}: {reason}"
+  "admission_reroute": "Moved from {from} to {to}: {reason}",
+  "admission_queued": "Queued, the hub will retry automatically: {reason}",
+  "admission_queue_timeout": "Still queued after {limit} of waiting, so the start is given up. Last reason: {reason}",
+  "start_link_lost": "The connection to “{machine}” dropped, and after it reconnected the task had not started: {reason}",
+  "start_machine_busy": "“{machine}” stayed connected but did not answer in time (it may be too busy): {reason}",
+  "start_link_down": "The connection to “{machine}” dropped and did not come back in time: {reason}"
 }

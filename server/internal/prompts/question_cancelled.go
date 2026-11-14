@@ -46,3 +46,10 @@ func RenderQuestionAskedLater(q QuestionAskedLater) string {
 // RenderSettingUnanswered is what persona_settings returns when its approval card ended without the user's own allow
 // or deny: it expired, was closed, or someone else answered it (#3722).
 func RenderSettingUnanswered() string { return render("agents/setting_unanswered", nil) }
+
+// RenderQuestionReleased is what a waiting ask_user returns when it let go of its turn because a message waits for the
+// conversation (#7392): the card stays up (interaction ID) until Until, and how it ends comes later as a new message,
+// as with wait false.
+func RenderQuestionReleased(q QuestionAskedLater) string {
+	return render("agents/question_released", q)
+}

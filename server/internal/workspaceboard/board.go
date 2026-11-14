@@ -13,6 +13,7 @@ import (
 const (
 	MaxColumns    = 32
 	MaxCards      = 1000
+	MaxBatchCards = MaxCards
 	MaxTitleRunes = 200
 	MaxIDBytes    = 1024
 	MaxPathBytes  = 8192
@@ -42,19 +43,32 @@ type Card struct {
 	Pinned      bool   `json:"pinned"`
 	Archived    bool   `json:"archived"`
 }
+
+// CardChange is a reversible edit to one existing card. A column also requests a
+// move, appended unless BeforeID names a card in that column at this step.
+// It deliberately cannot change bindings, create cards or run node operations.
+type CardChange struct {
+	ID       string `json:"id"`
+	ColumnID string `json:"column_id,omitempty"`
+	BeforeID string `json:"before_id,omitempty"`
+	Pinned   *bool  `json:"pinned,omitempty"`
+	Archived *bool  `json:"archived,omitempty"`
+}
+
 type Mutation struct {
-	Revision    int64   `json:"revision"`
-	Action      string  `json:"action"`
-	ID          string  `json:"id,omitempty"`
-	ColumnID    string  `json:"column_id,omitempty"`
-	BeforeID    string  `json:"before_id,omitempty"`
-	Title       *string `json:"title,omitempty"`
-	Pinned      *bool   `json:"pinned,omitempty"`
-	Archived    *bool   `json:"archived,omitempty"`
-	MachineID   string  `json:"machine_id,omitempty"`
-	WorkspaceID string  `json:"workspace_id,omitempty"`
-	Cwd         string  `json:"cwd,omitempty"`
-	MoveTo      string  `json:"move_to,omitempty"`
+	Revision    int64        `json:"revision"`
+	Action      string       `json:"action"`
+	ID          string       `json:"id,omitempty"`
+	ColumnID    string       `json:"column_id,omitempty"`
+	BeforeID    string       `json:"before_id,omitempty"`
+	Title       *string      `json:"title,omitempty"`
+	Pinned      *bool        `json:"pinned,omitempty"`
+	Archived    *bool        `json:"archived,omitempty"`
+	MachineID   string       `json:"machine_id,omitempty"`
+	WorkspaceID string       `json:"workspace_id,omitempty"`
+	Cwd         string       `json:"cwd,omitempty"`
+	MoveTo      string       `json:"move_to,omitempty"`
+	Changes     []CardChange `json:"changes,omitempty"`
 	// Discovery metadata is set by the hub after validating the workspace on its node.
 	Source   string `json:"-"`
 	SourceID string `json:"-"`
@@ -124,6 +138,9 @@ func Validate(s State) error {
 // Apply returns independent slices even for no-op moves; it never changes the revision.
 // Optimistic concurrency and the revision increment belong to the database.
 func Apply(current State, m Mutation) (State, error) {
+	if m.Action != "batch_cards" && m.Changes != nil {
+		return State{}, invalid("changes require batch_cards")
+	}
 	if err := Validate(current); err != nil {
 		return State{}, err
 	}
@@ -151,6 +168,13 @@ func Apply(current State, m Mutation) (State, error) {
 		return strings.TrimSpace(*m.Title)
 	}
 	switch m.Action {
+	case "batch_cards":
+		if m.ID != "" || m.ColumnID != "" || m.BeforeID != "" || m.Title != nil || m.Pinned != nil || m.Archived != nil || m.MachineID != "" || m.WorkspaceID != "" || m.Cwd != "" || m.MoveTo != "" || m.Source != "" || m.SourceID != "" || m.Branch != "" {
+			return State{}, invalid("batch_cards accepts only revision, action and changes")
+		}
+		if err := applyCardChanges(&next, m.Changes); err != nil {
+			return State{}, err
+		}
 	case "add_card":
 		canonical, err := CanonicalCwd(m.Cwd)
 		if err != nil {
@@ -251,6 +275,74 @@ func Apply(current State, m Mutation) (State, error) {
 		return State{}, err
 	}
 	return next, nil
+}
+
+// applyCardChanges owns next's independent slices. A failure discards every edit,
+// including edits before an invalid later anchor. Revision changes and persistence
+// happen once outside Apply, never once per card.
+func applyCardChanges(next *State, changes []CardChange) error {
+	if len(changes) == 0 || len(changes) > MaxBatchCards {
+		return invalid("batch card count out of bounds")
+	}
+	known := make(map[string]bool, len(next.Cards))
+	for _, card := range next.Cards {
+		known[card.ID] = true
+	}
+	columns := make(map[string]bool, len(next.Columns))
+	for _, column := range next.Columns {
+		columns[column.ID] = true
+	}
+	seen := make(map[string]bool, len(changes))
+	for _, change := range changes {
+		if !validID(change.ID) || !known[change.ID] || seen[change.ID] {
+			return invalid("invalid, unknown or duplicate batch card")
+		}
+		seen[change.ID] = true
+		if change.ColumnID == "" && change.Pinned == nil && change.Archived == nil {
+			return invalid("batch card has no changes")
+		}
+		if change.ColumnID != "" && (!validID(change.ColumnID) || !columns[change.ColumnID]) {
+			return invalid("unknown batch target column")
+		}
+		if change.BeforeID != "" && (change.ColumnID == "" || !validID(change.BeforeID) || !known[change.BeforeID] || change.BeforeID == change.ID) {
+			return invalid("invalid batch position")
+		}
+	}
+	index := func(id string) int {
+		for i, card := range next.Cards {
+			if card.ID == id {
+				return i
+			}
+		}
+		return -1
+	}
+	for _, change := range changes {
+		i := index(change.ID)
+		card := next.Cards[i]
+		if change.Pinned != nil {
+			card.Pinned = *change.Pinned
+		}
+		if change.Archived != nil {
+			card.Archived = *change.Archived
+		}
+		if change.ColumnID == "" {
+			next.Cards[i] = card
+			continue
+		}
+		if change.BeforeID != "" && next.Cards[index(change.BeforeID)].ColumnID != change.ColumnID {
+			return invalid("before card must be in the target column")
+		}
+		card.ColumnID = change.ColumnID
+		next.Cards = append(next.Cards[:i], next.Cards[i+1:]...)
+		at := len(next.Cards)
+		if change.BeforeID != "" {
+			at = index(change.BeforeID)
+		}
+		next.Cards = append(next.Cards, Card{})
+		copy(next.Cards[at+1:], next.Cards[at:])
+		next.Cards[at] = card
+	}
+	return nil
 }
 
 // CanonicalCwd normalizes remote path syntax without consulting the hub filesystem.

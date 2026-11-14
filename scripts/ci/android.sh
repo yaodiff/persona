@@ -9,7 +9,10 @@ usage() {
     '       scripts/ci/android.sh --help' \
     'Requires Bash, Python 3, timeout (or gtimeout), JAVA_HOME pointing to JDK 21,' \
     'and ANDROID_HOME (or ANDROID_SDK_ROOT) pointing to an installed Android SDK.' \
-    'SDK setup: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"' \
+    'Also requires rustup and NDK 29.0.14206865: core:rustcore tests build the host JNI library;' \
+    'core:rustcore-android packages arm64-v8a and x86_64 for the debug APK.' \
+    'SDK setup: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865"' \
+    'Install the Android Rust targets: rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android' \
     'Accept SDK licenses using sdkmanager --licenses if required by your SDK tools.' \
     'Toolchain versions are read from android/gradle/libs.versions.toml.' \
     'No arguments runs the original complete verification. lint-build-test-0 owns checker tests,' \
@@ -92,7 +95,16 @@ export ANDROID_HOME="$SDK" ANDROID_SDK_ROOT="$SDK"
 # API 37 is distributed as android-37.0, unlike older platforms' android-<API>.
 [[ -f $SDK/platforms/android-$COMPILE_SDK.0/android.jar || -f $SDK/platforms/android-$COMPILE_SDK/android.jar ]] || fail "Install SDK platform android-$COMPILE_SDK.0"
 [[ -d $SDK/build-tools/$BUILD_TOOLS ]] || fail "Install SDK build-tools $BUILD_TOOLS"
+[[ -d $SDK/ndk/29.0.14206865 ]] || fail 'Install NDK 29.0.14206865 for the Android shared core'
+rustup target list --installed --toolchain 1.98.0 | grep -Fx aarch64-linux-android >/dev/null ||
+  rustup target add --toolchain 1.98.0 aarch64-linux-android || fail 'Cannot install the arm64 Android Rust target'
+rustup target list --installed --toolchain 1.98.0 | grep -Fx x86_64-linux-android >/dev/null ||
+  rustup target add --toolchain 1.98.0 x86_64-linux-android || fail 'Cannot install the x86_64 Android Rust target'
 [[ -f $ROOT/android/gradlew && -f $ROOT/android/gradle/wrapper/gradle-wrapper.jar ]] || fail 'The Gradle wrapper is missing'
+# :core:rustcore's tests load a host build of the shared Rust core (native/app-core).
+source "$ROOT/scripts/ci/common.sh"
+ci_rust_toolchain || fail 'Install rustup (https://rustup.rs) for the shared Rust core'
+cd "$ROOT"
 
 # Capture the generator's status before reading its output; process substitution
 # would hide parse failures and could accidentally invoke Gradle's default tasks.

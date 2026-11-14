@@ -35,9 +35,9 @@ final class InboxSuggestionModel {
 
     /// send / start / got it / confirm, with `text` when the user changed the words (edit).
     @discardableResult
-    func confirm(_ s: InboxItem.Suggestion, text: String? = nil) async -> InboxSuggestionOutcome? {
+    func confirm(_ s: InboxItem.Suggestion, text: String? = nil, due: String? = nil) async -> InboxSuggestionOutcome? {
         let t = text?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return await run("confirm", s, text: t == nil || t == s.text ? nil : t)
+        return await run("confirm", s, text: t == nil || t == s.text ? nil : t, due: due)
     }
 
     @discardableResult
@@ -51,13 +51,13 @@ final class InboxSuggestionModel {
         return await run("instruct", s, text: w)
     }
 
-    private func run(_ action: String, _ s: InboxItem.Suggestion, text: String?) async -> InboxSuggestionOutcome? {
+    private func run(_ action: String, _ s: InboxItem.Suggestion, text: String?, due: String? = nil) async -> InboxSuggestionOutcome? {
         guard busy == nil else { return nil }
         busy = action
         notice = nil
         error = nil
         defer { busy = nil }
-        let body = InboxSuggestionBody(version: s.version, action: action, text: text, clientID: UUID().uuidString)
+        let body = InboxSuggestionBody(version: s.version, action: action, text: text, due: due, clientID: UUID().uuidString)
         let outcome: InboxSuggestionOutcome
         do {
             outcome = .done(try await send(itemID, body))

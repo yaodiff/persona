@@ -194,25 +194,6 @@ describe("paged state chips during count refreshes", () => {
   });
 });
 
-describe("the By repo entry in the paged list", () => {
-  it("offers By repo only when the caller has the full tree, and choosing it switches views instead of filtering", async () => {
-    const segments = () => [...host.querySelectorAll<HTMLButtonElement>(`[aria-label="${t("paged-agents.group_by")}"] [role="radio"]`)];
-    const repo = () => segments().find((b) => b.textContent === t("lib-agent-groups.seg_repo"));
-    await act(async () => root.render(<PagedSessionList root={list} path="/sessions" identity={identity} compare={compare} event="sessions_list" renderRow={(row: Row) => <span>{row.id}</span>} />));
-    expect(repo()).toBeUndefined();
-
-    const onRepo = vi.fn();
-    await act(async () => root.render(<PagedSessionList root={list} path="/sessions" identity={identity} compare={compare} event="sessions_list" renderRow={(row: Row) => <span>{row.id}</span>} onRepo={onRepo} />));
-    expect(repo()).toBeDefined();
-
-    await act(async () => repo()!.click());
-    expect(onRepo).toHaveBeenCalledTimes(1);
-    // it did not become a paged filter: the list still shows the unfiltered, recently updated projection
-    expect(segments()[0].getAttribute("aria-checked")).toBe("true");
-    expect(repo()!.getAttribute("aria-checked")).toBe("false");
-  });
-});
-
 describe("paged grouping controls", () => {
   it("browses by project through a segmented control and the design system's menu, with no native select", async () => {
     rootCounts.mockResolvedValue({ ...counts(), project: { "/work/alpha": 2, "/work/beta": 5 } });

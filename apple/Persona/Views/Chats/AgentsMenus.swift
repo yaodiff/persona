@@ -174,7 +174,7 @@ struct AgentsListMenu: View {
                 .font(Theme.Font.secondaryStrong)
                 .fixedSize()
             } else {
-                ThemedIcon(shownGrouping == .standard ? "line.3.horizontal.decrease" : shownGrouping.symbol)
+                ThemedIcon(shownGrouping == .standard ? Theme.Icon.capsuleGrouping : shownGrouping.symbol)
             }
     }
 }
@@ -393,7 +393,8 @@ struct SpaceHeaderMenu: View, Equatable {
 /// The grouping, one tap away under the quick filters (#5766), in a cell without the search input. The same stored
 /// choice as the ⋯ menu's (`dev.grouping`), kept across launches. Reads nothing that a hub push changes.
 struct AgentsGroupingMenu: View {
-
+    var iconOnly = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
     private var shown: DevGrouping { DevGrouping.resolvedNow(grouping) }
 
@@ -401,19 +402,27 @@ struct AgentsGroupingMenu: View {
         Menu {
             Picker("Group By [Agents Menus 399ee6]", selection: Binding(get: { shown }, set: { g in
                 Haptics.tap()
-                withAnimation(Theme.Motion.layout) { grouping = g }
+                withAnimation(reduceMotion ? nil : Theme.Motion.layout) { grouping = g }
             })) {
                 ForEach(DevGrouping.offeredNow) { g in
                     Label(g.title, systemImage: g.symbol).tag(g)
                 }
             }
         } label: {
-            HStack(spacing: Theme.Space.xs) {
-                ThemedIcon(shown.symbol)
-                Text(shown.title)
-                ThemedIcon(Theme.Icon.choices).font(Theme.Font.label)
+            if iconOnly {
+                ThemedIcon(Theme.Icon.capsuleGrouping)
+                    .font(Theme.Font.secondaryMedium)
+                    .foregroundStyle(Color.primary)
+                    .tapTargetFrame()
+                    .contentShape(.rect)
+            } else {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(shown.symbol)
+                    Text(shown.title)
+                    ThemedIcon(Theme.Icon.choices).font(Theme.Font.label)
+                }
+                .agentsPill()
             }
-            .agentsPill()
         }
         .labelOnlyMenu()
         // Keep the Menu's activation independent of surrounding List content.

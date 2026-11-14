@@ -104,6 +104,59 @@ class AgentCreationServiceTest {
         }
     }
 
+    /** New Agent's workspace choice (#7259): the computer's catalog rows only; an older hub or a failure is no choice. */
+    @Test fun workspacesAreTheComputersCatalogRowsAndNothingOnFailure() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"workspaces":[
+                {"id":"laptop/paseo/w1","machine_id":"laptop","source":"paseo","source_id":"w1","title":"persona","cwd":"/code/persona",
+                 "branch":"main","index":0,"project_id":"p1","project_name":"persona","project_path":"/code/persona","is_main":true,
+                 "workspace_kind":"git","online":true,"available":true,"owned":false,"unread":true},
+                {"id":"studio/orca/w2","machine_id":"studio","source":"orca","source_id":"w2","title":"notes","cwd":"/notes","index":1,"online":true,"available":true}
+            ],"errors":[{"machine_id":"studio","source":"herdr","error":"offline"}]}"""))
+            val rows = service.workspaces("laptop")
+            val request = server.takeRequest()
+            assertEquals("/api/v1/workspaces", request.path)
+            assertEquals("Bearer test-token", request.getHeader("Authorization"))
+            assertEquals(listOf("w1"), rows.map { it.sourceId })
+            val row = rows.single()
+            assertEquals("paseo", row.source)
+            assertEquals("/code/persona", row.cwd)
+            assertEquals("p1", row.projectId)
+            assertEquals(true, row.isMain)
+            assertEquals("git", row.workspaceKind)
+            assertEquals(true, row.available)
+
+            server.enqueue(MockResponse().setResponseCode(404).setBody("{}"))
+            assertTrue(service.workspaces("laptop").isEmpty())
+            server.enqueue(MockResponse().setResponseCode(500).setBody("{}"))
+            assertTrue(service.workspaces("laptop").isEmpty())
+            server.enqueue(MockResponse().setBody("not json"))
+            assertTrue(service.workspaces("laptop").isEmpty())
+        }
+    }
+
+    /** A start in a catalog workspace names its engine (`host`); a start without one sends the same body as before. */
+    @Test fun aStartInAWorkspaceCarriesItsHostAndOnlyThen() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            val created = """{"session":{"machine_id":"laptop","session_id":"s1"}}"""
+            server.enqueue(MockResponse().setBody(created))
+            service.start(AgentStartRequest("laptop", "/code/persona", "", workspaceId = "w1", host = "paseo"), "00000000-0000-4000-8000-000000000005")
+            val inWorkspace = JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+            assertEquals("paseo", inWorkspace["host"]?.jsonPrimitive?.content)
+            assertEquals("w1", inWorkspace["workspace_id"]?.jsonPrimitive?.content)
+            assertEquals("/code/persona", inWorkspace["cwd"]?.jsonPrimitive?.content)
+            server.enqueue(MockResponse().setBody(created))
+            service.start(AgentStartRequest("laptop", "/code/persona", ""), "00000000-0000-4000-8000-000000000006")
+            val byFolder = JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+            assertFalse("host" in byFolder)
+            assertFalse("workspace_id" in byFolder)
+            assertEquals("""{"machine_id":"laptop","cwd":"/code/persona","launcher":""}""", JsonCodec.encodeToString(AgentStartRequest.serializer(),
+                AgentStartRequest("laptop", "/code/persona", "")))
+        }
+    }
+
     /** The manager refuses a provider outside the computer's scope before anything starts: its words are the answer, no lookup. */
     @Test fun aStartRefusedForTheProvidersScopeSaysWhy() = runBlocking {
         MockWebServer().use { server ->

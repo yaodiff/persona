@@ -3,7 +3,7 @@
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useModalFocus } from "./overlay";
+import { trapTabIn, useModalFocus } from "./overlay";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -107,5 +107,50 @@ describe("useModalFocus", () => {
     act(() => root.render(<Modal />));
     act(() => root.render(<Modal open={false} />));
     expect(document.activeElement).toBe(opener);
+  });
+});
+
+// The shortcut help: Close, a scrolling list with no control in it, and "Edit in Settings" in the footer. Chrome lets the
+// keyboard focus such a list (here tabIndex -1 stands in for that: focusable, and not among focusables()); Tab from it
+// went back to Close, so "Edit in Settings" was out of reach going forward.
+function Help() {
+  const ref = useRef<HTMLDivElement>(null);
+  useModalFocus(ref, true);
+  return (
+    <div ref={ref} role="dialog" aria-modal="true" tabIndex={-1} data-testid="modal">
+      <button type="button">close</button>
+      <div tabIndex={-1} data-testid="body">
+        <p>keys</p>
+      </div>
+      <button type="button">edit</button>
+    </div>
+  );
+}
+
+describe("Tab past a scrolling body with no control of its own", () => {
+  it("goes on from the body in the browser's order, and wraps only from the last control", () => {
+    act(() => root.render(<Help />));
+    const [close, edit] = buttons();
+    const body = host.querySelector<HTMLElement>("[data-testid=body]")!;
+    body.focus();
+    expect(tab()).toBe(false); // the browser moves on to "edit"
+    expect(document.activeElement).toBe(body);
+    expect(tab(true)).toBe(false); // and back to "close"
+    edit.focus();
+    expect(tab()).toBe(true); // past the last control: back to the first
+    expect(document.activeElement).toBe(close);
+  });
+
+  it("reads the body's place among the controls; the modal itself or a focus outside still goes to an end", () => {
+    const box = document.createElement("div");
+    box.innerHTML = '<button id="close">close</button><div id="body"><p>keys</p></div><button id="edit">edit</button><div id="tail"></div>';
+    const list = [...box.querySelectorAll("button")] as HTMLElement[];
+    const at = (id: string) => box.querySelector(`#${id}`)!;
+    expect(trapTabIn(box, list, false, at("body"))).toBeNull();
+    expect(trapTabIn(box, list, true, at("body"))).toBeNull();
+    expect(trapTabIn(box, list, false, at("tail"))).toBe(0); // after every control: wraps to the first
+    expect(trapTabIn(box, list, true, at("tail"))).toBeNull();
+    expect(trapTabIn(box, list, false, box)).toBe(0);
+    expect(trapTabIn(box, list, true, document.body)).toBe(1);
   });
 });

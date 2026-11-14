@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="inbox_now_confirm_reply">Waiting for you to confirm a reply</string>
+    <string name="inbox_now_confirm_agent">Waiting for you to start an Agent</string>
+    <string name="inbox_now_decide">Waiting for your decision</string>
+    <string name="inbox_now_queued">Queued for the AI</string>
+    <string name="inbox_now_looking">AI is looking</string>
+    <string name="inbox_now_agent_working">Agent working</string>
+    <string name="inbox_now_waiting">Waiting for %1$s</string>
+    <string name="inbox_now_waiting_anyone">Waiting for a reply</string>
+    <string name="inbox_now_look_again">" · look again %1$s"</string>
+    <string name="inbox_now_next">: %1$s</string>
+    <string name="inbox_now_follow_up_ask">Checked 3 times with no news. Keep following?</string>
+    <string name="inbox_now_check_due">Time to look again</string>
+    <string name="inbox_now_failed">AI couldn\'t finish: %1$s</string>
+    <string name="inbox_now_failed_plain">AI couldn\'t handle it</string>
+    <string name="inbox_now_needs_you">Needs you</string>
+    <string name="inbox_now_fyi">FYI</string>
+    <string name="inbox_now_folded">Folded</string>
+    <string name="inbox_now_done_replied">You replied</string>
+    <string name="inbox_now_done_manager">Assistant checked: nothing to do</string>
+    <string name="inbox_now_done_user">You marked it done</string>
+    <string name="inbox_now_done_read">Read elsewhere</string>
+    <string name="inbox_now_done_dismissed">You dismissed it</string>
+    <string name="inbox_now_done_muted">Muted</string>
+    <string name="inbox_now_done_superseded">Replaced by a newer item</string>
+    <string name="inbox_row_sender">%1$s: %2$s</string>
+    <string name="inbox_row_where">%1$s · %2$s</string>
+    <string name="inbox_time_tomorrow">tomorrow</string>
+    <string name="inbox_time_yesterday">Yesterday</string>
+    <string name="inbox_event_assistant_says">Assistant says</string>
+    <string name="inbox_event_processing_chat">Conversation ›</string>
+</resources>

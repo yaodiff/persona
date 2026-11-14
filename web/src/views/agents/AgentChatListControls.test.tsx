@@ -19,9 +19,11 @@ vi.hoisted(() => {
   });
 });
 import { t } from "../../i18n";
+import { getAgentListFilters, filterAgentList, resetAgentListFilters } from "../../lib/agent-list-filters";
+import { closePalette, getPalette } from "../../lib/palette";
 import { getState, reset, savePins } from "../../lib/store";
 import type { Machine, Session } from "../../lib/types";
-import { AgentsList } from "../Sidebar";
+import { AgentsList, Sidebar } from "../Sidebar";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,6 +68,7 @@ let root: Root;
 beforeEach(() => {
   localStorage.clear();
   reset();
+  resetAgentListFilters();
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string) => {
@@ -84,6 +87,8 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   reset();
+  resetAgentListFilters();
+  closePalette();
   vi.unstubAllGlobals();
 });
 
@@ -116,16 +121,20 @@ function seed() {
   });
 }
 
-describe("Agents list search and Filter menu (#4397)", () => {
-  it("is one row when idle: the search field and a Filter button, no pills, chips or plan bar", async () => {
+describe("Agents list Filter menu (#4397) on the title row, the search in ⌘K (#6589)", () => {
+  it("has no search row: the Filter button sits on the title row, and nothing is between the quick filters and the list", async () => {
     seed();
     await act(async () => {
       root.render(<AgentsList route={{ name: "agent-list" }} onNewAgent={() => {}} />);
     });
-    const bar = host.querySelector<HTMLElement>('[data-testid="agent-dimension-filter-bar"]')!;
-    expect(bar.children).toHaveLength(1);
-    expect(bar.querySelectorAll("button")).toHaveLength(1);
-    expect(host.querySelector('[data-testid="agent-filter-button"]')).not.toBeNull();
+    expect(host.querySelector("input")).toBeNull();
+    expect(host.querySelector('[data-testid="agent-dimension-filter-bar"]')).toBeNull();
+    const button = host.querySelector<HTMLElement>('[data-sidebar-agents-controls] [data-testid="agent-filter-button"]')!;
+    expect(button).not.toBeNull();
+    // beside the title row's other menu button, nothing counted yet
+    expect(button.closest(".group\\/sec")).not.toBeNull();
+    expect(button.textContent).toBe("");
+    expect(host.querySelector('[data-testid="agent-filter-chips"]')).toBeNull();
     expect(host.querySelector('[data-testid="scoped-filter-strip"]')).toBeNull();
     expect(host.querySelector('[data-testid="search-as-code-plan"]')).toBeNull();
     // the grouped list stays the default; chat-list rows only when picked
@@ -181,5 +190,59 @@ describe("Agents list search and Filter menu (#4397)", () => {
     const updatedRows = [...host.querySelectorAll<HTMLElement>('[data-testid="agent-chatlist-row"]')];
     expect(updatedRows[0].getAttribute("data-session-id")).toBe("s1");
     expect(updatedRows[0].getAttribute("data-pinned")).toBe("true");
+  });
+  it("narrows by the query ⌘K put on the list: a chip that reopens ⌘K, counted on the button, cleared by × or Reset", async () => {
+    seed();
+    localStorage.setItem("persona.agentChatList", "1");
+    await act(async () => {
+      root.render(<AgentsList route={{ name: "agent-list" }} onNewAgent={() => {}} />);
+    });
+    const rows = () => [...host.querySelectorAll<HTMLElement>('[data-testid="agent-chatlist-row"]')].map((r) => r.getAttribute("data-session-id"));
+    expect(rows()).toEqual(["s2", "s1"]);
+
+    // the list's operators, as its own field took them
+    await act(async () => filterAgentList("machine:gcp"));
+    expect(rows()).toEqual(["s1"]);
+    const button = () => host.querySelector<HTMLElement>('[data-testid="agent-filter-button"]')!;
+    expect(button().textContent).toBe("1");
+    const chip = host.querySelector<HTMLElement>('[data-chip="query"]')!;
+    expect(chip.textContent).toBe(`${t("lib-agent-filter.query_chip")}: machine:gcp`);
+
+    // its text opens ⌘K on it, to change it
+    await act(async () => chip.querySelector<HTMLButtonElement>("button")!.click());
+    expect(getPalette()).toEqual({ open: true, query: "machine:gcp" });
+
+    // words match what the list's Full text reads: the error and the question of the other one
+    await act(async () => filterAgentList("socket"));
+    expect(rows()).toEqual(["s2"]);
+
+    // with a facet too, the count is two; Reset clears both
+    await openFilterMenu();
+    await chooseRow(t("lib-agent-filter.filter_machine"));
+    await chooseRow("Mac Studio");
+    expect(button().textContent).toBe("2");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="scoped-filter-reset"]')!.click());
+    expect(getAgentListFilters().query).toBe("");
+    expect(getAgentListFilters().machines).toEqual([]);
+    expect(rows()).toEqual(["s2", "s1"]);
+    expect(button().textContent).toBe("");
+
+    // × on the query's chip clears it alone
+    await act(async () => filterAgentList("orca"));
+    expect(rows()).toEqual(["s2"]);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-chip="query"] button[aria-label]')!.click());
+    expect(rows()).toEqual(["s2", "s1"]);
+  });
+
+  it("opens the block folded under its title when ⌘K puts words on the list", async () => {
+    seed();
+    localStorage.setItem("fold:agents", "1");
+    await act(async () => {
+      root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />);
+    });
+    const block = () => host.querySelector<HTMLButtonElement>("[data-sidebar-agents-controls] button[aria-expanded]")!;
+    expect(block().getAttribute("aria-expanded")).toBe("false");
+    await act(async () => filterAgentList("orca"));
+    expect(block().getAttribute("aria-expanded")).toBe("true");
   });
 });

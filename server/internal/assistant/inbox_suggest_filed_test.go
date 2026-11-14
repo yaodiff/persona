@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,6 +16,11 @@ import (
 // Only a recap still saves, and the item stays filed in the store.
 func TestInboxSuggestKindAfterFiling(t *testing.T) {
 	h, _, it := handledHub(t)
+	// Hold the item's delivery off: tellSoon sends its pending notes (and clears the wake) on a goroutine once a request
+	// has answered, which the test would race with.
+	delivery, _ := h.inbox.telling.LoadOrStore(it.ID, &sync.Mutex{})
+	delivery.(*sync.Mutex).Lock()
+	t.Cleanup(delivery.(*sync.Mutex).Unlock)
 	other := actionItem("lark:f2:1", time.Now())
 	h.inbox.mu.Lock()
 	h.inbox.items[other.ID] = other

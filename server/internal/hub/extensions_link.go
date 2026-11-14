@@ -25,6 +25,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -137,8 +138,9 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
 	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureSessionsManager, featureSessionsPageCounts,
-		featureAgentsPageCounts, featureSessionsHierarchy, featureSessionsCatalog, featureMachineRename)
+		featureSessionsSearch, featureAgentsPageCounts, featureSessionsHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait)
 	out = append(out, h.agentSessionArchiveFeatures()...)
+	out = append(out, h.agentAutonameFeatures()...)
 	out = append(out, h.meetingAttendanceFeatures()...)
 	out = append(out, h.meetingConversationFeatures()...)
 	out = append(out, h.meetingPhotosFeatures()...)
@@ -148,16 +150,17 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingTranscriptionFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
 	out = append(out, h.assistantSearchFeatures()...)
+	out = append(out, h.assistantStartServiceTierFeatures()...)
 	// The assistant's card interfaces, always on (docs/assistant/assistant-views.md, #5509): assistant_views is declarative
 	// actions (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions. Neither says
 	// a client may run HTML: that is each platform's own security sign-off, else fallback.
 	out = append(out, "assistant_views", "assistant_html_bridge")
 	for _, f := range h.extReport().Features {
 		switch f {
-		case featureAgentSessionArchives, featureAgentSessionArchiveClose, featureMeetingAttendance, featureMeetingConversation,
+		case featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
 			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
-			featureAssistantSearch:
-			continue // only manager hello can promise fleet archive support, the meeting features, all-day recordings and chat search
+			featureAssistantSearch, featureAssistantStartServiceTier:
+			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search and start speed
 		}
 		if !slices.Contains(out, f) {
 			out = append(out, f)

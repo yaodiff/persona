@@ -75,7 +75,8 @@ func (e *setupEnv) hubJSON() string { return filepath.Join(e.root, "hub.json") }
 func (e *setupEnv) config() (*setupConfig, error) {
 	raw, err := readHubJSON(e.root)
 	if err != nil {
-		return nil, e.fail("config", e.hubJSON()+" 读不了或不是 JSON 对象："+err.Error(), "修好或挪走这个文件，再运行 personad hub setup")
+		return nil, e.fail("config", i18n.T(e.l, "hub-setup.config_unreadable", i18n.Args{"path": e.hubJSON(), "error": err.Error()}),
+			i18n.T(e.l, "hub-setup.config_unreadable_next"))
 	}
 	_, hasToken := raw.Get("token")
 	fresh := !hasToken
@@ -83,7 +84,8 @@ func (e *setupEnv) config() (*setupConfig, error) {
 	var notes []string
 	services := e.canManagerService(context.Background())
 	if e.o.managerService && !services {
-		return nil, e.fail("config", "这里装不了内置管理者的常驻服务（"+e.noManagerServiceWhy(context.Background())+"）", "去掉 --manager-service 重跑")
+		return nil, e.fail("config", i18n.T(e.l, "hub-setup.manager_service_unavailable", i18n.Args{"why": e.noManagerServiceWhy(context.Background())}),
+			i18n.T(e.l, "hub-setup.manager_service_unavailable_next"))
 	}
 	if fresh {
 		in := e.installInputs(&notes)
@@ -101,7 +103,7 @@ func (e *setupEnv) config() (*setupConfig, error) {
 			}
 			return freshManagerMode(o, services, e.o.managerService)
 		}); err != nil {
-			return nil, e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
+			return nil, e.fail("config", e.writeFailed(e.hubJSON(), err), i18n.T(e.l, "hub-setup.check_permissions"))
 		}
 	} else {
 		if e.o.managerService {
@@ -111,8 +113,8 @@ func (e *setupEnv) config() (*setupConfig, error) {
 			}
 			if changed {
 				e.restartHub = true // a running hub reads assistant.mode only when it starts
-				e.restartWhy = append(e.restartWhy, "内置管理者改成了自己的常驻服务")
-				notes = append(notes, "assistant.mode 改成 service：hub 不再拉起内置管理者，它是自己的常驻服务")
+				e.restartWhy = append(e.restartWhy, i18n.T(e.l, "hub-setup.restart_why_manager_service"))
+				notes = append(notes, i18n.T(e.l, "hub-setup.note_manager_service"))
 			}
 		}
 		if note := e.keptListenNote(raw); note != "" {
@@ -120,37 +122,36 @@ func (e *setupEnv) config() (*setupConfig, error) {
 		}
 		if e.o.outside {
 			if err := editHubJSON(e.root, outsideTLS); err != nil {
-				return nil, e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
+				return nil, e.fail("config", e.writeFailed(e.hubJSON(), err), i18n.T(e.l, "hub-setup.check_permissions"))
 			}
 		}
 	}
 	b, err := os.ReadFile(e.hubJSON())
 	if err != nil {
-		return nil, e.fail("config", "读不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
+		return nil, e.fail("config", i18n.T(e.l, "hub-setup.read_failed", i18n.Args{"path": e.hubJSON(), "error": err.Error()}),
+			i18n.T(e.l, "hub-setup.check_permissions"))
 	}
 	cfg := &Config{Listen: ":18660", dir: e.root}
 	if err := json.Unmarshal(b, cfg); err != nil {
-		return nil, e.fail("config", e.hubJSON()+" 格式有误："+err.Error(), "修正 JSON 后重跑")
+		return nil, e.fail("config", i18n.T(e.l, "hub-setup.config_invalid", i18n.Args{"path": e.hubJSON(), "error": err.Error()}),
+			i18n.T(e.l, "hub-setup.config_invalid_next"))
 	}
 	cfg.applyEnv()
 	if _, err := doctorPort(cfg.Listen); err != nil {
-		return nil, e.fail("config", "hub.json 的 listen（"+cfg.Listen+"）没有有效端口", "改成 \":18660\" 这样的写法后重跑")
+		return nil, e.fail("config", i18n.T(e.l, "hub-setup.listen_no_port", i18n.Args{"listen": cfg.Listen}),
+			i18n.T(e.l, "hub-setup.listen_no_port_next"))
 	}
-	detail := "已写好 " + e.hubJSON()
-	if !fresh {
-		detail = "用已有的 " + e.hubJSON() + "，已有的值不改"
-	}
-	if fresh {
-		detail += "（明文端口 " + portOf(cfg.Listen)
-		if cfg.Public.TLSListen != "" {
-			detail += "，TLS " + cfg.Public.TLSListen
-		} else {
-			detail += "，没找到局域网地址，先不开 TLS"
-		}
-		detail += "）"
+	var detail string
+	switch {
+	case !fresh:
+		detail = i18n.T(e.l, "hub-setup.config_kept", i18n.Args{"path": e.hubJSON()})
+	case cfg.Public.TLSListen != "":
+		detail = i18n.T(e.l, "hub-setup.config_written_tls", i18n.Args{"path": e.hubJSON(), "port": portOf(cfg.Listen), "tls": cfg.Public.TLSListen})
+	default:
+		detail = i18n.T(e.l, "hub-setup.config_written_no_tls", i18n.Args{"path": e.hubJSON(), "port": portOf(cfg.Listen)})
 	}
 	if len(notes) > 0 {
-		detail += "；" + strings.Join(notes, "；")
+		detail += e.sep() + strings.Join(notes, e.sep())
 	}
 	e.report("config", true, detail, "")
 	return &setupConfig{Config: cfg, fresh: fresh, noLocal: !fresh && noMachines(raw) && e.hasAgents()}, nil
@@ -167,8 +168,8 @@ func (e *setupEnv) localMachine(ctx context.Context, cfg *setupConfig) error {
 	}
 	kept, err := e.keptMachines(ctx, cfg.Config)
 	if err != nil {
-		e.report("config", false, "hub.json 里没有电脑，但读不了哪些电脑归管理者管（"+err.Error()+"），这次没补本机",
-			"看管理界面的「电脑」里有没有这台电脑，没有就加上；修好后重跑 personad hub setup")
+		e.report("config", false, i18n.T(e.l, "hub-setup.local_machine_unknown", i18n.Args{"error": err.Error()}),
+			i18n.T(e.l, "hub-setup.local_machine_unknown_next"))
 		return nil
 	}
 	if len(kept) > 0 {
@@ -180,11 +181,11 @@ func (e *setupEnv) localMachine(ctx context.Context, cfg *setupConfig) error {
 		}
 		return o.Set("machines", []MachineConfig{defaultLocalMachine()})
 	}); err != nil {
-		return e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
+		return e.fail("config", e.writeFailed(e.hubJSON(), err), i18n.T(e.l, "hub-setup.check_permissions"))
 	}
 	e.restartHub = true
-	e.restartWhy = append(e.restartWhy, "hub.json 补了本机")
-	e.report("config", true, "补上本机作为电脑（kind: local）", "")
+	e.restartWhy = append(e.restartWhy, i18n.T(e.l, "hub-setup.restart_why_local_machine"))
+	e.report("config", true, i18n.T(e.l, "hub-setup.local_machine_added"), "")
 	return nil
 }
 
@@ -228,20 +229,20 @@ func (e *setupEnv) keptListenNote(raw *jsonObject) string {
 	}
 	var diffs []string
 	if e.o.listenSet && !sameListen(e.o.listen, file.Listen, "") {
-		diffs = append(diffs, "listen 仍是 "+file.Listen+"（这次给的 --listen "+e.o.listen+"）")
+		diffs = append(diffs, i18n.T(e.l, "hub-setup.kept_listen", i18n.Args{"have": file.Listen, "given": e.o.listen}))
 	}
 	// A new install binds a TLS address given without a host to the LAN IPv4 (newInstallConfig): that is the same.
 	if e.o.tlsSet && !sameListen(e.o.tls, file.Public.TLSListen, e.lanIPv4()) {
 		have := file.Public.TLSListen
 		if have == "" {
-			have = "空（没开 TLS）"
+			have = i18n.T(e.l, "hub-setup.kept_tls_empty")
 		}
-		diffs = append(diffs, "public.tls_listen 仍是 "+have+"（这次给的 --tls "+e.o.tls+"）")
+		diffs = append(diffs, i18n.T(e.l, "hub-setup.kept_tls", i18n.Args{"have": have, "given": e.o.tls}))
 	}
 	if len(diffs) == 0 {
 		return ""
 	}
-	return strings.Join(diffs, "，") + "：--listen、--tls 只用于新装，已有的不改"
+	return i18n.T(e.l, "hub-setup.kept_listen_note", i18n.Args{"diffs": strings.Join(diffs, i18n.T(e.l, "hub-setup.comma"))})
 }
 
 // sameListen: the address a flag asked for is the one the file has; a flag without a host also matches the file's
@@ -281,7 +282,7 @@ func (e *setupEnv) installInputs(notes *[]string) installInputs {
 				break
 			}
 			if e.portFree(l) && e.portFree(t) {
-				*notes = append(*notes, fmt.Sprintf("端口 %d / %d 被别的程序占着，可能是另一个 Persona，改用 %d / %d", lp, tp, l, t))
+				*notes = append(*notes, i18n.T(e.l, "hub-setup.ports_moved", i18n.Args{"listen": lp, "tls": tp, "new_listen": l, "new_tls": t}))
 				lh, _, _ := net.SplitHostPort(in.listen)
 				th, _, _ := net.SplitHostPort(in.tls)
 				in.listen, in.tls = net.JoinHostPort(lh, strconv.Itoa(l)), net.JoinHostPort(th, strconv.Itoa(t))
@@ -299,6 +300,11 @@ func (e *setupEnv) installInputs(notes *[]string) installInputs {
 		}
 	}
 	return in
+}
+
+// writeFailed says a file could not be written, for a step's detail.
+func (e *setupEnv) writeFailed(path string, err error) string {
+	return i18n.T(e.l, "hub-setup.write_failed", i18n.Args{"path": path, "error": err.Error()})
 }
 
 // noMachines: hub.json says "machines": []. Without the key the hub starts with this machine already (defaultConfig).

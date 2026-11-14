@@ -362,15 +362,19 @@ func (s *Service) cardsUp(ctx context.Context) map[string]proto.Interaction {
 }
 
 // cardBack is e's card put back (its turn still waits; nil when not now), and whether e keeps it meanwhile (false: past
-// its day, or the turn went on). Only the agent going on ends the card: working again, or a later turn. A card
-// still waits for its answer when the session was looked at (as one the hub kept up does), and is kept for a later
-// tick while its machine or session is not back as it was — right after a hub restart the nodes reconnect and report
-// their sessions over the next seconds, a node that restarted too before it has read the transcripts.
+// its day, the turn went on, or its session is gone). Only the agent going on ends the card: working again, or a later
+// turn. A card still waits for its answer when the session was looked at (as one the hub kept up does), and is kept
+// for a later tick while its machine or session is not back as it was — right after a hub restart the nodes reconnect
+// and report their sessions over the next seconds, a node that restarted too before it has read the transcripts —
+// unless the session stays missing from its machine's list (cardSessionGone).
 func (s *Service) cardBack(v *workView, e db.SessionWork, now time.Time) (*proto.Interaction, bool) {
 	if now.After(e.TurnAt.Add(workCardTTL)) || len(e.Work.Questions) == 0 {
 		return nil, false
 	}
 	c, why := s.workGuard(v, e, true)
+	if s.cardSessionGone(e, why, now) {
+		return nil, false
+	}
 	switch why {
 	case "", "looked at in herdr":
 		ix := workCard(e.MachineID, c, e.Work, e.InteractionID)
@@ -391,8 +395,37 @@ func wentOn(c proto.Session, e db.SessionWork) bool {
 	return c.Status == proto.StatusWorking || c.UpdatedAt.After(e.TurnAt.Add(2*time.Second))
 }
 
-// cardTick: k's card is past its day, or its turn went on (a turn_started the manager missed while it was away): it
-// goes, and the hub withdraws it when the snapshot no longer has it. One read back and not out yet is put back out.
+// workCardGoneAfter is how long a card's session may be missing from its machine's list, the machine up and listing,
+// before the card goes: longer than a node, its engine's bridge or the engine itself takes to come back and list it.
+var workCardGoneAfter = 10 * time.Minute
+
+// cardSessionGone: e's session has been missing from its machine's list (why "gone": the machine is up and said what
+// it lists) for workCardGoneAfter (#6709). A card nobody can answer there any more (deleted, or listed under another
+// id: a Paseo fork before #6709) does not stay among what needs the user for a day. Listed again, or the machine away
+// (it says nothing then), the wait starts over.
+func (s *Service) cardSessionGone(e db.SessionWork, why string, now time.Time) bool {
+	id := e.InteractionID
+	s.work.mu.Lock()
+	defer s.work.mu.Unlock()
+	s.work.init()
+	if why != "gone" || id == "" {
+		delete(s.work.gone, id)
+		return false
+	}
+	since, ok := s.work.gone[id]
+	if !ok {
+		if len(s.work.gone) > 1000 { // the cards of sessions that came back or were answered meanwhile
+			clear(s.work.gone)
+		}
+		s.work.gone[id] = now
+		return false
+	}
+	return now.Sub(since) >= workCardGoneAfter
+}
+
+// cardTick: k's card is past its day, its turn went on (a turn_started the manager missed while it was away), or its
+// session is gone (cardSessionGone): it goes, and the hub withdraws it when the snapshot no longer has it. One read
+// back and not out yet is put back out.
 func (s *Service) cardTick(ctx context.Context, v *workView, k [2]string, now time.Time) {
 	e, ok := s.workEntry(k)
 	if !ok || e.InteractionID == "" {
@@ -401,10 +434,11 @@ func (s *Service) cardTick(ctx context.Context, v *workView, k [2]string, now ti
 	s.work.mu.Lock()
 	_, out := s.work.cards[e.InteractionID]
 	s.work.mu.Unlock()
-	var drop bool
+	var drop, gone bool
 	if out {
 		c, why := s.workGuard(v, e, true)
-		drop = now.After(e.TurnAt.Add(workCardTTL)) || why == "task done" || why == "moved on" && wentOn(c, e)
+		gone = s.cardSessionGone(e, why, now)
+		drop = now.After(e.TurnAt.Add(workCardTTL)) || why == "task done" || why == "moved on" && wentOn(c, e) || gone
 	} else {
 		ix, keep := s.cardBack(v, e, now)
 		if ix != nil {
@@ -424,9 +458,17 @@ func (s *Service) cardTick(ctx context.Context, v *workView, k [2]string, now ti
 	}
 	s.work.mu.Lock()
 	delete(s.work.cards, e.InteractionID)
+	if since := s.work.gone[e.InteractionID]; !since.IsZero() && now.Sub(since) >= workCardGoneAfter {
+		gone = true // cardBack's reason for one not out
+	}
+	delete(s.work.gone, e.InteractionID)
 	s.work.mu.Unlock()
 	if !out {
 		s.recordEnd(e.InteractionID, "cancelled", nil) // never put back up: nothing else ends it in the history
+	}
+	if gone {
+		s.logf("work %s/%s: card %s withdrawn: the session is no longer on its computer", k[0], short(k[1]), e.InteractionID)
+		s.workEvent(k[0], k[1], "withdrawn", map[string]any{"by": "gone"})
 	}
 	e.InteractionID, e.Work.InteractionID = "", ""
 	s.putWork(ctx, e)

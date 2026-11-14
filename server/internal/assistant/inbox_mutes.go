@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -66,7 +67,7 @@ func mutesOf(it *InboxItem) []MuteOption {
 			}
 		}
 	case it.Lark != nil && it.Doc == nil && it.Moment == nil:
-		add(connector.TagChat, it.Lark.FeedID, it.Title)
+		add(connector.TagChat, it.Lark.FeedID, cmp.Or(it.Where, it.Title))
 		if it.Lark.IsGroup {
 			add(connector.TagSender, it.Lark.SenderID, it.Sender)
 		}

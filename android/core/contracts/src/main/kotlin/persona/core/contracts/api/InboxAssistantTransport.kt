@@ -20,6 +20,8 @@ class InboxSuggestionStale(val item: JsonObject?) : IllegalStateException("sugge
 interface InboxAssistantTransport {
     val scope: String
     suspend fun inbox(): JsonObject
+    /** One item by its hub id, including a done item the list no longer carries; 404 means it does not exist. */
+    suspend fun item(itemId: String): JsonObject = throw UnsupportedOperationException("Inbox item lookup unavailable")
     suspend fun larkConversations(cursor: String? = null): JsonObject = throw UnsupportedOperationException("Conversation metadata unavailable")
     suspend fun larkConversationsForAccount(account: Int?, cursor: String? = null): JsonObject {
         require(account == null) { "Account-specific conversation metadata unavailable" }
@@ -67,6 +69,11 @@ interface InboxAssistantTransport {
      */
     suspend fun suggestion(itemId: String, version: Long, action: String, text: String?, clientId: String): JsonObject =
         throw UnsupportedOperationException("Inbox suggestions unavailable")
+    /** An item's ancestors and direct children (`GET /api/v1/inbox/tree/{kind}/{id...}`). */
+    suspend fun tree(kind: String, id: String): JsonObject = throw UnsupportedOperationException("Inbox tree unavailable")
+    /** Sets [itemId]'s parent, or clears it when [parent] is null (`PUT /api/v1/inbox/{id}/parent`). */
+    suspend fun setParent(itemId: String, parent: InboxParentRef?): JsonObject =
+        throw UnsupportedOperationException("Inbox parent route unavailable")
     suspend fun replyMail(itemId: String, text: String, clientId: String, target: MailReplyTarget): JsonObject =
         throw UnsupportedOperationException("Checked mail replies unavailable")
     suspend fun messages(feedId: String, around: Long? = null, before: String? = null, after: String? = null): JsonObject

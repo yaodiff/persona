@@ -22,6 +22,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -228,6 +229,10 @@ func (s assistantSendTiming) mark(phase string, ok bool) {
 	s.node.logf("send_timing trace=%s phase=%s elapsed_ms=%d ok=%t", s.id, phase, time.Since(s.start).Milliseconds(), ok)
 }
 
+func serviceTierRefusal(ctx context.Context, code string) error {
+	return refusal(code, i18n.T(i18n.From(ctx), "rpc-errors."+code), nil)
+}
+
 // assistantSend delivers a user message, starting or restarting the headless claude when needed.
 // id == "" starts a new conversation and returns its id.
 func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string, images []proto.Image, mode, effort string, options ...modelExecution) (string, error) {
@@ -277,6 +282,18 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	restartForRecovery := recovery != nil && restart
 	resume := id != ""
 	st, _ := n.state.get(id)
+	// Read and consume the one-shot choice before guest or launcher normalization can replace options. A resumed send
+	// must never lose an explicit tier and quietly continue on the thread's current speed.
+	startTier := executionOption(options).ServiceTier
+	if startTier != "" {
+		options = slices.Clone(options)
+		for i := range options {
+			options[i].ServiceTier = ""
+		}
+		if resume {
+			return "", serviceTierRefusal(ctx, "assistant_service_tier_start_only")
+		}
+	}
 	if err := validModesFor(launcherOr(launcher, st.Launcher), mode, effort); err != nil {
 		return "", err
 	}
@@ -333,6 +350,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if startTier != "" {
+			return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
+		}
 		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
 			return "", skillSelectionError(assistantskills.ErrReference)
 		}
@@ -384,6 +404,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	agent, err := n.assistantAgent(ctx, launcher)
 	if err != nil {
 		return "", err
+	}
+	if startTier != "" && agent != "codex" {
+		return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
 	}
 	if guest != nil && (agent != "claude" || execution.Runtime != "" && (execution.Runtime != proto.AssistantRuntimeAgentSDK || guestKind == guestMeeting)) {
 		return "", errGuestAgent
@@ -477,12 +500,25 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			p = nil
 		}
 	}
-	n.noteModes(id, mode, effort)
+	if startTier == "" {
+		n.noteModes(id, mode, effort) // the ordinary start keeps its original ordering
+	}
 	fresh := p == nil
 	if p == nil {
 		if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
 			return "", err
 		}
+	}
+	if startTier != "" {
+		// Acknowledge the native setting before persisting or exposing the new conversation. This process is either a
+		// cold start or an adopted spare, so a refusal must stop it rather than leave an unused conversation behind.
+		if err := p.cx.setSpeed(ctx, startTier); err != nil {
+			n.logf("assistant %s: Codex refused service tier %q before its first turn: %v", short(id), startTier, err)
+			n.stopAssistantProcess(id)
+			n.notifySessions()
+			return "", serviceTierRefusal(ctx, "assistant_service_tier_refused")
+		}
+		n.noteModes(id, mode, effort)
 	}
 	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain || st.ConfigDir != execution.ConfigDir {
 		started := st.StartedAt

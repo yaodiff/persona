@@ -39,17 +39,25 @@ type testNode struct {
 	refuseWatch map[string]int
 	// unknown: the methods it does not have (a node from before them).
 	unknown map[string]bool
+	// fileStarted / fileCancelled hold one file call until its RPC context ends, for cancellation tests.
+	fileStarted, fileCancelled chan struct{}
 }
 
 func (n *testNode) dial(context.Context) (net.Conn, error) {
 	managerSide, nodeSide := net.Pipe()
 	p := rpc.New("n", nodeSide)
-	p.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
+	p.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		n.calls = append(n.calls, method+" "+string(params))
 		if n.unknown[method] {
 			return nil, errors.New("unknown method " + method)
+		}
+		if (method == "file.copy" || method == "file.zip") && n.fileStarted != nil {
+			close(n.fileStarted)
+			<-ctx.Done()
+			close(n.fileCancelled)
+			return nil, ctx.Err()
 		}
 		switch method {
 		case "node.info":

@@ -16,13 +16,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/netaddr"
 )
 
+// reportText is the report as `personad hub doctor` prints it.
+func reportText(d *doctorReport) string {
+	var b bytes.Buffer
+	d.write(&b)
+	return b.String()
+}
+
 func TestDoctorReadOnly(t *testing.T) {
 	dir := t.TempDir()
-	var out bytes.Buffer
-	d := &doctorReport{out: &out}
+	d := &doctorReport{l: i18n.En}
 	missing := filepath.Join(dir, "missing")
 	if d.config(missing) != nil {
 		t.Fatal("missing configuration was accepted")
@@ -73,20 +80,22 @@ func TestDoctorReadOnly(t *testing.T) {
 	}
 	loaded := d.config(dir)
 	if loaded == nil {
-		t.Fatal(out.String())
+		t.Fatal(reportText(d))
 	}
 	if endpoints := d.running(context.Background(), loaded); len(endpoints) != 1 {
-		t.Fatalf("missing published endpoints: %s", out.String())
+		t.Fatalf("missing published endpoints: %s", reportText(d))
 	}
 	if !reflect.DeepEqual(paths, []string{"/api/v1/health", "/api/v1/endpoints", "/api/v1/devices/push"}) {
 		t.Fatalf("unexpected requests: %v", paths)
 	}
-	for _, want := range []string{pin, cert.Leaf.NotAfter.UTC().Format(time.RFC3339), "当前已开启公网明文", "2001:db8::2", "回环 health 检查通过"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("missing output %q", want)
+	out := reportText(d)
+	for _, want := range []string{pin, cert.Leaf.NotAfter.UTC().Format(time.RFC3339), "Problem | security.allow_public_plaintext: Plain HTTP from the internet is on",
+		"2001:db8::2", "OK | Running hub: The loopback health check passed"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing output %q in:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out.String(), token) {
+	if strings.Contains(out, token) {
 		t.Fatal("doctor disclosed the master token")
 	}
 	for _, file := range files {
@@ -97,7 +106,7 @@ func TestDoctorReadOnly(t *testing.T) {
 	}
 	redirect, paths = true, nil
 	d.running(context.Background(), loaded)
-	if !reflect.DeepEqual(paths, []string{"/api/v1/health", "/api/v1/endpoints"}) || !strings.Contains(out.String(), "HTTP 302") {
+	if !reflect.DeepEqual(paths, []string{"/api/v1/health", "/api/v1/endpoints"}) || !strings.Contains(reportText(d), "HTTP 302") {
 		t.Fatal("doctor followed a redirect or failed to report it")
 	}
 	if err := os.WriteFile(filepath.Join(dir, "hub.json"), []byte(`{}`), 0o600); err != nil {
@@ -106,7 +115,7 @@ func TestDoctorReadOnly(t *testing.T) {
 	loaded = d.config(dir)
 	d.running(context.Background(), loaded)
 	b, _ = os.ReadFile(filepath.Join(dir, "hub.json"))
-	if string(b) != `{}` || loaded.Token != "" || !strings.Contains(out.String(), "配置缺少主 token") {
+	if string(b) != `{}` || loaded.Token != "" || !strings.Contains(reportText(d), "The configuration has no master token") {
 		t.Fatal("doctor must not generate or persist missing credentials")
 	}
 }
@@ -146,15 +155,15 @@ func TestDoctorCredentialPermissions(t *testing.T) {
 	chmod("docker", 0o755)
 	write("mcp.json", 0o644) // an ordinary file: its mode is none of the check's business
 
-	var out bytes.Buffer
-	d := &doctorReport{out: &out}
+	d := &doctorReport{l: i18n.En}
 	d.credentials(dir)
+	out := reportText(d)
 	for _, want := range []string{"relay-tunnel.token", "docker", "db-password", "chmod 600", "chmod 700"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("missing finding %q in:\n%s", want, out.String())
+		if !strings.Contains(out, want) {
+			t.Errorf("missing finding %q in:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out.String(), "mcp.json") || len(d.problems) != 3 {
+	if strings.Contains(out, "mcp.json") || len(d.problems) != 3 {
 		t.Fatalf("want exactly the three open credentials, got %v", d.problems)
 	}
 	// Read-only: the modes the run found are still the ones it must report.
@@ -165,11 +174,10 @@ func TestDoctorCredentialPermissions(t *testing.T) {
 	chmod("relay-tunnel.token", 0o600)
 	chmod("docker/db-password", 0o600)
 	chmod("docker", 0o700)
-	out.Reset()
-	d = &doctorReport{out: &out}
+	d = &doctorReport{l: i18n.En}
 	d.credentials(dir)
-	if len(d.problems) != 0 || !strings.Contains(out.String(), "正常｜凭据文件权限") {
-		t.Fatalf("want a clean report, got %v:\n%s", d.problems, out.String())
+	if out := reportText(d); len(d.problems) != 0 || !strings.Contains(out, "OK | Credential file permissions: ") {
+		t.Fatalf("want a clean report, got %v:\n%s", d.problems, out)
 	}
 
 	// A deployment without the container's password file and a data directory with no credentials at all are clean.
@@ -177,7 +185,7 @@ func TestDoctorCredentialPermissions(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(plain, "mcp.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	d = &doctorReport{out: &out}
+	d = &doctorReport{l: i18n.En}
 	d.credentials(plain)
 	if len(d.problems) != 0 {
 		t.Fatalf("an absent credential is nothing to check: %v", d.problems)
@@ -196,20 +204,93 @@ func TestDoctorRouteAndAddressDiagnostics(t *testing.T) {
 	if got := doctorRouteInterfaces(v6, true); !reflect.DeepEqual(got, []string{"tun0"}) {
 		t.Fatalf("IPv6 routes: %v", got)
 	}
-	var out bytes.Buffer
-	d := &doctorReport{out: &out}
-	d.route("wg0", "测试路由")
-	if !strings.Contains(out.String(), "TUN 代理可能吞掉入站回包") || len(d.next) == 0 {
+	d := &doctorReport{l: i18n.En}
+	d.route("wg0", "test route")
+	if !strings.Contains(reportText(d), "a TUN proxy may swallow replies to inbound connections") || len(d.next) == 0 {
 		t.Fatal("missing actionable TUN warning")
 	}
 	a := netaddr.Addr{IP: netip.MustParseAddr("2001:db8::2"), InterfaceFlags: net.FlagUp,
 		FlagsKnown: true, ScopeKnown: true, Virtual: true,
 		Flags:          netaddr.FlagTemporary | netaddr.FlagDeprecated | netaddr.FlagTentative | netaddr.FlagDADFailed,
 		LifetimesKnown: true}
-	reason := doctorAddressReason(a)
-	for _, want := range []string{"非全局 IPv6", "虚拟或回环网卡", "临时隐私地址", "已废弃地址", "地址检测尚未完成", "重复地址检测失败", "地址有效期已结束"} {
+	reason := doctorAddressReason(i18n.En, a)
+	for _, want := range []string{"not a global IPv6 address", "virtual or loopback interface", "temporary privacy address", "deprecated address",
+		"address detection not finished", "duplicate address detection failed", "address lifetime has ended"} {
 		if !strings.Contains(reason, want) {
 			t.Errorf("missing exclusion reason %q", want)
+		}
+	}
+}
+
+// The report prints as it always did: a title, "OK | item: detail" and "Problem | item: action" lines, an item's later
+// lines indented under it, then the next steps; the same items go to the admin page as they are.
+func TestDoctorReportLayout(t *testing.T) {
+	d := &doctorReport{l: i18n.En}
+	d.note("before any item")
+	d.ok("Item A", "fine")
+	d.problem("Item B", "fix it")
+	d.note("detail line")
+	d.info("Item C", "found")
+	d.next = append(d.next, "Step two")
+	want := "Hub self-check (read-only)\nbefore any item\nOK | Item A: fine\nProblem | Item B: fix it\n  detail line\n" +
+		"Item C: found\n\nNext steps:\n- fix it\n- Step two\n"
+	if got := reportText(d); got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if !reflect.DeepEqual(d.problems, []string{"Item B: fix it"}) {
+		t.Fatalf("problems %v", d.problems)
+	}
+	if d.items[2].Detail != "fix it\ndetail line" || d.items[3].Level != "info" {
+		t.Fatalf("items %+v", d.items)
+	}
+	empty := &doctorReport{l: i18n.En}
+	b, _ := json.Marshal(map[string]any{"items": empty.itemsOrEmpty(), "next": empty.nextOrEmpty()})
+	if string(b) != `{"items":[],"next":[]}` {
+		t.Fatalf("an empty report is empty lists, not null: %s", b)
+	}
+}
+
+// Every language words the report from its catalog; zh-Hans reads exactly as the report did before it had any other.
+func TestDoctorSpeaksEveryLanguage(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	for _, l := range i18n.Langs {
+		d := &doctorReport{l: l}
+		d.config(missing)
+		out := reportText(d)
+		if !strings.HasPrefix(out, i18n.T(l, "hub-doctor.title")+"\n") || !strings.Contains(out, i18n.T(l, "hub-doctor.config_unreadable")) {
+			t.Errorf("%s:\n%s", l, out)
+		}
+		if strings.Contains(out, "hub-doctor.") {
+			t.Errorf("%s shows a key:\n%s", l, out)
+		}
+	}
+	zh := &doctorReport{l: i18n.ZhHans}
+	zh.config(missing)
+	if got := reportText(zh); got != "hub 自检（只读）\n有问题｜配置：无法读取 ~/.persona/hub.json；请确认配置存在且当前用户有读取权限\n\n下一步：\n"+ // i18n-ignore: the zh-Hans wording
+		"- 无法读取 ~/.persona/hub.json；请确认配置存在且当前用户有读取权限\n" { // i18n-ignore: the zh-Hans wording
+		t.Fatalf("zh-Hans changed:\n%s", got)
+	}
+	ja := &doctorReport{l: i18n.Ja}
+	ja.config(missing)
+	if out := reportText(ja); !strings.Contains(out, "問題あり｜設定：") || !strings.Contains(out, "次の手順：") { // i18n-ignore: the ja wording
+		t.Fatalf("ja:\n%s", out)
+	}
+}
+
+// `personad hub doctor` speaks the terminal's language (#5520): English when it names none.
+func TestDoctorCommandSpeaksTheTerminalLanguage(t *testing.T) {
+	t.Setenv("PERSONA_HOME", t.TempDir()) // no hub here: the report is about a missing hub.json
+	for _, c := range []struct{ env, title string }{
+		{"ja_JP.UTF-8", "ハブの自己診断（読み取り専用）"}, // i18n-ignore: the ja wording
+		{"C", "Hub self-check (read-only)"},
+	} {
+		t.Setenv("PERSONA_LANG", c.env)
+		var out bytes.Buffer
+		if err := Doctor(context.Background(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(out.String(), c.title+"\n") {
+			t.Fatalf("PERSONA_LANG=%s:\n%s", c.env, out.String())
 		}
 	}
 }

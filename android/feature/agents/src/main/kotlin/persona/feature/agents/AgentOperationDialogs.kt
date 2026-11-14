@@ -18,6 +18,7 @@ import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.closeConfirmation
 import persona.core.domain.sort.deleteConfirmation
 import persona.core.domain.sort.isTern
+import persona.core.domain.sort.worktreeKind
 
 internal sealed interface AgentOperationDialog {
     val session: Session
@@ -37,12 +38,13 @@ internal fun AgentOperationDialog(
     val session = dialog.session
     // Keep or remove the worktree Persona made for it, when it worked in one (#4532); removed once it is gone.
     val ending = dialog is AgentOperationDialog.Close || dialog is AgentOperationDialog.Delete
-    val worktree = persona.feature.chat.rememberOurWorktree(worktrees.takeIf { ending }, session.machineId, session.cwd, machine?.online == true)
+    val worktree = persona.feature.chat.rememberOurWorktree(worktrees.takeIf { ending }, session.machineId, session.cwd, machine?.online == true,
+        session.worktreeKind)
     var cleanup by remember(session.key) { mutableStateOf(persona.feature.chat.WorktreeCleanup()) }
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     val res = androidx.compose.ui.platform.LocalResources.current
     fun cleanUp() { if (worktrees != null && worktree != null)
-        persona.feature.chat.WorktreeCleanups.cleanUp(worktrees, session.machineId, worktree, cleanup, feedback, res) }
+        persona.feature.chat.WorktreeCleanups.cleanUp(worktrees, session.machineId, worktree, cleanup, feedback, res, session.worktreeKind) }
     val cleanupSection: (@Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit)? = worktree?.let { st ->
         { persona.feature.chat.WorktreeCleanupSection(st, cleanup, { cleanup = it }, machine?.home) } }
     when (dialog) {

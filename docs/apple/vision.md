@@ -1,7 +1,7 @@
 # visionOS App
 
 The native visionOS version of Persona (the `PersonaVision` target in `apple/`, #1687): it shares the logic layer (`Shared/`, `Persona/App`) and content views with the iOS App,
-wrapped in a visionOS shell of its own (`apple/Vision/`). The approach follows the Mac version (`docs/apple/mac.md` ("Approach")): iOS and Mac do not change how they look for visionOS.
+wrapped in a visionOS shell of its own (`apple/Vision/`). The approach follows the retired native Mac version ([mac.md](../archive/apple/mac.md), "Approach"): iOS and Mac do not change how they look for visionOS.
 
 ## Approach
 

@@ -96,7 +96,8 @@ type deployCached struct {
 // deployCacheFor is how long a result other than deployIn is reused (deployIn holds for good for that hub commit).
 const deployCacheFor = 2 * time.Minute
 
-// describeHash is the commit in a version as deploy.sh and publish.sh write it, "$(git describe --always --dirty)-$BUILD":
+// describeHash is the commit in a version as deploy.sh and publish.sh write it, "$(git describe --tags --match 'v[0-9]*'
+// --always --dirty)-$BUILD":
 // <tag>-<n>-g<hash>[-dirty]-<build>, or with no tag <hash>[-dirty]-<build>.
 var describeHash = lazyre.New(`(?:-g|^)([0-9a-f]{7,40})(?:-dirty)?-[0-9]{12}$`)
 

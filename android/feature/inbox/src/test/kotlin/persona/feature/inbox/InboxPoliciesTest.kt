@@ -126,6 +126,17 @@ class InboxPoliciesTest {
         assertTrue(muteAndRuleActions(res, record.copy(mutes = emptyList()), {}, {}).isEmpty())
     }
 
+    @Test fun theChatMuteUsesWhereWithoutChangingTheRuleName() {
+        val res = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().resources
+        val record = InboxRecord(InboxItem("1"), source = "lark", mutes = listOf(chat, sender),
+            event = InboxEventFields(where = "Launch group"))
+        val actions = muteAndRuleActions(res, record, {}, {})
+        assertEquals(listOf("Mute this conversation · Launch group", "Mute this sender · Alex",
+            "Rule for this conversation · Design", "Rule for this sender · Alex"), actions.map { it.label })
+        val withoutWhere = muteAndRuleActions(res, record.copy(event = InboxEventFields.None), {}, {})
+        assertEquals("Mute this conversation · Design", withoutWhere.first().label)
+    }
+
     private class PolicyRepository(var policies: List<InboxPolicy> = emptyList()) : InboxRepository by FakeInboxRepository() {
         var failRead: Exception? = null
         var failRemove: Exception? = null

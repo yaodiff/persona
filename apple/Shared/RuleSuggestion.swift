@@ -196,7 +196,7 @@ nonisolated struct RuleSuggestionMade: Decodable, Hashable, Sendable {
         case "tasks.trust":
             return String(localized: "Rule added: these tasks start without asking first. It is listed, and removed, in the assistant's profile under Auto-Start Tasks.")
         case "standing_authorization":
-            return String(localized: "Standing authorization added. It is listed, and removed, in the web app's settings for Persona, under Standing authorizations.")
+            return String(localized: "Standing authorization added. It is listed, and revoked, in the assistant's profile under Standing Authorizations.")
         default:
             let name = setting ?? asked.setting ?? ""
             if name.isEmpty { return String(localized: "Done. Nothing was stored.") }

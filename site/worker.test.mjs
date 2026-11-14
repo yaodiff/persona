@@ -402,3 +402,216 @@ test("the page itself and other /extensions paths are static files", async () =>
     assert.equal(await r.text(), "asset " + p, p);
   }
 });
+
+// ---- localized pages: distinct English URLs, remembered choices, no shared-cache crossover ----
+
+function languageRequest(path, acceptLanguage, cookie) {
+  const headers = {};
+  if (acceptLanguage !== undefined) headers["accept-language"] = acceptLanguage;
+  if (cookie) headers.cookie = cookie;
+  return new Request("https://site.example" + path, { headers });
+}
+
+test("Accept-Language prefers supported ranges and uses English for other positive languages", async () => {
+  for (const [header, english] of [
+    ["en-US,en;q=0.9", true],
+    ["EN-us", true],
+    ["en-US;q=0.8,zh-CN;q=0.8", true],
+    ["en ;q=0.8,zh;q=0.7", true],
+    ["en-;q=1,zh;q=0.5", false],
+    ["en;q=.8,zh;q=0.7", false],
+    ["en;q=1e-1,zh;q=0.7", false],
+    ["en;q=0x1,zh;q=0.7", false],
+    ["en;q=0.1234,zh;q=0.5", false],
+    ["en;q=0.8;q=0.9,zh;q=0.7", false],
+    ["fr-FR,*;q=0.8", true],
+    ["en;q=1.5,zh;q=0.5", false],
+    ["en;q=bogus,zh;q=0.5", false],
+    ["zh-CN,zh;q=0.9,en;q=0.8", false],
+    ["fr-FR;q=1,en-GB;q=0.7,zh-CN;q=0.4", true],
+    ["fr;q=1,zh-CN;q=0.9", false],
+    ["en;q=0.4,zh;q=0.7", false],
+    ["fr-FR,de-DE;q=0.9", true],
+    ["ja-JP,ja;q=0.9", true],
+    ["fr-FR,en;q=0.2", true],
+    ["en;q=0,zh-CN;q=0.5", false],
+    ["fr;q=0,en;q=0,zh;q=0,*;q=0", false],
+    ["*", false],
+    ["", false],
+    ["not a valid header", false],
+    [undefined, false],
+  ]) {
+    const r = await worker.fetch(languageRequest("/", header), { ASSETS: assets });
+    if (english) {
+      assert.equal(r.status, 302, header);
+      assert.equal(r.headers.get("location"), "/en/", header);
+      assert.equal(r.headers.get("set-cookie"), null, "browser detection is not an explicit saved choice");
+    } else {
+      assert.equal(r.status, 200, header);
+      assert.equal(await r.text(), "asset /", header);
+    }
+    assert.equal(r.headers.get("cache-control"), "private, no-store", header);
+    assert.match(r.headers.get("vary"), /Accept-Language/i, header);
+    assert.match(r.headers.get("vary"), /Cookie/i, header);
+  }
+});
+
+test("language negotiation is GET / HEAD only and preserves HEAD semantics", async () => {
+  const head = await worker.fetch(new Request("https://site.example/", { method: "HEAD", headers: { "accept-language": "en" } }), { ASSETS: assets });
+  assert.equal(head.status, 302);
+  assert.equal(head.headers.get("location"), "/en/");
+  assert.equal(await head.text(), "");
+  const post = await worker.fetch(new Request("https://site.example/", { method: "POST", body: "x", headers: { "accept-language": "en" } }), { ASSETS: assets });
+  assert.equal(post.status, 200);
+  assert.equal(post.headers.get("location"), null);
+  assert.equal(post.headers.get("set-cookie"), null);
+});
+
+test("every Chinese page has a distinct English URL", async () => {
+  for (const [zh, en] of [
+    ["/", "/en/"], ["/extensions/", "/en/extensions/"], ["/releases/", "/en/releases/"],
+    ["/privacy/", "/en/privacy/"], ["/terms/", "/en/terms/"], ["/404.html", "/en/404.html"],
+    ["/index", "/en/"], ["/404", "/en/404.html"], ["/extensions/index", "/en/extensions/"],
+  ]) {
+    const picked = await worker.fetch(languageRequest(zh, "en"), { ASSETS: assets });
+    assert.equal(picked.status, 302, zh);
+    assert.equal(picked.headers.get("location"), en, zh);
+    const direct = await worker.fetch(languageRequest(en, "zh"), { ASSETS: assets });
+    assert.equal(direct.status, 200, en);
+    assert.equal(await direct.text(), "asset " + en, en);
+    assert.equal(direct.headers.get("set-cookie"), null, "a shared canonical URL does not change the saved preference");
+  }
+});
+
+test("an explicit choice wins over Accept-Language and sticks", async () => {
+  let r = await worker.fetch(languageRequest("/", "zh-CN", "persona_lang=en"), { ASSETS: assets });
+  assert.equal(r.status, 302);
+  assert.equal(r.headers.get("location"), "/en/");
+
+  r = await worker.fetch(languageRequest("/", "en-US", "persona_lang=zh"), { ASSETS: assets });
+  assert.equal(r.status, 200);
+  assert.equal(await r.text(), "asset /");
+
+  r = await worker.fetch(languageRequest("/en/?lang=zh", "en-US", "persona_lang=en"), { ASSETS: assets });
+  assert.equal(r.status, 302);
+  assert.equal(r.headers.get("location"), "/");
+  assert.match(r.headers.get("set-cookie"), /^persona_lang=zh;/);
+  assert.match(r.headers.get("set-cookie"), /HttpOnly/i);
+  assert.match(r.headers.get("set-cookie"), /Secure/i);
+  assert.match(r.headers.get("set-cookie"), /Path=\//i);
+  assert.match(r.headers.get("set-cookie"), /Max-Age=31536000/i);
+  assert.match(r.headers.get("set-cookie"), /SameSite=Lax/i);
+  assert.equal(r.headers.get("cache-control"), "private, no-store");
+
+  r = await worker.fetch(languageRequest("/?lang=en", "zh-CN", "persona_lang=zh"), { ASSETS: assets });
+  assert.equal(r.status, 302);
+  assert.equal(r.headers.get("location"), "/en/");
+  assert.match(r.headers.get("set-cookie"), /^persona_lang=en;/);
+
+  r = await worker.fetch(languageRequest("/en/extensions/?lang=zh&q=mail", "en"), { ASSETS: assets });
+  assert.equal(r.headers.get("location"), "/extensions/?q=mail");
+  assert.match(r.headers.get("set-cookie"), /^persona_lang=zh;/);
+
+  // A shared English URL is explicit too: it must not redirect a Chinese-preferring visitor away.
+  r = await worker.fetch(languageRequest("/en/releases/", "zh-CN", "persona_lang=zh"), { ASSETS: assets });
+  assert.equal(r.status, 200);
+  assert.equal(await r.text(), "asset /en/releases/");
+  assert.equal(r.headers.get("set-cookie"), null);
+});
+
+test("malformed language cookies never override the browser preference", async () => {
+  for (const cookie of ["persona_lang=en=garbage", "persona_lang=\"en\"", "persona_lang=fr", "persona_lang="]) {
+    const r = await worker.fetch(languageRequest("/", "zh-CN", cookie), { ASSETS: assets });
+    assert.equal(r.status, 200, cookie);
+    assert.equal(await r.text(), "asset /", cookie);
+  }
+  const later = await worker.fetch(languageRequest("/", "zh-CN", "persona_lang=fr; persona_lang=en"), { ASSETS: assets });
+  assert.equal(later.status, 302);
+  assert.equal(later.headers.get("location"), "/en/");
+});
+
+test("language redirects preserve unrelated raw query parameters", async () => {
+  let r = await worker.fetch(languageRequest("/?q=hello%20world&flag&lang=fr&x=1&x=2", "en"), { ASSETS: assets });
+  assert.equal(r.headers.get("location"), "/en/?q=hello%20world&flag&lang=fr&x=1&x=2");
+  assert.equal(r.headers.get("set-cookie"), null);
+
+  r = await worker.fetch(languageRequest("/en/extensions/?q=hello%20world&flag&lang=zh&x=1&x=2", "en"), { ASSETS: assets });
+  assert.equal(r.headers.get("location"), "/extensions/?q=hello%20world&flag&x=1&x=2");
+  assert.match(r.headers.get("set-cookie"), /^persona_lang=zh;/);
+});
+
+test("language negotiation leaves existing non-page routes untouched", async () => {
+  for (const path of ["/install.sh", "/dl/VERSION", "/releases/download/v0.4.0/app.apk", "/img/paper.webp"]) {
+    const r = await worker.fetch(languageRequest(path, "en-US"), { ASSETS: assets });
+    assert.equal(r.status, 200, path);
+    assert.equal(await r.text(), "asset " + path, path);
+    assert.equal(r.headers.get("set-cookie"), null, path);
+    assert.equal(r.headers.get("location"), null, path);
+  }
+});
+
+test("a missing page gets the selected language's 404 without changing its status", async () => {
+  const missingAssets = {
+    fetch: async (req) => {
+      const path = new URL(req.url).pathname;
+      if (path === "/404.html" || path === "/en/404.html") return new Response("asset " + path);
+      return new Response("missing", { status: 404 });
+    },
+  };
+  for (const [path, header, cookie, expected] of [
+    ["/not-here", "en-US", "", "/en/404.html"],
+    ["/not-here", "zh-CN", "", "/404.html"],
+    ["/not-here", "ja-JP,ja;q=0.9", "", "/en/404.html"],
+    ["/not-here", "fr-FR,*;q=0.8", "", "/en/404.html"],
+    ["/not-here", "*", "", "/404.html"],
+    ["/not-here", "en-US", "persona_lang=zh", "/404.html"],
+    ["/en/not-here", "zh-CN", "persona_lang=zh", "/en/404.html"],
+  ]) {
+    const r = await worker.fetch(languageRequest(path, header, cookie), { ASSETS: missingAssets });
+    assert.equal(r.status, 404, path);
+    assert.equal(await r.text(), "asset " + expected, path);
+    assert.equal(r.headers.get("cache-control"), "private, no-store", path);
+    assert.match(r.headers.get("vary"), /Accept-Language/i, path);
+  }
+});
+
+test("localized 404 subrequests ignore the missing URL's validators and ranges", async () => {
+  const seen = [];
+  const conditionalAssets = {
+    fetch: async (req) => {
+      const path = new URL(req.url).pathname;
+      if (path !== "/en/404.html") return new Response("missing", { status: 404 });
+      seen.push({ method: req.method, headers: new Headers(req.headers) });
+      if (["range", "if-range", "if-match", "if-none-match", "if-modified-since", "if-unmodified-since"].some((h) => req.headers.has(h))) {
+        return new Response(null, { status: req.headers.has("range") ? 206 : 304 });
+      }
+      return new Response(req.method === "HEAD" ? null : "complete English 404", { status: 200, headers: { etag: '"404-en"' } });
+    },
+  };
+  for (const [method, header] of [
+    ["GET", { "if-none-match": '"404-en"' }],
+    ["GET", { range: "bytes=0-3" }],
+    ["GET", { "if-modified-since": "Wed, 11 Nov 2026 00:00:00 GMT" }],
+    ["HEAD", { "if-none-match": '"404-en"', range: "bytes=0-3" }],
+  ]) {
+    const r = await worker.fetch(new Request("https://site.example/missing", {
+      method, headers: { "accept-language": "en", ...header },
+    }), { ASSETS: conditionalAssets });
+    assert.equal(r.status, 404, `${method} ${JSON.stringify(header)}`);
+    assert.equal(await r.text(), method === "HEAD" ? "" : "complete English 404");
+    assert.equal(r.headers.get("content-range"), null);
+  }
+  assert.equal(seen.length, 4);
+  for (const { headers } of seen) {
+    for (const name of ["range", "if-range", "if-match", "if-none-match", "if-modified-since", "if-unmodified-since"]) {
+      assert.equal(headers.has(name), false, name);
+    }
+  }
+
+  const unavailable = await worker.fetch(languageRequest("/missing", "en"), { ASSETS: {
+    fetch: async (req) => new URL(req.url).pathname === "/en/404.html"
+      ? new Response(null, { status: 304 }) : new Response("original missing", { status: 404 }),
+  } });
+  assert.equal(unavailable.status, 404);
+  assert.equal(await unavailable.text(), "original missing", "a non-200 error asset is never relabeled as a full 404");
+});

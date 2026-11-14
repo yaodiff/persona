@@ -9,6 +9,7 @@
   "interrupt_failed": "中断できませんでした：{error}",
   "new_chat": "新しいチャット",
   "session": "セッション",
+  "not_found_title": "会話が見つかりません",
   "continue_text": "続けて",
   "start_failed": "起動できませんでした：{error}",
   "start_failed_title": "起動できませんでした",
@@ -55,9 +56,8 @@
   "unpin": "ピン留めを外す",
   "pin": "ピン留め",
   "copy_session_id": "セッションIDをコピー",
-  "copy_folder": "フォルダのパスをコピー",
+  "copy_folder": "フォルダーのパスをコピー",
   "copy_resume_command": "再開コマンドをコピー",
-  "close_agent_menu": "エージェントを閉じる…",
   "delete_chat": "チャットを削除…",
   "sidebar": "サイドバー",
   "same_space_count": "同じスペース{count}",
@@ -136,5 +136,6 @@
   "search_origin_changed": "元の記録が変わりました。現在の記録をご覧ください",
   "search_return": "検索前の位置に戻る",
   "search_menu": "会話内を検索",
-  "todo_completed_label": "To-do（完了）：{title}"
+  "todo_completed_label": "To-do（完了）：{title}",
+  "export": "会話を書き出す…"
 }

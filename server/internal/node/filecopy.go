@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -20,7 +19,7 @@ import (
 // whole, links as links (never followed), permissions kept; what the read guard refuses (keys, credentials) is left out.
 // Duplicate is a copy into the same folder with keep.
 
-func (n *Node) copyFiles(ctx context.Context, paths []string, cwd, dir, conflict string) (map[string]any, error) {
+func (n *Node) copyFiles(ctx context.Context, paths []string, cwd, dir, conflict string, report *fileOperationReporter) (map[string]any, error) {
 	switch conflict {
 	case "", proto.UploadConflictReplace, proto.UploadConflictKeep:
 	default:
@@ -69,6 +68,9 @@ func (n *Node) copyFiles(ctx context.Context, paths []string, cwd, dir, conflict
 	files, total := 0, int64(0)
 	for _, s := range sources {
 		err := filepath.WalkDir(s.real, func(path string, d fs.DirEntry, err error) error {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if err != nil {
 				if d != nil && d.IsDir() && path != s.real {
 					return filepath.SkipDir
@@ -97,9 +99,10 @@ func (n *Node) copyFiles(ctx context.Context, paths []string, cwd, dir, conflict
 			return nil, err
 		}
 	}
+	report.totals(files, total)
 	copied := make([]map[string]string, 0, len(sources))
 	for _, s := range sources {
-		final, err := n.copyOne(ctx, s.real, s.info, realDir, conflict)
+		final, err := n.copyOne(ctx, s.real, s.info, realDir, conflict, report)
 		if err != nil {
 			return nil, err
 		}
@@ -112,19 +115,21 @@ func (n *Node) copyFiles(ctx context.Context, paths []string, cwd, dir, conflict
 }
 
 // copyOne copies real into dir under its name, or as conflict says when the name is taken; the name it got.
-func (n *Node) copyOne(ctx context.Context, real string, info os.FileInfo, dir, conflict string) (string, error) {
+func (n *Node) copyOne(ctx context.Context, real string, info os.FileInfo, dir, conflict string, report *fileOperationReporter) (string, error) {
 	name := filepath.Base(real)
 	to := filepath.Join(dir, name)
 	if err := n.writable(to); err != nil {
 		return "", err
 	}
+	var replaced string // the trash id of an existing destination, put back if this copy fails
 	if st, err := os.Lstat(to); err == nil {
 		switch conflict {
 		case proto.UploadConflictReplace:
 			if st.IsDir() || info.IsDir() || to == real {
 				return "", errExists(name)
 			}
-			if _, err := n.toTrash(to, to); err != nil {
+			replaced, err = n.toTrash(to, to)
+			if err != nil {
 				return "", err
 			}
 		case proto.UploadConflictKeep:
@@ -146,8 +151,14 @@ func (n *Node) copyOne(ctx context.Context, real string, info os.FileInfo, dir, 
 			return "", errExists(name)
 		}
 	}
-	if err := n.copyTree(ctx, real, to); err != nil {
+	if err := n.copyTree(ctx, real, to, report); err != nil {
 		_ = os.RemoveAll(to) // what this copy made (the name was free: made with O_EXCL / Mkdir)
+		if replaced != "" {
+			// A failed or cancelled replace must not lose the file that was already there (#6113).
+			if _, rerr := n.restoreFiles([]string{replaced}); rerr != nil {
+				return "", fmt.Errorf("%w; %s is in the trash and could not be put back: %v", err, name, rerr)
+			}
+		}
 		if errors.Is(err, fs.ErrExist) {
 			return "", errExists(name)
 		}
@@ -157,7 +168,7 @@ func (n *Node) copyOne(ctx context.Context, real string, info os.FileInfo, dir, 
 }
 
 // copyTree copies from to the free name to: a file with its permissions, a folder whole, a link as a link.
-func (n *Node) copyTree(ctx context.Context, from, to string) error {
+func (n *Node) copyTree(ctx context.Context, from, to string, report *fileOperationReporter) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -171,7 +182,11 @@ func (n *Node) copyTree(ctx context.Context, from, to string) error {
 		if err != nil {
 			return err
 		}
-		return os.Symlink(target, to)
+		if err := os.Symlink(target, to); err != nil {
+			return err
+		}
+		report.fileDone()
+		return nil
 	case info.IsDir():
 		if err := os.Mkdir(to, info.Mode().Perm()|0o700); err != nil {
 			return err
@@ -185,11 +200,15 @@ func (n *Node) copyTree(ctx context.Context, from, to string) error {
 			if n.offLimitsResolved(src) != nil {
 				continue
 			}
-			if err := n.copyTree(ctx, src, filepath.Join(to, e.Name())); err != nil {
+			if err := n.copyTree(ctx, src, filepath.Join(to, e.Name()), report); err != nil {
 				return err
 			}
 		}
-		return os.Chmod(to, info.Mode().Perm())
+		if err := os.Chmod(to, info.Mode().Perm()); err != nil {
+			return err
+		}
+		report.fileDone()
+		return nil
 	case info.Mode().IsRegular():
 		src, err := os.Open(from)
 		if err != nil {
@@ -200,7 +219,7 @@ func (n *Node) copyTree(ctx context.Context, from, to string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(dst, src); err != nil {
+		if _, err := copyFileContents(ctx, dst, src, report); err != nil {
 			_ = dst.Close()
 			return err
 		}
@@ -208,7 +227,12 @@ func (n *Node) copyTree(ctx context.Context, from, to string) error {
 			_ = dst.Close()
 			return err
 		}
-		return dst.Close()
+		if err := dst.Close(); err != nil {
+			return err
+		}
+		report.fileDone()
+		return nil
 	}
+	report.fileDone()
 	return nil // sockets, devices, pipes: left out
 }

@@ -125,7 +125,11 @@ export interface RecordingMinutes {
   decisions?: MinutesPoint[];
   actions?: MinutesAction[];
   open?: MinutesPoint[];
+  /** The summary card (#6563): the headline, the core conclusions and the points and decisions grouped by topic. Read
+   *  defensively on its own (lib/minutes-overview.ts `minutesOverview`), so a broken one never costs the fields above. */
+  overview?: unknown;
   partial?: boolean;
+  /** The same minutes as Markdown, what Copy sends; it follows the summary card when there is one. */
   markdown: string;
 }
 
@@ -527,11 +531,6 @@ export function groupEntries(kind: KBKind, items: KBEntry[], tag?: string): Entr
     ];
   }
   return out.filter((s) => s.items.length);
-}
-
-/** 1985 → "1985" (no grouping comma, the chip is narrow), past 9999 → "10K+" (in Chinese units). */
-export function countLabel(n: number): string {
-  return n > 9999 ? t("lib-kb.count_over") : String(n);
 }
 
 /**

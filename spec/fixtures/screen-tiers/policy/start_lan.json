@@ -1,0 +1,43 @@
+{
+  "description" : "The same network: the best tier.",
+  "init" : {
+    "bias" : "auto",
+    "capKbps" : 12000,
+    "display" : {
+      "maxSize" : 2868,
+      "pixels" : [
+        3024,
+        1964
+      ],
+      "points" : [
+        1512,
+        982
+      ]
+    },
+    "link" : {
+      "kind" : "lan",
+      "minRttMs" : null,
+      "srttMs" : null,
+      "via" : "wifi"
+    },
+    "maxFps" : 60,
+    "maxScale" : null,
+    "now" : 0,
+    "remembered" : null
+  },
+  "name" : "start_lan",
+  "start" : {
+    "fps" : 60,
+    "height" : 1862,
+    "index" : 0,
+    "maxKbps" : 12000,
+    "minKbps" : 6408,
+    "reason" : "start",
+    "scale" : 2,
+    "targetKbps" : 6408,
+    "width" : 2868
+  },
+  "steps" : [
+
+  ]
+}

@@ -14,17 +14,21 @@ struct RecordingTimelineRows: View {
     /// Rows lit for a moment (`Theme.accentTint`, and selected for VoiceOver): the meeting page's transcript opened at a
     /// highlight's minute (#3862 phase 2b, `RecordingTimeline.focus`). Every other page passes none.
     var lit: Set<RecordingTimeline.Item.ID> = []
+    /// The hub's lines in place of the phone's sentences: the meeting page's transcript in hub mode while the page shows
+    /// the hub's (#3862 phase 5, `MeetingTranscription.shown`). Nil, the phone's own: every other page, and a fallback.
+    var hubLines: [MeetingHubLine]? = nil
 
-    @Environment(\.dynamicTypeSize) private var size
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var capture = RecordingCapture.shared
 
     var body: some View {
         // A clock for the gap marker's number, not for the rows: the rows are the same between its beats.
         TimelineView(.periodic(from: .now, by: Theme.Recording.gapRefresh)) { _ in
-            let built = RecordingTimeline.make(sentences: RecordingTimeline.sentences(of: entry), marks: entry.marks,
-                                               asks: exchanges.map { .init(id: $0.id, at: $0.at) },
-                                               transcribedUntil: RecordingTimeline.transcribedUntil(of: entry), now: capture.timeline)
+            // The hub's lines come within one window and its caption says what is said now: no gap marker under them.
+            let built = RecordingTimeline.make(sentences: hubLines.map(RecordingTimeline.sentences(hub:)) ?? RecordingTimeline.sentences(of: entry),
+                                               marks: entry.marks, asks: exchanges.map { .init(id: $0.id, at: $0.at) },
+                                               transcribedUntil: hubLines == nil ? RecordingTimeline.transcribedUntil(of: entry) : capture.timeline,
+                                               now: capture.timeline)
             rows(built)
                 .onChange(of: built, initial: true) { items = built }
         }
@@ -75,13 +79,7 @@ struct RecordingTimelineRows: View {
     }
 
     private func sentence(at time: Double, text: String, lit: Bool) -> some View {
-        Group {
-            if size.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.xs) { stamp(time); words(text) }
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) { stamp(time); words(text) }
-            }
-        }
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) { stamp(time); words(text) }
         // Lit: the tint reaches a little past the words, so the row's own place doesn't move when it comes and goes.
         .background {
             if lit {
@@ -93,7 +91,7 @@ struct RecordingTimelineRows: View {
         .accessibilityElement(children: .combine)
         // Lit is said, not only tinted (DESIGN_SYSTEM.md 6.3): VoiceOver reads the target lines as selected while lit.
         .accessibilityAddTraits(lit ? .isSelected : [])
-        .accessibilityIdentifier(lit ? "recording-timeline-sentence-lit" : "recording-timeline-sentence")
+        .accessibilityIdentifier(lit ? "recording-timeline-sentence-lit" : hubLines == nil ? "recording-timeline-sentence" : "recording-timeline-hub-line")
     }
 
     private func stamp(_ time: Double) -> some View {

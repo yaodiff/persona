@@ -206,7 +206,8 @@ function Doctor() {
               </span>
               <div className="min-w-0 flex-1">
                 <div className={cx("text-[13px]", it.level === "problem" ? "font-medium text-ink" : "text-ink")}>{it.item}</div>
-                <div className="mt-0.5 text-[12px] leading-relaxed break-words text-ink-2">{it.detail}</div>
+                {/* A detail's later lines are the item's list (addresses, devices, firewall rules): one per line. */}
+                <div className="mt-0.5 text-[12px] leading-relaxed break-words whitespace-pre-line text-ink-2">{it.detail}</div>
               </div>
             </div>
           ))}

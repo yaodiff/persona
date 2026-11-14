@@ -143,6 +143,15 @@ type SnapshotFollowup struct {
 	Every string // "30 minutes" for a repeating one
 }
 
+// SnapshotFollowing is one open inbox matter being followed: where it happens, who or what it waits on, the next step
+// and when to look again (CheckAt in the user's zone, zero when none). The two flags select the state note in the
+// template, so no prompt wording is assembled in Go.
+type SnapshotFollowing struct {
+	Title, Where, Who, Next string
+	CheckAt                 time.Time
+	FollowUpAsk, CheckDue   bool
+}
+
 // SnapshotPlan is a plan card in the main conversation still waiting for the user's "Start" (#4453): nothing of it has
 // started, and it shows nowhere else.
 type SnapshotPlan struct {
@@ -271,6 +280,10 @@ type Snapshot struct {
 	Tasks          []SnapshotTask     // tasks opened from assistant conversations (task_plan), newest first
 	Plans          []SnapshotPlan     // plan cards in the main conversation waiting for "Start", newest first (at most five)
 	PlansTotal     int
+
+	FollowingEnabled bool                // Inbox is enabled and available; false leaves the whole section out
+	Following        []SnapshotFollowing // open inbox matters being followed, earliest check first (at most five)
+	FollowingTotal   int                 // all of them
 	// Asked: the assistant's ask_user questions nobody answered in time, now to-dos waiting for the user's call (#1617),
 	// oldest first.
 	Asked []SnapshotAsked
@@ -286,10 +299,11 @@ type Snapshot struct {
 }
 
 // SnapshotOmit marks the sections a snapshot leaves out for size (#3203). An omitted section still renders its heading
-// and its count, with the tool that lists it, never as empty: the node sends only the sections that changed, so a
-// section that went missing would read as unchanged, and one rendered without its items as "none".
+// and count with where to see the rows (a tool, or the App for Inbox follow-ups), never as empty: the node sends only
+// the sections that changed, so a section that went missing would read as unchanged, and one rendered without its items
+// as "none".
 type SnapshotOmit struct {
-	Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
+	Waiting, Working, Unread, Routines, Following, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
 }
 
 // SnapshotCut is the line a snapshot cut short ends with (assistant/snapshot_cut).
@@ -335,6 +349,15 @@ func (s Snapshot) Upcoming() *SnapshotCalendar {
 	return &out
 }
 
+// FollowingLeft is how many followed matters are not in the snapshot's bounded list.
+func (s Snapshot) FollowingLeft() int {
+	left := s.FollowingTotal - len(s.Following)
+	if left < 0 {
+		return 0
+	}
+	return left
+}
+
 func RenderSnapshot(s Snapshot) string { return render("assistant/snapshot", s) }
 
 // RenderSnapshotWorkflow is one running workflow, in a line ("'parity-audit' stage Verify (2/2), 169/185 agents done, running 14 minutes").
@@ -376,12 +399,10 @@ type TaskRun struct {
 	Label          string
 	Once, Interval bool   // neither: daily
 	Every          string // interval: "30 minutes"
-	// Accelerated: a leader's open supervised todos shortened this run's interval.
-	Accelerated bool
-	Late        string // "" when on time; else how late ("25 minutes")
-	Due         time.Time
-	Prompt      string
-	KBHint      bool // daily runs with the knowledge base on
+	Late           string // "" when on time; else how late ("25 minutes")
+	Due            time.Time
+	Prompt         string
+	KBHint         bool // daily runs with the knowledge base on
 	// KnowledgeDir: the knowledge base directory the hint names; "" is the default ~/.persona/data.
 	KnowledgeDir string
 	// Continued: it goes into the task's own conversation, which got the background on the first run.
@@ -415,7 +436,9 @@ type BriefFacts struct {
 	Failed                                                           []BriefFailed
 	Accept                                                           []BriefAccept
 	Progress                                                         []BriefProgress
-	Leaders                                                          []BriefLeader // one per direction (#3609)
+	// InboxWaiting and InboxDue are read-only follow-up facts for the model only; neither is on the card or in the push.
+	InboxWaiting, InboxDue []BriefFollow
+	Leaders                []BriefLeader // one per direction (#3609)
 	// Briefs: the open pieces of work that need the owner or changed since the last briefing, in their own words;
 	// BriefsDone: those that ended since, once, with each criterion's result (#3822).
 	Briefs, BriefsDone []BriefTask
@@ -524,6 +547,9 @@ type BriefFailed struct {
 
 // BriefAccept is a task waiting to be verified, with what it changed in the words of its "Please verify" card.
 type BriefAccept struct{ Line, Changed string }
+
+// BriefFollow is one Inbox matter in the briefing's model-only facts: its title, who or what it waits on and next step.
+type BriefFollow struct{ Title, Who, Next string }
 
 // BriefProgress is a task being worked on and its stage ("plan", "develop", "review", "merge", "deploy", "verify"; "" not known).
 type BriefProgress struct{ Title, Stage string }
@@ -676,6 +702,9 @@ type Supervise struct {
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
+	// LowDistraction: the owner's low-distraction mode is on: a card is never handed to the user on a timeout, and ask_escalate
+	// pushes only what is the owner's alone (why_owner).
+	LowDistraction bool
 	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
 	// owner_cannot_answer; #3804).
 	Decisions bool
@@ -767,6 +796,8 @@ type SuperviseOption struct{ Label, LeadsTo string }
 type SuperviseAsk struct {
 	ID, Kind, Machine, Session, Text string
 	Raised                           bool
+	// Reminded: low-distraction mode kept the card from the user when its time ran out, and gives it to its supervisor once more.
+	Reminded bool
 }
 
 func RenderSupervise(s Supervise) string { return render("assistant/supervise", s) }

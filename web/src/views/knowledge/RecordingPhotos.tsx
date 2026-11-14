@@ -227,9 +227,11 @@ function Recognized({ text }: { text: string }) {
 
 /** A minutes item's photo, in place of its transcript time: its thumbnail and time, going to it under **Photos**;
  *  "Photo removed" once a list read lacks it; the number and time alone while no list has been read. */
-export function PhotoCite({ n, at, rec, photos, onJump }: { n: number; at: number; rec: RecordingView; photos?: MeetingPhotos; onJump: (id: string) => void }) {
+export function PhotoCite({ n, at, rec, photos, onJump }: { n: number; at: number | undefined; rec: RecordingView; photos?: MeetingPhotos; onJump: (id: string) => void }) {
   const photo = photos?.on ? photos.list?.find((p) => p.n === n) : undefined;
-  const clock = recordingClock(rec.startedAt, photo?.at ?? at);
+  // `at` is unknown only for a summary-card line whose time did not read (#6563): the photo's own number then.
+  const seconds = photo?.at ?? at;
+  const clock = seconds === undefined ? "" : recordingClock(rec.startedAt, seconds);
   if (photo && photos) {
     return (
       <button type="button" aria-label={t("knowledge-kbdetail.minutes_photo_jump", { n, time: clock })} aria-controls={photoAnchor(n)} onClick={() => onJump(photoAnchor(n))}
@@ -248,7 +250,7 @@ export function PhotoCite({ n, at, rec, photos, onJump }: { n: number; at: numbe
   }
   return (
     <span data-minutes-photo={n} className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11.5px] text-ink-3 tabular-nums">
-      <Icon name="image" size={12} />{t("knowledge-kbdetail.minutes_photo", { n, time: clock })}
+      <Icon name="image" size={12} />{clock ? t("knowledge-kbdetail.minutes_photo", { n, time: clock }) : t("knowledge-kbdetail.photo_label", { n })}
     </span>
   );
 }

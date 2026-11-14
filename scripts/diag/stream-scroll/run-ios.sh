@@ -11,6 +11,11 @@ SIM=${SIM:?SIM=<simulator udid>}; PORT=${PORT:-18831}; OUT=${OUT:-/tmp/stream-sh
 CASES=${*:-testFollowingWhileAReplyStreams testFollowingWhenTheClearComesFirst testReadingWhileAReplyStreams testArrowWhileAReplyStreams testDragAwayWhileAReplyStreams testFollowingARunningTurn testFollowingAnAgentAtWork testReadingWhileAnAgentWorks}
 BUNDLE=$(cd "$ROOT" && python3 scripts/persona_config.py env | sed -n 's/^export PERSONA_BUNDLE_ID=//p')
 cd "$ROOT" && eval "$(python3 scripts/persona_config.py env)" >/dev/null
+if [ -x "${PERSONA_XCODE_RUNNER:-$HOME/.local/bin/xcode-slot}" ]; then
+  "${PERSONA_XCODE_RUNNER:-$HOME/.local/bin/xcode-slot}" "$ROOT/native/app-core/scripts/build-apple.sh" || exit 1
+else
+  "$ROOT/native/app-core/scripts/build-apple.sh" || exit 1
+fi
 SIM=$(scripts/app/sim-boot.sh "$SIM") || { echo "RESULT no simulator"; exit 1; }
 cd apple && xcodegen generate -q
 COMMON=(-project Persona.xcodeproj -scheme Persona -destination "id=$SIM" -derivedDataPath "$ROOT/build/DerivedData")

@@ -32,11 +32,8 @@ nonisolated enum PushCrypto {
         var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: name,
                                 kSecAttrAccount as String: account(group: hubGroup)]
         if let group { q[kSecAttrAccessGroup as String] = group }
-        #if os(macOS)
-        // A Mac's default is the old file keychain, where access groups do nothing and an item belongs to the app that
-        // made it: PersonaMacNotify could not read the key. The data protection keychain shares it like on a phone.
+        // On macOS the data protection keychain shares the key with the notification extension like on a phone.
         q[kSecUseDataProtectionKeychain as String] = true
-        #endif
         return q
     }
 
@@ -64,9 +61,7 @@ nonisolated enum PushCrypto {
                                     kSecReturnData as String: true, kSecReturnAttributes as String: true,
                                     kSecMatchLimit as String: kSecMatchLimitAll]
             if let accessGroup { q[kSecAttrAccessGroup as String] = accessGroup }
-            #if os(macOS)
             q[kSecUseDataProtectionKeychain as String] = true
-            #endif
             var out: AnyObject?
             guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let items = out as? [[String: Any]] else { continue }
             for item in items {

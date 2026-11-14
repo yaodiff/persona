@@ -155,8 +155,10 @@ func TestInboxDoesNotResumeOnWorkMachine(t *testing.T) {
 		t.Fatalf("failure = %q", it.Handling.Error)
 	}
 	// A running twin with no pending notes must also leave the active queue.
+	h.inbox.mu.Lock()
 	it.Agent.State, it.Agent.Pending = AgentRunning, nil
 	it.Handling.State = HandlingLooking
+	h.inbox.mu.Unlock()
 	h.sweepInboxAgents(ctx, InboxAgentConfig{Enabled: true}, time.Now())
 	if it.Handling.State != HandlingFailed {
 		t.Fatalf("still active: %+v", it.Handling)

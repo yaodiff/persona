@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"syscall"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeupdate"
@@ -65,6 +64,15 @@ func main() {
 	}
 	if os.Getenv("FIXTURE_CRASH") == version {
 		os.Exit(7)
+	}
+	if os.Getenv("FIXTURE_LEGACY") == version {
+		// A build without the updater (one that cannot take updates where it runs): it runs, but never records
+		// itself in the transaction nor confirms.
+		proof, _ := json.Marshal(map[string]any{"version": version, "pid": os.Getpid()})
+		_ = os.WriteFile(os.Getenv("FIXTURE_PROOF"), proof, 0600)
+		for { // runs until stopped (an empty select would end it: the runtime calls that a deadlock)
+			time.Sleep(time.Hour)
+		}
 	}
 	// As the resident node does before runResident: after an in-place exec the update watchdog the previous image
 	// started is this one's child.
@@ -126,8 +134,11 @@ func main() {
 	}
 	mustExec(m.Executable())
 }
+
+// mustExec restarts onto the installed file as the resident node does: exec in place, or on Windows an exit its
+// supervisor answers with an immediate restart.
 func mustExec(path string) {
-	if err := syscall.Exec(path, os.Args, os.Environ()); err != nil {
+	if err := nodeupdate.Restart(path); err != nil {
 		panic(err)
 	}
 }

@@ -1,0 +1,45 @@
+{
+  "description" : "The same on cellular: 4 Mbit/s cap.",
+  "expected" : [
+    {
+      "fps" : 30,
+      "height" : 1472,
+      "maxKbps" : 4000,
+      "minKbps" : 2003,
+      "scale" : 1.5,
+      "width" : 2268
+    },
+    {
+      "fps" : 30,
+      "height" : 982,
+      "maxKbps" : 3563,
+      "minKbps" : 891,
+      "scale" : 1,
+      "width" : 1512
+    },
+    {
+      "fps" : 15,
+      "height" : 982,
+      "maxKbps" : 1782,
+      "minKbps" : 200,
+      "scale" : 1,
+      "width" : 1512
+    }
+  ],
+  "input" : {
+    "bias" : "auto",
+    "capKbps" : 4000,
+    "codec" : "hevc",
+    "maxFps" : 60,
+    "maxSize" : 2556,
+    "pixels" : [
+      3024,
+      1964
+    ],
+    "points" : [
+      1512,
+      982
+    ]
+  },
+  "name" : "retina_auto_cellular"
+}

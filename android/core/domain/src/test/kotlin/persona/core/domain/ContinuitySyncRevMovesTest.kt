@@ -20,8 +20,8 @@ class ContinuitySyncRevMovesTest {
 
     @Test fun aMoveHeardWhileTheReadIsOnItsWayReadsOnceMore() {
         val sync = opened()
-        assertEquals(listOf(Action.ScheduleFill()), sync.settle(Gap.Fill)) // lines 4 and 5: their push is lost
-        assertEquals(listOf(Action.FetchAfter(3)), sync.fillTimer())
+        assertEquals(listOf(Action.FetchAfter(3)), sync.settle(Gap.Fill)) // lines 4 and 5: their push is lost
+        assertEquals(emptyList<Action>(), sync.continueFill())
         assertFalse(sync.behind)
         sync.settle(Gap.Fill) // line 6 is written while the read for 4 and 5 is out
         assertTrue(sync.behind)
@@ -34,23 +34,23 @@ class ContinuitySyncRevMovesTest {
         assertEquals(emptyList<Action>(), second.actions)
         assertEquals(listOf(4, 5, 6), sync.reducer.items.map { it.seq }.drop(3))
         // The fill ended: a new move schedules a new fill as before.
-        assertEquals(listOf(Action.FetchAfter(6)), sync.fillTimer())
+        assertEquals(listOf(Action.FetchAfter(6)), sync.continueFill())
     }
 
     @Test fun aMoveHeardBeforeTheReadWasSentIsCoveredByIt() {
         val sync = opened()
         sync.settle(Gap.Fill)
-        sync.settle(Gap.Fill) // two moves before the timer fires: one read covers both
-        assertEquals(listOf(Action.FetchAfter(3)), sync.fillTimer())
+        sync.settle(Gap.Fill) // a second gap while the read is in flight: its completion reads again
+        assertEquals(emptyList<Action>(), sync.continueFill())
         val done = sync.after(listOf(item(4), item(5)), "h", 3, 5)
-        assertEquals(emptyList<Action>(), done.actions)
+        assertEquals(listOf(Action.FetchAfter(5)), done.actions)
         assertFalse(sync.behind)
     }
 
     @Test fun movesThatKeepComingStopAtThePageCapWithTheLatestPage() {
         val sync = opened()
         sync.settle(Gap.Fill)
-        var actions = sync.fillTimer()
+        var actions = sync.continueFill()
         var seq = 3
         repeat(7) {
             sync.settle(Gap.Fill)

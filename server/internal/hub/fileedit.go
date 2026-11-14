@@ -21,13 +21,14 @@ import (
 const maxFileEditPaths = 1000
 
 type fileEditRequest struct {
-	Path     string   `json:"path,omitempty"`
-	Paths    []string `json:"paths,omitempty"`
-	Cwd      string   `json:"cwd,omitempty"`
-	Name     string   `json:"name,omitempty"`
-	Dir      string   `json:"dir,omitempty"`
-	Conflict string   `json:"conflict,omitempty"`
-	TrashIDs []string `json:"trash_ids,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	Paths       []string `json:"paths,omitempty"`
+	Cwd         string   `json:"cwd,omitempty"`
+	Name        string   `json:"name,omitempty"`
+	Dir         string   `json:"dir,omitempty"`
+	Conflict    string   `json:"conflict,omitempty"`
+	OperationID string   `json:"operation_id,omitempty"`
+	TrashIDs    []string `json:"trash_ids,omitempty"`
 	// write (#5828, #5829): the text; create a new file, or replace the one still at revision (or hashing to sha256);
 	// force: Overwrite Anyway.
 	Text     *string `json:"text,omitempty"`

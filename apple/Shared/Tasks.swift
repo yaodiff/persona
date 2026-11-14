@@ -478,9 +478,11 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var manager: String?
     /// The round of a decision that waits on the owner (`decision_review`): what Later / Don't handle on its row refer to.
     var decisionReview: DecisionReview?
+    /// The knowledge-base project it belongs to (#2581, docs/assistant/todos.md "Project"): its slug; nil for none.
+    var project: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery, manager, orphaned
+        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery, manager, orphaned, project
         case decisionReview = "decision_review"
         case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", reopenedAt = "reopened_at", seenAt = "seen_at", planID = "plan_id", startError = "start_error",
              doneBy = "done_by", doneReason = "done_reason", prURL = "pr_url", dueAt = "due_at", dueDate = "due_date",
@@ -493,7 +495,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
          supervision: TaskSupervision? = nil, dueAt: Date? = nil, dueDate: String? = nil, remindAt: Date? = nil,
          remindedAt: Date? = nil, priority: String? = nil, ask: TodoAsk? = nil, reopenedAt: Date? = nil,
          delivery: TodoDelivery? = nil, manager: String? = nil, seenAt: Date? = nil, decisionReview: DecisionReview? = nil,
-         orphaned: TodoOrphaned? = nil) {
+         orphaned: TodoOrphaned? = nil, project: String? = nil) {
         self.id = id
         self.title = title
         self.notes = notes
@@ -523,6 +525,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         self.seenAt = seenAt
         self.decisionReview = decisionReview
         self.orphaned = orphaned
+        self.project = project
     }
 
     init(from decoder: Decoder) throws {
@@ -563,6 +566,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         decisionReview = (try? c.decodeIfPresent(DecisionReview.self, forKey: .decisionReview)) ?? nil
         // New (#3618): absent from older hubs; one that does not decode is as if there were none.
         orphaned = (try? c.decodeIfPresent(TodoOrphaned.self, forKey: .orphaned)) ?? nil
+        // New (#2581): absent with none and from older hubs; "" is none too.
+        project = ((try? c.decodeIfPresent(String.self, forKey: .project)) ?? nil).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// An ended task cannot keep an old decision card alive.

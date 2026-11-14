@@ -6,7 +6,7 @@ if [ "$mode" = version ]; then
   if [ "${GITHUB_REF_TYPE:-}" = tag ]; then
     version="${GITHUB_REF_NAME#v}"
   else
-    version="$(git describe --always)-$(date -u +%Y%m%d%H%M)"
+    version="$(git describe --tags --match 'v[0-9]*' --always)-$(date -u +%Y%m%d%H%M)"
   fi
   image="ghcr.io/$(printf '%s' "${GITHUB_REPOSITORY:?}" | tr '[:upper:]' '[:lower:]')"
   printf 'version=%s\nimage=%s\n' "$version" "$image" >> "${GITHUB_OUTPUT:?}"

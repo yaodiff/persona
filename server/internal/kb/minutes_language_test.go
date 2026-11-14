@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -358,7 +359,8 @@ func TestDayRecapRepairedKeepsItsLanguage(t *testing.T) {
 
 // Minutes keep their language when a photo's delete renders them again, whatever the recording says now: English ones
 // stay English, after a PUT that says Japanese too, and ones an older hub wrote of an English recording (minutes.json
-// saying no language) stay Chinese.
+// saying no language) stay Chinese. The summary card's Markdown too (#6563): its headings and AI note in that language,
+// the topic and the conclusion the photo held gone with it.
 func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 	reply := func(_ int, _, user string) (string, error) {
 		if strings.Contains(user, "[P1] ") {
@@ -367,9 +369,21 @@ func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 		}
 		return `{"title":"Review","points":[{"text":"The first line","line":1}]}`, nil
 	}
+	card := func(_ int, _, user string) (string, error) {
+		if strings.Contains(user, "[P1] ") {
+			return `{"title":"Review","headline":"The review in one line",
+			  "conclusions":[{"text":"From the **whiteboard**","photo":1},{"text":"The first line **holds**","line":1}],
+			  "topics":[{"title":"Board","icon":"design","points":[{"text":"The whiteboard","photo":1}]},
+			            {"title":"Opening","icon":"general","points":[{"text":"The first line","line":1}]}],
+			  "actions":[{"who":"Bo","what":"Send the notes","line":2}]}`, nil
+		}
+		return `{"title":"Review","points":[{"text":"The first line","line":1}]}`, nil
+	}
 	english := []string{"## Key points\n", "## Action items\n", "- [14:00:10] Bo: Send the notes"}
 	for _, tc := range []struct {
 		name, tag string
+		card      bool   // answered in the summary card's shape
+		code      string // the minutes' language ("en" when "")
 		old       bool   // minutes.json without its language, as written before it was kept
 		later     string // the language a PUT after the minutes says, before the delete
 		want      []string
@@ -380,9 +394,21 @@ func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 			never: []string{"要点", "アクション項目", "日時", "讨论要点", "待办"}},
 		{name: "old", tag: "en-US", old: true, want: []string{"- 时间：", "## 讨论要点\n", "## 待办\n", "- [14:00:10] Bo：Send the notes"},
 			never: []string{"Key points", "Action items", "When:"}},
+		{name: "english card", tag: "en-US", card: true, later: "ja-JP",
+			want: []string{"\nThe review in one line\n", "## Core conclusions\n\n- [14:00:00] The first line **holds**\n", "## Opening\n\n- [14:00:00] The first line\n",
+				"## Action items\n", "- [14:00:10] Bo: Send the notes\n\n*AI-generated from the recording. Check anything important.*"},
+			never: []string{"whiteboard", "Board", "Key points", "photo", "主な結論"}},
+		{name: "japanese card", tag: "ja-JP", card: true, code: "ja",
+			want: []string{"## 主な結論\n", "## Opening\n", "## アクション項目\n", "- [14:00:10] Bo：Send the notes",
+				"*録音から AI が作成しました。重要な内容は確認してください。*"},
+			never: []string{"whiteboard", "Core conclusions", "## 要点", "写真"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := goldenEngine(t, &funcModel{f: reply})
+			f := reply
+			if tc.card {
+				f = card
+			}
+			e := goldenEngine(t, &funcModel{f: f})
 			start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 			u := meetingUpload(1, start, "第一句 the first line", "Bo sends the notes", "第三句")
 			u.Language = tc.tag
@@ -391,8 +417,11 @@ func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 			putRecording(t, e, recID, u, start.Add(time.Minute))
 			addPhoto(t, e, recID, photoUpload(1, 0, "whiteboard", "budget"), false)
 			e.WriteMinutes(context.Background(), 2)
-			if lang := storedLanguage(t, e, recID, "minutes.json"); lang != "en" {
+			if lang := storedLanguage(t, e, recID, "minutes.json"); lang != cmp.Or(tc.code, "en") {
 				t.Fatalf("minutes.json language %q", lang)
+			}
+			if m, _ := e.Store.ReadMinutes(recID); (m.Overview != nil) != tc.card || tc.card && len(m.Overview.Groups[0].Topics) != 2 {
+				t.Fatalf("overview %+v", m.Overview)
 			}
 			if tc.later != "" {
 				again := meetingUpload(2, start, "第一句 the first line", "Bo sends the notes", "第三句")
@@ -418,9 +447,10 @@ func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 				t.Fatalf("delete: %v %v", ok, err)
 			}
 			m, err := e.Store.ReadMinutes(recID)
-			if err != nil || len(m.Points) != 1 {
+			if err != nil || len(m.Points) != 1 || tc.card && (m.Overview == nil || len(m.Overview.Conclusions) != 1) {
 				t.Fatalf("after the delete: %+v %v", m, err)
 			}
+			checkOverview(t, m)
 			md := readFile(t, e, recID, "minutes.md")
 			if strings.Contains(md, "The whiteboard") {
 				t.Fatalf("minutes.md not written again:\n%s", md)
@@ -452,7 +482,8 @@ func TestMinutesHeadingsAreTheWebsSections(t *testing.T) {
 			t.Fatal(err)
 		}
 		for hub, page := range map[string]string{"kb-minutes.points": "minutes_points", "kb-minutes.decisions": "minutes_decisions",
-			"kb-minutes.actions": "minutes_actions", "kb-minutes.open": "minutes_open", "kb-day-recap.actions": "recap_actions"} {
+			"kb-minutes.actions": "minutes_actions", "kb-minutes.open": "minutes_open", "kb-day-recap.actions": "recap_actions",
+			"kb-minutes.conclusions": "minutes_conclusions", "kb-minutes.ai_note": "minutes_ai_note"} {
 			if got := i18n.T(l, hub); got != web[page] {
 				t.Errorf("%s: %s is %q, the web's %s %q", l, hub, got, page, web[page])
 			}

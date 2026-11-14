@@ -583,6 +583,7 @@ struct TerminalPanel: View {
     /// Over the page (TerminalCover): a bar on top in every state — its size on the left, the handle, settings and Close
     /// on the right. Dragged down it takes the terminal with it (far or fast enough: closed); a tap on the handle or on
     /// Close closes it. With no terminal (#4328) only the handle and Close: size and settings have nothing to act on.
+    /// A terminal that can be renamed (#6996) has ⋯ in the settings button's place: Rename… and Terminal Settings.
     private func grabBar(_ g: TerminalGrab) -> some View {
         let fg = Color(hex: side.foreground)
         return ZStack {
@@ -597,7 +598,19 @@ struct TerminalPanel: View {
                     if feed.loading { ProgressView().controlSize(.mini).tint(fg) }
                 }
                 Spacer(minLength: 0)
-                if !noTerminal {
+                if !noTerminal, let rename = g.rename {
+                    Menu {
+                        Button(action: rename) { Label("Rename… [Assistant Sidebar ec4cd0]", systemImage: Theme.Icon.edit) }
+                        Button { showSettings = true } label: { Label("Terminal Settings", systemImage: Theme.Icon.options) }
+                    } label: {
+                        ThemedIcon(Theme.Icon.more).font(Theme.Font.captionStrong).foregroundStyle(fg.opacity(0.75))
+                            .scaledFrame(width: Theme.Size.well, height: Theme.Size.iconL)
+                            .contentShape(.rect)
+                    }
+                    .labelOnlyMenu()
+                    .accessibilityLabel("Terminal actions")
+                    .accessibilityIdentifier("terminal-more")
+                } else if !noTerminal {
                     Button { Haptics.tap(); showSettings = true } label: {
                         ThemedIcon(Theme.Icon.options).font(Theme.Font.captionStrong).scaledFrame(width: Theme.Size.well, height: Theme.Size.iconL)
                     }
@@ -1675,6 +1688,8 @@ struct TerminalGrab {
     var dragged: (CGFloat) -> Void
     var released: (_ distance: CGFloat, _ predicted: CGFloat) -> Void
     var close: () -> Void
+    /// Rename… (#6996): the bar's settings button becomes ⋯ with Rename… and Terminal Settings.
+    var rename: (() -> Void)? = nil
 }
 
 /// The cover's drag down, on its bar and on the no-terminal state (#4328): the terminal follows the finger, and goes

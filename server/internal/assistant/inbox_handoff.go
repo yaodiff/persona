@@ -26,8 +26,11 @@ import (
 const handoffsMax = 5
 
 type handoffReq struct {
-	Text     string `json:"text"`
-	ClientID string `json:"client_id"`
+	Text     string      `json:"text"`
+	ClientID string      `json:"client_id"`
+	Session  *SessionRef `json:"session"`
+	Kind     string      `json:"kind"`
+	Title    string      `json:"title"`
 }
 
 func (s *Service) inboxHandoffRoutes() {
@@ -40,13 +43,34 @@ func (s *Service) inboxHandoffRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		if strings.TrimSpace(in.Text) == "" {
+		if in.Session != nil {
+			switch {
+			case strings.TrimSpace(in.Session.MachineID) == "" || strings.TrimSpace(in.Session.SessionID) == "":
+				apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.session_ref_required"))
+				return
+			case in.Kind != "agent" && in.Kind != "conversation":
+				apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.handoff_kind"))
+				return
+			case strings.TrimSpace(in.Text) != "":
+				apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.handoff_record_text"))
+				return
+			}
+		} else if strings.TrimSpace(in.Text) == "" {
 			apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.text_required"))
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 110*time.Second) // a main conversation may have to start
 		defer cancel()
-		it, to, err := s.handOff(ctx, r.PathValue("id"), in)
+		var (
+			it  InboxItem
+			to  SessionRef
+			err error
+		)
+		if in.Session != nil {
+			it, to, err = s.recordHandoff(ctx, r.PathValue("id"), in)
+		} else {
+			it, to, err = s.handOff(ctx, r.PathValue("id"), in)
+		}
 		switch {
 		case errors.Is(err, errNoInboxItem):
 			apierr.Write(w, http.StatusNotFound, err)
@@ -96,6 +120,67 @@ func (s *Service) handOff(ctx context.Context, id string, in handoffReq) (InboxI
 	out := it.listed()
 	b.mu.Unlock()
 	// No rollback: the message is in the conversation. The record stays in memory and the item's next save writes it.
+	if failed := s.saveInbox(ctx, []*InboxItem{it}); failed[id] {
+		s.logf("inbox: %s was handed to %s but could not be saved; the live state stays until the next save", id, short(to.SessionID))
+	}
+	return out, to, nil
+}
+
+// recordHandoff records a hand-off the client already sent to an Agent or conversation. It sends nothing and leaves
+// the item's processing conversation and state alone. A replay answers with the originally recorded target.
+func (s *Service) recordHandoff(ctx context.Context, id string, in handoffReq) (InboxItem, SessionRef, error) {
+	b := &s.inbox
+	to := SessionRef{MachineID: strings.TrimSpace(in.Session.MachineID), SessionID: strings.TrimSpace(in.Session.SessionID)}
+	op := strings.ToLower(strings.TrimSpace(in.ClientID))
+	if !validClientID(op) {
+		op = namedClientID("inbox handoff record\n" + id + "\n" + to.MachineID + "\n" + to.SessionID + "\n" + in.Kind)
+	}
+	v, _ := b.handingOff.LoadOrStore(id, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	b.mu.Lock()
+	it := b.items[id]
+	if it == nil {
+		b.handingOff.CompareAndDelete(id, mu)
+		b.mu.Unlock()
+		return InboxItem{}, SessionRef{}, errNoInboxItem
+	}
+	if h := handoffOp(it, op); h != nil {
+		out, original := it.listed(), SessionRef{MachineID: h.MachineID, SessionID: h.SessionID}
+		b.mu.Unlock()
+		return out, original, nil
+	}
+
+	now := time.Now().UTC()
+	it.Handoffs = append(it.Handoffs, InboxHandoff{MachineID: to.MachineID, SessionID: to.SessionID, At: now, Op: op})
+	if n := len(it.Handoffs); n > handoffsMax {
+		it.Handoffs = slices.Clone(it.Handoffs[n-handoffsMax:])
+	}
+	chainKind := ChainHandling
+	namedKey, genericKey := "assistant-inbox_chain.handed_conversation", "assistant-inbox_chain.handed_conversation_generic"
+	if in.Kind == "agent" {
+		chainKind = ChainAgent
+		namedKey, genericKey = "assistant-inbox_chain.handed_agent", "assistant-inbox_chain.handed_agent_generic"
+	}
+	text := i18n.T(b.userLang(), genericKey)
+	if title := clip(oneLine(in.Title), 40); title != "" {
+		text = i18n.T(b.userLang(), namedKey, i18n.Args{"title": title})
+	}
+	linked := false
+	for _, e := range it.Chain {
+		if e.Kind == chainKind && e.Link != nil && e.Link.SessionID == to.SessionID {
+			linked = true
+			break
+		}
+	}
+	if !linked {
+		b.chainAdd(it, InboxChainEntry{Kind: chainKind, At: now, Text: text, Via: ViaUser,
+			Link: &InboxChainLink{Type: LinkSession, MachineID: to.MachineID, SessionID: to.SessionID}})
+	}
+	out := it.listed()
+	b.mu.Unlock()
+	// The client already sent the hand-off. The record stays in memory and the item's next save writes it.
 	if failed := s.saveInbox(ctx, []*InboxItem{it}); failed[id] {
 		s.logf("inbox: %s was handed to %s but could not be saved; the live state stays until the next save", id, short(to.SessionID))
 	}

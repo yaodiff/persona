@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // renameWorktree targets a listed host container, including one with no Agents.
@@ -19,6 +20,12 @@ func (n *Node) renameWorktree(ctx context.Context, kind, workspace, name string)
 	name = strings.Join(strings.Fields(name), " ")
 	if workspace == "" || name == "" || utf8.RuneCountInString(name) > maxLabel {
 		return fmt.Errorf("worktree and a name of 1 to %d characters are required", maxLabel)
+	}
+	if rt, runtime, err := n.worktreeRuntime(ctx, kind); runtime { // an engine runtime's workspace: its title
+		if err != nil {
+			return err
+		}
+		return n.runtimeRenameWorkspace(ctx, rt, workspace, name)
 	}
 	h, err := n.hostOfKind(kind)
 	if err != nil {
@@ -50,11 +57,15 @@ func (n *Node) renameWorktree(ctx context.Context, kind, workspace, name string)
 
 // renameSpace renames a workspace (what the phone calls a space) in the host it is in (spaceOrganizer) and returns the
 // name it shows now: a named herdr session's with the session in front (sessionLabel, #2196), which the hub keys pins
-// and to-do links by.
+// and to-do links by. An engine runtime's space (Paseo's project, by its id or one of its workspaces') is renamed in the
+// runtime (runtimeworkspaces_manage.go).
 func (n *Node) renameSpace(ctx context.Context, workspaceID, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if workspaceID == "" || name == "" {
 		return "", fmt.Errorf("workspace and name are required")
+	}
+	if h, space := n.runtimeSpace(workspaceID); h != nil {
+		return n.runtimeRenameSpace(ctx, h, space, name)
 	}
 	org, err := n.spaceOrganizer(ctx, workspaceID)
 	if err != nil {
@@ -71,9 +82,10 @@ func (n *Node) renameSpace(ctx context.Context, workspaceID, name string) (strin
 	return name, nil
 }
 
-// spaceOrganizer is the host a space is in. Space ids carry no host kind: with one host that renames, its own (the
-// engine's, as always); with several (a set, herdr and Tern say), the first that lists the space, the default host
-// first, else the default host's.
+// spaceOrganizer is the host a space is in. Space ids carry no host kind: with one host that renames and is the default
+// engine, its own (as always); with several (a set, herdr and Tern say), or when the default engine is no terminal host
+// (Paseo beside herdr), the first that lists the space, the default host first, else the default host's. With the
+// default engine no terminal host, a space no host lists is no space of this machine's terminals.
 func (n *Node) spaceOrganizer(ctx context.Context, space string) (host.Organizer, error) {
 	var hs []host.Host
 	for _, h := range n.hosts.All() {
@@ -83,8 +95,9 @@ func (n *Node) spaceOrganizer(ctx context.Context, space string) (host.Organizer
 			hs = append(hs, h)
 		}
 	}
-	if len(hs) > 1 {
-		def := n.defaultKind()
+	def := n.defaultKind()
+	terminal := n.hosts.Get(def) != nil // the default engine is one of the terminal hosts
+	if len(hs) > 1 || len(hs) == 1 && !terminal {
 		slices.SortStableFunc(hs, func(a, b host.Host) int {
 			return boolRank(b.Kind() == def) - boolRank(a.Kind() == def)
 		})
@@ -94,6 +107,10 @@ func (n *Node) spaceOrganizer(ctx context.Context, space string) (host.Organizer
 				return h.(host.Organizer), nil
 			}
 		}
+	}
+	if !terminal && def != "" {
+		// in the request's language by its code (the hub words it: rpc-errors.space_gone)
+		return nil, refusal("space_gone", i18n.T(i18n.Default, "rpc-errors.space_gone"), nil)
 	}
 	return hostCap[host.Organizer](n)
 }

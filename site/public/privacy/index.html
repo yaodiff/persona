@@ -4,13 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<link rel="alternate" hreflang="zh-CN" href="https://personaside.com/privacy/">
+<link rel="alternate" hreflang="en" href="https://personaside.com/en/privacy/">
+<link rel="alternate" hreflang="x-default" href="https://personaside.com/privacy/">
 <title>隐私政策 · Persona</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <main>
   <h1>隐私政策</h1>
-  <p class="muted">更新于 2026 年 11 月 12 日</p>
+  <p class="muted">更新于 2026 年 11 月 13 日</p>
 
   <p>Persona 是自托管的个人 AI 助手。App 的完整功能连接你自己部署的服务器（hub），不提供托管账号；未配对时可以先用内置的虚构数据演示，演示不会连接真实 hub、发送邮件或执行电脑操作。开发者运营的只有两样：这个网站，以及给没有自己推送密钥的 hub 用的推送中继（见下面「推送中继」）。除此之外，你的数据只在你的设备和你自己的 hub 之间。开发者不收集你自己 hub 上的邮件、照片、健康等内容，不出售用户数据，也不将其用于广告或追踪。可选推送中继会处理推送标识并记录技术诊断日志（见下文）；App 不含广告或统计 SDK。</p>
 
@@ -30,6 +33,13 @@
   <h2>其他数据</h2>
   <p>你授权后，Persona 可以读写 iPhone 上的通讯录、日历、提醒事项、照片、健康、位置等数据，仅在你主动使用相关功能时访问，数据只在你的设备和你自己部署的 hub 之间传输；只有在你让 AI 助手（Claude）使用这些数据时，相关内容才会作为对话内容发送给模型服务。</p>
 
+  <h2>会议录音</h2>
+  <ul>
+    <li>默认在 iPhone 上转写（隐私模式）：音频留在 iPhone 上，只有文字和时间戳存进你自己 hub 上的知识库。只有在会议里按住「说话」时例外：那时说的内容会发送到语音服务。</li>
+    <li>你也可以让 hub 转写一场会议：开始录音时选「在 hub 上」，或在设置里把它设为默认。这时这场会议的音频（包括「说话」）经你的 hub 传给它配置的语音服务（语音扩展里设置的服务，或你另选的扩展）；会议纪要写好后 hub 就删除这段音频，最长也不超过录音的保留期。语音服务按它自己的条款处理收到的音频。</li>
+    <li>两种模式下，文字稿和会议纪要都按你的保留设置存在你自己的 hub 上；iPhone 上的音频照旧保留到保留期结束或你删除为止。</li>
+  </ul>
+
   <h2>推送中继</h2>
   <ul>
     <li>iPhone 的通知要经 Apple 的推送服务（APNs）发出。hub 如果没有配置自己的 APNs 推送密钥，会经开发者运营的推送中继发送；配置了自己的密钥、或自己搭一个中继，就不经过它。</li>
@@ -41,7 +51,7 @@
   </ul>
 
   <h2>网站</h2>
-  <p>这个网站和推送中继的入口托管在 Cloudflare，访问日志由 Cloudflare 按它自己的规则处理。网站本身不设置 Cookie，也不加载任何第三方脚本、字体或统计服务。</p>
+  <p>这个网站和推送中继的入口托管在 Cloudflare，访问日志由 Cloudflare 按它自己的规则处理。网站本身只在你主动切换语言时保存一个语言偏好 Cookie，用于下次打开时显示同一语言；它不用于追踪。网站不加载任何第三方脚本、字体或统计服务。</p>
 
   <h2>TestFlight</h2>
   <p>通过 TestFlight 测试时，Apple 会按它自己的规则把安装情况、崩溃报告和你主动提交的反馈提供给开发者，开发者只用来改进 Persona。</p>
@@ -49,7 +59,7 @@
   <h2>联系</h2>
   <p><a href="/#contact">联系 Persona</a>，或在官网提交问题反馈。</p>
 
-  <nav><a href="/">Persona</a><a href="/terms/">服务条款</a></nav>
+  <nav><a href="/">Persona</a><a href="/terms/">服务条款</a><a class="lang" href="/en/privacy/?lang=en" hreflang="en" lang="en" aria-label="View in English">EN</a></nav>
 </main>
 </body>
 </html>

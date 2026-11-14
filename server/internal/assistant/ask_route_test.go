@@ -170,11 +170,12 @@ func (e *routeEnv) settle() {
 	settleService(e.t, e.s)
 }
 
-// noDirectionsTimers keeps s's directions comparison from running at all: it is a timer of its own, and one left armed
+// noDirectionsTimers keeps s's directions comparisons from running at all: they are timers of their own, and one left armed
 // past its test logs through that test's T (a database already closed) after it ended. The route tests do not read
-// what it compares.
+// what they compare.
 func noDirectionsTimers(s *Service) {
 	s.directions.after = func(time.Duration, func()) {}
+	s.dtree.after = func(time.Duration, func()) {}
 }
 
 // supervisorState says what the apps see the two assistant conversations in: the main conversation and the leader in

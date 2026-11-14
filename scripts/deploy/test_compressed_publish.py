@@ -206,19 +206,19 @@ class InstallNodeServiceTests(unittest.TestCase):
         result = self.run_install("--hub", "--listen")
         self.assertEqual(result.returncode, 2)
 
-    def test_mac_sets_up_the_node_and_points_at_the_app(self):
+    def test_mac_installs_the_independent_connector_service(self):
         self.env.update({"TEST_OS": "Darwin", "TEST_ARCH": "arm64"})
         self.publish("darwin-arm64")
         result = self.run_install("--node", "--listen")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.calls_made(), ["node install", "pair --listen"])
+        self.assertEqual(self.calls_made(), ["install --listen"])
         self.calls.unlink()
         result = self.run_install("--listen", ":18700", "--addr", "mac.example.com")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.calls_made(), ["node install", "pair --listen :18700 --addr mac.example.com"])
-        self.assertIn("Persona Link", result.stdout)
+        self.assertEqual(self.calls_made(), ["install --listen :18700 --addr mac.example.com"])
+        self.assertIn("independent Persona Link service is installed", result.stdout)
         self.assert_canonical_connector_command()
-        self.assertEqual(self.identities.read_text().splitlines(), ["persona-link|"] * 4)
+        self.assertEqual(self.identities.read_text().splitlines(), ["persona-link|"] * 2)
 
     def test_without_persona_link_published_the_node_service_fails_loudly(self):
         self.publish(link=False)

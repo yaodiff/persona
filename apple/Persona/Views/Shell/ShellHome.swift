@@ -199,6 +199,7 @@ private struct ShellErrorNote: View {
 /// the rest are. A tap opens it where it lives.
 struct ShellNeedsYou: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.pushInboxChat) private var pushChat
     /// How tall it may be (`NeedsRoom`).
     var maxHeight: CGFloat = .infinity
     var openInbox: (InboxItem) -> Void
@@ -281,7 +282,7 @@ struct ShellNeedsYou: View {
     @ViewBuilder private func beautifulRow(_ line: Line) -> some View {
         switch line {
         case .agent(let ix):
-            Button { model.open(ix.sessionKey) } label: {
+            Button { InboxWaitingOpen.session(ix.sessionKey, currentHub: model.hub?.group, push: pushChat, open: { model.open(ix.sessionKey) }) } label: {
                 BUIListRow(agentName(ix), detail: oneLine(ix.summary ?? ix.questions?.first?.question ?? ix.title),
                            accessory: .disclosure, detailLines: 1) {
                     IconTile(ix.symbol, tint: Theme.needsYou)
@@ -339,7 +340,7 @@ struct ShellNeedsYou: View {
     @ViewBuilder private func row(_ line: Line) -> some View {
         switch line {
         case .agent(let ix):
-            Button { model.open(ix.sessionKey) } label: {
+            Button { InboxWaitingOpen.session(ix.sessionKey, currentHub: model.hub?.group, push: pushChat, open: { model.open(ix.sessionKey) }) } label: {
                 HStack(spacing: Theme.Space.m) {
                     ThemedIcon(ix.symbol)
                         .font(Theme.Font.heading)
@@ -421,23 +422,83 @@ struct ShellNeedsYou: View {
 struct ShellDestinations: ViewModifier {
     @Binding var path: NavigationPath
     var enabled: Bool
+    /// Injected here as well as on Assistant's stack so destination pages in a wide split receive it.
+    var inboxChat: ((InboxChatRoute) -> Void)? = nil
+    /// The pages the Agents list registers too (a chat, a to-do, a machine, its terminals): off in the Sidebar layout
+    /// (#6332), whose one path has the Agents' (`AgentsDestinations`), the split's first pages without a back.
+    var agentRoutes = true
     @StateObject private var accounts = InboxAccountState()
+
+    /// The explicit closure from Assistant, or this destination's own path in the unified Sidebar layout.
+    private var routeChat: ((InboxChatRoute) -> Void)? {
+        if let inboxChat { return inboxChat }
+        guard enabled else { return nil }
+        return { path.append($0) }
+    }
 
     func body(content: Content) -> some View {
         if enabled {
             content
                 // ☰ beside Back on a place's pages: the sidebar opens at any depth, so a place is changed without
-                // popping it (docs/design/sidebar-navigation.md).
-                .navigationDestination(for: ShellRoute.self) { route in place(route).modifier(ShellPlaceSidebarButton()) }
-                .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id).modifier(ShellPlaceSidebarButton()) }
-                .modifier(InboxDestinations(accounts: accounts.accounts))
-                .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).modifier(ShellPlaceSidebarButton()) }
-                .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine).modifier(ShellPlaceSidebarButton()) }
-                .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
-                .navigationDestination(for: InboxChatRoute.self) { r in ChatView(key: r.key, itemManager: r.manager).id(r.key) }
+                // popping it (docs/design/sidebar-navigation.md). In the Sidebar layout a place is the split's first
+                // page, with no back to the conversation under it (#6332).
+                .navigationDestination(for: ShellRoute.self) { route in
+                    routed(place(route).modifier(ShellPlaceSidebarButton()).modifier(FirstPage(on: !agentRoutes)))
+                }
+                .modifier(InboxDestinations(accounts: accounts.accounts, inboxChat: routeChat, openFeishu: { path.append($0) }))
+                .modifier(AgentRoutes(on: agentRoutes, chat: routeChat, openFeishu: { path.append($0) }))
+                .navigationDestination(for: InboxChatRoute.self) { r in routed(ChatView(key: r.key, itemManager: r.manager).id(r.key)) }
                 .environment(\.feishuOpen) { path.append($0) }
+                .environment(\.pushInboxChat, routeChat)
+                #if DEBUG
+                .onAppear { ShellTrace.shared.note("inbox chat closure available=\(routeChat != nil)") }
+                #endif
         } else {
             content
+        }
+    }
+
+    /// Injects on each returned destination, not only the stack's root content (the iPad split drops the latter).
+    private func routed<Content: View>(_ content: Content) -> some View {
+        content.modifier(InboxDestinationEnvironment(chat: routeChat, openFeishu: { path.append($0) }))
+    }
+
+    /// What the Agents list registers as well: here only where it does not (the shell, the iPad's Persona tab).
+    private struct AgentRoutes: ViewModifier {
+        var on: Bool
+        var chat: ((InboxChatRoute) -> Void)?
+        var openFeishu: ((FeishuRoute) -> Void)?
+
+        func body(content: Content) -> some View {
+            if on {
+                content
+                    .navigationDestination(for: TodoDetailRoute.self) { r in
+                        TodoDetailView(todoID: r.id).modifier(ShellPlaceSidebarButton())
+                            .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
+                    }
+                    .navigationDestination(for: MachineDetailRoute.self) { r in
+                        MachineDetailView(ref: r.ref).modifier(ShellPlaceSidebarButton())
+                            .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
+                    }
+                    .navigationDestination(for: TerminalsRoute.self) { r in
+                        TerminalsView(only: r.machine).modifier(ShellPlaceSidebarButton())
+                            .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
+                    }
+                    .navigationDestination(for: SessionKey.self) { key in
+                        ChatView(key: key).id(key).modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
+                    }
+            } else {
+                content
+            }
+        }
+    }
+
+    /// The Sidebar layout's places are the split's first pages: no back to the conversation under them (#6332).
+    private struct FirstPage: ViewModifier {
+        var on: Bool
+
+        func body(content: Content) -> some View {
+            if on { content.splitDetailPage() } else { content }
         }
     }
 

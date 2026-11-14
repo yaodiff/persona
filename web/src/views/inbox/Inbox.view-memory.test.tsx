@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // An Inbox history entry keeps the view that was on it when another route took over: list search, section folds, list
-// scroll, and the item's handling-chain expansion. A new visit (including a reload) starts clean.
+// scroll, the item's handling-chain expansion, and an embedded original's expansion. A new visit (including a reload)
+// starts clean.
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,7 +25,7 @@ vi.mock("../../lib/store", async (orig) => {
 });
 vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined }));
 vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined }));
-vi.mock("./LarkThread", () => ({ LarkThread: () => null, chatOfItem: () => ({}) }));
+vi.mock("./LarkThread", () => ({ LarkThread: () => <div data-chat-body />, chatOfItem: () => ({}) }));
 
 import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { resetInboxViewMemoryForTests } from "../../lib/inbox-view-memory";
@@ -39,7 +40,9 @@ const item = (id: string, tier: InboxItem["tier"]): InboxItem => ({
   updated_at: "2026-11-09T04:00:00Z", tier, version: `v-${id}`, lark: { feed_id: id, is_group: true },
   chain: [
     { id: `${id}-received`, kind: "received", text: "received" },
+    { id: `${id}-triaged`, kind: "triaged", text: "triaged" },
     { id: `${id}-handling`, kind: "handling", text: "handling" },
+    { id: `${id}-waiting`, kind: "waiting", text: "waiting" },
   ],
 });
 
@@ -58,6 +61,8 @@ const search = () => host.querySelector<HTMLInputElement>('input[aria-label]')!;
 const fyiToggle = () => host.querySelector<HTMLButtonElement>('[data-section="fyi"] > div > button[aria-expanded]')!;
 const chainToggle = () => host.querySelector<HTMLButtonElement>("[data-chain-toggle]")!;
 const chainRows = () => host.querySelectorAll("[data-chain-entry]");
+const originalToggle = () => host.querySelector<HTMLButtonElement>('[data-testid="inbox-original-row-toggle"]')!;
+const originalOpen = () => host.querySelector('[data-event-body="embedded"]') !== null;
 const listScroll = () => host.querySelector<HTMLElement>("[data-inbox-list-scroll]")!;
 const setSearch = async (value: string) => {
   const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -117,7 +122,7 @@ describe("Inbox history-entry view memory", () => {
     await act(async () => fyiToggle().click());
     expect(fyiToggle().getAttribute("aria-expanded")).toBe("false");
     await act(async () => chainToggle().click());
-    expect(chainRows()).toHaveLength(2);
+    expect(chainRows()).toHaveLength(4);
     await act(async () => {
       listScroll().scrollTop = 180;
       listScroll().dispatchEvent(new Event("scroll"));
@@ -128,8 +133,28 @@ describe("Inbox history-entry view memory", () => {
 
     expect(search().value).toBe("chat");
     expect(fyiToggle().getAttribute("aria-expanded")).toBe("false");
-    expect(chainRows()).toHaveLength(2);
+    expect(chainRows()).toHaveLength(4);
     expect(listScroll().scrollTop).toBe(180);
+  });
+
+  it("restores an expanded original after leaving and Back, but starts collapsed on fresh navigation", async () => {
+    await openItem("a1");
+    expect(originalOpen()).toBe(false);
+    expect(host.querySelector("[data-chat-body]")).toBeNull();
+    await act(async () => originalToggle().click());
+    expect(originalOpen()).toBe(true);
+    expect(host.querySelector("[data-chat-body]")).not.toBeNull();
+
+    await leaveForChat();
+    await backToItem("a1");
+    expect(originalOpen()).toBe(true);
+    expect(host.querySelector("[data-chat-body]")).not.toBeNull();
+
+    await leaveForChat();
+    await act(async () => history.pushState(null, "", "/inbox/a1"));
+    await show("a1");
+    expect(originalOpen()).toBe(false);
+    expect(host.querySelector("[data-chat-body]")).toBeNull();
   });
 
   it("starts clean on a fresh navigation and when the page memory is gone after a reload", async () => {
@@ -143,7 +168,7 @@ describe("Inbox history-entry view memory", () => {
     await show("a1");
     expect(search().value).toBe("");
     expect(fyiToggle().getAttribute("aria-expanded")).toBe("true");
-    expect(chainRows()).toHaveLength(1);
+    expect(chainRows()).toHaveLength(3);
     expect(listScroll().scrollTop).toBe(0);
 
     await act(async () => root.unmount());
@@ -152,7 +177,7 @@ describe("Inbox history-entry view memory", () => {
     await show("a1");
     expect(search().value).toBe("");
     expect(fyiToggle().getAttribute("aria-expanded")).toBe("true");
-    expect(chainRows()).toHaveLength(1);
+    expect(chainRows()).toHaveLength(3);
   });
 
   it("restores an already-visited item immediately on an in-Inbox Back", async () => {
@@ -161,12 +186,12 @@ describe("Inbox history-entry view memory", () => {
     await act(async () => chainToggle().click());
     await openItem("a2");
     await setSearch("chat a2");
-    expect(chainRows()).toHaveLength(1);
+    expect(chainRows()).toHaveLength(3);
 
     await act(async () => popped(() => history.back()));
     await show("a1");
     expect(search().value).toBe("chat");
-    expect(chainRows()).toHaveLength(2);
+    expect(chainRows()).toHaveLength(4);
   });
 
   it("does not let a post-reload entry reuse an old entry's identifier and snapshot", async () => {
@@ -196,7 +221,7 @@ describe("Inbox history-entry view memory", () => {
     const firstEntry = (history.state as Record<string, unknown>).personaInboxView;
 
     await openItem("a2");
-    expect(chainRows()).toHaveLength(1);
+    expect(chainRows()).toHaveLength(3);
     expect((history.state as Record<string, unknown>).personaInboxSteps).toBe(2);
     expect((history.state as Record<string, unknown>).personaInboxView).not.toBe(firstEntry);
 
@@ -204,10 +229,10 @@ describe("Inbox history-entry view memory", () => {
     await backToItem("a2");
     expect(search().value).toBe("chat");
     expect(fyiToggle().getAttribute("aria-expanded")).toBe("false");
-    expect(chainRows()).toHaveLength(1);
+    expect(chainRows()).toHaveLength(3);
   });
 
-  it("does not replace history for search, folds, scrolling, or chain expansion", async () => {
+  it("does not replace history for search, folds, scrolling, chain expansion, or original expansion", async () => {
     await openItem("a1");
     const replace = vi.spyOn(history, "replaceState");
     await setSearch("c");
@@ -215,6 +240,8 @@ describe("Inbox history-entry view memory", () => {
     await setSearch("chat");
     await act(async () => fyiToggle().click());
     await act(async () => chainToggle().click());
+    await act(async () => originalToggle().click());
+    expect(originalOpen()).toBe(true);
     await act(async () => {
       listScroll().scrollTop = 90;
       listScroll().dispatchEvent(new Event("scroll"));

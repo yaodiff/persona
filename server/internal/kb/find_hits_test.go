@@ -36,7 +36,7 @@ func findReference(e *Engine, query string, limit int) []Result {
 			continue
 		}
 		fh := fileHits{key: kind + "/" + id}
-		if raw, err := os.ReadFile(p); err == nil && hasAll(fold(string(raw)), ws) {
+		if raw, err := scanRead(p); err == nil && hasAll(fold(string(raw)), ws) {
 			for n, l := range strings.Split(string(raw), "\n") {
 				if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "# ") && match(t) {
 					fh.found = append(fh.found, Found{Path: filepath.ToSlash(rel), Line: clip(t, 300), N: n + 1})

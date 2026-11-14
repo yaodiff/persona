@@ -105,6 +105,26 @@ class BackgroundRoundsTest {
         assertTrue(folds(project(promoted).foreground).isEmpty())
     }
 
+    @Test fun aSupervisionRoundMarkedLevelUserStaysShownWhileTriageFolds() {
+        // web turns.ts supervisionVisible: injected.state == "supervise" && injected.level == "user" keeps the round open,
+        // the same rule on iOS. A failed notify alone would fold it; the user-level mark wins.
+        val source = MessageSource("conversation", "c2", "Release plan")
+        val quietTools = listOf(
+            use(2, "mcp__persona__notify_user"), result(3, 2, "failed", error = true), reply(4, "Done"))
+        val userLevel = listOf(
+            user(1, "Check", source, injected = Injected("system", "supervise", line = "督办：2 个派出去的任务要处理", level = "user")),
+        ) + quietTools
+        assertTrue("level=user unfolds the round like the web's", folds(project(userLevel).foreground).isEmpty())
+        val triage = listOf(
+            user(1, "Check", source, injected = Injected("system", "supervise", line = "督办：2 个派出去的任务要处理", level = "triage")),
+        ) + quietTools
+        assertEquals(1, folds(project(triage).foreground).size)
+        val noLevel = listOf(
+            user(1, "Check", source, injected = Injected("system", "supervise", line = "督办：2 个派出去的任务要处理")),
+        ) + quietTools
+        assertEquals("An older hub without level keeps folding", 1, folds(project(noLevel).foreground).size)
+    }
+
     @Test fun aLiveRoundSaysItRunsInTheBackground() {
         val items = listOf(user(1, "My question"), reply(2, "My answer"), user(3, "Nightly", MessageSource("patrol", title = "Nightly")))
         val round = folds(project(items, live = true).foreground).single()

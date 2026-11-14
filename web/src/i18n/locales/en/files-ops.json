@@ -71,5 +71,12 @@
   "copied_other": "Copied {count} items to “{dir}”",
   "duplicated_one": "Duplicated",
   "duplicated_other": "Duplicated {count} items",
-  "compressed": "Compressed into “{name}”"
+  "compressed": "Compressed into “{name}”",
+  "file_operations": "File operations",
+  "operations_running_one": "Working on {count} file operation",
+  "operations_running_other": "Working on {count} file operations",
+  "operation_preparing": "Preparing on the computer…",
+  "operation_done": "Done",
+  "copy_cancel": "Cancel copying “{name}”",
+  "compress_cancel": "Cancel compressing “{name}”"
 }

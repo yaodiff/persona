@@ -1,11 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  agentRoot, agentRow, archivedUnderOwnId, codexThreadOf, backgroundOf, defaultProvider, interactionOf, launchersOf, linkedWorktree,
+  AUTO_ACCEPT_ROOTS, agentRoot, agentRow, archivedUnderOwnId, autoAcceptOf, codexThreadOf, backgroundOf, defaultProvider, interactionOf,
+  launchersOf, linkedWorktree,
   parentAgentId, paseoMode, promptKey, providerRoots, responseOf, rewindOf, rowStatus, projectSpaces, sessionIdOf, slotNameOf, spaceIdOf,
-  strayRecord, timelineItems, toolCall, transcriptOf,
+  strayRecord, timelineItems, toolCall, transcriptOf, workspaceRow, paseoCheckouts,
 } from '../lib/map.js'
-import { agentSnapshot, entry } from './fake-paseo.js'
+import { agentSnapshot, autoAcceptFeature, entry, workspaceDescriptor } from './fake-paseo.js'
 
 const CLAUDE_SID = 'aaaaaaaa-0000-4000-8000-000000000001'
 
@@ -86,7 +87,7 @@ test('a row: its space, the agent the apps know, model, modes and transcript', (
   const row = agentRow(a, { roots, project: { projectKey: 'prj', projectName: 'proj', workspaceName: '登录修复' } })
   assert.deepEqual(row, {
     session_id: CLAUDE_SID, title: '修登录', cwd: '/w/proj', status: 'idle', updated_at: '2026-11-04T10:00:00.000Z',
-    rev: Date.parse('2026-11-04T10:00:00.000Z'), space_id: 'prj', space_name: 'proj', slot_name: '登录修复',
+    rev: Date.parse('2026-11-04T10:00:00.000Z'), space_id: 'prj', space_name: 'proj', slot_name: '登录修复', workspace_id: 'wks_9',
     agent: 'claude', launcher: 'my-claude', started_at: '2026-11-04T09:58:00.000Z',
     model: 'claude-x[1m]', permission_mode: 'acceptEdits', effort: 'max', transcript: CLAUDE_SID,
     capabilities: { rewind: false, rewind_code: false },
@@ -209,6 +210,17 @@ test("a Codex row: Paseo's full-access is Persona's bypassPermissions, the other
   assert.equal(paseoMode('acp', 'bypassPermissions'), undefined)
 })
 
+test("Allow all is Paseo's Auto Accept where that is the approval (Grok); off, or not listed, says no mode", () => {
+  const roots = providerRoots(CONFIG)
+  assert.ok(AUTO_ACCEPT_ROOTS.has(roots.grok), 'Grok extends acp')
+  const row = (fields) => agentRow(agentSnapshot({ provider: 'grok', cwd: '/w/x', ...fields }), { roots })
+  assert.equal(row({ features: [autoAcceptFeature(true)] }).permission_mode, 'bypassPermissions')
+  assert.equal(row({ features: [autoAcceptFeature(false)] }).permission_mode, undefined, "off: Grok's own settings may still approve everything")
+  assert.equal(row({ status: 'closed' }).permission_mode, undefined, 'not loaded: Paseo lists no switch')
+  assert.deepEqual([autoAcceptOf({ features: [autoAcceptFeature(true)] }), autoAcceptOf({ features: [autoAcceptFeature()] }), autoAcceptOf({ features: [] })],
+    [true, false, undefined])
+})
+
 test("spaces: a project's checkout and its worktrees are one space; a workspace names where an agent is, and is no slot", () => {
   // The placement's projectKey is Paseo's project record id.
   const at = (dir, o = {}) => ({ cwd: dir, isGit: true, currentBranch: o.branch ?? null, remoteUrl: null, worktreeRoot: dir,
@@ -289,6 +301,35 @@ test("tool calls as the apps draw them: Claude Code's names and arguments", () =
   assert.deepEqual(toolCall('read', { type: 'read', filePath: '/r', offset: 3 }), { name: 'Read', input: { file_path: '/r', offset: 3 } })
 })
 
+test("Grok's own tools, named in its ACP input (variant), as the apps' tools, and their results as text", () => {
+  const call = (name, input, output, status = 'completed') => ({ type: 'tool_call', callId: 'c1', name, status, error: null, detail: { type: 'unknown', input, output } })
+  const drawn = (item) => {
+    const [use, result] = timelineItems([entry(1, item, 2)], { maxSeq: 2 }).items
+    return [use.tool_name, use.tool_input, result?.text]
+  }
+  assert.deepEqual(drawn(call('other', { variant: 'ListDir', target_directory: '/w/app' },
+    { type: 'ListDir', Content: { content: '- /w/app/\n  - main.go', absolute_root_path: '/w/app' } })), ['LS', { path: '/w/app' }, '- /w/app/\n  - main.go'])
+  assert.equal(drawn(call('List `/w/app`', { variant: 'ListDir', target_directory: '/w/app' }, null))[0], 'LS', 'named after the ACP title: still the variant')
+  assert.deepEqual(drawn(call('other', { variant: 'Monitor', command: 'bash watch.sh', description: 'Watch the deploy', timeout_ms: 600000, persistent: false },
+    { type: 'Monitor', taskId: 't1', timeoutMs: 600000, persistent: false })),
+  ['Monitor', { command: 'bash watch.sh', description: 'Watch the deploy', timeout_ms: 600000, persistent: false }, 'taskId: t1\ntimeoutMs: 600000\npersistent: false'])
+  assert.deepEqual(drawn(call('other', { variant: 'TaskOutput', task_ids: ['t1'], timeout_ms: null },
+    { type: 'TaskOutput', Result: { task_id: 't1', command: '[monitor] Watch the deploy', status: 'failed', exit_code: 1, output: 'FAILED: connection closed' } })),
+  ['TaskOutput', { task_id: 't1' }, 'FAILED: connection closed\n（退出码 1）'])
+  assert.equal(drawn(call('other', { variant: 'TaskOutput', task_ids: ['t2'] }, null, 'canceled'))[2], '（已取消）')
+  assert.deepEqual(drawn(call('other', { variant: 'KillTask', task_id: 't1' },
+    { type: 'KillTask', Result: { task_id: 't1', outcome: 'already_exited', message: 'Task had already completed' } })),
+  ['TaskStop', { task_id: 't1' }, 'Task had already completed'])
+  assert.deepEqual(drawn(call('paseo__list_schedules', { variant: 'UseTool', tool_name: 'paseo__list_schedules', tool_input: { limit: 5 } },
+    { type: 'MCP', tool_name: 'list_schedules', server_name: 'paseo', output: { OkayOutput: 'schedules_count=0' } })),
+  ['mcp__paseo__list_schedules', { limit: 5 }, 'schedules_count=0'])
+  // Any other one under its own name; a result with no text of its own, its fields.
+  assert.deepEqual(drawn(call('other', { variant: 'Sleep', seconds: 5 }, { type: 'Sleep', Result: { slept: 5 } })), ['Sleep', { seconds: 5 }, 'slept: 5'])
+  // Its permission card says the tool and what it is about.
+  const card = interactionOf('s1', { id: 'p1', provider: 'grok', name: 'other', kind: 'tool', title: 'List directory', input: { variant: 'ListDir', target_directory: '/w/app' } })
+  assert.deepEqual([card.tool_name, card.tool_input, card.summary, card.reason], ['LS', { path: '/w/app' }, '/w/app', 'List directory'])
+})
+
 test('a timeline as items: results where they finished, the text being written held back, echoes tagged', () => {
   const entries = [
     entry(1, { type: 'user_message', text: '看看测试', messageId: 'm1' }),
@@ -356,4 +397,28 @@ test("the phone's answers as Paseo's responses", () => {
   assert.deepEqual(responseOf(tool, { allow: true }), { response: { behavior: 'allow' } })
   assert.deepEqual(responseOf(tool, { allow: false, message: '不要' }), { response: { behavior: 'deny', message: '不要' } })
   assert.equal(responseOf(tool, { dismiss: true }), undefined, "handed back: Paseo's app answers it")
+})
+
+test("Paseo's workspaces as the node's rows: kind, branch, the space its agents name, the repository, a worktree Paseo made", () => {
+  const main = workspaceDescriptor({ id: 'wks_00000000000000c1', workspaceDirectory: '/w/app', projectId: 'prj_app', projectDisplayName: 'app' })
+  assert.deepEqual(workspaceRow(main), { workspace_id: main.id, title: 'main', cwd: '/w/app', kind: 'checkout', branch: 'main', space_id: 'prj_app', space_name: 'app', repo_root: '/w/app' },
+    "its placement's project is the space, as its agents' rows have it")
+  const tree = workspaceDescriptor({ id: 'wks_00000000000000c2', workspaceDirectory: '/w/trees/fix', workspaceKind: 'worktree', name: 'Fix', worktreeSlug: 'fix',
+    gitRuntime: { currentBranch: 'fix/login' }, project: { projectKey: 'prj_stray', projectName: 'fix', checkout: { cwd: '/w/trees/fix', isGit: true, worktreeRoot: '/w/trees/fix', mainRepoRoot: '/w/app', isPaseoOwnedWorktree: true } } })
+  assert.deepEqual(workspaceRow(tree, { spaceId: 'prj_app', spaceName: 'app', canon: (p) => `/real${p}` }),
+    { workspace_id: tree.id, title: 'Fix', cwd: '/w/trees/fix', kind: 'worktree', branch: 'fix/login', space_id: 'prj_app', space_name: 'app', repo_root: '/real/w/app', owned: true },
+    "a stray record's worktree in its repository's space; the main checkout physical")
+  const answer = { ...tree, project: undefined, projectId: 'prj_app', projectDisplayName: 'app', projectRootPath: '/w/app' }
+  assert.deepEqual([workspaceRow(answer).space_id, workspaceRow(answer).repo_root, workspaceRow(answer).owned], ['prj_app', '/w/app', true],
+    "Paseo's answer to workspace.create has no placement: its project and root")
+  const folder = workspaceDescriptor({ id: 'wks_00000000000000c3', workspaceDirectory: '/w/notes', workspaceKind: 'directory', name: 'notes' })
+  assert.deepEqual(workspaceRow(folder), { workspace_id: folder.id, title: 'notes', cwd: '/w/notes', kind: 'folder', space_id: 'prj_1', space_name: 'proj' })
+  assert.equal(workspaceRow({ ...main, archivingAt: '2026-11-12T00:00:00Z' }), undefined, 'being archived')
+  assert.equal(workspaceRow({ ...main, id: '../x' }), undefined)
+  // Paseo's utils/worktree.js: sha256 of the main checkout, its first 8 bytes in base 36, 8 characters.
+  assert.match(paseoCheckouts('/home/u/.paseo/worktrees', '/w/app'), /^\/home\/u\/\.paseo\/worktrees\/[0-9a-z]{8}$/)
+  assert.equal(paseoCheckouts('/b', '/w/app'), paseoCheckouts('/b', '/w/app'))
+  assert.notEqual(paseoCheckouts('/b', '/w/app'), paseoCheckouts('/b', '/w/app2'))
+  const row = agentRow(agentSnapshot({ id: 'a1', provider: 'grok', workspaceId: 'wks_00000000000000c2', title: 'x' }), { roots: {} })
+  assert.equal(row.workspace_id, 'wks_00000000000000c2', "an agent's row names its workspace")
 })

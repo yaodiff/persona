@@ -22,6 +22,7 @@ internal class PinnedInboxRepository(val base: InboxRepository, val pins: Manage
     override fun conversation(feedId: String, startPosition: Long?) = base.conversation(feedId, startPosition).flowOn(pins)
 
     override suspend fun refresh() = withContext(pins) { base.refresh() }
+    override suspend fun item(itemId: String) = withContext(pins) { base.item(itemId) }
     override suspend fun readingStore() = withContext(pins) { base.readingStore() }
     override suspend fun savePreferences(value: InboxPreferences) = withContext(pins) { base.savePreferences(value) }
     override suspend fun refreshNow() = withContext(pins) { base.refreshNow() }

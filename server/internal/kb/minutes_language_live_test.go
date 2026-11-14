@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -42,6 +44,97 @@ var liveMeeting = []string{
 	"One open question: should the cap be per entry or per recording?",
 	"それはまだ決まっていません。来週のミーティングで決めましょう。",
 	"OK, that's all for today. Thanks everyone.",
+}
+
+// liveWhiteboard is the words of the whiteboard photographed in liveMeeting just after the cache bug (95 s in).
+const liveWhiteboard = "Cache bug: reproduced once, weak network only. Not reproduced by Wed: release +1 week."
+
+// liveAnswers is a model that keeps every minutes answer it gives and counts the merging calls.
+type liveAnswers struct {
+	Model
+	mu      sync.Mutex
+	answers []minutesAnswer
+	merges  int
+}
+
+func (m *liveAnswers) JSONMax(ctx context.Context, system, user string, maxTokens int, out any) error {
+	err := m.Model.JSONMax(ctx, system, user, maxTokens, out)
+	if a, ok := out.(*minutesAnswer); ok && err == nil {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.answers = append(m.answers, *a)
+		if strings.Contains(system, "已经分段整理过") { // i18n-ignore: the merging prompt's words
+			m.merges++
+		}
+	}
+	return err
+}
+
+// last is the answer the minutes were made from: the only call's, or the merging call's.
+func (m *liveAnswers) last() minutesAnswer {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.answers) == 0 {
+		return minutesAnswer{}
+	}
+	return m.answers[len(m.answers)-1]
+}
+
+// strayPhotoConclusions are the conclusions of a that cite a photo no point or decision of its topics cites, which the
+// prompts ask not to write (minutes_card.md): the hub keeps them only by their line.
+func strayPhotoConclusions(a minutesAnswer) []string {
+	cited := map[modelPhoto]bool{}
+	for _, tp := range a.Topics {
+		for _, p := range tp.Points {
+			cited[p.Photo] = cited[p.Photo] || p.Photo > 0
+		}
+		for _, d := range tp.Decisions {
+			cited[d.Photo] = cited[d.Photo] || d.Photo > 0
+		}
+	}
+	var out []string
+	for _, c := range a.Conclusions {
+		if c.Photo > 0 && !cited[c.Photo] {
+			out = append(out, string(c.Text))
+		}
+	}
+	return out
+}
+
+// cardMisses says what the summary card o of liveMeeting's minutes lacks ("" nothing): a headline, 2 to 4 core
+// conclusions, and the key figures in bold: most bullets have a bold place, and one naming the 4 MB cap bolds it.
+func cardMisses(o *MinutesOverview) string {
+	var miss []string
+	if strings.TrimSpace(o.Headline) == "" {
+		miss = append(miss, "no headline")
+	}
+	if n := len(o.Conclusions); n < 2 || n > minutesConclusions {
+		miss = append(miss, fmt.Sprintf("%d conclusions", n))
+	}
+	bullets, bold, capped, cappedBold := 0, 0, 0, 0
+	for _, g := range o.Groups {
+		for _, tp := range g.Topics {
+			for _, b := range tp.Bullets {
+				bullets++
+				if len(b.Strong) > 0 {
+					bold++
+				}
+				if strings.Contains(strings.ReplaceAll(b.Text, " ", ""), "4MB") {
+					capped++
+					if slices.ContainsFunc(b.Strong, func(s string) bool { return strings.Contains(s, "4") }) {
+						cappedBold++
+					}
+				}
+			}
+		}
+	}
+	if 2*bold < bullets {
+		miss = append(miss, fmt.Sprintf("%d of %d bullets bold", bold, bullets))
+	}
+	if capped == 0 || cappedBold == 0 {
+		miss = append(miss, fmt.Sprintf("the 4 MB cap in %d bullets, bold in %d", capped, cappedBold))
+	}
+	return strings.Join(miss, ", ")
 }
 
 // liveNames are the people of liveMeeting, left out of the counts: a name stays as it was said.
@@ -96,9 +189,26 @@ func (s scripts) wrongLanguage(lang string) string {
 	return ""
 }
 
-// minutesText is the written text of m: its title and every item (names apart).
+// minutesText is the written text of m: its title, every item and the summary card's headline, conclusions and
+// titles (names apart); the counts are points/decisions/actions/open, then the card's groups/topics/conclusions.
 func minutesText(m *Minutes) (string, string) {
 	parts := []string{m.Title}
+	card := "no card"
+	if o := m.Overview; o != nil {
+		topics := 0
+		parts = append(parts, o.Headline)
+		for _, c := range o.Conclusions {
+			parts = append(parts, c.Text)
+		}
+		for _, g := range o.Groups {
+			parts = append(parts, g.Title)
+			for _, tp := range g.Topics {
+				parts = append(parts, tp.Title)
+				topics++
+			}
+		}
+		card = fmt.Sprintf("%dg/%dt/%dc", len(o.Groups), topics, len(o.Conclusions))
+	}
 	for _, p := range m.Points {
 		parts = append(parts, p.Text)
 	}
@@ -111,7 +221,7 @@ func minutesText(m *Minutes) (string, string) {
 	for _, o := range m.Open {
 		parts = append(parts, o.Text)
 	}
-	counts := fmt.Sprintf("%d/%d/%d/%d", len(m.Points), len(m.Decisions), len(m.Actions), len(m.Open))
+	counts := fmt.Sprintf("%d/%d/%d/%d %s", len(m.Points), len(m.Decisions), len(m.Actions), len(m.Open), card)
 	return strings.Join(parts, "\n"), counts
 }
 
@@ -134,7 +244,11 @@ func recapText(rc *DayRecap) (string, string) {
 
 // TestMinutesLanguageLive asks a real model (PERSONA_LIVE_AI) for the minutes, summary and day recap of liveMeeting
 // recorded in each language, prints a row each, and fails when one is not written in the recording's language or its
-// Markdown's headings are not.
+// Markdown's headings are not. The minutes are written twice: in one call, and as a long meeting would be (the
+// transcript in parts of a few lines, then the merging call). Both must have their summary card (#6563) with 2 to 10
+// topics, a headline, 2 to 4 core conclusions and the key figures in bold (cardMisses), and no conclusion may cite the
+// whiteboard photo unless a topic's point or decision does; the cards (groups, topics, conclusions and bullets with
+// their bold places and photos) are printed after the table, or why one was left out.
 func TestMinutesLanguageLive(t *testing.T) {
 	raw := os.Getenv("PERSONA_LIVE_AI")
 	if raw == "" {
@@ -146,7 +260,7 @@ func TestMinutesLanguageLive(t *testing.T) {
 	}
 	model := ai.New(cfg)
 	ctx := context.Background()
-	var rows []string
+	var rows, cards []string
 	row := func(tag, kind, title, counts string, s scripts, miss string) {
 		mark := "ok  "
 		if miss != "" {
@@ -155,38 +269,109 @@ func TestMinutesLanguageLive(t *testing.T) {
 		}
 		rows = append(rows, fmt.Sprintf("%s %-6s %-8s %-30.30q %-28s %s", mark, tag, kind, title, counts, s))
 	}
-	for _, tc := range []struct{ tag, lang, heading, recapHeading string }{
-		{"zh-CN", "zh-Hans", "## 讨论要点", "全天回顾"},
-		{"en-US", "en", "## Key points", "# Day recap · "},
-		{"ja-JP", "ja", "## 要点", "の1日のまとめ"},
-	} {
-		e := goldenEngine(t, model)
-		e.Logf = t.Logf
-		start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
+	// card prints m's summary card, or why there is none (the log line buildMinutes writes).
+	card := func(tag string, m *Minutes, why []string) {
+		o := m.Overview
+		if o == nil {
+			cards = append(cards, fmt.Sprintf("%s: left out: %s", tag, strings.Join(why, "; ")))
+			return
+		}
+		photo := func(n int) string {
+			if n > 0 {
+				return fmt.Sprintf(" (photo %d)", n)
+			}
+			return ""
+		}
+		cards = append(cards, fmt.Sprintf("%s: %q", tag, o.Headline))
+		for _, c := range o.Conclusions {
+			cards = append(cards, fmt.Sprintf("  conclusion %q %q%s", c.Text, c.Strong, photo(c.Photo)))
+		}
+		for _, g := range o.Groups {
+			cards = append(cards, fmt.Sprintf("  group %q", g.Title))
+			for _, tp := range g.Topics {
+				cards = append(cards, fmt.Sprintf("    topic %q (%s)", tp.Title, tp.Icon))
+				for _, b := range tp.Bullets {
+					kind := "point"
+					if b.Decision {
+						kind = "decision"
+					}
+					cards = append(cards, fmt.Sprintf("      %s %q %q%s", kind, b.Text, b.Strong, photo(b.Photo)))
+				}
+			}
+		}
+	}
+	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
+	// minutes writes the minutes of liveMeeting and its whiteboard photo recorded in tag on a knowledge base of its
+	// own, the transcript in parts of at most part runes when part is not 0: the engine, the minutes, the model's
+	// answers and why the summary card was left out.
+	minutes := func(tag string, part int) (*Engine, *Minutes, *liveAnswers, []string) {
+		answers := &liveAnswers{Model: model}
+		e := goldenEngine(t, answers)
+		e.minutesCall, e.minutesPart = part, part
+		var why []string
+		e.Logf = func(f string, a ...any) {
+			line := fmt.Sprintf(f, a...)
+			if _, reason, ok := strings.Cut(line, "minutes: no overview: "); ok {
+				why = append(why, reason)
+			}
+			t.Log(line)
+		}
 		u := meetingUpload(1, start, liveMeeting...)
-		u.Language = tc.tag
+		u.Language = tag
 		putRecording(t, e, recID, u, start.Add(time.Hour))
-
-		// Minutes.
+		addPhoto(t, e, recID, photoUpload(1, 95, "Whiteboard", liveWhiteboard), false)
 		if n := e.WriteMinutes(ctx, 1); n != 1 {
-			t.Fatalf("%s: wrote %d minutes", tc.tag, n)
+			t.Fatalf("%s: wrote %d minutes", tag, n)
 		}
 		m, err := e.Store.ReadMinutes(recID)
 		if err != nil {
-			t.Fatalf("%s: %v", tc.tag, err)
+			t.Fatalf("%s: %v", tag, err)
 		}
-		text, counts := minutesText(m)
-		s := countScripts(text)
-		miss := s.wrongLanguage(tc.lang)
-		if m.Language != tc.lang || !strings.Contains(m.Markdown, tc.heading) {
-			miss = strings.TrimSpace(miss + fmt.Sprintf(" language %q, headings %q", m.Language, m.Markdown[:min(len(m.Markdown), 200)]))
+		return e, m, answers, why
+	}
+	for _, tc := range []struct{ tag, lang, heading, recapHeading string }{
+		{"zh-CN", "zh-Hans", "## 待办", "全天回顾"}, // a heading of either layout (#6563)
+		{"en-US", "en", "## Action items", "# Day recap · "},
+		{"ja-JP", "ja", "## アクション項目", "の1日のまとめ"},
+	} {
+		// Minutes: in one call, then in parts of a few lines and the merging call, as a long meeting's.
+		var e *Engine
+		for _, way := range []struct {
+			kind string
+			part int
+		}{{"minutes", 0}, {"merged", 400}} {
+			ee, m, answers, why := minutes(tc.tag, way.part)
+			if way.part == 0 {
+				e = ee
+			}
+			text, counts := minutesText(m)
+			s := countScripts(text)
+			miss := s.wrongLanguage(tc.lang)
+			if m.Language != tc.lang || !strings.Contains(m.Markdown, tc.heading) {
+				miss = strings.TrimSpace(miss + fmt.Sprintf(" language %q, headings %q", m.Language, m.Markdown[:min(len(m.Markdown), 200)]))
+			}
+			// The place is kept only as it was said (buildMinutes checks it against the transcript): written in
+			// another language it would be dropped. Merged minutes are checked against the lines the notes cite,
+			// which need not hold the place.
+			if way.part == 0 && m.Where == "" {
+				miss = strings.TrimSpace(miss + " no place (where): translated, so it did not match what was said")
+			}
+			if way.part > 0 && answers.merges != 1 {
+				miss = strings.TrimSpace(miss + fmt.Sprintf(" %d merging calls", answers.merges))
+			}
+			if o := m.Overview; o == nil {
+				miss = strings.TrimSpace(miss + " no summary card: " + strings.Join(why, "; "))
+			} else if n := topicCount(o); n < 2 || n > 10 {
+				miss = strings.TrimSpace(miss + fmt.Sprintf(" %d topics", n))
+			} else if c := cardMisses(o); c != "" {
+				miss = strings.TrimSpace(miss + " " + c)
+			}
+			if stray := strayPhotoConclusions(answers.last()); len(stray) > 0 {
+				miss = strings.TrimSpace(miss + fmt.Sprintf(" conclusions cite a photo no bullet cites: %q", stray))
+			}
+			row(tc.tag, way.kind, m.Title, counts, s, miss)
+			card(tc.tag+" "+way.kind, m, why)
 		}
-		// The place is kept only as it was said (buildMinutes checks it against the transcript): written in another
-		// language it would be dropped.
-		if m.Where == "" {
-			miss = strings.TrimSpace(miss + " no place (where): translated, so it did not match what was said")
-		}
-		row(tc.tag, "minutes", m.Title, counts, s, miss)
 
 		// The recording's summary (a meeting gets one besides its minutes).
 		if n := e.SummarizeRecordings(ctx, 1); n != 1 {
@@ -195,7 +380,7 @@ func TestMinutesLanguageLive(t *testing.T) {
 		r := recordingNow(t, e, recID)
 		sum, _ := os.ReadFile(e.Store.Path(KindRecording, recID, "summary.md"))
 		// The section headings count too: they are asked for in the recording's language.
-		s = countScripts(strings.Join([]string{r.AITitle, r.OneLine, string(sum)}, "\n"))
+		s := countScripts(strings.Join([]string{r.AITitle, r.OneLine, string(sum)}, "\n"))
 		row(tc.tag, "summary", r.AITitle, fmt.Sprintf("%d runes", len([]rune(string(sum)))), s, s.wrongLanguage(tc.lang))
 
 		// A day recorded with the same words, a minute a line: an hour's notes, then the recap.
@@ -213,9 +398,9 @@ func TestMinutesLanguageLive(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: recap: %v", tc.tag, err)
 		}
-		text, counts = recapText(rc)
+		text, counts := recapText(rc)
 		s = countScripts(text)
-		miss = s.wrongLanguage(tc.lang)
+		miss := s.wrongLanguage(tc.lang)
 		if rc.Language != tc.lang || !strings.Contains(rc.Markdown, tc.recapHeading) {
 			miss = strings.TrimSpace(miss + fmt.Sprintf(" language %q, heading %q", rc.Language, strings.SplitN(rc.Markdown, "\n", 2)[0]))
 		}
@@ -225,5 +410,14 @@ func TestMinutesLanguageLive(t *testing.T) {
 		}
 		row(tc.tag, "recap", title, counts, s, miss)
 	}
-	t.Logf("model %s\n%s", cfg.Model, strings.Join(rows, "\n"))
+	t.Logf("model %s\n%s\n\n%s", cfg.Model, strings.Join(rows, "\n"), strings.Join(cards, "\n"))
+}
+
+// topicCount is how many topics o has in all.
+func topicCount(o *MinutesOverview) int {
+	n := 0
+	for _, g := range o.Groups {
+		n += len(g.Topics)
+	}
+	return n
 }

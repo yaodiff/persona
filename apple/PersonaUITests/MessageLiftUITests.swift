@@ -6,6 +6,7 @@ import XCTest
 /// An answer taller than the screen scrolls inside the lift to its first line, with the bar staying put, in an Agents
 /// chat and in Persona's conversation, and a selection handle dragged to its top edge scrolls it on (#3188).
 /// An answer drawn in parts (#4970) lifts, copies and selects all of it from a press on its middle part (#5221).
+/// In a chat of every kind of row, a press on any message lifts that one, also under a folded message (#6645).
 /// PERSONA_LIFT_SCHEME: light or dark, or "light,dark": the tests of #3188 run in each, one after the other.
 /// PERSONA_LIFT_KEEP_GOING=1: a test goes on past a failure (to record a build without the fix to its end).
 final class MessageLiftUITests: XCTestCase {
@@ -28,6 +29,9 @@ final class MessageLiftUITests: XCTestCase {
     /// An answer long enough to be drawn in parts (`AnswerParts`: three), its first and last sentences in its first and
     /// last parts.
     private let split = "macbook/a1f3c2d4-0000-4000-8000-0000000c1e0e"
+    /// A working Agent's chat with rows of every kind one under another: a long answer drawn in parts, your messages,
+    /// folded runs of tools, a short answer, a message another session sent, a plan (`lift_rows` in the mock).
+    private let rows = "macbook/a1f3c2d4-0000-4000-8000-0000000c1e10"
     private let schemes = (ProcessInfo.processInfo.environment["PERSONA_LIFT_SCHEME"] ?? "light").split(separator: ",").map(String.init)
     private var scheme = "light"
 
@@ -769,6 +773,49 @@ final class MessageLiftUITests: XCTestCase {
         }
     }
 
+    /// The long answer's last sentence (mock data).
+    private static let lastSentence = "有问题的话告诉我具体哪一页，我再调整。"
+
+    /// A long press on a word of the lifted long answer's last line selects that word, under the finger (#6552: at
+    /// xxxLarge it selected the start of a list item four lines up, at AX5 a space): at the default text size, at
+    /// xxxLarge and at AX5, since a message's words grow past the interface's largest size (#6448).
+    @MainActor func testALongPressOnTheLastLineOfALongAnswerSelectsThePressedWord() throws {
+        inEachScheme {
+            for (size, tag) in [("", ""), ("UICTContentSizeCategoryXXXL", "-xxxl"), ("UICTContentSizeCategoryAccessibilityXXXL", "-ax5")] {
+                app = XCUIApplication()
+                launch(long, ["-showLiftLines", "YES", "-openChatsFresh", "YES", "-openDraftsFresh", "YES"]
+                    + (size.isEmpty ? [] : ["-UIPreferredContentSizeCategoryName", size]))
+                liftTheLongAnswerAtItsEnd()
+                let end = lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "有问题的话告诉我")).firstMatch
+                XCTAssertTrue(shows(end), "\(tag): the pressed line shows")
+                let press = CGPoint(x: end.frame.minX + 12, y: end.frame.maxY - 12)
+                pressInLift(press)
+                XCTAssertTrue(menuItem("拷贝").waitForExistence(timeout: 5), "\(tag): no edit menu:\n\(app.debugDescription)")
+                sleep(1)
+                attachLiftLines("last-line" + tag)
+                shot("last-line" + tag)
+                let p = picked()
+                XCTAssertTrue(p.lines.contains { $0.insetBy(dx: -4, dy: -4).contains(press) },
+                              "\(tag): the selection \(p.lines) is under the press \(press)")
+                menuItem("拷贝").tap()
+                XCTAssertTrue(app.textViews["lift-text"].waitForNonExistence(timeout: 3), "\(tag): 拷贝 put the answer back")
+                let copied = pasted().trimmingCharacters(in: .whitespacesAndNewlines)
+                XCTAssertFalse(copied.isEmpty, "\(tag): nothing was selected")
+                XCTAssertTrue(Self.lastSentence.contains(copied), "\(tag): the word selected is the pressed one, in 「\(Self.lastSentence)」: \(copied)")
+            }
+        }
+    }
+
+    /// What `-showLiftLines` says (the lines in the chat, the lifted copy and the text view, and what is selected), as
+    /// an attachment: where a selection lands against the words it lies over.
+    @MainActor private func attachLiftLines(_ name: String) {
+        let e = app.descendants(matching: .any)["lift-lines"].firstMatch
+        let a = XCTAttachment(string: e.waitForExistence(timeout: 3) ? (e.value as? String ?? "") : "no lift-lines")
+        a.name = "lift-lines-\(name)-\(scheme)"
+        a.lifetime = .keepAlways
+        add(a)
+    }
+
     /// A short answer, as before: lifted where it is, all of it; Copy copies it.
     @MainActor func testALongPressOnAShortAnswerLiftsAndCopiesIt() throws {
         inEachScheme {
@@ -812,6 +859,142 @@ final class MessageLiftUITests: XCTestCase {
         sleep(1)
         let runs = (get(hub + "/mock/frames?name=" + name)["runs"] as? [[String: Any]]) ?? []
         return runs.last ?? [:]
+    }
+
+    /// A place to long-press in the chat of every kind of row (`rows`): the line with these words, its first line or its
+    /// last; the message they are in is the one that must be lifted.
+    private struct Probe {
+        var message: String
+        var words: String
+        var bottom: Bool
+        var name: String { "\(message)-\(bottom ? "bottom" : "top")" }
+    }
+
+    /// From the newest message back: a press on the top and on the bottom of each message.
+    private static let probes: [Probe] = {
+        let lines: [(message: String, words: String)] = [
+            ("found", "Found the cause: the copy job"), ("path", "为什么夜里的搬运任务报磁盘满了"), ("plan-ask", "列个上线步骤给我看看"),
+            ("other-end", "Reply \"go ahead\""), ("other", "The search session has finished"),
+            ("peer", "The search index rebuild is ready"),
+            ("removed-end", "I'll post here after each batch"), ("removed", "I've paused the nightly copy job"),
+            ("gate", "先停掉夜里的自动搬运"),
+            ("long-end", "每搬完一批我会在这里说一声"), ("long", "旧存储桶要你来决定"),
+        ]
+        var probes: [Probe] = []
+        for line in lines {
+            probes.append(Probe(message: line.message, words: line.words, bottom: true))
+            probes.append(Probe(message: line.message, words: line.words, bottom: false))
+        }
+        return probes
+    }()
+
+    /// Long-presses each message of a working Agent's chat (a long answer drawn in parts, your messages, folded runs of
+    /// tools, a short answer, a message another session sent, a plan) on its first line and on its last, from the newest
+    /// back, scrolling as it goes: the lifted copy is always the pressed message (#6645: the folded message's hidden words
+    /// lay over the rows under it, and a press there lifted it). At the default text size and at xxxLarge.
+    @MainActor func testALongPressLiftsThePressedMessage() throws {
+        inEachScheme {
+            for big in [false, true] {
+                let tag = big ? "-xxxl" : ""
+                app = XCUIApplication()
+                launch(rows, ["-openChatsFresh", "YES"] + (big ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"] : []))
+                XCTAssertTrue(text("Found the cause: the copy job").waitForExistence(timeout: 30), "\(tag): the chat did not open")
+                sleep(2)
+                var log: [String] = []
+                var wrong: [String] = []
+                var left = Self.probes
+                var pressedAt: [String: CGFloat] = [:] // by message, where its other end was pressed
+                // At most 8 screens back and 4 minutes: a press or a scroll that goes wrong ends the case, not the ticket.
+                let deadline = Date.now.addingTimeInterval(240)
+                var rounds = 0
+                var lost = false // a press opened something else: the rest would press another screen
+                // The chat's header (title, state, the strip of running agents) ends near 100 pt at the default size and
+                // near 175 pt at xxxLarge, where a press above 200 pt can open another agent from the strip.
+                let top: CGFloat = big ? 200 : 140
+                while !left.isEmpty, !lost, rounds < 8, Date.now < deadline {
+                    let window = app.windows.firstMatch.frame
+                    // Clear of the header and of the composer, and of the jump button's column on the right.
+                    let band = CGRect(x: window.minX, y: window.minY + top, width: window.width * 0.7, height: window.height - top - 130)
+                    for probe in left where Date.now < deadline && !lost {
+                        let e = text(probe.words)
+                        guard e.exists else { continue }
+                        let f = visiblePart(e.frame)
+                        let y = probe.bottom ? f.maxY - 10 : f.minY + 10
+                        guard band.contains(CGPoint(x: band.midX, y: y)), f.height >= 20 else { continue }
+                        left.removeAll { $0.name == probe.name }
+                        // One line: its other end was this press already.
+                        if let other = pressedAt[probe.message], abs(other - y) < 20 { continue }
+                        pressedAt[probe.message] = y
+                        let at = CGPoint(x: min(f.minX + 24, band.maxX - 8), y: y)
+                        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: at.x, dy: at.y)).press(forDuration: 0.6)
+                        let up = liftCameUp()
+                        let right = up && liftHolds(probe.words)
+                        let line = "\(probe.name) at \(Int(at.x)),\(Int(at.y)) in \(Int(f.minY))…\(Int(f.maxY)): "
+                            + (up ? (right ? "ok" : "WRONG, lifted 「\(liftedWords())」") : "nothing lifted")
+                        log.append(line)
+                        if !right { wrong.append(line) }
+                        // The first press under the folded message, which lifted that message (#6645): a shot either way.
+                        if !right || probe.name == "other-top" { shot("rows-\(probe.name)\(tag)") }
+                        if up { putTheLiftBack(probe.name) }
+                        if !up && !e.exists {
+                            lost = true
+                            wrong.append("\(probe.name): the press left the chat")
+                        }
+                    }
+                    guard !left.isEmpty, !lost else { break }
+                    // Back a third of the screen, slowly enough that the list stops where the finger does.
+                    let origin = app.coordinate(withNormalizedOffset: .zero)
+                    origin.withOffset(CGVector(dx: window.width * 0.85, dy: window.height * 0.35))
+                        .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: window.width * 0.85, dy: window.height * 0.65)),
+                               withVelocity: .slow, thenHoldForDuration: 0.3)
+                    rounds += 1
+                    log.append("round \(rounds): scrolled back")
+                }
+                let a = XCTAttachment(string: log.joined(separator: "\n"))
+                a.name = "rows-presses\(tag)-\(scheme)"
+                a.lifetime = .keepAlways
+                add(a)
+                XCTAssertTrue(left.isEmpty, "\(tag): after \(rounds) screens back, never pressed \(left.map(\.name))")
+                XCTAssertTrue(wrong.isEmpty, "\(tag): \(wrong.joined(separator: "\n"))")
+            }
+        }
+    }
+
+    /// The press lifted a message, with its bar. A press waits for the app to idle, so they are there by now, or soon.
+    @MainActor private func liftCameUp() -> Bool {
+        let bar = app.buttons["复制"].firstMatch
+        if lifted.exists, bar.exists { return true }
+        return lifted.waitForExistence(timeout: 2) && bar.exists
+    }
+
+    /// A tap beside the lifted message puts it back (nothing is selected in it).
+    @MainActor private func putTheLiftBack(_ name: String) {
+        let l = lifted.frame
+        let y = l.minY > 140 ? l.minY / 2 : (l.maxY + app.frame.maxY) / 2
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.width * 0.1, dy: y)).tap()
+        if lifted.exists { XCTAssertTrue(lifted.waitForNonExistence(timeout: 3), "\(name): the lift did not close") }
+    }
+
+    /// Where to press words in the chat: down to a line above a folded message's Expand, which sits under what shows of
+    /// its words (their element may run on past the fold, #6645) and takes touches a little above itself.
+    @MainActor private func visiblePart(_ f: CGRect) -> CGRect {
+        let clear: CGFloat = 12
+        let expands = app.descendants(matching: .any).matching(identifier: "message.expand").allElementsBoundByIndex
+        guard let fold = expands.map(\.frame).first(where: { $0.minY > f.minY && $0.minY < f.maxY + clear }) else { return f }
+        return CGRect(x: f.minX, y: f.minY, width: f.width, height: max(0, min(f.maxY, fold.minY - clear) - f.minY))
+    }
+
+    /// The lifted copy holds these words (a long one has static texts; a short one is one element, its label).
+    @MainActor private func liftHolds(_ words: String) -> Bool {
+        let p = NSPredicate(format: "label CONTAINS %@", words)
+        return lifted.label.contains(words) || lifted.descendants(matching: .any).matching(p).count > 0
+    }
+
+    /// The lifted copy's first words, to say which message it is.
+    @MainActor private func liftedWords() -> String {
+        let first = lifted.staticTexts.firstMatch
+        let label = first.exists ? first.label : lifted.label
+        return String(label.prefix(40))
     }
 
     /// The 33,000-character report of `MOCK_LONG_REPORT=1` (a mock at PERSONA_LIFT_REPORT_HUB), long-pressed near its

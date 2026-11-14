@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The uncompressed packaged library is mapped directly; extraction is unnecessary on every supported Android. -->
+    <application android:extractNativeLibs="false" />
+</manifest>

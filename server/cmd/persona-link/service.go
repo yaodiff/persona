@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 )
 
@@ -18,7 +19,7 @@ import (
 const unitName = "persona-link.service"
 
 // noUserInstance starts the reason when systemd is there but the user's own instance cannot be reached.
-const noUserInstance = "连不上你的 systemd 用户实例"
+func noUserInstance() string { return i18n.T(i18n.Terminal(), "link-service.systemd_user_unavailable") }
 
 // unitPath is where systemd looks for the user's own units.
 func (e *env) unitPath() string {
@@ -31,8 +32,8 @@ func (e *env) unitPath() string {
 }
 
 // unitFile is the service. No network-online.target: a user instance has none to wait for, and persona-link retries
-// by itself until the hub answers. Its status lines are for the menu bar app, so not for the journal; the log goes to
-// its own file, which `persona-link logs` reads whether or not the journal keeps user logs.
+// by itself until the hub answers. Status is persisted in link.status.json, while the readable log goes to its own
+// file, which `persona-link logs` reads whether or not the journal keeps user logs.
 func unitFile(bin, logPath string) string {
 	return `# Written by persona-link install; persona-link uninstall removes it (docs/operations/link.md).
 [Unit]
@@ -85,7 +86,7 @@ func (e *env) systemdMissing() string {
 		if why == "" {
 			why = err.Error()
 		}
-		return noUserInstance + "：" + why
+		return noUserInstance() + "：" + why
 	}
 	return ""
 }
@@ -100,7 +101,7 @@ func install(e *env, args []string) error {
 	var addrs []string
 	var sshFlags sshPairFlags
 	nodeBinAny := false // --node-bin: either program, asked which (nodeInstall)
-	pairing, passive, withNode, withTray := false, false, true, true
+	pairing, passive, withNode := false, false, true
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
 		case a == "--pair": // the link, or - or nothing for stdin
@@ -113,8 +114,6 @@ func install(e *env, args []string) error {
 			pairing, pairLink = true, strings.TrimPrefix(a, "--pair=")
 		case a == "--no-node":
 			withNode = false
-		case a == "--no-tray":
-			withTray = false
 		default:
 			if v, next, ok := optionalValue(args, i, "--listen"); ok {
 				passive, listen, i = true, v, next
@@ -169,10 +168,7 @@ func install(e *env, args []string) error {
 		return errors.New("install --listen 不要 --ssh：SSH 隧道只在主动模式（我去连 hub）下用")
 	}
 	switch e.goos {
-	case "linux", "windows":
-	case "darwin":
-		return errors.New("Mac 上不用 install：装菜单栏 App「Persona Link」（scripts/app/mac-link.sh install），它带着 persona-link 和 persona-node、" +
-			"管着它们，登录时启动在它的菜单里勾")
+	case "linux", "darwin", "windows":
 	default:
 		return fmt.Errorf("%s 上 install 还装不了后台服务：先在前台运行 persona-link run，交给这台的进程管理", e.goos)
 	}
@@ -216,7 +212,10 @@ func install(e *env, args []string) error {
 		}
 	}
 	if e.goos == "windows" {
-		return installTask(e, withNode, withTray, personad, invite) // winservice.go
+		return installTask(e, withNode, personad, invite) // winservice.go
+	}
+	if e.goos == "darwin" {
+		return installMac(e, withNode, personad, nodeBinAny, invite) // service_mac.go
 	}
 	bin, copied, err := e.installBinary()
 	if err != nil {
@@ -323,7 +322,7 @@ func noSystemd(e *env, why, bin string) {
   · supervisord、runit、s6、OpenRC 这类进程管理：让它前台跑上面那条命令，退出了就重启。
 跑起来以后：persona-link status 看状态，persona-link logs -f 看日志。
 `, why, runLine, runLine, runLine)
-	if strings.HasPrefix(why, noUserInstance) {
+	if strings.HasPrefix(why, noUserInstance()) {
 		fmt.Fprintf(e.stdout, "如果这台其实有 systemd：用 ssh 直接登录这个用户再装（su / sudo -u 进来的会话找不到用户实例），"+
 			"或者先 sudo loginctl enable-linger %s 再试。\n", e.userOr("$USER"))
 	}
@@ -422,6 +421,10 @@ func uninstall(e *env, args []string) error {
 	switch {
 	case e.goos == "windows":
 		uninstallTask(e) // winservice.go
+	case e.goos == "darwin":
+		if err := uninstallMac(e); err != nil { // service_mac.go
+			return err
+		}
 	case e.goos != "linux":
 	case fileExists(unit):
 		if why := e.systemdMissing(); why == "" {
@@ -444,7 +447,7 @@ func uninstall(e *env, args []string) error {
 		return nil
 	}
 	if link.Running(e.configPath()) {
-		return errors.New("还有一个 persona-link 在运行（不是这个服务起的：菜单栏 App，或者你自己跑的）：先停掉它，再 --purge")
+		return errors.New(i18n.T(i18n.Terminal(), "link-service.running_before_purge"))
 	}
 	cfg := e.configPath()
 	var gone []string

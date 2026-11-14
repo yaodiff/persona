@@ -1,9 +1,8 @@
-// The direction tree (#4352, lib/direction-tree.ts) as the Agents list's "By pinned" grouping draws it: pinned direction
-// › task › agent › sub-agent in lib/todo-tree.ts's nodes, with live session rows.
-import type { AgentMutes } from "./agent-groups";
-import { directionTitle, agentRef, type DirectionAgent, type DirectionTask, type DirectionTaskState, type DirectionTree } from "./direction-tree";
-import { agentTreeState, buildTodoTree, type TodoTree, type TreeAgent, type TreeProject, type TreeState, type TreeTodo, worstTreeState } from "./todo-tree";
-import type { AgentState, Machine, Session } from "./types";
+// The direction tree (#4352, lib/direction-tree.ts) as the sidebar's 常驻 rows unfold it: task › agent › sub-agent in
+// lib/todo-tree.ts's nodes, with live session rows. (The Agents list's "By pinned" grouping drew it too, until #6662.)
+import { agentRef, type DirectionAgent, type DirectionTask, type DirectionTaskState } from "./direction-tree";
+import { agentTreeState, type TreeAgent, type TreeState, type TreeTodo } from "./todo-tree";
+import type { AgentState, Session } from "./types";
 import { splitSubagentLink } from "./subagent-link";
 
 /** The Agents tree's one-word state for a task's state: needs you, working, and waiting for stuck and review. */
@@ -45,32 +44,4 @@ export function directionTaskNode(td: DirectionTask, sessions: ReadonlyMap<strin
   const agents = directionAgentNodes(td.agents, sessions, placed, standIns);
   const flat = (n: TreeAgent): Session[] => [n.session, ...n.children.flatMap(flat)];
   return { key: `${keyPrefix}${td.id}`, todoId: td.id, name: td.title, state: TREE_STATE[td.state], taskState: td.state, agents, sessions: agents.flatMap(flat), folded };
-}
-
-const keyOf = (s: Session) => `${s.machine_id}/${s.session_id}`;
-
-/**
- * Agents "By pinned" (#4352): pinned direction › task › agent › sub-agent, from the hub's tree, for the sessions listed
- * (live, filtered, unpinned). A task none of whose agents is listed is left out, and so is a direction left with no task.
- * The listed agents the tree does not hold go last, in the "By to-do" tree's own groups for agents on no to-do.
- */
-export function buildDirectionAgentTree(tree: DirectionTree, all: Session[], machines: Machine[], mutes?: AgentMutes, now = Date.now()): TodoTree {
-  const sessions = new Map(all.map((s) => [keyOf(s), s]));
-  const placed = new Set<string>();
-  const projects: TreeProject[] = [];
-  for (const d of tree.directions) {
-    const todos = (d.tasks ?? []).map((td) => directionTaskNode(td, sessions, placed, { keyPrefix: `direction-agents:task:${d.id}:`, folded: false, standIns: false })).filter((td) => td.agents.length > 0);
-    if (todos.length === 0) continue;
-    projects.push({
-      key: `direction-agents:${d.id}`,
-      name: directionTitle(d),
-      state: worstTreeState(todos.map((td) => td.state)),
-      todos,
-      sessions: todos.flatMap((td) => td.sessions),
-      folded: false,
-      direction: { counts: d.counts, running: d.running, secretary: !!d.secretary },
-    });
-  }
-  const rest = all.filter((s) => !placed.has(keyOf(s)));
-  return { projects, todos: [], loose: buildTodoTree(rest, machines, [], mutes, now).loose };
 }

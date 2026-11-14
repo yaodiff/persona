@@ -24,5 +24,7 @@
   "create_and_link": "创建并挂上",
   "new_todo": "新建待办…",
   "space_unlink": "移出待办",
-  "session_unlink": "解除关联"
+  "session_unlink": "解除关联",
+  "search": "搜索未完成的待办",
+  "no_match": "没有符合的待办"
 }

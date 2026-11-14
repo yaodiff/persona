@@ -20,6 +20,7 @@ internal fun ComposerRefusalActions(
     service: ChatComposerService?,
     delivery: ComposerDelivery?,
     terminal: (() -> Unit)?,
+    canSend: Boolean = true,
     edit: () -> Unit,
     notice: (String) -> Unit,
 ) {
@@ -30,7 +31,7 @@ internal fun ComposerRefusalActions(
     val refusal = delivery?.refusal
     val code = refusal?.code ?: message.error
     fun retry(clear: Boolean) {
-        if (service == null || busy) return
+        if (service == null || busy || !canSend) return
         busy = true
         scope.launch {
             try { service.retryRefused(message.clientMessageId, clear) }
@@ -46,12 +47,13 @@ internal fun ComposerRefusalActions(
             "dialog_open" -> Text(stringResource(R.string.chat_refusal_dialog_open), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         }
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            if (code == "input_draft" && !refusal?.clearable.isNullOrEmpty()) JButton(stringResource(R.string.chat_refusal_clear_and_send), { confirm = true }, size = JButtonSize.Small, kind = JButtonKind.Secondary, enabled = !busy)
+            if (canSend && code == "input_draft" && !refusal?.clearable.isNullOrEmpty()) JButton(stringResource(R.string.chat_refusal_clear_and_send), { confirm = true }, size = JButtonSize.Small, kind = JButtonKind.Secondary, enabled = !busy)
             if (terminal != null) JButton(stringResource(R.string.chat_refusal_open_terminal), terminal, size = JButtonSize.Small, kind = JButtonKind.Secondary, enabled = !busy)
-            JButton(stringResource(R.string.chat_refusal_edit), edit, size = JButtonSize.Small, kind = JButtonKind.Secondary, enabled = !busy)
+            if (canSend) JButton(stringResource(R.string.chat_refusal_edit), edit, size = JButtonSize.Small, kind = JButtonKind.Secondary, enabled = !busy)
         }
     }
-    if (confirm) JDialog(onDismiss = { confirm = false }, title = stringResource(R.string.chat_refusal_confirm_title),
+    LaunchedEffect(canSend) { if (!canSend) confirm = false }
+    if (confirm && canSend) JDialog(onDismiss = { confirm = false }, title = stringResource(R.string.chat_refusal_confirm_title),
         content = {
             Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
                 Text(stringResource(R.string.chat_refusal_confirm_text), style = PersonaTheme.type.callout)

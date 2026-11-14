@@ -340,6 +340,25 @@ struct ReplyTextTests {
         #expect(quiet.size == ReplyMetrics.points(ReplyMetrics.quiet, of: look.size))
     }
 
+    /// A reply's words are the size the chat draws them, MarkdownUI's (`ScaledMetric` relative to body, a whole point),
+    /// not the body text style's; your own message keeps the body style, its bubble's. A list's words start where the
+    /// chat's do: past a marker room of 1.5 em and the label's gap, 34 pt at the default size. At xxxLarge and AX5 the
+    /// text view had wrapped the words onto more lines than the chat, and a press on the last line picked words above it (#6552).
+    @Test func aReplyIsTheChatsSizeAndItsListsStartWhereTheChatsDo() {
+        #expect(ReplyMetrics.markerRoom(of: 17) + ReplyMetrics.markerGap == 34)
+        for c: UIContentSizeCategory in [.large, .extraExtraExtraLarge, .accessibilityExtraExtraExtraLarge] {
+            let traits = UITraitCollection(preferredContentSizeCategory: c)
+            let look = ReplyText.Look(.reply(quiet: false), traits: traits)
+            #expect(look.size == UIFontMetrics(forTextStyle: .body).scaledValue(for: Theme.Level.body.size, compatibleWith: traits).rounded(), "\(c.rawValue)")
+            let mine = ReplyText.Look(.plain(.primary), traits: traits)
+            #expect(mine.size == UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize, "\(c.rawValue)")
+            let s = ReplyText.attributed("- 甲乙\n  - 丙丁", look: look, width: 360)
+            let room = ReplyMetrics.markerRoom(of: look.size) + ReplyMetrics.markerGap
+            #expect(style(s, at: "甲")?.headIndent == room, "\(c.rawValue)")
+            #expect(style(s, at: "丙")?.headIndent == 2 * room, "\(c.rawValue): a nested item's words a marker further in")
+        }
+    }
+
     /// The fonts follow the text size.
     @Test func fontsFollowTheTextSize() {
         func size(_ s: NSAttributedString, _ at: Int) -> CGFloat { (s.attribute(.font, at: at, effectiveRange: nil) as? UIFont)?.pointSize ?? 0 }

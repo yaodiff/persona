@@ -12,10 +12,11 @@ struct ShellPlaces {
     private(set) var current: ShellPage?
     private var saved: [ShellPage: NavigationPath] = [:]
 
-    /// Pages that are places: Health opens a conversation or its own page, New Chat is the conversation.
+    /// Pages that are places: Health opens a conversation or its own page, New Chat and the Sidebar layout's way back to
+    /// the conversation (#6332) are the conversation.
     static func isPlace(_ page: ShellPage) -> Bool {
         switch page {
-        case .newConversation, .health: false
+        case .newConversation, .health, .conversation: false
         default: true
         }
     }

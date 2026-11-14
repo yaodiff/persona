@@ -90,11 +90,12 @@ func matcher(query string) func(string) bool {
 // Nor is live ingestion's bookkeeping in a chat (ingest.go): the receipts
 // (.receipts.json: the source, every message's id and time, one long line), the intent of a write in progress
 // (.ingest.json) and the zone the days are in (messages/.zone, zone.go). Profile files are read before any day, so a
-// query of digits, a date or the source's name matched every chat's receipts and filled the limit (#5991).
+// query of digits, a date or the source's name matched every chat's receipts and filled the limit (#5991). Nor is the
+// search index itself (.search/, search_index.go).
 func searchable(rel string) bool {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	switch {
-	case parts[0] == "cursors" || parts[0] == "history" || parts[0] == selectDir || parts[0] == trashDirName:
+	case parts[0] == "cursors" || parts[0] == "history" || parts[0] == selectDir || parts[0] == trashDirName || parts[0] == SearchIndexDir:
 		return false
 	case len(parts) == 3 && parts[0] == KindChat && (parts[2] == retentionFile || parts[2] == ingestReceipts || parts[2] == ingestJournal):
 		return false
@@ -184,55 +185,71 @@ func (e *Engine) Find(query string, limit int) []Result {
 	// line break or a space (no canonical decomposition holds one), so trimming a line does not change how it folds.
 	// The two spaces NFC does change (U+2000, U+2001) cannot be in such a file: they would have changed its fold.
 	matchFolded := func(t string) bool { return hasAll(t, ws) }
-	// Files are looked at in parallel (the archive is ~25 MB); what each found is added in file order, so the lines
-	// kept for an entry are its profile's first, then the newest days'. The app searches as the user types, so a
-	// file unchanged since the last search is not read again (findCache): one stat each instead of read + lowercase.
+	// read is what one file gives: its first lines that match and how many do.
+	read := func(c *findText, rel string) (found []Found, count int) {
+		if !hasAll(c.lower, ws) {
+			return nil, 0
+		}
+		m := match
+		if c.same {
+			m = matchFolded
+		}
+		return fileFound(c.raw, rel, m)
+	}
+	// Every file is looked at, in parallel: one stat each, which is all most of them cost. The search index
+	// (search_index.go) rules out the files that cannot hold every word, as long as they are as it read them; the
+	// others are read, through findCache (the app searches as the user types, so a file unchanged since the last
+	// search is not read again). Without an index, or for the files it does not have, that is every file.
 	all := e.files().all
+	filter := e.searchFilter(ws)
+	gen := e.find.begin()
+	const (
+		findSkip = iota // not a file of an entry, gone, or ruled out by the index
+		findRead        // to read
+		findDone        // read already: a recording's uploaded files, which are not read from disk (searchText)
+	)
+	state := make([]uint8, len(all))
+	stats := make([]fileStat, len(all))
 	type fileHits struct {
-		key   string
-		stat  fileStat
 		found []Found // what fileFound keeps
 		count int
 	}
-	per := make([]fileHits, len(all))
-	gen := e.find.begin()
-	var next atomic.Int64
-	var wg sync.WaitGroup
-	for range max(1, min(8, runtime.NumCPU())) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				i := int(next.Add(1) - 1)
-				if i >= len(all) {
-					return
+	var early sync.Map // by index: the fileHits of the findDone files
+	workers := max(1, min(8, runtime.NumCPU()))
+	// unread: a file that is there was not read, so its cached text was not seen by this search.
+	var unread atomic.Bool
+	each(len(all), workers, func(i int) {
+		f := all[i]
+		if f.kind == "" { // a file Matches does not read (shown)
+			return
+		}
+		if recordingViewFile(f.rel) {
+			c, st, ok := e.searchText(f.path, gen, recording)
+			stats[i], state[i] = st, findDone
+			if ok {
+				var fh fileHits
+				if fh.found, fh.count = read(c, f.rel); fh.count > 0 {
+					early.Store(i, fh)
 				}
-				f := all[i]
-				p, rel, kind, id := f.path, f.rel, f.kind, f.id // kind is "" for a file Matches does not read (shown)
-				if kind == "" {
-					continue
-				}
-				fh := fileHits{key: kind + "/" + id}
-				c, st, ok := e.searchText(p, gen, recording)
-				fh.stat = st
-				if ok && hasAll(c.lower, ws) {
-					m := match
-					if c.same {
-						m = matchFolded
-					}
-					fh.found, fh.count = fileFound(c.raw, rel, m)
-				}
-				per[i] = fh
 			}
-		}()
-	}
-	wg.Wait()
-	e.find.prune(gen)
+			return
+		}
+		st := statFile(f.path)
+		if !st.ok {
+			return
+		}
+		stats[i] = fileStat{path: f.path, mod: st.mod, size: st.size}
+		if filter != nil && filter.skip(f.rel, st) {
+			unread.Store(true)
+			return
+		}
+		state[i] = findRead
+	})
 	// The entries the lists show depend only on the JSON files (meta.json, docs/<id>.json): kept while none changed.
 	var metas []fileStat
-	for i, fh := range per {
-		if fh.key != "" && strings.HasSuffix(all[i].path, ".json") {
-			metas = append(metas, fh.stat)
+	for i, f := range all {
+		if f.kind != "" && strings.HasSuffix(f.path, ".json") {
+			metas = append(metas, stats[i])
 		}
 	}
 	known := e.find.entries(metas, func() map[string]Entry {
@@ -250,27 +267,109 @@ func (e *Engine) Find(query string, limit int) []Result {
 		}
 		return known
 	})
-	by := map[string]*Result{}
-	for _, fh := range per {
-		if fh.count == 0 {
+	// The files to read, by entry and in file order, so the lines kept for an entry are its profile's first, then
+	// the newest days'. Files of an entry the lists do not show (a doc without a title yet) are not read: there
+	// would be nothing to open.
+	type entryFiles struct {
+		key   string
+		res   *Result
+		files []int // indices in all
+		next  int   // files[:next] are read
+		batch int
+	}
+	type entryKey struct{ kind, id string }
+	groups := map[entryKey]*entryFiles{}
+	var order []*entryFiles
+	for i, f := range all {
+		if state[i] == findSkip {
 			continue
 		}
-		en, ok := known[fh.key]
-		if !ok {
-			continue // an entry the lists do not show (a doc without a title yet): nothing to open
+		g := groups[entryKey{f.kind, f.id}]
+		if g == nil {
+			g = &entryFiles{key: f.kind + "/" + f.id, batch: 16}
+			groups[entryKey{f.kind, f.id}] = g
+			if _, ok := known[g.key]; ok {
+				order = append(order, g)
+			}
 		}
-		r := by[fh.key]
-		if r == nil {
-			r = &Result{Entry: en}
-			by[fh.key] = r
+		g.files = append(g.files, i)
+	}
+	by := map[string]*Result{}
+	// add counts one file's lines for its entry, and reports whether the entry is settled: at foundCap lines with
+	// every line it shows, nothing a later file has changes it.
+	add := func(g *entryFiles, fh fileHits) bool {
+		if fh.count == 0 {
+			return false
 		}
+		if g.res == nil {
+			g.res = &Result{Entry: known[g.key]}
+			by[g.key] = g.res
+		}
+		r := g.res
 		r.Count = min(foundCap, r.Count+fh.count)
 		for _, f := range fh.found {
 			if len(r.Hits) < hitsPerResult && !hasLine(r.Hits, f.Line) {
 				r.Hits = append(r.Hits, f)
 			}
 		}
+		return r.Count >= foundCap && len(r.Hits) == hitsPerResult
 	}
+	// Read in rounds: of every entry not settled yet its next files, a few at first and more each round, so an
+	// entry with a line on every day costs its newest days, and one with none is read through in a few rounds.
+	type task struct {
+		g *entryFiles
+		i int
+	}
+	var tasks []task
+	var hits []fileHits
+	for len(order) > 0 {
+		tasks = tasks[:0]
+		for _, g := range order {
+			for _, i := range g.files[g.next:min(len(g.files), g.next+g.batch)] {
+				tasks = append(tasks, task{g, i})
+			}
+		}
+		hits = append(hits[:0], make([]fileHits, len(tasks))...)
+		each(len(tasks), workers, func(n int) {
+			i := tasks[n].i
+			if state[i] == findDone {
+				if fh, ok := early.Load(i); ok {
+					hits[n] = fh.(fileHits)
+				}
+				return
+			}
+			if c, ok := e.find.textAt(all[i].path, gen, stats[i]); ok {
+				hits[n].found, hits[n].count = read(c, all[i].rel)
+			}
+		})
+		n := 0
+		left := order[:0]
+		for _, g := range order {
+			end := min(len(g.files), g.next+g.batch)
+			settled := false
+			for ; g.next < end; g.next, n = g.next+1, n+1 {
+				settled = settled || add(g, hits[n])
+			}
+			if g.batch = min(4*g.batch, 4096); !settled && g.next < len(g.files) {
+				left = append(left, g)
+			} else if g.next < len(g.files) {
+				unread.Store(true)
+			}
+		}
+		order = left
+	}
+	if unread.Load() {
+		// The files not read (ruled out by the index, or of an entry settled before them) are still as the cache
+		// has them when their stat is the cached one: prune leaves their texts, and drops those of files gone.
+		e.find.seen(gen, func(yield func(fileStat) bool) {
+			for i := range all {
+				if stats[i].path != "" && !yield(stats[i]) {
+					return
+				}
+			}
+		})
+	}
+	e.find.prune(gen)
 	// Names: an entry whose name matches is found even when no file line does.
 	for key, en := range known {
 		if match(en.Name) {
@@ -339,8 +438,9 @@ func (e *Engine) walkLocked() *dirWalk {
 		for i := range ents {
 			switch d := &ents[i]; {
 			case d.dir:
-				// Attachments hold no text; history/ and select/ are bookkeeping, not searched (see searchable).
-				if d.name != "attachments" && d.rel != "history" && d.rel != selectDir {
+				// Attachments hold no text; history/, select/ and the search index are bookkeeping, not searched (see
+				// searchable).
+				if d.name != "attachments" && d.rel != "history" && d.rel != selectDir && d.rel != SearchIndexDir {
 					walk(d.path, d.rel)
 				}
 			case d.day:

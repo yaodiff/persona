@@ -70,3 +70,36 @@ These are the checks on real Windows 10 and 11 machines (2026-11-03 to 2026-11-0
 - Linux (`golang:1.27` container): `orcart`, `osproc`, `plugin`, `transcript`, the whole `node` package, and the screen-reading card / Orca / engine / link / machine tests in `hub`: passed.
 - On Windows, all tests in `orcart`, `osproc`, `transcript` and the Orca / attach / process-scanning tests in `node`: passed. A batch of tests in the `node`, `link` and `persona-link` packages hard-code
   Unix (shell scripts posing as executables, `/tmp`, permission bits) and fail on Windows; unrelated to this change, left for #1179.
+
+
+# Retired tray implementation (#6770)
+
+> Historical implementation notes for the retired tray. It is not part of the current independent Link service; see [operations/windows.md](../../operations/windows.md).
+
+## Tray
+
+The tray icon is the Windows counterpart of the Mac menu bar App ([link.md](link.md), "Menu bar App"): it shows the link's state and does what the App's menu does (#299).
+It is part of persona-link (`internal/linktray`, `persona-link tray`), not a separate program, so it is always the same version as the connector it manages. Pure Go, no cgo: Win32 for the icon, the menu and the windows, WebView2 (`wailsapp/go-webview2`) for the panel and the pairing window.
+
+- **What runs**: `install` writes "Persona Link" under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` → `"%USERPROFILE%\.persona\bin\persona-link-service.exe" tray` (the GUI-subsystem copy, so no console window) and starts it right away.
+  The tray is not in the scheduled task: the supervisor's Job would end it with the task, and `install` starts it outside any Job (`CREATE_BREAKAWAY_FROM_JOB`) so it outlives the terminal that ran `install`.
+  The panel's switch **Show in tray at sign-in** (or Settings › Apps › Startup) only changes the sign-in entry; the background service runs either way.
+- **One per data directory**: a named mutex; a second `tray` hands its link (or "show the panel") to the running one over `WM_COPYDATA` and exits. `install` asks the running tray to quit before replacing the program and starts the new one afterwards.
+- **State is read, never asked**: `link.json`, `link.status.json` and whether the pid in it is a live persona-link (`OpenProcess` and the image name). The data directory is watched (`FindFirstChangeNotification`), so changes show at once;
+  otherwise it reads them every second while the panel or the pairing window is open and every 3 seconds when not. The scheduled task's state (schtasks, about 50 ms) is read every 30 seconds and after each action.
+- **Reconnect now and network changes**: Windows has no `SIGUSR1` / `SIGUSR2`. persona-link waits on two named events instead, `Local\PersonaLink.<hash of link.json's path>.recheck` and `.reconnect` (`internal/link/poke*.go`), which the tray sets;
+  pairing from the tray sets `recheck` so a running persona-link reads the new credential at once. persona-link watches network changes itself with `NotifyIpInterfaceChange` (`internal/netaddr`), as it does with netlink on Linux.
+- **Icon**: the Mac App's seven looks (Connected, Needs your OK, Service not running, Connecting, Waiting for hub, Offline, Not paired), drawn at the notification area's size and DPI for a light or dark taskbar (`icons.go`; `LINKTRAY_ICON_SHEET=<dir> go test ./internal/linktray/ -run Icon` writes them out to look at).
+  Left click opens the panel; right click is a native menu with the same actions, which works without WebView2.
+- **Panel and pairing window**: HTML pages (`internal/linktray/web`; every size and color comes from `tokens.css`) loaded from memory, with no server and nothing fetched. The panel is a flyout over acrylic next to the icon, on the taskbar's side;
+  the pairing window (active and passive, as in the Mac App) is a normal window over Mica. Both follow the system's light or dark mode, accent color, transparency setting and the monitor's DPI (per-monitor v2).
+  The backdrops need Windows 11 22H2 (build 22621); earlier builds get a solid background. Slow actions (install, restart, pair) run off the UI thread, and their result shows in the panel in the user's words.
+- **Rename this computer…**: in the panel (and the right-click menu) while connected to a hub that renames computers and once the computer is confirmed. It opens a name field in the panel; Save asks the running
+  persona-link to have the hub rename it, as `persona-link name` does ([link.md](link.md), "The computer's name"), and the panel says the hub's answer. The status line shows the name the hub gives the computer.
+- **Notifications**: once when the hub waits for your OK on this computer, and once when a link that was up has been down for a minute.
+- **Links**: `persona://` links, and the previous brand's ones that older hubs print, open the pairing window with the link filled in (`HKCU\Software\Classes\<scheme>`, running `tray --open "%1"`).
+  A scheme that another program already handles is left alone (a desktop App's phone link must keep working), and uninstall removes only the handlers that are ours.
+- **Language**: Windows' display language, en / zh-Hans / ja (`internal/i18n/locales/*/link-tray.json`). The failures it recognizes (hub unreachable, link refused, no background service) are explained in that language, with the raw error after the explanation.
+- **WebView2**: Windows 11 always has the runtime. On Windows 10 without it, clicking the icon shows a notification and the native menu. WebView2 keeps the tray's profile (a cache, nothing of the user's) in `%LOCALAPPDATA%\Persona\LinkTray`, and `uninstall` deletes it.
+  `PERSONA_TRAY_DEVTOOLS=1` turns on the developer tools (F12); a port number (`PERSONA_TRAY_DEVTOOLS=9333`) also opens remote debugging on that port, for Playwright's `connect_over_cdp`.
+- **Pages in a browser**: `LINKTRAY_PAGES=<dir> go test ./internal/linktray/ -run TestWritePages` writes every sample state's panel and the pairing window, in each language and theme, as HTML files.

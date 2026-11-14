@@ -24,6 +24,18 @@ struct AgentsWidgetEdit: HomeWidgetEdit {
     }
 }
 
+/// Calendar: the view it starts on; the switch at its top right changes it from there.
+struct CalendarWidgetEdit: HomeWidgetEdit {
+    nonisolated static let title: LocalizedStringResource = "Calendar [Home Widgets]"
+    nonisolated static let description = IntentDescription("Today, this week or this month on your calendar. [Home Widgets]")
+
+    @Parameter(title: "View [Home Widgets]", default: .today) var view: HomeCalendarView
+
+    nonisolated init() {}
+
+    func apply(to entry: inout HomeEntry) { entry.calendarView = view }
+}
+
 /// Computers: every computer, or one.
 struct ComputersWidgetEdit: HomeWidgetEdit {
     nonisolated static let title: LocalizedStringResource = "Computers [Home Widgets]"
@@ -54,6 +66,15 @@ nonisolated extension HomeAgentsShow: AppEnum {
         .all: "All Agents [Home Widgets]",
         .computers: "Agents on Your Computers [Home Widgets]",
         .persona: "Persona's Tasks [Home Widgets]",
+    ]
+}
+
+nonisolated extension HomeCalendarView: AppEnum {
+    nonisolated static let typeDisplayRepresentation: TypeDisplayRepresentation = "View [Home Widgets]"
+    nonisolated static let caseDisplayRepresentations: [HomeCalendarView: DisplayRepresentation] = [
+        .today: "Today [Home Widgets]",
+        .week: "Week [Home Widgets]",
+        .month: "Month [Home Widgets]",
     ]
 }
 

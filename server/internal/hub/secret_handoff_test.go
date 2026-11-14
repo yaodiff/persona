@@ -89,6 +89,11 @@ func (m *handoffManager) took() ([]assistantwire.HTTPRequest, []extwire.Audit, [
 
 // handoffBusHub is a hub with handoffManager on the bus as the assistant.
 func handoffBusHub(t *testing.T) (*Hub, *handoffManager) {
+	h, m, _ := handoffBusHubWithCapabilities(t, nil)
+	return h, m
+}
+
+func handoffBusHubWithCapabilities(t *testing.T, capabilities []string) (*Hub, *handoffManager, *rawBus) {
 	t.Helper()
 	h := newTestHub(t)
 	h.store = &tokenStore{memStore: *newMemStore(), rows: map[string]db.DeviceToken{}, rev: map[string]bool{}}
@@ -101,10 +106,10 @@ func handoffBusHub(t *testing.T) (*Hub, *handoffManager) {
 	t.Cleanup(busSrv.Close)
 	m := &handoffManager{}
 	raw := dialRawBusWith(t, busSrv, busToken(t, h, assistantwire.AssistantID, "assistant"), m.handle)
-	if err := raw.call("manager.hello", map[string]any{"id": assistantwire.AssistantID}, nil); err != nil {
+	if err := raw.call("manager.hello", map[string]any{"id": assistantwire.AssistantID, "capabilities": capabilities}, nil); err != nil {
 		t.Fatal(err)
 	}
-	return h, m
+	return h, m, raw
 }
 
 // A message for an assistant conversation is marked as a person's own (SendParams.Human) only when the hub's auth

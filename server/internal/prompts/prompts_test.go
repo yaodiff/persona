@@ -191,7 +191,7 @@ func TestSmallPrompts(t *testing.T) {
 		RenderJSONOnly("system"):           "system\n\nReply with a single JSON object only, no prose, no code fences.",
 		RenderTranslateMailInput("S", "T"): "主题：S\n\nT",
 		RenderCodexInstructions("mem"):     "mem",
-		SnapshotCut():                      "- 快照到此截断；其余用 agents_list、todo_list、inbox 查",
+		SnapshotCut():                      "- 快照到此截断；其余用 agents_list、todo_list 查；收件箱在 App 里看",
 	} {
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)

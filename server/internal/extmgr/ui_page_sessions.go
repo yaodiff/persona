@@ -81,6 +81,7 @@ type pageSession struct {
 	components                         map[string]bool
 	slot                               extension.UISlot
 	tree                               *uistream.Tree
+	fit                                pageFitMemo // FitNative's last answer for this session's renders
 	native                             pageNative
 	latest                             *pageNative // one coalesced source render, never an unbounded delta queue
 	busy, suspended, closed            bool

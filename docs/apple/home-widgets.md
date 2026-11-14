@@ -6,7 +6,7 @@ Activity, the Control Center controls and the extension widget are documented el
 `docs/apple/intents.md`, `docs/extensions/extensions.md`). The Mac app is frozen and gets none of these widgets. The
 watch has its own complications (`docs/apple/persona.md`, "The Milk Frog on the watch").
 
-**Who it serves.** Everyday people first: **Today**, **To-dos**, **Record**, **Health** and **Inbox** need no
+**Who it serves.** Everyday people first: **Calendar**, **To-dos**, **Record**, **Health** and **Inbox** need no
 knowledge of Agents and use plain words. **Agents**, **Usage** and **Computers** serve people who work with Agents.
 They show titles and state words, never engine names, session IDs, paths or model IDs (DESIGN_SYSTEM.md 5.6).
 
@@ -17,7 +17,7 @@ Each widget has one hero (a number, a ring, a chart, a button) and one color tha
 | Widget | Its color | Small | Medium | Large | Lock Screen | Edit Widget |
 | --- | --- | --- | --- | --- | --- | --- |
 | **Agents** | Needs You's blue (the lead state's) | how many need you, big; the other counts in a line | + the one waiting longest | the three counts side by side, then five agents | circular (count, or the face), rectangular, inline | Show: All Agents · Agents on Your Computers · Persona's Tasks; Computer |
-| **Today** | the icon's coral | weekday, the day big, the next event | + the next three events | the rest of the day as a day view, a red line at now | circular (the date), rectangular, inline | none |
+| **Calendar** | the icon's coral | weekday, the day big, the next event | Today, Week or Month (the switch at its top right): the date and the next events; the week with a dot under each day that has events, the chosen day's events under it; the month with its dots, the chosen day's beside it | Today: the rest of the day as a day view, a red line at now; Week: the week, then the days from the chosen one on; Month: the month, then the chosen day's events | circular (the date), rectangular, inline | View |
 | **To-dos** | orange | the list's disc and how many, "1 overdue" | + four to-dos to tick off | eight to-dos to tick off | circular, rectangular, inline | none |
 | **Usage** | by how full: green, orange ≥ 80 %, red ≥ 95 % | the fullest window as a ring | each account as two rings, one inside the other | today's tokens, money spent, tokens by the hour, the accounts' rings | circular gauge, rectangular, inline | Account |
 | **Computers** | green; a computer's agents color its ring | four rings, a computer each | four rings with names and states | how many online, then each computer with its load | circular, rectangular, inline | Computer |
@@ -25,9 +25,10 @@ Each widget has one hero (a number, a ring, a chart, a button) and one color tha
 | **Health** | pink | today's steps, big, against the 7-day average | + sleep and resting heart rate | + the week's steps as bars | circular gauge, rectangular, inline | none |
 | **Inbox** | Needs You's blue | how many need you, big, and who sent the newest | + the newest message | the five newest | circular, rectangular, inline | none |
 
-A small widget never holds a list; lists start at medium. A new widget needs no editing: every default works on a fresh
-install (principle 1). Edit Widget holds every choice and changes it back. Nothing about the widgets lives in the
-app's Settings (principles 2 and 3).
+A small widget never holds a list; lists start at medium. The Calendar widget was called Today until it had a week and a
+month (#6946); its kind stays `persona.home.today`, so the ones already placed keep their place. A new widget needs no
+editing: every default works on a fresh install (principle 1). Edit Widget holds every choice and changes it back.
+Nothing about the widgets lives in the app's Settings (principles 2 and 3).
 
 ## The look
 
@@ -44,11 +45,50 @@ app's Settings (principles 2 and 3).
 - **StandBy**: the system removes the background and scales a small widget up. Every widget reads on black, and at
   night the system draws it in red.
 
+## Calendar: Today, Week and Month
+
+The Calendar widget (#6946) shows today's page, the week or the month on the medium and large sizes; the small one is
+today's page alone, since a switch, a week or a month grid do not fit beside each other there, and a small widget never
+holds a list.
+
+- **Today** is the page it always had: the date, the next events (medium), the rest of the day as a day view (large).
+- **Week**: the week that holds the chosen day, from the phone's first weekday, as a strip of seven days: the
+  weekday's letter, the number, a dot under a day that has events. Under it the chosen day's events (medium), or that
+  day and the days after it that have events, for a week, as many as fit (large).
+- **Month**: the month as the calendar draws it, a dot under each day that has events; the chosen day's events under
+  the grid (large) or beside it (medium, a smaller grid).
+- Today is in the widget's coral: a coral disc when it is the chosen day, its number in coral when another is. A chosen
+  day is a filled disc (black in light, white in dark), as the phone's Calendar marks them. Days gone by and their dots
+  step back. Today's list is the rest of the day; another day's is the whole day, with "N more" when it has more.
+- **The switch** (Today · Week · Month) sits at the top right, beside the persona: a segmented control drawn in the
+  widget's tokens (`HomeCalendarSwitch`). Each part is a widget button (`ShowCalendarViewIntent`): a tap changes only
+  this widget and redraws it at once, without opening the app or reaching the network. The view stays where it was left.
+- **A day** in the week or the month is a button too (`PickCalendarDayIntent`): it picks that day in the widget and
+  lists its events, without the app (Persona has no calendar page of its own, and the To-dos calendar shows to-dos, not
+  the phone's events). A tap on today, or on the day already picked, goes back to today. A picked day goes back to
+  today by itself after 10 minutes (`HomeCalendarState.pickLasts`) and at midnight, so the next glance shows today.
+  The rest of the widget opens the To-dos page, as before.
+- **Edit Widget › View** (Today, Week, Month) sets the view a widget starts on; the default is Today, so the widgets
+  placed before the switch existed still show today's page.
+- **Two widgets alike**: WidgetKit gives a widget no identity of its own. What the switch and a tapped day leave is kept
+  in the App Group (`Widgets/calendar.json`, `HomeCalendarState`) under the widget's size and Edit Widget › View. Two
+  sizes always keep their own; two of the same size and View switch together, and giving one of them another View in
+  Edit Widget keeps them apart.
+- **Why a day lists nothing** (`HomeDayNone`): no calendar access ("Allow Calendars in Persona to see your events"),
+  nothing left today, only today known (the hub's meetings: "Allow Calendars in Persona to see other days"), a day
+  the snapshot does not cover yet ("Open Persona to see this day"), or a free day ("No events"). A day the snapshot
+  does not cover has no dot: an unknown day is never shown as a free one in its list.
+- **Sizes**: the switch's words, the grids' numbers and letters are fixed sizes (`HomeWidgetTokens.segment…`,
+  `week…`, `month…`), as the heroes are; the events' words follow the text size, and fewer of them fit.
+- **The timeline** has at most four entries: now, when a picked day goes back to today, midnight (the date and the grids
+  move on without the app; the snapshot already holds the next days, so the new day's events show too), and when the
+  snapshot turns stale.
+
 ## Lock Screen
 
 Every widget but Record comes in the Lock Screen's three families; Record in the circle and the rectangle (one action).
 
-- **Circular**: the hero alone. Agents: how many need you (the face when none). Today: the weekday and the day. To-dos,
+- **Circular**: the hero alone. Agents: how many need you (the face when none). Calendar: the weekday and the day. To-dos,
   Inbox: the count under the widget's mark. Usage: the fullest window as a gauge. Computers: online of all. Health: a
   gauge of the steps against the average. Record: the button.
 - **Rectangular**: the widget's line in its accent ("2 need you", the next event, "6 to-dos today", "3 of 4 online")
@@ -62,13 +102,14 @@ content steps back, as on the Home Screen. Inbox and Health stay `privacySensiti
 
 ## Edit Widget
 
-Three widgets have choices, on the widget itself (touch and hold, Edit Widget); nothing about the widgets is in the
+Four widgets have choices, on the widget itself (touch and hold, Edit Widget); nothing about the widgets is in the
 app's Settings (principles 2 and 3). Every choice starts at a default that works on a fresh install.
 
 | Widget | Choice | Default | The others |
 | --- | --- | --- | --- |
 | Agents | Show | All Agents | Agents on Your Computers (the coding agents), Persona's Tasks |
 | Agents, Computers | Computer | Any Computer | each computer in the snapshot |
+| Calendar | View | Today | Week, Month: where the widget starts; its switch changes it from there |
 | Usage | Account | The Fullest | each subscription account in the snapshot (up to 8) |
 
 - The lists come from the snapshot the app last wrote (`HomeChoices`), so Edit Widget never calls the hub and names
@@ -84,7 +125,7 @@ app's Settings (principles 2 and 3). Every choice starts at a default that works
 The persona never takes the hero's place. It appears in three places:
 
 - **The corner**: a 22 pt face at the top right (`HomeWidgetTokens.faceCorner`) whose mood says how this widget's
-  subject is. Agents: needs you, working, done (an agent finished, unseen). Today: working when an event starts within
+  subject is. Agents: needs you, working, done (an agent finished, unseen). Calendar: working when an event starts within
   15 minutes. To-dos: needs you when one is overdue, done when all are done. Usage: working over 80 %, needs you over
   95 %. Computers: what their agents do, offline when all are. Health: done once the steps pass the average. Inbox:
   needs you when a message does.
@@ -111,7 +152,8 @@ The same definition as the app, from the same code (principle 4):
 | --- | --- | --- | --- |
 | Agents | Needs You | sessions that wait for you, each once (DESIGN_SYSTEM.md 4.8, `AgentsNeedsYou`, the Agents tab's badge) | `AppModel` sessions, the rule of `TabBadges` |
 | Agents | Working, Just Finished | the Agents list's states (finished = unread) | the same |
-| Today | events | the rest of today's events: the phone's calendar when Persona already has full access (`MeetingCalendar`'s); else the hub's Today meetings; else none, and the widget says to allow Calendars in Persona. The widget never asks itself | EventKit / `TodayBody.meetings` |
+| Calendar | events | the rest of today's events: the phone's calendar when Persona already has full access (`MeetingCalendar`'s); else the hub's Today meetings; else none, and the widget says to allow Calendars in Persona. The widget never asks itself | EventKit / `TodayBody.meetings` |
+| Calendar | a day's dot, its events | the phone's calendar only, the same events as today's (declined and untitled ones left out): every event on that day, all-day ones first, an event over several days on each; today's dot also counts the ones already over | EventKit (`HomeDays.build`) |
 | To-dos | the count | the To-dos page's Today filter: due today, plus open overdue ones | `TodoStore`, `TodoListLogic` |
 | Usage | a window's percent, reset time | `GET /api/v1/usage/windows`, the Machines page's numbers | `UsageWindowsStore` |
 | Usage | tokens today, by the hour | the island's Tokens Today; the hours from `GET /api/v1/usage`'s `hourly` (#5721) | `FleetState.stats`, the usage summary |
@@ -138,14 +180,17 @@ The widget extension never talks to the hub and never reads the keychain (it can
 App Group, and the widgets draw only that:
 
 ```
-Widgets/snapshot.json        HomeSnapshot: counts, the top rows, events, to-dos, windows, computers, health, inbox
+Widgets/snapshot.json        HomeSnapshot: counts, the top rows, events and days, to-dos, windows, computers, health, inbox
+Widgets/calendar.json        HomeCalendarState: the Calendar widgets' views and picked days, written by their buttons
 Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at the widget sizes (as Fleet/faces/)
 ```
 
 - **What it holds** (`apple/Shared/HomeWidgets/HomeSnapshot.swift`): only what a widget draws. Up to 40 agent rows
-  (the rest counted), today's events, 8 to-dos, the accounts, 8 computers, 5 messages and a week of steps. About
-  6 KB. Times are Unix seconds. The app and its widgets ship together: a file of another shape (`HomeSnapshot.version`,
-  written before an update) reads as none until the app writes again.
+  (the rest counted), today's events, the days around today (below), 8 to-dos, the accounts, 8 computers, 5 messages
+  and a week of steps. About 6 KB, with the days up to about 20 KB. Times are Unix seconds. The app and its widgets
+  ship together: a file of another shape (`HomeSnapshot.version`, written before an update) reads as none until the
+  app writes again. A new optional field (the days) reads as absent from an older file and needs no new version, so
+  the widgets keep their content across the update.
 - **When the app writes it**: on every change a widget shows, coalesced to at most one write every 5 seconds (P7);
   when it goes to the background; at least every 20 minutes while it runs (`HomeWidgetWriter.heartbeat`); and when the
   hub's widget push wakes it (#5721). That push is sent within seconds when Needs You changes; other changes are coalesced to at most one
@@ -156,13 +201,18 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 - **Waking the app** (#5721): from the foreground the app tells the hub whether any of the widgets is on a screen
   (`widgets` in its device prefs, `HomeWidgetWriter.tellHub`); the hub's silent `persona_wake: "widgets"` push then
   connects it for 25 seconds, and it writes before it lets go.
-- **What the app reads itself** (`HomeWidgetData`): today's calendar events (EventKit, off the main actor, only with
-  the access Persona already has), Health's numbers (`HealthTool.daily`: steps for 8 days, sleep, resting heart rate,
-  active energy), the subscription windows (`UsageWindowsStore`), today's tokens by the hour (`GET /api/v1/usage`'s
-  `hourly`) and today's money at the gateways (each gateway launcher's quota, at most every 15 minutes, never sooner when
-  the hub wakes the app; a money read on another day is not shown). Each is read only while a widget that shows it is on a screen (`WidgetCenter`'s configurations, from the
-  foreground), at most every 10, 15 and 5 minutes, and again when the hub wakes the app; a read that fails (Health is
-  locked with the phone) keeps the last.
+- **The days** (`HomeSnapshot.Today.days`, `HomeDays`): every day of this month's grid and the 14 days after today,
+  whichever ends later (at most about seven weeks), each with how many events it has and its first four (titles cut
+  to 60 characters); days without events are left out, and the range is written, so a day outside it reads as not
+  known rather than free. Only from the phone's calendar: the hub's meetings are today's alone.
+- **What the app reads itself** (`HomeWidgetData`): the calendar's events over those days, in one query (EventKit, off
+  the main actor, only with the access Persona already has; today's rest and the days come from the same read), Health's
+  numbers (`HealthTool.daily`: steps for 8 days, sleep, resting heart rate, active energy), the subscription windows
+  (`UsageWindowsStore`), today's tokens by the hour (`GET /api/v1/usage`'s `hourly`) and today's money at the gateways
+  (each gateway launcher's quota, at most every 15 minutes, never sooner when the hub wakes the app; a money read on
+  another day is not shown). Each is read only while a widget that shows it is on a screen (`WidgetCenter`'s
+  configurations, from the foreground), at most every 10, 15 and 5 minutes, and again when the hub wakes the app; a read
+  that fails (Health is locked with the phone) keeps the last.
 - **Off the main thread** (P1): the file is written on a background task, protected until first unlock as
   `FleetLookStore`'s; only encoding the few kilobytes runs on the main actor, at most every 5 seconds.
 - **Stale**: the timeline adds an entry at `HomeSnapshot.staleAfter` (an hour after the write). From then on the
@@ -171,9 +221,11 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 ## Taps
 
 A widget opens its page (`persona://widget/<kind>`): the Agents list, To-dos, Machines, Recordings, Health, Inbox;
-Today opens To-dos too (Persona has no calendar page of its own), and Usage opens Machines, where the windows are. Agents opens the most urgent agent's chat (`persona://open?machine=…&session=…`, the Live
-Activity's link). Each row of the large Agents widget opens its own agent. The Record button runs the Record control's
-intent without opening the app, and the recording's Live Activity confirms it at once.
+Calendar opens To-dos too (Persona has no calendar page of its own; its switch and its days are buttons that change only
+the widget), and Usage opens Machines, where the windows are. Agents opens the most urgent agent's chat
+(`persona://open?machine=…&session=…`, the Live Activity's link). Each row of the large Agents widget opens its own
+agent. The Record button runs the Record control's intent without opening the app, and the recording's Live Activity
+confirms it at once.
 
 ## Smart Stack
 
@@ -187,7 +239,8 @@ The gallery draws every widget at its Home Screen sizes in light and dark with m
 from the system, so the gallery supplies stand-ins for them. For the Home Screen itself, `-showHomeWidgetSample YES`
 writes the same made-up snapshot instead of the app's, so the widgets added to a simulator's Home Screen show it
 without a hub (`-showHomeWidgetSample ticked`: two to-dos just ticked, one on its way and one the hub refused); those
-shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list).
+shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list). `-showHomeWidgets calendar:<page>`
+draws the Calendar widget's views a page at a time (`medium`, `large`, `large2`, `more`; an iPad's screen holds one).
 
 ## Phases
 
@@ -205,3 +258,6 @@ shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s
 4. **The gateways' money for Usage**: an optional `period` on a quota report's usage entries (`day`, `week`, `month`;
    `server/internal/quota`), and the widget's money as the sum of the `day` entries' `cost_usd` over the gateway
    launchers (`HomeUsage.spentToday`), read at most every 15 minutes.
+5. **The Calendar widget's week and month** (#6946): Today renamed Calendar; the switch and the day buttons
+   (`ShowCalendarViewIntent`, `PickCalendarDayIntent`, `HomeCalendarState`), Edit Widget › View, the days in the
+   snapshot (`HomeDays`), the midnight entry, `HomeCalendarWidgetTests`.

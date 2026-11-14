@@ -252,15 +252,14 @@ import Testing
 
     /// The top card: phase 2's Live box only where there can be no highlights (a meeting started without them, or one
     /// Persona doesn't attend, by its role or its room, that has none); the waiting line before the first while Persona
-    /// attends; the highlights once there are any, also after the role turned off. With the keyboard up (the regular
-    /// sizes) each one folds, and at the accessibility sizes, where nothing folds, each stays as without it.
+    /// attends; the highlights once there are any, also after the role turned off. With the keyboard up each one folds.
     @Test func theCardsMode() throws {
         typealias H = MeetingHighlights
         let roleOff = try H.attending(meeting(room(.off)), room: roomState("ready"), roomMissing: false, refused: false)
         let roomUnavailable = try H.attending(meeting(room()), room: roomState("unavailable"), roomMissing: false, refused: false)
         #expect(!roleOff && !roomUnavailable)
-        func mode(shows: Bool = true, has: Bool = false, attending: Bool = true, writing: Bool = false, large: Bool = false) -> H.Mode {
-            H.mode(shows: shows, hasHighlights: has, attending: attending, writing: writing, accessibilitySize: large)
+        func mode(shows: Bool = true, has: Bool = false, attending: Bool = true, writing: Bool = false) -> H.Mode {
+            H.mode(shows: shows, hasHighlights: has, attending: attending, writing: writing)
         }
         #expect(mode(shows: false) == .live(folded: false), "no flag: the Live box")
         #expect(mode(shows: false, has: true) == .live(folded: false), "no flag: the Live box, whatever the hub sends")
@@ -280,12 +279,6 @@ import Testing
         let folds = [H.Mode.live(folded: true), .waiting(folded: true), .highlights(folded: true)].map(\.folded)
         let wholes = [H.Mode.live(folded: false), .waiting(folded: false), .highlights(folded: false)].map(\.folded)
         #expect(folds == [true, true, true] && wholes == [false, false, false])
-
-        // At the accessibility sizes nothing folds.
-        #expect(mode(has: true, writing: true, large: true) == .highlights(folded: false), "nothing folds")
-        #expect(mode(writing: true, large: true) == .waiting(folded: false))
-        #expect(mode(shows: false, writing: true, large: true) == .live(folded: false))
-        #expect(mode(attending: false, writing: true, large: true) == .live(folded: false))
     }
 
     /// Whether Persona attends and its room still gets the meeting, as the page works it out for the waiting line: the
@@ -331,7 +324,7 @@ import Testing
 
         // Through the card: the Live box while none came, as with the role off.
         let mode = { (attending: Bool) in
-            H.mode(shows: true, hasHighlights: false, attending: attending, writing: false, accessibilitySize: false)
+            H.mode(shows: true, hasHighlights: false, attending: attending, writing: false)
         }
         #expect(mode(attending(unsupported, room: ready)) == .live(folded: false))
         #expect(mode(attending(room: none, refused: true)) == .live(folded: false))

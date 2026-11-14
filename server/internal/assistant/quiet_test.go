@@ -547,7 +547,7 @@ func TestQueuedDoneNoticeSurvivesAnsweredCard(t *testing.T) {
 	idleLark.Status = proto.StatusIdle
 	f.setSessions("server", idle1, idleLark)
 	s.drainRelays("server", []proto.Session{idleLark})
-	waitFor(t, "the done notice to go out", func() bool { return f.sentTo("lark1") == 1 })
+	waitFor(t, "the done notice to go out", func() bool { return f.sentTo("lark1") == 1 && s.queuedFor("lark1") == 0 })
 	if q := s.queuedFor("lark1"); q != 0 {
 		t.Fatalf("%d notice(s) still queued", q)
 	}

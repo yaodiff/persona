@@ -2,7 +2,8 @@
 // "Original" pages over the event body (a document, a connector thread, a Moments post — and the extension's own "View in
 // chat") get one same-address history entry, so Back returns to the event and "Handling" takes the entry back off (E1).
 // The entry must never outlive the page it was opened from: switching items, ‹, Done and Back all land where they should,
-// and a chat or mail item embeds its source under the event even when an extension offers a page for it.
+// and a chat or mail item keeps its original collapsed until Original or a chain entry opens it, even when an extension
+// offers a page for it.
 import { StrictMode, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -123,19 +124,26 @@ afterEach(async () => {
   history.replaceState(null, "", "/");
 });
 
-describe("a chat item's event embeds its chat, extension page or not", () => {
-  it("draws the event above the chat, with no extension page and Pin available", async () => {
+describe("a chat item's event keeps its chat collapsed, extension page or not", () => {
+  it("mounts the chat and Pin only after Original expands it", async () => {
     await draw(chatItem());
+    expect(host.querySelector('[data-event-body="embedded"]')).toBeNull();
+    expect(host.querySelector("[data-chat-body]")).toBeNull();
+    expect(host.querySelector("[data-extension-inbox]")).toBeNull();
+    expect(host.querySelector('button[aria-label="Pin 消息"]')).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="inbox-original-row-toggle"]')!.click());
+    await flush();
     expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
     expect(host.querySelector("[data-chat-body]")).not.toBeNull();
-    expect(host.querySelector("[data-extension-inbox]")).toBeNull();
     expect(host.querySelector('button[aria-label="Pin 消息"]')).not.toBeNull();
   });
 
-  it("a chain entry focuses the chat in place, adding no history entry", async () => {
+  it("a chain entry expands and focuses the chat in place, adding no history entry", async () => {
     openFromList();
     await draw(chatItem({ chain: [{ ...received(), link: { type: "source", position: "42" } }] }));
+    expect(host.querySelector("[data-chat-body]")).toBeNull();
     await press("1 new message");
+    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
     expect(host.querySelector("[data-chat-body]")?.getAttribute("data-focus")).toBe("42");
     expect(onOverlayEntry(history.state)).toBe(false);
     expect(eventBody()).not.toBeNull(); // the event is still there above it
@@ -150,10 +158,11 @@ describe("a chat item's event embeds its chat, extension page or not", () => {
     expect(onOverlayEntry(history.state)).toBe(false);
   });
 
-  it("a mail item's event embeds its message, extension page or not", async () => {
+  it("a mail item's event starts with its message collapsed, extension page or not", async () => {
     await draw(docItem({ id: "mail:a1:1:1", source: "mail", doc: undefined, mail: { account_id: "a1", mailbox: "INBOX", uids: [1], from: { name: "A", email: "a@example.com" } } }));
-    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
+    expect(host.querySelector('[data-event-body="embedded"]')).toBeNull();
     expect(host.querySelector("[data-extension-inbox]")).toBeNull();
+    expect(host.querySelector<HTMLButtonElement>('[data-testid="inbox-original-row-toggle"]')?.getAttribute("aria-expanded")).toBe("false");
   });
 });
 

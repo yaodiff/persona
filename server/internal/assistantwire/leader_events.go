@@ -54,6 +54,10 @@ type LeaderReportEvent struct {
 	Doing    string   `json:"doing,omitempty"`
 	NeedsYou string   `json:"needs_you,omitempty"`
 	Links    []string `json:"links,omitempty"`
+	// Level is set while the hub's low-distraction mode is on (Hello.QuietPush): P1 for progress, a goal reached and
+	// stuck, which an extension keeps in its log and briefing without alerting the owner (no message that rings, no
+	// mention); P0 for a decision. Left out with the mode off, when an extension does as before.
+	Level string `json:"level,omitempty"`
 }
 
 // LeaderReportTextMost is how long a report's text may be, in characters.

@@ -18,6 +18,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 func TestProxyProtocolPolicy(t *testing.T) {
@@ -386,14 +388,15 @@ func TestDoctorProxyProtocol(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "hub.json"), b, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		var out bytes.Buffer
-		(&doctorReport{out: &out}).config(dir)
+		d := &doctorReport{l: i18n.ZhHans} // the wording the report had before it spoke other languages
+		d.config(dir)
+		out := reportText(d)
 		if tc.want == "" {
-			if strings.Contains(out.String(), "proxy_protocol") {
-				t.Fatalf("unset proxy_protocol reported:\n%s", out.String())
+			if strings.Contains(out, "proxy_protocol") {
+				t.Fatalf("unset proxy_protocol reported:\n%s", out)
 			}
-		} else if !strings.Contains(out.String(), tc.want) {
-			t.Fatalf("doctor output lacks %q:\n%s", tc.want, out.String())
+		} else if !strings.Contains(out, tc.want) {
+			t.Fatalf("doctor output lacks %q:\n%s", tc.want, out)
 		}
 	}
 }

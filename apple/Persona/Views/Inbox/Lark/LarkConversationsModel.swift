@@ -5,6 +5,8 @@ import Observation
 /// The browser shares the inbox's routes and chat UI, with one account-bound list snapshot.
 @MainActor @Observable
 final class LarkConversationsModel {
+    enum Filter: String { case all, unread }
+
     nonisolated struct Snapshot: Codable, Sendable {
         var accountID: String
         var conversations: [LarkConversation]
@@ -19,6 +21,7 @@ final class LarkConversationsModel {
         var status: () async throws -> LarkStatus
         var cached: () -> Snapshot?
         var save: (Snapshot?) -> Void
+        var unreadPage: ((String?, String) async throws -> APIClient.LarkConversations)? = nil
 
         /// account: the Feishu account to list (`ol_account`); nil: the hub's own. Its rows carry it (`LarkConversation.account`).
         static func live(_ config: ServerConfig, account: Int? = nil, accountName: String? = nil) -> Self {
@@ -34,11 +37,13 @@ final class LarkConversationsModel {
             }
             return Self(page: { stamp(try await api.larkConversationPage(cursor: $0, accountID: $1)) },
                         pinned: { stamp(try await api.larkPinnedSnapshot()) },
-                        status: { try await api.larkStatus() }, cached: { cache.load() }, save: { cache.save($0) })
+                        status: { try await api.larkStatus() }, cached: { cache.load() }, save: { cache.save($0) },
+                        unreadPage: { stamp(try await api.larkConversationPage(cursor: $0, accountID: $1, scope: "unread")) })
         }
     }
 
     private(set) var conversations: [LarkConversation] = []
+    private(set) var filter: Filter = .all
     private(set) var pinned: [LarkConversation] = []
     private(set) var accountID: String?
     private(set) var loading = false
@@ -108,6 +113,29 @@ final class LarkConversationsModel {
         return "lark-conversations-v2-" + digest.map { String(format: "%02x", $0) }.joined() + (account.map { "-a\($0)" } ?? "")
     }
 
+    /// A filter owns its cursor and requests. Only All uses the existing disk cache; switching never reads disk.
+    func select(_ value: Filter) async {
+        guard value != filter else { return }
+        revision += 1
+        filter = value
+        willChange()
+        pending = nil
+        conversations = []
+        pinned = []
+        nextCursor = nil
+        loadedPages = 1
+        failed = false
+        pageFailed = false
+        needsUpgrade = false
+        await refresh()
+    }
+
+    private func fetchPage(_ cursor: String?, _ owner: String) async throws -> APIClient.LarkConversations {
+        if filter == .unread, let unread = deps.unreadPage { return try await unread(cursor, owner) }
+        let result = try await deps.page(cursor, owner)
+        return filter == .unread ? result.unreadOnly() : result
+    }
+
     /// Fetch the complete shelf and every loaded page before replacing the snapshot.
     /// A newer refresh invalidates the previous result even if its HTTP cancellation arrives late.
     func refresh() async {
@@ -133,7 +161,7 @@ final class LarkConversationsModel {
             var count = 0
             let pageCount = pending?.loadedPages ?? loadedPages
             repeat {
-                let page = try await deps.page(cursor, owner)
+                let page = try await fetchPage(cursor, owner)
                 try check(request)
                 guard try Self.owner(page) == owner else { throw LoadError.accountChanged }
                 rows = Self.merge(rows, page.conversations)
@@ -178,7 +206,7 @@ final class LarkConversationsModel {
         do {
             let shelf = try await deps.pinned()
             try check(request)
-            let page = try await deps.page(nil, owner)
+            let page = try await fetchPage(nil, owner)
             try check(request)
             // Another account signed in: the whole list is read for it (`refresh` clears the old one first).
             if try Self.owner(shelf) != owner || Self.owner(page) != owner || accountID != owner { whole = true }
@@ -209,25 +237,26 @@ final class LarkConversationsModel {
     func more() async {
         // A refresh landing while the page is on its way drops it. The spinner asking for it keys on the cursor, which
         // the refresh leaves as it was, so it would not ask again: ask here once the refresh is done.
-        while await morePage() == .superseded {}
+        let selected = filter
+        while selected == filter, await morePage(selected) == .superseded {}
     }
 
     private enum PageOutcome { case done, superseded }
 
-    private func morePage() async -> PageOutcome {
+    private func morePage(_ selected: Filter) async -> PageOutcome {
         // Only a refresh holds the page back. A moving list asks at once (#2823: waiting for the fling to rest left the
         // spinner at the end for a whole round trip after it stopped); what comes back waits in `pending` like a refresh.
         while loading {
             await withCheckedContinuation { pageWaiters.append($0) }
-            guard !Task.isCancelled else { return .done }
+            guard !Task.isCancelled, selected == filter else { return .done }
         }
         let base = current
-        guard let cursor = base.nextCursor, let owner = accountID, !loadingMore, !Task.isCancelled else { return .done }
+        guard selected == filter, let cursor = base.nextCursor, let owner = accountID, !loadingMore, !Task.isCancelled else { return .done }
         let request = revision
         loadingMore = true
         defer { loadingMore = false; wakePageWaiters() }
         do {
-            let page = try await deps.page(cursor, owner)
+            let page = try await fetchPage(cursor, owner)
             try check(request)
             guard try Self.owner(page) == owner, accountID == owner else { throw LoadError.accountChanged }
             // A snapshot held while this page was on its way (`pending`) is the newer base, as long as it still ends here.
@@ -269,11 +298,14 @@ final class LarkConversationsModel {
         pinned = fresh.pinned
         nextCursor = fresh.nextCursor
         loadedPages = fresh.loadedPages
-        deps.save(fresh)
+        if filter == .all { deps.save(fresh) }
     }
 
     private func publish(_ fresh: Snapshot) {
-        if scrolling { pending = fresh; deps.save(fresh) } else { apply(fresh) }
+        if scrolling {
+            pending = fresh
+            if filter == .all { deps.save(fresh) }
+        } else { apply(fresh) }
     }
 
     private func clearAccount() {

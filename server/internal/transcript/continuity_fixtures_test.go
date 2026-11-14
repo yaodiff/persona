@@ -16,7 +16,7 @@ import (
 
 // These fixtures describe ChatStore, including behavior outside the corpus simulator:
 // optional pagination metadata, folds, reload races, and AppModel's request decisions.
-// The independent Swift replay documented beside the fixtures uses the real ChatStore.
+// The XCTest replay beside PersonaCore uses the real ChatStore and the Rust binding.
 type continuityState struct {
 	Items   []proto.Item `json:"items"`
 	Covered int          `json:"covered"`
@@ -26,7 +26,6 @@ type continuityState struct {
 }
 type continuityAction struct {
 	Kind       string `json:"kind"`
-	DelayMS    int    `json:"delay_ms,omitempty"`
 	AfterSeq   *int   `json:"after_seq,omitempty"`
 	SinceSeq   *int   `json:"since_seq,omitempty"`
 	BeforeSeq  *int   `json:"before_seq,omitempty"`
@@ -68,8 +67,10 @@ type continuityClient struct {
 	continuityState
 	filling    bool
 	fillPages  int
-	timers     int
+	heard      int
+	asked      int
 	unfolding  *proto.Item
+	opened     map[string]proto.Item
 	work       []proto.Item
 	rangePages int
 }
@@ -95,27 +96,113 @@ func continuityFolds(f, i proto.Item) bool {
 		continuityPositionLE(i.Seq, part(i.ID), f.Fold.ThroughSeq, part(f.Fold.ThroughID))
 }
 func (c *continuityClient) merge(in []proto.Item, backlog bool, more *bool) {
-	var folds []proto.Item
-	for _, f := range in {
-		if f.Kind != proto.KindFold {
-			continue
+	// ChatStore's newestCopies keeps the last duplicate in cache order before applying incoming items.
+	cached := map[string]proto.Item{}
+	for _, i := range c.Items {
+		cached[i.ID] = i
+	}
+	evidence := make([]proto.Item, 0, len(c.Items)+len(c.opened)+len(in))
+	// A restored cache can repeat an id. Keep the original copies long enough to collect earlier promotion evidence.
+	for _, i := range c.Items {
+		if i.SupervisionUser || i.Fold != nil && i.Fold.SupervisionUser {
+			evidence = append(evidence, i)
 		}
-		same := false
-		for _, old := range c.Items {
-			if old.ID == f.ID && reflect.DeepEqual(old.Fold, f.Fold) {
-				same = true
+	}
+	for _, i := range c.opened {
+		if i.SupervisionUser {
+			evidence = append(evidence, i)
+		}
+	}
+	for _, i := range in {
+		if i.SupervisionUser || i.Fold != nil && i.Fold.SupervisionUser {
+			evidence = append(evidence, i)
+		}
+	}
+	promotedIDs := map[string]bool{}
+	var promotedFolds, promotedWork []proto.Item
+	for _, i := range evidence {
+		if i.SupervisionUser {
+			promotedIDs[i.ID] = true
+		}
+		if i.Fold != nil {
+			promotedFolds = append(promotedFolds, i)
+		}
+		if continuityWork(i) {
+			promotedWork = append(promotedWork, i)
+		}
+	}
+	retain := func(i proto.Item) proto.Item {
+		keep := promotedIDs[i.ID]
+		if continuityWork(i) {
+			for _, f := range promotedFolds {
+				keep = keep || continuityFolds(f, i)
 			}
 		}
-		if !same {
-			folds = append(folds, f)
+		if i.Kind == proto.KindFold {
+			for _, w := range promotedWork {
+				keep = keep || continuityFolds(i, w)
+			}
+		}
+		if keep {
+			i.SupervisionUser = true
+			if i.Fold != nil {
+				f := *i.Fold
+				f.SupervisionUser = true
+				i.Fold = &f
+			}
+		}
+		return i
+	}
+	freshMap := map[string]proto.Item{}
+	for _, i := range in {
+		freshMap[i.ID] = retain(i)
+	}
+	c.Items = c.Items[:0]
+	for _, i := range cached {
+		c.Items = append(c.Items, retain(i))
+	}
+	var fresh []proto.Item
+	for _, i := range freshMap {
+		if was, ok := c.opened[i.ID]; ok && was.Fold != nil && i.Fold != nil &&
+			continuityPositionLE(i.Fold.ThroughSeq, part(i.Fold.ThroughID), was.Fold.ThroughSeq, part(was.Fold.ThroughID)) {
+			continue
+		}
+		overlapped := false
+		for _, work := range freshMap {
+			if i.Kind == proto.KindFold && work.Kind != proto.KindFold && continuityWork(work) && continuityFolds(i, work) {
+				overlapped = true
+			}
+		}
+		if !overlapped {
+			fresh = append(fresh, i)
+		}
+	}
+	var batchWork []proto.Item
+	for _, i := range fresh {
+		if i.Kind != proto.KindFold && continuityWork(i) {
+			batchWork = append(batchWork, i)
 		}
 	}
 	kept := make([]proto.Item, 0, len(c.Items))
 	for _, old := range c.Items {
 		drop := false
-		for _, f := range folds {
-			if continuityWork(old) && continuityFolds(f, old) {
-				drop = true
+		for _, i := range fresh {
+			if i.Kind == proto.KindFold {
+				if continuityWork(old) && continuityFolds(i, old) {
+					drop = true
+				}
+				for _, work := range batchWork {
+					if continuityFolds(i, work) {
+						drop = true
+					}
+				}
+			}
+		}
+		if old.Kind == proto.KindFold {
+			for _, work := range batchWork {
+				if continuityFolds(old, work) {
+					drop = true
+				}
 			}
 		}
 		if !drop {
@@ -127,11 +214,19 @@ func (c *continuityClient) merge(in []proto.Item, backlog bool, more *bool) {
 	for _, i := range c.Items {
 		ids[i.ID] = true
 	}
-	for _, i := range in {
-		if !ids[i.ID] {
-			c.Items = append(c.Items, i)
-			ids[i.ID] = true
+	for _, i := range fresh {
+		updated := false
+		for n, old := range c.Items {
+			if old.ID == i.ID {
+				c.Items[n] = i
+				updated = true
+				break
+			}
 		}
+		if !updated {
+			c.Items = append(c.Items, i)
+		}
+		ids[i.ID] = true
 	}
 	// ChatStore evaluates this before sorting newly prepended items.
 	reaches := false
@@ -153,6 +248,7 @@ func (c *continuityClient) merge(in []proto.Item, backlog bool, more *bool) {
 }
 func (c *continuityClient) reset() {
 	c.Items = []proto.Item{}
+	c.opened = nil
 	c.Covered = 0
 	c.HasMore = nil
 	c.Loaded = false
@@ -167,6 +263,7 @@ func (c *continuityClient) replace(e continuityEvent, more bool) {
 		}
 	}
 	c.Items = []proto.Item{}
+	c.opened = nil
 	c.HasMore = continuityPtr(more)
 	if e.History != nil {
 		c.History = e.History
@@ -254,22 +351,24 @@ func (c *continuityClient) step(e continuityEvent) (gap, []continuityAction, err
 			return g, nil, fmt.Errorf("after response without active fill")
 		}
 		e.Backlog, e.HasMore = false, nil // AppModel.fill does not pass has_more to apply.
+		before, to := c.Covered, e.To
 		g = c.apply(e)
 		c.fillPages++
-		if g == gapNone {
+		again := g == gapNone && c.heard > c.asked
+		progress := c.Covered > before || to != nil && *to > before
+		if g == gapNone && !again || g == gapFill && !progress {
 			c.filling = false
-		} else if g == gapReload || c.fillPages == 8 {
+		} else if g == gapReload || (g == gapFill || again) && c.fillPages == 8 {
 			c.filling = false
 			actions = append(actions, continuityLatest())
 		} else {
 			actions = append(actions, c.after())
 		}
-		return g, actions, nil
-	case "fill_timer":
-		if c.timers == 0 {
-			return g, nil, fmt.Errorf("timer without scheduled fill")
+		if len(actions) > 0 {
+			c.asked = c.heard
 		}
-		c.timers--
+		return g, actions, nil
+	case "continue_fill":
 		if !c.filling {
 			c.filling = true
 			c.fillPages = 0
@@ -329,6 +428,10 @@ func (c *continuityClient) step(e continuityEvent) (gap, []continuityAction, err
 							work = append(work, w)
 						}
 					}
+					if c.opened == nil {
+						c.opened = map[string]proto.Item{}
+					}
+					c.opened[c.unfolding.ID] = *c.unfolding
 					c.merge(work, false, nil)
 					break
 				}
@@ -341,8 +444,13 @@ func (c *continuityClient) step(e continuityEvent) (gap, []continuityAction, err
 	}
 	switch g {
 	case gapFill:
-		c.timers++
-		actions = append(actions, continuityAction{Kind: "schedule_fill", DelayMS: 1500})
+		c.heard++
+		if !c.filling {
+			c.filling = true
+			c.fillPages = 0
+			c.asked = c.heard
+			actions = append(actions, c.after())
+		}
 	case gapReload:
 		actions = append(actions, continuityLatest())
 	}

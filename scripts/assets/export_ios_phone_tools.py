@@ -101,7 +101,8 @@ def schema_property(call):
     if val_m:
         val_name = val_m.group(1)
         if val_name == "metricNames":
-            prop["enum"] = ["steps", "distance", "active_energy", "heart_rate", "resting_heart_rate", "sleep", "weight"]
+            prop["enum"] = ["steps", "distance", "active_energy", "heart_rate", "resting_heart_rate", "sleep", "weight",
+                            "dietary_energy", "protein", "carbs", "fat", "resting_energy"]
         else:
             raise ValueError("enum values are not exported yet: %s" % call)
     return prop

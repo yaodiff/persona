@@ -100,8 +100,8 @@ func TestRelayInDoubtButInTheConversationIsNotSentAgain(t *testing.T) {
 	}
 	for range 3 {
 		s.drainRelays("server", []proto.Session{idle})
+		waitFor(t, "the repeated drain to settle", func() bool { return !drainingNow(s, "conv1") })
 	}
-	time.Sleep(50 * time.Millisecond)
 	if got := triesOf(f, tries); len(got) != 1 {
 		t.Fatalf("sent %d times, want once", len(got))
 	}

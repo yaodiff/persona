@@ -35,11 +35,25 @@ final class PersonaQueueUITests: XCTestCase {
         return app
     }
 
-    @MainActor private func shot(_ app: XCUIApplication, _ name: String) throws {
+    @MainActor private func shot(_ app: XCUIApplication, _ name: String, appearance: String? = nil) throws {
         let env = ProcessInfo.processInfo.environment
         guard let dir = env["PERSONA_SHOTS"] else { return }
-        let appearance = env["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
+        let appearance = appearance ?? env["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
         try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/persona-queue-\(appearance)-\(name).png"))
+    }
+
+    /// PERSONA_SHOTS: this step in light and dark through the system's appearance (a `-ui.scheme` launch changes the app
+    /// icon, and its notice covers the shot), then back to the run's appearance.
+    @MainActor private func shotLightAndDark(_ app: XCUIApplication, _ name: String) throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil else { return }
+        let look = XCUIDevice.shared.appearance
+        for (each, word) in [(XCUIDevice.Appearance.light, "light"), (.dark, "dark")] {
+            XCUIDevice.shared.appearance = each
+            sleep(1)
+            try shot(app, name, appearance: word)
+        }
+        XCUIDevice.shared.appearance = look
+        sleep(1)
     }
 
     @MainActor func testPersonaChatShowsTheQueueStrip() throws {
@@ -53,8 +67,10 @@ final class PersonaQueueUITests: XCTestCase {
         let app = launch()
         let strip = app.descendants(matching: .any)["queue-strip"].firstMatch
         XCTAssertTrue(strip.waitForExistence(timeout: 20), app.debugDescription)
-        XCTAssertTrue(strip.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Persona")).firstMatch.exists,
-                      "the queue names the persona, not Claude:\n\(strip.debugDescription)")
+        // The assistant by the name shown everywhere else (#6489: the roster's, 「助手」 in the mock), never Claude.
+        let named = { (name: String) in strip.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", name)).firstMatch }
+        XCTAssertTrue(named("助手").exists, "the queue does not name the assistant:\n\(strip.debugDescription)")
+        XCTAssertFalse(named("Claude").exists, "the queue names Claude, not the assistant:\n\(strip.debugDescription)")
         let sendNow = app.buttons["queue-send-now"]
         XCTAssertTrue(sendNow.waitForExistence(timeout: 5), "no Send Now for the user's own queued messages:\n\(app.debugDescription)")
         sendNow.tap()
@@ -69,9 +85,18 @@ final class PersonaQueueUITests: XCTestCase {
         let strip = app.descendants(matching: .any)["queue-strip"].firstMatch
         XCTAssertTrue(strip.waitForExistence(timeout: 20), app.debugDescription)
         if strip.elementType == .button { strip.tap() } else { strip.buttons.firstMatch.tap() }
+        // Messages from other conversations fold into one line (#6394) that says how many, in words: never the catalog
+        // key's context (#6703).
+        let fold = app.buttons["queue-relayed-summary"]
+        XCTAssertTrue(fold.waitForExistence(timeout: 5), "no fold row for the relayed message:\n\(app.debugDescription)")
+        XCTAssertEqual(fold.label, "还有 1 条别的对话在排队", "the fold row's words")
+        XCTAssertEqual(app.buttons.matching(identifier: "queue-item").count, 2, "the relayed message is folded away")
+        try shotLightAndDark(app, "relayed-fold")
+        fold.tap()
         let relayed = app.buttons.matching(identifier: "queue-item").element(boundBy: 2)
-        XCTAssertTrue(relayed.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(relayed.waitForExistence(timeout: 5), "the fold row did not open:\n\(app.debugDescription)")
         XCTAssertTrue(relayed.label.contains("对话空闲后送达"), "the relayed row says when it arrives:\n\(relayed.debugDescription)")
+        try shotLightAndDark(app, "relayed-open")
         relayed.tap()
         XCTAssertTrue(app.buttons["拷贝"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(app.buttons["撤回编辑"].exists, "a relayed message cannot be taken back")
@@ -167,6 +192,10 @@ final class PersonaQueueUITests: XCTestCase {
         let gone = NSPredicate(format: "exists == false")
         wait(for: [XCTNSPredicateExpectation(predicate: gone, object: sendNow)], timeout: 10)
         XCTAssertTrue(strip.exists, "the relayed message stays listed")
+        let fold = app.buttons["queue-relayed-summary"]
+        XCTAssertTrue(fold.waitForExistence(timeout: 5), "the relayed message stays, folded:\n\(app.debugDescription)")
+        fold.tap()
+        XCTAssertTrue(items.element(boundBy: 0).waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(items.element(boundBy: 0).label.contains("来自「早报"), "only the relayed message remains")
 
         let assistant = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(string: hub + "/api/v1/assistant")!)) as? [String: Any]
