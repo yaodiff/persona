@@ -4842,6 +4842,9 @@ type LeaderReportEvent struct {
 	Doing    string    `json:"doing,omitempty"`
 	NeedsYou string    `json:"needs_you,omitempty"`
 	Links    []string  `json:"links,omitempty"`
+	// set only while the hub's push tiering (low-distraction switch) is on: P1 for progress, reached and stuck (keep it
+	// in the log and the briefing, alert nobody), P0 for a decision
+	Level string `json:"level,omitempty"`
 }
 
 // ModelErrorCode: error.code of model.complete besides permission_denied (data {scope: "models"}): invalid_params;

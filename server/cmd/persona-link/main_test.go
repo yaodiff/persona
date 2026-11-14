@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -15,6 +16,26 @@ import (
 
 	"github.com/nwverse/persona/server/internal/link"
 )
+
+// A stripped release retains the build number the manifest verifier needs on every platform, including Windows.
+// `-v` reports that same number alongside the version and channel, as personad and persona-node do.
+func TestVersionReportsReleaseBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the release connector")
+	}
+	bin := filepath.Join(t.TempDir(), "persona-link")
+	cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-s -w -X main.version=v1 -X main.channel=release -X main.build=202611141527", "-o", bin, ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	out, err := exec.Command(bin, "version", "-v").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(out), "v1\nchannel release, build 202611141527\n"; got != want {
+		t.Fatalf("version -v = %q, want %q", got, want)
+	}
+}
 
 // fakeEnv is a Linux computer with a systemd user instance, unless the test changes it; nothing it does reaches the
 // real one. calls records the commands run; onCommand answers them.

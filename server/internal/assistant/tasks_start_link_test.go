@@ -190,3 +190,114 @@ func TestTaskStartLinkDropWaitsOutTheNodesStartBeforeRetrying(t *testing.T) {
 		t.Fatalf("linked %s, want the first start's %s", got, startID)
 	}
 }
+
+// A failed pre-start snapshot disables only the heuristic. The exact id still finds the original session after the
+// link returns, while its node is still inside its own start budget; no second agent may be started (#7772).
+func TestTaskStartLinkDropWithFailedPreStartListAdoptsExactSession(t *testing.T) {
+	s, f := linkHub(t, 5*time.Second)
+	nodeStartBudget = 4 * time.Second
+	dropFirstStart(f, 100*time.Millisecond, nil)
+	f.mu.Lock()
+	f.sessionsFail["box"] = 1 // the list immediately before session.start fails; later lists work
+	var startID string
+	inner := f.onStart
+	f.onStart = func(f *fakeHub, p map[string]any) {
+		if startID == "" {
+			startID, _ = p["session_id"].(string)
+			// The node accepted the first start but finishes it only after the link returns.
+			time.AfterFunc(3*time.Second, func() {
+				f.mu.Lock()
+				f.sessions["box"] = []proto.Session{{SessionID: startID, MachineID: "box", Cwd: "/code/app", Agent: "claude", Launcher: "claude",
+					StartedByPersona: true, Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now().UTC()}}
+				f.mu.Unlock()
+			})
+		}
+		inner(f, p)
+	}
+	f.mu.Unlock()
+	todo := startReconcileTask(t, s, "box", machineFixed)
+	waitFor(t, "the original session to be adopted without a pre-start snapshot", func() bool {
+		return len(todoNow(s, todo.ID).Agents) == 1
+	})
+	if starts := taskStartMachines(f); len(starts) != 1 {
+		t.Fatalf("starts %v: the retry opened a second agent after the pre-start list failed", starts)
+	}
+	if got := todoNow(s, todo.ID).Agents[0].SessionID; got != startID {
+		t.Fatalf("linked %s, want the original start's exact id %s", got, startID)
+	}
+	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.StartError != "" {
+		t.Fatalf("the adopted original start was recorded as a failure: %+v", got)
+	}
+}
+
+// The polling context can expire just after the last pre-budget list. A fresh final lookup after the budget is what
+// closes that boundary race; the exact session becomes visible only to a list made after the deadline (#7772).
+func TestTaskStartAdoptionLooksAgainAfterNodeStartBudget(t *testing.T) {
+	s, f := newTaskService(t)
+	shortAgentStartTimeout(t)
+	oldWait, oldPoll := taskStartAdoptWait, taskStartAdoptPoll
+	taskStartAdoptWait, taskStartAdoptPoll = 20*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { taskStartAdoptWait, taskStartAdoptPoll = oldWait, oldPoll })
+
+	until := time.Now().Add(100 * time.Millisecond)
+	postBudgetLists := 0
+	f.mu.Lock()
+	f.onList = func(f *fakeHub, machine string) {
+		if machine != "box" || time.Now().Before(until) {
+			return
+		}
+		postBudgetLists++
+		f.sessions["box"] = []proto.Session{{SessionID: "exact-after-budget", MachineID: "box"}}
+	}
+	f.mu.Unlock()
+
+	got, ok := s.adoptTaskStartSessionUntil(context.Background(), Device{ID: "box"}, "claude", "/code/app", "exact-after-budget", nil, until)
+	if !ok || got.SessionID != "exact-after-budget" {
+		t.Fatalf("got %+v ok=%v, want a fresh exact-id lookup after the node start budget", got, ok)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if postBudgetLists != 1 {
+		t.Fatalf("post-budget lists = %d, want exactly one", postBudgetLists)
+	}
+}
+
+// Without a snapshot or an exact id there is no safe session to adopt, but a request that may have reached the node
+// still must not be retried before its start budget expires (#7772).
+func TestTaskStartLinkDropWithoutSnapshotOrExactIDWaitsForBudget(t *testing.T) {
+	s, f := linkHub(t, 5*time.Second)
+	nodeStartBudget = 2 * time.Second
+	dropFirstStart(f, 100*time.Millisecond, nil)
+	f.mu.Lock()
+	f.sessionsFail["box"] = 1
+	f.launcherList = []proto.Launcher{{Name: "codex", Agent: "codex"}}
+	starts := 0
+	var firstAt, retryAt time.Time
+	inner := f.onStart
+	f.onStart = func(f *fakeHub, p map[string]any) {
+		starts++
+		if starts == 1 {
+			firstAt = time.Now()
+		} else if starts == 2 {
+			retryAt = time.Now()
+		}
+		inner(f, p)
+	}
+	f.mu.Unlock()
+
+	todo, err := s.createTodo(context.Background(), "无快照启动", "等待节点时限", "conv1", "plan_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.startPlanTask("plan_x", "conv1", 0, PlanTask{
+		Title: todo.Title, Prompt: "等待节点时限", Machine: "box", Cwd: "/code/app", Launcher: "codex",
+		Permission: "bypassPermissions", TodoID: todo.ID, MachinePolicy: machineFixed,
+	}, false)
+	waitFor(t, "the post-budget retry to link", func() bool { return len(todoNow(s, todo.ID).Agents) == 1 })
+	if got := taskStartMachines(f); len(got) != 2 {
+		t.Fatalf("starts %v, want the original and one post-budget retry", got)
+	}
+	if elapsed := retryAt.Sub(firstAt); elapsed < 1800*time.Millisecond {
+		t.Fatalf("the retry ran after %s, before the node's 2s start budget expired", elapsed)
+	}
+}

@@ -14,7 +14,7 @@ Send the user a push notification right now (works when the app is closed). Tapp
     "push_level": {
       "type": "string",
       "enum": ["P0", "P1"],
-      "description": "How urgent this is. P1 (default): worth knowing; in the hub's low-distraction mode it is held for the briefing instead of alerting, and from a non-main conversation it is held even without an explicit level. P0: the user must act now, so it alerts even in low-distraction mode and from any conversation. Use P0 only when waiting would cause real harm."
+      "description": "How urgent this is. P1 (default): worth knowing; in the hub's low-distraction mode it is held for the briefing instead of alerting, and from a non-main conversation it is held even without an explicit level. P0: something the user must do or decide themselves (an action only they can take, a decision only they can make), so it alerts even in low-distraction mode and from any conversation. Use P1 for results, progress and conclusions."
     },
     "related_key": {
       "type": "string",

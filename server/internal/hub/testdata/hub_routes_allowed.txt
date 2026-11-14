@@ -212,6 +212,7 @@ POST /api/v1/phone/write-queue/{id}/cancel
 DELETE /api/v1/push/web/{device}
 GET /api/v1/push/intercepts # ln mode held pushes, read-only (lnmode.go)
 GET /api/v1/push/ln-mode # ln mode switch (lnmode.go)
+GET /api/v1/push/stats/daily # push grading delivered/held counts per day, read-only (lnmode.go)
 GET /api/v1/push/web
 GET /api/v1/push/web/{device}
 POST /api/v1/push/web/{device}/test

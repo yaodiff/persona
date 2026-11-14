@@ -80,6 +80,8 @@ type Hub struct {
 	// handoffRecorded: the refused approvals of hand-off cards recorded lately (secret_handoff.go).
 	handoffRecorded handoffRecorded
 
+	// machineEventsMu keeps machine-list snapshots in the order they are queued.
+	machineEventsMu sync.Mutex
 	// sessionsSent: each machine's last session list sent to the apps, as encoded (broadcastSessions).
 	sessionsMu   sync.Mutex
 	sessionsSent map[string][]sentSession
@@ -336,7 +338,9 @@ func (h *Hub) broadcastMachines() {
 	if h.pruneSessionListMachines() {
 		h.broadcastSessionListNotice()
 	}
+	h.machineEventsMu.Lock()
 	h.broadcast(map[string]any{"type": "machines", "machines": h.machineList()})
+	h.machineEventsMu.Unlock()
 	h.meshTouch() // a member's record says which of its computers the center can reach through it
 	h.assistantUpdated()
 }

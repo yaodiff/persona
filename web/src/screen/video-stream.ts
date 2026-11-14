@@ -7,7 +7,11 @@
 import { BASE } from "../lib/base";
 import { decoderSetup } from "./video-bitstream";
 import { decodeOptions } from "./video-probe";
-import { encode, VideoParser, VideoWireError, decode, type Encoding, type Hello, type Start, type Timing, type Update } from "./video-wire";
+import type { Budget } from "./data-use";
+import type { Change } from "./tiers/policy";
+import type { Bias } from "./tiers/ladder";
+import { updateOf, type ScreenVideoTiers } from "./video-tiers";
+import { encode, FRAME_REFINEMENT, VideoParser, VideoWireError, decode, type Encoding, type Hello, type Start, type Timing, type Update } from "./video-wire";
 
 /** A duplex of bytes, one stream's worth; the relay WebSocket now, a direct route later (#6398 step 6). */
 export type VideoTransport = {
@@ -38,6 +42,7 @@ export type StreamEvent =
   | { type: "resumed" }
   | { type: "timing"; timing: Timing }
   | { type: "encoding"; encoding: Encoding }
+  | { type: "tier"; change: Change }
   | { type: "ended"; why: Ending };
 
 export const SILENCE_MS = 3000;
@@ -74,20 +79,26 @@ export class ScreenVideoStream {
   private began = new Map<number, number>();
   private newest: { picture: Picture; decodeMs: number } | null = null;
   private flushQueued = false;
+  /** When the message still incomplete after the last read began arriving (a large frame over several reads), µs. */
+  private partialSince: number | null = null;
+  /** The quality tiers (#6558), when the page drives them; they start once the helper's hello lists them too. */
+  readonly tiers: ScreenVideoTiers | null;
 
   constructor(
     private transport: VideoTransport,
     start: Start,
     private onEvent: (e: StreamEvent) => void,
-    private opts: { makeDecoder?: DecoderMaker; silenceMs?: number; openingMs?: number; now?: () => number; nowMicros?: () => number } = {},
+    private opts: { makeDecoder?: DecoderMaker; silenceMs?: number; openingMs?: number; now?: () => number; nowMicros?: () => number; tiers?: ScreenVideoTiers | null } = {},
   ) {
+    this.tiers = opts.tiers ?? null;
     this.heardAt = this.now();
     transport.onBytes = (b) => this.bytes(b);
     transport.onClosed = () => this.finish("closed");
     transport.send(encode(start));
     this.watch = setInterval(() => {
       const limit = this.heardAny ? (this.opts.silenceMs ?? SILENCE_MS) : (this.opts.openingMs ?? OPENING_MS);
-      if (!this.quiet && this.now() - this.heardAt > limit) this.finish("silent");
+      if (!this.quiet && this.now() - this.heardAt > limit) return this.finish("silent");
+      if (!this.quiet && this.tiers) this.apply(this.tiers.tick(this.nowMicros())); // the tier's 250 ms decision
     }, 250);
   }
 
@@ -111,6 +122,26 @@ export class ScreenVideoStream {
   /** `update` to the helper: pause, a new cap or frame rate. */
   send(update: Omit<Update, "type">): void {
     if (!this.over) this.transport.send(encode({ type: "update", ...update }));
+  }
+
+  /** A tier the policy chose: to the helper, then to the link. */
+  private apply(change: Change | null) {
+    if (!change || this.over) return;
+    this.send(updateOf(change));
+    this.onEvent({ type: "tier", change });
+  }
+
+  /** ⋯ › Quality or the data cap changed: the policy looks again. */
+  tierBias(b: Bias): void {
+    if (this.tiers) this.apply(this.tiers.setBias(b, this.nowMicros()));
+  }
+  tierBudget(b: Budget): void {
+    if (this.tiers) this.apply(this.tiers.setBudget(b, this.nowMicros()));
+  }
+
+  /** A decoded picture reached the screen, or a newer one replaced it before it did (the page's draw loop). */
+  shown(replaced: boolean): void {
+    this.tiers?.shown(replaced, this.nowMicros());
   }
 
   private stop() {
@@ -143,13 +174,19 @@ export class ScreenVideoStream {
     if (this.over) return;
     this.received += chunk.length;
     this.sinceReport += chunk.length;
+    const arrived = this.nowMicros();
+    const waiting = this.parser.pendingBytes > 0 ? this.partialSince : null;
     let raws;
     try {
       raws = this.parser.push(chunk);
     } catch {
       return this.finish("undecodable");
     }
+    this.partialSince = this.parser.pendingBytes > 0 ? (raws.length ? arrived : (this.partialSince ?? arrived)) : null;
+    let firstOfRead = true;
     for (const raw of raws) {
+      const first = firstOfRead;
+      firstOfRead = false;
       let m;
       try {
         m = decode(raw.type, raw.body);
@@ -163,6 +200,7 @@ export class ScreenVideoStream {
           this.codec = m.codec;
           this.newDecoder();
           this.onEvent({ type: "hello", hello: m });
+          if (this.tiers) this.apply(this.tiers.hello(m, this.nowMicros() / 1_000_000));
           break;
         case "format": {
           const setup = decoderSetup(this.codec, m.parameter_sets);
@@ -179,6 +217,8 @@ export class ScreenVideoStream {
           this.heard();
           this.transport.send(encode({ type: "report", last_frame: m.number, capture_micros: m.capture_micros, arrival_micros: this.nowMicros(), bytes_since_last: this.sinceReport, flags: 0 }));
           this.sinceReport = 0;
+          // Only the read's first message can have begun in an earlier read.
+          this.tiers?.frame(m.capture_micros, arrived, first ? waiting : null, raw.body.length + 5, (m.flags & FRAME_REFINEMENT) !== 0);
           if (!this.decoder || !this.configured) return this.finish("undecodable");
           this.began.set(m.number, this.now());
           try {
@@ -202,6 +242,7 @@ export class ScreenVideoStream {
           this.onEvent({ type: "resumed" });
           break;
         case "timing":
+          this.tiers?.helper(m);
           this.onEvent({ type: "timing", timing: m });
           break;
         case "encoding":
@@ -236,6 +277,7 @@ export class ScreenVideoStream {
     this.began.delete(picture.timestamp);
     this.newest?.picture.close();
     this.newest = { picture, decodeMs: began === undefined ? 0 : this.now() - began };
+    if (began !== undefined) this.tiers?.decoded(this.newest.decodeMs, this.nowMicros());
     if (this.flushQueued) return;
     this.flushQueued = true;
     queueMicrotask(() => {

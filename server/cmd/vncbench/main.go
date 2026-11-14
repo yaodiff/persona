@@ -5,6 +5,7 @@
 //
 //	go run ./cmd/vncbench probe                       # macOS Screen Sharing on this Mac
 //	go run ./cmd/vncbench run -scenes all -config app # the app's encodings, every scene
+//	go run ./cmd/vncbench wheel -apps page,finder,terminal -browser <path> # how far wheel notches scroll (#7775)
 //
 // It signs in with VNCBENCH_ACCOUNT / VNCBENCH_PASSWORD, or the login keychain's "persona-vnc-bench" password
 // (never printed). -hub and -machine go through a hub's port relay as the app does, with a device token in
@@ -35,6 +36,10 @@ func main() {
 	var run runFlags
 	if cmd == "run" {
 		run.register(fs)
+	}
+	var wheel wheelFlags
+	if cmd == "wheel" {
+		wheel.register(fs)
 	}
 	recConfig := fs.String("rec-config", "app", "record: the encodings (as run's -config)")
 	recMode := fs.String("rec-mode", "stopwait", "record: how updates are asked for (as run's -mode)")
@@ -78,6 +83,8 @@ func main() {
 		err = probe(ctx, t, cred)
 	case "run":
 		err = runScenes(ctx, t, cred, run)
+	case "wheel":
+		err = wheelBench(ctx, t, cred, wheel)
 	case "shot":
 		err = shot(ctx, t, cred, *recOut, *shotScale)
 	case "dump":
@@ -97,7 +104,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: vncbench probe|private|dump|shot|trace|run|record|relay [flags]  (vncbench run -h for its flags)")
+	fmt.Fprintln(os.Stderr, "usage: vncbench probe|private|dump|shot|trace|run|wheel|record|relay [flags]  (vncbench run -h for its flags)")
 	os.Exit(2)
 }
 

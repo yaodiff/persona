@@ -2,7 +2,7 @@
 
 Persona Link connects this Mac to your Persona hub so the hub can use Agents running here. It is a background connector and resident-node service, not a menu bar app and not a prerequisite of the Electron desktop app.
 
-The independent helper package also contains **Persona Screen**, which owns the Screen Recording permission for live-screen capture. It is not bundled into the Electron desktop's login items or process lifetime. See [link.md](link.md) for connection modes and protocol, and [desktop.md](../desktop/desktop.md) for the separate desktop boundary.
+The independent helper package also contains **Persona Screen**, which owns the Screen Recording permission for live-screen capture, and **Persona Input**, which owns the Accessibility permission for scrolling the live screen by the point ([computer-use.md](../extensions/computer-use.md) "Pixel scrolling (#7775)"). It is not bundled into the Electron desktop's login items or process lifetime. See [link.md](link.md) for connection modes and protocol, and [desktop.md](../desktop/desktop.md) for the separate desktop boundary.
 
 There is no signed distribution package yet. Build from source for local use; this guide does not claim Developer ID signing or notarization.
 
@@ -24,7 +24,7 @@ git clone <repository-url> persona && cd persona
 ./scripts/app/mac-link.sh install
 ```
 
-The command builds persona-link, persona-node and Persona Screen, places them under `/Applications/Persona Link.app/Contents/Helpers/`, then registers two independent launchd agents:
+The command builds persona-link, persona-node, Persona Screen and Persona Input, places them under `/Applications/Persona Link.app/Contents/Helpers/`, then registers two independent launchd agents:
 
 - `com.persona.link` runs the connector copied to `~/.persona/bin/persona-link`. This fixed path is also what the Electron setup window invokes.
 - `com.persona.node` runs the resident node. An existing node service is preserved, including its program and data directory.
@@ -82,4 +82,5 @@ To remove the resident node too, inspect its actual service and binary first, th
 - **Connector not running**: `launchctl print gui/$(id -u)/com.persona.link` and `persona-link logs -f`.
 - **Hub cannot reach the local node**: `persona-link node status`; logs are in `~/.persona/node-attach.log`.
 - **LAN unreachable**: check macOS local-network permission for the connector. Other routes and TLS errors are explained by `persona-link status`.
+- **Persona Input permission**: `Contents/Helpers/Persona Input.app`; its Accessibility grant is its own. `mac-link.sh` rebuilds it only when its sources change (it keeps the built helper in `~/.persona/cache/persona-input`), so an update leaves the grant alone; `./scripts/app/mac-link.sh verify-input` checks that two clean builds are the same.
 - **Persona Screen permission**: the helper remains at `/Applications/Persona Link.app/Contents/Helpers/Persona Screen.app`, the path the node already searches. Its Screen Recording grant is separate from the Electron app and the connector.

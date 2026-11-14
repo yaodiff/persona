@@ -168,6 +168,7 @@ type Service struct {
 	placeBook       placeBook       // places.go
 	savedPromptBook savedPromptBook // saved_prompts.go
 	accept          acceptBook      // acceptance.go
+	pushQuiet       quietSwitch     // push_quiet.go: the hub's low-distraction switch as last read
 	deploy          deployProbe     // deploy_check.go: is the work in the running hub
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
@@ -289,6 +290,7 @@ func New(o Options) *Service {
 	s.scheduleRoutes()
 	s.placeRoutes()
 	s.savedPromptRoutes()
+	s.savedAgentSearchRoutes()
 	s.repositoryRoutes()
 	s.taskRoutes()
 	s.viewActionRoutes()

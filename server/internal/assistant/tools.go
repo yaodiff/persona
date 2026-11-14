@@ -677,9 +677,10 @@ func startResultUnknown(err error) bool {
 }
 
 // startedWithoutAnswer answers an agent_start whose result is unknown. A list showing the new session the node
-// built (not present before the start) adopts and links it like an answered start; otherwise (or when the pre-start
-// list failed) the model gets neutral text: check the Agents list first and never start a second copy. expectID is
-// the session id the hub asked this start to use, for an exact reconciliation (session_adopt.go).
+// built (not present before the start) adopts and links it like an answered start; otherwise the model gets neutral
+// text: check the Agents list first and never start a second copy. A failed pre-start list disables only the
+// heuristic, not an exact expectID match. expectID is the session id the hub asked this start to use
+// (session_adopt.go).
 func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string, m Device, launcher, cwd, prompt string, tab any, note, expectID string, knownIDs map[string]bool) string {
 	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, expectID, knownIDs); ok {
 		if told, ok := s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID); ok {
@@ -696,7 +697,8 @@ func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string,
 		"session there, and only start again if no new session appears.%s", m.Name, cwd, note)
 }
 
-// knownSessionIDs is the machine's session ids before a start; nil when the list could not be read (no adoption).
+// knownSessionIDs is the machine's session ids before a start; nil when the list could not be read (no heuristic
+// adoption, though an exact expectID can still be reconciled).
 func (s *Service) knownSessionIDs(ctx context.Context, machine string) map[string]bool {
 	list, err := s.sessions(ctx, machine)
 	if err != nil {

@@ -156,7 +156,7 @@ func (s *Service) leaderProgressReport(ctx context.Context, lead string, p leade
 	sum := sha256.Sum256([]byte(key))
 	ev := assistantwire.LeaderReportEvent{ID: "lrep_" + hex.EncodeToString(sum[:8]), Leader: lead, Kind: assistantwire.LeaderProgress,
 		Text: clip(strings.Join(parts, "\n"), assistantwire.LeaderReportTextMost), At: p.At, Reached: p.Reached, Doing: p.Doing,
-		NeedsYou: p.NeedsYou, Links: p.Links}
+		NeedsYou: p.NeedsYou, Links: p.Links, Level: s.leaderReportLevel(ctx, assistantwire.LeaderProgress)}
 	if len(p.Links) > 0 {
 		ev.Link = p.Links[0]
 	}

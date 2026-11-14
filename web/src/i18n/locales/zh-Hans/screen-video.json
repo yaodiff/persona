@@ -37,5 +37,15 @@
   "mobile_data_clearer_usage": "约 0.6 GB / 小时",
   "mobile_data_saver_usage": "约 0.2–0.3 GB / 小时",
   "mobile_data_quality": "移动数据下的画质",
-  "mobile_data_close": "关闭"
+  "mobile_data_close": "关闭",
+  "stats_tier": "档位",
+  "tier_start": "按当前网络起步",
+  "tier_link_slowed": "网络变慢",
+  "tier_link_steady": "网络稳定",
+  "tier_network_changed": "网络变了",
+  "tier_device_warm": "设备发热或在省电",
+  "tier_device_behind": "浏览器跟不上",
+  "tier_choice": "你改了画质",
+  "tier_seconds_ago": "{n} 秒前",
+  "tier_minutes_ago": "{n} 分钟前"
 }

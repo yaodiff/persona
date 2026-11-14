@@ -3,6 +3,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ScreenVideoStream, type StreamEvent } from "./video-stream";
 import { fakeDecoders, fixture, framed, prefix, scripted, tick } from "./video-test-helpers";
+import { ScreenVideoTiers } from "./video-tiers";
+import { decode, encode, VideoParser, type Hello } from "./video-wire";
 
 const start = { type: "start" as const, max_size: 1920, fps: 60, max_kbps: 12_000, codecs: ["hevc", "h264"] };
 afterEach(() => vi.useRealTimers());
@@ -102,5 +104,41 @@ describe("ScreenVideoStream", () => {
     s.close();
     s.send({ paused: false });
     expect(t.sent.filter((m) => m.type === "update")).toEqual([{ type: "update", paused: true }]);
+  });
+
+  it("with tiers: the hello's start tier goes out as an update; frames, decodes, timing and the 250 ms tick reach them, not while paused", async () => {
+    vi.useFakeTimers();
+    let micros = 1_000_000;
+    const t = scripted(), events: StreamEvent[] = [];
+    const tiers = new ScreenVideoTiers({ bias: "auto", budget: { maxKbps: 12_000, fps: 60 }, maxSize: 1920, link: null, remembered: null });
+    const frames = vi.spyOn(tiers, "frame"), decoded = vi.spyOn(tiers, "decoded"), helper = vi.spyOn(tiers, "helper"), ticks = vi.spyOn(tiers, "tick");
+    new ScreenVideoStream(t, start, (e) => events.push(e), { makeDecoder: fakeDecoders().make, now: () => 0, nowMicros: () => micros, tiers });
+    const raws = new VideoParser().push(prefix(4)); // hello, format, two frames
+    const message = (i: number) => encode(decode(raws[i].type, raws[i].body));
+    const h = decode(raws[0].type, raws[0].body) as Hello;
+    t.feed(framed({ ...h, features: ["tiers"], points: [960, 600], pixels: [1920, 1200] })); // a helper with tiers
+    const change = events.find((e) => e.type === "tier");
+    expect(change).toMatchObject({ type: "tier", change: { reason: "start" } });
+    const c = (change as { change: { tier: { fps: number; maxKbps: number; scale: number; minKbps: number }; targetKbps: number } }).change;
+    expect(t.sent.at(-1)).toEqual({ type: "update", fps: c.tier.fps, max_kbps: c.tier.maxKbps, scale: c.tier.scale, min_kbps: c.tier.minKbps, target_kbps: c.targetKbps });
+    // format and the first frame in one read; the second frame over two reads: it began arriving with the first part
+    t.feed(new Uint8Array([...message(1), ...message(2)]));
+    const second = message(3);
+    micros = 2_000_000;
+    t.feed(second.slice(0, 10));
+    micros = 2_050_000;
+    t.feed(second.slice(10));
+    expect(frames.mock.calls.map((call) => [call[1], call[2], call[3]])).toEqual([
+      [1_000_000, null, message(2).length],
+      [2_050_000, 2_000_000, second.length],
+    ]);
+    expect(decoded).toHaveBeenCalledTimes(2);
+    t.feed(framed({ type: "timing", kbps: 900, fps: 30, target_kbps: 1_000 }));
+    expect(helper).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1_000);
+    expect(ticks).toHaveBeenCalledTimes(4);
+    t.feed(framed({ type: "paused", reason: "locked" }));
+    vi.advanceTimersByTime(1_000);
+    expect(ticks, "no decisions while capture is paused").toHaveBeenCalledTimes(4);
   });
 });

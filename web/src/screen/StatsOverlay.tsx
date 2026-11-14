@@ -17,7 +17,8 @@ import { Icon } from "../ui/icons";
 import { t } from "../i18n";
 import { mbpsText, ScreenMeter } from "./meter";
 import { countBytes, countFrames, probeHub } from "./probes";
-import type { ScreenStats } from "./video";
+import type { Change, TierReason } from "./tiers/policy";
+import type { ScreenQuality, ScreenStats } from "./video";
 import type { Reading } from "./video-link";
 
 /** How often the panel draws a new reading. */
@@ -46,8 +47,42 @@ export function StatsToggle({ on, onToggle }: { on: boolean; onToggle: (on: bool
 }
 
 /** The panel over the picture: measures `rfb` (noVNC) and `socket` (the RFB WebSocket it was handed) while shown. */
-/** The video channel's numbers while its picture shows (#6558): ./video-link's reading, the codec and the size. */
-export type VideoStats = { reading: Reading; codec: string | null; size: { width: number; height: number } | null };
+/** The video channel's numbers while its picture shows (#6558): ./video-link's reading, the codec and the size; with
+ *  quality tiers, the tier, when it last changed (ms on performance.now()) and the Quality chosen. */
+export type VideoStats = {
+  reading: Reading;
+  codec: string | null;
+  size: { width: number; height: number } | null;
+  tier?: { change: Change; at: number; quality: ScreenQuality } | null;
+};
+
+const QUALITY: Record<ScreenQuality, () => string> = {
+  auto: () => t("screen-video.quality_auto"),
+  sharper: () => t("screen-video.quality_sharper"),
+  smoother: () => t("screen-video.quality_smoother"),
+};
+
+const REASON: Record<TierReason, () => string> = {
+  start: () => t("screen-video.tier_start"),
+  link_slowed: () => t("screen-video.tier_link_slowed"),
+  link_steady: () => t("screen-video.tier_link_steady"),
+  network_changed: () => t("screen-video.tier_network_changed"),
+  phone_warm: () => t("screen-video.tier_device_warm"),
+  phone_behind: () => t("screen-video.tier_device_behind"),
+  choice: () => t("screen-video.tier_choice"),
+};
+
+/** The tier as the panel shows it, as the iPhone's ScreenTierText: the Quality chosen, the scale and the frame rate
+ *  (Auto · 1.5× · 60 fps); and why it last changed, in plain words, with how long ago. */
+export function tierParts(quality: ScreenQuality, c: Change): string[] {
+  const scale = Number.isInteger(c.tier.scale) ? String(c.tier.scale) : c.tier.scale.toFixed(1);
+  return [QUALITY[quality](), `${scale}×`, t("screen-video.stats_fps", { fps: c.tier.fps })];
+}
+export function tierReasonParts(reason: TierReason, at: number, now: number): string[] {
+  const seconds = Math.max(0, Math.floor((now - at) / 1000));
+  const ago = seconds < 60 ? t("screen-video.tier_seconds_ago", { n: seconds }) : t("screen-video.tier_minutes_ago", { n: Math.floor(seconds / 60) });
+  return [REASON[reason](), ago];
+}
 /** Why the computer's video isn't playing on this page, said only when the computer offers it. */
 export type NoVideoReason = "insecure" | "unsupported" | "failed";
 
@@ -175,6 +210,19 @@ export function StatsOverlay({ rfb, socket, onClose, video = null, noVideo = nul
           <Icon name="x" size={12} />
         </button>
       </div>
+      {/* the tier and why it last changed, under the header as on the iPhone; the reason on its own line, since the
+          reasons are words and would widen the panel */}
+      {video?.tier && (
+        <>
+          <p className="flex items-center gap-1.5 whitespace-nowrap" data-testid="screen-stats-tier">
+            <span className="text-ink-2">{t("screen-video.stats_tier")}</span>
+            {dotted(tierParts(video.tier.quality, video.tier.change))}
+          </p>
+          <p className="flex items-center gap-1.5 whitespace-nowrap text-ink-3" data-testid="screen-stats-tier-reason">
+            {dotted(tierReasonParts(video.tier.change.reason, video.tier.at, performance.now()))}
+          </p>
+        </>
+      )}
       {rates.length > 0 && <p className="flex items-center gap-1.5 whitespace-nowrap text-ink-2">{dotted(rates)}</p>}
       {segments.length > 0 && (
         <p className="flex items-center gap-1.5 whitespace-nowrap text-ink-2" data-testid="screen-stats-segments">

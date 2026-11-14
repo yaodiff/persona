@@ -42,7 +42,7 @@ func TestLnNotifyUserNonMainConversationHeldForBriefing(t *testing.T) {
 	if calls := len(f.calls(t, 0)); calls != 0 {
 		t.Fatalf("APNs got %d calls, want 0", calls)
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 1 || view[0].Reason != interceptReasonP1 || view[0].Level != assistantwire.LevelP1 {
 		t.Fatalf("intercepts = %+v, want one P1 held entry", view)
 	}
@@ -69,7 +69,7 @@ func TestLnNotifyUserMainConversationPushes(t *testing.T) {
 	if calls := len(f.calls(t, 1)); calls != 1 {
 		t.Fatalf("APNs got %d calls, want 1", calls)
 	}
-	if view := h.push.lnInterceptsView(0); len(view) != 0 {
+	if view := h.push.lnInterceptsView("", 0); len(view) != 0 {
 		t.Fatalf("got %d intercepts, want none for a pushed main-conversation notice", len(view))
 	}
 }
@@ -117,7 +117,7 @@ func TestLnNotifyUserDowngradeIsOffWithSwitchOff(t *testing.T) {
 	if calls := len(f.calls(t, 3)); calls != 3 {
 		t.Fatalf("APNs got %d calls, want 3", calls)
 	}
-	if view := h.push.lnInterceptsView(0); len(view) != 0 {
+	if view := h.push.lnInterceptsView("", 0); len(view) != 0 {
 		t.Fatalf("got %d intercepts with ln mode off, want none", len(view))
 	}
 }
@@ -181,7 +181,7 @@ func TestLnNotifyBusReplyHeldForNonMainConversation(t *testing.T) {
 	if calls := len(f.calls(t, 0)); calls != 0 {
 		t.Fatalf("APNs got %d calls, want 0", calls)
 	}
-	if view := h.push.lnInterceptsView(0); len(view) != 1 || view[0].Reason != interceptReasonP1 {
+	if view := h.push.lnInterceptsView("", 0); len(view) != 1 || view[0].Reason != interceptReasonP1 {
 		t.Fatalf("intercepts = %+v, want one P1 entry", view)
 	}
 }

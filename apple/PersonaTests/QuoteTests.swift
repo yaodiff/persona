@@ -76,7 +76,7 @@ struct SelectionQuoteTests {
                              extra: ["machine": "m", "cwd": "/two"])
         let quote = ContextRef.quote("Earlier", from: "Claude", msg: "m1")
         #expect(one.isQuote)
-        #expect(one.quoteHeading == String(localized: "Workspace · One"))
+        #expect(one.quoteHeading == "工作区 · One")
         #expect(one.quoteSummary == "Computer: Mac Folder: /one")
         let withQuote = ContextRef.addingMention(one, to: [quote]) ?? []
         #expect(withQuote.count == 2)

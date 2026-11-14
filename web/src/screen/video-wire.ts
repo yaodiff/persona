@@ -116,6 +116,11 @@ export function frame(type: number, body: Uint8Array = new Uint8Array()): Uint8A
 export class VideoParser {
   private buf = new Uint8Array(0);
 
+  /** Bytes of a message still incomplete after the last push. */
+  get pendingBytes(): number {
+    return this.buf.length;
+  }
+
   push(chunk: Uint8Array): RawMessage[] {
     const joined = new Uint8Array(this.buf.length + chunk.length);
     joined.set(this.buf);

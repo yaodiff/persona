@@ -371,7 +371,9 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
   useEffect(() => watchNetwork(() => setNet(readNetwork())), []);
   const tiersOn = webTiers.supported && !!video?.tiers;
   const [mobileData, setMobileData] = useState<MobileData>(currentMobileData);
-  const budget = useMemo(() => budgetOf(net, tiersOn ? mobileData : null), [net, tiersOn, mobileData]);
+  // The cap without tiers starts the stream; the tiers, once the helper lists them, work under the cap with the choice.
+  const budget = useMemo(() => budgetOf(net, null), [net]);
+  const tierBudget = useMemo(() => budgetOf(net, mobileData), [net, mobileData]);
   const dataChoice = tiersOn && onMobileData(net);
   const [askData, setAskData] = useState(false);
   const askedHere = useRef(false);
@@ -502,7 +504,20 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
           <div ref={screen} className={cx("absolute", !frame && "inset-0")} style={frame ? place(frame.inner) : undefined} data-testid="screen" />
         </div>
         {!target.embedded && Video && playable && link && (
-          <Video.VideoChannel rfb={link.rfb} screen={screen.current} pair={livePair} want={want} codecs={probe!.codecs} budget={budget} mid={target.mid} token={target.token} onState={setVideo} />
+          <Video.VideoChannel
+            rfb={link.rfb}
+            screen={screen.current}
+            pair={livePair}
+            want={want}
+            codecs={probe!.codecs}
+            budget={budget}
+            tierBudget={tierBudget}
+            quality={quality}
+            tiers={webTiers.supported}
+            mid={target.mid}
+            token={target.token}
+            onState={setVideo}
+          />
         )}
         {/* under the bar, centered: why VNC shows, and the mobile-data question; the strip between lets the picture take clicks */}
         {!target.embedded && Video && (fallback || (askData && dataChoice && live && picture === "video")) && (
@@ -520,7 +535,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
             rfb={link.rfb}
             socket={link.socket}
             onClose={() => showStats(false)}
-            video={video?.showing ? { reading: video.reading, codec: video.codec, size: video.size } : null}
+            video={video?.showing ? { reading: video.reading, codec: video.codec, size: video.size, tier: tiersOn && video.tier ? { change: video.tier, at: video.tierAt ?? 0, quality } : null } : null}
             noVideo={noVideo}
           />
         )}

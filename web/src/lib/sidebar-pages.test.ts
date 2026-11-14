@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // The sidebar's pages as arranged in Settings › General › Sidebar pages: the order, the list and More, the defaults for new pages.
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { arrangePages, EXTENSION_CAP, getSidebarPrefs, inList, movePage, ordered, parsePrefs, resetSidebarPrefs, setPageOrder, setPageShown, type SidebarPrefs } from "./sidebar-pages";
 
 const NONE: SidebarPrefs = { order: [], shown: [], hidden: [] };
@@ -8,6 +8,10 @@ const pages = (...ks: string[]) => ks.map((k) => ({ k }));
 const keys = (ps: { k: string }[]) => ps.map((p) => p.k);
 
 beforeEach(() => localStorage.clear());
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetSidebarPrefs();
+});
 
 describe("ordered", () => {
   it("keeps the default order when nothing was chosen", () => {
@@ -75,6 +79,26 @@ describe("the stored choices", () => {
     movePage(["home", "kb", "inbox"], "home", -1);
     expect(getSidebarPrefs().order).toEqual(["home", "kb", "inbox"]);
   });
+  it("keeps hide, reorder, unhide, and reset in memory while storage writes fail", () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage blocked"); });
+    const removeItem = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new Error("storage blocked"); });
+    setPageShown("health", false);
+    expect(getSidebarPrefs().hidden).toEqual(["health"]);
+    setPageOrder(["kb", "home"]);
+    expect(getSidebarPrefs().order).toEqual(["kb", "home"]);
+    setPageShown("health", true);
+    expect(getSidebarPrefs().hidden).toEqual([]);
+    expect(getSidebarPrefs().shown).toContain("health");
+    resetSidebarPrefs();
+    expect(getSidebarPrefs()).toEqual(NONE);
+
+    setItem.mockRestore();
+    removeItem.mockRestore();
+    setPageShown("health", false);
+    expect(getSidebarPrefs().hidden).toEqual(["health"]);
+    expect(parsePrefs(localStorage.getItem("sidebar.pages")).hidden).toEqual(["health"]);
+  });
+
   it("resets to the defaults", () => {
     setPageShown("health", false);
     resetSidebarPrefs();

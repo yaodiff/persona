@@ -421,8 +421,10 @@
     <string name="chat_search_at_start">Reached the earliest record</string>
     <string name="chat_search_enter">Enter a keyword</string>
     <string name="chat_search_no_match">No matching records</string>
-    <string name="chat_search_scope">Searches text, thinking, tool names, tool input and output, and system events.</string>
-    <string name="chat_search_note">Searches loaded content only; collapsed work records and truncated full text aren\'t included.</string>
+    <string name="chat_search_scope">Searches messages, quoted context, thinking, tool names, tool input and output, and system events.</string>
+    <string name="chat_search_note">Only what\'s loaded is searched, folded steps included. Truncated full text isn\'t included.</string>
+    <string name="chat_search_folds_loading">Searching folded steps…</string>
+    <string name="chat_search_folds_partial">Some folded steps couldn\'t be searched.</string>
     <string name="chat_search_return">Back to where you were</string>
     <string name="chat_search_unlocatable">Can\'t find this record right now. You can go back to where you were</string>
     <string name="chat_search_origin_changed">The earlier record changed. Keep browsing the current records</string>

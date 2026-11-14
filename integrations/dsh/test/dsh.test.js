@@ -170,6 +170,43 @@ test('pages history back from the end, by turns, before a seq, after a seq and o
   await assert.rejects(n.peer.call('session.items', { session_id: 'nope' }), /没有会话/)
 })
 
+test('catch-up over more than 2,000 DSH events begins at the requested cursor', async (t) => {
+  const { n, ctl, rt } = await setup(t)
+  const events = Array.from({ length: 2501 }, (_, seq) => text(seq, seq % 2 === 0 ? 'user' : 'assistant', `message ${seq}`))
+  ctl.add('session-long', {}, events)
+  rt.start()
+  await n.ready
+
+  const result = await n.peer.call('session.items', { session_id: 'session-long', after_seq: 100 })
+  assert.equal(result.from_seq, 100, 'the batch must continue from the caller cursor')
+  assert.equal(result.to_seq, 600, 'the first 500 item-producing events form the first page')
+  assert.equal(result.more_after, true)
+  assert.equal(result.items.length, 500)
+  assert.equal(result.items[0].text, 'message 100')
+  assert.equal(result.items.at(-1).text, 'message 599')
+})
+
+test('a bounded catch-up window does not jump over non-displayed records', async (t) => {
+  const { n, ctl, rt } = await setup(t)
+  const events = Array.from({ length: 2501 }, (_, seq) => ({ type: 'model/changed', seq, time: 0, data: {} }))
+  events[2500] = text(2500, 'assistant', 'tail')
+  ctl.add('session-long', {}, events)
+  rt.start()
+  await n.ready
+
+  const first = await n.peer.call('session.items', { session_id: 'session-long', after_seq: 100 })
+  assert.equal(first.from_seq, 100)
+  assert.equal(first.to_seq, 2100)
+  assert.equal(first.more_after, true)
+  assert.deepEqual(first.items, [])
+
+  const second = await n.peer.call('session.items', { session_id: 'session-long', after_seq: first.to_seq })
+  assert.equal(second.from_seq, 2100)
+  assert.equal(second.to_seq, 2501)
+  assert.equal(second.more_after, false)
+  assert.deepEqual(second.items.map((item) => item.text), ['tail'])
+})
+
 test('sends with the client message id, queued when idle and steered while working', async (t) => {
   const { n, ctl, ev, rt } = await setup(t)
   ctl.add('session-s', {}, [text(0, 'user', 'hi')])

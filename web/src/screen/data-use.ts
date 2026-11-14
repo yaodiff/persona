@@ -2,7 +2,7 @@
 // ScreenMobileData (#6396). The cap goes to the helper in `start.max_kbps` and, when the network changes, in an `update`;
 // the helper's own adaptation works under it.
 //
-// Without quality tiers (a helper without them, or a page that doesn't drive them yet: video.ts webTiers), the caps
+// Without quality tiers (a helper without them, or a page that does not drive them: video.ts webTiers), the caps
 // are the iPhone's: 1.5 Mbit/s with Data Saver on (`navigator.connection.saveData`, the browser's Low Data Mode), 4 on
 // mobile data, 12 otherwise. With tiers, mobile data follows the user's choice, as on the iPhone: Clearer keeps
 // 4 Mbit/s; Data Saver (the default until they choose) is 1.5 and at most one pixel per point (`maxScale`, which the

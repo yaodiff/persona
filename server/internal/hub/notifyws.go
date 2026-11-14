@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -81,11 +82,28 @@ func managerPushCollapseID(manager, id string) string {
 // finished notifications of seen sessions when it starts, and a reminder is about a seen one). owner is the manager
 // that asked for it, as for notifyDone.
 func (h *Hub) notifyReply(owner, machineID, machine, sessionID, title, text string) {
+	h.notifyReplyKeyed(owner, machineID, machine, sessionID, title, text, "")
+}
+
+// notifyReplyKeyed is notifyReply with the manager's related key for the question it waits on (low-distraction mode keeps one key
+// quiet for 12 hours after it rang): reminders of the same question merge, a new question of the same agent rings.
+// "" (an older manager) keys by the session and what it asks.
+func (h *Hub) notifyReplyKeyed(owner, machineID, machine, sessionID, title, text, key string) {
 	build := func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }
 	wants := pushWants{Kind: "input"}
-	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: sessionID, title: title, body: text}
+	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: replyKey(sessionID, text, key), title: title, body: text}
 	h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil)
 	h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
+}
+
+// replyKey is the related key of a reply reminder: the manager's when it named one, else the session and a digest of
+// the question, so one agent's second question is not taken for a repeat of its first.
+func replyKey(sessionID, text, given string) string {
+	if given = strings.TrimSpace(given); given != "" {
+		return given
+	}
+	sum := sha256.Sum256([]byte(sessionID + "\x00" + strings.TrimSpace(text)))
+	return "reply:" + sessionID + ":" + hex.EncodeToString(sum[:8])
 }
 
 // notifyDecide pushes a to-do whose conclusion waits for the owner's decision and recommends an option (#2056) to the
@@ -109,6 +127,21 @@ func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text str
 // notifyInteraction pushes a new card. linkCovered: owner says its Persona Link summary rings for this card
 // (assistantwire.Notification.LinkCovered).
 func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine string, linkCovered bool) {
+	h.notifyInteractionAt(owner, ix, machine, linkCovered, "", "")
+}
+
+// notifyInteractionAt is notifyInteraction with the manager's push level and related key for low-distraction mode (push_quiet.go):
+// "" is a card's own, P0 keyed by the card. A supervisor's escalation names P1 when what it asks is not the owner's
+// alone, and low-distraction mode then holds it for the "Needs you" list instead of alerting.
+func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine string, linkCovered bool, level, key string) {
+	switch level {
+	case assistantwire.LevelP0, assistantwire.LevelP1, assistantwire.LevelP2:
+	default:
+		level = assistantwire.LevelP0 // none, or one this hub does not know: a card interrupts
+	}
+	if key = strings.TrimSpace(key); key == "" {
+		key = "ix:" + ix.ID
+	}
 	build := func(l i18n.Lang) map[string]any { return interactionPayloadIn(l, ix, machine) }
 	summary := ix.Summary
 	if ix.Private { // a Just me turn's card: what it asks stays in the app
@@ -120,7 +153,7 @@ func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine stri
 	if ix.Kind == proto.IxElicitation {
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
 		// the push has no buttons) and the connections that declared it.
-		policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: "ix:" + ix.ID, title: summary}
+		policy := pushPolicy{level: level, relatedKey: key, title: summary}
 		h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation)
 		h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
 	} else {
@@ -128,7 +161,7 @@ func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine stri
 		// desktops is there too (desktops.go); which cards those are is owner's to say. The desktop app's online check
 		// follows in sendCard and notifyWSFrom.
 		fn := alertWanted(wants.fn(), linkCovered && h.linkDesktopOnline(owner))
-		policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: "ix:" + ix.ID, title: summary}
+		policy := pushPolicy{level: level, relatedKey: key, title: summary}
 		h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil)
 		h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
 	}

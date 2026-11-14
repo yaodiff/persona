@@ -406,8 +406,10 @@
     <string name="chat_search_at_start">最初の記録に到達しました</string>
     <string name="chat_search_enter">キーワードを入力</string>
     <string name="chat_search_no_match">一致する記録はありません</string>
-    <string name="chat_search_scope">本文、思考、ツール名、ツールの入出力、システムイベントを検索できます。</string>
-    <string name="chat_search_note">読み込んだ内容のみを検索します。展開していない作業記録と省略された全文は対象外です。</string>
+    <string name="chat_search_scope">本文、引用、思考、ツール名、ツールの入力と出力、システムイベントを検索できます。</string>
+    <string name="chat_search_note">読み込み済みの内容のみを検索します（折りたたまれた作業記録を含む）。省略された全文は対象外です。</string>
+    <string name="chat_search_folds_loading">折りたたまれた作業記録を検索中…</string>
+    <string name="chat_search_folds_partial">一部の折りたたまれた作業記録は検索できませんでした。</string>
     <string name="chat_search_return">検索前の位置に戻る</string>
     <string name="chat_search_unlocatable">この記録は現在見つけられません。検索前の位置に戻れます</string>
     <string name="chat_search_origin_changed">元の記録が変わりました。現在の記録をそのままご覧ください</string>

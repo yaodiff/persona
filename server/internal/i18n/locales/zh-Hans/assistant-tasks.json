@@ -20,6 +20,7 @@
   "ultracode_skipped": "没开 ultracode 就启动了：{reason}",
   "task_failed_title": "「{name}」没开起来",
   "task_failed_title_health": "任务没开起来",
+  "ask_held_title": "「{name}」有卡片在等督办处理",
   "task_failed_body": "{reason}。打开对话点『重试』，或换一台电脑再派",
   "task_failed_body_no_reason": "打开对话点『重试』，或换一台电脑再派",
   "not_retryable": "只有没开起来、或被模型服务出错打断的任务能重试",

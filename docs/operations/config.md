@@ -319,6 +319,11 @@ The sections that are a manager's (whose assistant it is, `ai`, `agents`, `inbox
 - `screen_link_off` (default `false`): the hub never selects the live screen's session subprotocol, so every live screen stays on the
   plain relay through the hub, whatever the apps and nodes support ([computer-use.md](../extensions/computer-use.md) ("Live screen routes (#6398)")).
   The switch for when direct routes misbehave; it takes effect when the hub restarts.
+- `intercept_readers` (default empty): extension IDs whose tokens may read `GET /api/v1/push/intercepts`, on top of the
+  `notify` scope. Full credentials always may; an extension token whose ID is not listed gets 403 even with `notify`.
+  A listed extension still reads only its own manager's entries, and held-push bodies are stored and served as a
+  summary (title plus at most 140 runes), never as full text. Add the extension's ID (its manifest `name`) here when
+  its control panel needs the held-push list; it takes effect when the hub restarts.
 - `shutdown_timeout_seconds` (default 8): total hub shutdown budget, including closing the database connection pool; external `docker stop -t` must be longer (`docs/server/server.md` ("Shutdown")).
 - `auto_update_nodes` (default `false`): lets the managers update the computers' nodes by themselves, after a confirmed hub update and when a node on another build reconnects (the hub hands it over in `devices.config`).
   Off, a node changes only when someone picks **Redeploy** for its computer ([hub-update.md](hub-update.md) ("Node upgrade policy")).

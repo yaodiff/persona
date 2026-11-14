@@ -503,6 +503,8 @@ class Watcher:
             if old.get("outcome") == "passed_with_base_failures" and old.get("semantic") == "passed" and not old.get("review_posted"):
                 old = dict(old, outcome="passed", review_posted=False)
             if old.get("outcome") == "failed":
+                if old.get("failure_posted"):
+                    return
                 self.comment(repo, number, "Automated review at `%s` did not pass. Not merged.\n\n```text\n%s\n```" %
                              (head[:9], bounded(old.get("failure", "verification failed"), 14000)))
                 self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)

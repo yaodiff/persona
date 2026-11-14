@@ -7,7 +7,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cx, Dialog } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { t } from "../i18n";
-import type { MobileData } from "./data-use";
+import type { Budget, MobileData } from "./data-use";
+import type { Change } from "./tiers/policy";
+import type { ScreenQuality } from "./video";
 import { holdUpdates } from "./rfb-hold";
 import { ScreenVideoLink, type Fallback, type Reading, type Want } from "./video-link";
 import { relayTransport, videoSocket, type DecoderMaker, type Picture } from "./video-stream";
@@ -30,6 +32,9 @@ export type VideoState = {
   size: { width: number; height: number } | null;
   tiers: boolean;
   decoderFailed: boolean;
+  /** The quality tier and when it last changed (ms on performance.now()); null without tiers. */
+  tier: Change | null;
+  tierAt: number | null;
 };
 
 /** The picture's long edge at most: this screen's, at least 1920 and at most 4K, as the iPhone asks for its own. */
@@ -39,7 +44,9 @@ function maxSize() {
 }
 
 /** The video over noVNC's canvas. `screen` is the element noVNC draws in; `pair` the signed-in connection's, null while
- *  RFB isn't; `want` what to show (null: VNC); `budget` the cap on its data (./data-use), sent again when it changes. */
+ *  RFB isn't; `want` what to show (null: VNC); `budget` the cap on its data (./data-use), sent again when it changes.
+ *  With `tiers` (this page drives them, video.ts webTiers) the tiers take `tierBudget` (with the mobile-data choice) and
+ *  `quality` once the helper lists them too. */
 export function VideoChannel({
   rfb,
   screen,
@@ -47,6 +54,9 @@ export function VideoChannel({
   want,
   codecs,
   budget,
+  tierBudget = budget,
+  quality = "auto",
+  tiers = false,
   mid,
   token,
   onState,
@@ -57,7 +67,10 @@ export function VideoChannel({
   pair: string | null;
   want: Want | null;
   codecs: VideoCodec[];
-  budget: { maxKbps: number; fps: number };
+  budget: Budget;
+  tierBudget?: Budget;
+  quality?: ScreenQuality;
+  tiers?: boolean;
   mid: string;
   token: string;
   onState: (s: VideoState) => void;
@@ -67,23 +80,34 @@ export function VideoChannel({
   const [link, setLink] = useState<ScreenVideoLink | null>(null);
   const stateCb = useRef(onState);
   stateCb.current = onState;
-  const budgetNow = useRef(budget);
-  budgetNow.current = budget;
+  const budgetNow = useRef({ budget, tierBudget, quality });
+  budgetNow.current = { budget, tierBudget, quality };
 
   // One link a page; its inputs follow the props.
   useEffect(() => {
-    const b = budgetNow.current;
+    const now = budgetNow.current;
     const link = new ScreenVideoLink({
       open: (r) => relayTransport(videoSocket(window.location, mid, token, r.pair)),
       codecs,
       maxSize: maxSize(),
-      maxKbps: b.maxKbps,
-      fps: b.fps,
+      maxKbps: now.budget.maxKbps,
+      fps: now.budget.fps,
+      tiers: tiers ? { key: mid, bias: now.quality, budget: now.tierBudget } : null,
       makeDecoder,
     });
     setLink(link);
     const tell = () =>
-      stateCb.current({ showing: link.showing, fallback: link.fallback, reading: link.reading, codec: link.codec, size: link.size, tiers: link.tiers, decoderFailed: link.decoderFailed });
+      stateCb.current({
+        showing: link.showing,
+        fallback: link.fallback,
+        reading: link.reading,
+        codec: link.codec,
+        size: link.size,
+        tiers: link.tiers,
+        decoderFailed: link.decoderFailed,
+        tier: link.tier,
+        tierAt: link.tierAt,
+      });
     link.onChange = tell;
     link.onReading = tell;
     const hidden = () => link.hold("background", document.visibilityState === "hidden");
@@ -94,10 +118,14 @@ export function VideoChannel({
       link.close();
       setLink(null);
     };
-  }, [mid, token, codecs, makeDecoder]);
+  }, [mid, token, codecs, makeDecoder, tiers]);
 
   useEffect(() => link?.want(want), [link, want]);
-  useEffect(() => link?.setBudget({ maxKbps: budget.maxKbps, fps: budget.fps }), [link, budget.maxKbps, budget.fps]);
+  useEffect(
+    () => link?.setBudget({ maxKbps: budget.maxKbps, fps: budget.fps, maxScale: budget.maxScale }, { maxKbps: tierBudget.maxKbps, fps: tierBudget.fps, maxScale: tierBudget.maxScale }),
+    [link, budget.maxKbps, budget.fps, budget.maxScale, tierBudget.maxKbps, tierBudget.fps, tierBudget.maxScale],
+  );
+  useEffect(() => link?.setQuality(quality), [link, quality]);
   useEffect(() => link?.rfb(pair ? { pair } : null), [link, pair]);
 
   // Showing: noVNC asks for no updates and its canvas goes clear; the newest picture is drawn at the next frame.
@@ -127,6 +155,8 @@ export function VideoChannel({
       place();
     };
     link.onPicture = (p) => {
+      // A picture still waiting for the next frame is replaced, never drawn: the tiers count those.
+      link.shown(latest !== null);
       latest?.close();
       latest = p;
       if (!frame) frame = requestAnimationFrame(draw);

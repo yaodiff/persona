@@ -51836,6 +51836,29 @@
       },
       "extractionState" : "manual"
     },
+    "Default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標準"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认"
+          }
+        }
+      }
+    },
     "Default (no background)" : {
       "localizations" : {
         "en" : {
@@ -62583,6 +62606,29 @@
       },
       "extractionState" : "manual"
     },
+    "Faster" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faster"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速め"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较快"
+          }
+        }
+      }
+    },
     "Faster route" : {
       "localizations" : {
         "en" : {
@@ -70393,6 +70439,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "How far a computer's screen scrolls when you drag two fingers on it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How far a computer's screen scrolls when you drag two fingers on it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータの画面を2本指でドラッグしたときの、スクロールの速さです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用两指在电脑画面上拖动时，画面滚动的快慢。"
+          }
+        }
+      }
     },
     "How full your subscription windows are, and today's tokens. [Home Widgets]" : {
       "extractionState" : "manual",
@@ -130531,6 +130600,29 @@
       },
       "extractionState" : "manual"
     },
+    "Scroll Speed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scroll Speed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スクロールの速さ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "滚动速度"
+          }
+        }
+      }
+    },
     "Scroll up to load earlier output" : {
       "localizations" : {
         "en" : {
@@ -139229,6 +139321,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Slower" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slower"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遅め"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较慢"
+          }
+        }
+      }
     },
     "Slowest and most careful" : {
       "localizations" : {
@@ -195897,19 +196012,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "live screen screen route direct connection quality cellular mobile data hotspot"
+            "value" : "live screen screen route direct connection quality cellular mobile data hotspot scroll scrolling scroll speed two fingers"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ライブ画面 画面 経路 直接接続 画質 モバイル通信 インターネット共有"
+            "value" : "ライブ画面 画面 経路 直接接続 画質 モバイル通信 インターネット共有 スクロール スクロールの速さ 2本指"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "实时屏幕 屏幕 线路 直连 画质 蜂窝 移动数据 热点"
+            "value" : "实时屏幕 屏幕 线路 直连 画质 蜂窝 移动数据 热点 滚动 滚动速度 双指"
           }
         }
       }

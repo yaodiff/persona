@@ -56,6 +56,11 @@ type Hello struct {
 	// SecretHandoffGate: the hub lets only a device that may approve a hand-off card say yes to one, and names it in
 	// HTTPRequest.HandoffApprover. An older hub never sends it; a manager then shows no hand-off card at all.
 	SecretHandoffGate bool `json:"secret_handoff_gate,omitempty"`
+	// QuietPush: the hub's push tiering switch (the low-distraction switch, docs/server/server.md) is on. The manager
+	// then holds back what is its own to send, by the same levels the hub filters pushes by: a supervised card is not
+	// handed to the owner on a timeout, a P1 escalation and conclusion / progress cards post nothing. An older hub never
+	// sends it: off. A change of the switch sends manager.updated.
+	QuietPush bool `json:"quiet_push,omitempty"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the
@@ -262,7 +267,7 @@ type Notification struct {
 	// Level is how urgent the push is for the hub's low-distraction (ln) mode: "P0", "P1" or "P2". "" lets the hub
 	// derive one from the kind. Hubs from before the field derive the level, so older and newer managers interoperate.
 	Level string `json:"level,omitempty"`
-	// RelatedKey links the push to what it is about (a to-do id, a PR URL, a subject): in ln mode the same key pushes
+	// RelatedKey links the push to what it is about (a to-do id, a PR URL, a subject): in low-distraction mode the same key pushes
 	// at most once in 12 hours, and same-minute P1 conclusion pushes with it merge into one intercepted entry.
 	RelatedKey string `json:"related_key,omitempty"`
 }
@@ -270,8 +275,8 @@ type Notification struct {
 // Push levels a Notification may carry (hub low-distraction mode, docs/server/server.md "Push policy").
 const (
 	LevelP0 = "P0" // must interrupt: a decision or a card that needs the owner now
-	LevelP1 = "P1" // worth knowing: a conclusion, an explicit notify_user; held for the briefing in ln mode
-	LevelP2 = "P2" // background news: silent in ln mode
+	LevelP1 = "P1" // worth knowing: a conclusion, an explicit notify_user; held for the briefing in low-distraction mode
+	LevelP2 = "P2" // background news: silent in low-distraction mode
 )
 
 // NotifyTodo is the to-do a NotifyDecide push asks about: its id, when the decision now waiting was asked (what

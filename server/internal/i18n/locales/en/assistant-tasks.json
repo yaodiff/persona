@@ -20,6 +20,7 @@
   "ultracode_skipped": "started without ultracode: {reason}",
   "task_failed_title": "“{name}” couldn’t be started",
   "task_failed_title_health": "Task couldn’t be started",
+  "ask_held_title": "A card in “{name}” waits for its supervisor",
   "task_failed_body": "{reason}. Open the conversation to tap “Retry”, or assign to another computer",
   "task_failed_body_no_reason": "Open the conversation to tap “Retry”, or assign to another computer",
   "not_retryable": "Only a task that didn’t start, or was interrupted by a model service error, can be retried",

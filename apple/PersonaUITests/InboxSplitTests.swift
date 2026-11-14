@@ -51,6 +51,13 @@ final class InboxSplitTests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
     }
 
+    /// Expands the original source on a freshly opened non-event inbox detail.
+    @MainActor private func expandSource() {
+        let source = app.buttons["inbox.detail.source"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 15), "the original source control did not appear")
+        source.tapCenter()
+    }
+
     /// Types into the chat's box once it has the cursor: a tap while the chat is still settling can leave it without.
     @MainActor private func type(_ text: String, into box: XCUIElement) {
         for _ in 0..<3 {
@@ -86,6 +93,7 @@ final class InboxSplitTests: XCTestCase {
         let theirs = "The new icon set"        // in 「设计评审」 only
         let draft = "给韩梅梅的草稿 " + UUID().uuidString.prefix(4)
         row("韩梅梅")?.tapCenter()
+        expandSource()
         XCTAssertTrue(message(mine).waitForExistence(timeout: 15), "韩梅梅's chat did not open")
         let box = app.textFields["lark.box"]
         XCTAssertTrue(box.waitForExistence(timeout: 5))
@@ -95,6 +103,7 @@ final class InboxSplitTests: XCTestCase {
 
         row("设计评审")?.tapCenter()
         XCTAssertTrue(title("设计评审").waitForExistence(timeout: 10), "设计评审 did not open")
+        expandSource()
         _ = message(theirs).waitForExistence(timeout: 15)
         shot("2-second")
         XCTAssertTrue(message(theirs).exists, "设计评审 did not show its own messages")
@@ -103,6 +112,7 @@ final class InboxSplitTests: XCTestCase {
 
         row("韩梅梅")?.tapCenter()
         XCTAssertTrue(title("韩梅梅").waitForExistence(timeout: 10), "韩梅梅's chat did not open again")
+        expandSource()
         XCTAssertTrue(message(mine).waitForExistence(timeout: 15), "韩梅梅's chat did not show its messages again")
         XCTAssertFalse(message(theirs).exists, "设计评审's messages stayed in 韩梅梅's chat")
         XCTAssertTrue((box.value as? String ?? "").contains(draft), "韩梅梅's draft was not kept")

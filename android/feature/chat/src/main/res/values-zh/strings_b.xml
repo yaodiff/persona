@@ -406,8 +406,10 @@
     <string name="chat_search_at_start">已到最早的记录</string>
     <string name="chat_search_enter">输入关键词</string>
     <string name="chat_search_no_match">没有找到匹配记录</string>
-    <string name="chat_search_scope">可搜索正文、思考、工具名、工具输入和输出、系统事件。</string>
-    <string name="chat_search_note">仅搜索已加载的内容；未展开的工作记录和截断的全文不在搜索范围内。</string>
+    <string name="chat_search_scope">可搜索正文、引用、思考、工具名、工具输入和输出、系统事件。</string>
+    <string name="chat_search_note">仅搜索已加载的内容（含收起的工作记录）；截断的全文不在搜索范围内。</string>
+    <string name="chat_search_folds_loading">正在搜索收起的工作记录…</string>
+    <string name="chat_search_folds_partial">部分收起的工作记录没能搜索。</string>
     <string name="chat_search_return">返回搜索前位置</string>
     <string name="chat_search_unlocatable">找不到这条记录在哪，可以回到搜索前的位置</string>
     <string name="chat_search_origin_changed">原来的记录已变化，请继续浏览当前记录</string>

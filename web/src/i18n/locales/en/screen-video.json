@@ -37,5 +37,15 @@
   "mobile_data_clearer_usage": "About 0.6 GB an hour",
   "mobile_data_saver_usage": "About 0.2–0.3 GB an hour",
   "mobile_data_quality": "Quality on mobile data",
-  "mobile_data_close": "Close"
+  "mobile_data_close": "Close",
+  "stats_tier": "Tier",
+  "tier_start": "Picked for this connection",
+  "tier_link_slowed": "Connection slowed down",
+  "tier_link_steady": "Connection is steady",
+  "tier_network_changed": "Network changed",
+  "tier_device_warm": "This device is warm or saving power",
+  "tier_device_behind": "This browser couldn’t keep up",
+  "tier_choice": "You changed Quality",
+  "tier_seconds_ago": "{n} s ago",
+  "tier_minutes_ago": "{n} min ago"
 }

@@ -33,10 +33,13 @@ vi.mock("../lib/assistant-search", async (importOriginal) => ({
 }));
 const { closePalette, openPalette, setPaletteQuery } = await import("../lib/palette");
 const { Palette } = await import("./Palette");
+await import("../lib/assistant-search");
+await import("../lib/agent-search");
 
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   fake.asked = [];
   fake.features = ["assistant_search"];
   host = document.createElement("div");
@@ -47,21 +50,17 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   closePalette();
+  vi.useRealTimers();
 });
 async function search(query: string) {
   openPalette("jump");
   setPaletteQuery(query);
   act(() => root.render(<Palette open onClose={() => {}} onNewAgent={() => {}} />));
-  await act(async () => { await new Promise((ok) => setTimeout(ok, 300)); });
-  // The palette loads lib/assistant-search with the first query typed and asks after its debounce, later than 300 ms on a
-  // busy machine: wait for the ask, each poll in act, so the results are in before anything is read.
-  if (fake.features.includes("assistant_search")) {
-    await vi.waitFor(async () => {
-      await act(async () => { await new Promise((ok) => setTimeout(ok, 20)); });
-      expect(fake.asked).toContain(query);
-    }, { timeout: 5000, interval: 20 });
-  }
+  await act(async () => { await vi.dynamicImportSettled(); });
+  await act(async () => { vi.advanceTimersByTime(210); });
+  await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+  if (fake.features.includes("assistant_search")) expect(fake.asked).toContain(query);
   return document.body;
 }
 

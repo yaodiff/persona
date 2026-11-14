@@ -4,9 +4,18 @@
 // The stream ending (closed, silent for 3 s, a picture that doesn't decode) or the Mac locking (`paused`) puts RFB back
 // at once and says why; a stream that ended is tried again after 30 s, doubling to 5 min, back to 30 s once video has
 // stayed up a minute. A held page (in the background) stops the stream with nothing said, and opens it again when shown.
+//
+// With quality tiers on both sides (#6558, #6396: the page's `tiers` option and the helper's `hello.features`), the
+// stream's tiers (./video-tiers) pick the picture's size and frame rate under the cap: Quality (`setQuality`) and the
+// data cap with the user's mobile-data choice (`setBudget`'s second cap) go to them, and the tier this computer last
+// settled on is where its next stream on this page starts.
+import type { Budget } from "./data-use";
+import type { Bias } from "./tiers/ladder";
+import type { Change } from "./tiers/policy";
 import type { VideoCodec } from "./video-probe";
 import { ScreenVideoStream, type DecoderMaker, type Ending, type Picture, type VideoTransport } from "./video-stream";
-import type { Hello, Timing } from "./video-wire";
+import { ScreenVideoTiers } from "./video-tiers";
+import type { Encoding, Hello, Timing } from "./video-wire";
 
 /** Why VNC shows while video was chosen, in words the page turns into a line (screen-video). */
 export type Fallback = "lost" | "locked" | "notAllowed";
@@ -36,11 +45,17 @@ export type LinkOptions = {
   maxKbps: number;
   fps: number;
   makeDecoder?: DecoderMaker;
+  /** This page drives the quality tiers (video.ts webTiers), keyed by computer for the tier it settles on. */
+  tiers?: { key: string; bias: Bias; budget: Budget } | null;
   now?: () => number;
   firstWaitMs?: number;
   longestWaitMs?: number;
   stableMs?: number;
 };
+
+/** The tier each computer last settled on, by computer and kind of route, on this page: its next stream starts there
+ *  (the policy's `remembered`). The web takes the hub's relay only. */
+const settled = new Map<string, number>();
 
 export class ScreenVideoLink {
   showing = false;
@@ -50,6 +65,9 @@ export class ScreenVideoLink {
   size: { width: number; height: number } | null = null;
   /** The helper said it has quality tiers (`hello.features`). */
   tiers = false;
+  /** The tier now and when (ms on `now`) it last changed, for the stats panel; null without tiers. */
+  tier: Change | null = null;
+  tierAt: number | null = null;
   reading: Reading = {};
   /** When video is tried again after it stopped (ms on `now`), for tests. */
   retryAt: number | null = null;
@@ -110,12 +128,28 @@ export class ScreenVideoLink {
     if (was !== (this.held.size === 0)) this.reconsider(); // the line said stays until a picture shows
   }
 
-  /** A new cap (the network or the data choice changed, ./data-use): the open stream gets an `update`, as the
-   *  iPhone's does; a new one starts with it. */
-  setBudget(b: { maxKbps: number; fps: number }): void {
-    if (b.maxKbps === this.opts.maxKbps && b.fps === this.opts.fps) return;
-    this.opts = { ...this.opts, maxKbps: b.maxKbps, fps: b.fps };
-    this.stream?.send({ fps: b.fps, max_kbps: b.maxKbps });
+  /** A new cap (the network or the data choice changed, ./data-use), as the iPhone's: with tiers running, the policy
+   *  takes `tiered` (with the mobile-data choice) and picks a tier under it; without, `plain` goes to the open stream in
+   *  an `update`. A new stream starts with `plain`. */
+  setBudget(plain: Budget, tiered: Budget = plain): void {
+    if (this.opts.tiers) this.opts = { ...this.opts, tiers: { ...this.opts.tiers, budget: tiered } };
+    const same = plain.maxKbps === this.opts.maxKbps && plain.fps === this.opts.fps;
+    if (!same) this.opts = { ...this.opts, maxKbps: plain.maxKbps, fps: plain.fps };
+    if (this.stream?.tiers?.active) return this.stream.tierBudget(tiered);
+    if (!same) this.stream?.send({ fps: plain.fps, max_kbps: plain.maxKbps });
+  }
+
+  /** ⋯ › Quality for this computer: on the running stream at once. */
+  setQuality(b: Bias): void {
+    if (!this.opts.tiers || b === this.opts.tiers.bias) return;
+    this.opts = { ...this.opts, tiers: { ...this.opts.tiers, bias: b } };
+    this.stream?.tierBias(b);
+  }
+
+  /** A picture reached the screen, or a newer one `replaced` it before it was drawn (the page's draw loop): the tiers
+   *  count those as the screen not keeping up. */
+  shown(replaced: boolean): void {
+    this.stream?.shown(replaced);
   }
 
   /** Ends everything (the page went away). */
@@ -137,6 +171,13 @@ export class ScreenVideoLink {
     this.opened = target;
     this.rect = target.want.rect;
     this.tally = new Tally();
+    this.tier = null;
+    this.tierAt = null;
+    const tt = this.opts.tiers;
+    // The tiers, when this page has them: they start once the helper's hello says it has them too.
+    const tiers = tt
+      ? new ScreenVideoTiers({ bias: tt.bias, budget: tt.budget, maxSize: this.opts.maxSize, link: null, remembered: settled.get(`${tt.key}/relay`) ?? null })
+      : null;
     this.stream = new ScreenVideoStream(
       t,
       { type: "start", ...(target.want.display === null ? {} : { display: target.want.display }), max_size: this.opts.maxSize, fps: this.opts.fps, max_kbps: this.opts.maxKbps, codecs: this.opts.codecs },
@@ -150,13 +191,17 @@ export class ScreenVideoLink {
             return this.paused(e.reason);
           case "timing":
             return this.helper(e.timing);
+          case "tier":
+            return this.tierChanged(e.change);
+          case "encoding":
+            return this.encoding(e.encoding);
           case "ended":
             return this.ended(e.why);
           default:
-            return; // resumed: the next picture shows video again; encoding: for the tiers (PR 4)
+            return; // resumed: the next picture shows video again
         }
       },
-      { makeDecoder: this.opts.makeDecoder, now: this.opts.now },
+      { makeDecoder: this.opts.makeDecoder, now: this.opts.now, tiers },
     );
   }
 
@@ -173,6 +218,22 @@ export class ScreenVideoLink {
     this.size = { width: h.width, height: h.height };
     if (h.features?.includes("tiers")) this.tiers = true;
     if (h.rect && h.rect.length === 4) this.rect = [h.rect[0], h.rect[1], h.rect[2], h.rect[3]];
+    this.onChange();
+  }
+
+  /** A new tier: for the stats panel, and remembered for this computer's next stream. */
+  private tierChanged(c: Change) {
+    if (!this.stream) return;
+    this.tier = c;
+    this.tierAt = this.now();
+    if (this.opts.tiers) settled.set(`${this.opts.tiers.key}/relay`, c.index);
+    this.onChange();
+  }
+
+  /** The encoder's size after a change in place: the stats panel shows what runs, not what `hello` said. */
+  private encoding(e: Encoding) {
+    if (!this.stream || (this.size?.width === e.width && this.size?.height === e.height)) return;
+    this.size = { width: e.width, height: e.height };
     this.onChange();
   }
 

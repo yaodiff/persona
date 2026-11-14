@@ -155,7 +155,9 @@ type assistantLink struct{ h *Hub }
 func (l assistantLink) Hello(context.Context) (assistantwire.Hello, error) {
 	h := l.h
 	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go).
-	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true}
+	// QuietPush: this hub's push tiering switch, which the managers follow for what is not a hub push (cards they
+	// post, cards they hand up); a change sends manager.updated.
+	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, QuietPush: h.push.lnModeOn()}
 	if m, ok := h.mutesEvent(); ok { // the hub's mutes, before the manager pushes anything (fleet_link.go)
 		out.Mutes = m.Mutes
 	}

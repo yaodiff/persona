@@ -439,8 +439,13 @@ const linkRangWait = 2 * time.Second
 // summary merged with newer cards may list it in More, a notification may be dropped before it is handed over, a link
 // may go.
 func (s *Service) notifyInteraction(ix proto.Interaction, machine string, covered bool) {
+	s.notifyInteractionAt(ix, machine, covered, "", "")
+}
+
+// notifyInteractionAt is notifyInteraction with a push level and related key for the hub's low-distraction mode ("": derived).
+func (s *Service) notifyInteractionAt(ix proto.Interaction, machine string, covered bool, level, key string) {
 	n := Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
-		Interaction: &ix}
+		Interaction: &ix, Level: level, RelatedKey: key}
 	if !covered || s.devs == nil {
 		s.deliver(n)
 		return

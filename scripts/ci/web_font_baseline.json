@@ -61,7 +61,7 @@
  "web/src/views/NewAgent.tsx": 27,
  "web/src/views/NodePrompt.tsx": 3,
  "web/src/views/PageBoundary.tsx": 2,
- "web/src/views/Palette.tsx": 16,
+ "web/src/views/Palette.tsx": 13,
  "web/src/views/PasswordLogin.tsx": 8,
  "web/src/views/PersonaAssistant.tsx": 8,
  "web/src/views/Settings.tsx": 48,

@@ -83,6 +83,11 @@ func (v *Item) todo() string {
 // ID is an adapter-supplied exact composite identity, not a public query key;
 // it selects at most one row and cannot be combined with Cursor or Since.
 type Options struct {
+	// Search is the runtime palette's opt-in grammar. Context is captured only on
+	// the first page; AllowedMachines is an adapter-owned authorization boundary.
+	Search                                                                             string
+	SearchContext                                                                      *SearchContext
+	AllowedMachines                                                                    []string
 	Limit                                                                              int
 	ID, Cursor, Since, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
 	// Manager selects the rows of the batches replaced with that owner (ReplaceOwned); like the other filters, a
@@ -124,12 +129,13 @@ const TodoNone = "none"
 // Total is the filtered membership at Revision, not the number of delta events.
 // Sessions and Remove together consume Limit slots in an incremental page.
 type Page struct {
-	Sessions   []any    `json:"sessions"`
-	Remove     []string `json:"remove"`
-	HasMore    bool     `json:"has_more"`
-	NextCursor string   `json:"next_cursor,omitempty"`
-	Revision   string   `json:"revision"`
-	Total      int      `json:"total"`
+	SearchHits map[string]SearchHit `json:"search_hits,omitempty"`
+	Sessions   []any                `json:"sessions"`
+	Remove     []string             `json:"remove"`
+	HasMore    bool                 `json:"has_more"`
+	NextCursor string               `json:"next_cursor,omitempty"`
+	Revision   string               `json:"revision"`
+	Total      int                  `json:"total"`
 }
 
 // Counts describes the complete filtered membership, ignoring page size.
@@ -169,8 +175,9 @@ func (e *Error) Error() string { return e.Code + ": " + e.message }
 func failure(code, message string) error { return &Error{Code: code, message: message} }
 
 type record struct {
-	item   Item
-	search string
+	searchDocument *searchRecord // lazy immutable projection; Item remains in its allocation class
+	item           Item
+	search         string
 	// owner is the manager its batch was replaced with (ReplaceOwned), "" for none: what filters.Manager selects by.
 	// It is the batch's, not an Item attribute, so the items an adapter builds for every update stay the size they were.
 	owner string
@@ -190,6 +197,7 @@ type filters struct {
 }
 
 type binding struct {
+	Search, AllowedMachines string
 	filters
 	Summary bool
 	Since   string
@@ -207,9 +215,10 @@ type event struct {
 }
 
 type result struct {
-	events  []event
-	counts  Counts
-	ordered bool // counts-only views must not be mistaken for an empty ordered list
+	searchHits map[string]SearchHit
+	events     []event
+	counts     Counts
+	ordered    bool // counts-only views must not be mistaken for an empty ordered list
 }
 
 type cacheEntry struct {

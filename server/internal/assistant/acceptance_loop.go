@@ -70,6 +70,8 @@ func (s *Service) retryAcceptance(now time.Time) {
 	}
 	slices.Sort(due)
 	st, stErr := s.feishuStatus(ctx)
+	quiet := s.quietModeOn(ctx)
+	quietHolds := func(a *acceptAsk) bool { return quiet && !decideAsk(a) } // as quietHoldsAsk, read once for the sweep
 	for _, id := range due {
 		t, ok := s.todoNow(id)
 		if f := s.acceptSweepHook; f != nil {
@@ -92,7 +94,7 @@ func (s *Service) retryAcceptance(now time.Time) {
 			continue
 		}
 		late := now.Sub(maxTime(a.AskedAt, a.PushedAt)) > acceptPostWindow // PushedAt: held for a briefing first (decision_wait.go)
-		if late || stErr == nil && !(st.Ready && st.Features.Reports) {
+		if late || stErr == nil && !(st.Ready && st.Features.Reports) || quietHolds(a) {
 			if late {
 				s.logf("task %s: acceptance: its card did not go out within %v: kept without one", id, acceptPostWindow)
 			}
@@ -165,6 +167,11 @@ func (s *Service) remindAcceptance(now time.Time) {
 		return
 	}
 	if f, ready := s.feishuFeatures(ctx); !ready || !f.Reports {
+		return
+	}
+	if s.quietModeOn(ctx) {
+		// low-distraction mode: no morning card again; the briefing lists what still waits to be verified (snapshotUnaccepted).
+		s.logf("acceptance reminders: low-distraction mode, %d left to the briefing without a card", len(due))
 		return
 	}
 	slices.Sort(due)

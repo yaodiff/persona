@@ -17,14 +17,26 @@ const status = vi.hoisted(() => ({ video: null as unknown }));
 const chunk = vi.hoisted(() => ({
   probe: { codecs: ["hevc", "h264"] } as { codecs: string[]; why?: string },
   tiers: false,
-  budget: null as { maxKbps: number; fps: number } | null, // the cap the channel was last given
+  budget: null as { maxKbps: number; fps: number } | null, // the cap the channel was last given (it starts the stream)
+  tierBudget: null as { maxKbps: number; fps: number; maxScale?: number } | null, // the tiers' cap, with the choice
+  quality: null as string | null,
+  pageTiers: null as boolean | null, // the page drives the tiers
 }));
 vi.mock("./VideoPicture", async () => {
   const { useEffect } = await import("react");
   return {
     probeHere: async () => chunk.probe,
-    VideoChannel: ({ onState, budget }: { onState: (s: unknown) => void; budget: { maxKbps: number; fps: number } }) => {
+    VideoChannel: ({ onState, budget, tierBudget, quality, tiers }: {
+      onState: (s: unknown) => void;
+      budget: { maxKbps: number; fps: number };
+      tierBudget: { maxKbps: number; fps: number; maxScale?: number };
+      quality: string;
+      tiers: boolean;
+    }) => {
       chunk.budget = budget;
+      chunk.tierBudget = tierBudget;
+      chunk.quality = quality;
+      chunk.pageTiers = tiers;
       useEffect(() => onState({ showing: false, fallback: null, reading: {}, codec: null, size: null, tiers: chunk.tiers, decoderFailed: false }), [onState]);
       return null;
     },
@@ -99,6 +111,9 @@ beforeEach(() => {
   chunk.probe = { codecs: ["hevc", "h264"] };
   chunk.tiers = false;
   chunk.budget = null;
+  chunk.tierBudget = null;
+  chunk.quality = null;
+  chunk.pageTiers = null;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -160,9 +175,11 @@ describe("the picture switcher when the Mac advertises video", () => {
       "false", // Sharper
       "false", // Smoother
     ]);
+    expect([chunk.pageTiers, chunk.quality], "the channel drives the tiers, on Auto").toEqual([true, "auto"]);
     act(() => rows()[3].click()); // Sharper
     await flush();
     expect(localStorage.getItem("persona.screen.quality.macbook")).toBe("sharper");
+    expect(chunk.quality, "Quality goes to the running stream").toBe("sharper");
   });
 
   it("comes back on the kept picture on the next page", async () => {
@@ -246,10 +263,11 @@ describe("data use", () => {
     network("cellular");
     await live();
     await vi.waitFor(() => expect(card()).not.toBeNull());
-    expect(chunk.budget).toEqual({ maxKbps: 1_500, fps: 60, maxScale: 1 });
+    // the stream starts on the cap without tiers (they aren't known before hello); the tiers take Data Saver
+    expect([chunk.budget, chunk.tierBudget]).toEqual([{ maxKbps: 4_000, fps: 60 }, { maxKbps: 1_500, fps: 60, maxScale: 1 }]);
     act(() => host.querySelector<HTMLButtonElement>('[data-testid="screen-mobile-data-clearer"]')!.click());
     await flush();
-    expect([card(), localStorage.getItem("persona.screen.mobileData"), chunk.budget]).toEqual([null, "clearer", { maxKbps: 4_000, fps: 60 }]);
+    expect([card(), localStorage.getItem("persona.screen.mobileData"), chunk.tierBudget]).toEqual([null, "clearer", { maxKbps: 4_000, fps: 60 }]);
     act(() => button()!.click());
     expect(rows().map((r) => [r.textContent?.startsWith(t("screen-video.mobile_data_clearer")) || r.textContent?.startsWith(t("screen-video.mobile_data_saver")), r.getAttribute("aria-checked")]).slice(-2)).toEqual([
       [true, "true"], // Clearer
@@ -257,7 +275,7 @@ describe("data use", () => {
     ]);
     act(() => rows().at(-1)!.click()); // back to Data Saver from ⋯
     await flush();
-    expect([localStorage.getItem("persona.screen.mobileData"), chunk.budget]).toEqual(["saver", { maxKbps: 1_500, fps: 60, maxScale: 1 }]);
+    expect([localStorage.getItem("persona.screen.mobileData"), chunk.tierBudget]).toEqual(["saver", { maxKbps: 1_500, fps: 60, maxScale: 1 }]);
   });
 
   it("asks at most twice: closed unanswered it stays on Data Saver and comes back once more", async () => {
@@ -269,7 +287,7 @@ describe("data use", () => {
     await vi.waitFor(() => expect(card()).not.toBeNull());
     act(() => host.querySelector<HTMLButtonElement>('[data-testid="screen-mobile-data-close"]')!.click());
     await flush();
-    expect([card(), localStorage.getItem("persona.screen.mobileData"), chunk.budget]).toEqual([null, null, { maxKbps: 1_500, fps: 60, maxScale: 1 }]);
+    expect([card(), localStorage.getItem("persona.screen.mobileData"), chunk.tierBudget]).toEqual([null, null, { maxKbps: 1_500, fps: 60, maxScale: 1 }]);
     act(() => root.unmount());
     root = createRoot(host);
     await live(); // asked twice now
@@ -283,7 +301,7 @@ describe("data use", () => {
     network("cellular", true);
     await live();
     await flush();
-    expect([card(), chunk.budget]).toEqual([null, { maxKbps: 1_500, fps: 60, maxScale: 1 }]);
+    expect([card(), chunk.budget, chunk.tierBudget]).toEqual([null, { maxKbps: 1_500, fps: 60 }, { maxKbps: 1_500, fps: 60, maxScale: 1 }]);
     act(() => button()!.click());
     expect(rows(), "Video, VNC and Quality: no mobile-data choice").toHaveLength(5);
   });

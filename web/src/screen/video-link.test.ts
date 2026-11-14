@@ -2,8 +2,10 @@
 // a picture decodes; back to VNC with a plain reason when it stops; tried again after 30 s doubling to 5 min, reset after
 // a minute of video; a held page (in the background) stops it with nothing said.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Budget } from "./data-use";
 import { pausedFallback, ScreenVideoLink, type Fallback } from "./video-link";
 import { fakeDecoders, framed, prefix, scripted } from "./video-test-helpers";
+import { decode, VideoParser, type Hello, type VideoMessage } from "./video-wire";
 
 let now = 0;
 beforeEach(() => {
@@ -12,7 +14,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-function link() {
+function link(tiers: { key: string; budget: Budget } | null = null) {
   const transports: ReturnType<typeof scripted>[] = [];
   const pairs: string[] = [];
   const l = new ScreenVideoLink({
@@ -27,6 +29,7 @@ function link() {
     maxKbps: 12_000,
     fps: 60,
     makeDecoder: fakeDecoders().make,
+    tiers: tiers && { key: tiers.key, bias: "auto", budget: tiers.budget },
     now: () => now,
   });
   const shows: boolean[] = [], said: (Fallback | null)[] = [];
@@ -139,4 +142,49 @@ describe("ScreenVideoLink", () => {
     l.rfb({ pair: "b" });
     expect(transports[1].sent[0]).toMatchObject({ type: "start", max_kbps: 1_500 });
   });
+
+  it("with tiers on both sides: the start tier, the data cap and Quality go out as tier updates, and the tier is where this computer's next stream starts", async () => {
+    const { l, transports } = link({ key: "tiers-mac", budget: { maxKbps: 1_500, fps: 60, maxScale: 1 } });
+    l.setBudget({ maxKbps: 4_000, fps: 60 }, { maxKbps: 1_500, fps: 60, maxScale: 1 }); // mobile data, on Data Saver
+    l.want({ display: null, rect: null });
+    l.rfb({ pair: "a" });
+    expect(transports[0].sent[0]).toMatchObject({ type: "start", max_kbps: 4_000 }); // tiers aren't known before hello
+    transports[0].feed(tieredHello());
+    const updates = () => transports[0].sent.filter((m): m is Extract<VideoMessage, { type: "update" }> => m.type === "update");
+    expect(updates()[0].scale, "Data Saver: one pixel per point").toBe(1);
+    expect(updates()[0].max_kbps).toBeLessThanOrEqual(1_500);
+    expect([l.tier?.reason, l.tierAt]).toEqual(["start", 0]);
+    now = 5_000;
+    l.setBudget({ maxKbps: 4_000, fps: 60 }, { maxKbps: 4_000, fps: 60 }); // Clearer
+    expect([l.tier?.reason, l.tierAt, updates().length]).toEqual(["network_changed", 5_000, 2]);
+    expect(updates().every((u) => u.scale !== undefined), "the tiers set the cap: no plain update").toBe(true);
+    l.setQuality("smoother");
+    l.setQuality("smoother");
+    expect([l.tier?.reason, updates().length]).toEqual(["choice", 3]);
+    const settled = l.tier!.index;
+    transports[0].feed(framed({ type: "encoding", width: 1280, height: 800, fps: 60, scale: 1, min_kbps: 900, max_kbps: 4_000 }));
+    expect(l.size).toEqual({ width: 1280, height: 800 });
+    l.rfb({ pair: "b" });
+    transports[1].feed(tieredHello());
+    expect([l.tier?.reason, l.tier?.index]).toEqual(["start", settled]);
+  });
+
+  it("with a helper without tiers the cap goes as before and Quality changes nothing", () => {
+    const { l, transports } = link({ key: "plain-mac", budget: { maxKbps: 12_000, fps: 60 } });
+    l.want({ display: null, rect: null });
+    l.rfb({ pair: "a" });
+    transports[0].feed(prefix(1)); // a hello without features
+    l.setQuality("sharper");
+    l.setBudget({ maxKbps: 4_000, fps: 60 }, { maxKbps: 1_500, fps: 60, maxScale: 1 });
+    expect([l.tier, transports[0].sent.slice(1)]).toEqual([null, [{ type: "update", fps: 60, max_kbps: 4_000 }]]);
+  });
 });
+
+/** The fixture's hello from a helper with tiers on a 960×600-point display, then its format. */
+function tieredHello(): Uint8Array {
+  const raws = new VideoParser().push(prefix(2));
+  const h = decode(raws[0].type, raws[0].body) as Hello;
+  const hello = framed({ ...h, features: ["tiers"], points: [960, 600], pixels: [1920, 1200] });
+  const format = framed(decode(raws[1].type, raws[1].body));
+  return new Uint8Array([...hello, ...format]);
+}

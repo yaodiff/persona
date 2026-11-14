@@ -693,7 +693,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (heldRe
 		if !ok || cmp.Or(ix.Manager, assistantwire.AssistantID) != from {
 			return "", &rpc.Error{Code: devicewire.CodeNoDevice, Message: "an input push is for a pending card the manager reported"}
 		}
-		h.notifyInteraction(from, ix, n.Subtitle, n.LinkCovered)
+		h.notifyInteractionAt(from, ix, n.Subtitle, n.LinkCovered, n.Level, n.RelatedKey)
 		return "", nil
 	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply, assistantwire.NotifyDecide:
 		if !h.ownsRef(from, n.DeviceID, n.SessionID) {
@@ -712,7 +712,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (heldRe
 			pushWants{Kind: "done", Took: time.Duration(n.TookMS) * time.Millisecond, Long: time.Duration(n.LongMS) * time.Millisecond},
 			"", "", pushPolicy{level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey})
 	case assistantwire.NotifyReply:
-		h.notifyReply(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body)
+		h.notifyReplyKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, n.RelatedKey)
 	case assistantwire.NotifyDecide:
 		if n.Todo == nil || n.Todo.ID == "" || n.Todo.AskedAt.IsZero() || n.Todo.Recommend == "" {
 			return "", errors.New("a decision's push needs its to-do, when it was asked and the option its OK takes")

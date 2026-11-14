@@ -33,6 +33,41 @@ The table below is for Orca; where the herdr engine differs is in the table in t
 
 ## Install and start at logon
 
+Releases publish `persona-link-windows-amd64.exe.gz` and `persona-link-windows-arm64.exe.gz` on [GitHub](https://github.com/nwverse/persona/releases/latest). They are single executables compressed with gzip, not ZIP archives. The POSIX `install.sh` is for Linux and macOS, not Windows; use PowerShell on Windows.
+
+The following downloads the matching architecture, verifies the archive against the release's `SHA256SUMS`, and expands it. It installs only the connector: a computer that should also run Agents needs a resident node, which can be built from source as shown below. Windows `personad` / `persona-node` release assets and their release-feed packages are outside the connector release.
+
+```powershell
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+$base = 'https://github.com/nwverse/persona/releases/latest/download'
+$name = "persona-link-windows-$arch.exe"
+$dir = Join-Path $env:USERPROFILE '.persona\downloads'
+New-Item -ItemType Directory -Force $dir | Out-Null
+curl.exe -fL "$base/$name.gz" -o "$dir\$name.gz"
+curl.exe -fL "$base/SHA256SUMS" -o "$dir\SHA256SUMS"
+$match = Select-String -LiteralPath "$dir\SHA256SUMS" -Pattern " $([regex]::Escape($name)).gz$"
+$expected = $match.Line.Split()[0]
+$actual = (Get-FileHash -LiteralPath "$dir\$name.gz" -Algorithm SHA256).Hash.ToLowerInvariant()
+if (-not $expected -or $actual -ne $expected) { throw 'SHA-256 mismatch; do not run this download' }
+
+$input = [IO.File]::OpenRead("$dir\$name.gz")
+try {
+  $gzip = [IO.Compression.GzipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
+  try {
+    $output = [IO.File]::Create("$dir\$name")
+    try { $gzip.CopyTo($output) } finally { $output.Dispose() }
+  } finally { $gzip.Dispose() }
+} finally { $input.Dispose() }
+
+& "$dir\$name" version
+& "$dir\$name" install --no-node --pair '<the persona://link?… link from the hub>'
+& "$env:USERPROFILE\.persona\bin\persona-link.exe" status
+```
+
+To include a locally built resident node instead, omit `--no-node` and pass `--personad .\personad.exe`. No administrator is needed. Active mode needs no SSH or VPN. Only the optional SSH tunnel uses the system `ssh`; install Windows' OpenSSH client if that feature is wanted and `ssh` is not already available. These command-line executables are not Authenticode-signed, so Windows may warn before the first run; the SHA-256 check verifies the download, not a publisher signature.
+
+To build both programs from source instead:
+
 ```powershell
 cd server
 go build -o personad.exe .\cmd\personad

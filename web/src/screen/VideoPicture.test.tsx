@@ -9,7 +9,8 @@ import { t } from "../i18n";
 
 vi.mock("./probes", () => ({ countFrames: () => null, countBytes: () => () => {}, probeHub: () => () => {} }));
 import { FallbackLine, MobileDataCard } from "./VideoPicture";
-import { StatsOverlay } from "./StatsOverlay";
+import { StatsOverlay, tierParts, tierReasonParts } from "./StatsOverlay";
+import type { Change } from "./tiers/policy";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let host: HTMLDivElement;
@@ -66,6 +67,19 @@ describe("the stats panel", () => {
     act(() => root.render(<StatsOverlay {...props} video={{ reading: { fps: 30, decodeMs: 2 }, codec: "H.264", size: null }} />));
     expect(host.querySelector('[data-testid="screen-stats-total"]')).toBeNull();
     expect(host.querySelector('[data-testid="screen-stats-segments"]')?.textContent).toBe(t("screen-video.stats_decode", { ms: 2 }));
+  });
+
+  it("shows the tier as the iPhone does: Quality, scale and frame rate, then why it last changed and how long ago", () => {
+    const change: Change = { tier: { scale: 1.5, fps: 60, width: 2268, height: 1472, minKbps: 4_006, maxKbps: 12_000 }, index: 1, reason: "link_steady", targetKbps: 5_000 };
+    vi.spyOn(performance, "now").mockReturnValue(73_000);
+    act(() => root.render(<StatsOverlay {...props} video={{ reading: {}, codec: "HEVC", size: null, tier: { change, at: 61_000, quality: "auto" } }} />));
+    const value = [t("screen-video.quality_auto"), "1.5×", t("screen-video.stats_fps", { fps: 60 })].join("·");
+    expect(host.querySelector('[data-testid="screen-stats-tier"]')?.textContent).toBe(t("screen-video.stats_tier") + value);
+    expect(host.querySelector('[data-testid="screen-stats-tier-reason"]')?.textContent).toBe(`${t("screen-video.tier_link_steady")}·${t("screen-video.tier_seconds_ago", { n: 12 })}`);
+    expect(tierParts("sharper", { ...change, tier: { ...change.tier, scale: 2, fps: 30 } })).toEqual([t("screen-video.quality_sharper"), "2×", t("screen-video.stats_fps", { fps: 30 })]);
+    expect(tierReasonParts("choice", 0, 125_000)).toEqual([t("screen-video.tier_choice"), t("screen-video.tier_minutes_ago", { n: 2 })]);
+    act(() => root.render(<StatsOverlay {...props} video={{ reading: {}, codec: "HEVC", size: null }} />));
+    expect(host.querySelector('[data-testid="screen-stats-tier"]'), "no tier line without tiers").toBeNull();
   });
 
   it("says why the Mac's video isn't playing here, over VNC only", () => {

@@ -18,6 +18,8 @@ class OperationFailureTest {
     }
 
     @Test fun deliveryEvidenceAndTerminalCodesDetermineRecovery() {
+        assertEquals(OperationFailure(FailureReason.AgentStopped, FailureAction.OpenTerminal),
+            mapOperationFailure("agent_stopped", "none", true))
         assertEquals(FailureAction.Verify, mapOperationFailure("input_draft", "unknown", true).action)
         assertEquals(FailureAction.Verify, mapOperationFailure(null, "yes", true).action)
         assertEquals(FailureAction.OpenTerminal, mapOperationFailure("input_draft", "none", true).action)

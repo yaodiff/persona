@@ -37,5 +37,15 @@
   "mobile_data_clearer_usage": "1時間あたり約0.6 GB",
   "mobile_data_saver_usage": "1時間あたり約0.2〜0.3 GB",
   "mobile_data_quality": "モバイルデータ通信時の画質",
-  "mobile_data_close": "閉じる"
+  "mobile_data_close": "閉じる",
+  "stats_tier": "ティア",
+  "tier_start": "回線に合わせて開始",
+  "tier_link_slowed": "回線が遅くなりました",
+  "tier_link_steady": "回線が安定しています",
+  "tier_network_changed": "ネットワークが変わった",
+  "tier_device_warm": "デバイスが高温か省電力中",
+  "tier_device_behind": "ブラウザの処理が追いつきません",
+  "tier_choice": "画質を変更しました",
+  "tier_seconds_ago": "{n}秒前",
+  "tier_minutes_ago": "{n}分前"
 }

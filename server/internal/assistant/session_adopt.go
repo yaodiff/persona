@@ -51,7 +51,7 @@ func (s *Service) openTodoSessionIDs(ctx context.Context, machine string) (map[s
 // The heuristic takes a session not in the pre-start snapshot (knownIDs), hub-started, a non-assistant agent of the
 // same launcher and directory, with a fresh sign of life, that no open todo has linked yet; newest wins. It lists
 // twice, since the hub's held sessions can lag the node by a changed event. nil knownIDs (the pre-start list failed)
-// means nothing is adopted.
+// disables only this heuristic: the exact expectID above still needs no snapshot and must keep running (#7772).
 //
 // Limits of the fallback (only reachable on a node too old to honor session_id): two unanswered starts in the same
 // directory and launcher at the same instant cannot be told apart, so one could adopt the other's session (a
@@ -61,7 +61,7 @@ func (s *Service) openTodoSessionIDs(ctx context.Context, machine string) (map[s
 // node is what closes that risk. A session already on an open todo is never taken, so a task can never steal another
 // task's agent; and an unreadable todo book fails closed instead of guessing.
 func (s *Service) adoptStartedSession(ctx context.Context, m Device, launcher, cwd, expectID string, knownIDs map[string]bool) (proto.Session, bool) {
-	if knownIDs == nil {
+	if knownIDs == nil && expectID == "" {
 		return proto.Session{}, false
 	}
 	// The open-todo exclusion is read once and shared by both list attempts: the reconciliation is one decision
@@ -94,6 +94,10 @@ func (s *Service) adoptStartedSession(ctx context.Context, m Device, launcher, c
 				if sess.SessionID == expectID {
 					return sess, true
 				}
+			}
+			if knownIDs == nil {
+				// Without the pre-start snapshot there is no safe heuristic; the next attempt remains exact-only.
+				continue
 			}
 			// The node did not list the expected id (an older node ignores session_id, or its list still lags): load
 			// the open-todo book now, lazily, so a new-node exact match never pays for it, then keep the old

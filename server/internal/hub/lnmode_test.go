@@ -118,14 +118,14 @@ func TestLnModeOffPushesEverything(t *testing.T) {
 	if calls := len(f.calls(t, 3)); calls != 3 {
 		t.Fatalf("APNs got %d calls, want 3", calls)
 	}
-	if got := h.push.lnInterceptsView(0); len(got) != 0 {
+	if got := h.push.lnInterceptsView("", 0); len(got) != 0 {
 		t.Fatalf("nothing may be intercepted with the switch off, got %d", len(got))
 	}
 }
 
-// P0 must interrupt even in ln mode, and its related key then stays quiet for 12 hours: three cards about the same PR
-// produce exactly one push, and the other two are recorded as dedup intercepts.
-func TestLnModeP0AlwaysPushesAndSameKeyOnce(t *testing.T) {
+// P0 always interrupts: the 12-hour check runs after the level, so no earlier push with the same key swallows what the
+// owner must do or decide themself. Its key then keeps a lower-level push about the same thing quiet.
+func TestQuietP0IsNeverSwallowedByTheSameKey(t *testing.T) {
 	h, f := lnHub(t)
 	if err := h.push.setLnMode(context.Background(), true); err != nil {
 		t.Fatal(err)
@@ -133,30 +133,31 @@ func TestLnModeP0AlwaysPushesAndSameKeyOnce(t *testing.T) {
 	attempts := lnAttempts(h)
 	const pr = "https://example.test/pulls/12"
 	for i := range 3 {
-		if err := h.deliverPush(lnNotification(assistantwire.LevelP0, pr, "conclusion card "+string(rune('1'+i)))); err != nil {
+		if err := h.deliverPush(lnNotification(assistantwire.LevelP0, pr, "decision "+string(rune('1'+i)))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if *attempts != 1 {
-		t.Fatalf("got %d pushes for one PR's three cards, want 1", *attempts)
+	if *attempts != 3 {
+		t.Fatalf("got %d pushes for three P0 pushes with one key, want 3", *attempts)
 	}
-	if calls := len(f.calls(t, 1)); calls != 1 {
-		t.Fatalf("APNs got %d calls, want 1", calls)
+	if calls := len(f.calls(t, 3)); calls != 3 {
+		t.Fatalf("APNs got %d calls, want 3", calls)
 	}
-	view := h.push.lnInterceptsView(0)
-	if len(view) != 2 {
-		t.Fatalf("got %d intercepts, want 2 dedup entries", len(view))
+	if view := h.push.lnInterceptsView("", 0); len(view) != 0 {
+		t.Fatalf("P0 pushes were held: %+v", view)
 	}
-	for _, e := range view {
-		if e.Reason != interceptReasonDedup || e.RelatedKey != pr {
-			t.Fatalf("intercept = %+v, want a dedup entry for the PR key", e)
-		}
+	if err := h.deliverPush(lnNotification(assistantwire.LevelP2, pr, "background about the PR")); err != nil {
+		t.Fatal(err)
+	}
+	view := h.push.lnInterceptsView("", 0)
+	if *attempts != 3 || len(view) != 1 || view[0].Reason != interceptReasonDedup || view[0].RelatedKey != pr {
+		t.Fatalf("after the P0: %d pushes, intercepts %+v; want the P2 held as a repeat", *attempts, view)
 	}
 }
 
 // After the 12-hour window the same key may push again.
 func TestLnModeDedupWindowExpires(t *testing.T) {
-	h, _ := lnHub(t)
+	h, f := lnHub(t)
 	if err := h.push.setLnMode(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +174,7 @@ func TestLnModeDedupWindowExpires(t *testing.T) {
 	if *attempts != 2 {
 		t.Fatalf("got %d pushes across the 12-hour window, want 2", *attempts)
 	}
+	f.calls(t, 2) // let both APNs goroutines finish before the fake server closes
 }
 
 // P2 never alerts in ln mode; it is recorded as a silent intercept instead.
@@ -191,7 +193,7 @@ func TestLnModeP2IsSilentAndRecorded(t *testing.T) {
 	if calls := len(f.calls(t, 0)); calls != 0 {
 		t.Fatalf("APNs got %d calls for a P2 push, want 0", calls)
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 1 || view[0].Reason != interceptReasonP2 || view[0].Level != assistantwire.LevelP2 {
 		t.Fatalf("intercepts = %+v, want one P2 silent entry", view)
 	}
@@ -212,7 +214,7 @@ func TestLnModeP1HeldAndMergedWithinMinute(t *testing.T) {
 	if *attempts != 0 {
 		t.Fatalf("P1 alerted %d times in ln mode, want 0", *attempts)
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 1 {
 		t.Fatalf("same-minute P1 cards made %d entries, want 1 merged", len(view))
 	}
@@ -258,7 +260,7 @@ func TestLnModeSwitchAndInterceptsPersist(t *testing.T) {
 	if !restarted.lnModeOn() {
 		t.Fatal("the ln mode switch did not survive a restart")
 	}
-	view := restarted.lnInterceptsView(0)
+	view := restarted.lnInterceptsView("", 0)
 	if len(view) != 1 || view[0].RelatedKey != "persisted" {
 		t.Fatalf("restored intercepts = %+v, want the held P2 entry", view)
 	}
@@ -276,7 +278,7 @@ func TestLnInterceptsViewShape(t *testing.T) {
 	if err := h.deliverPush(lnNotification(assistantwire.LevelP1, "k2", "second")); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(map[string]any{"intercepts": h.push.lnInterceptsView(0)})
+	raw, err := json.Marshal(map[string]any{"intercepts": h.push.lnInterceptsView("", 0)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,6 +297,7 @@ func TestLnInterceptsViewShape(t *testing.T) {
 // manager's; PUT /api/v1/push/ln-mode is refused to an extension token.
 func TestLnInterceptsHeldToManager(t *testing.T) {
 	h, _ := lnHub(t)
+	h.cfg = &Config{InterceptReaders: []string{"ext-held-reads"}}
 	if err := h.push.setLnMode(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +326,7 @@ func TestLnInterceptsHeldToManager(t *testing.T) {
 	if all := read(nil); len(all) != 2 {
 		t.Fatalf("a full credential read %d entries, want 2", len(all))
 	}
-	ext := read(&principal{Role: roleExtension, Manager: "manager-b"})
+	ext := read(&principal{Role: roleExtension, Manager: "manager-b", Extension: "ext-held-reads"})
 	if len(ext) != 1 || ext[0].Manager != "manager-b" {
 		t.Fatalf("manager-b's extension read %+v, want only its own entry", ext)
 	}
@@ -339,7 +342,7 @@ func TestLnInterceptsHeldToManager(t *testing.T) {
 // Review fix: with the switch off a payload without aps (an extension's push_localized may send one) goes out as
 // before instead of panicking while the held-push text is read.
 func TestLnOffPayloadWithoutAPS(t *testing.T) {
-	h, _ := lnHub(t)
+	h, f := lnHub(t)
 	attempts := lnAttempts(h)
 	build := func(i18n.Lang) map[string]any { return map[string]any{"custom": "x"} }
 	h.push.sendFrom("manager-a", build, "", nil, quietNone, nil)
@@ -350,9 +353,10 @@ func TestLnOffPayloadWithoutAPS(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.push.sendFrom("manager-a", build, "", nil, quietNone, nil) // P1: held, no panic
-	if *attempts != 1 || len(h.push.lnInterceptsView(0)) != 1 {
-		t.Fatalf("pushes %d, intercepts %d; want 1 and 1", *attempts, len(h.push.lnInterceptsView(0)))
+	if *attempts != 1 || len(h.push.lnInterceptsView("", 0)) != 1 {
+		t.Fatalf("pushes %d, intercepts %d; want 1 and 1", *attempts, len(h.push.lnInterceptsView("", 0)))
 	}
+	f.calls(t, 1) // the off-mode push's APNs goroutine must finish before the fake server closes
 }
 
 // Review fix: same-minute P1 entries merge only within one manager, so one extension never reads another's titles.
@@ -366,7 +370,7 @@ func TestLnMergeStaysWithinManager(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 2 || len(view[0].Also) != 0 || len(view[1].Also) != 0 {
 		t.Fatalf("view = %+v, want two separate entries", view)
 	}
@@ -386,15 +390,15 @@ func TestLnSamePRP1IsOneEntry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 1 || len(view[0].Also) != 2 || view[0].RelatedKey != pr {
 		t.Fatalf("view = %+v, want one entry for the PR with two merged titles", view)
 	}
 }
 
-// Review fix: a decision rings once per round. The same round again is held; a new round (asked again) rings.
+// A decision is P0: it rings every time it is pushed, the same round's reminder too, and a new round (asked again).
 func TestLnDecisionRoundsRingAgain(t *testing.T) {
-	h, _ := lnHub(t)
+	h, f := lnHub(t)
 	if err := h.push.setLnMode(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
@@ -404,31 +408,38 @@ func TestLnDecisionRoundsRingAgain(t *testing.T) {
 	h.notifyDecide("", "", "", "", "decide", "body", todo)
 	todo.AskedAt = todo.AskedAt.Add(time.Hour)
 	h.notifyDecide("", "", "", "", "decide again", "body", todo)
-	if *attempts != 2 {
-		t.Fatalf("got %d decision pushes, want 2 (one per round)", *attempts)
+	if *attempts != 3 {
+		t.Fatalf("got %d decision pushes, want 3 (P0 is never held as a repeat)", *attempts)
 	}
+	f.calls(t, 2) // both decisions' APNs goroutines must finish before the fake server closes
 }
 
-// Review fix: two P0 pushes with one key at the same moment never both pass.
+// Concurrent pushes with one key: every P0 passes, and every lower-level one racing them is held, never alerted.
 func TestLnDedupIsAtomic(t *testing.T) {
 	h, _ := lnHub(t)
 	if err := h.push.setLnMode(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	var allowed atomic.Int32
-	for range 32 {
+	var p0, low atomic.Int32
+	for i := range 32 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if ok, _ := h.push.applyLn(pushPolicy{level: assistantwire.LevelP0, relatedKey: "same"}); ok {
-				allowed.Add(1)
+			level := assistantwire.LevelP0
+			if i%2 == 1 {
+				level = assistantwire.LevelP2
+			}
+			if ok, _ := h.push.applyLn(pushPolicy{level: level, relatedKey: "same"}); ok && level == assistantwire.LevelP0 {
+				p0.Add(1)
+			} else if ok {
+				low.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
-	if allowed.Load() != 1 {
-		t.Fatalf("%d concurrent pushes passed, want 1", allowed.Load())
+	if p0.Load() != 16 || low.Load() != 0 {
+		t.Fatalf("%d P0 and %d P2 passed, want 16 and 0", p0.Load(), low.Load())
 	}
 }
 

@@ -31,6 +31,16 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## A reversed range traps on the audio tap's thread (#7740)
+
+A TestFlight iPhone crashed with `EXC_BREAKPOINT` (`brk 1`) on the recorder's input-tap queue, an `NSLock` and a
+collection's uniqueness check in its registers. Hub transcription's ring (`MeetingAudioRing.append`, under the uplink's
+lock) recorded what fell out of its 60 seconds as `lose(max(start, acked)..<newStart)`; once the hub acknowledged audio
+inside the 60 seconds held, which it does every 5 seconds while streaming, the lower bound passed the upper and `..<`
+trapped: every streaming hub-mode meeting about a minute in. `..<` and `...` check their bounds in Release too. Where
+positions come from two clocks (the tap's and the other side's acknowledgements), compare them before making a range,
+and test the ring full with an acknowledgement inside it, not only behind it.
+
 ## A Debug build on an iPhone has a 1 MB main-thread stack (#6735)
 
 A Debug build installed on an iPhone crashed every time it opened on Agents: `EXC_BAD_ACCESS` in the main thread's stack

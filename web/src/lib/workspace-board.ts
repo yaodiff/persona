@@ -1,5 +1,6 @@
 import { t } from "../i18n";
-import { api, ApiError, errorText } from "./api";
+import { api, ApiError, credentialOwner, errorText, getToken } from "./api";
+import { defaultKnown, defaultManager, MANAGER_HEADER } from "./manager-choice";
 import { sameValue } from "./stable-lines";
 import type { Session } from "./types";
 
@@ -11,10 +12,14 @@ export interface BoardCard {
 /** Compatible board name for the shared discovery wire type. */
 export type { HostWorkspace as Workspace } from "./workspace-catalog";
 import type { HostWorkspace as Workspace } from "./workspace-catalog";
-export interface BoardState { revision: number; columns: BoardColumn[]; cards: BoardCard[]; can_write?: boolean }
+export interface BoardState { revision: number; columns: BoardColumn[]; cards: BoardCard[]; can_write?: boolean; batch_cards?: boolean; activity?: boolean }
 export interface WorkspaceList { workspaces: Workspace[]; errors?: { machine_id: string; error: string }[] }
+export interface BoardCardChange {
+  id: string; column_id?: string; before_id?: string; pinned?: boolean; archived?: boolean;
+}
 export interface BoardMutation {
-  action: "add_card" | "update_card" | "move_card" | "add_column" | "update_column" | "move_column" | "delete_column";
+  action: "add_card" | "update_card" | "move_card" | "add_column" | "update_column" | "move_column" | "delete_column" | "batch_cards";
+  changes?: BoardCardChange[];
   id?: string; column_id?: string; before_id?: string; title?: string; pinned?: boolean; archived?: boolean;
   machine_id?: string; workspace_id?: string; cwd?: string; move_to?: string;
 }
@@ -71,6 +76,12 @@ function insertBefore<T extends { id: string }>(items: T[], item: T, before?: st
 }
 /** Only project reversible metadata edits; additions wait for trustworthy IDs and canonical paths from the hub. */
 export function optimisticBoard(board: BoardState, m: BoardMutation): BoardState {
+  if (m.action === "batch_cards") {
+    return (m.changes ?? []).reduce((next, change) => {
+      if (change.column_id !== undefined) next = optimisticBoard(next, { action: "move_card", ...change });
+      return optimisticBoard(next, { action: "update_card", id: change.id, pinned: change.pinned, archived: change.archived });
+    }, board);
+  }
   const card = board.cards.find((c) => c.id === m.id);
   const column = board.columns.find((c) => c.id === m.id);
   if (m.action === "move_card" && card && m.id !== m.before_id) return { ...board, cards: insertBefore(board.cards, { ...card, column_id: m.column_id! }, m.before_id) };
@@ -81,17 +92,57 @@ export function optimisticBoard(board: BoardState, m: BoardMutation): BoardState
   return board;
 }
 
+/** Restore only the changed fields. Reverse traversal places each moved card before an already restored
+ *  successor in its original column, including archived/pinned cards that the current filter hides. */
+export function inverseBoardChanges(board: BoardState, changes: readonly BoardCardChange[]): BoardCardChange[] {
+  const changed = new Map(changes.map((change) => [change.id, change]));
+  const nextInColumn = new Map<string, string>();
+  const inverse: BoardCardChange[] = [];
+  for (let i = board.cards.length - 1; i >= 0; i--) {
+    const card = board.cards[i], change = changed.get(card.id);
+    if (change) inverse.push({
+      id: card.id,
+      ...(change.column_id !== undefined ? { column_id: card.column_id, before_id: nextInColumn.get(card.column_id) ?? "" } : {}),
+      ...(change.pinned !== undefined ? { pinned: card.pinned } : {}),
+      ...(change.archived !== undefined ? { archived: card.archived } : {}),
+    });
+    nextInColumn.set(card.column_id, card.id);
+  }
+  return inverse;
+}
+
 export interface BoardSnapshot {
   board: BoardState | null; discovery: WorkspaceList; loading: boolean; busy: boolean; readonly: boolean; error: string; discoveryError: string;
+  /** Only the last successful batch can be undone, at exactly its acknowledged revision. */
+  canUndo: boolean;
   /** The last read said this hub has no board (boardUnsupported): Retry can't help, updating the hub does. */
   unsupported: boolean;
 }
 type Transport = <T>(path: string, init?: RequestInit & { json?: unknown }) => Promise<T>;
 export class BoardModel {
-  private state: BoardSnapshot = { board: null, discovery: { workspaces: [] }, loading: true, busy: false, readonly: false, error: "", discoveryError: "", unsupported: false };
+  private state: BoardSnapshot = { board: null, discovery: { workspaces: [] }, loading: true, busy: false, readonly: false, error: "", discoveryError: "", unsupported: false, canUndo: false };
   private listeners = new Set<() => void>();
   private reads = 0;
-  constructor(private request: Transport = api) {}
+  private refreshAfterWrite = false;
+  private undoEntry: { revision: number; changes: BoardCardChange[] } | null = null;
+  // A mounted board is keyed by these identities. Retired requests may finish, but must never recover or write
+  // through the next manager/credential. The transport captures its headers synchronously at invocation.
+  private owner = credentialOwner();
+  private manager = defaultManager();
+  private production: boolean;
+  private request: Transport;
+  private current = () => (!this.production || defaultKnown()) && this.owner === credentialOwner() && this.manager === defaultManager();
+  constructor(request?: Transport) {
+    this.production = !request;
+    const token = getToken();
+    // These routes belong to the roster's default manager, not the sidebar's current Assistant. Name it explicitly:
+    // a roster change on the hub between read and write must never apply this board's IDs to another manager.
+    this.request = request ?? (<T>(path: string, init?: Parameters<Transport>[1]) => {
+      const headers = new Headers(init?.headers);
+      headers.set(MANAGER_HEADER, this.manager);
+      return api<T>(path, { ...init, headers, token, tokenOwner: this.owner, isAuthContextCurrent: this.current });
+    });
+  }
   snapshot = () => this.state;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   /** A patch that changes no field keeps the snapshot and notifies no one, so an unchanged poll does not re-render the board. */
@@ -99,44 +150,89 @@ export class BoardModel {
     if ((Object.keys(patch) as (keyof BoardSnapshot)[]).every((k) => Object.is(this.state[k], patch[k]))) return;
     this.state = { ...this.state, ...patch }; this.listeners.forEach((fn) => fn());
   }
+  private canUndo(board = this.state.board): boolean {
+    return Boolean(board?.batch_cards && board.can_write !== false && this.undoEntry?.revision === board.revision && !this.state.readonly);
+  }
   async refresh() {
+    if (!this.current()) return;
+    // A pushed change during a write must be read after its acknowledgement, never silently discarded.
+    if (this.state.busy) { this.refreshAfterWrite = true; return; }
+    await this.load();
+  }
+  private async load() {
     const read = ++this.reads;
     await Promise.allSettled([
       this.request<BoardState>("/workspace-board").then((board) => {
-        if (read !== this.reads || this.state.busy) return;
-        if (!this.state.board || board.revision >= this.state.board.revision) this.set({
+        if (read !== this.reads || !this.current()) return;
+        if (this.state.board && board.revision < this.state.board.revision) return;
+        const readonly = board.can_write === undefined ? this.state.readonly : !board.can_write;
+        if (!board.batch_cards || readonly || this.undoEntry?.revision !== board.revision) this.undoEntry = null;
+        this.set({
           board: sameValue(board, this.state.board) ? this.state.board : board,
-          readonly: board.can_write === undefined ? this.state.readonly : !board.can_write, error: "", unsupported: false,
+          readonly, error: "", unsupported: false, canUndo: Boolean(this.undoEntry),
         });
       }).catch((e) => {
-        if (read !== this.reads) return;
-        this.set({ error: boardError(e), unsupported: boardUnsupported(e), ...(e instanceof ApiError && e.status === 403 ? { readonly: true } : {}) });
+        if (read !== this.reads || !this.current()) return;
+        const denied = e instanceof ApiError && e.status === 403;
+        if (denied || boardUnsupported(e)) this.undoEntry = null;
+        this.set({ error: boardError(e), unsupported: boardUnsupported(e), canUndo: Boolean(this.undoEntry), ...(denied ? { readonly: true } : {}) });
       }),
       this.request<WorkspaceList>("/workspaces").then((discovery) => {
-        if (read === this.reads) this.set({ discovery: sameValue(discovery, this.state.discovery) ? this.state.discovery : discovery, discoveryError: "" });
-      }).catch((e) => { if (read === this.reads) this.set({ discoveryError: errorText(e) }); }),
+        if (read === this.reads && this.current()) this.set({ discovery: sameValue(discovery, this.state.discovery) ? this.state.discovery : discovery, discoveryError: "" });
+      }).catch((e) => { if (read === this.reads && this.current()) this.set({ discoveryError: errorText(e) }); }),
     ]);
-    if (read === this.reads) this.set({ loading: false });
+    if (read === this.reads && this.current()) this.set({ loading: false });
   }
   async mutate(mutation: BoardMutation): Promise<boolean> {
+    return this.write(mutation, false);
+  }
+  async undo(): Promise<boolean> {
+    if (!this.current() || !this.canUndo() || this.state.busy || !this.undoEntry) return false;
+    return this.write({ action: "batch_cards", changes: this.undoEntry.changes }, true);
+  }
+  private async write(mutation: BoardMutation, undo: boolean): Promise<boolean> {
     const previous = this.state.board;
-    if (!previous || this.state.busy || this.state.readonly) return false;
+    if (!this.current() || !previous || this.state.busy || this.state.readonly) return false;
+    const batch = mutation.action === "batch_cards";
+    if (batch && (!previous.batch_cards || !mutation.changes?.length)) return false;
+    // Snapshot caller-owned changes: a later selection edit must not change the request or its inverse.
+    const submitted = batch ? { ...mutation, changes: mutation.changes!.map((c) => ({ ...c })) } : { ...mutation };
+    const inverse = batch && !undo ? inverseBoardChanges(previous, submitted.changes!) : null;
     ++this.reads;
-    this.set({ busy: true, error: "", board: optimisticBoard(previous, mutation) });
+    this.set({ busy: true, error: "", canUndo: false, board: optimisticBoard(previous, submitted) });
     let conflict = false;
+    let failure = "";
     try {
-      const board = await this.request<BoardState>("/workspace-board", { method: "POST", json: { revision: previous.revision, ...mutation } });
+      const board = await this.request<BoardState>("/workspace-board", { method: "POST", json: { revision: previous.revision, ...submitted } });
+      if (!this.current()) return false;
+      this.undoEntry = inverse && board.batch_cards && board.can_write !== false ? { revision: board.revision, changes: inverse } : null;
       this.set({ board, readonly: board.can_write === undefined ? this.state.readonly : !board.can_write });
       return true;
     } catch (e) {
+      if (!this.current()) return false;
       conflict = e instanceof ApiError && e.status === 409;
-      this.set({ board: previous, error: boardError(e), ...(e instanceof ApiError && e.status === 403 ? { readonly: true } : {}) });
+      failure = boardError(e);
+      const denied = e instanceof ApiError && e.status === 403;
+      if (conflict || denied) this.undoEntry = null;
+      this.set({ board: previous, error: failure, ...(denied ? { readonly: true } : {}) });
       return false;
     } finally {
-      this.set({ busy: false });
-      if (conflict) {
-        await this.refresh();
-        this.set({ error: t("lib-workspace-board.conflict_reloaded") });
+      if (this.current()) {
+        if (conflict) {
+          // Keep write admission closed until authoritative recovery finishes.
+          this.refreshAfterWrite = false;
+          await this.load();
+        }
+        // The caller clears its submitted selection when this promise resolves. Keep controls busy until queued
+        // reads finish too, so a newly selected card cannot be cleared by the previous submission's continuation.
+        while (this.refreshAfterWrite && this.current()) {
+          this.refreshAfterWrite = false;
+          await this.load();
+        }
+        if (this.current()) {
+          if (failure && !this.state.error) this.set({ error: conflict ? t("lib-workspace-board.conflict_reloaded") : failure });
+          this.set({ busy: false, canUndo: this.canUndo() });
+        }
       }
     }
   }

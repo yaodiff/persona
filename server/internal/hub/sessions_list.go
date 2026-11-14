@@ -515,6 +515,32 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		}
 		limited = opts.Machine == ""
 	}
+	if opts.Search != "" {
+		// Search authorizes before matching and freezing totals/evidence. Never
+		// apply ownPage after pagination: foreign hits would already be counted.
+		if em := extensionManager(r); em != "" {
+			opts.Manager = em
+			opts.AllowedMachines = append([]string{}, own...)
+		}
+		if opts.Cursor == "" {
+			opts.SearchContext, err = h.runtimeSearchContext(r, opts.Search)
+			if err != nil {
+				writeErr(w, http.StatusServiceUnavailable, err)
+				return
+			}
+		}
+		page, err := index.Query(opts)
+		if err != nil {
+			sessionListErr(w, err)
+			return
+		}
+		// A successful empty search still identifies this contract to new clients.
+		writeJSON(w, struct {
+			sessionlist.Page
+			Hits map[string]sessionlist.SearchHit `json:"search_hits"`
+		}{page, page.SearchHits})
+		return
+	}
 	if limited && opts.PaneSource != "" {
 		// The legacy ownership projection recomputes totals outside the frozen view.
 		// Require one authorized machine for this stricter origin contract.

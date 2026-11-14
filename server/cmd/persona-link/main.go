@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,9 +25,16 @@ import (
 
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/netaddr"
+	"github.com/nwverse/persona/server/internal/update"
 )
 
-var version = "dev"
+// What the publisher writes in (-X), as personad's and persona-node's: the connector's build must also be verifiable
+// from the compressed release, including on another platform (update.VerifyRelease).
+var (
+	version = "dev"
+	channel = "dev"
+	build   = ""
+)
 
 const usage = `用法：
   persona-link pair [--machine <id>] [--ssh <服务器> [--ssh-target <地址:端口>] [--ssh-always|--no-ssh-always]] [<配对链接>|-]
@@ -74,7 +82,7 @@ const usage = `用法：
                                                  --always 只走隧道，--off 移除隧道，--test 测试连接
   persona-link address add <地址>                 手动加一个 hub 的候选地址（https://域名:端口，或 域名）
   persona-link address remove <地址>              去掉手动加的地址
-  persona-link version
+  persona-link version [-v]                    看版本；-v 加发布渠道和构建号
 
 信号（Linux、Mac）：SIGUSR1 网络变了，马上看一眼链路；SIGUSR2 断开重连。Windows 上是同名的命名事件（reconnect 命令发）。`
 
@@ -131,6 +139,10 @@ func main() {
 		err = nameCmd(e, args)
 	case "version", "--version", "-v":
 		fmt.Println(version)
+		if slices.Contains(args, "-v") {
+			b := update.Make(version, channel, build, "")
+			fmt.Printf("channel %s, build %d\n", b.Channel, b.Number)
+		}
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, usage)
 	default:

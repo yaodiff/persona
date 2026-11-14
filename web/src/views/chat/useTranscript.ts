@@ -96,6 +96,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   // fold asked for before that is dropped when it lands, so it never merges into the conversation shown by then.
   const generation = useRef(0);
   const earlierInFlight = useRef(false); // set at once, unlike loadingEarlier, so scroll events before a render do not ask twice
+  const rewrite = useRef<() => void>(() => {}); // the effect's cache invalidation, shared with older-page reads below
   // The back-off after a failed older page: when loadEarlier may ask again, and how long the last wait was.
   const earlierRetryAt = useRef(0);
   const earlierWait = useRef(0);
@@ -184,6 +185,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       snapshot.current = null;
       setNonce((x) => x + 1);
     };
+    rewrite.current = rewritten;
 
     // The live text against the newest items, after they changed (`batch`) or a delta came: the assistant's ends at
     // its reply's item; an agent's shows what of its message the latest one does not hold (lib/live-text.ts).
@@ -388,8 +390,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}&before_seq=${first.seq}`);
       if (gen !== generation.current) return;
       if (p.history && history.current && p.history !== history.current) {
-        generation.current++;
-        setNonce((n) => n + 1);
+        rewrite.current();
         return;
       }
       apply(p.items ?? []);

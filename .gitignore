@@ -26,6 +26,7 @@ florak/
 # Personal notes for coding agents working in this checkout (machines, accounts); see CLAUDE.md.
 /CLAUDE.local.md
 /apple/PersonaLink/.build/
+/apple/PersonaLink/Input/.build/
 # swift test in a local package (apple/Packages/PersonaKit, #2095): its build output, never committed.
 /apple/Packages/PersonaCore/build/
 /apple/Packages/PersonaCore/Inputs.stamp
