@@ -1017,3 +1017,8 @@ lookups. Cancellation must use the same idle-only retirement as completion, not 
 Keep historical ownership and an explicit stop reason so the remaining transcript explains what happened.
 Input and view-exit activity are not read receipts: writing them as seen can suppress the reply the owner is waiting
 for (`TestQuietPatrolAbsorbedUserQuestionPushes`). Persist them separately and keep notification regressions in the check.
+The manager sees the owner's message on an Agent's own page only as a new turn. "Any turn of a planned task's Agent
+reopens its accepted task" therefore undid every review-accepted plan task the moment the owner kept chatting, and its
+Agent was never retired (#6819). Attribute such a turn with the owner's presence (`ownerOnSession`: viewing, or active
+within the idle window) and keep an explicit task send (`noteAgentSend`) as the only override; test the direct-chat
+turn, not just `agent_send`.

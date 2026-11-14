@@ -595,24 +595,30 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 		todos   []Todo
 		sent    *agentSent // the agent's last send for a conversation, if any
 		reopens bool
+		owner   string // "view": the owner has the agent's page open; "message": they messaged it just now (#6819)
 	}{
-		{"judged done", []Todo{task(db.DoneByAuto, s1)}, nil, true},
-		{"accepted, its plan started the agent", []Todo{planned}, nil, true},
-		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, nil, false},
-		{"accepted, other work", []Todo{accepted}, nil, false},
-		{"accepted, its conversation sent more", []Todo{accepted}, &agentSent{"conv1", since}, true},
-		{"reviewed, its conversation sent more", []Todo{task(db.DoneByReview, s1)}, &agentSent{"conv1", since}, true},
-		{"accepted, its supervisor sent more", []Todo{handedOn}, &agentSent{"conv2", since}, true},
-		{"accepted, another conversation sent", []Todo{accepted}, &agentSent{"conv9", since}, false},
-		{"accepted, sent before the acceptance", []Todo{accepted}, &agentSent{"conv1", before}, false},
-		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, nil, false},
-		{"legacy cancelled", []Todo{legacyCancelled}, nil, false},
-		{"closed by the user", []Todo{task("", s1)}, nil, false},
-		{"start failed", []Todo{failed}, nil, false},
-		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, nil, false},
-		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, nil, false},
-		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, nil, false},
-		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, nil, false},
+		{"judged done", []Todo{task(db.DoneByAuto, s1)}, nil, true, ""},
+		{"accepted, its plan started the agent", []Todo{planned}, nil, true, ""},
+		{"accepted, its plan started the agent, the owner chats on its page", []Todo{planned}, nil, false, "view"},
+		{"accepted, its plan started the agent, the owner just messaged it", []Todo{planned}, nil, false, "message"},
+		{"accepted, its plan started the agent, its conversation sent more while the owner looks", []Todo{planned}, &agentSent{"conv1", since}, true, "view"},
+		{"accepted, the owner chats on its page", []Todo{accepted}, nil, false, "view"},
+		{"judged done, the owner chats on its page", []Todo{task(db.DoneByAuto, s1)}, nil, true, "view"},
+		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, nil, false, ""},
+		{"accepted, other work", []Todo{accepted}, nil, false, ""},
+		{"accepted, its conversation sent more", []Todo{accepted}, &agentSent{"conv1", since}, true, ""},
+		{"reviewed, its conversation sent more", []Todo{task(db.DoneByReview, s1)}, &agentSent{"conv1", since}, true, ""},
+		{"accepted, its supervisor sent more", []Todo{handedOn}, &agentSent{"conv2", since}, true, ""},
+		{"accepted, another conversation sent", []Todo{accepted}, &agentSent{"conv9", since}, false, ""},
+		{"accepted, sent before the acceptance", []Todo{accepted}, &agentSent{"conv1", before}, false, ""},
+		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, nil, false, ""},
+		{"legacy cancelled", []Todo{legacyCancelled}, nil, false, ""},
+		{"closed by the user", []Todo{task("", s1)}, nil, false, ""},
+		{"start failed", []Todo{failed}, nil, false, ""},
+		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, nil, false, ""},
+		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, nil, false, ""},
+		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, nil, false, ""},
+		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, nil, false, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f := newTaskService(t)
@@ -623,6 +629,12 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 				s.tasks.mu.Lock()
 				s.tasks.sentBy[[2]string{"box", "s1"}] = *c.sent
 				s.tasks.mu.Unlock()
+			}
+			switch c.owner {
+			case "view":
+				setTaskViewer(t, s, "box", "s1", true)
+			case "message":
+				s.UserSpoke(context.Background(), SessionRef{MachineID: "box", SessionID: "s1"})
 			}
 			agentTurn(s, f, proto.StatusWorking, "", 0)
 			got := todoNow(s, "todo_a")

@@ -155,8 +155,8 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
 		if !found {
 			return
 		}
-		if !s.closedTurnReopens(closed, mid, sid) {
-			s.logf("task %s: accepted; its agent works again, but nothing was sent for the task: left closed", closed.ID)
+		if !s.closedTurnReopens(ctx, closed, mid, sid) {
+			s.logf("task %s: accepted; its agent works again, but nothing was sent for the task (or the owner is talking to it directly): left closed", closed.ID)
 			return
 		}
 		if err := s.reopenTodo(ctx, closed.ID); err != nil {
@@ -210,26 +210,29 @@ func (s *Service) noteAgentSend(self, mid, sid string) (undo func()) {
 }
 
 // closedTurnReopens: a new turn of agent mid/sid opens closed task t again (taskWorking). One the hub's judge closed,
-// yes: the judge may have been early, and more for it comes as a turn of its agent. So does one its supervisor
-// accepted whose agent its plan started (task_plan): that session exists for the task, and more for it (the owner's
-// follow-up, a start that failed and came up late) is the task's work. A task with no plan has an agent that was often
-// running before it became the task's (agent_supervise, agent_send with a task, an agent that became a task by itself,
-// a link by hand; agent_start's tasks have no plan either) and is kept on for other work: turns for its own timers,
-// other conversations, messages from other sessions and the owner's words in its own session reopened the finished
-// task each time and woke its supervision again (#6726). Such an accepted task reopens only when the task's
-// conversation (or its supervisor) sent the agent more after the acceptance: agent_send, or the owner's message on the
-// task's card. The owner can still reopen one by hand.
-func (s *Service) closedTurnReopens(t Todo, mid, sid string) bool {
-	if t.DoneBy != db.DoneByReview || t.PlanID != "" {
+// yes: the judge may have been early, and more for it comes as a turn of its agent. One its supervisor accepted
+// reopens when the task's conversation (or its supervisor) sent the agent more after the acceptance: agent_send, or
+// the owner's message on the task's card (routeToTask). Without such a send, a task with no plan stays closed: its
+// agent was often running before it became the task's (agent_supervise, agent_send with a task, an agent that became a
+// task by itself, a link by hand; agent_start's tasks have no plan either) and is kept on for other work, so turns for
+// its own timers, other conversations and messages from other sessions reopened the finished task each time and woke
+// its supervision again (#6726). An agent its plan started (task_plan) exists for the task, so its other turns (a start
+// that failed and came up late) are the task's work and reopen it, except while the owner is on that agent's page or
+// was active there within taskUserIdle: then the turn is the owner chatting directly with an agent whose task is
+// closed, which the page shows as closed and keeps usable; that conversation stays theirs and leaves the to-do closed,
+// so its agent is still retired once all is quiet (#6819). The owner can still reopen one by hand or on its card.
+func (s *Service) closedTurnReopens(ctx context.Context, t Todo, mid, sid string) bool {
+	if t.DoneBy != db.DoneByReview {
 		return true
 	}
 	s.tasks.mu.Lock()
 	sent, ok := s.tasks.sentBy[[2]string{mid, sid}]
 	s.tasks.mu.Unlock()
-	if !ok || t.DoneAt == nil || !sent.at.After(*t.DoneAt) {
-		return false
+	if ok && t.DoneAt != nil && sent.at.After(*t.DoneAt) &&
+		(sent.conversation == t.Origin || t.Supervision != nil && sent.conversation == t.Supervision.Supervisor) {
+		return true
 	}
-	return sent.conversation == t.Origin || t.Supervision != nil && sent.conversation == t.Supervision.Supervisor
+	return t.PlanID != "" && !s.ownerOnSession(ctx, mid, sid, time.Now())
 }
 
 type receiptBody struct {

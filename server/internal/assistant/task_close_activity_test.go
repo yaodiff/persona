@@ -238,3 +238,40 @@ func TestClosedTaskAgentWaitsForOwnerThenArchivesWithReason(t *testing.T) {
 		})
 	}
 }
+
+// #6819 B: a planned task its supervisor accepted leaves its Agent usable. The owner chatting on the Agent's own page
+// (the manager sees only the turn) keeps the to-do completed, so the page keeps its closed-task notice and the
+// closed-task cleanup can still run; the task's conversation sending more (agent_send, the card) still reopens it.
+func TestAcceptedPlannedTaskStaysClosedWhenOwnerChatsDirectly(t *testing.T) {
+	s, f := newTaskService(t)
+	todo := startedTask(t, s, f)
+	if todo.PlanID == "" {
+		t.Fatal("fixture is not a planned task")
+	}
+	agentTurn(s, f, proto.StatusIdle, "READY", 0)
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": reviewAccepted, "note": "Disposable lifecycle probe"})
+	if closed := todoNow(s, todo.ID); closed.DoneAt == nil || closed.DoneBy != db.DoneByReview {
+		t.Fatalf("accepted review did not close the task: %+v", closed)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	setTaskViewer(t, s, "box", "s1", true) // the owner opens the Agent page and types there
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusIdle, "B_AFTER_CLOSE_6819", 0)
+	setTaskViewer(t, s, "box", "s1", false) // leaving the page is recent activity too
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusIdle, "still the owner's exchange", 0)
+	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.ReopenedAt != nil || got.DoneBy != db.DoneByReview {
+		t.Fatalf("the owner's direct chat reopened the accepted task: %+v", got)
+	}
+	if rep := s.todoReport(context.Background()); len(rep.Completed) != 1 || rep.Completed[0].TodoID != todo.ID {
+		t.Fatalf("the task left Completed after the owner's direct chat: %+v", rep)
+	}
+
+	// agent_send from the task's conversation records itself first (tools.go), as the card's routeToTask does.
+	s.noteAgentSend("conv1", "box", "s1")
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.ReopenedAt == nil {
+		t.Fatalf("the task's conversation sending more did not reopen it: %+v", got)
+	}
+}

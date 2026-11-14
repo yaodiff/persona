@@ -13,6 +13,9 @@ const taskUserIdle = 10 * time.Minute
 
 const taskActivityKey = "assistant.task_activity"
 
+// activityUnknown is sessionActivityReason's answer when the owner's recent activity could not be read.
+const activityUnknown = "the user's recent session activity could not be loaded"
+
 type taskActivityBook struct {
 	mu     sync.Mutex
 	loaded bool
@@ -109,7 +112,7 @@ func (s *Service) sessionActivityReason(ctx context.Context, machine, session st
 		}
 	}
 	if persistent && !s.fleet.seenLoaded || activityErr != nil {
-		return "the user's recent session activity could not be loaded"
+		return activityUnknown
 	}
 	at := s.fleet.seen[[2]string{machine, session}]
 	if activity.After(at) {
@@ -119,4 +122,11 @@ func (s *Service) sessionActivityReason(ctx context.Context, machine, session st
 		return fmt.Sprintf("the user viewed or messaged Agent %s within the last 10 minutes", short(session))
 	}
 	return ""
+}
+
+// ownerOnSession: the owner is viewing agent machine/session, or messaged, read or left it within taskUserIdle. Activity
+// that could not be read counts as absent here: the caller keeps its usual behavior (closedTurnReopens).
+func (s *Service) ownerOnSession(ctx context.Context, machine, session string, now time.Time) bool {
+	why := s.sessionActivityReason(ctx, machine, session, now)
+	return why != "" && why != activityUnknown
 }
