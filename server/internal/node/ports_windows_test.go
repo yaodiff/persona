@@ -66,7 +66,11 @@ func TestScanListenersFindsAChildsServer(t *testing.T) {
 				t.Fatal("the helper did not listen")
 			}
 			// The pane: the test process is its shell, the helper its child.
-			found, err := scanListeners(context.Background(), map[string][]int{"w1:p1": {1 << 30, os.Getpid()}})
+			procs, err := listProcs(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			found, err := scanListeners(context.Background(), procs, map[string][]int{"w1:p1": {1 << 30, os.Getpid()}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -88,7 +92,10 @@ func TestScanListenersFindsAChildsServer(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = sib.Process.Kill(); _ = sib.Wait() })
-			other, err := scanListeners(context.Background(), map[string][]int{"w2:p1": {1 << 30, sib.Process.Pid}})
+			if procs, err = listProcs(context.Background()); err != nil { // the table again: it has the sibling now
+				t.Fatal(err)
+			}
+			other, err := scanListeners(context.Background(), procs, map[string][]int{"w2:p1": {1 << 30, sib.Process.Pid}})
 			if err != nil {
 				t.Fatal(err)
 			}

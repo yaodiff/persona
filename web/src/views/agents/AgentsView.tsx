@@ -20,12 +20,13 @@ import {
   type AgentMessage,
   type Outgoing,
 } from "../../lib/agents";
-import { errorText } from "../../lib/api";
+import { ApiError, errorText } from "../../lib/api";
 import { ago, clock, uuid } from "../../lib/format";
-import { href, onLinkClick } from "../../lib/router";
+import { href, navigate, onLinkClick } from "../../lib/router";
 import { Button, Collapse, cx, EASE, IconButton, Loading, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
+import { Empty } from "../session/files/parts";
 import { SearchField } from "../../ui/SearchField";
 import { formatDate, t } from "../../i18n";
 import { composing } from "../../lib/send-history";
@@ -196,6 +197,8 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
   const [hasMore, setHasMore] = useState(false);
   const [older, setOlder] = useState(false);
   const [error, setError] = useState("");
+  // the hub has no such conversation (an old or mistyped link, or one removed since): said plainly, with the way back
+  const [missing, setMissing] = useState(false);
   const [out, setOut] = useState<Outgoing[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -214,12 +217,14 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
           setHasMore(p.hasMore);
         }
         setError("");
+        setMissing(false);
         const tail = p.messages.at(-1)?.externalId ?? "";
         if (first || tail !== readTail.current) {
           readTail.current = tail;
           void markRead(id).then(() => setLocalRead(id)).catch(() => {});
         }
       } catch (e) {
+        if (e instanceof ApiError && e.status === 404) setMissing(true);
         setError(errorText(e));
       }
     },
@@ -274,6 +279,7 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
   };
 
   const canSend = session?.canSend ?? false;
+  if (missing && !session) return <MissingAgent onToggleSidebar={onToggleSidebar} />;
   return (
     <div className="flex h-full flex-col">
       <Header title={session?.title || t("lib-format.untitled_session")} sub={session ? providerLabel(session.provider) : undefined} avatar={session ?? undefined} onToggleSidebar={onToggleSidebar} />
@@ -316,6 +322,26 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
         </div>
       </div>
       <AgentComposer disabled={!canSend} reason={session ? t("agents-agentsview.cannot_send") : t("agents-agentsview.loading")} onSend={(text) => void deliver({ clientId: uuid(), text, at: Date.now(), status: "sending" })} />
+    </div>
+  );
+}
+
+/** A personal agent's link to a conversation the hub doesn't have: what happened in plain words and the way back to the
+ *  list, as a computer's page that isn't there does (machines/MachineDetail.tsx), with no box that waits forever. */
+function MissingAgent({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+  return (
+    <div className="flex h-full flex-col">
+      {/* as a space that is gone (SpacePage): the header names where this is (the list's name), the shared empty state
+          says what is missing once, with the way back, and there is no composer */}
+      <Header title={t("agents-agentsview.title")} onToggleSidebar={onToggleSidebar} />
+      <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" role="status">
+        <Empty
+          icon="chat"
+          title={t("not-found.agent_title")}
+          detail={t("not-found.agent_detail")}
+          action={<Button tone="secondary" icon="arrowLeft" onClick={() => navigate({ name: "agents" })}>{t("not-found.agent_back")}</Button>}
+        />
+      </div>
     </div>
   );
 }

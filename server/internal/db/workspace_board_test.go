@@ -19,7 +19,7 @@ import (
 func openWorkspaceBoard(t testing.TB) *DB {
 	t.Helper()
 	d := open(t)
-	if _, err := d.pool.Exec(context.Background(), `TRUNCATE workspace_board, workspace_snapshots`); err != nil {
+	if _, err := d.pool.Exec(context.Background(), `TRUNCATE workspace_board_activity, workspace_board, workspace_snapshots`); err != nil {
 		t.Fatal(err)
 	}
 	return d

@@ -83,15 +83,14 @@ def main():
     test_env.update(caches)
     with tempfile.TemporaryDirectory(prefix='hub-release-tests-') as home:
         test_env.update(HOME=home, ZDOTDIR=home)
-        # internal/node's serial run outgrew Go's ten-minute -timeout: it runs in partitions beside the other
-        # packages, split exactly as CI's node shard splits it (scripts/test/go_partitions.py).
+        # internal/node's and internal/assistant's serial runs outgrew Go's ten-minute -timeout: they run in
+        # partitions beside the other packages, split exactly as CI's shards split them (scripts/test/go_partitions.py).
         import go_partitions
-        node = go_partitions.list_patterns(root / 'server', test_env)
-        others = [package for package in subprocess.check_output(['go', 'list', './...'], cwd=root / 'server',
-                                                                 env=test_env, text=True).split()
-                  if not go_partitions.is_partitioned(package)]
+        others, parts = go_partitions.split(subprocess.check_output(['go', 'list', './...'], cwd=root / 'server',
+                                                                    env=test_env, text=True).split())
         run_together([['go', 'test', '-count=1', *others]] +
-                     [['go', 'test', '-count=1', '-run', pattern, go_partitions.PACKAGE] for pattern in node],
+                     [['go', 'test', '-count=1', '-run', pattern, package] for package in parts
+                      for pattern in go_partitions.list_patterns(root / 'server', package, test_env)],
                      root / 'server', test_env)
         run(['go', 'test', '-race', '-count=1', './internal/hubedge', './internal/update',
              './internal/devices'], root / 'server', test_env)

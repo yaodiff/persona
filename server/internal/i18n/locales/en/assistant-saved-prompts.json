@@ -1,0 +1,10 @@
+{
+  "err_store": "Saved prompts are not available: the assistant has no database.",
+  "err_read_only": "This device can only view saved prompts.",
+  "err_not_found": "That saved prompt is gone.",
+  "err_name": "A prompt needs a name of at most {max} letters, digits, “-”, “_” or “.”, with no spaces.",
+  "err_text": "A prompt needs some text, at most {max} characters.",
+  "err_too_many": "You can save at most {max} prompts.",
+  "err_order": "The saved prompts changed on another device. Reload the list and try again.",
+  "err_name_taken": "There is already a prompt called “/{name}”."
+}

@@ -204,4 +204,78 @@ final class GitWriteUITests: XCTestCase {
         XCTAssertTrue(toast(app, "已丢弃").waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertFalse(old.waitForExistence(timeout: 2))
     }
+
+    // MARK: The pull request (#7014)
+
+    /// Scrolls the sheet's list up until e can be tapped.
+    @MainActor private func reveal(_ app: XCUIApplication, _ e: XCUIElement) {
+        for _ in 0..<4 where !(e.exists && e.isHittable) { app.swipeUp() }
+    }
+
+    @MainActor private func openPR(_ app: XCUIApplication) {
+        let row = app.buttons["git.pr.open"]
+        XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
+        row.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["git.pr.header"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+    }
+
+    @MainActor func testThePullRequestRowAndMergeAfterAsking() async throws {
+        try await control("reset=1&pr=ready")
+        let app = launch()
+        XCTAssertTrue(app.buttons["git.pr.open"].waitForExistence(timeout: 15), app.debugDescription)
+        try shot(app, "14-pr-row")
+        openPR(app)
+        try shot(app, "15-pr-page")
+        let merge = app.buttons["git.pr.merge"]
+        reveal(app, merge)
+        tapSettled(merge)
+        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "现在就在 GitHub 上用")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "16-merge-ask")
+        tapSettled(dialogButton(app, "git.pr.confirm", "合并"))
+        XCTAssertTrue(toast(app, "已合并 #128").waitForExistence(timeout: 10), app.debugDescription)
+    }
+
+    @MainActor func testReviewCommentsGoToTheAgentAndMergeWhenReadyAsks() async throws {
+        try await control("reset=1&pr=review")
+        let app = launch()
+        openPR(app)
+        let hand = app.buttons.matching(identifier: "git.pr.hand").firstMatch
+        reveal(app, hand)
+        XCTAssertTrue(hand.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "17-pr-review")
+        hand.tap()
+        let handed = app.buttons.matching(NSPredicate(format: "identifier == 'git.pr.hand' AND label CONTAINS %@", "已放进消息")).firstMatch
+        XCTAssertTrue(handed.waitForExistence(timeout: 10), app.debugDescription)
+        let when = app.buttons["git.pr.merge"]
+        reveal(app, when)
+        try shot(app, "18-pr-merge-section")
+        tapSettled(when)
+        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "检查和评审都通过后")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 10), app.debugDescription)
+        tapSettled(dialogButton(app, "git.pr.confirm", "通过后自动合并"))
+        XCTAssertTrue(toast(app, "检查和评审通过后会自动合并").waitForExistence(timeout: 10), app.debugDescription)
+    }
+
+    @MainActor func testOpenAPullRequestAfterAsking() async throws {
+        try await control("reset=1&pr=ready")
+        try await control("pr=none")
+        let app = launch()
+        let create = app.buttons["git.pr.create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 15), app.debugDescription)
+        try shot(app, "19-pr-none")
+        create.tap()
+        XCTAssertTrue(app.textFields["git.pr.title"].waitForExistence(timeout: 10), app.debugDescription)
+        // the default branch by its name (origin/HEAD, the mock's main)
+        let into = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "main（默认）", "main（默认）")).firstMatch
+        XCTAssertTrue(into.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "20-pr-create")
+        tapSettled(app.buttons["git.pr.open.go"])
+        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "从 widget-hourly 合进 main 的拉取请求")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "21-pr-create-ask")
+        tapSettled(dialogButton(app, "git.pr.create.confirm", "创建拉取请求"))
+        XCTAssertTrue(toast(app, "已创建拉取请求").waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["git.pr.header"].firstMatch.waitForExistence(timeout: 10), "the page takes the sheet's place")
+    }
 }

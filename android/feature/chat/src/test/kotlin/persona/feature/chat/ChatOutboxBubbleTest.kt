@@ -21,6 +21,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.api.DeliveryState
+import persona.core.contracts.api.OutboxMessage
+import persona.core.contracts.SessionKey
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 
@@ -109,5 +111,42 @@ class ChatOutboxBubbleTest {
         rule.waitForIdle()
         assertNull(mark.fetchSemanticsNode().config.getOrNull(SemanticsActions.OnClick))
         rule.onNodeWithText("Sends when connected").assertDoesNotExist()
+    }
+
+    @Test fun aStoppedChatsMarkOnlyOffersDeleteIncludingTalkBack() {
+        val done = mutableListOf<DeliveryAction>()
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                OutboxBubble("Refused words", "m2", DeliveryState.Refused, busy = false, canSend = false) { done += it }
+            }
+        }
+        val mark = rule.onNodeWithContentDescription("Not sent")
+        assertEquals(listOf("Delete"), mark.fetchSemanticsNode().config[SemanticsActions.CustomActions].map { it.label })
+        mark.performClick()
+        rule.onNodeWithText("Resend").assertDoesNotExist()
+        rule.onNodeWithText("Delete").performClick()
+        assertEquals(listOf(DeliveryAction.Delete), done)
+        val labels = messageMenuActions(MessageTarget("m2", "Refused words", true, "Refused words", DeliveryState.Refused),
+            writes = false, handOff = false, res, MessageExtras(delete = true)) {}.map { it.label }
+        assertTrue(labels.contains("Copy"))
+        assertFalse(labels.contains("Edit"))
+    }
+
+    @Test fun aStoppedChatsStatusOffersDeleteWithoutRetryOrEdit() {
+        val done = mutableListOf<DeliveryAction>()
+        var state by mutableStateOf(DeliveryState.Refused)
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Brief) {
+                OutboxStatus(OutboxMessage("m2", SessionKey("desk", "s"), "Refused words", state), false,
+                    onAction = { done += it }, canSend = false)
+            }
+        }
+        rule.onNodeWithText("Retry").assertDoesNotExist()
+        rule.onNodeWithText("Edit").assertDoesNotExist()
+        rule.onNodeWithText("Delete").performClick()
+        assertEquals(listOf(DeliveryAction.Delete), done)
+        rule.runOnIdle { state = DeliveryState.Queued }
+        rule.onNodeWithText("Edit").assertDoesNotExist()
+        rule.onNodeWithText("Retry").assertDoesNotExist()
     }
 }

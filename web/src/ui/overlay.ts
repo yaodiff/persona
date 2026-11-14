@@ -9,13 +9,30 @@ export const NARROW_QUERY = NARROW;
 export { useMedia };
 
 /** Tab inside a modal: the index to move focus to so it stays in, or null where the browser's own order already does
- *  (between two of its controls). `current` is -1 when the focus is not on one of the `count` controls. */
-export function trapTab(count: number, current: number, back: boolean): number | null {
+ *  (between two of its controls). `current` is -1 when the focus is not on one of the `count` controls. `next` is set
+ *  when the focus is on something else inside the modal that Tab still reaches: the index of the first control after it
+ *  (`count` when none is). Chrome lets the keyboard focus a scrolling body with no control of its own inside (the
+ *  shortcut help's list): from there Tab goes on in the browser's order and wraps only past either end, where it used
+ *  to jump back to the first control and never reach the ones after the body. */
+export function trapTab(count: number, current: number, back: boolean, next?: number): number | null {
   if (count === 0) return -1; // nothing to land on: the dialog itself keeps it
+  if (current < 0 && next !== undefined) {
+    if (back) return next === 0 ? count - 1 : null;
+    return next >= count ? 0 : null;
+  }
   if (current < 0) return back ? count - 1 : 0;
   if (back && current === 0) return count - 1;
   if (!back && current === count - 1) return 0;
   return null;
+}
+
+/** Tab in `root` (a modal) with `list` its controls (focusables): trapTab's answer for where the focus is now. */
+export function trapTabIn(root: HTMLElement, list: HTMLElement[], back: boolean, active: Element | null = document.activeElement): number | null {
+  const current = list.indexOf(active as HTMLElement);
+  // on something inside that is no control of the list (not the modal itself, which Tab enters at an end)
+  const between = current < 0 && active !== null && active !== root && root.contains(active);
+  const next = between ? list.findIndex((el) => Boolean(active.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) : -1;
+  return trapTab(list.length, current, back, between ? (next < 0 ? list.length : next) : undefined);
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
@@ -61,7 +78,7 @@ export function useModalFocus(ref: RefObject<HTMLElement | null>, open = true): 
     const tab = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
       const list = focusables(el);
-      const i = trapTab(list.length, list.indexOf(document.activeElement as HTMLElement), e.shiftKey);
+      const i = trapTabIn(el, list, e.shiftKey);
       if (i === null) return;
       e.preventDefault();
       (list[i] ?? el).focus();
@@ -92,16 +109,24 @@ export interface MenuPlace {
   left: number;
   top: number;
   width: number;
-  /** Set only when the visible viewport is shorter than the menu's own cap (a phone with the keyboard up). */
+  /** Set when the menu has less room than its own cap (the window, 8px inside): on a phone the visible viewport (the
+   *  keyboard up); on a wide screen the room on one side of its anchor, for a menu taller than the window. */
   maxHeight?: number;
 }
 
+/** The least room beside its anchor a menu taller than the window is held to on a wide screen (five rows); with less on
+ *  both sides it opens over the anchor, as tall as the window. */
+const MENU_MIN_ROOM = 160;
+
 /** Where a menu of height `h` opens next to `anchor`, kept 8px inside the area it may use: the window, or on a phone
- *  the visible viewport (`view`: its top and height, from --kb-top / --kb-h) the soft keyboard leaves. */
+ *  the visible viewport (`view`: its top and height, from --kb-top / --kb-h) the soft keyboard leaves. A menu that fits
+ *  in the window shows whole, moved over its anchor when neither side has room for it. `beside` (Menu on a wide screen,
+ *  which holds itself to `maxHeight` and scrolls): one taller than the window, which has to scroll anyway, opens on the
+ *  roomier side of its anchor, as tall as that room, where over the anchor it hid the button that opened it. */
 export function placeMenu(
   anchor: { left: number; right: number; top: number; bottom: number },
   h: number,
-  o: { width: number; align: "left" | "right"; side: "top" | "bottom"; screenW: number; screenH: number; view?: { top: number; height: number }; gap?: number },
+  o: { width: number; align: "left" | "right"; side: "top" | "bottom"; screenW: number; screenH: number; view?: { top: number; height: number }; gap?: number; beside?: boolean },
 ): MenuPlace {
   const width = Math.min(o.width, o.screenW - 16);
   const left = Math.max(8, Math.min(o.align === "left" ? anchor.left : anchor.right - width, o.screenW - width - 8));
@@ -110,6 +135,12 @@ export function placeMenu(
   const maxHeight = o.view ? Math.max(0, hi - lo) : undefined;
   const fit = Math.min(h, maxHeight ?? h);
   const gap = o.gap ?? 6; // a menu at the cursor has none: it opens at the pointer
+  if (o.beside && !o.view) {
+    const below = hi - anchor.bottom - gap;
+    const above = anchor.top - gap - lo;
+    if (h > hi - lo && Math.max(below, above) >= MENU_MIN_ROOM)
+      return below >= above ? { left, top: anchor.bottom + gap, width, maxHeight: below } : { left, top: lo, width, maxHeight: above };
+  }
   let top = o.side === "bottom" ? anchor.bottom + gap : anchor.top - fit - gap;
   if (o.side === "bottom" && top + fit > hi) top = anchor.top - fit - gap;
   if (top < lo) top = lo;

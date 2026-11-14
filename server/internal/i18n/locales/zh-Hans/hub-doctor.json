@@ -37,6 +37,7 @@
   "item_routes_firewall": "路由、防火墙",
   "item_running": "运行中的 hub",
   "item_tls_certificate": "TLS 证书",
+  "item_web_push": "Web Push",
   "line_ok": "正常｜{item}：{detail}",
   "line_problem": "有问题｜{item}：{detail}",
   "list_separator": "、",
@@ -95,5 +96,11 @@
   "running_unreachable": "无法连接本机回环，hub 可能没运行或未监听回环地址；请启动 personad hub run 并检查 listen",
   "title": "hub 自检（只读）",
   "tls_listen_invalid": "未设置有效 TLS 监听端口；请配置 public.tls_listen 后重启 hub",
-  "tls_listen_ok": "{listen}（配置值，尚未验证 TLS 监听）"
+  "tls_listen_ok": "{listen}（配置值，尚未验证 TLS 监听）",
+  "web_push_bad_one": "{count} 个浏览器用的是旧密钥，或上一条没推出去，见下面",
+  "web_push_bad_other": "{count} 个浏览器用的是旧密钥，或上一条没推出去，见下面",
+  "web_push_ok_one": "{count} 个浏览器在 Persona 关闭时也能收到通知",
+  "web_push_ok_other": "{count} 个浏览器在 Persona 关闭时也能收到通知",
+  "web_push_route": "经 {service}",
+  "web_push_stale": "{route}，但用的是旧密钥：下次在它上面打开 Persona 页面时会重新订阅"
 }

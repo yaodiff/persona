@@ -5,7 +5,6 @@ import { createPortal } from "react-dom";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
 import { ago } from "../../lib/format";
 import {
-  countLabel,
   groupEntries,
   groupResults,
   hitView,
@@ -21,6 +20,7 @@ import {
   type KBResult,
 } from "../../lib/kb";
 import { href, navigate } from "../../lib/router";
+import { onHubEvent } from "../../lib/store";
 import { Button, Collapse, cx, Dialog, EASE, IconButton, Loading, Menu, Spinner, toast } from "../../ui/atoms";
 import { contextMenuProps } from "../../ui/context-menu";
 import type { MenuAt } from "../../ui/menu-model";
@@ -108,6 +108,16 @@ export function ListPane({
     };
   }, [q, reloadKey, searchRetry]);
 
+  // A read that failed while the hub was away is read again once it is back (its hello), as Retry would, so the page
+  // does not stay on the error. Reads that went through are not repeated on a hello.
+  useEffect(() => {
+    if (!error && !searchError) return;
+    return onHubEvent("hello", () => {
+      if (error) setRetry((x) => x + 1);
+      if (searchError) setSearchRetry((x) => x + 1);
+    });
+  }, [error, searchError]);
+
   const sections = useMemo(() => (list?.items ? groupEntries(kind, list.items, tag) : []), [list, kind, tag]);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [limits, setLimits] = useState<Record<string, number>>({});
@@ -192,19 +202,16 @@ export function ListPane({
               onOpen={onOpen}
               onRetry={() => setSearchRetry((x) => x + 1)}
             />
-          ) : !list && !error ? (
-            // Paint the chips with their count and rows, so the count cannot wrap an already visible chip row.
-            <div className="py-10">
-              <Loading />
-            </div>
           ) : (
             <>
               <div className="mt-3 flex items-start gap-2">
-                {/* Search covers every kind: the chips (one of them lit) would say otherwise, so they go while searching. */}
+                {/* Search covers every kind: the chips (one of them lit) would say otherwise, so they go while searching.
+                    The chips carry no count: a count on the selected one only changed its width, so picking another kind
+                    re-wrapped the row and moved every chip after it; each section under them says how many it holds. With
+                    nothing that changes their width they stay put, while a kind loads too. */}
                 <div role="tablist" aria-label={t("knowledge-kblist.kinds")} className="flex min-w-0 flex-1 flex-wrap gap-1">
                   {KB_KINDS.map((k) => {
                     const on = k === kind;
-                    const n = on ? list?.items?.length : undefined;
                     return (
                       <a
                         key={k}
@@ -218,7 +225,6 @@ export function ListPane({
                         )}
                       >
                         {KIND_TITLE[k]}
-                        {n !== undefined && <span className="tabular-nums opacity-70">{countLabel(n)}</span>}
                       </a>
                     );
                   })}
@@ -236,6 +242,11 @@ export function ListPane({
               )}
 
               <div className="mt-4 flex flex-col gap-5">
+                {!list && !error && (
+                  <div className="py-6">
+                    <Loading />
+                  </div>
+                )}
                 {error && !list && <ErrorBox text={error} onRetry={() => setRetry((x) => x + 1)} />}
                 {list && sections.length === 0 && <Empty kind={kind} tag={tag} />}
                 {sections.map((s) => {
@@ -449,6 +460,15 @@ const EMPTY_TITLE: Record<KBKind, string> = {
   topics: t("knowledge-kblist.empty_topics"),
 };
 
+/** Where a kind's entries come from, for its empty page: topics are curated, events come from a connected calendar and
+ *  recordings from the phone; the rest from the archived chats. Under a tag the page is empty because of the filter, so
+ *  it says how to see the rest instead. */
+const EMPTY_BODY: Partial<Record<KBKind, string>> = {
+  topics: t("knowledge-kblist.empty_topics_body"),
+  events: t("knowledge-kblist.empty_events_body"),
+  recordings: t("knowledge-kblist.empty_recordings_body"),
+};
+
 function Empty({ kind, tag }: { kind: KBKind; tag?: string }) {
   return (
     <div className="flex flex-col items-center px-6 py-10 text-center">
@@ -456,7 +476,7 @@ function Empty({ kind, tag }: { kind: KBKind; tag?: string }) {
         <KBIcon name={KIND_ICON[kind]} size={18} />
       </span>
       <p className="text-[13.5px] font-medium text-ink">{tag ? t("knowledge-kblist.empty_tag", { tag, kind: KIND_TITLE[kind] }) : EMPTY_TITLE[kind]}</p>
-      <p className="mt-1 max-w-[340px] text-[12.5px] leading-relaxed text-ink-3">{kind === "topics" && !tag ? t("knowledge-kblist.empty_topics_body") : t("knowledge-kblist.empty_body")}</p>
+      <p className="mt-1 max-w-[340px] text-[12.5px] leading-relaxed text-ink-3">{tag ? t("knowledge-kblist.empty_tag_body", { kind: KIND_TITLE[kind] }) : EMPTY_BODY[kind] ?? t("knowledge-kblist.empty_body")}</p>
     </div>
   );
 }

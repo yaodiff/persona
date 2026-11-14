@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="designsystem_agent_stopped">This Agent has stopped. Its conversation and terminal stay; it doesn\'t take messages.</string>
+</resources>

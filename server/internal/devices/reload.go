@@ -56,9 +56,13 @@ func (m *Machine) expectedReload() bool {
 
 // call retries only an explicit not-started refusal or a close before writing. An ambiguous dropped write is never
 // replayed. The retry budget bounds waiting, not the operation's original execution deadline after the node is ready.
-func (m *Machine) call(ctx context.Context, method string, params any, out any) error {
+// Each call leaves a line in the log when it fails (calllog.go).
+func (m *Machine) call(ctx context.Context, method string, params any, out any) (err error) {
+	start, tries := time.Now(), 0
+	defer func() { m.logCall(method, err, time.Since(start), tries) }()
 	var deadline time.Time
 	for {
+		tries++
 		err := m.callOnce(ctx, method, params, out)
 		notSent := errors.Is(err, errOffline) || errors.Is(err, rpc.ErrSuspended) || errors.Is(err, rpc.ErrClosed) && !errors.Is(err, rpc.ErrDropped)
 		if !restartingError(err) && !(notSent && m.expectedReload()) {

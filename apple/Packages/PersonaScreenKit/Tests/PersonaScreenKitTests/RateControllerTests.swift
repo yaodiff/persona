@@ -130,4 +130,127 @@ final class RateControllerTests: XCTestCase {
         let now = start + 13 * second
         XCTAssertEqual(rate.receive(report(at: now, queue: 180), now: now).kbps, 220, "raised 10% after 2 calm seconds")
     }
+
+    // MARK: - A band from the phone (#6396)
+
+    /// Frames captured every `interval` µs, `bytes` each, over a link that carries `kbps`: each arrives once the link
+    /// has carried the ones before it. `now` is when the helper gets each report (on its own clock).
+    private func overLink(count: Int, from start: UInt64, interval: UInt64 = 20_000, bytes: UInt32, kbps: UInt64)
+        -> [(report: ReceiverReport, now: UInt64)] {
+        let transmit = UInt64(bytes) * 8 * 1000 / kbps
+        var last: UInt64 = 0
+        return (0..<count).map { i in
+            let capture = start + UInt64(i) * interval
+            let arrival = max(capture + 5_000, last + transmit)
+            last = arrival
+            let report = ReceiverReport(lastFrame: UInt32(i + 1), captureMicros: capture, arrivalMicros: arrival + 7_000_000_000,
+                                        bytesSinceLast: bytes, flags: [])
+            return (report, arrival + 5_000)
+        }
+    }
+
+    func testABandHoldsTheBitrateAndTurnsOnTiers() {
+        var rate = RateController(cap: 12_000)
+        XCTAssertFalse(rate.tiered)
+        XCTAssertEqual(rate.setBand(min: 2_000, max: 8_000, target: 9_000), 8_000, "a target above the band: its ceiling")
+        XCTAssertTrue(rate.tiered)
+        XCTAssertEqual(rate.floorKbps, 2_000)
+        XCTAssertEqual(rate.cap, 8_000)
+        XCTAssertEqual(rate.setBand(min: nil, max: nil, target: 100), 2_000, "below it: its floor")
+        XCTAssertNil(rate.setBand(min: 2_000, max: 8_000, target: nil), "the same band: no change")
+        XCTAssertEqual(rate.setBand(min: 3_000, max: nil, target: nil), 3_000, "a higher floor lifts the bitrate")
+        XCTAssertEqual(rate.setBand(min: nil, max: 1_000, target: nil), 1_000, "a ceiling under the floor wins")
+        XCTAssertEqual(rate.floorKbps, 1_000)
+    }
+
+    func testWithABandACutGoesToWhatArrived() {
+        // 8 Mbit/s of frames over a 3 Mbit/s link: the queue grows 33 ms a frame and passes 150 ms on the sixth.
+        var rate = RateController(cap: 12_000)
+        _ = rate.setBand(min: 1_000, max: 12_000, target: 8_000)
+        var cuts: [Int] = []
+        for (r, now) in overLink(count: 8, from: 10 * second, bytes: 20_000, kbps: 3_000) {
+            if let k = rate.receive(r, now: now).kbps { cuts.append(k) }
+        }
+        XCTAssertEqual(cuts, [2_550], "85% of the 3 Mbit/s that arrived, in one step")
+    }
+
+    func testWithoutABandACutIsThirtyPercentAsBefore() {
+        var rate = RateController(cap: 12_000)
+        var cuts: [Int] = []
+        for (r, now) in overLink(count: 8, from: 10 * second, bytes: 20_000, kbps: 3_000) {
+            if let k = rate.receive(r, now: now).kbps { cuts.append(k) }
+        }
+        XCTAssertEqual(cuts, [2_800], "an app before #6396: 30% of the 4 Mbit/s start")
+    }
+
+    func testWithABandButTooFewReportsACutIsThirtyPercent() {
+        var rate = RateController(cap: 12_000)
+        _ = rate.setBand(min: 1_000, max: 12_000, target: 8_000)
+        let now: UInt64 = 10 * second
+        _ = rate.receive(report(at: now, queue: 0), now: now)
+        XCTAssertEqual(rate.receive(report(at: now + 20_000, queue: 200), now: now + 20_000).kbps, 5_600,
+                       "two reports say nothing of the link")
+    }
+
+    func testABandsCutStopsAtItsFloor() {
+        var rate = RateController(cap: 12_000)
+        _ = rate.setBand(min: 4_000, max: 12_000, target: 8_000)
+        for (r, now) in overLink(count: 8, from: 10 * second, bytes: 20_000, kbps: 3_000) { _ = rate.receive(r, now: now) }
+        XCTAssertEqual(rate.kbps, 4_000, "the phone moves to a lower tier from here")
+    }
+
+    func testWithABandTheFirstSecondsRaiseFaster() {
+        var rate = RateController(cap: 12_000)
+        _ = rate.setBand(min: 1_000, max: 12_000, target: 2_000)
+        var now: UInt64 = 10 * second
+        var raises: [Int] = []
+        for _ in 0..<270 { // 4.5 s of calm 60 fps reports
+            now += second / 60
+            if let k = rate.receive(report(at: now, queue: 5), now: now).kbps { raises.append(k) }
+        }
+        XCTAssertEqual(raises, [2_500, 3_125, 3_907, 4_884], "+25% each calm second")
+    }
+
+    func testSlowStartEndsWithTheFirstCut() {
+        var rate = RateController(cap: 12_000)
+        _ = rate.setBand(min: 1_000, max: 12_000, target: 2_000)
+        var now: UInt64 = 10 * second
+        _ = rate.receive(report(at: now, queue: 0), now: now)
+        now += 10_000
+        XCTAssertEqual(rate.receive(report(at: now, queue: 200), now: now).kbps, 1_400)
+        var raises: [Int] = []
+        for _ in 0..<(3 * 60) { // 3 calm seconds
+            now += second / 60
+            if let k = rate.receive(report(at: now, queue: 5), now: now).kbps { raises.append(k) }
+        }
+        XCTAssertEqual(raises, [1_540], "back to +10% after 2 calm seconds")
+    }
+
+    func testSlowStartEndsAfterTenSeconds() {
+        var rate = RateController(cap: 50_000)
+        _ = rate.setBand(min: 200, max: 50_000, target: 200)
+        var now: UInt64 = 10 * second
+        var raises: [UInt64] = []
+        for _ in 0..<(16 * 60) {
+            now += second / 60
+            if rate.receive(report(at: now, queue: 5), now: now).kbps != nil { raises.append(now) }
+        }
+        // Nine fast raises about a second apart while slow start lasts, then one every 2 calm seconds.
+        let gaps = zip(raises.dropFirst(), raises).map { $0 - $1 }
+        XCTAssertEqual(raises.count, 12, "\(raises)")
+        XCTAssertTrue(gaps.prefix(8).allSatisfy { $0 < 1_100_000 }, "\(gaps)")
+        XCTAssertTrue(gaps.suffix(3).allSatisfy { $0 >= 2_000_000 }, "\(gaps)")
+    }
+
+    func testANewPathStartsTheDelayFloorOver() {
+        var moved = RateController(cap: 12_000), stayed = RateController(cap: 12_000)
+        var now: UInt64 = 10 * second
+        _ = moved.receive(report(at: now, queue: 0), now: now)
+        _ = stayed.receive(report(at: now, queue: 0), now: now)
+        moved.pathChanged()
+        // The new path is 200 ms longer each way: its own floor, not queueing.
+        now += 20_000
+        XCTAssertNil(moved.receive(report(at: now, queue: 200), now: now).kbps)
+        XCTAssertEqual(stayed.receive(report(at: now, queue: 200), now: now).kbps, 2_800, "without it: read as queueing")
+    }
 }

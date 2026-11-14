@@ -14,12 +14,12 @@ use serde_json::{Map, Value, json};
 #[derive(Default)]
 struct Recorder {
     effects: Mutex<Vec<Effect>>,
-    changes: Mutex<Vec<u64>>,
+    changes: Mutex<Vec<(String, u64)>>,
 }
 
 impl Host for Recorder {
-    fn changed(&self, version: u64) {
-        self.changes.lock().unwrap().push(version);
+    fn changed_chat(&self, chat: &str, version: u64) {
+        self.changes.lock().unwrap().push((chat.to_owned(), version));
     }
     fn run(&self, effect: &[u8]) {
         self.effects
@@ -73,7 +73,9 @@ fn request_json(request: &Request) -> Value {
         Request::FetchOlder { before_seq, fold_work } => {
             json!({"kind": "fetch_older", "before_seq": before_seq, "fold_work": fold_work})
         }
-        Request::FetchRange { from_seq, through_seq } => {
+        Request::FetchRange {
+            from_seq, through_seq, ..
+        } => {
             json!({"kind": "fetch_range", "from_seq": from_seq, "through_seq": through_seq})
         }
     }
@@ -150,6 +152,7 @@ fn continuity_fixtures_through_runtime() {
                         has_more: boolean(event, "has_more").unwrap(),
                     }),
                     "http_range" => Some(ChatEvent::Range {
+                        fold_id: None,
                         items_json: items_json(event),
                         more: flag(event, "more"),
                     }),
@@ -206,7 +209,10 @@ fn one_chats_drain_does_not_consume_another_chats_wakeup() {
         })));
     }
     assert!(runtime.flush(Duration::from_secs(5)));
-    assert_eq!(host.changes.lock().unwrap().len(), 2);
+    assert_eq!(
+        host.changes.lock().unwrap().as_slice(),
+        [("a".to_owned(), 1), ("b".to_owned(), 2)]
+    );
     let _ = runtime.drain("a");
     let batch = WireBatch {
         items_json: r#"[{"id":"1#0","seq":1,"role":"assistant","kind":"text","text":"new"}]"#.into(),
@@ -221,8 +227,8 @@ fn one_chats_drain_does_not_consume_another_chats_wakeup() {
     })));
     assert!(runtime.flush(Duration::from_secs(5)));
     assert_eq!(
-        host.changes.lock().unwrap().len(),
-        3,
+        host.changes.lock().unwrap().last().map(|(chat, _)| chat.as_str()),
+        Some("b"),
         "b must be woken again after a is drained"
     );
     let patch: ChatPatch = wire::decode(&runtime.drain("b")).unwrap();

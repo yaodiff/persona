@@ -10,28 +10,44 @@ import { Icon } from "../ui/icons";
 import { t } from "../i18n";
 import type { MenuItem } from "../ui/menu-model";
 import type { ScreenPicture, ScreenQuality } from "./video";
+import type { MobileData } from "./data-use";
 
 const PICTURES: ScreenPicture[] = ["video", "vnc"];
 const QUALITIES: ScreenQuality[] = ["auto", "sharper", "smoother"];
 const pictureLabel = (p: ScreenPicture) => (p === "video" ? t("screen-video.picture_video") : t("screen-video.picture_vnc"));
 const qualityLabel = (q: ScreenQuality) =>
   q === "auto" ? t("screen-video.quality_auto") : q === "sharper" ? t("screen-video.quality_sharper") : t("screen-video.quality_smoother");
+const MOBILE_DATA: MobileData[] = ["clearer", "saver"];
+const mobileDataLabel = (m: MobileData) => (m === "clearer" ? t("screen-video.mobile_data_clearer") : t("screen-video.mobile_data_saver"));
+const mobileDataUsage = (m: MobileData) => (m === "clearer" ? t("screen-video.mobile_data_clearer_usage") : t("screen-video.mobile_data_saver_usage"));
 
 /** The picture and (for video) quality the live screen uses, remembered per Mac. `onPicture` / `onQuality` persist and
  *  apply the choice; the parent holds the current value so the menu reads it back as the chosen radio. */
-export default function ScreenMenu({ picture, quality, onPicture, onQuality }: {
+export default function ScreenMenu({ picture, quality, onPicture, onQuality, qualityOffered = false, mobileData = null, onMobileData }: {
   picture: ScreenPicture;
   quality: ScreenQuality;
   onPicture: (p: ScreenPicture) => void;
   onQuality: (q: ScreenQuality) => void;
+  /** Quality only when it can do something: the helper has tiers and so does this page (#6396, video.ts webTiers). */
+  qualityOffered?: boolean;
+  /** The choice for mobile data (#6558, ./data-use), where it applies: with tiers, on mobile data; else null. The
+   *  iPhone has it in Settings; the web has no Settings row for it, so it lives here. */
+  mobileData?: MobileData | null;
+  onMobileData?: (m: MobileData) => void;
 }) {
   const [at, setAt] = useState<HTMLElement | null>(null); // the button, while the menu is open
   const items: MenuItem[] = [
     ...PICTURES.map((p): MenuItem => ({ key: `picture-${p}`, label: pictureLabel(p), radio: true, checked: picture === p, onSelect: () => onPicture(p) })),
-    ...(picture === "video"
+    ...(picture === "video" && qualityOffered
       ? [
           { key: "quality", label: t("screen-video.quality"), heading: true, divider: true, onSelect: () => {} } as MenuItem,
           ...QUALITIES.map((q): MenuItem => ({ key: `quality-${q}`, label: qualityLabel(q), radio: true, checked: quality === q, onSelect: () => onQuality(q) })),
+        ]
+      : []),
+    ...(picture === "video" && mobileData && onMobileData
+      ? [
+          { key: "mobile-data", label: t("screen-video.mobile_data_quality"), heading: true, divider: true, onSelect: () => {} } as MenuItem,
+          ...MOBILE_DATA.map((m): MenuItem => ({ key: `mobile-data-${m}`, label: mobileDataLabel(m), detail: mobileDataUsage(m), radio: true, checked: mobileData === m, onSelect: () => onMobileData(m) })),
         ]
       : []),
   ];

@@ -10,6 +10,14 @@ export interface WorkspaceBoardSetting {
   /** null until the hub answered: nothing shows the board (or says it is off) before that. */
   enabled: boolean | null;
   canWrite: boolean;
+  /** Why the switch could not be read, kept while it decides what the pages show; unset once a read or a write answers:
+   *  - while nothing is known yet, the board page and Settings say why (errorText) with Retry instead of loading
+   *    forever; the next hello reads it again too;
+   *  - a 404 is a hub from before the switch, which showed the board to everyone: the board shows, and Settings says
+   *    only updating the hub brings the switch, rather than "read-only device";
+   *  - a push after such a read says on or off but not whether this device may change it (canWrite is still unknown):
+   *    it stays, so Settings offers the switch rather than calling the device read-only, and the switch is read again. */
+  error?: unknown;
 }
 
 let state: WorkspaceBoardSetting = { enabled: null, canWrite: false };
@@ -22,7 +30,7 @@ let rev = 0;
 const listeners = new Set<() => void>();
 
 function set(next: WorkspaceBoardSetting) {
-  if (next.enabled === state.enabled && next.canWrite === state.canWrite) return;
+  if (next.enabled === state.enabled && next.canWrite === state.canWrite && next.error === state.error) return;
   state = next;
   listeners.forEach((l) => l());
 }
@@ -60,9 +68,11 @@ async function readSwitch(): Promise<void> {
     const r = await api<{ enabled?: boolean; can_write?: boolean }>("/workspace-board/settings");
     if (mine === rev) set({ enabled: r.enabled === true, canWrite: r.can_write === true });
   } catch (e) {
+    if (mine !== rev) return;
     // a hub from before the switch showed the board to everyone and has nothing to turn it off with
-    if (e instanceof ApiError && e.status === 404 && mine === rev) set({ enabled: true, canWrite: false });
-    // anything else: keep what we had, the next hello asks again
+    if (e instanceof ApiError && e.status === 404) set({ enabled: true, canWrite: false, error: e });
+    // anything else: keep what we had (the next hello asks again); with nothing yet, say why, so the page can offer Retry
+    else if (state.enabled === null) set({ ...state, error: e });
   }
 }
 
@@ -88,6 +98,8 @@ onHubEvent("workspace_board_settings", (e) => {
   if (typeof e.enabled !== "boolean" || !defaultKnown() || !fromDefaultManager(e)) return;
   rev++;
   set({ ...state, enabled: e.enabled });
+  // the last read failed, so who may change it is still unknown: ask (its answer is newer than this push)
+  if (state.error !== undefined) void refreshWorkspaceBoardSetting();
 });
 // the default became known or moved: its switch, which may have changed while its pushes were left out
 onDefaultManager(() => void refreshWorkspaceBoardSetting());
@@ -100,8 +112,10 @@ const subscribe = (l: () => void) => {
   };
 };
 
-export function useWorkspaceBoardSetting(): WorkspaceBoardSetting {
-  return useSyncExternalStore(subscribe, getWorkspaceBoardSetting, getWorkspaceBoardSetting);
+/** The switch, and `retry` to read it again (Retry beside a failed read; the pages are lazy, and a name this module
+ *  did not hand them before would rename the first screen's imports). */
+export function useWorkspaceBoardSetting(): WorkspaceBoardSetting & { retry: () => Promise<void> } {
+  return { ...useSyncExternalStore(subscribe, getWorkspaceBoardSetting, getWorkspaceBoardSetting), retry: refreshWorkspaceBoardSetting };
 }
 
 /** Only for tests: back to "not answered yet". */

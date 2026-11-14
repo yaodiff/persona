@@ -87,8 +87,10 @@
     <string name="inbox_empty_search_text">「%1$s」に一致するメッセージやメールはありません。</string>
     <string name="inbox_empty_title">受信トレイは空です</string>
     <string name="inbox_empty_text">ハブでLark（Lark ゲートウェイ）を設定するか、設定でメールアカウントを追加すると、対応が必要なメッセージやメールがここに表示されます。</string>
-    <string name="inbox_empty_filtered_title">すべて確認済み</string>
-    <string name="inbox_empty_filtered_text">この絞り込みには何もありません。</string>
+    <string name="inbox_empty_filtered_title">この絞り込みに一致する未対応の項目はありません</string>
+    <string name="inbox_empty_filtered_text">絞り込みを解除すると、受信トレイ全体が表示されます。</string>
+    <string name="inbox_empty_caught_up_title">すべて確認済み</string>
+    <string name="inbox_empty_caught_up_text">この絞り込みには何もありません。</string>
     <string name="inbox_group_fyi">参考</string>
     <string name="inbox_mark_all_seen">すべて確認</string>
     <string name="inbox_clear_all">すべてクリア</string>
@@ -269,6 +271,7 @@
     <string name="inbox_event_view_source">原文を見る</string>
     <string name="inbox_done_by_manager">アシスタントが処理済み</string>
     <string name="inbox_event_related">関連</string>
-    <!-- Source subscriptions (#2041): with the Inbox's other settings -->
+    <!-- Source subscriptions (#2041): with the Inbox's other settings. Inbox Sources (#5308) once the hub says so. -->
     <string name="inbox_subscriptions">購読</string>
+    <string name="inbox_sources">受信箱のソース</string>
 </resources>

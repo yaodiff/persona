@@ -57,6 +57,10 @@ import SwiftUI
         var key: String; var at: Spot; var base: CGFloat; var until: Date; var slow: Bool; var rise: CGFloat
         /// The content's height when the hold began, and whether the header has reported since (`watch`).
         var height: CGFloat = 0
+        /// How far past the end the list's own arithmetic puts it the list already was when the hold began (0 if not):
+        /// at the oldest end the list sat 100 pt further than `within` thinks it can go, and a hold that clamped to
+        /// `within` took the row 100 pt up on opening (#7237).
+        var slack: CGFloat = 0
         var reported = false
         /// It has glided once to where the list can be (`moved`): from then on the list follows the header at once.
         var glided = false
@@ -69,6 +73,10 @@ import SwiftUI
         var waitUntil = Date.distantPast
     }
     private var held: Held?
+    #if DEBUG
+    /// Why the last hold ended (`traceHeld`).
+    private var why = ""
+    #endif
 
     /// The hold is still on: within its time, or waiting for what it opened (`awaiting`).
     private static func on(_ h: Held) -> Bool { Date.now <= h.until || h.waiting > 0 && Date.now <= h.waitUntil }
@@ -110,7 +118,8 @@ import SwiftUI
             resume = nil
         }
         held = Held(key: key, at: at, base: list.contentOffset.y, until: keep ? .distantFuture : .now.addingTimeInterval(Self.holdTime),
-                    slow: slow || keep, rise: max(rise, 0), height: list.contentSize.height)
+                    slow: slow || keep, rise: max(rise, 0), height: list.contentSize.height,
+                    slack: max(list.contentOffset.y - Self.within(list, .greatestFiniteMagnitude), 0))
         lastHeld = key
         want = nil
         reach = 0
@@ -133,7 +142,7 @@ import SwiftUI
                 guard grown > 0.5 else { continue }
                 self.rising(grown)
                 guard let h = self.held else { return }
-                let target = Self.within(list, self.wanted(h, grown: grown))
+                let target = limited(list, self.wanted(h, grown: grown))
                 if abs(target - list.contentOffset.y) >= 0.5 { list.contentOffset.y = target }
             }
         }
@@ -189,6 +198,9 @@ import SwiftUI
 
     /// Lets go of what is held (a kept hold: ↓, sending, the user's scrolling).
     func release() {
+        #if DEBUG
+        why = "release"
+        #endif
         held = nil
         stopGlide()
         gliding = nil
@@ -214,7 +226,7 @@ import SwiftUI
         // its plan back as the pill over the composer, the list's bottom edge 40 pt up a pass after the fold started the
         // glide: the glide kept its way, and the header showed 40 pt up for a frame before it glided down.
         path.from -= d
-        path.to = Self.within(list, want, content: known(reach))
+        path.to = limited(list, want, content: known(reach))
         glidePath = path
         glideTo(list, at: CACurrentMediaTime())
     }
@@ -230,7 +242,10 @@ import SwiftUI
     }
 
     /// A hold is over. One that interrupted a kept hold hands the list back to it, unless a finger has the list.
-    private func ended(_ list: UIScrollView) {
+    private func ended(_ list: UIScrollView, _ because: @autoclosure () -> String = "") {
+        #if DEBUG
+        why = "ended \(because())"
+        #endif
         held = nil
         guard let key = resume else { return }
         resume = nil
@@ -248,7 +263,7 @@ import SwiftUI
         func spot(_ s: Spot?) -> String { s.map { "\(Int($0.y.rounded()))/\(Int($0.content.rounded()))" } ?? "-" }
         let drawn = traced.flatMap { DrawnProbe.top($0) }.map { " drawn \(Int($0.rounded()))" } ?? ""
         let rs = resizes > 0 ? " rs \(resizes)/\(Int(lastResize.rounded()))" : ""
-        guard let h = held else { return "- last \(traced.map { spot(last[$0]) } ?? "-")\(drawn)\(rs)" }
+        guard let h = held else { return "- last \(traced.map { spot(last[$0]) } ?? "-")\(drawn)\(rs) why \(why)" }
         return "\(h.key.suffix(6))\(h.until == .distantFuture ? "+kept" : "") at \(spot(last[h.key]))\(drawn) from \(spot(h.at)) base \(Int(h.base.rounded()))"
             + " want \(want.map { "\(Int($0.rounded()))" } ?? "-")\(gliding != nil ? " glide" : "")\(h.waiting > 0 ? " wait" : "")\(rs)"
     }
@@ -271,9 +286,16 @@ import SwiftUI
     func moved(_ key: String, to spot: Spot) {
         last[key] = spot
         guard var h = held, h.key == key, let list else { return }
-        if !Self.on(h) || list.isTracking || list.isDecelerating { return ended(list) }
+        if !Self.on(h) || list.isTracking || list.isDecelerating { return ended(list, "on \(Self.on(h)) tracking \(list.isTracking) decel \(list.isDecelerating)") }
         if !h.reported, abs(spot.content - h.at.content) >= 0.5 { h.reported = true; held = h } // it moved, and says where
-        if !h.slow, abs(spot.y - h.at.y) < 0.5 { return ended(list) }
+        // Not over until the header has said that its content grew (at the oldest end the first report came before the
+        // growth and the row went 100 pt up, #7237), and the list is where the hold wants it: SwiftUI reports the header
+        // where its own layout puts it, a pass before the content size follows and UIKit sets a list that rests past its
+        // end back to it (`Held.slack`), so the hold lasts until that has happened.
+        let settled = limited(list, wanted(h, grown: spot.content - h.at.content), content: known(spot.content))
+        if !h.slow, h.reported, h.slack < 0.5, abs(spot.y - h.at.y) < 0.5, abs(list.contentOffset.y - settled) < 0.5 {
+            return ended(list, "still off \(Int(list.contentOffset.y)) goal \(Int(settled)) slack \(Int(h.slack))")
+        }
         // The content runs newest first: rows opening under the header on screen push it further into the content,
         // and the offset has to grow by as much to keep it on screen where it was (as far as the list can go). Allowed to
         // rise, the header goes up by that much first: the list moves only for what opened past it.
@@ -286,7 +308,7 @@ import SwiftUI
         if let g = gliding, Date.now < g { want = goal; return }
         // Folded at the newest end, the list cannot keep the header where it was: it stays for this frame and the list
         // glides to where it can be. In one frame it went 400–470 pt down (#1123).
-        let still = h.base + grown, target = Self.within(list, goal, content: known(spot.content))
+        let still = h.base + grown, target = limited(list, goal, content: known(spot.content))
         if !h.glided, target - still >= 0.5, !Theme.Motion.reduced {
             var h = h
             h.glided = true
@@ -423,7 +445,7 @@ import SwiftUI
     private func keepHeld() {
         guard let h = held, h.reported, h.until == .distantFuture, glidePath == nil, gliding == nil, let list,
               !list.isTracking, !list.isDecelerating, let spot = last[h.key] else { return }
-        let target = Self.within(list, wanted(h, grown: spot.content - h.at.content), content: known(max(reach, spot.content)))
+        let target = limited(list, wanted(h, grown: spot.content - h.at.content), content: known(max(reach, spot.content)))
         if abs(list.contentOffset.y - target) >= 0.5 { list.contentOffset.y = target }
     }
 
@@ -451,6 +473,9 @@ import SwiftUI
         let by = last && gap <= room ? gap : min(over, room)
         // Nothing to bring up: whatever holds the list goes on holding it.
         guard by >= 0.5 else { return }
+        #if DEBUG
+        why = "show"
+        #endif
         held = nil
         want = nil
         stopGlide()
@@ -462,7 +487,7 @@ import SwiftUI
     /// The list goes as near `want` as it can now.
     private func put(_ list: UIScrollView) {
         guard let want else { return }
-        let target = Self.within(list, want, content: known(reach))
+        let target = limited(list, want, content: known(reach))
         if abs(target - list.contentOffset.y) >= 0.5 { list.contentOffset.y = target }
         if abs(target - want) < 0.5 { self.want = nil }
     }
@@ -498,6 +523,13 @@ import SwiftUI
     /// An offset the list can be at. `content`: how long the content is known to be (`known`): the rows are laid out a
     /// pass before the scroll view's content size follows, and capped by the old size the list stayed at the newest end
     /// for a frame, on steps still fading in: blank (#754).
+    /// `within`, for the held row: no nearer the end than the list already was when the hold began (`Held.slack`).
+    private func limited(_ list: UIScrollView, _ y: CGFloat, content: CGFloat = 0) -> CGFloat {
+        let slack = held?.slack ?? 0
+        let end = Self.within(list, .greatestFiniteMagnitude, content: content) + slack
+        return min(max(y, Self.within(list, -.greatestFiniteMagnitude)), end)
+    }
+
     private static func within(_ list: UIScrollView, _ y: CGFloat, content: CGFloat = 0) -> CGFloat {
         let inset = list.adjustedContentInset
         let height = max(list.contentSize.height, content)

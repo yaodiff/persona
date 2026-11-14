@@ -170,14 +170,29 @@ top of the list (#5707). Now the owner files it:
 
 ## Header count
 
-The web's header reads "N open · N shelved · N done" beside the title on wider screens (a phone leaves it out); it counts what the list's filter shows, whatever is searched (#3740). The iOS and
+The web's header reads "N open · N parked · N inactive · N done" beside the title on wider screens (a phone leaves it out); it counts what the list's filter shows, whatever is searched (#3740). The iOS and
 Android lists have no such line (#3712): it said again what the sections say, so each section's title carries the number of
 to-dos its rows list (a merged row's related ones too), in the section's state color, and the counts follow a search and the
 list's filter (#3740). **Open** counts to-dos that are not closed, not accepted or deployed,
 and not shelved: Waiting on you, Working, PR to merge, Other open, and Just finished rows still open (a finished turn
 is not a closed to-do; only a review or the user closes it; once the owner has seen it, rule 9a, it is in Done and not
-counted). **Done** counts closed, accepted and deployed ones. The
+counted). **Parked**, **inactive** and **done** count the to-dos in the Parked, Shelved and Done sections as their titles
+do (a merged row's related to-dos under the row's section), so the header and each section's title say the same number;
+what closed in the last 24 hours and was not seen yet is under Just finished and counted there, not as done. The
 sidebar's To-dos badge shows the same open count without quiet tasks (#1731), as before; the page lists and counts them. A task whose agent never started (rule 1) counts as open while it waits on the owner.
+
+The counts are the same whatever the list is grouped by (web audit item 12), and so is where each to-do is:
+
+- **By folder**: the folders hold every to-do the status sections place outside Done (a merged row's to-dos where the
+  row is), each in its own reading: a failed start waiting on the owner open, with why it did not start, and its folder
+  says Needs you; a to-do closed in the last 24 hours struck through, with **Got it**, until it is seen. The folded
+  **Done** at the bottom holds the Done section's.
+- **By pinned direction**: the directions hold the open to-dos the hub's tree lists (it lists only what counts as open);
+  a line says how many open ones no direction lists; the rest outside Done (closed in the last 24 hours, accepted,
+  deployed, shelved) keep their status sections below the directions, as Android's list does, so a to-do ticked there
+  moves to Just finished instead of leaving the list; the folded **Done** holds the Done section's.
+
+Before the first read of the to-dos lands the header shows no counts, not zeros (audit item 83).
 
 ## Shelving
 

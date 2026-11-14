@@ -38,6 +38,9 @@ if [ -f "$STAMP" ] && cmp -s "$INPUT" "$STAMP" && [ -d "$DEST" ]; then
   exit 0
 fi
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CORE/target/apple}"
+# Panic metadata from dependencies names their registry source paths. Keep the build machine's home and checkout
+# paths out of the published XCFramework, including when a caller supplies its own CARGO_HOME.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$HOME=/build/home --remap-path-prefix=$ROOT=/build/persona"
 for TARGET in $TARGETS; do
   printf 'persona-core-apple: building %s\n' "$TARGET"
   SDKROOT=$(xcrun --sdk macosx --show-sdk-path)

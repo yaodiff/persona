@@ -16,8 +16,8 @@ import persona.feature.inbox.LarkRoute
 
 /**
  * An item link — a notification, a hub deep link, the Persona home's Needs you, the capsule's "open in the app" — opens
- * what the row would: the item's event page when the hub sent event fields, its source page otherwise. A chat link
- * still opens the chat.
+ * what the row would: the collapsed item page for an event or a chat/mail item, and the source or extension page for
+ * other items. A direct chat link still opens the chat.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
@@ -32,8 +32,8 @@ class InboxOneRowLinksTest {
             inboxDestination(InboxItemRoute("with-events"), listOf(withEvents), loaded = true))
     }
 
-    @Test fun anItemFromAnOlderHubStillOpensItsSource() {
-        assertEquals(InboxDestination.Open(LarkRoute("room", "plain", null)),
+    @Test fun aChatItemFromAnOlderHubOpensItsCollapsedPage() {
+        assertEquals(InboxDestination.Open(InboxEventRoute("plain")),
             inboxDestination(InboxItemRoute("plain"), listOf(item("plain")), loaded = true))
     }
 

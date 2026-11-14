@@ -485,6 +485,10 @@ final class AppModel {
         }
         #if os(iOS)
         HomeWidgetWriter.shared.source = { [weak self] in self?.homeSnapshotSource() }
+        // A tool call asked iOS for a source's permission (#7659): a refused source's tools leave the hub's list.
+        NotificationCenter.default.addObserver(forName: .phoneAccessAnswered, object: nil, queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.registerPhone() }
+        }
         #endif
         #if os(iOS) || os(visionOS)
         if registryUnreadable {
@@ -1806,6 +1810,15 @@ final class AppModel {
             // right after the catch-up, so the answer goes on being written instead of blanking for a moment.
             if plan.refetch { chat(key).dropLive() }
             link.live.send(subscribeMessage(key))
+            // After a full refresh the chat also reads what came after its `covered` itself, as the web does (#4315):
+            // the subscription's backlog is the only other way those lines arrive, and it can fail (the node not back
+            // yet after a hub restart answers it with an error frame) or never come. Messages sent from another device
+            // while this socket was down then stayed missing until the next push. Both merge by id and seq, and `fill`
+            // collapses concurrent reads for the chat. A chat with nothing yet gets its latest page from the subscription.
+            if plan.refetch, chat(key).covered > 0 {
+                let store = chat(key)
+                Task { await fill(key, shouldApply: { self.isSubscribed(key) && self.existingChat(key) === store }) }
+            }
         }
         guard plan.refetch else { return }
         // Questions answered on the computer while the socket was down are gone from the hub: drop their cards.

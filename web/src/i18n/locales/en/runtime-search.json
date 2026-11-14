@@ -1,0 +1,12 @@
+{
+  "loaded_only": "Only loaded Agents are searched on this hub.",
+  "searching": "Searching all Agents…",
+  "loaded_count": "{count} of {total} Agent matches loaded",
+  "more": "Load more Agents",
+  "retry": "Retry search",
+  "search_again": "Search again",
+  "invalid_response": "Could not read Agent search results. Try again.",
+  "query_too_long": "Search is too long. Use a shorter query.",
+  "unsupported": "This hub cannot search all Agents yet. Update it to enable this search.",
+  "expired": "These search results have expired. Search again to refresh them."
+}

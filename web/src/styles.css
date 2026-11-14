@@ -1,4 +1,9 @@
 @import "tailwindcss";
+/* Tailwind writes a utility for every class-like word in the files it scans. Tests and browser scripts are not the
+   page: their assertions and fixtures (`not.toContain("outline-white")`, `[typed:zzz]`) cost every page's first
+   screen about 0.2 KB (#7418). The admin UI and the showcase import this file too, so their sources stay in. */
+@source not "../**/*.test.{ts,tsx}";
+@source not "../e2e";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -7,6 +12,17 @@
   position: sticky;
   z-index: 20;
   background: var(--sidebar-group-bg, var(--page));
+}
+/* Pinned over its rows (SidebarGroup sets data-edge on the innermost pinned heading): the Persona row's divider under
+   it, so a row half under the heading reads as scrolled beneath it, not as text run into it (audit item 51). */
+.sidebar-group-heading[data-edge]::after {
+  content: "";
+  position: absolute;
+  inset-inline: calc(var(--spacing) * 2);
+  bottom: 0;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
 }
 [data-sidebar-rows] {
   --sidebar-group-bg: var(--canvas);
@@ -398,8 +414,15 @@ button:disabled { cursor: default; }
    adds no margin, padding or border; the table keeps its own box, scroll and margin collapse. */
 .prose-j > .md-table:first-child > table { margin-top: 0; }
 .prose-j > .md-table:last-child > table { margin-bottom: 0; }
-.prose-j th, .prose-j td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; min-width: 7em; max-width: 18em; overflow-wrap: anywhere; word-break: normal; }
+.prose-j th, .prose-j td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; max-width: 18em; overflow-wrap: anywhere; word-break: normal; }
+/* A column is as narrow as its words (audit item 77): a header never wraps, and only a cell long enough to wrap keeps
+   7em, so a squeezed table doesn't stack a sentence a word per line; a short one (a number, a name: Markdown.tsx
+   cellFits) stays on one line and takes what it needs. */
+.prose-j td { min-width: 7em; }
+.prose-j td[data-fit] { min-width: 0; white-space: nowrap; }
 .prose-j th { font-weight: 600; color: var(--ink-2); background: var(--inset); white-space: nowrap; }
+/* The copy button's room in the header row (Markdown.tsx TableBlock): its 24px, its inset and a gap. */
+.prose-j .md-table th:last-child { padding-right: 2.25rem; }
 .prose-j tr:last-child td { border-bottom: 0; }
 .prose-j input[type=checkbox] { margin-right: .4em; accent-color: var(--ink); }
 .prose-j img { max-width: 100%; border-radius: 8px; }

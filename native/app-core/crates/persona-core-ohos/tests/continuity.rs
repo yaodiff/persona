@@ -65,7 +65,9 @@ fn request_json(request: &Request) -> Value {
         Request::FetchOlder { before_seq, fold_work } => {
             json!({"kind": "fetch_older", "before_seq": before_seq, "fold_work": fold_work})
         }
-        Request::FetchRange { from_seq, through_seq } => {
+        Request::FetchRange {
+            from_seq, through_seq, ..
+        } => {
             json!({"kind": "fetch_range", "from_seq": from_seq, "through_seq": through_seq})
         }
     }
@@ -150,6 +152,7 @@ fn continuity_fixtures_through_napi_runtime_registry() {
                         has_more: boolean(event, "has_more").unwrap(),
                     }),
                     "http_range" => Some(ChatEvent::Range {
+                        fold_id: None,
                         items_json: items_json(event),
                         more: flag(event, "more"),
                     }),

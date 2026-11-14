@@ -1,4 +1,7 @@
 {
   "name_placeholder": "名前",
-  "close_confirm": "ペインで実行中のプログラムも終了します。"
+  "close_confirm": "ペインで実行中のプログラムも終了します。",
+  "section_pane": "ペイン · {name}",
+  "section_tab": "タブ · {name}",
+  "section_space": "スペース · {name}"
 }

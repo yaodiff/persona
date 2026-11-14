@@ -239,9 +239,24 @@ func TestLeaderPlanWaitingIsADecision(t *testing.T) {
 	if r := byPlan[handed.ID]; r.Kind != assistantwire.LeaderDecision || r.Leader != "conv_lead_a" || !strings.Contains(r.Text, "Fix push") {
 		t.Fatalf("the plan handed to the leader: %+v", r)
 	}
+	for _, r := range got {
+		if r.Level != "" {
+			t.Fatalf("a level with push tiering off: %+v", r)
+		}
+	}
 	if again := e.reports(time.Now(), true); len(again) != 0 {
 		t.Fatalf("told again: %+v", again)
 	}
+	// With push tiering on a plan waiting for Start is P1 (a briefing line, no alert), though its kind is a decision.
+	on := true
+	e.s.setQuietForTest(&on)
+	late := put("conv_lead_a", "", planOpen, "Settings search")
+	e.s.lreports.plansDue.Store(true)
+	tiered := e.reports(time.Now(), false)
+	if len(tiered) != 1 || tiered[0].Plan != late.ID || tiered[0].Kind != assistantwire.LeaderDecision || tiered[0].Level != assistantwire.LevelP1 {
+		t.Fatalf("a waiting plan with push tiering on: %+v", tiered)
+	}
+	e.s.setQuietForTest(nil)
 	e2 := env()
 	if again := e2.reports(time.Now(), false); len(again) != 0 {
 		t.Fatalf("told again after a restart: %+v", again)

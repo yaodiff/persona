@@ -268,6 +268,10 @@ func TestTodoReminders(t *testing.T) {
 		if len(pushes) != 1 || pushes[0].Title != "Call the bank" || !strings.Contains(pushes[0].Body, "12-01") {
 			t.Fatalf("pushes: %+v", pushes)
 		}
+		// The owner's own reminder is theirs to act on: P0 even with push tiering on, keyed by to-do and due time.
+		if pushes[0].Level != "P0" || !strings.HasPrefix(pushes[0].RelatedKey, "todo-remind:"+id+"@") {
+			t.Fatalf("reminder level %q key %q", pushes[0].Level, pushes[0].RelatedKey)
+		}
 		if got, _ := e.todo(id); got.RemindedAt == nil {
 			t.Fatal("not marked pushed")
 		}

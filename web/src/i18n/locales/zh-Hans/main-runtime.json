@@ -1,13 +1,11 @@
 {
-  "main": "主会话",
-  "not_started": "主会话尚未启动",
-  "starting": "主会话 · 启动中…",
-  "unknown": "主会话 · 运行信息未上报",
+  "main": "主对话",
+  "not_started": "主对话还没开始",
+  "starting": "主对话 · 启动中…",
   "running": "运行中",
-  "location_unknown": "运行位置未上报",
-  "proxy": "经 {name} 接入（实际位置未上报）",
+  "proxy": "经 {name} 接入",
   "container": "容器 {name}",
-  "offline": "主会话 · 离线",
-  "stopped": "主会话 · 已停止",
+  "offline": "主对话 · 离线",
+  "stopped": "主对话 · 已停止",
   "last_location": "上次运行于 {location}"
 }

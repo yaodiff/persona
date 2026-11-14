@@ -41,7 +41,7 @@ import { onOverlayEntry } from "../../lib/back-close";
 import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { resetInboxViewMemoryForTests } from "../../lib/inbox-view-memory";
 import { settleRosterDefault } from "../../lib/manager-choice";
-import { t } from "../../i18n";
+import { initI18n, t } from "../../i18n";
 import { InboxDetail } from "./InboxDetail";
 
 settleRosterDefault();
@@ -133,7 +133,8 @@ afterEach(async () => {
   vi.useRealTimers();
   resetInboxViewMemoryForTests();
   history.replaceState(null, "", "/");
-});
+  await initI18n("zh-Hans");
+}, 30_000);
 
 describe("an embedded original starts collapsed", () => {
   it("does not read or report a chat until expanded; the row expands it and the header hides it again", async () => {
@@ -187,5 +188,62 @@ describe("an embedded original starts collapsed", () => {
     expect(replace).not.toHaveBeenCalled();
     expect(onOverlayEntry(history.state)).toBe(false);
     expect(location.pathname).toBe("/inbox/lark:f1:1");
+  });
+});
+
+describe("the original-source controls show their literal English labels", { timeout: 30_000 }, () => {
+  beforeEach(async () => {
+    await initI18n("en");
+  }, 30_000);
+
+  it("labels both collapsed chat controls View original, then the expanded header Hide original", async () => {
+    await draw(chatItem());
+    const header = originalToggle("inbox-original-toggle");
+    const row = originalToggle("inbox-original-row-toggle");
+    expect(header.textContent).toBe("View original");
+    expect(row.textContent).toBe("View original");
+    expect(header.textContent).not.toBe("Original");
+    expect(row.textContent).not.toBe("Original");
+    expect(embedded()).toBeNull();
+
+    await pressOriginal("inbox-original-row-toggle");
+    expect(originalToggle("inbox-original-toggle").textContent).toBe("Hide original");
+    expect(host.querySelector('[data-testid="inbox-original-row-toggle"]')).toBeNull();
+    expect(embedded()).not.toBeNull();
+    expect(host.querySelector('[data-mid="m102"]')).not.toBeNull();
+  });
+
+  it("alternates a non-embedded event between View original and Handling", async () => {
+    await draw(chatItem({ lark: undefined }));
+    expect(host.querySelector("[data-event-body]")).not.toBeNull();
+    expect(originalToggle("inbox-original-toggle").textContent).toBe("View original");
+
+    await pressOriginal("inbox-original-toggle");
+    expect(originalToggle("inbox-original-toggle").textContent).toBe("Handling");
+    expect(host.querySelector("[data-event-body]")).toBeNull();
+
+    await pressOriginal("inbox-original-toggle");
+    expect(originalToggle("inbox-original-toggle").textContent).toBe("View original");
+    expect(host.querySelector("[data-event-body]")).not.toBeNull();
+  });
+
+  it("uses the same literal labels for an embedded mail original", async () => {
+    await draw(chatItem({
+      id: "mail:a1:1",
+      source: "mail",
+      kind: "mail",
+      account: "a1",
+      account_name: "Mail",
+      lark: undefined,
+      mail: { account_id: "a1", mailbox: "INBOX", uids: [1], from: { name: "A", email: "a@example.com" } },
+    }));
+    expect(originalToggle("inbox-original-toggle").textContent).toBe("View original");
+    expect(originalToggle("inbox-original-row-toggle").textContent).toBe("View original");
+    expect(embedded()).toBeNull();
+
+    await pressOriginal("inbox-original-row-toggle");
+    expect(originalToggle("inbox-original-toggle").textContent).toBe("Hide original");
+    expect(host.querySelector('[data-testid="inbox-original-row-toggle"]')).toBeNull();
+    expect(embedded()).not.toBeNull();
   });
 });

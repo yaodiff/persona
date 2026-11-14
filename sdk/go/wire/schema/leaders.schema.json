@@ -36,7 +36,8 @@
         "reached": {"type": "string"},
         "doing": {"type": "string"},
         "needs_you": {"type": "string"},
-        "links": {"type": "array", "items": {"type": "string"}}
+        "links": {"type": "array", "items": {"type": "string"}},
+        "level": {"type": "string", "enum": ["P0", "P1"], "description": "set only while the hub's push tiering (low-distraction switch) is on: P1 for progress, reached and stuck (keep it in the log and the briefing, alert nobody), P0 for a decision"}
       },
       "required": ["id", "leader", "kind", "todo", "text", "at"]
     }

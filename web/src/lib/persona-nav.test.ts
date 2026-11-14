@@ -18,10 +18,10 @@ describe("Persona is the front door (#1239)", () => {
     expect(href({ name: "persona-new" })).toBe("/persona/new");
   });
 
-  it("moves 总览 to /overview and keeps unknown paths on it", () => {
+  it("moves 总览 to /overview; an unknown path says it is no page (web usability audit item 42)", () => {
     expect(parse("/overview")).toEqual({ name: "home" });
     expect(href({ name: "home" })).toBe("/overview");
-    expect(parse("/no-such-page")).toEqual({ name: "home" });
+    expect(parse("/no-such-page")).toEqual({ name: "not-found", path: "/no-such-page" });
   });
 
   it("keeps the other old links", () => {
@@ -63,7 +63,7 @@ describe("an extension's page (docs/extensions/extensions.md「UI slots」 nav_p
     expect(parse("/extension/example-gateway/usage")).toEqual({ name: "extension", extension: "example-gateway", ui: "usage" });
     expect(href({ name: "extension", extension: "a b", ui: "c/d" })).toBe("/extension/a%20b/c%2Fd");
     expect(parse(href({ name: "extension", extension: "a b", ui: "c/d" }))).toEqual({ name: "extension", extension: "a b", ui: "c/d" });
-    expect(parse("/extension/only-one")).toEqual({ name: "home" });
+    expect(parse("/extension/only-one")).toEqual({ name: "not-found", path: "/extension/only-one" });
     expect(sidebarActiveKey({ name: "extension", extension: "g", ui: "usage" })).toBe(extensionNavKey("g", "usage"));
     expect(extensionNavKey("g", "usage")).toBe("p:g/usage");
   });

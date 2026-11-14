@@ -1,0 +1,13 @@
+{
+  "forbidden": "这台设备不能给 Agent 改名",
+  "upgrade": "更新助手后才能在这里自动重命名 Agent",
+  "assistant_session": "Persona 自己的对话由它自己命名，自动重命名只用于 Agent",
+  "model_not_configured": "还没有可用于命名的模型：在 设置 › 模型配置 为「信息筛选」选一个",
+  "no_dialogue": "这个 Agent 还没有对话内容，暂时起不了名字",
+  "invalid_name": "模型没有给出可用的名字，请重试",
+  "model_failed": "连不上命名用的模型，请重试",
+  "dialogue_unavailable": "读不到这个 Agent 的对话，确认它所在的电脑在线后重试",
+  "timeout": "起名用时太久，请重试",
+  "save_failed": "新名字没能保存，请重试",
+  "renamed_meanwhile": "起名期间这个 Agent 已被改名，已保留新改的名字"
+}

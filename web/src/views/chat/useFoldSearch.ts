@@ -54,7 +54,10 @@ export function useFoldSearch(mid: string, sid: string, history: string | undefi
 
   useEffect(() => {
     const own = cache.current;
-    const wanted = foldsKey ? folds.filter((f) => !own.fetched.has(f.id)) : [];
+    const wanted = foldsKey ? folds.filter((f) => {
+      const seen = own.fetched.get(f.id);
+      return !seen || seen.fold.fold!.through_seq !== f.fold!.through_seq || seen.fold.fold!.through_id !== f.fold!.through_id;
+    }) : [];
     if (!wanted.length) return;
     let stop = false;
     setLoading(true);
@@ -64,13 +67,14 @@ export function useFoldSearch(mid: string, sid: string, history: string | undefi
       stopped: () => stop || cache.current !== own,
       budget: FOLD_SEARCH_BUDGET - own.spent,
       onFold: (f, its) => {
+        const before = own.fetched.get(f.id);
         own.fetched.set(f.id, { fold: f, items: its });
-        own.spent += foldItemsSize(its);
+        own.spent = Math.max(0, own.spent + foldItemsSize(its) - foldItemsSize(before?.items ?? []));
         setVersion((v) => v + 1);
       },
     }).then((r) => {
       if (r.stopped) return;
-      own.partial = own.partial || r.failed > 0 || r.capped;
+      own.partial = r.failed > 0 || r.capped;
       setLoading(false);
       setVersion((v) => v + 1);
     });

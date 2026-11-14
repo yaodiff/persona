@@ -140,10 +140,10 @@ type stopOnRecoveryPush struct {
 	cancel context.CancelFunc
 }
 
-func (h stopOnRecoveryPush) NotifyRequest(ctx context.Context, p NotifyRequest) error {
-	err := h.fakeHub.NotifyRequest(ctx, p)
+func (h stopOnRecoveryPush) NotifyRequest(ctx context.Context, p NotifyRequest) (NotifyResult, error) {
+	res, err := h.fakeHub.NotifyRequest(ctx, p)
 	h.cancel()
-	return err
+	return res, err
 }
 
 func TestRunRecoversTaskStarts(t *testing.T) {

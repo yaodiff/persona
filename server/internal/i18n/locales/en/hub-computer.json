@@ -8,6 +8,7 @@
   "confirm_script": "Run a script on “{machine}”: {line}",
   "confirm_steps": "Run on “{machine}” in order: {steps}",
   "list_sep": ", ",
+  "session_stopped": "Operating {machine} was stopped on its screen, so I paused. Should I go on?",
   "err_outdated_lcu": "The personad on this computer is too old to recognize LCU. Redeploy it",
   "err_unknown_action": "unknown action",
   "err_bad_body": "bad body: {err}",

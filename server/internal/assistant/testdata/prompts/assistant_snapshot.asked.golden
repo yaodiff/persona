@@ -4,5 +4,4 @@
 - Agents：需要你 0 个，完成未看 0 个，工作中 0 个（详情用 agents_list）
 - 你用 ask_user 问过、到点没人回、转成待办在等用户拍板的（用户在待办里记了决定会作为新消息发给发问的对话；别再问，也别先按某个选项去做，除非用户已经在对话里直接答了）：「Merge the release PR now?」（todo_ask_0a1b2c，11-08 12:04 问的）
 - iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
-- 在跟的事：没有
 - 已安排的跟进：没有

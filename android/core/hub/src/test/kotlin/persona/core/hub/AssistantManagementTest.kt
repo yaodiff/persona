@@ -318,4 +318,39 @@ class AssistantManagementTest {
             catch (failure: HubFailure) { assertEquals(HubError.PairingExpired, failure.kind) }
         }
     }
+
+    /** A missing search route is not an answer; a body that is not one fails so the app keeps its local filter; limit stays in 1..50. */
+    @Test fun searchChatsTreats404AsUnsupportedAndABadBodyAsAFailureAndSendsABoundedLimit() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"no such route"}"""))
+            assertNull(api.searchChats("lane"))
+            val missing = server.takeRequest()
+            assertEquals("GET", missing.method)
+            assertTrue(missing.path!!.startsWith("/api/v1/assistant/search?"))
+            assertTrue(missing.path!!.contains("q=lane"))
+
+            server.enqueue(MockResponse().setBody("not json"))
+            try {
+                api.searchChats("lane")
+                fail("a body that is not the search answer must not become one")
+            } catch (failure: HubFailure) {
+                fail("a malformed body is not a missing route")
+            } catch (_: Exception) { }
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"results":[{"session_id":"s","machine_id":"m","title":"Trip"}],"partial":true}"""))
+            val answer = api.searchChats("  lane  ", limit = 0)
+            val low = server.takeRequest()
+            assertTrue(low.path!!.contains("q=lane"))
+            assertTrue(low.path!!.contains("limit=1"))
+            assertEquals("s", answer!!.results.single().sessionId)
+            assertEquals("m", answer.results.single().machineId)
+            assertTrue(answer.partial)
+
+            server.enqueue(MockResponse().setBody("""{"results":[]}"""))
+            assertTrue(api.searchChats("lane", limit = 80)!!.results.isEmpty())
+            assertTrue(server.takeRequest().path!!.contains("limit=50"))
+        }
+    }
 }

@@ -167,6 +167,7 @@
     <string name="chat_screen_added_context">已作为上下文，随下一条消息发送</string>
     <string name="chat_search_category_event">系统事件</string>
     <string name="chat_search_category_text">正文</string>
+    <string name="chat_search_category_quoted">引用</string>
     <string name="chat_search_category_thinking">思考</string>
     <string name="chat_search_category_tool_input">工具输入</string>
     <string name="chat_search_category_tool_output">工具输出</string>

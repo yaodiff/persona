@@ -12,5 +12,7 @@
   "err_resolve_failed": "目录验证失败，请检查路径与 node 版本：{error}",
   "err_resolve_empty": "目录验证没有返回可用工作区",
   "err_snapshot_read": "工作区历史快照无法读取",
-  "err_snapshot_save": "保存工作区快照失败"
+  "err_snapshot_save": "保存工作区快照失败",
+  "err_activity_unavailable": "此管理器尚不支持活动记录，请更新后使用。",
+  "err_activity_gone": "这条活动记录已不可用，请刷新记录。"
 }

@@ -6,7 +6,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.chatlist.ChatReadingPosition
+import persona.core.contracts.Fold
 import persona.core.contracts.Item
+import persona.core.contracts.JsonCodec
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ChatRepository
 import persona.core.contracts.api.ChatSnapshot
@@ -15,8 +17,14 @@ import persona.core.domain.lines.LineOptions
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.File
+import java.io.IOException
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
@@ -44,6 +52,13 @@ class ChatSearchTest {
         assertTrue(capped.truncated)
         assertEquals("item-101", capped.hits.first().itemId)
         assertFalse(searchChat(res, (1..100).map { Item("item-$it", it, kind = "text", text = "needle") }, "needle").truncated)
+        val live = Item("r#0", 4, kind = "tool_result", role = "user", text = "NewNeedle")
+        assertEquals(listOf("r#0"), searchChat(res, listOf(live, live.copy(text = "OldNeedle")), "NewNeedle").hits.map { it.itemId })
+        assertTrue(searchChat(res, listOf(live, live.copy(text = "OldNeedle")), "OldNeedle").hits.isEmpty())
+        val older = Item("same#0", 3, kind = "text", text = "OlderNeedle")
+        val newer = Item("same#0", 4, kind = "text", text = "NewerNeedle")
+        assertEquals(listOf("same#0"), searchChat(res, listOf(older, newer), "NewerNeedle").hits.map { it.itemId })
+        assertTrue(searchChat(res, listOf(older, newer), "OlderNeedle").hits.isEmpty())
     }
 
     @Test fun resolvesFoldedTargetsAndLoadsOnlyContinuousBoundedPagesWithoutLosingReturnAnchor() = runTest {
@@ -87,5 +102,57 @@ class ChatSearchTest {
         fail = true
         assertNotNull(loadEarlierForSearch(res, repository, key) { org.junit.Assert.fail("Failed page must not advance progress") })
         assertEquals(21, calls)
+    }
+
+    @Test fun matchesTheSharedFixtureAndNothingItHides() = runTest {
+        val root = generateSequence(File(System.getProperty("persona.repo.root") ?: System.getProperty("user.dir")).absoluteFile) { it.parentFile }
+            .first { File(it, "spec/fixtures/chat-search/cases.json").isFile }
+        val cases = JsonCodec.parseToJsonElement(File(root, "spec/fixtures/chat-search/cases.json").readText())
+            .jsonObject.getValue("cases").jsonArray.map { it.jsonObject }
+        val items = cases.map { JsonCodec.decodeFromJsonElement<Item>(it.getValue("item")) }
+        for ((case, item) in cases.zip(items)) {
+            val fields = case.getValue("fields").jsonArray.map { row ->
+                val pair = row.jsonArray
+                pair[0].jsonPrimitive.content to pair[1].jsonPrimitive.content
+            }
+            assertEquals(case.getValue("name").jsonPrimitive.content, fields, item.searchFields())
+        }
+        for (word in listOf("ActionSecret", "persona-action", "ViewErr", "beach.jpg", "InjectedRaw", "RawFollowup", "persona-supervision", "fallback", "persona-view"))
+            assertTrue(word, searchChat(res, items, word).hits.isEmpty())
+        for (hit in searchChat(res, items, "路线").hits) {
+            assertFalse(hit.snippet, hit.snippet.contains("persona-") || hit.snippet.contains("fallback"))
+        }
+    }
+
+    @Test fun fetchesFoldedStepsNewestFirstWithoutOpeningAndHonorsTheBudget() = runTest {
+        val folds = (1..3).map { Item("fold-$it", seq = it * 10, kind = "fold", fold = Fold(throughSeq = it * 10 + 5, throughId = "end-$it")) }
+        val seen = mutableListOf<String>()
+        val capped = fetchFoldsForSearch(folds, load = { fold ->
+            seen += fold.id
+            listOf(Item("step-" + fold.id, kind = "thinking", text = "x".repeat(100)))
+        }, onFold = { _, _ -> }, stopped = { false }, budget = 50, concurrency = 1)
+        assertEquals(listOf("fold-3"), seen)
+        assertTrue(capped.capped)
+        assertEquals(0, capped.failed)
+        seen.clear()
+        val failed = fetchFoldsForSearch(folds, load = { fold ->
+            seen += fold.id
+            if (fold.id == "fold-2") throw IOException("offline")
+            listOf(Item("step-" + fold.id, kind = "text", text = "word"))
+        }, onFold = { _, _ -> }, stopped = { false }, concurrency = 1)
+        assertEquals(listOf("fold-3", "fold-2", "fold-1"), seen)
+        assertEquals(1, failed.failed)
+        assertFalse(failed.capped)
+    }
+
+    @Test fun openingAHitInsideAFoldWaitsUntilTheFoldLoads() {
+        val fold = Item("fold1", 10, kind = "fold", fold = Fold(throughSeq = 12, throughId = "x"))
+        val lines = chatLines(listOf(Item("user", 1, role = "user", kind = "text", text = "hi"), fold).map(Item::asLineItem)).lines
+        val line = foldWorkLine(lines, "fold1")
+        assertNotNull(line)
+        assertTrue(searchGo(lines, "inner", emptySet(), "fold1", emptySet()) is SearchGo.Expand)
+        assertEquals(SearchGo.Waiting, searchGo(lines, "inner", setOf(line!!), "fold1", emptySet()))
+        assertEquals(SearchGo.Missing, searchGo(lines, "inner", setOf(line), "fold1", setOf("fold1")))
+        assertEquals(SearchGo.Missing, searchGo(lines, "inner", emptySet(), null, emptySet()))
     }
 }

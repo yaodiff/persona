@@ -142,7 +142,7 @@ def check(browser, base, width, theme, shots, single, outdated):
             expect(menu.get_by_role("menuitem", name="新建助手")).to_be_visible()
             expect(menu.get_by_role("menuitem", name="管理助手…")).to_be_visible()
             expect(menu.get_by_text("外观", exact=True)).to_be_visible()
-            for item in ("跟随系统", "浅色", "深色", "设置", "断开这个浏览器"):
+            for item in ("跟随系统", "浅色", "深色", "设置", "断开这个浏览器…"):
                 expect(menu.get_by_role("menuitem", name=item, exact=True)).to_be_visible()
             if shots:
                 page.screenshot(path=name("single-menu"))
@@ -641,7 +641,7 @@ def check_reach(browser, base, shots):
             if shots:
                 page.wait_for_timeout(400)
                 page.screenshot(path=os.path.join(shots, f"managers-reach-{what}-top.png"))
-            for name in ("新建助手", "管理助手…", "跟随系统", "浅色", "深色", "设置", "断开这个浏览器"):
+            for name in ("新建助手", "管理助手…", "跟随系统", "浅色", "深色", "设置", "断开这个浏览器…"):
                 row = menu.get_by_role("menuitem", name=name, exact=True)
                 row.scroll_into_view_if_needed()
                 box = row.bounding_box()

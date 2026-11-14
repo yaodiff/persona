@@ -1,0 +1,353 @@
+{
+ "words": {
+  "you": "You",
+  "persona": "Persona",
+  "from": "From {name}",
+  "computer": "Computer",
+  "folder": "Folder",
+  "agent": "Agent",
+  "exported": "Exported",
+  "thinking": "Thinking",
+  "input": "Input",
+  "result": "Result",
+  "error": "Error",
+  "image": "Image",
+  "cut": "{n} more characters not included",
+  "partial": "Starts at {from}: earlier messages were not read."
+ },
+ "meta": {
+  "title": "Fix the  login\nredirect",
+  "agent": "Claude Code",
+  "computer": "MacBook",
+  "folder": "~/code/app",
+  "exported": "2026-11-14 18:00"
+ },
+ "time": "the item's ts in UTC as YYYY-MM-DD HH:MM (clients show their own time zone)",
+ "cases": [
+  {
+   "name": "conversation",
+   "why": "messages only: a message with its picture under one heading, replies in a row merged, folded work, recaps and empty texts left out, a notice on its own line, Persona's own message and another session's by name, text still cut",
+   "work": false,
+   "partial": false,
+   "items": [
+    {
+     "id": "u1#0",
+     "seq": 1,
+     "role": "user",
+     "kind": "text",
+     "ts": "2026-11-14T10:01:00Z",
+     "text": "Why does login redirect to /home twice?",
+     "client_msg_id": "m1"
+    },
+    {
+     "id": "u2#0",
+     "seq": 2,
+     "role": "user",
+     "kind": "image",
+     "ts": "2026-11-14T10:02:00Z",
+     "image": {
+      "mime": "image/png",
+      "lazy": true
+     },
+     "client_msg_id": "m1"
+    },
+    {
+     "id": "u3#0",
+     "seq": 3,
+     "role": "assistant",
+     "kind": "fold",
+     "ts": "2026-11-14T10:03:00Z",
+     "fold": {
+      "items": 6,
+      "tools": 3,
+      "thoughts": 1,
+      "through_seq": 8
+     }
+    },
+    {
+     "id": "u9#0",
+     "seq": 9,
+     "role": "assistant",
+     "kind": "text",
+     "ts": "2026-11-14T10:09:00Z",
+     "text": "The guard runs once on mount"
+    },
+    {
+     "id": "u10#0",
+     "seq": 10,
+     "role": "assistant",
+     "kind": "text",
+     "ts": "2026-11-14T10:10:00Z",
+     "text": "and again after the token refresh.\n\nI'll move it into the router."
+    },
+    {
+     "id": "u11#0",
+     "seq": 11,
+     "role": "system",
+     "kind": "notice",
+     "ts": "2026-11-14T10:11:00Z",
+     "text": "Context compacted"
+    },
+    {
+     "id": "u12#0",
+     "seq": 12,
+     "role": "user",
+     "kind": "text",
+     "ts": "2026-11-14T10:12:00Z",
+     "text": "Persona: the task is done.",
+     "injected": {
+      "kind": "task_notice",
+      "state": "done",
+      "line": "Task “Login redirect” is done",
+      "detail": "Review the change."
+     }
+    },
+    {
+     "id": "u13#0",
+     "seq": 13,
+     "role": "user",
+     "kind": "text",
+     "ts": "2026-11-14T10:13:00Z",
+     "text": "Can you also check the logout path?",
+     "client_msg_id": "m2"
+    },
+    {
+     "id": "u14#0",
+     "seq": 14,
+     "role": "assistant",
+     "kind": "text",
+     "ts": "2026-11-14T10:14:00Z",
+     "text": "Logout is fine: it",
+     "full_size": 40
+    },
+    {
+     "id": "u15#0",
+     "seq": 15,
+     "role": "user",
+     "kind": "text",
+     "ts": "2026-11-14T10:15:00Z",
+     "text": "FYI the CI is green.",
+     "from": "release-bot"
+    },
+    {
+     "id": "u16#0",
+     "seq": 16,
+     "role": "assistant",
+     "kind": "recap",
+     "ts": "2026-11-14T10:16:00Z",
+     "text": "While you were away"
+    }
+   ],
+   "markdown": "# Fix the login redirect\n\n- Agent: Claude Code\n- Computer: MacBook\n- Folder: ~/code/app\n- Exported: 2026-11-14 18:00\n\n## You · 2026-11-14 10:01\n\nWhy does login redirect to /home twice?\n\n_[Image]_\n\n## Claude Code · 2026-11-14 10:09\n\nThe guard runs once on mount\n\nand again after the token refresh.\n\nI'll move it into the router.\n\n_Context compacted_\n\n## Persona · 2026-11-14 10:12\n\nTask “Login redirect” is done\n\nReview the change.\n\n## You · 2026-11-14 10:13\n\nCan you also check the logout path?\n\n## Claude Code · 2026-11-14 10:14\n\nLogout is fine: it\n\n_22 more characters not included_\n\n## From release-bot · 2026-11-14 10:15\n\nFYI the CI is green.\n"
+  },
+  {
+   "name": "work_steps",
+   "why": "with work steps: thinking and each tool call with its input and result inside the agent's part, a result that is an error and cut, a result whose call is not in the export, and a reply holding a code fence",
+   "work": true,
+   "partial": false,
+   "items": [
+    {
+     "id": "u1#0",
+     "seq": 1,
+     "role": "user",
+     "kind": "text",
+     "ts": "2026-11-14T10:01:00Z",
+     "text": "Run the tests",
+     "client_msg_id": "m1"
+    },
+    {
+     "id": "u2#0",
+     "seq": 2,
+     "role": "assistant",
+     "kind": "thinking",
+     "ts": "2026-11-14T10:02:00Z",
+     "text": "I should run npm test first."
+    },
+    {
+     "id": "u3#0",
+     "seq": 3,
+     "role": "assistant",
+     "kind": "tool_use",
+     "ts": "2026-11-14T10:03:00Z",
+     "tool_name": "Bash",
+     "tool_use_id": "t1",
+     "tool_input": {
+      "command": "npm test -- --run",
+      "description": "Run tests"
+     }
+    },
+    {
+     "id": "u4#0",
+     "seq": 4,
+     "role": "user",
+     "kind": "tool_result",
+     "ts": "2026-11-14T10:04:00Z",
+     "tool_use_id": "t1",
+     "text": "Tests  12 passed\nDone in 3s"
+    },
+    {
+     "id": "u5#0",
+     "seq": 5,
+     "role": "assistant",
+     "kind": "text",
+     "ts": "2026-11-14T10:05:00Z",
+     "text": "All 12 pass. The config looks like this:\n\n```ts\nexport default {}\n```"
+    },
+    {
+     "id": "u6#0",
+     "seq": 6,
+     "role": "assistant",
+     "kind": "tool_use",
+     "ts": "2026-11-14T10:06:00Z",
+     "tool_name": "Read",
+     "tool_use_id": "t2",
+     "tool_input": {
+      "file_path": "/repo/src/<secret>.ts"
+     }
+    },
+    {
+     "id": "u7#0",
+     "seq": 7,
+     "role": "user",
+     "kind": "tool_result",
+     "ts": "2026-11-14T10:07:00Z",
+     "tool_use_id": "t2",
+     "is_error": true,
+     "text": "File not found",
+     "full_size": 5014
+    },
+    {
+     "id": "u8#0",
+     "seq": 8,
+     "role": "user",
+     "kind": "tool_result",
+     "ts": "2026-11-14T10:08:00Z",
+     "tool_use_id": "t0",
+     "text": "output of a call before the export starts"
+    },
+    {
+     "id": "u9#0",
+     "seq": 9,
+     "role": "assistant",
+     "kind": "text",
+     "ts": "2026-11-14T10:09:00Z",
+     "text": "Done."
+    }
+   ],
+   "markdown": "# Fix the login redirect\n\n- Agent: Claude Code\n- Computer: MacBook\n- Folder: ~/code/app\n- Exported: 2026-11-14 18:00\n\n## You · 2026-11-14 10:01\n\nRun the tests\n\n## Claude Code · 2026-11-14 10:02\n\n<details>\n<summary>Thinking</summary>\n\nI should run npm test first.\n\n</details>\n\n<details>\n<summary>Bash: npm test -- --run</summary>\n\n**Input**\n\n```json\n{\n  \"command\": \"npm test -- --run\",\n  \"description\": \"Run tests\"\n}\n```\n\n**Result**\n\n```\nTests  12 passed\nDone in 3s\n```\n\n</details>\n\nAll 12 pass. The config looks like this:\n\n```ts\nexport default {}\n```\n\n<details>\n<summary>Read: /repo/src/&lt;secret&gt;.ts</summary>\n\n**Input**\n\n```json\n{\n  \"file_path\": \"/repo/src/<secret>.ts\"\n}\n```\n\n**Error**\n\n```\nFile not found\n```\n\n_5000 more characters not included_\n\n</details>\n\n<details>\n<summary>Result</summary>\n\n**Result**\n\n```\noutput of a call before the export starts\n```\n\n</details>\n\nDone.\n"
+  },
+  {
+   "name": "work_off",
+   "why": "the same items without work steps: only what was said",
+   "work": false,
+   "partial": false,
+   "items": [
+    {
+     "id": "u1#0",
+     "seq": 1,
+     "role": "user",
+     "kind": "text",
+     "ts": "2026-11-14T10:01:00Z",
+     "text": "Run the tests",
+     "client_msg_id": "m1"
+    },
+    {
+     "id": "u2#0",
+     "seq": 2,
+     "role": "assistant",
+     "kind": "thinking",
+     "ts": "2026-11-14T10:02:00Z",
+     "text": "I should run npm test first."
+    },
+    {
+     "id": "u3#0",
+     "seq": 3,
+     "role": "assistant",
+     "kind": "tool_use",
+     "ts": "2026-11-14T10:03:00Z",
+     "tool_name": "Bash",
+     "tool_use_id": "t1",
+     "tool_input": {
+      "command": "npm test -- --run",
+      "description": "Run tests"
+     }
+    },
+    {
+     "id": "u4#0",
+     "seq": 4,
+     "role": "user",
+     "kind": "tool_result",
+     "ts": "2026-11-14T10:04:00Z",
+     "tool_use_id": "t1",
+     "text": "Tests  12 passed\nDone in 3s"
+    },
+    {
+     "id": "u5#0",
+     "seq": 5,
+     "role": "assistant",
+     "kind": "text",
+     "ts": "2026-11-14T10:05:00Z",
+     "text": "All 12 pass. The config looks like this:\n\n```ts\nexport default {}\n```"
+    },
+    {
+     "id": "u6#0",
+     "seq": 6,
+     "role": "assistant",
+     "kind": "tool_use",
+     "ts": "2026-11-14T10:06:00Z",
+     "tool_name": "Read",
+     "tool_use_id": "t2",
+     "tool_input": {
+      "file_path": "/repo/src/<secret>.ts"
+     }
+    },
+    {
+     "id": "u7#0",
+     "seq": 7,
+     "role": "user",
+     "kind": "tool_result",
+     "ts": "2026-11-14T10:07:00Z",
+     "tool_use_id": "t2",
+     "is_error": true,
+     "text": "File not found",
+     "full_size": 5014
+    },
+    {
+     "id": "u8#0",
+     "seq": 8,
+     "role": "user",
+     "kind": "tool_result",
+     "ts": "2026-11-14T10:08:00Z",
+     "tool_use_id": "t0",
+     "text": "output of a call before the export starts"
+    },
+    {
+     "id": "u9#0",
+     "seq": 9,
+     "role": "assistant",
+     "kind": "text",
+     "ts": "2026-11-14T10:09:00Z",
+     "text": "Done."
+    }
+   ],
+   "markdown": "# Fix the login redirect\n\n- Agent: Claude Code\n- Computer: MacBook\n- Folder: ~/code/app\n- Exported: 2026-11-14 18:00\n\n## You · 2026-11-14 10:01\n\nRun the tests\n\n## Claude Code · 2026-11-14 10:05\n\nAll 12 pass. The config looks like this:\n\n```ts\nexport default {}\n```\n\nDone.\n"
+  },
+  {
+   "name": "partial",
+   "why": "stopped at its limit: the document says where it begins",
+   "work": false,
+   "partial": true,
+   "items": [
+    {
+     "id": "u30#0",
+     "seq": 30,
+     "role": "assistant",
+     "kind": "text",
+     "ts": "2026-11-14T10:30:00Z",
+     "text": "…and that was the fix."
+    }
+   ],
+   "markdown": "# Fix the login redirect\n\n- Agent: Claude Code\n- Computer: MacBook\n- Folder: ~/code/app\n- Exported: 2026-11-14 18:00\n\n> Starts at 2026-11-14 10:30: earlier messages were not read.\n\n## Claude Code · 2026-11-14 10:30\n\n…and that was the fix.\n"
+  }
+ ]
+}

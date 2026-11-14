@@ -11,7 +11,7 @@ import persona.core.contracts.api.*
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class CodexFirstMessageTest {
     @Test fun refusalsKeepTheMessageForManualRetryEvenWhenMarkedRetryable() = runTest {
-        for (code in listOf("codex_not_ready", "codex_first_text", "input_draft", "dialog_open")) {
+        for (code in listOf("agent_stopped", "codex_not_ready", "codex_first_text", "input_draft", "dialog_open")) {
             val store = MemoryOutboxStore()
             val hub = Hub(MessageTransportResult.HubError(code, "none", retryable = true))
             val sender = OutboxMessageSender(HubScope("hub", code), store, hub, backgroundScope)

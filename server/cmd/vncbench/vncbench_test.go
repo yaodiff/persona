@@ -238,3 +238,70 @@ func TestShapedDelaysAndLimits(t *testing.T) {
 		t.Fatalf("took %s", d)
 	}
 }
+
+// A picture of varied rows (as a Finder list or a terminal's lines), scrolled by s pixels.
+func scrolledRows(w, h, s int) []uint8 {
+	out := make([]uint8, w*h)
+	for y := range h {
+		line := (y + s) / 17
+		for x := range w {
+			// Text-like: dark runs whose lengths differ from line to line, on a light background.
+			if (y+s)%17 < 12 && x < 40+(line*37)%(w-60) && (x/6+line)%5 != 0 {
+				out[y*w+x] = 30
+			} else {
+				out[y*w+x] = 235
+			}
+		}
+	}
+	return out
+}
+
+func TestRowShiftFindsHowFarTheRowsWentUp(t *testing.T) {
+	const w, h = 300, 400
+	region := image.Rect(40, 80, 260, 340)
+	base := scrolledRows(w, h, 1000)
+	for _, s := range []int{0, 1, 7, 17, 40, -23, 150, -160} {
+		got, cost := rowShift(base, scrolledRows(w, h, 1000+s), w, region, 170)
+		if got != s || cost != 0 {
+			t.Errorf("scrolled %d: found %d (difference %.1f)", s, got, cost)
+		}
+	}
+	// Something else drawn over the rows: no shift matches well.
+	other := scrolledRows(w, h, 1000+20)
+	for i := range other {
+		if (i/w)%3 == 0 {
+			other[i] = 255 - other[i]
+		}
+	}
+	if _, cost := rowShift(base, other, w, region, 170); cost <= wheelMatch {
+		t.Errorf("a different picture matched (difference %.1f)", cost)
+	}
+}
+
+func TestParseSchedulesSortsAndRefusesNonsense(t *testing.T) {
+	got, err := parseSchedules([]byte(`{"slow": "16.7:1, 8.3:2,33:-1", "none": ""}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []notchStep{{8.3, 2}, {16.7, 1}, {33, -1}}
+	if len(got["slow"]) != 3 || got["slow"][0] != want[0] || got["slow"][1] != want[1] || got["slow"][2] != want[2] {
+		t.Errorf("slow: %v", got["slow"])
+	}
+	if len(got["none"]) != 0 || scheduleNames(got)[0] != "none" {
+		t.Errorf("names %v, none %v", scheduleNames(got), got["none"])
+	}
+	if _, err := parseSchedules([]byte(`{"x": "12-3"}`)); err == nil {
+		t.Error("12-3 is not ms:n")
+	}
+}
+
+func TestDisplaysMapPointsToTheFramebuffer(t *testing.T) {
+	// A second display left of the main one: the framebuffer starts at its left edge.
+	d := displays{Origin: image.Pt(-1280, -200), Scale: 2}
+	if r := d.toFramebuffer(image.Rect(0, 0, 100, 50)); r != image.Rect(2560, 400, 2760, 500) {
+		t.Errorf("toFramebuffer: %v", r)
+	}
+	if x, y := d.toPoints(image.Pt(2560, 400)); x != 0 || y != 0 {
+		t.Errorf("toPoints: %v, %v", x, y)
+	}
+}

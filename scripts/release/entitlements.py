@@ -37,6 +37,9 @@ APS = ("aps-environment", "com.apple.developer.aps-environment")  # iOS, macOS
 # cloud-signed export of an unsigned archive) silently drops it, and every push the hub marks time-sensitive then shows
 # as active (#1572).
 TIME_SENSITIVE = "com.apple.developer.usernotifications.time-sensitive"
+# The same for HealthKit background delivery (config.json app.health_background_delivery): without it a workout report
+# waits for Persona to open, while Settings says it comes right after the workout (#2526).
+HEALTH_BACKGROUND = "com.apple.developer.healthkit.background-delivery"
 
 
 def targets():
@@ -177,6 +180,9 @@ def check(path):
             if ents.get(TIME_SENSITIVE) and not have.get(TIME_SENSITIVE):
                 problems.append("%s: %s missing (time-sensitive pushes show as active; rerun asc_signing.py)"
                                 % (name, TIME_SENSITIVE))
+            if ents.get(HEALTH_BACKGROUND) and not have.get(HEALTH_BACKGROUND):
+                problems.append("%s: %s missing (workout reports wait for Persona to open; allow it on the App ID's profile)"
+                                % (name, HEALTH_BACKGROUND))
             for k in (k for k in APS if k in ents):
                 if k not in have:
                     problems.append("%s: %s missing (no push)" % (name, k))

@@ -28,7 +28,8 @@ func checkResidentReplacement(ctx context.Context, path, program string) error {
 	if err != nil {
 		return err
 	}
-	if !check.ResidentHandover {
+	// Where there is no handover (Windows), the supervisor starts the replacement as a new process instead.
+	if !check.ResidentHandover && node.ResidentHandoverSupported {
 		return errors.New("resident replacement does not support listener handover")
 	}
 	return nil

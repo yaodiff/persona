@@ -5,7 +5,6 @@
   "deleted": "To-do deleted",
   "delete_failed": "Couldn't delete: {error}",
   "title": "To-dos",
-  "summary": "{open} open · {done} done",
   "new_todo": "New to-do",
   "load_failed": "Couldn't load to-dos",
   "search_placeholder": "Search to-dos",

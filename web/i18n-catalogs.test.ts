@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { catalogFallbacks, catalogFiles, catalogModule, i18nCatalogs } from "./i18n-catalogs";
 import { flatten } from "./src/i18n/locales/flatten";
 import startupNamespaces from "./src/i18n/startup-namespaces.json";
+import { startupMatcher } from "./src/i18n/startup-keys";
 
 type Catalog = { default: Record<string, string>; fallbacks: Record<string, Record<string, string>> };
 
@@ -62,9 +63,9 @@ describe("i18n catalogs under Vitest", () => {
       expect(source).not.toContain("chat-chatsearch.");
       for (const name of primary) expect(source).toContain(`chat-chatview.search_${name}`);
     });
-    it(`${lang}: client-startup holds the startup namespaces and client-rest the others, together the client catalog`, async () => {
+    it(`${lang}: client-startup holds what startup-namespaces.json lists and client-rest the rest, together the client catalog`, async () => {
       const [whole, first, second] = await Promise.all([client[key](), startup[key](), rest[key]()]);
-      const listed = (k: string) => startupNamespaces.includes(k.split(".")[0]);
+      const listed = startupMatcher(startupNamespaces);
       expect(Object.keys(first.default).every(listed)).toBe(true);
       expect(Object.keys(second.default).some(listed)).toBe(false);
       expect({ ...first.default, ...second.default }).toEqual(whole.default);
@@ -126,6 +127,33 @@ describe("catalogModule", () => {
     } finally {
       process.env.VITEST = vitest;
       plugin.configResolved({ command: "serve" });
+    }
+  });
+
+  it("lists in startup-namespaces.json only namespaces and keys the client catalog has, none twice", () => {
+    const keys = Object.keys(expected("en", "client"));
+    const namespaces = new Set(keys.map((k) => k.split(".")[0]));
+    const stale = startupNamespaces.filter((entry) => (entry.includes(".") ? !keys.some((k) => k.startsWith(entry)) : !namespaces.has(entry)));
+    expect(stale).toEqual([]);
+    // "ns" takes "ns.a", and "ns.a" takes "ns.ab": the narrower entry says nothing
+    const covers = (wider: string, entry: string) => wider !== entry && (wider.includes(".") ? entry.startsWith(wider) : entry.startsWith(`${wider}.`));
+    expect(startupNamespaces.filter((entry) => startupNamespaces.some((wider) => covers(wider, entry)))).toEqual([]);
+    expect(new Set(startupNamespaces).size).toBe(startupNamespaces.length);
+  });
+
+  it("gives the dev server each part of the client catalog with the keys the build gives it", async () => {
+    for (const [kind, built] of [["client-startup", startup], ["client-rest", rest]] as const) {
+      // the import form, its imports read from disk as the dev server would load them
+      const body = catalogModule(meta, kind)
+        .replace(/^import (ns\d+) from ("[^"]+");$/gm, (_, name, path) => `const ${name} = read(${path});`)
+        .replace(/^import startupEntries from ("[^"]+");$/m, (_, path) => `const startupEntries = read(${path});`)
+        .replace(/^import \{ (flatten|startupMatcher) \} from .*$/gm, "")
+        .replace(/^export default /m, "const d = ")
+        .replace(/^export const fallbacks = /m, "const f = ");
+      expect(body).not.toMatch(/^(import|export) /m);
+      const run = new Function("read", "flatten", "startupMatcher", `${body}\nreturn d;`);
+      const catalog = run((path: string) => JSON.parse(readFileSync(path, "utf8")), flatten, startupMatcher) as Record<string, string>;
+      expect(catalog).toEqual((await built["./src/i18n/locales/en/_meta.json"]()).default);
     }
   });
 

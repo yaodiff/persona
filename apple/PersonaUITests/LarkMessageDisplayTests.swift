@@ -8,6 +8,11 @@ final class LarkMessageDisplayFlowTests: XCTestCase {
         app.launchPinned()
         return app
     }
+    @MainActor private func expandSource(_ app: XCUIApplication) {
+        let source = app.buttons["inbox.detail.source"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 15), "the original source control did not appear")
+        source.tapCenter()
+    }
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) throws {
         let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
         if let path = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
@@ -83,6 +88,7 @@ final class LarkMessageDisplayFlowTests: XCTestCase {
         var app = launch(hub, settings: false)
         var chat = app.staticTexts["设计评审"].firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 20)); chat.tapCenter()
+        expandSource(app)
         XCTAssertTrue(app.staticTexts["已留存的评审时间：周五下午"].firstMatch.waitForExistence(timeout: 15))
         XCTAssertFalse(app.staticTexts["不能展示的占位原文"].exists)
         XCTAssertFalse(app.staticTexts["不得展示的系统撤回原文"].exists)
@@ -121,6 +127,7 @@ final class LarkMessageDisplayFlowTests: XCTestCase {
         app = launch(hub, settings: false)
         chat = app.staticTexts["设计评审"].firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 20)); chat.tapCenter()
+        expandSource(app)
         XCTAssertTrue(app.staticTexts["评审地点改为线上"].waitForExistence(timeout: 15))
         XCTAssertFalse(app.staticTexts["已留存的评审时间：周五下午"].exists)
         XCTAssertFalse(app.buttons["查看编辑历史"].exists)

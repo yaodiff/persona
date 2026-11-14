@@ -33,7 +33,6 @@
   "help_model_claude": "すでに Claude Code を使っている：そのパソコンで一度ログインするだけで、ほかに入力するものはありません。",
   "probe_ok": "試しました。返答：{answer}",
   "probe_failed": "試しましたが失敗しました：{error}",
-  "resend": "再送信",
   "help_model_computer": "どちらの場合も、今はメインチャットをあなたのパソコンで動かす必要があります。パソコンをつながずに API キーを貼るだけでは始められません。",
   "help_model_no_computer": "まだパソコンがつながっていません。まず 1 台追加してください。",
   "help_model_computer_not_ready": "パソコンの準備がまだです。先にこちらを済ませてください：{step}"

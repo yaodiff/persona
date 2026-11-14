@@ -7,8 +7,8 @@ import { createHash } from "node:crypto";
 import { brotliCompressSync, brotliDecompressSync, constants, gzipSync } from "node:zlib";
 import { LANG_MATCHES, LANGS, preferredLanguage } from "./i18n";
 import {
-  brotliCopies, BROTLI_MIN_SIZE, EXPORT_NAME_PLACEHOLDER, firstScreenBytes, firstScreenOverBudget, gzipBytes, HASH_PLACEHOLDER, idleImports,
-  localeDirs, nameHashes, placeholderExportNames, placeholderHashes, preloadScript, startupNamespaceGaps,
+  brotliCopies, BROTLI_MIN_SIZE, EXPORT_NAME_PLACEHOLDER, FIRST_SCREEN_LOW_ROOM, firstScreenBytes, firstScreenOverBudget, firstScreenRoom, gzipBytes,
+  HASH_PLACEHOLDER, idleImports, localeDirs, nameHashes, placeholderExportNames, placeholderHashes, preloadScript, startupGaps,
 } from "./startup-preload";
 
 const langs = localeDirs(join(__dirname, "i18n/locales"));
@@ -343,11 +343,42 @@ describe("idle tier", () => {
   });
 });
 
-describe("startup namespace check", () => {
-  it("names each namespace the first screen's code reads that the startup list leaves out", () => {
-    const code = ['t("common.ok");t("page.title");x(`page.${n}`);y("settings.json");z("other.key")', 'w(\'menu.open\')'];
-    const namespaces = ["common", "page", "menu", "settings", "unread"];
-    expect(startupNamespaceGaps(code, namespaces, ["common"])).toEqual(["menu", "page", "settings"]);
-    expect(startupNamespaceGaps(code, namespaces, ["common", "menu", "page", "settings"])).toEqual([]);
+describe("startup catalog check", () => {
+  const keys = ["common.ok", "common.cancel", "page.title", "page.title_one", "page.title_other", "page.step_a", "page.step_b", "menu.open", "menu.close", "settings.avatar", "unread.x"];
+
+  it("names each key the first screen's code reads that the startup list leaves to the rest", () => {
+    const code = ['t("common.ok");t("page.title",{count:n});x(`page.step_${n}`);y("settings.json");z("other.key")', "w('menu.open')"];
+    expect(startupGaps(code, keys, ["common"])).toEqual(["menu.open", "page.step_", "page.title"]);
+    expect(startupGaps(code, keys, ["common", "menu.open", "page.step_", "page.title"])).toEqual([]);
+    expect(startupGaps(code, keys, ["common", "menu", "page"])).toEqual([]);
+  });
+
+  it("asks for the whole namespace when the code names none of the key, and only for it", () => {
+    expect(startupGaps(['t("page."+k)'], keys, ["page.title"])).toEqual(["page"]);
+    expect(startupGaps(['t("page."+k);t("page.title");t("page.step_a")'], keys, [])).toEqual(["page"]);
+  });
+
+  it("takes a listed key's plural forms and the suffixes a wrapper adds", () => {
+    expect(startupGaps(['t("page.title",{count:2});say("page.step")'], keys, ["page.title", "page.step"])).toEqual([]);
+    expect(startupGaps(['say("page.step")'], keys, ["page.step_a"])).toEqual(["page.step"]);
+  });
+
+  it("passes a string that only looks like a key", () => {
+    expect(startupGaps(['y("settings.json");z("unread.")'], keys, ["unread"])).toEqual([]);
+  });
+});
+
+describe("first-screen room", () => {
+  it("says each language's count and the room left in the fullest", () => {
+    expect(firstScreenRoom([["en", 1000], ["ja", 1500], ["zh-Hans", 1200]], 4000)).toEqual({
+      line: "startup-preload: first screen en 1,000 B, ja 1,500 B, zh-Hans 1,200 B; 2,500 B left under FIRST_SCREEN_BUDGET (ja)",
+      low: false,
+    });
+  });
+
+  it("warns under FIRST_SCREEN_LOW_ROOM", () => {
+    const room = firstScreenRoom([["en", 3000], ["ja", 3100]], 3100 + FIRST_SCREEN_LOW_ROOM - 1);
+    expect(room.low).toBe(true);
+    expect(room.line).toContain(`${(FIRST_SCREEN_LOW_ROOM - 1).toLocaleString("en-US")} B left under FIRST_SCREEN_BUDGET (ja), under FIRST_SCREEN_LOW_ROOM`);
   });
 });

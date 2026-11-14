@@ -185,6 +185,14 @@ describe("a 常驻 lead row (#6214 keepTrailing)", () => {
     // and the anchor reserves no overlay room of its own
     expect(link(html)).toMatch(/pr-1\b/);
   });
+  it("draws its name once, with or without a second line (it read 「Per… Per…」 in a narrow sidebar)", () => {
+    const named = { ...props, label: "Persona 产品" };
+    expect(renderToStaticMarkup(<SessionRow {...named} active={false} />).match(/>Persona 产品</g)).toHaveLength(1);
+    expect(renderToStaticMarkup(<SessionRow {...named} active />).match(/>Persona 产品</g)).toHaveLength(1);
+    // a second line puts the name in the column, still once
+    const busy = { ...named, showState: true, s: { ...lead, last_text: "整理了三条进展" } };
+    expect(renderToStaticMarkup(<SessionRow {...busy} active={false} />).match(/>Persona 产品</g)).toHaveLength(1);
+  });
   it("an ordinary row still overlays its ⋯ and hides its tail on hover", () => {
     const html = renderToStaticMarkup(<SessionRow {...rowProps} active={false} />);
     expect(more(html)).toMatch(/class="[^"]*\bhidden\b/);

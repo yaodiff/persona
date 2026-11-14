@@ -17,6 +17,7 @@ interface FixtureEvent {
   more?: boolean;
   covered?: number;
   loaded_once?: boolean;
+  fold_id?: string;
 }
 interface FixtureCase {
   name: string;
@@ -73,7 +74,7 @@ function eventAction(event: FixtureEvent, chat: string): Action {
   else if (event.kind === 'http_reload') eventValue = {kind: 'reloaded', items_json: JSON.stringify(event.items || []),
     history: text(event, 'history'), to_seq: number(event, 'to_seq'), has_more: event.has_more === true};
   else if (event.kind === 'http_older') eventValue = {kind: 'older', items_json: JSON.stringify(event.items || []), has_more: event.has_more === true};
-  else if (event.kind === 'http_range') eventValue = {kind: 'range', items_json: JSON.stringify(event.items || []), more: event.more === true};
+  else if (event.kind === 'http_range') eventValue = {kind: 'range', fold_id: null, items_json: JSON.stringify(event.items || []), more: event.more === true};
   else if (event.kind === 'reconnect') eventValue = {kind: 'reconnected'};
   else if (event.kind === 'load_older') eventValue = {kind: 'load_older'};
   else if (event.kind === 'open_fold') eventValue = {kind: 'open_fold', fold_id: event.fold_id || ''};
@@ -92,6 +93,53 @@ function requestObject(request: Request): ExpectedRequest {
   return {kind: request.kind, from_seq: request.from_seq, through_seq: request.through_seq};
 }
 
+interface StepDrain {
+  patch: ChatPatch;
+  effects: Effect[];
+}
+
+const callbackTimeoutMillis: number = 5000;
+const callbackPollMillis: number = 10;
+
+export async function awaitDeliveredEffects(effects: Effect[], expected: Object[], label: string,
+  timeoutMillis: number = callbackTimeoutMillis): Promise<void> {
+  // `coreFlush` finishes native work, not the ArkTS event loop. A patch or wake may be absent even when this action
+  // emits a fetch/rejection. Match this step's complete request sequence before accepting its effects; a fixed
+  // quiet interval alone could let an older callback satisfy the next step with the same request kind.
+  const deadline: number = Date.now() + timeoutMillis;
+  await new Promise<void>((resolve: () => void) => setTimeout(resolve, 0));
+  if (effects.length > expected.length) {
+    throw new Error(label + ': unexpected extra effects before the expected request sequence');
+  }
+  while (effects.length < expected.length && Date.now() < deadline) {
+    await new Promise<void>((resolve: () => void) => setTimeout(resolve, callbackPollMillis));
+  }
+  const requests: ExpectedRequest[] = [];
+  for (const effect of effects) {
+    if (effect.kind === 'rejected') throw new Error(label + ': effect rejected');
+    requests.push(requestObject(effect.request));
+  }
+  if (effects.length !== expected.length) {
+    throw new Error(label + ': expected ' + expected.length + ' effects, received ' + effects.length);
+  }
+  if (JSON.stringify(requests) !== JSON.stringify(expected)) {
+    throw new Error(label + ': expected ' + JSON.stringify(expected) + ', received ' + JSON.stringify(requests));
+  }
+}
+
+export async function drainCore(handle: number, chat: string, list: string[], effects: Effect[],
+  expected: Object[], label: string): Promise<StepDrain> {
+  expect(native.coreFlush(handle, 5000)).assertTrue();
+  await awaitDeliveredEffects(effects, expected, label);
+  const patch: ChatPatch = decodeChatPatch(native.coreDrain(handle, chat));
+  for (const op of patch.ops) {
+    if (op.kind === 'remove') list.splice(op.index, 1);
+    else if (op.kind === 'insert') list.splice(op.index, 0, op.json);
+    else list[op.index] = op.json;
+  }
+  return {patch, effects: effects.splice(0, effects.length)};
+}
+
 export default function nativeCoreTests(): void {
   describe('NativePersonaCore', (): void => {
     it('replays_every_shared_fixture_through_the_real_napi_binding', 0, async (): Promise<void> => {
@@ -103,8 +151,8 @@ export default function nativeCoreTests(): void {
         for (const fixture of file.document.cases) {
           cases++;
           let effects: Effect[] = [];
-          const handle = native.coreCreate(native.coreConfig(), (_version: number): void => {},
-            (bytes: Uint8Array): void => { effects.push(decodeEffect(bytes)); });
+          const handle = native.coreCreateWithChat(native.coreConfig(), (_version: number): void => {},
+            (_chat: string, _version: number): void => {}, (bytes: Uint8Array): void => { effects.push(decodeEffect(bytes)); });
           try {
             const chat = 'fixture/continuity';
             const initial: ChatSnapshot = {items_json: JSON.stringify(fixture.input.initial.items || []),
@@ -112,29 +160,23 @@ export default function nativeCoreTests(): void {
               has_more: boolean(fixture.input.initial, 'has_more'), loaded_once: fixture.input.initial.loaded_once === true};
             expect(native.coreDispatch(handle, encodeAction({kind: 'open_chat', chat, snapshot: initial}))).assertTrue();
             const list: string[] = [];
-            const drain = (): ChatPatch => {
-              expect(native.coreFlush(handle, 5000)).assertTrue();
-              const patch = decodeChatPatch(native.coreDrain(handle, chat));
-              for (const op of patch.ops) {
-                if (op.kind === 'remove') list.splice(op.index, 1);
-                else if (op.kind === 'insert') list.splice(op.index, 0, op.json);
-                else list[op.index] = op.json;
-              }
-              return patch;
+            const drain = async (expected: Object[], label: string): Promise<StepDrain> => {
+              return await drainCore(handle, chat, list, effects, expected, label);
             };
-            drain();
+            await drain([], fixture.name + ' open');
             effects = [];
             for (let index = 0; index < fixture.input.events.length; index++) {
               const expected = fixture.expected[index];
               expect(native.coreDispatch(handle, encodeAction(eventAction(fixture.input.events[index], chat)))).assertTrue();
-              const patch = drain();
+              const step: StepDrain = await drain(expected.actions, fixture.name + ' step ' + index);
+              const patch: ChatPatch = step.patch;
               const requests: ExpectedRequest[] = [];
-              for (const effect of effects) {
+              for (const effect of step.effects) {
                 if (effect.kind === 'rejected') throw new Error(fixture.name + ': ' + effect.reason);
                 expect(effect.chat).assertEqual(chat);
                 requests.push(requestObject(effect.request));
               }
-              effects = [];
+              effects = step.effects;
               expect(JSON.stringify(list.map((json: string): Object => JSON.parse(json) as Object))).assertEqual(JSON.stringify(expected.items));
               expect(patch.covered).assertEqual(expected.covered);
               expect(patch.history).assertEqual(expected.history);
@@ -151,21 +193,22 @@ export default function nativeCoreTests(): void {
     });
     it('a_repeated_item_is_one_update_and_close_is_idempotent', 0, async (): Promise<void> => {
       const chat = 'update';
+      const effects: Effect[] = [];
       const handle = native.coreCreate(native.coreConfig(), (_version: number): void => {}, (_bytes: Uint8Array): void => {});
       const snapshot: ChatSnapshot = {items_json: '[{"id":"1#0","seq":1,"role":"assistant","kind":"text","text":"old"}]',
         history: 'h', covered: 1, has_more: false, loaded_once: true};
       try {
         expect(native.coreDispatch(handle, encodeAction({kind: 'open_chat', chat, snapshot}))).assertTrue();
-        expect(native.coreFlush(handle, 5000)).assertTrue();
-        native.coreDrain(handle, chat);
+        const list: string[] = [];
+        await drainCore(handle, chat, list, effects, [], 'open repeated item');
         const batch: WireBatch = {items_json: '[{"id":"1#0","seq":1,"role":"assistant","kind":"text","text":"newest"}]',
           history: 'h', from_seq: 0, to_seq: 1, backlog: false, has_more: null, more_after: false};
         expect(native.coreDispatch(handle, encodeAction({kind: 'chat', chat, event: {kind: 'pushed', batch}}))).assertTrue();
-        expect(native.coreFlush(handle, 5000)).assertTrue();
-        const patch = decodeChatPatch(native.coreDrain(handle, chat));
+        const patch: ChatPatch = (await drainCore(handle, chat, list, effects, [], 'update repeated item')).patch;
         expect(patch.ops.length).assertEqual(1);
         expect(patch.ops[0].kind).assertEqual('update');
         expect(patch.ops[0].index).assertEqual(0);
       } finally { native.coreClose(handle); native.coreClose(handle); }
     });
   });
+}

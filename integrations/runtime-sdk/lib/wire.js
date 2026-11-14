@@ -79,6 +79,7 @@ export class Peer {
     } catch {
       return
     }
+    if (m === null || typeof m !== 'object' || Array.isArray(m)) return
     if (typeof m.method === 'string' && m.id !== undefined) {
       void this.handle(m)
     } else if (typeof m.event === 'string') {

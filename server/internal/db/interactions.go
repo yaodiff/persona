@@ -26,6 +26,18 @@ func (d *DB) InsertInteraction(ctx context.Context, ix proto.Interaction) error 
 	return err
 }
 
+// MarkInteractionResumable records that pending interaction id outlives a restart from now on (its payload's
+// resumable, which ExpireStaleInteractions reads): an ask_user question that let go of its turn and is now waited on by
+// no call (assistant/ask_release.go, #7392). false when id is not pending.
+func (d *DB) MarkInteractionResumable(ctx context.Context, id string) (bool, error) {
+	tag, err := d.pool.Exec(ctx, `UPDATE interactions SET payload = jsonb_set(payload, '{resumable}', 'true'::jsonb)
+		WHERE id = $1 AND status = 'pending'`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // FinishInteraction records how an interaction ended; only the first outcome counts.
 func (d *DB) FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) error {
 	var raw []byte

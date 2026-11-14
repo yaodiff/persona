@@ -49,7 +49,10 @@ func TestOwnerTurnGateHoldsTheWholeQueue(t *testing.T) {
 	// The round ends: the gate releases and one message drains (the late answer, first by rank). A new round is on
 	// again for that message while the rest keep waiting.
 	s.setSessions("server", []proto.Session{session(proto.StatusIdle)})
-	waitFor(t, "the first queued message after the owner's round", func() bool { return f.sentTo("conv1") == 1 })
+	// The drain pops the queue only once the send returns: wait for both, never for the moment between them (#7643).
+	waitFor(t, "the first queued message after the owner's round", func() bool {
+		return f.sentTo("conv1") == 1 && s.queuedFor("conv1") == 2
+	})
 	if n := f.notices(); len(n) != 1 || n[0] != "the late answer" {
 		t.Fatalf("delivered %v, want the late answer first", n)
 	}
@@ -68,15 +71,18 @@ func TestOwnerTurnGateSafetyStartWait(t *testing.T) {
 	ctx := context.Background()
 	session := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
 	s.queueRelay("conv1", relayMsg{From: "c2", FromTitle: "Research", Tool: "conversation_send", Text: "held", At: time.Now().UTC()})
+	spoke := time.Now()
 	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "conv1"})
 	s.drainRelays("server", []proto.Session{session})
-	if sent := f.sentTo("conv1"); sent != 0 {
+	// The gate holds until at least spoke+ownerTurnStartWait: a count read before then must be 0. A machine that
+	// stalled past the limit before the read proves nothing either way (#7643).
+	if sent := f.sentTo("conv1"); time.Since(spoke) < ownerTurnStartWait && sent != 0 {
 		t.Fatalf("the gate let a message out at once: %d", sent)
 	}
-	waitFor(t, "the safety limit to release the gate", func() bool { return f.sentTo("conv1") == 1 })
-	if q := s.queuedFor("conv1"); q != 0 {
-		t.Fatalf("%d queued left after the safety release", q)
-	}
+	// The drain pops the queue only once the send returns: wait for both, never for the moment between them (#7643).
+	waitFor(t, "the safety limit to release the gate", func() bool {
+		return f.sentTo("conv1") == 1 && s.queuedFor("conv1") == 0
+	})
 }
 
 // A gate whose round a list keeps showing working releases on the hard cap, and the owner speaking again refreshes
@@ -98,9 +104,11 @@ func TestOwnerTurnGateHardCapAndRefresh(t *testing.T) {
 	turn.at = time.Now().UTC().Add(-150 * time.Millisecond)
 	s.relays.ownerTurns["conv1"] = turn
 	s.relays.mu.Unlock()
+	spoke := time.Now()
 	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "conv1"})
 	s.drainRelays("server", []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusWorking}})
-	if sent := f.sentTo("conv1"); sent != 0 {
+	// Read before spoke+ownerTurnMax, the count must be 0; past it, a stalled machine proves nothing (#7643).
+	if sent := f.sentTo("conv1"); time.Since(spoke) < ownerTurnMax && sent != 0 {
 		t.Fatalf("the refreshed gate let a message out: %d", sent)
 	}
 	// The list never shows the round stop; the hard cap releases it.

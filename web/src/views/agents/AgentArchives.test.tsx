@@ -130,6 +130,18 @@ describe("Archived agents", () => {
     await flush();
     expect(el.textContent).toContain(t("agents-archives.unsupported_title"));
   });
+
+  it("goes back to the Agents list from its header, at every width (a phone had only the sidebar button)", async () => {
+    history.replaceState(null, "", "/agents/archived");
+    act(() => root.render(<AgentArchives onToggleSidebar={() => {}} />));
+    await flush();
+    const back = el.querySelector<HTMLButtonElement>(`header button[aria-label="${t("agents-archives.back")}"]`);
+    expect(back).not.toBeNull();
+    // not hidden at any width, unlike the sidebar button beside it
+    expect(back!.className).not.toMatch(/\bhidden\b/);
+    act(() => back!.click());
+    expect(location.pathname).toBe("/agents");
+  });
 });
 
 describe("the row menu", () => {

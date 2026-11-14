@@ -1,0 +1,806 @@
+{
+  "now": "2026-01-02T12:00:00Z",
+  "machines": [
+    {
+      "id": "computer-a",
+      "name": "Studio",
+      "online": true
+    },
+    {
+      "id": "computer-b",
+      "name": "Build Box",
+      "online": true
+    }
+  ],
+  "pins": {
+    "spaces": [],
+    "sessions": [
+      "computer-a/alpha",
+      "computer-a/gamma"
+    ]
+  },
+  "interactions": [
+    {
+      "id": "question",
+      "machine_id": "computer-b",
+      "session_id": "worker",
+      "folded_under": "interact"
+    }
+  ],
+  "sessions": [
+    {
+      "machine_id": "computer-a",
+      "session_id": "alpha",
+      "title": "Parser repair",
+      "cwd": "/work/app",
+      "status": "idle",
+      "state": "idle",
+      "agent": "claude-code",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "model": "claude-opus-5-5",
+      "last_text": "Fixed the **empty input** crash.",
+      "asks": "Repair the parser"
+    },
+    {
+      "machine_id": "computer-b",
+      "session_id": "alpha",
+      "title": "Parser repair",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "claude",
+      "updated_at": "2026-01-02T12:00:00Z"
+    },
+    {
+      "machine_id": "computer-b",
+      "session_id": "beta",
+      "title": "Docs",
+      "cwd": "/work/parser",
+      "status": "working",
+      "state": "working",
+      "agent": "codex-cli",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "model": "gpt-5.5",
+      "last_text": "Parser documentation completed"
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "gamma",
+      "title": "Release",
+      "cwd": "/work/notes",
+      "status": "offline",
+      "state": "offline",
+      "agent": "",
+      "updated_at": "2025-12-30T12:00:00Z",
+      "launcher": "pi-fast",
+      "agent_name": "Workshop",
+      "turn_error": "Token limit"
+    },
+    {
+      "machine_id": "computer-b",
+      "session_id": "delta",
+      "title": "Failure notes",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "gemini-cli",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "model": "gemini-3",
+      "start_error": "Network unreachable"
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "epsilon",
+      "title": "Build queue",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "needs_you",
+      "agent": "custom-runtime",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "agent_label": "My Runner"
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "pinned",
+      "title": "pin notes",
+      "cwd": "/work/pinned",
+      "status": "idle",
+      "state": "idle",
+      "agent": "claude",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "last_text": "pinned notes"
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "literal",
+      "title": "state:broken manual",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "claude",
+      "updated_at": "2026-01-02T12:00:00Z"
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "user",
+      "title": "Plan tests",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "claude",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "asks": "Rare request text",
+      "goal": {
+        "objective": "Deliver coverage report"
+      }
+    },
+    {
+      "machine_id": "computer-b",
+      "session_id": "interact",
+      "title": "Approval follow-up",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "claude",
+      "updated_at": "2026-01-02T12:00:00Z"
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "root",
+      "title": "",
+      "cwd": "/",
+      "status": "idle",
+      "state": "idle",
+      "agent": "custom-runtime",
+      "updated_at": "2026-01-02T12:00:00Z"
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "cjk",
+      "title": "追踪修复",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "custom-runtime",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "last_text": "已完成 **异步 调度** 的校验。"
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "work-current",
+      "title": "work-current",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "custom-runtime",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "work": {
+        "phase": "done",
+        "line": "Completed trace validation"
+      }
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "work-stale",
+      "title": "work-stale",
+      "cwd": "/work/notes",
+      "status": "working",
+      "state": "working",
+      "agent": "custom-runtime",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "work": {
+        "phase": "working",
+        "line": "stale private workline"
+      }
+    },
+    {
+      "machine_id": "computer-a",
+      "session_id": "closeout",
+      "title": "closeout",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "custom-runtime",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "work": {
+        "phase": "done",
+        "closeout": {
+          "status": "not_done",
+          "missing": "acceptance artifact"
+        }
+      }
+    },
+    {
+      "machine_id": "computer-b",
+      "session_id": "markdown",
+      "title": "markdown",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "custom-runtime",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "last_text": "## Readable\n\n- **bold** label [target](https://example.com)\n\n```txt\ncode_sample\n```"
+    },
+    {
+      "machine_id": "computer-b",
+      "session_id": "html-fold",
+      "title": "Folded answer",
+      "cwd": "/work/notes",
+      "status": "idle",
+      "state": "idle",
+      "agent": "custom-runtime",
+      "updated_at": "2026-01-02T12:00:00Z",
+      "last_text": "<details>\n<summary>Result</summary>\n**foldedneedle** proof\n</details>"
+    }
+  ],
+  "cases": [
+    {
+      "name": "global_title_and_project_ranking",
+      "query": "parser",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "alpha",
+          "score": 105
+        },
+        {
+          "machine_id": "computer-b",
+          "session_id": "alpha",
+          "score": 105
+        },
+        {
+          "machine_id": "computer-b",
+          "session_id": "beta",
+          "score": 65
+        }
+      ],
+      "description": "Preserve global title and project ranking in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "parser"
+      }
+    },
+    {
+      "name": "machine_alias_plus_two_prose_terms",
+      "query": "host:studio empty input",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "alpha",
+          "score": 45
+        }
+      ],
+      "description": "Preserve machine alias plus two prose terms in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "host:studio empty input"
+      }
+    },
+    {
+      "name": "field_dimensions_and",
+      "query": "machine:build repo:parser",
+      "expected": [
+        {
+          "machine_id": "computer-b",
+          "session_id": "beta",
+          "score": 35
+        }
+      ],
+      "description": "Preserve field dimensions and in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "machine:build repo:parser"
+      }
+    },
+    {
+      "name": "canonical_harness_alias",
+      "query": "project:app harness:claude",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "alpha",
+          "score": 35
+        }
+      ],
+      "description": "Preserve canonical harness alias in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "project:app harness:claude"
+      }
+    },
+    {
+      "name": "short_claude_model",
+      "query": "harness:claude model:opus",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "alpha",
+          "score": 35
+        }
+      ],
+      "description": "Preserve short claude model in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "harness:claude model:opus"
+      }
+    },
+    {
+      "name": "provider_model",
+      "query": "agent:codex model:gpt",
+      "expected": [
+        {
+          "machine_id": "computer-b",
+          "session_id": "beta",
+          "score": 35
+        }
+      ],
+      "description": "Preserve provider model in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "agent:codex model:gpt"
+      }
+    },
+    {
+      "name": "launcher_fallback",
+      "query": "launcher:pi model:fast",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "gamma",
+          "score": 30
+        }
+      ],
+      "description": "Preserve launcher fallback in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "launcher:pi model:fast"
+      }
+    },
+    {
+      "name": "custom_harness_label",
+      "query": "harness:workshop",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "gamma",
+          "score": 30
+        }
+      ],
+      "description": "Preserve custom harness label in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "harness:workshop"
+      }
+    },
+    {
+      "name": "or_within_state_dimension",
+      "query": "state:working status:offline",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "work-stale",
+          "score": 35
+        },
+        {
+          "machine_id": "computer-b",
+          "session_id": "beta",
+          "score": 35
+        },
+        {
+          "machine_id": "computer-a",
+          "session_id": "gamma",
+          "score": 30
+        }
+      ],
+      "description": "Preserve or within state dimension in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "state:working status:offline"
+      }
+    },
+    {
+      "name": "error_aliases",
+      "query": "is:failed harness:gemini",
+      "expected": [
+        {
+          "machine_id": "computer-b",
+          "session_id": "delta",
+          "score": 35
+        }
+      ],
+      "description": "Preserve error aliases in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "is:failed harness:gemini"
+      }
+    },
+    {
+      "name": "complete_interaction_context",
+      "query": "is:error machine:build",
+      "expected": [
+        {
+          "machine_id": "computer-b",
+          "session_id": "delta",
+          "score": 35
+        },
+        {
+          "machine_id": "computer-b",
+          "session_id": "interact",
+          "score": 35
+        }
+      ],
+      "description": "Preserve complete interaction context in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "is:error machine:build"
+      }
+    },
+    {
+      "name": "pinned_identities",
+      "query": "is:pin parser",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "alpha",
+          "score": 105
+        }
+      ],
+      "description": "Preserve pinned identities in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "is:pin parser"
+      }
+    },
+    {
+      "name": "pin_and_state_conjunction",
+      "query": "is:pinned state:offline",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "gamma",
+          "score": 30
+        }
+      ],
+      "description": "Preserve pin and state conjunction in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "is:pinned state:offline"
+      }
+    },
+    {
+      "name": "recent_window",
+      "query": "since:24h parser",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "alpha",
+          "score": 105
+        },
+        {
+          "machine_id": "computer-b",
+          "session_id": "alpha",
+          "score": 105
+        },
+        {
+          "machine_id": "computer-b",
+          "session_id": "beta",
+          "score": 65
+        }
+      ],
+      "description": "Preserve recent window in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "since:24h parser"
+      }
+    },
+    {
+      "name": "week_alias",
+      "query": "after:1w launcher:pi",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "gamma",
+          "score": 30
+        }
+      ],
+      "description": "Preserve week alias in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "after:1w launcher:pi"
+      }
+    },
+    {
+      "name": "old_excluded",
+      "query": "updated:24h launcher:pi",
+      "expected": [],
+      "description": "Preserve old excluded in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "updated:24h launcher:pi"
+      }
+    },
+    {
+      "name": "legacy48h_alias_preserved",
+      "query": "since:48h launcher:pi",
+      "expected": [],
+      "description": "Preserve legacy48h alias preserved in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "since:48h launcher:pi"
+      }
+    },
+    {
+      "name": "unknown_state_remains_literal",
+      "query": "state:broken",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "literal",
+          "score": 105
+        }
+      ],
+      "description": "Preserve unknown state remains literal in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "state:broken"
+      }
+    },
+    {
+      "name": "words_never_become_filters",
+      "query": "pinned notes",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "pinned",
+          "score": 65
+        }
+      ],
+      "description": "Preserve words never become filters in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "pinned notes"
+      }
+    },
+    {
+      "name": "across_place_and_answer",
+      "query": "studio crash",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "alpha",
+          "score": 45
+        }
+      ],
+      "description": "Preserve across place and answer in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "studio crash"
+      }
+    },
+    {
+      "name": "request_evidence",
+      "query": "rare request",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "user",
+          "score": 45
+        }
+      ],
+      "description": "Preserve request evidence in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "rare request"
+      }
+    },
+    {
+      "name": "goal_evidence",
+      "query": "coverage report",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "user",
+          "score": 45
+        }
+      ],
+      "description": "Preserve goal evidence in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "coverage report"
+      }
+    },
+    {
+      "name": "machine_dimension_or",
+      "query": "machine:studio host:build parser",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "alpha",
+          "score": 105
+        },
+        {
+          "machine_id": "computer-b",
+          "session_id": "alpha",
+          "score": 105
+        },
+        {
+          "machine_id": "computer-b",
+          "session_id": "beta",
+          "score": 65
+        }
+      ],
+      "description": "Preserve machine dimension or in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "machine:studio host:build parser"
+      }
+    },
+    {
+      "name": "empty_title_root_path",
+      "query": "project:/ machine:computer-a state:idle /",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "root",
+          "score": 105
+        },
+        {
+          "machine_id": "computer-a",
+          "session_id": "alpha",
+          "score": 45
+        },
+        {
+          "machine_id": "computer-a",
+          "session_id": "cjk",
+          "score": 45
+        },
+        {
+          "machine_id": "computer-a",
+          "session_id": "closeout",
+          "score": 45
+        },
+        {
+          "machine_id": "computer-a",
+          "session_id": "literal",
+          "score": 45
+        },
+        {
+          "machine_id": "computer-a",
+          "session_id": "pinned",
+          "score": 45
+        },
+        {
+          "machine_id": "computer-a",
+          "session_id": "user",
+          "score": 45
+        },
+        {
+          "machine_id": "computer-a",
+          "session_id": "work-current",
+          "score": 45
+        }
+      ],
+      "description": "Preserve empty title root path in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "project:/ machine:computer-a state:idle /"
+      }
+    },
+    {
+      "name": "custom_runtime_display_label",
+      "query": "harness:runner",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "epsilon",
+          "score": 35
+        }
+      ],
+      "description": "Preserve custom runtime display label in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "harness:runner"
+      }
+    },
+    {
+      "name": "raw_model_is_operator_metadata_only",
+      "query": "claude-opus",
+      "expected": [],
+      "description": "Preserve raw model is operator metadata only in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "claude-opus"
+      }
+    },
+    {
+      "name": "current_work_metadata",
+      "query": "trace validation",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "work-current",
+          "score": 45
+        }
+      ],
+      "description": "Preserve current work metadata in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "trace validation"
+      }
+    },
+    {
+      "name": "working_stale_line_not_preview",
+      "query": "stale private workline",
+      "expected": [],
+      "description": "Preserve working stale line not preview in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "stale private workline"
+      }
+    },
+    {
+      "name": "closeout_missing_evidence",
+      "query": "acceptance artifact",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "closeout",
+          "score": 45
+        }
+      ],
+      "description": "Preserve closeout missing evidence in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "acceptance artifact"
+      }
+    },
+    {
+      "name": "cjk_markdown_terms",
+      "query": "异步 调度",
+      "expected": [
+        {
+          "machine_id": "computer-a",
+          "session_id": "cjk",
+          "score": 45
+        }
+      ],
+      "description": "Preserve cjk markdown terms in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "异步 调度"
+      }
+    },
+    {
+      "name": "markdown_normalized_prose_and_code",
+      "query": "bold target code_sample",
+      "expected": [
+        {
+          "machine_id": "computer-b",
+          "session_id": "markdown",
+          "score": 45
+        }
+      ],
+      "description": "Preserve markdown normalized prose and code in runtime metadata search.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "input": {
+        "query": "bold target code_sample"
+      }
+    },
+    {
+      "name": "html_fold_visible_words",
+      "description": "Keep the words inside a folded HTML answer searchable.",
+      "source": "web/src/lib/agent-search.ts:agentSearchHit",
+      "query": "foldedneedle proof",
+      "input": {
+        "query": "foldedneedle proof"
+      },
+      "expected": [
+        {
+          "machine_id": "computer-b",
+          "session_id": "html-fold",
+          "score": 45
+        }
+      ]
+    }
+  ]
+}

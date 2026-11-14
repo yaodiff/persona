@@ -27,7 +27,7 @@ export function TerminalModeRow() {
     }
   };
   return (
-    <Row label={t("terminal-full.mode_group")} hint={t("terminal-full.pref_hint")}>
+    <Row label={t("terminal-full.mode_group")} hint={t("terminal-full.pref_hint")} wrapHint>
       <Segmented<ModePreference> label={t("terminal-full.mode_group")} value={pref} options={OPTIONS} onChange={choose} />
     </Row>
   );

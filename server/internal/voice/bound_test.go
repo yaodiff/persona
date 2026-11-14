@@ -885,6 +885,47 @@ func TestReconnectsStartOverAfterAStableSession(t *testing.T) {
 	}
 }
 
+// A service whose model's backend is down may start the session and only then say so (error upstream_unavailable,
+// then a 1008 close): the reconnects go as for any drop, and when they run out the call ends as the service being
+// unavailable with its words, not as a dropped connection. A run of drops whose last one the service did not explain
+// stays upstream_failed (TestReconnectsStartOverAfterAStableSession).
+func TestServiceDownAfterTheSessionStartedEndsAsUnavailable(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		t.Run(fmt.Sprint("bound=", bound), func(t *testing.T) {
+			setVar(t, &stableAfter, time.Hour)
+			hub := agentHub(t)
+			var sessions atomic.Int32
+			up := newFakeUpstream(t, func(u *fakeUpstream, c *websocket.Conn, f map[string]any) {
+				if f["type"] != "session.start" {
+					return
+				}
+				sessions.Add(1)
+				u.send(c, map[string]any{"type": "session.started", "session": map[string]any{}})
+				u.send(c, map[string]any{"type": "error", "error": map[string]any{"type": "server_error",
+					"code": "upstream_unavailable", "message": "backend down (cluster c1)"}})
+				_ = c.Close(websocket.StatusPolicyViolation, "upstream unavailable")
+			})
+			pl := testPlugin(t, liveProvider(up), hub.server(t))
+			start := map[string]any{"type": "start"}
+			if bound {
+				start = boundStart("a1", nil)
+			}
+			a := dialApp(t, pl, start)
+			a.until(ofType("ready"))
+			f := a.until(ofType("error"))
+			if f["code"] != codeUpstreamUnavailable || f["fatal"] != true {
+				t.Fatalf("error: %v", f)
+			}
+			if msg, _ := f["message"].(string); !strings.Contains(msg, "backend down (cluster c1)") {
+				t.Fatalf("the service's words are not in the message: %q", msg)
+			}
+			if n := sessions.Load(); n != maxReconnects+1 {
+				t.Fatalf("%d sessions, want %d", n, maxReconnects+1)
+			}
+		})
+	}
+}
+
 // A session after a drop is told the bound conversation as it is now. When the agent wrote more meanwhile, that is an
 // agent's words taken in: what the new session hands over before the user speaks again is refused, as after a
 // result. When nothing changed, what the user said just before the drop still counts.

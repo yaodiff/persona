@@ -103,6 +103,8 @@ const { keepOutgoing, outboxKey, resetOutboxClaimsForTests, resetRestoredForTest
 const { configureMessageFeedback, receiveMessageSend, resetMessageFeedback } = await import("../../lib/message-send");
 configureMessageFeedback({ getSession, send, onHubEvent, subscribe, receiptsAllowed: () => true }); // injected trusted transport
 const { SESSIONS_LOOKUP_FEATURE } = await import("../../lib/runtime-list");
+// ChatView's own React.lazy notice must be ready before the missing-chat assertions, not only lazyPage's registry.
+await import("./NotFoundNotice");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
@@ -173,6 +175,37 @@ describe("the deferred search dialog", () => {
   });
 });
 
+describe("the header's title", () => {
+  it("calls a leader conversation by its direction, as its sidebar row does, not by the hub's raw title", async () => {
+    const { applyLeadersEvent, resetDirectionNames } = await import("../../lib/direction-names");
+    captured.session = { machine_id: "hub", session_id: "lead1", title: "1109 | 探索 | 你是「增长」方向的主管", cwd: "/code", state: "idle", status: "idle", assistant: true } as Session;
+    try {
+      act(() => root.render(<ChatView mid="hub" sid="lead1" assistant />)); await flush();
+      expect(host.querySelector("[data-chat-title]")?.textContent).toBe("1109 | 探索 | 你是「增长」方向的主管"); // no names yet
+      act(() => host.querySelector("[data-chat-title]")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+      expect(host.querySelector("[data-chat-title-input]")).not.toBeNull(); // renamable in place while not a direction
+      act(() => host.querySelector("[data-chat-title-input]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+      expect(host.querySelector("[data-chat-title-input]")).toBeNull();
+      act(() => void applyLeadersEvent([{ id: "lead1", name: "增长" }])); await flush();
+      expect(host.querySelector("[data-chat-title]")?.textContent).toBe("增长");
+      // the direction's name is not the conversation's title: no in-place rename of it (⋯ Rename, as on the sidebar row)
+      act(() => host.querySelector("[data-chat-title]")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+      expect(host.querySelector("[data-chat-title-input]")).toBeNull();
+      // an Agent's page of the same conversation says it the same way
+      act(() => root.render(<ChatView mid="hub" sid="lead1" />)); await flush();
+      expect(host.querySelector("[data-chat-title]")?.textContent).toBe("增长");
+    } finally {
+      resetDirectionNames();
+    }
+  });
+
+  it("reads a conversation titled by its <persona-context> tag", async () => {
+    captured.session = { machine_id: "hub", session_id: "c1", title: '<persona-context kind="context" title="飞书 · 发布群 &quot;周五&quot;" url="">', cwd: "/code", state: "idle", status: "idle" } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant />)); await flush();
+    expect(host.querySelector("[data-chat-title]")?.textContent).toBe('飞书 · 发布群 "周五"');
+  });
+});
+
 describe("message feedback before runtime execution", () => {
   it.each([false, true])("shows the receipt through delayed HTTP without manufacturing execution (assistant=%s)", async (assistant) => {
     captured.session = { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", state: "idle", status: "idle" } as Session;
@@ -181,7 +214,8 @@ describe("message feedback before runtime execution", () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant={assistant} />)); await flush();
     let sent!: Promise<boolean>;
     act(() => { sent = captured.onSend!({ text: "Synthetic receipt input", images: [] }); }); await flush();
-    expect(host.textContent).toContain(t("chat-segmentview.sending"));
+    // local Sending at once, on the chat's status line (its words here are the offline test page's "waiting for the hub")
+    expect(host.querySelector('[data-message-feedback="sending"]')).not.toBeNull();
     const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).endsWith("/messages"))!;
     const id = JSON.parse(String(call[1]?.body)).client_msg_id;
     act(() => receiveMessageSend({ machine_id: "hub", session_id: "c1", client_msg_id: id, state: "processing", at: "2026-11-12T10:00:00Z" }));
@@ -191,6 +225,23 @@ describe("message feedback before runtime execution", () => {
     await act(async () => { accept(json({})); await sent; }); await flush();
     expect(host.querySelector('[data-message-feedback="processing"]')).not.toBeNull();
     expect(captured.session.state).toBe("idle");
+  });
+  it.each([false, true])("says Sending, then Processing, once: on the chat's status line, not under the bubble as well (assistant=%s)", async (assistant) => {
+    captured.session = { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", state: "idle", status: "idle" } as Session;
+    let accept!: (r: Response) => void;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input).endsWith("/messages") ? new Promise<Response>(resolve => { accept = resolve; }) : Promise.resolve(json({}))));
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant={assistant} />)); await flush();
+    let sent!: Promise<boolean>;
+    act(() => { sent = captured.onSend!({ text: "two lines\nof input", images: [] }); }); await flush();
+    const said = (words: string) => [...host.querySelectorAll("*")].filter((el) => el.childElementCount === 0 && el.textContent === words).length;
+    // the status line says it (here "waiting for the hub", the test page being offline); the bubble only dims
+    expect(host.querySelectorAll("[data-message-feedback]")).toHaveLength(1);
+    expect(host.querySelector("[data-user-bubble]")?.textContent).not.toContain(t("chat-segmentview.sending"));
+    const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).endsWith("/messages"))!;
+    act(() => receiveMessageSend({ machine_id: "hub", session_id: "c1", client_msg_id: JSON.parse(String(call[1]?.body)).client_msg_id, state: "processing", at: "2026-11-12T10:00:00Z" }));
+    expect(said(t("chat-segmentview.processing"))).toBe(1);
+    expect(host.querySelector("[data-message-feedback]")?.textContent).toContain(t("chat-segmentview.processing"));
+    await act(async () => { accept(json({})); await sent; }); await flush();
   });
   it.each(["working", "done"] as const)("does not revive Processing when %s precedes the final HTTP without an echo", async (result) => {
     captured.session = { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", state: "idle", status: "idle" } as Session;
@@ -218,6 +269,33 @@ describe("message feedback before runtime execution", () => {
 });
 
 describe("a refused send's card", () => {
+  it("is said once, by the failed bubble with its one Retry, when the send failed with nothing to set up (the hub away, HTTP 500)", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant />));
+    await flush();
+    reply = () => json({}, 500);
+    await act(async () => void (await captured.onSend!({ text: "你好", images: [] })));
+    await flush();
+    expect(host.querySelector('[data-outbox] [data-user-bubble][data-send-state="failed"]')).not.toBeNull();
+    expect(host.querySelector("[data-outbox] [role=alert]")?.textContent).toContain("HTTP 500");
+    expect(host.querySelector('[data-testid="readiness-failure"]')).toBeNull();
+    const retries = [...host.querySelectorAll("button")].filter((b) => b.textContent === t("chat-outboxbubbles.retry"));
+    expect(retries).toHaveLength(1);
+  });
+
+  it("keeps a coded refusal's card for what to set up, with no second Retry beside the bubble's", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant />));
+    await flush();
+    reply = () => json({ error: "模型没接好", code: "model_missing", action: "connect_model" }, 409);
+    await act(async () => void (await captured.onSend!({ text: "你好", images: [] })));
+    await flush();
+    const card = host.querySelector('[data-testid="readiness-failure"]');
+    expect(card?.textContent).toContain("模型没接好");
+    // its button is the setup step; its old "重新发送" went: the bubble's 重试 is the one way to send again
+    expect([...card!.querySelectorAll("button")].map((b) => b.textContent)).not.toContain("重新发送");
+    expect(card?.textContent).not.toContain(t("chat-outboxbubbles.retry"));
+    expect([...host.querySelectorAll("[data-outbox] button")].filter((b) => b.textContent === t("chat-outboxbubbles.retry"))).toHaveLength(1);
+  });
+
   it("goes away once a later send goes through", async () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant />));
     await flush();
@@ -752,6 +830,67 @@ describe("sending in order, and with no row yet", () => {
     } finally {
       captured.features = [];
     }
+  });
+
+  it.each([false, true])("calls a chat the hub has no such conversation for, with nothing of it here, not found, never by its id (assistant=%s)", async (assistant) => {
+    captured.session = undefined;
+    captured.features = [SESSIONS_LOOKUP_FEATURE];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(json(String(input).includes("/sessions?") ? { sessions: [], remove: [], has_more: false, revision: "r", total: 0 } : {}))));
+    try {
+      history.replaceState(null, "", "/persona/nope-0000");
+      act(() => root.render(<ChatView mid="hub" sid="nope-0000" assistant={assistant} />));
+      await flush();
+      expect(host.querySelector("[data-chat-title]")?.textContent).toBe(t("chat-chatview.not_found_title"));
+      expect(host.textContent).not.toContain("nope-0000");
+      // The notice is a React.lazy chunk: it suspends once on its first render even when the module is in, so it is
+      // drawn a little after flush() returns, as late as the machine is slow. Each poll runs in act so React's retry can flush.
+      await vi.waitFor(async () => {
+        await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+        expect(host.querySelector("[data-chat-not-found]")).not.toBeNull();
+      }, { timeout: 5000, interval: 20 });
+      const notice = host.querySelector("[data-chat-not-found]");
+      expect(notice?.textContent).toContain(t("chat-notfoundnotice.body"));
+      expect(host.textContent).not.toContain(t("runtime-session.missing"));
+      const back = [...notice!.querySelectorAll("button")].find((b) => b.textContent === (assistant ? t("assistant-assistantchat.back_to_main") : t("chat-notfoundnotice.back_home")));
+      expect(back).toBeTruthy();
+      act(() => back!.click());
+      // the main chat (`/`), or Overview for an Agent's
+      expect(location.pathname).toBe(assistant ? "/" : "/overview");
+    } finally {
+      captured.features = [];
+      history.replaceState(null, "", "/");
+    }
+  });
+
+  it("keeps a missing chat's own title and the still-readable notice while something of it is here", async () => {
+    captured.session = undefined;
+    captured.features = [SESSIONS_LOOKUP_FEATURE];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(json(String(input).includes("/sessions?") ? { sessions: [], remove: [], has_more: false, revision: "r", total: 0 } : {}))));
+    const previous = transcript.items;
+    transcript.items = [{ id: "u1", seq: 1, role: "user", kind: "text", text: "cached line", ts: "2026-11-12T09:00:00Z" }];
+    try {
+      act(() => root.render(<ChatView mid="hub" sid="c1" />));
+      await flush();
+      expect(host.querySelector("[data-chat-not-found]")).toBeNull();
+      expect(host.textContent).toContain(t("runtime-session.missing"));
+    } finally {
+      transcript.items = previous;
+      captured.features = [];
+    }
+  });
+
+  it("asks in a space's own words in an idle Persona chat (Health's), and the box's other states still say theirs", async () => {
+    captured.session = { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", state: "idle", status: "idle" } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant placeholder="Ask about your health" />));
+    await flush();
+    expect(captured.composer?.placeholder).toBe("Ask about your health");
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant />));
+    await flush();
+    expect(captured.composer?.placeholder).toBe(t("chat-chatview.ask_placeholder", { name: "Persona" }));
+    captured.session = { ...captured.session, state: "working" } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant placeholder="Ask about your health" />));
+    await flush();
+    expect(captured.composer?.placeholder).toBe(t("chat-chatview.queue_placeholder"));
   });
 
   it("the main conversation with no row is not connecting, and its failed bubble keeps Retry", async () => {

@@ -355,6 +355,45 @@ final class VNCTests: XCTestCase {
         print("VNC-MEASURE " + samples.joined(separator: " | "))
     }
 
+    /// How far two-finger drags scroll and how evenly their notches go out (#7775), with PERSONA_VNC_SCROLL_MEASURE=1:
+    /// 300 pt up the picture slowly (200 pt a second), at a medium speed (600) and fast (1500), each reaching its speed
+    /// in 50 ms and lifted moving. Once any coast has stopped, the mock says how many notches its Screen Sharing got (a
+    /// `scroll` click each) and when each reached its relay (`wheel_in`: when the app sent it); printed as a
+    /// SCROLL-MEASURE line a drag: how many, over how long, and how many went out together (within 2 ms of each other).
+    @MainActor func testScrollMeasure() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_VNC_SCROLL_MEASURE"] == "1" else { throw XCTSkip("PERSONA_VNC_SCROLL_MEASURE=1") }
+        let (app, _) = try signedInMachinePage()
+        let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
+        XCTAssertTrue(screen.waitForExistence(timeout: 10))
+        let step = 1.0 / 60
+        for (name, speed) in [("slow", 200.0), ("medium", 600.0), ("fast", 1500.0)] {
+            try mock(hub!, "/mock/screen-password?clear=1")
+            let r = screen.frame
+            var ys: [CGFloat] = []
+            for i in 0... {
+                let t = Double(i) * step
+                let travel = t < 0.05 ? speed * t * t / 0.1 : speed * (t - 0.025)
+                ys.append(r.midY + 150 - min(travel, 300))
+                if travel >= 300 { break }
+            }
+            try TouchScript.twoFingers(ys.map { CGPoint(x: r.midX - 40, y: $0) }, ys.map { CGPoint(x: r.midX + 40, y: $0) }, step: step)
+            sleep(4) // any coast has stopped
+            let state = try mockState()
+            let notches = (state["clicks"] as? [[String: Any]] ?? []).filter { $0["scroll"] != nil }.count
+            let times = (state["wheel_in"] as? [Double] ?? []).sorted()
+            var together: [Int] = []
+            for (i, t) in times.enumerated() {
+                if i > 0, t - times[i - 1] < 0.002 { together[together.count - 1] += 1 } else { together.append(1) }
+            }
+            print(String(format: "SCROLL-MEASURE %@ speed=%.0f notches=%d sent=%d over=%.2fs sends=%d most-together=%d", name, speed,
+                         notches, times.count, (times.last ?? 0) - (times.first ?? 0), together.count, together.max() ?? 0))
+            // The simulator plays these touches faster than scripted, and lifts after a pause: how far each goes says
+            // little about the speeds named. What holds whatever the speed: it scrolled, and every notch sent arrived.
+            XCTAssertGreaterThan(notches, 0, "\(name): the scroll reached the Mac")
+            XCTAssertEqual(notches, times.count, "\(name): every notch sent arrived")
+        }
+    }
+
     // MARK: #3075
 
     /// Picture in Picture is a button of its own right of Close, as round as it, and no longer inside ⋯. The simulators
@@ -1019,6 +1058,35 @@ final class VNCTests: XCTestCase {
         shot(app, "vnc-video-lost")
     }
 
+    /// #6398: the stats overlay's Route row (the demo's numbers: a direct LAN route, its round trip and loss, and why the
+    /// live screen moved, on its own line), for review in light and dark, at the default size and at xxxLarge.
+    @MainActor func testTheOverlayShowsTheRoute() throws {
+        for (scheme, size) in [("light", "L"), ("dark", "L"), ("light", "XXXL"), ("dark", "XXXL")] {
+            let (app, _) = try signedInMachinePage(["-showScreenStatsDemo", "YES", "-ui.scheme", scheme,
+                                                    "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\(size)"])
+            let overlay = app.descendants(matching: .any)["screen-stats"].firstMatch
+            XCTAssertTrue(overlay.waitForExistence(timeout: 10), "the overlay:\n\(app.debugDescription)")
+            XCTAssertTrue(overlay.label.contains("6 ms"), "the route's round trip: \(overlay.label)")
+            for source in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] { // the icon follows the look
+                let alert = source.alerts.containing(NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")).firstMatch
+                if alert.exists, alert.buttons.firstMatch.exists { alert.buttons.firstMatch.tap() }
+            }
+            shot(app, "vnc-overlay-route-\(scheme)-\(size == "L" ? "default" : "xxxl")")
+            app.terminate()
+        }
+    }
+
+    /// #6398: a phone that asks the hub for a screen session (direct routes on, `-showScreenRoutes`) and a hub that
+    /// doesn't offer one (the mock, like an older hub or node) keep today's live screen through the same raw streams:
+    /// RFB signs in and, with the mock's video channel, video takes the picture and reports frames.
+    @MainActor func testAskingForAScreenSessionKeepsTheRawStreams() throws {
+        let (app, _) = try signedInMachinePage(["-showScreenRoutes", "YES"])
+        guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_VIDEO"] == "1" else { return }
+        let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
+        XCTAssertTrue(picture(screen, "video"), "video took the picture: \(screen.value ?? "")")
+        XCTAssertGreaterThan(try mockJSON("/mock/screen-video")["reports"] as? Int ?? 0, 0, "the phone reports frames")
+    }
+
     /// #3954: the not-allowed line at the largest text size: the words and "How to turn it on" wrap, nothing cut off.
     @MainActor func testVideoNotAllowedAtTheLargestText() throws {
         guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_VIDEO"] == "1" else {
@@ -1055,6 +1123,46 @@ final class VNCTests: XCTestCase {
         while Date.now < deadline, !words.allSatisfy(stats.label.contains) { usleep(250_000) }
         XCTAssertTrue(words.allSatisfy(stats.label.contains), "every segment: \(stats.label)")
         shot(app, "vnc-video-stats")
+        app.buttons["screen-stats-close"].firstMatch.tap() // kept per Mac: off again for the other tests
+        XCTAssertTrue(stats.waitForNonExistence(timeout: 5))
+    }
+
+    /// #3954: a Mac whose helper macOS hasn't asked about yet (a second mock with MOCK_SCREEN_VIDEO=missing, its address
+    /// in TEST_RUNNER_PERSONA_SCREEN_VIDEO_MISSING): VNC with the not-allowed line, and "How to turn it on" says the Mac
+    /// is about to show a window, not where in System Settings (Persona Screen isn't in that list until it asked).
+    @MainActor func testNotAskedYetSaysAWindowWillShow() throws {
+        guard let missingHub = ProcessInfo.processInfo.environment["PERSONA_SCREEN_VIDEO_MISSING"], missingHub.hasPrefix("http") else {
+            throw XCTSkip("needs a mock with MOCK_SCREEN_VIDEO=missing, its address in TEST_RUNNER_PERSONA_SCREEN_VIDEO_MISSING")
+        }
+        hubOverride = missingHub
+        let (app, _) = try signedInMachinePage()
+        let how = app.buttons["screen-fallback-help"].firstMatch
+        XCTAssertTrue(how.waitForExistence(timeout: 10), "the not-allowed line:\n\(app.debugDescription)")
+        XCTAssertTrue((app.descendants(matching: .any)["vnc-screen"].firstMatch.value as? String ?? "").contains("picture=vnc"))
+        how.tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "会弹一个窗口")).firstMatch.exists,
+                      "a window will show: \(alert.debugDescription)")
+        shot(app, "vnc-video-not-asked")
+        alert.buttons.firstMatch.tap()
+    }
+
+    /// #6558: Connection Stats over VNC shows the round trip to the hub on a line of its own, timed on the app's own
+    /// hub connection (the mock answers its pings), as the web's overlay does.
+    @MainActor func testTheOverlayShowsTheRoundTripToTheHub() throws {
+        let (app, _) = try signedInMachinePage()
+        app.buttons["vnc-more"].tap()
+        let toggle = app.descendants(matching: .any)["screen-stats-toggle"].firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "Connection Stats in ⋯:\n\(app.debugDescription)")
+        toggle.tap()
+        let stats = app.descendants(matching: .any)["screen-stats"].firstMatch
+        XCTAssertTrue(stats.waitForExistence(timeout: 5), "the overlay:\n\(app.debugDescription)")
+        let words = ["VNC", "经 hub 中转", "到 hub 往返"]
+        let deadline = Date.now.addingTimeInterval(10)
+        while Date.now < deadline, !words.allSatisfy(stats.label.contains) { usleep(250_000) }
+        XCTAssertTrue(words.allSatisfy(stats.label.contains), "the round trip to the hub: \(stats.label)")
+        shot(app, "vnc-stats-hub")
         app.buttons["screen-stats-close"].firstMatch.tap() // kept per Mac: off again for the other tests
         XCTAssertTrue(stats.waitForNonExistence(timeout: 5))
     }

@@ -609,6 +609,38 @@ test("a new Codex session: bypassPermissions starts it with Paseo's full-access 
   assert.equal((await start('default')).modeId, undefined)
 })
 
+test("Grok: Allow all starts it with Paseo's Auto Accept on and switches that, the row follows; no other mode reaches it", async (t) => {
+  const { fake, node, a, rows } = await setup(t)
+  const start = (launcher, permission_mode) => call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher, permission_mode })
+  const created = () => fake.requestsOf('agent.create.request').at(-1).config
+  const on = await start('grok', 'bypassPermissions')
+  assert.deepEqual(created().featureValues, { auto_accept: true })
+  assert.equal(on.session.permission_mode, 'bypassPermissions')
+  for (const mode of ['default', 'acceptEdits', undefined]) {
+    await start('grok', mode)
+    assert.equal(created().featureValues, undefined, `${mode}: Paseo's own default (off)`)
+  }
+  await start('my-claude', 'bypassPermissions')
+  assert.deepEqual([created().modeId, created().featureValues], ['bypassPermissions', undefined], "Claude Code's mode, as before")
+
+  const sid = on.session.session_id
+  const mode = () => rows().find((r) => r.session_id === sid)?.permission_mode
+  const feature = () => fake.requestsOf('set_agent_feature_request').at(-1)
+  await call(node, 'session.modes', { session_id: sid, permission_mode: 'default' })
+  assert.deepEqual([feature().featureId, feature().value], ['auto_accept', false])
+  await until('Ask: no mode said', () => mode() === undefined)
+  await call(node, 'session.modes', { session_id: sid, permission_mode: 'bypassPermissions', effort: 'xhigh' })
+  assert.equal(feature().value, true)
+  await until('Allow all', () => mode() === 'bypassPermissions')
+  await assert.rejects(call(node, 'session.modes', { session_id: sid, permission_mode: 'acceptEdits' }), /没有这个权限模式/)
+  assert.equal(fake.requestsOf('set_agent_mode_request').length, 0, 'never a mode Grok does not have')
+  // One not running is asked too: Paseo loads it first.
+  await call(node, 'session.modes', { session_id: `paseo-${a.grok.id}`, permission_mode: 'bypassPermissions' })
+  assert.equal(feature().agentId, a.grok.id)
+  fake.handlers.set_agent_feature_request = () => ({ payload: { accepted: false, error: 'busy' } })
+  await assert.rejects(call(node, 'session.modes', { session_id: sid, permission_mode: 'default' }), /没有换模式：busy/)
+})
+
 test('a resolved preset whose launcher Paseo lacks uses the replacement provider defaults', async (t) => {
   const { fake, node } = await setup(t, {
     providers: { ...PROVIDERS, codex: { enabled: false } },

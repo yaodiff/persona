@@ -145,16 +145,31 @@ extension SlotRow {
     /// Where it runs, one line: the source first (its tag, a tap away for a Lark group), then what `placeText` says, its
     /// to-do, a muted agent's bell. `states`: with Awaiting Reply and Waiting in the Background, unless the row spells
     /// its state out already (C).
+    /// The place line: whole when it fits the row; the to-do as an icon, then the model chip dropped, when it does not; and the place text cut short
+    /// last. Its chips never shrink, so at a large text size they pushed the row wider than its card, the time and the
+    /// preview running off the edge; the choice is by measured width (`ViewThatFits`), not text size.
     @MainActor private func placeLine(states: Bool = true) -> some View {
+        ViewThatFits(in: .horizontal) {
+            placeLineItems(states: states, model: true, todoChip: true, cut: false)
+            placeLineItems(states: states, model: true, todoChip: false, cut: false)
+            placeLineItems(states: states, model: false, todoChip: false, cut: false)
+            placeLineItems(states: states, model: false, todoChip: false, cut: true)
+        }
+        .font(Theme.Font.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    @MainActor private func placeLineItems(states: Bool, model: Bool, todoChip: Bool, cut: Bool) -> some View {
         HStack(spacing: Theme.Space.xs) {
             sourceLabel
-            placeText(states: states).lineLimit(1)
-            if !session.modelShortName.isEmpty {
+            placeText(states: states).lineLimit(1).fixedSize(horizontal: !cut, vertical: false)
+            if model, !session.modelShortName.isEmpty {
                 Chip(text: session.modelShortName, look: .outline, compact: true)
             }
             if let todo = session.todo {
-                ViewThatFits(in: .horizontal) {
+                if todoChip {
                     Chip(text: todo.title, symbol: Theme.Icon.todo, look: .outline)
+                } else {
                     ThemedIcon(Theme.Icon.todo).help(todo.title).accessibilityLabel(String(localized: "To-do: \(todo.title)"))
                 }
             }
@@ -162,8 +177,6 @@ extension SlotRow {
                 ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).accessibilityLabel("Notifications muted")
             }
         }
-        .font(Theme.Font.caption)
-        .foregroundStyle(.secondary)
     }
 
     // MARK: A · Avatar

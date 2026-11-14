@@ -21,6 +21,15 @@ function apply() {
 
 media.addEventListener("change", apply);
 
+// Another tab of this browser picked a theme (or its storage was cleared): this one follows at once, and its Settings
+// show the theme it shows (they read the stored choice).
+if (typeof window !== "undefined")
+  window.addEventListener("storage", (e) => {
+    if (e.key !== null && e.key !== "persona.theme") return;
+    apply();
+    listeners.forEach((l) => l());
+  });
+
 export function setTheme(t: Theme) {
   storeValue("persona.theme", t);
   apply();

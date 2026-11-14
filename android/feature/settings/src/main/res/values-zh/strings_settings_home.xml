@@ -28,4 +28,8 @@
     <string name="settings_model_how_runs_detail">在模型供应商中管理凭据和连接方式。更换模型不会改变界面或已开启的功能。</string>
     <string name="settings_home_extensions_detail">管理扩展能力</string>
     <string name="settings_home_connectors_detail">邮件、消息与手机数据</string>
+    <!-- Inbox Sources (#5308): the same words as iOS and the web. -->
+    <string name="settings_inbox_sources">收件箱来源</string>
+    <string name="settings_inbox_sources_detail">哪些来源会往收件箱里放新东西</string>
+    <string name="settings_search_inbox_sources_aliases">收件箱 来源 订阅 推荐订阅 邮件 静音</string>
 </resources>

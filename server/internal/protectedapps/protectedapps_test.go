@@ -23,26 +23,9 @@ func TestIs(t *testing.T) {
 			t.Errorf("%q %q: %v", c.id, c.name, got)
 		}
 	}
-}
-
-// A window's pid is matched to its app, so System Settings counts under any name; a pid the list lacks asks for a
-// fresh list once; a window off the screen is not counted.
-func TestOnScreen(t *testing.T) {
-	apps := Apps(json.RawMessage(`{"apps": [{"name": "Calculator", "bundle_id": "com.apple.calculator", "pid": 63}]}`))
-	windows, ok := Windows(json.RawMessage(`{"windows": [
-		{"app_name": "Calculator", "pid": 63, "is_on_screen": true},
-		{"app_name": "Réglages Système", "pid": 70, "is_on_screen": true},
-		{"app_name": "SecurityAgent", "pid": 98, "is_on_screen": false}]}`))
-	if !ok {
-		t.Fatal("windows")
-	}
-	asked := 0
-	found, latest := OnScreen(windows, apps, func() []App {
-		asked++
-		return append(apps, App{Name: "Réglages Système", BundleID: "com.apple.systempreferences", PID: 70})
-	})
-	if strings.Join(found, ",") != "Réglages Système" || asked != 1 || len(latest) != 2 {
-		t.Fatalf("found %v, asked %d, %d apps", found, asked, len(latest))
+	// The prompts are strict (nothing is operated while one shows), System Settings is not one of them.
+	if !IsPrompt("", "universalAccessAuthWarn") || !IsPrompt("com.apple.SecurityAgent", "") || IsPrompt("com.apple.systempreferences", "System Settings") {
+		t.Error("IsPrompt")
 	}
 	if _, ok := Windows(json.RawMessage(`{"ok": true}`)); ok {
 		t.Fatal("not a window list")

@@ -22,6 +22,9 @@ struct KnowledgeView: View {
     @State private var resultsFor = ""
     @State private var searchError: String?
     @State private var showIgnored = false
+    @State private var showMap = false
+    /// Organize knowledge points by topic, read when the topics list comes back empty (off says why).
+    @State private var curating: Bool?
     /// The project the user asked to delete, while the question is up.
     @State private var deletingProject: KBEntry?
     /// Projects taken off the list while their deletion is sent.
@@ -107,7 +110,13 @@ struct KnowledgeView: View {
             MacToolbarMiddle() // the menu by the search field, clear of the title row's Knowledge (#830)
             #endif
             ToolbarItem(placement: .topBarTrailing) { if !(kind == .recordings && localRecordings) { tagMenu } }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showMap = true } label: { ThemedIcon(Theme.Icon.knowledgeMap) }
+                    .accessibilityLabel("Knowledge Map")
+                    .accessibilityIdentifier("kb.map")
+            }
         }
+        .navigationDestination(isPresented: $showMap) { KnowledgeMapView() }
         // Always shown: the drawer that hides on scroll folded away as soon as results replaced the list (the chips
         // row goes), taking the typed text out of sight (2026-10-31).
         .pageSearchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: String(localized: "Search profiles and chat history"))
@@ -138,6 +147,11 @@ struct KnowledgeView: View {
             if let id = RecordingSamples.installIfAsked(), UserDefaults.standard.bool(forKey: "openRecording") { debugRecording = id }
             #endif
             if let q = UserDefaults.standard.string(forKey: "showKnowledgeSearch") { query = q }
+            // `-showKnowledgeMap YES`: the knowledge map pushed (screenshots).
+            // A moment later: pushed while this page is still being pushed, the map was dropped now and then.
+            if UserDefaults.standard.bool(forKey: "showKnowledgeMap") {
+                Task { try? await Task.sleep(for: .seconds(1)); showMap = true }
+            }
             if let k = UserDefaults.standard.string(forKey: "showKnowledgeKind").flatMap(KBKind.init(rawValue:)) { kind = k }
             if let ref = UserDefaults.standard.string(forKey: "showKnowledgeEntry"), let slash = ref.firstIndex(of: "/") {
                 let id = String(ref[ref.index(after: slash)...])
@@ -155,7 +169,9 @@ struct KnowledgeView: View {
     // MARK: Lists
 
     @ViewBuilder private func content(_ list: KBList) -> some View {
-        if list.items.isEmpty {
+        if kind == .topics {
+            topics(list)
+        } else if list.items.isEmpty {
             Section {
                 EmptyStateView(symbol: kind.symbol, title: tag == nil ? String(localized: "No \(kind.title) yet") : String(localized: "No \(kind.title) tagged #\(tag!)"),
                                message: String(localized: "The hub archives and condenses your Lark and email conversations, organizes them into projects, people, docs and meetings, and ranks them by importance and relevance."))
@@ -216,6 +232,46 @@ struct KnowledgeView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Topics (#7251): the map first, then every topic by importance and size; empty, it says whether curation is off.
+    @ViewBuilder private func topics(_ list: KBList) -> some View {
+        if list.items.isEmpty {
+            Section {
+                if curating == false {
+                    EmptyStateView(symbol: KBKind.topics.symbol, title: String(localized: "Knowledge Points Are Off"),
+                                   message: String(localized: "Turn on “Organize knowledge points by topic” in Settings › Knowledge Selection, and Persona starts curating in the background."))
+                } else {
+                    EmptyStateView(symbol: KBKind.topics.symbol, title: String(localized: "No Topics Yet"),
+                                   message: String(localized: "In the background, Persona pulls durable knowledge out of your project timelines and chats and files it by topic. The map fills in as it does."))
+                }
+            }
+            .listRowBackground(Color.clear)
+            .task {
+                guard curating == nil, let api = scopedAPI() else { return }
+                curating = try? await api.assistant().kbTopics ?? true
+            }
+        } else {
+            let points = list.items.reduce(0) { $0 + ($1.topicPoints ?? 0) }
+            Section {
+                Button { showMap = true } label: {
+                    HStack(spacing: Theme.Space.m) {
+                        IconTile(Theme.Icon.knowledgeMap, tint: Theme.accent)
+                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                            Text("Knowledge Map").font(Theme.Font.heading).lineLimit(1)
+                            Text("\(list.items.count) topics and \(points) knowledge points as one map")
+                                .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                        Spacer(minLength: Theme.Space.s)
+                        ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(.tertiary)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("kb.map.row")
+            }
+            Section { rows(KBTopics.ordered(list.items)) } header: { header(tag.map { "#" + $0 } ?? String(localized: "All"), list.items.count) }
         }
     }
 
@@ -549,6 +605,7 @@ struct KBRow: View {
     private func badges(tags: Int) -> some View {
         HStack(spacing: Theme.Space.sm) {
             ImportanceBadge(importance: entry.importance)
+            if let n = entry.topicPoints { KBPill(text: String(localized: "\(n) knowledge points")) }
             if let k = entry.projectKind { KBPill(text: k, tint: (entry.extra ?? "").hasPrefix("long") ? Theme.Hue.blue : nil) }
             if entry.relevance > 0 { KBPill(text: String(localized: "Relevance \(entry.relevance)"), tint: RelevanceMeter.tint(entry.relevance)) }
             ForEach((entry.tags ?? []).prefix(tags), id: \.self) { t in
@@ -692,6 +749,9 @@ struct KnowledgeDetailView: View {
     @State private var allLog = false
     @State private var openKinds: Set<String> = []
     @State private var factsEditor = false
+    /// A topic's point open in its sheet.
+    @State private var openPoint: KBOpenPoint?
+    @State private var pushedEntry: KBEntry?
     /// The link the user asked to remove, while the question is up.
     @State private var unlinking: KBUnlink?
     /// Links taken off the page while their removal is written and checked (`kind/id`).
@@ -738,7 +798,12 @@ struct KnowledgeDetailView: View {
                 if let log = d.log, !log.isEmpty { timeline(log) }
                 KBFactsSection(facts: KBFacts.text(d.meta), edit: { factsEditor = true }, delete: { Task { await deleteFacts() } })
                 // Empty once the header's parts are taken out (a summary that is just the one line): no blank card.
-                if let sum = d.summary, case let profile = Self.profile(sum, oneLine: shown.oneLine), !profile.isEmpty {
+                // A topic's summary is written from its points (docs/assistant/knowledge.md "Topics"): the points instead.
+                if d.kind == KBKind.topics.rawValue {
+                    KBTopicPointsSections(detail: d) { p in
+                        openPoint = KBOpenPoint(point: p, links: d.links ?? [], crumbs: [shown.name] + (p.path ?? []))
+                    }
+                } else if let sum = d.summary, case let profile = Self.profile(sum, oneLine: shown.oneLine), !profile.isEmpty {
                     Section("Profile") {
                         Markdown(Links.markdown(MathMarkdown.rewrite(profile))).markdownTheme(.persona).readingContent().textSelection(.enabled)
                             .padding(.vertical, Theme.Space.sm)
@@ -790,6 +855,10 @@ struct KnowledgeDetailView: View {
             KBTagEditor(entry: shown) { await load() }
                 .environment(\.knowledgeSettingsAPI, capturedAPI)
         }
+        .sheet(item: $openPoint) { p in
+            KBPointSheet(point: p.point, links: p.links, crumbs: p.crumbs) { e in pushedEntry = e }
+        }
+        .navigationDestination(item: $pushedEntry) { e in KnowledgeDetailView(entry: e) }
         .sheet(isPresented: $factsEditor) {
             KBFactsEditor(name: shown.name, initial: KBFacts.text(detail?.detail.meta)) { text in
                 try await saveFacts(text)
@@ -838,6 +907,7 @@ struct KnowledgeDetailView: View {
                     HStack(spacing: Theme.Space.sm) {
                         ImportanceBadge(importance: e.importance)
                         if let k = e.projectKind { KBPill(text: String(localized: "\(k) project"), tint: (e.extra ?? "").hasPrefix("long") ? Theme.Hue.blue : nil) }
+                        if let n = e.topicPoints { KBPill(text: String(localized: "\(n) knowledge points")) }
                         if let st = projectStatus { KBPill(text: st) }
                         if e.relevance > 0 { KBPill(text: String(localized: "Relevance \(e.relevance)"), tint: RelevanceMeter.tint(e.relevance)) }
                     }
@@ -1180,6 +1250,7 @@ struct KnowledgeDetailView: View {
         if let t = m["tags"]?.array { e.tags = t.compactMap(\.string) }
         if let l = m["one_line"]?.string ?? m["note"]?.string, !l.isEmpty { e.oneLine = l }
         if e.kind == KBKind.projects.rawValue, let k = m["kind"]?.string { e.extra = k + " · " + (m["status"]?.string ?? "active") }
+        if e.kind == KBKind.topics.rawValue, let n = m["points"]?.int { e.extra = String(n) }
         return e
     }
 
@@ -1226,6 +1297,10 @@ struct KnowledgeDetailView: View {
             if !debugOpened, let d = detail?.detail {
                 debugOpened = true
                 if UserDefaults.standard.bool(forKey: "showKnowledgeFacts") { factsEditor = true }
+                // `-showKnowledgePoint YES` on a topic: its first point's sheet.
+                if UserDefaults.standard.bool(forKey: "showKnowledgePoint"), let p = KBTopics.group(d.points).points.first ?? d.points?.first {
+                    openPoint = KBOpenPoint(point: p, links: d.links ?? [], crumbs: [Self.shown(entry, detail: detail).name] + (p.path ?? []))
+                }
                 if UserDefaults.standard.bool(forKey: "showKnowledgeUnlink") {
                     unlinking = d.links?.lazy.compactMap { KBUnlink.removal(d, name: Self.shown(entry, detail: detail).name, linked: $0) }.first
                 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -360,8 +361,11 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 	}
 	title, body := s.reminderText(ctx, todo, at, now)
 	set := s.settings(ctx)
+	// A reminder the owner set for themself: theirs to act on, so P0 even in the hub's low-distraction mode, keyed by
+	// to-do and due time (each due time rings once).
 	s.push(ctx, Notification{Subtitle: i18n.T(s.lang(ctx), "assistant-todos.remind_subtitle"), DeviceID: set.MachineID,
-		SessionID: set.Main, Title: title, Body: body})
+		SessionID: set.Main, Title: title, Body: body, Level: assistantwire.LevelP0,
+		RelatedKey: "todo-remind:" + id + "@" + at.UTC().Format(time.RFC3339)})
 	s.channelsPushed(set.MachineID, set.Main, title, body) // the Feishu bot and the channels with pushes on, as notify_user
 	s.logf("todo %s: reminded (due %s)", id, at.Format(time.RFC3339))
 }

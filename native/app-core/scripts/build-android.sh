@@ -31,8 +31,14 @@ for target in aarch64-linux-android x86_64-linux-android; do
   rustup target list --installed --toolchain 1.98.0 | grep -Fx "$target" >/dev/null ||
     rustup target add --toolchain 1.98.0 "$target"
 done
-LLVM=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-[[ -d $LLVM ]] || { printf 'Android core build: FAILED (this script currently supports an x86_64 Linux NDK host)\n' >&2; exit 2; }
+HOST_OS=$(uname -s)
+case "$HOST_OS" in
+  Linux) NDK_HOST=linux-x86_64 ;;
+  Darwin) NDK_HOST=darwin-x86_64 ;;
+  *) printf 'Android core build: FAILED (unsupported NDK host OS %s)\n' "$HOST_OS" >&2; exit 2 ;;
+esac
+LLVM=$NDK/toolchains/llvm/prebuilt/$NDK_HOST
+[[ -d $LLVM ]] || { printf 'Android core build: FAILED (NDK %s lacks the %s host tools)\n' "$NDK_VERSION" "$NDK_HOST" >&2; exit 2; }
 READELF=$LLVM/bin/llvm-readelf
 STRIP=$LLVM/bin/llvm-strip
 [[ -x $READELF && -x $STRIP ]] || { printf 'Android core build: FAILED (NDK LLVM tools are missing)\n' >&2; exit 2; }

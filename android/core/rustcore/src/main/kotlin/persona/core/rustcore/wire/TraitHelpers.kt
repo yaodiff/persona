@@ -62,6 +62,26 @@ object TraitHelpers {
     }
 
     @Throws(com.novi.serde.SerializationError::class)
+    fun serialize_option_u64(value: ULong?, serializer: com.novi.serde.Serializer) {
+        if (value == null) {
+            serializer.serialize_option_tag(false)
+        } else {
+            serializer.serialize_option_tag(true)
+            serializer.serialize_u64(value)
+        }
+    }
+
+    @Throws(com.novi.serde.DeserializationError::class)
+    fun deserialize_option_u64(deserializer: com.novi.serde.Deserializer): ULong? {
+        val tag = deserializer.deserialize_option_tag()
+        return if (!tag) {
+            null
+        } else {
+            deserializer.deserialize_u64()
+        }
+    }
+
+    @Throws(com.novi.serde.SerializationError::class)
     fun serialize_vector_ListOp(value: kotlin.collections.List<persona.core.rustcore.wire.ListOp>, serializer: com.novi.serde.Serializer) {
         serializer.serialize_len(value.size.toLong())
         for (item in value) {

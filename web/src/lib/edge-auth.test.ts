@@ -65,6 +65,23 @@ describe("probing after the socket failed", () => {
     expect(await probeEdge((async () => { throw new TypeError("offline"); }) as typeof fetch)).toBe(false);
     expect(await probeEdge((async () => res(200)) as typeof fetch)).toBe(false);
   });
+  it("asks after the credential only when the hub itself answered (web usability audit item 38)", async () => {
+    const answered = vi.fn(async () => {});
+    await probeEdge((async () => { throw new TypeError("offline"); }) as typeof fetch, answered);
+    expect(answered).not.toHaveBeenCalled();
+    await probeEdge((async () => res(200)) as typeof fetch, answered);
+    expect(answered).toHaveBeenCalledTimes(1);
+    // the hub's own JSON refusal is the hub answering too
+    await probeEdge((async () => res(401)) as typeof fetch, answered);
+    expect(answered).toHaveBeenCalledTimes(2);
+  });
+  it("asks nothing more when a proxy in front answers for a hub that is down", async () => {
+    const answered = vi.fn(async () => {});
+    for (const status of [502, 503, 504]) {
+      expect(await probeEdge((async () => res(status, "basic", "text/plain")) as typeof fetch, answered)).toBe(false);
+    }
+    expect(answered).not.toHaveBeenCalled();
+  });
   it("asks without following redirects", async () => {
     const f = vi.fn(async (_u: RequestInfo | URL, _i?: RequestInit) => res(200));
     await probeEdge(f as unknown as typeof fetch);

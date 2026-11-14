@@ -27,7 +27,6 @@
   "unsorted_footer_docs": "只在群里出现过、还没有打标的文档。和你说过话、或在重要会话里的会被 AI 整理出来。",
   "unsorted_footer_meetings": "只在群里出现过、还没有打标的会议。和你说过话、或在重要会话里的会被 AI 整理出来。",
   "unsorted_footer_events": "只在群里出现过、还没有打标的日程。和你说过话、或在重要会话里的会被 AI 整理出来。",
-  "count_over": "1万+",
   "hit_chat": "聊天记录 · {day}",
   "hit_sender": "{sender}：{text}",
   "hit_profile": "档案",

@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/mcpwait"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestLCUElicitationIsAnsweredOnTheCardAndNeverImplied(t *testing.T) {
@@ -17,6 +20,9 @@ func TestLCUElicitationIsAnsweredOnTheCardAndNeverImplied(t *testing.T) {
 	sess := newLCUSession(func(ctx context.Context, conv string, raw json.RawMessage) (map[string]any, error) {
 		if conv != "conv-1" {
 			t.Errorf("conversation %q", conv)
+		}
+		if callID := mcpwait.CallFrom(ctx); callID != "55555555-5555-4555-8555-555555555555" {
+			t.Errorf("MCP call ID %q", callID)
 		}
 		if string(raw) == "" {
 			t.Error("empty elicitation")
@@ -32,6 +38,7 @@ func TestLCUElicitationIsAnsweredOnTheCardAndNeverImplied(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	ctx = mcpwait.WithCall(ctx, "55555555-5555-4555-8555-555555555555")
 	res, err := sess.call(ctx, "js", map[string]any{"code": "return 1"}, "persona-abcd", "conv-1")
 	if err != nil {
 		t.Fatal(err)
@@ -225,5 +232,80 @@ func TestLCUWriteErrorIsItselfUnlessThePipeClosed(t *testing.T) {
 	_, err := sess.call(ctx, "js", map[string]any{"code": "return 1"}, "", "")
 	if !errors.Is(err, failed) || errors.Is(err, errLCUEnded) {
 		t.Fatalf("err = %v, want the write's own error", err)
+	}
+}
+
+func TestComputerCallCarriesCallIDToElicit(t *testing.T) {
+	const callID = "12121212-1212-4212-8212-121212121212"
+	elicit := []byte(`{"mode":"form","message":"Allow Calculator?","requestedSchema":{"type":"object","properties":{}},"_meta":{"codex_approval_kind":"mcp_tool_call","connector_id":"computer-use","tool_params":{"app":"com.apple.calculator"},"tool_params_display":[{"name":"app","value":"Calculator"}],"persist":["session"]}}`)
+	for _, tc := range []struct {
+		name   string
+		callID any
+		want   string
+	}{
+		{"valid id", callID, callID},
+		{"no id", nil, ""},
+		{"malformed id", "not-a-uuid", ""},
+		{"non-string id", 17, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, _ := testNode(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			n2hR, n2hW := io.Pipe()
+			h2nR, h2nW := io.Pipe()
+			n.peer = rpc.New("n", n2hW)
+			hub := rpc.New("h", h2nW)
+			elicited := make(chan map[string]json.RawMessage, 1)
+			hub.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
+				if method != "computer.elicit" {
+					return map[string]any{}, nil
+				}
+				var p map[string]json.RawMessage
+				_ = json.Unmarshal(params, &p)
+				elicited <- p
+				return map[string]any{"action": "accept", "content": map[string]any{}, "_meta": map[string]any{"persist": "session"}}, nil
+			}
+			go func() { _ = hub.Serve(ctx, n2hR) }()
+			go func() { _ = n.peer.Serve(ctx, h2nR) }()
+			defer func() { _ = n2hW.Close(); _ = h2nW.Close() }()
+
+			sess := n.lcuSession()
+			serverRead, clientWrite := io.Pipe()
+			clientRead, serverWrite := io.Pipe()
+			sess.attachPipes(clientRead, clientWrite)
+			errc := make(chan error, 1)
+			go func() { errc <- lcuFakeServer(serverRead, serverWrite, elicit) }()
+
+			call := map[string]any{"session": "persona-abcd", "conversation": "conv-1", "tool": "js", "args": map[string]any{"code": "return 1"}}
+			if tc.callID != nil {
+				call["call_id"] = tc.callID
+			}
+			raw, _ := json.Marshal(call)
+			if _, err := n.lcuComputerCall(ctx, raw); err != nil {
+				t.Fatalf("the computer call itself must not fail: %v", err)
+			}
+			select {
+			case p := <-elicited:
+				var got string
+				_ = json.Unmarshal(p["call_id"], &got)
+				if got != tc.want {
+					t.Fatalf("computer.elicit call_id = %q, want %q (params %v)", got, tc.want, p)
+				}
+				if _, present := p["call_id"]; present != (tc.want != "") {
+					t.Fatalf("computer.elicit call_id present = %v: %v", present, p)
+				}
+			case <-ctx.Done():
+				t.Fatal("no computer.elicit reached the manager")
+			}
+			select {
+			case err := <-errc:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal("the fake LCU server did not finish")
+			}
+		})
 	}
 }
