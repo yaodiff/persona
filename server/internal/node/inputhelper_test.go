@@ -98,12 +98,29 @@ func (w *inputWorld) asks() [][]string {
 
 func eventually(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if ok() {
-			return
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(3 * time.Second)
+	for !ok() {
+		select {
+		case <-tick.C:
+		case <-deadline:
+			t.Fatalf("never: %s", what)
 		}
 	}
-	t.Fatalf("never: %s", what)
+}
+
+// helloNow is hello with its work done before it returns: hello runs start on a goroutine of its own, so a test
+// checking that nothing happened runs start itself instead of waiting a fixed time for it.
+func helloNow(s *inputSession) {
+	s.mu.Lock()
+	if s.started || s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.started = true
+	s.mu.Unlock()
+	s.start()
 }
 
 // With the permission, hello starts the helper once; the stream's records reach it as they came, in order; the
@@ -171,8 +188,7 @@ func TestWithoutThePermissionHelloAsksOncePerVersion(t *testing.T) {
 		t.Fatalf("after asking: %+v", st)
 	}
 	other := &inputSession{inputs: w.inputs, pair: "L"}
-	other.hello()
-	time.Sleep(50 * time.Millisecond)
+	helloNow(other)
 	if len(w.asks()) != 1 || w.starts.Load() != 0 {
 		t.Fatalf("asked %d times and started %d: want one ask, no helper", len(w.asks()), w.starts.Load())
 	}
@@ -192,8 +208,7 @@ func TestPersonaInputOnlyForASignedInStreamAndWithinItsCount(t *testing.T) {
 	w := newInputWorld(t, "granted")
 	w.signed.Store(false)
 	s := &inputSession{inputs: w.inputs, pair: "K"}
-	s.hello()
-	time.Sleep(50 * time.Millisecond)
+	helloNow(s)
 	if w.starts.Load() != 0 || len(w.asks()) != 0 {
 		t.Fatal("a stream that hadn't signed in started or asked for something")
 	}
@@ -205,9 +220,10 @@ func TestPersonaInputOnlyForASignedInStreamAndWithinItsCount(t *testing.T) {
 	var preflights atomic.Int32
 	swap(t, &inputPreflight, func(context.Context, string) string { preflights.Add(1); return "granted" })
 	s = &inputSession{inputs: w.inputs, pair: "K"}
-	s.hello()
-	eventually(t, "the helper started", func() bool { return w.starts.Load() == 1 })
-	time.Sleep(20 * time.Millisecond)
+	helloNow(s)
+	if n := w.starts.Load(); n != 1 {
+		t.Fatalf("started %d times, want once", n)
+	}
 	if s.scroll(record(inputKindScroll, 2, 0, 1, 0)) || w.inputs.count() != 0 {
 		t.Fatalf("a helper that said missing took a record, or still counts (%d)", w.inputs.count())
 	}
@@ -223,11 +239,9 @@ func TestPersonaInputOnlyForASignedInStreamAndWithinItsCount(t *testing.T) {
 	var sessions []*inputSession
 	for _, pair := range []string{"A", "B", "C"} {
 		s := &inputSession{inputs: w.inputs, pair: pair}
-		s.hello()
+		helloNow(s)
 		sessions = append(sessions, s)
 	}
-	eventually(t, "two helpers", func() bool { return w.starts.Load() == 3 })
-	time.Sleep(50 * time.Millisecond)
 	if n := w.starts.Load(); n != 3 || w.inputs.count() != inputHelpersMost {
 		t.Fatalf("started %d (one earlier), %d running; want two more, %d running", n, w.inputs.count(), inputHelpersMost)
 	}
