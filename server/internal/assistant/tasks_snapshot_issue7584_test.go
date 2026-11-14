@@ -217,3 +217,46 @@ func TestFitSnapshotCompactsOpenRosterBeforeOmittingTaskDetails(t *testing.T) {
 		t.Fatalf("snapshot exceeds budget: %d", runes(got))
 	}
 }
+
+// A question to-do stays out of the roster and the task list only while the snapshot's own question line shows it.
+// Once its ask record is pruned (askTodoKeep, askTodoMax) it is an ordinary to-do: listed and counted like any other,
+// not lost from both.
+func TestSnapshotListsAQuestionTodoOnceItsAskRecordIsPruned(t *testing.T) {
+	s := newStorelessService(t, newFakeHub().withMachine())
+	ctx := context.Background()
+	live, pruned := askTodoPrefix+"live", askTodoPrefix+"pruned"
+	for _, id := range []string{live, pruned} {
+		if _, err := s.newTodoAs(ctx, id, "question "+id, "", "conversation", "", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.keepAskTodo(ctx, askTodo{TodoID: live, Questions: []string{"Which one?"}, AskedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// Asked longer ago than askTodoKeep: saving the records drops it at once, as pruning would.
+	if err := s.keepAskTodo(ctx, askTodo{TodoID: pruned, Questions: []string{"Old one?"}, AskedAt: time.Now().Add(-askTodoKeep - time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.askTodoOf(ctx, pruned); ok {
+		t.Fatal("fixture: the old record was not pruned")
+	}
+	roster, total := s.snapshotOpenTodos(ctx, "")
+	ids := map[string]bool{}
+	for _, r := range roster {
+		ids[r.ID] = true
+	}
+	if !ids[pruned] || ids[live] || total != 1 {
+		t.Fatalf("roster = %+v (total %d), want the pruned question listed and the live one left to its own line", roster, total)
+	}
+	tasks := map[string]bool{}
+	for _, task := range s.snapshotTasks(ctx, "") {
+		tasks[task.ID] = true
+	}
+	if !tasks[pruned] || tasks[live] {
+		t.Fatalf("snapshot tasks = %v, want the pruned question listed and the live one not", tasks)
+	}
+	asked := s.snapshotAsked(ctx)
+	if len(asked) != 1 || asked[0].TodoID != live {
+		t.Fatalf("question line = %+v", asked)
+	}
+}

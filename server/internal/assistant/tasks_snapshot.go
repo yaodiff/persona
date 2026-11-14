@@ -21,10 +21,11 @@ func (s *Service) snapshotOpenTodos(ctx context.Context, web string) ([]prompts.
 	if s.ensureTodosLoaded(ctx) != nil {
 		return nil, 0
 	}
+	asked := s.askedInSnapshot(ctx)
 	s.todos.mu.RLock()
 	list := make([]Todo, 0, len(s.todos.todos))
 	for _, t := range s.todos.todos {
-		if t.DoneAt == nil && !isAskTodo(t.ID) {
+		if t.DoneAt == nil && !asked[t.ID] {
 			list = append(list, copyTodoLocked(t))
 		}
 	}
@@ -46,16 +47,28 @@ func (s *Service) snapshotOpenTodos(ctx context.Context, web string) ([]prompts.
 	return out, total
 }
 
+// askedInSnapshot are the question to-dos the snapshot's own line (snapshotAsked) shows. Only those stay out of the
+// roster and the task list: one whose ask record was pruned (askTodoKeep, askTodoMax), or that line no longer shows, is
+// an ordinary to-do and is listed like any other, so no open to-do drops out of both.
+func (s *Service) askedInSnapshot(ctx context.Context) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range s.snapshotAsked(ctx) {
+		out[a.TodoID] = true
+	}
+	return out
+}
+
 // snapshotTasks are the highest-priority open todos plus recent conversation tasks that have ended.
 func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.SnapshotTask {
 	var list []Todo
 	if s.ensureTodosLoaded(ctx) != nil {
 		return nil
 	}
+	asked := s.askedInSnapshot(ctx)
 	s.todos.mu.RLock()
 	for _, row := range s.todos.todos {
 		t := copyTodoLocked(row)
-		if isAskTodo(t.ID) {
+		if asked[t.ID] {
 			continue // questions have their own line in the snapshot
 		}
 		if t.DoneAt == nil || (t.Origin != "" && time.Since(*t.DoneAt) < 24*time.Hour && time.Since(t.UpdatedAt) < 7*24*time.Hour) {

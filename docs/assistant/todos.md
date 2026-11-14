@@ -821,7 +821,7 @@ several requests, in a stable order, and counts the set as sent only once every 
 
 A to-do it makes is the user's own (no `origin`): work for an agent still goes through `task_plan`. In a health conversation, anything that writes asks first (`confirmOutbound`, `health.md`). The generated CLAUDE.md tells the assistant to use `todo_create` when the user says to note a to-do or to remind them of something.
 
-The main conversation's snapshot includes every open non-question to-do in a compact, bounded index, including old and personal to-dos with no `origin`; it also gives the total and a `todo_list` entrance. This is visibility only: a personal to-do stays the user's own and is not automatically supervised or dispatched to an Agent. Questions created by `ask_user` keep their dedicated snapshot section.
+The main conversation's snapshot includes every open to-do in a compact, bounded index (question to-dos the snapshot's question line shows are left to that line), including old and personal to-dos with no `origin`; it also gives the total and a `todo_list` entrance. This is visibility only: a personal to-do stays the user's own and is not automatically supervised or dispatched to an Agent. Questions created by `ask_user` keep their dedicated snapshot section.
 
 ## Interaction design across clients
 
