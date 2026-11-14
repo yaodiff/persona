@@ -377,8 +377,9 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageWaiting, ruleAgentAsks)
 	case t.DoneAt == nil && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
 		return at(triageWaiting, ruleOwnerDecides)
-	case !(finished && !seen(last)) && triageWaitingForMerge(t, status, now):
-		// rule 9 after rule 8: a turn or review nobody has looked at stays Just finished even with its PR open
+	case !(finished && !seen(last) && review != reviewParked) && triageWaitingForMerge(t, status, now):
+		// rule 9 after rule 8: a turn or review nobody has looked at stays Just finished even with its PR open. A parked
+		// hold is its supervisor's reading of the latest turn, so an agent session left unread does not hide its PR.
 		return at(triagePR, rulePROpen)
 	case status == "working" || status == "waiting":
 		return at(triageWorking, ruleAgentRunning)
