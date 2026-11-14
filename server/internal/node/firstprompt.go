@@ -150,6 +150,7 @@ func (n *Node) firstAfterDialog(pane, id, prompt string, since time.Time, wait, 
 		} else {
 			log.Printf("start %s: first message delivered after its dialog was answered", id)
 			n.lostFirst.clear(id)
+			n.dropHandoff(id, nil) // a switch's handoff waiting for the next message went in with this one (engine_switch.go)
 		}
 		n.notifySessions()
 		return

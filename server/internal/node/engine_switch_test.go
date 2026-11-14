@@ -1041,6 +1041,61 @@ func TestEngineSwitchKeepsTheHandoffForTheNextMessage(t *testing.T) {
 	}
 }
 
+// A switch's first message a dialog held back goes in by itself once the dialog is answered (firstAfterDialog): it
+// already carries the handoff, so the copy waiting for the next message is dropped and does not come twice.
+func TestEngineSwitchHeldFirstMessageCarriesTheHandoffOnce(t *testing.T) {
+	withFirstAfterDialog(t, 10*time.Second, 20*time.Millisecond)
+	n, f, home, cwd, _ := codexSwitchNode(t)
+	n.state.setPendingSwitch(sidB, &proto.PendingSwitch{Launcher: "claude", Agent: "claude", At: time.Now()})
+	quitsOn(f, "w1:p1", sidB, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidB))
+	plain, ansi := screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi")
+	var mu sync.Mutex
+	status := ""
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "--resume "+sidA) {
+			mu.Lock()
+			status = proto.StatusBlocked
+			mu.Unlock()
+			f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusBlocked, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+		}
+		if c.Method == "agent.prompt" {
+			line, _ := json.Marshal(map[string]any{"type": "user", "timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+				"cwd": cwd, "message": map[string]any{"role": "user", "content": str(c.Params["text"])}})
+			appendTranscript(t, home, cwd, sidA, string(line)) // the held message reaches the transcript
+		}
+	})
+	f.handle("agent.get", func(p map[string]any) any {
+		mu.Lock()
+		defer mu.Unlock()
+		if status == "" {
+			return map[string]any{"agent": nil}
+		}
+		return map[string]any{"agent": map[string]any{"agent": "claude", "agent_status": status, "pane_id": "w1:p1",
+			"tab_id": "w1:t1", "workspace_id": "w1"}}
+	})
+	if err := tellTo(t, n, sidB, "and now?"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if st, _ := n.state.get(sidA); st.PendingHandoff == nil {
+		t.Fatal("the handoff is not kept while the first message is held")
+	}
+	// Answered at the computer: the box is back and the held message goes in without anything sent again.
+	f.setScreens("w1:p1", plain, ansi)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+	mu.Lock()
+	status = proto.StatusIdle
+	mu.Unlock()
+	n.dialogWait.Wait()
+	got := promptsTo(f)
+	if len(got) != 1 {
+		t.Fatalf("typed %q, want the held message once", got)
+	}
+	checkHandoffBlock(t, got[0], "codex", "claude", "", true, "and now?")
+	if st, _ := n.state.get(sidA); st.PendingHandoff != nil {
+		t.Errorf("the handoff still waits after going in with the held message: %+v", st.PendingHandoff)
+	}
+}
+
 // The handoff a held-back first message left is not put in front of a message once the session got one since (typed
 // at the computer, or sent before without its arrival confirmed): it would come twice, or after the conversation went on.
 func TestEngineSwitchDropsAHandoffTheSessionWentOnWithout(t *testing.T) {

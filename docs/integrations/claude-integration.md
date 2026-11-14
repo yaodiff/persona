@@ -343,7 +343,9 @@ engine: the same pick, the same message that carries it out, the same time bound
   the session's row says its first message did not go in, as for any start. The handoff is kept on the new session's
   record (`PendingHandoff`, persisted in the hub's Postgres like the history, with when that start began) and goes in
   front of the next message sent to that session, whoever sends it (send.go): the words the user sends again do not go
-  without it. It is cleared once that message is known to be in (`afterPrompt`), and dropped instead of put in front
+  without it. A dialog's held first message (`lostDialogHeld`) keeps the handoff the same way; when that held message
+  goes in by itself once the dialog is answered (`firstAfterDialog`), it carries the handoff and the kept copy is
+  dropped (#7885). It is cleared once that message is known to be in (`afterPrompt`), and dropped instead of put in front
   when the session got a message since it was kept or works (`promptedSince`: one typed at the computer, or the earlier
   message whose arrival was not confirmed), so it never comes twice; also when the session's lost first message is
   cleared that way, and on a session a later switch moves the conversation away from.
