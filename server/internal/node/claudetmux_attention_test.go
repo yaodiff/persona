@@ -46,12 +46,7 @@ func TestTmuxClaudeWaitingOnADialogIsNotComputerOnly(t *testing.T) {
 	writeOutsideClaude(t, home, sidA, "cli", "waiting", inbox, map[string]any{"tmux": "orc:@11.%11"})
 
 	var s proto.Session
-	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
-		s = byID(listSessions(t, n))[sidA]
-		if s.AttentionReason == want {
-			break
-		}
-	}
+	waitFor(t, "the dialog named", func() bool { s = byID(listSessions(t, n))[sidA]; return s.AttentionReason == want })
 	if s.PaneID != "tmux:%11" || s.Capabilities == nil || !s.Capabilities.Terminal {
 		t.Fatalf("not driven through its pane: %+v", s)
 	}
@@ -65,11 +60,7 @@ func TestTmuxClaudeWaitingOnADialogIsNotComputerOnly(t *testing.T) {
 	wait := func(ok func(proto.Session) bool) proto.Session {
 		t.Helper()
 		var row proto.Session
-		for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
-			if row = byID(listSessions(t, n))[sidA]; ok(row) {
-				break
-			}
-		}
+		waitFor(t, "the row", func() bool { row = byID(listSessions(t, n))[sidA]; return ok(row) })
 		return row
 	}
 	if s = wait(func(s proto.Session) bool { return s.AttentionReason == want }); s.Status != proto.StatusBlocked || s.AttentionReason != want {
@@ -85,7 +76,9 @@ func TestTmuxClaudeWaitingOnADialogIsNotComputerOnly(t *testing.T) {
 	// A dialog the pane does not show (not read yet, or one the reader does not recognize) leaves the sentence the row
 	// had: never an empty reason on a blocked row.
 	writeOutsideClaude(t, home, sidA, "cli", "waiting", inbox, map[string]any{"tmux": "orc:@11.%11"})
-	for end := time.Now().Add(300 * time.Millisecond); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for end := time.Now().Add(300 * time.Millisecond); time.Now().Before(end); <-tick.C {
 		if s = byID(listSessions(t, n))[sidA]; s.Status != proto.StatusBlocked || s.AttentionReason != proto.AttentionClaudeComputer {
 			t.Fatalf("no dialog on the pane: attention %q (status %s)", s.AttentionReason, s.Status)
 		}

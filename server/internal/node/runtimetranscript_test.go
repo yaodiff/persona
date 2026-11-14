@@ -188,7 +188,7 @@ func TestRuntimeTranscriptWatchStopsWithItsConnection(t *testing.T) {
 			f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 			_, _ = f.WriteString(`{"type":"assistant","uuid":"a2","timestamp":"2026-11-04T10:00:09Z","message":{"role":"assistant","content":[{"type":"text","text":"after the connection"}]}}` + "\n")
 			_ = f.Close()
-			time.Sleep(700 * time.Millisecond) // several 250 ms watch polls
+			time.Sleep(700 * time.Millisecond) // sleep-ok: a negative check, several 250 ms watch polls must pass with nothing pushed
 			if after := len(hub.items); after != before {
 				t.Fatalf("the watch kept pushing after its connection ended: items %d -> %d", before, after)
 			}
