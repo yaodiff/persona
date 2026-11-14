@@ -72,10 +72,12 @@ const REASON: Record<TierReason, () => string> = {
   choice: () => t("screen-video.tier_choice"),
 };
 
-/** The tier as the panel shows it, as the iPhone's ScreenTierText: the Quality chosen, the scale and the frame rate
- *  (Auto · 1.5× · 60 fps); and why it last changed, in plain words, with how long ago. */
+/** The tier as the panel shows it, as the iPhone's ScreenTierText: the Quality chosen, the scale the picture really has
+ *  (its pixels per point to a tenth: 1× on a display at one pixel per point, 1.9× for a Retina 2× under the long-edge
+ *  cap) and the frame rate (Auto · 1.5× · 60 fps); and why it last changed, in plain words, with how long ago. */
 export function tierParts(quality: ScreenQuality, c: Change): string[] {
-  const scale = Number.isInteger(c.tier.scale) ? String(c.tier.scale) : c.tier.scale.toFixed(1);
+  const v = Math.round(c.tier.pixelsPerPoint * 10) / 10;
+  const scale = Number.isInteger(v) ? String(v) : v.toFixed(1);
   return [QUALITY[quality](), `${scale}×`, t("screen-video.stats_fps", { fps: c.tier.fps })];
 }
 export function tierReasonParts(reason: TierReason, at: number, now: number): string[] {

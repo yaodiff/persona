@@ -243,6 +243,7 @@
   "section_done": "完了",
   "shelved_hint": "48時間進展がなく、動いているエージェントもありません。未完了には数えません。データは削除されていません。",
   "related": "関連 {count} 件",
+  "concern": "関心事",
   "pr_idle": "最終更新 {age}",
   "restore": "戻す",
   "restored": "リストに戻しました",

@@ -313,6 +313,9 @@ type Node struct {
 	screens     *screenLogins
 	screenStart func(ctx context.Context, id, pair string, keepAwake, link bool, done func()) (linked bool, err error)
 	links       *screenlink.Registry
+	// inputs: pixel scrolling (#7775, inputhelper.go): on a Mac, each paired 5900 stream is read for the phone's scroll
+	// records, which go to Persona Input. nil elsewhere: the streams pass as they come.
+	inputs *screenInputs
 }
 
 func New(version string) (*Node, error) {
@@ -369,7 +372,8 @@ func New(version string) (*Node, error) {
 		n.logger.Printf("machine uid: %v", err) // the hubs then treat this computer as theirs alone
 	}
 	if runtime.GOOS == "darwin" {
-		n.screenStart = n.startScreenHelper // Persona Screen, the live screen's video helper (#3954)
+		n.screenStart = n.startScreenHelper                                         // Persona Screen, the live screen's video helper (#3954)
+		n.inputs = &screenInputs{logf: n.logger.Printf, signed: n.screens.signedIn} // Persona Input (#7775)
 	}
 	n.links = screenlink.NewRegistry(screenlink.DefaultLimits, n.logger.Printf)
 	// Direct routes (#6398): a listener on this computer's LAN and Tailscale addresses, only while a screen session is

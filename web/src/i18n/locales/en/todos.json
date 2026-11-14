@@ -244,6 +244,7 @@
   "section_done": "Done",
   "shelved_hint": "No progress for 48 hours and nothing running. Not counted as open; nothing was deleted.",
   "related": "{count} related",
+  "concern": "Concern",
   "pr_idle": "last moved {age}",
   "restore": "Restore",
   "restored": "Back in the list",

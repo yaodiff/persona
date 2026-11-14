@@ -90,6 +90,7 @@ func computerStatus(ctx context.Context) proto.Computer {
 	c.ScreenSharing = screenSharing(ctx)
 	c.Displays = screenDisplays(ctx, c.ScreenSharing)
 	c.ScreenVideo = screenVideoStatus(ctx) // #3954: nil until advertiseScreenVideo
+	c.ScreenInput = screenInputStatus(ctx) // #7775: nil without Persona Input
 	c.Ready, c.Note = computerReady(c)
 	c.Backend = "cua"
 	c.Job = currentJob()

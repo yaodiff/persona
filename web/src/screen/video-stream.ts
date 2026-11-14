@@ -11,7 +11,7 @@ import type { Budget } from "./data-use";
 import type { Change } from "./tiers/policy";
 import type { Bias } from "./tiers/ladder";
 import { updateOf, type ScreenVideoTiers } from "./video-tiers";
-import { encode, FRAME_REFINEMENT, VideoParser, VideoWireError, decode, type Encoding, type Hello, type Start, type Timing, type Update } from "./video-wire";
+import { encode, FRAME_KEYFRAME, FRAME_REFINEMENT, VideoParser, VideoWireError, decode, type Encoding, type Hello, type Start, type Timing, type Update } from "./video-wire";
 
 /** A duplex of bytes, one stream's worth; the relay WebSocket now, a direct route later (#6398 step 6). */
 export type VideoTransport = {
@@ -218,7 +218,7 @@ export class ScreenVideoStream {
           this.transport.send(encode({ type: "report", last_frame: m.number, capture_micros: m.capture_micros, arrival_micros: this.nowMicros(), bytes_since_last: this.sinceReport, flags: 0 }));
           this.sinceReport = 0;
           // Only the read's first message can have begun in an earlier read.
-          this.tiers?.frame(m.capture_micros, arrived, first ? waiting : null, raw.body.length + 5, (m.flags & FRAME_REFINEMENT) !== 0);
+          this.tiers?.frame(m.capture_micros, arrived, first ? waiting : null, raw.body.length + 5, (m.flags & FRAME_REFINEMENT) !== 0, (m.flags & FRAME_KEYFRAME) !== 0);
           if (!this.decoder || !this.configured) return this.finish("undecodable");
           this.began.set(m.number, this.now());
           try {

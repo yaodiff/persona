@@ -70,13 +70,16 @@ describe("the stats panel", () => {
   });
 
   it("shows the tier as the iPhone does: Quality, scale and frame rate, then why it last changed and how long ago", () => {
-    const change: Change = { tier: { scale: 1.5, fps: 60, width: 2268, height: 1472, minKbps: 4_006, maxKbps: 12_000 }, index: 1, reason: "link_steady", targetKbps: 5_000 };
+    const change: Change = { tier: { scale: 1.5, fps: 60, width: 2268, height: 1472, minKbps: 4_006, maxKbps: 12_000, pixelsPerPoint: 1.5 }, index: 1, reason: "link_steady", targetKbps: 5_000 };
     vi.spyOn(performance, "now").mockReturnValue(73_000);
     act(() => root.render(<StatsOverlay {...props} video={{ reading: {}, codec: "HEVC", size: null, tier: { change, at: 61_000, quality: "auto" } }} />));
     const value = [t("screen-video.quality_auto"), "1.5×", t("screen-video.stats_fps", { fps: 60 })].join("·");
     expect(host.querySelector('[data-testid="screen-stats-tier"]')?.textContent).toBe(t("screen-video.stats_tier") + value);
     expect(host.querySelector('[data-testid="screen-stats-tier-reason"]')?.textContent).toBe(`${t("screen-video.tier_link_steady")}·${t("screen-video.tier_seconds_ago", { n: 12 })}`);
-    expect(tierParts("sharper", { ...change, tier: { ...change.tier, scale: 2, fps: 30 } })).toEqual([t("screen-video.quality_sharper"), "2×", t("screen-video.stats_fps", { fps: 30 })]);
+    expect(tierParts("sharper", { ...change, tier: { ...change.tier, scale: 2, fps: 30, pixelsPerPoint: 2 } })).toEqual([t("screen-video.quality_sharper"), "2×", t("screen-video.stats_fps", { fps: 30 })]);
+    // the scale the picture has, not the step asked for: a Retina 2× under the long-edge cap, and any step on a 1× display
+    expect(tierParts("auto", { ...change, tier: { ...change.tier, scale: 2, pixelsPerPoint: 2868 / 1512 } })[1]).toBe("1.9×");
+    expect(tierParts("auto", { ...change, tier: { ...change.tier, scale: 1.5, pixelsPerPoint: 1 } })[1]).toBe("1×");
     expect(tierReasonParts("choice", 0, 125_000)).toEqual([t("screen-video.tier_choice"), t("screen-video.tier_minutes_ago", { n: 2 })]);
     act(() => root.render(<StatsOverlay {...props} video={{ reading: {}, codec: "HEVC", size: null }} />));
     expect(host.querySelector('[data-testid="screen-stats-tier"]'), "no tier line without tiers").toBeNull();

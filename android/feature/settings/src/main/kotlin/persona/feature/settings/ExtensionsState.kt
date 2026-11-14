@@ -454,12 +454,23 @@ internal class ExtensionListModel(private val api: ExtensionManagement, private 
     private val mutable = MutableStateFlow(ExtensionListState())
     val state = mutable.asStateFlow()
 
+    /** Identity distinguishes every push, even when it repeats the same auth. */
+    private class AuthPush(val auth: ExtensionAuth)
+    private val authPushes = MutableStateFlow<Map<Pair<String, String>, AuthPush>>(emptyMap())
+
     suspend fun load() {
         if (state.value.loading) return
+        val authAtStart = authPushes.value
         mutable.update { it.copy(loading = true) }
         try {
             val listing = api.listing()
-            mutable.update { it.copy(extensions = listing.extensions, markets = listing.markets, error = null) }
+            mutable.update {
+                val pushes = authPushes.value
+                it.copy(extensions = listing.extensions.map { extension ->
+                    val key = extension.id to ExtensionOwners.of(extension.manager)
+                    pushes[key]?.takeIf { push -> push !== authAtStart[key] }?.let { push -> extension.copy(auth = push.auth) } ?: extension
+                }, markets = listing.markets, error = null)
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { mutable.update { it.copy(error = res.getString(R.string.settings_ext_load_failed, failureReasonText(error).resolve(res))) } }
         finally { mutable.update { it.copy(loading = false) } }
@@ -467,6 +478,7 @@ internal class ExtensionListModel(private val api: ExtensionManagement, private 
 
     /** Follows the hub's `extension_auth` pushes while the list is open: each changes its own manager's copy (#1834). */
     suspend fun watchAuth() = api.authUpdates.collect { event ->
+        authPushes.update { it + ((event.extension to pushManager(event.manager)) to AuthPush(event.auth)) }
         mutable.update { s ->
             s.copy(extensions = s.extensions?.map {
                 if (it.id == event.extension && ExtensionOwners.of(it.manager) == pushManager(event.manager)) it.copy(auth = event.auth) else it

@@ -258,7 +258,7 @@ func TestALetGoQuestionsCardOutlivesItsTurnOnTheQueue(t *testing.T) {
 	if _, up := a.s.pendingIx(ix.ID); !up {
 		t.Fatal("the node's connection ending took the card down")
 	}
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, "the detached node to settle with one card push", func() bool { return len(a.f.pushed()) == 1 })
 	if n := len(a.f.pushed()); n != 1 {
 		t.Fatalf("%d pushes, want the card's one", n)
 	}

@@ -35,11 +35,36 @@ final class DictationBarTests: XCTestCase {
         app.launchPinned()
         XCTAssertTrue(mic.waitForExistence(timeout: 30), "no mic")
         clearDraft()
+        offBarUnnamed("before the mic")
     }
 
     private var mic: XCUIElement { app.buttons["shell-composer-mic"].firstMatch }
     private var field: XCUIElement { app.descendants(matching: .any)["shell-composer-field"].firstMatch }
     private func bar(_ part: String) -> XCUIElement { app.buttons["dictation-bar-" + part].firstMatch }
+
+    /// While the bar is off its parts are listed without a label or identifier: hidden, they still are in XCUITest's
+    /// tree, and lookups of the composer's send by its label 「发送」 found the off bar's ↑ (#7684). A bar label counts
+    /// only over the composer and outside its own controls (`shell-composer-…` and what they hold): the mic says
+    /// 「停止听写」 while it is held, and other screens have a 「取消」 of their own.
+    @MainActor private func offBarUnnamed(_ when: String) {
+        let names: Set = ["取消", "停止听写", "发送", "正在听…"]
+        XCTAssertTrue(wait {
+            guard let root = try? self.app.snapshot() else { return false }
+            var others: [XCUIElementSnapshot] = [], composer = CGRect.null
+            Self.split(root, others: &others, composer: &composer)
+            return !others.contains { $0.identifier.hasPrefix("dictation-bar-") || (names.contains($0.label) && composer.intersects($0.frame)) }
+        }, "the off bar has names (\(when)):\n\(app.debugDescription)")
+    }
+
+    /// The composer's own controls make up its frame; every other element goes to `others`.
+    private static func split(_ e: XCUIElementSnapshot, others: inout [XCUIElementSnapshot], composer: inout CGRect) {
+        if e.identifier.hasPrefix("shell-composer-") {
+            composer = composer.union(e.frame)
+            return
+        }
+        others.append(e)
+        for child in e.children { split(child, others: &others, composer: &composer) }
+    }
 
     /// What the field holds (its value is the placeholder while it is empty).
     @MainActor private var draft: String {
@@ -93,6 +118,7 @@ final class DictationBarTests: XCTestCase {
         dictate()
         bar("stop").tap()
         XCTAssertTrue(closed(), "the bar did not close")
+        offBarUnnamed("after ■")
         XCTAssertEqual(draft, words)
         XCTAssertEqual(try sent().count, before, "■ sent the message")
         clearDraft()
@@ -103,6 +129,7 @@ final class DictationBarTests: XCTestCase {
         dictate()
         bar("cancel").tap()
         XCTAssertTrue(closed(), "the bar did not close")
+        offBarUnnamed("after ✕")
         XCTAssertEqual(draft, "", "✕ kept the words")
         XCTAssertTrue(mic.isHittable, "the composer did not come back")
     }
@@ -113,6 +140,7 @@ final class DictationBarTests: XCTestCase {
         dictate()
         bar("send").tap()
         XCTAssertTrue(closed(), "the bar did not close")
+        offBarUnnamed("after ↑")
         let deadline = Date.now.addingTimeInterval(5)
         while try sent().count == before, Date.now < deadline { usleep(200_000) }
         let all = try sent()

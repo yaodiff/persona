@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Session } from "./types";
-import { makeSessionLookup, todoStatus, todoStatusLabel, type Todo } from "./todos";
+import { makeSessionLookup, shownStatus, todoStatus, todoStatusLabel, type Todo } from "./todos";
 import { checkCount, checklist, reviewBadge, type Supervision } from "./supervision";
 import { FOLDED_SECTIONS, lastActivity, relatedKeys, SHELVE_AFTER_MS, supersededFailedStarts, todoBucket, TRIAGE_SECTIONS, triage, triageTodos } from "./todo-triage";
 import { resetRestoredCache, restoreTodo } from "./todo-restore";
@@ -116,6 +116,15 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
     expect(at(td)).toMatchObject({ section: "just_done", rule: "accepted" });
     expect(todoStatusLabel(td, todoStatus(td, lookup))).toBe("已验收");
     expect(reviewBadge(td)?.tone).toBe("green");
+  });
+
+  it("an accepted concern stays open in its status words and tone too", () => {
+    const td = todo("concern", { kind: "concern", supervision: acceptedReopened() });
+    const status = todoStatus(td, lookup);
+    expect(at(td)).toMatchObject({ section: "other", rule: "rest" });
+    expect(status).toBe("not_started");
+    expect(shownStatus(td, status)).toBe("not_started");
+    expect(todoStatusLabel(td, status)).toBe("未开始");
   });
 
   it("an accepted task whose agent runs again is Working", () => {

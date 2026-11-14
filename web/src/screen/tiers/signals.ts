@@ -2,7 +2,9 @@
 // line for line (spec/fixtures/screen-tiers/signals is replayed against it). The queueing delay is a frame's one-way delay
 // above the lowest of the last 10 s, so the helper's and the browser's clocks needn't agree; the delivered rate is what
 // the link carried while busy, else what came over the last second; large frames over several reads say how fast the
-// link moved them. Times are µs on the page's monotonic clock; the arithmetic is in the Swift side's order, so the two
+// link moved them. A keyframe and the frames queued behind it while it crossed the link are its wake: left out of
+// `queueP95Ms` (whether the link is calm: that queue is the keyframe's size, not a slower link, #7842), counted
+// everywhere else. Times are µs on the page's monotonic clock; the arithmetic is in the Swift side's order, so the two
 // give the same numbers.
 
 /** Frames this big or bigger, spread over several reads, say how fast the link moved them. */
@@ -39,7 +41,10 @@ const within = (at: number, now: number, window: number) => at + window >= now;
 
 export class ReceiverSignals {
   private baseline: { at: number; delay: number }[] = [];
-  private queue: { at: number; ms: number; late: boolean; bytes: number }[] = [];
+  private queue: { at: number; ms: number; late: boolean; bytes: number; wake: boolean }[] = [];
+  /** Until when arriving frames are in the last keyframe's wake: its arrival, plus the time it took to come in, plus two
+   *  frame intervals. */
+  private wakeUntil: number | null = null;
   private arrivals: { at: number; bytes: number }[] = [];
   private bursts: number[] = [];
   private decodes: { at: number; ms: number }[] = [];
@@ -47,7 +52,7 @@ export class ReceiverSignals {
 
   /** A frame arrived whole at `arrival`, its first bytes at `firstByte` (null: one read). `fps` is the frame rate asked
    *  for, which says when a frame is late (over two frame intervals queued). */
-  frame(capture: number, arrival: number, firstByte: number | null, bytes: number, refinement: boolean, fps: number): void {
+  frame(capture: number, arrival: number, firstByte: number | null, bytes: number, refinement: boolean, keyframe: boolean, fps: number): void {
     if (bytes >= BURST_BYTES && firstByte !== null && arrival > firstByte && arrival - firstByte >= BURST_MIN_SPAN_MICROS) {
       this.bursts.push((bytes * 8 * 1000) / (arrival - firstByte));
     }
@@ -58,7 +63,12 @@ export class ReceiverSignals {
     while (this.baseline.length > 1 && arrival - this.baseline[0].at > BASELINE_MICROS) this.baseline.shift();
     const ms = (delay - this.baseline[0].delay) / 1000;
     const interval = 1000 / Math.max(fps, 1);
-    this.queue.push({ at: arrival, ms, late: ms > 2 * interval, bytes });
+    if (keyframe) {
+      const took = firstByte !== null && arrival > firstByte ? arrival - firstByte : 0;
+      this.wakeUntil = arrival + took + Math.trunc(2 * interval * 1000);
+    }
+    const wake = keyframe || (this.wakeUntil !== null && arrival <= this.wakeUntil);
+    this.queue.push({ at: arrival, ms, late: ms > 2 * interval, bytes, wake });
     this.arrivals.push({ at: arrival, bytes });
     this.prune(arrival);
   }
@@ -80,6 +90,7 @@ export class ReceiverSignals {
     this.baseline = [];
     this.queue = [];
     this.arrivals = [];
+    this.wakeUntil = null;
   }
 
   private prune(now: number) {
@@ -92,11 +103,12 @@ export class ReceiverSignals {
   /** The signals at `now`; the bursts are handed over once. */
   take(now: number): TierSignals {
     this.prune(now);
-    const recent = this.queue.filter((q) => within(q.at, now, 500_000)).map((q) => q.ms);
+    const window = this.queue.filter((q) => within(q.at, now, 500_000));
+    const recent = window.map((q) => q.ms);
     const s: TierSignals = {
       frames: recent.length,
       queueP50Ms: percentile(recent, 0.5),
-      queueP95Ms: percentile(recent, 0.95),
+      queueP95Ms: percentile(window.filter((q) => !q.wake).map((q) => q.ms), 0.95),
       queueRising: false,
       queueFalling: false,
       deliveredKbps: null,
@@ -112,14 +124,21 @@ export class ReceiverSignals {
       s.queueRising = late - early > 10;
       s.queueFalling = late - early < -10;
     }
-    let busyBytes = 0, busyMicros = 0, busyFrames = 0;
+    // Frames read together (a backlog arrives several to a read) all count, in the time since the read before; those
+    // that came with the run's first read came in before it started, so they don't (#7842).
+    let busyBytes = 0, busyMicros = 0, busyFrames = 0, counting = false;
     for (let i = 0; i + 1 < this.queue.length; i++) {
       const a = this.queue[i], b = this.queue[i + 1];
-      if (a.ms > BUSY_MS && b.ms > BUSY_MS && b.at > a.at) {
-        busyBytes += b.bytes;
+      if (!(a.ms > BUSY_MS && b.ms > BUSY_MS && b.at >= a.at)) {
+        counting = false;
+        continue;
+      }
+      if (b.at > a.at) {
+        counting = true;
         busyMicros += b.at - a.at;
         busyFrames += 1;
       }
+      if (counting) busyBytes += b.bytes;
     }
     const first = this.arrivals[0], last = this.arrivals[this.arrivals.length - 1];
     if (busyFrames >= 3 && busyMicros >= 50_000) s.deliveredKbps = (busyBytes * 8 * 1000) / busyMicros;
@@ -127,7 +146,6 @@ export class ReceiverSignals {
       const bytes = this.arrivals.slice(1).reduce((sum, a) => sum + a.bytes, 0);
       s.deliveredKbps = (bytes * 8 * 1000) / (last.at - first.at);
     }
-    const window = this.queue.filter((q) => within(q.at, now, 500_000));
     s.lateShare = window.length ? window.filter((q) => q.late).length / window.length : null;
     s.replacedShare = this.showns.length ? this.showns.filter((x) => x.replaced).length / this.showns.length : null;
     return s;

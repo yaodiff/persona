@@ -907,9 +907,30 @@ scrolling stays on RFB's notches.
   (CGMomentumScrollPhase: 0 none, 1 begin, 2 continue, 3 end), three reserved bytes, then dy and dx as `f32` Mac points
   (> 0 shows what is above or to the left, as the RFB wheel's up and CGEvent's axes). Another version is refused, never
   guessed at. The node hands the helper the same 16 bytes.
-- Still to come on #7775: the node reading the phone's messages after the login and taking the record out, its status
-  `screen_input {version, permission, asked}`, asking once on first use, and falling back to wheel notches; then the
-  phone sending the record.
+- **The node** (`node/rfbinput.go`, `node/inputhelper.go`): on a Mac every paired 5900 stream (after the login observer)
+  is read on the phone's side.
+  - **The handshake** is followed as the bytes go by. With types 1, 2 and 30, macOS's Screen Sharing speaks plain RFB
+    after the login (type 30's key length comes from Screen Sharing's own bytes). With Apple's other types (33, 35, 36)
+    or anything else, nothing is read and the stream passes as it came.
+  - **Messages**: then the six client messages (fixed lengths; SetEncodings' and ClientCutText's from their headers),
+    each passed on at once, byte for byte, however the stream is cut. A message type it doesn't know ends the reading
+    for good.
+  - **Records** (type 200) are taken out:
+    - A hello starts Persona Input for the stream if it may post events: at most 2 at once, only for a stream that
+      signed in, and it ends with the stream. If it may not, the node asks macOS once for this helper version
+      (`--request-permission`, recorded in `~/.persona/bin/Persona Input.asked`; macOS's window shows on the Mac's
+      screen, which the phone is showing).
+    - A scroll goes to the helper through a short queue, so the relay never waits.
+    - One the helper can't take (not started yet, the permission gone, the helper stuck) goes to Screen Sharing as
+      wheel notches instead: a notch a Mac point, at the pointer the phone last placed, at most 200 a record, fractions
+      carried.
+    - A record that doesn't decode is dropped, never passed on.
+  - **Status**: `computer.status` / `browser.status` gain `screen_input {version, permission, asked}`, from the helper's
+    `--preflight`, at most once a minute (`asked` while missing). It is absent without the helper or from an older node,
+    so the phone never sends a record to a node that would pass it to Screen Sharing.
+  - With the node signing setting the node runs its own signed copy (`~/.persona/bin/Persona Input.app`), as for Persona
+    Screen. None of Persona Screen's node code changes for it.
+- Still to come on #7775: the phone saying hello and sending records.
 
 ## Locking, preventing sleep and per-App approval (plan, #1507, decided)
 

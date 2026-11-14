@@ -802,6 +802,19 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
   the wrong reason. Tap the switch itself: `(row.switches.firstMatch.exists ? row.switches.firstMatch : row).tap()`, as
   `ExtensionControlsUITests` and `AgentWorktreeUITests` do, and assert the value it reports (`"1"` / `"0"`) afterwards.
 
+## A hidden view that stays built is still in XCUITest's tree (2026-11-14, #7684)
+
+- Since #7586 the composer's dictation bar is built with the composer and only hidden while off, so a tap only animates
+  it. XCUITest (iOS 27.2) still listed its ✕ ■ ↑ at the mic's spot under their labels, so `app.buttons["发送"]` found the
+  off ↑: a tap fell through to the composer's send where the two lined up, a lookup with two matches failed to tap
+  (`PersonaQueueUITests`), and `ExtensionAssistantCardTests`' "no send" check failed in the main conversation.
+- Not enough, measured: `accessibilityHidden`, opacity 0, the whole bar as `.accessibilityElement(children: .ignore)` +
+  hidden, the identifier switched off (`accessibilityIdentifier(_:isEnabled: false)`: the button then shows its SF
+  Symbol's name, `arrow.up`, as identifier), an empty identifier (the label stays).
+- Out of the tree means not built. A view that must stay built drops its accessibility label and identifier while
+  hidden (`DictationBar`'s `named`): still listed, but no lookup by label or identifier finds it. `DictationBarTests`
+  checks that none of the bar's names is in the tree while it is off.
+
 ## XCUITest cannot tap while a list glides (2026-11-10, #3027)
 
 - **Every XCUITest gesture waits for the app to be idle, before and after**, and a scroll view gliding after a flick

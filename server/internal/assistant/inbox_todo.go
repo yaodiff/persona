@@ -3,7 +3,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -141,15 +143,26 @@ func (s *Service) rollbackTodos(ctx context.Context, made map[string]Todo) {
 // error; one that belongs to another row is left alone.
 func (s *Service) undoInboxTodos(ctx context.Context, items []inboxTodoUndoItem, now time.Time) inboxBulkResult {
 	var back []inboxBulkTarget
+	failed := map[string]bool{}
 	for _, u := range items {
 		if td, ok := s.todoNow(u.Todo); ok && td.InboxItem == u.ID {
-			if err := s.deleteTodo(ctx, u.Todo); err != nil {
+			if err := s.deleteTodo(ctx, u.Todo); err != nil && !errors.Is(err, db.ErrTodoNotFound) {
 				s.logf("inbox: to-do %s not deleted by Undo: %v", u.Todo, err)
+				failed[u.ID] = true
 			}
 		}
-		back = append(back, inboxBulkTarget{ID: u.ID})
+		if !failed[u.ID] {
+			back = append(back, inboxBulkTarget{ID: u.ID})
+		}
 	}
-	return s.setInboxBulk(ctx, bulkReopen, back, nil, time.Time{}, now)
+	res := s.setInboxBulk(ctx, bulkReopen, back, nil, time.Time{}, now)
+	for id := range failed {
+		if !slices.Contains(res.Failed, id) {
+			res.Failed = append(res.Failed, id)
+		}
+	}
+	slices.Sort(res.Failed)
+	return res
 }
 
 func (s *Service) inboxTodoRoutes() {
