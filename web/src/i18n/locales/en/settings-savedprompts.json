@@ -1,0 +1,14 @@
+{
+  "title": "Saved Prompts",
+  "add": "New Prompt",
+  "footer": "{n} of {max}. Every chat's / list shows them in this order, after its own commands. They are this assistant's, the same on every device.",
+  "retry": "Try Again",
+  "unsupported": "This assistant doesn't keep saved prompts yet. Update its hub to use them.",
+  "empty_title": "No saved prompts yet",
+  "empty_body": "Keep the instructions you send again and again. Type “/” in any chat and pick one to put its text in the message box. You can also save one of your messages from its menu.",
+  "edit": "Edit",
+  "delete": "Delete",
+  "deleted": "Deleted “/{name}”.",
+  "move_up": "Move /{name} Up",
+  "move_down": "Move /{name} Down"
+}

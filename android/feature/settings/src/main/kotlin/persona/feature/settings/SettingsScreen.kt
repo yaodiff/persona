@@ -146,6 +146,7 @@ private fun SettingsContent(
     }
     val extensionService = mine.extensions.takeUnless { services.demo }
     val extensionsAvailable by remember(extensionService) { extensionService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
+    val inboxSources by remember(extensionService) { extensionService?.inboxSourcesAvailable ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
     // Each assistant's own: a switch never shows the last one's count, not even while the new one's is read (or fails).
     var extensionSummary by remember(assistant.id) { mutableStateOf<String?>(null) }
     val connectorsService = mine.connectors.takeUnless { services.demo }
@@ -460,7 +461,7 @@ private fun SettingsContent(
         } else if (page.startsWith("connector/")) {
             HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back, manager = connectorManager)
         } else SettingsHomePage(
-            services, searchQuery, { searchQuery = it }, extensionsAvailable, extensionSummary, channelsAvailable, channelList,
+            services, searchQuery, { searchQuery = it }, extensionsAvailable, inboxSources, extensionSummary, channelsAvailable, channelList,
             connection, translationValue, hubUpdateStatus,
             when {
                 busy -> stringResource(R.string.settings_update_checking)

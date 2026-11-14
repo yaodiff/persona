@@ -33,7 +33,6 @@
   "help_model_claude": "You already use Claude Code: sign in once on that computer, nothing else to fill in.",
   "probe_ok": "Tried it. The answer: {answer}",
   "probe_failed": "Tried it, and it failed: {error}",
-  "resend": "Send again",
   "help_model_computer": "Either way, the main chat still runs on one of your computers today: pasting an API key alone, without a computer, is not enough to start.",
   "help_model_no_computer": "You have no computer connected yet: add one first.",
   "help_model_computer_not_ready": "Your computer is not ready yet; sort that out first: {step}"

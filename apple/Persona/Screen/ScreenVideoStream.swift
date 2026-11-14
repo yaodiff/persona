@@ -148,6 +148,10 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
         case resumed
         /// The helper's side of the latency (capture, encode, network) and what it sent, about once a second.
         case timing(TimingMessage)
+        /// The quality tier changed (#6396): already sent to the helper; for the stats overlay and the link's memory.
+        case tier(TierPolicy.Change)
+        /// What the helper's encoder runs at now (#6396, `encoding`): the overlay's resolution after an in-place change.
+        case encoding(EncodingMessage)
         /// The stream is over; nothing more comes.
         case ended(Ending)
     }
@@ -168,6 +172,8 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
 
     private let transport: RFBTransport
     private let start: StartMessage
+    /// The quality tiers (#6396), when this app has them; they start once the helper says it has them too.
+    let tiers: ScreenVideoTiers?
     private let onEvent: @Sendable (Event) -> Void
     private let silence: Duration
     private let lock = NSLock()
@@ -182,10 +188,11 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
     /// Every byte that came so far (the overlay's bitrate is what arrived, not what was sent).
     var receivedBytes: Int { lock.withLock { total } }
 
-    init(transport: RFBTransport, start: StartMessage, silence: Duration = ScreenVideoStream.silence,
+    init(transport: RFBTransport, start: StartMessage, tiers: ScreenVideoTiers? = nil, silence: Duration = ScreenVideoStream.silence,
          onEvent: @escaping @Sendable (Event) -> Void) {
         self.transport = transport
         self.start = start
+        self.tiers = tiers
         self.silence = silence
         self.onEvent = onEvent
         heardAt = .now
@@ -225,6 +232,21 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
         Task.detached { [transport] in try? await transport.send(bytes) }
     }
 
+    /// A tier the policy chose: to the helper, then to the link (#6396).
+    private func apply(_ change: TierPolicy.Change?) {
+        guard let change else { return }
+        send(ScreenVideoTiers.update(change))
+        onEvent(.tier(change))
+    }
+
+    /// ⋯ › Quality, the phone's budget, or the route changed (#6396, #6398): the policy looks again.
+    func tierBias(_ b: TierLadder.Bias) { apply(tiers?.setBias(b, at: Self.nowMicros)) }
+    func tierBudget(_ b: ScreenVideoBudget) { apply(tiers?.setBudget(b, at: Self.nowMicros)) }
+    func tierPath(_ change: PathChange) { apply(tiers?.path(change, at: Self.nowMicros)) }
+
+    /// A decoded picture reached the screen, or a newer one replaced it before it did (the link's mailbox).
+    func shown(replaced: Bool) { tiers?.shown(replaced: replaced, at: Self.nowMicros) }
+
     private struct Ended: Error { let why: Ending }
 
     private func finish(_ why: Ending) {
@@ -243,6 +265,7 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
             // Typed, and named apart from the `quiet` property it reads: inferred, the tuple crashed the type checker.
             let (at, any, paused): (ContinuousClock.Instant, Bool, Bool) = lock.withLock { (heardAt, heardAny, quiet) }
             if !paused, ContinuousClock.now - at > (any ? silence : Self.opening) { throw Ended(why: .silent) }
+            if !paused { apply(tiers?.tick(at: Self.nowMicros)) } // the tier's 250 ms decision (#6396)
         }
     }
 
@@ -250,13 +273,19 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
         var parser = ScreenVideoParser()
         var decoder: ScreenVideoDecoder?
         var bytes = 0
+        /// When the message still incomplete after the last read began arriving (a large frame over several reads).
+        var partialSince: UInt64?
         while !Task.isCancelled {
             let chunk: [UInt8]
             do { chunk = try await transport.receive() } catch { throw Ended(why: .closed) }
             bytes += chunk.count
             lock.withLock { total += chunk.count }
+            let arrived = Self.nowMicros
+            let waiting = parser.pendingBytes > 0 ? partialSince : nil
             let messages: [ScreenVideoWire.RawMessage]
             do { messages = try parser.push(Data(chunk)) } catch { throw Ended(why: .undecodable) }
+            partialSince = parser.pendingBytes > 0 ? (messages.isEmpty ? (partialSince ?? arrived) : arrived) : nil
+            var firstOfRead = true
             var newest: (CVPixelBuffer, Double)?
             for raw in messages {
                 let m: ScreenVideoMessage
@@ -267,17 +296,22 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
                     decoder = ScreenVideoDecoder(codec: h.codec)
                     newest = nil
                     onEvent(.hello(h))
+                    apply(tiers?.hello(h, now: Double(Self.nowMicros) / 1_000_000))
                 case let .format(f):
                     do { try decoder?.setFormat(f) } catch { throw Ended(why: .undecodable) }
                 case let .frame(f):
                     heard()
                     report(f, bytes: bytes)
+                    // Only the read's first message can have begun in an earlier read.
+                    tiers?.frame(f, arrival: arrived, firstByte: firstOfRead ? waiting : nil, bytes: raw.body.count + 5)
                     bytes = 0
                     guard let decoder else { throw Ended(why: .undecodable) }
                     let began = ContinuousClock.now
                     do {
                         let picture = try decoder.decode(f)
-                        newest = (picture, Self.ms(ContinuousClock.now - began))
+                        let ms = Self.ms(ContinuousClock.now - began)
+                        newest = (picture, ms)
+                        tiers?.decoded(ms: ms, at: Self.nowMicros)
                     } catch {
                         throw Ended(why: .undecodable)
                     }
@@ -291,10 +325,14 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
                     heard()
                     onEvent(.resumed)
                 case let .timing(t):
+                    tiers?.helper(t)
                     onEvent(.timing(t))
+                case let .encoding(e):
+                    onEvent(.encoding(e))
                 default:
-                    continue // phone → helper types, or ones newer than this app: skipped
+                    break // phone → helper types, or ones newer than this app: skipped
                 }
+                firstOfRead = false
             }
             if let newest { onEvent(.picture(newest.0, decodeMs: newest.1)) }
         }

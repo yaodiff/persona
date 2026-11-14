@@ -37,6 +37,7 @@
   "item_routes_firewall": "Routes and firewall",
   "item_running": "Running hub",
   "item_tls_certificate": "TLS certificate",
+  "item_web_push": "Web Push",
   "line_ok": "OK | {item}: {detail}",
   "line_problem": "Problem | {item}: {detail}",
   "list_separator": ", ",
@@ -95,5 +96,11 @@
   "running_unreachable": "Can’t connect over loopback: the hub may not be running, or not listening on loopback. Start personad hub run and check listen",
   "title": "Hub self-check (read-only)",
   "tls_listen_invalid": "No valid TLS listen port; set public.tls_listen and restart the hub",
-  "tls_listen_ok": "{listen} (the configured value; TLS listening not verified)"
+  "tls_listen_ok": "{listen} (the configured value; TLS listening not verified)",
+  "web_push_bad_one": "{count} browser was subscribed with an earlier key or its last push didn’t go out (see below)",
+  "web_push_bad_other": "{count} browsers were subscribed with an earlier key or their last push didn’t go out (see below)",
+  "web_push_ok_one": "{count} browser gets notifications while Persona is closed",
+  "web_push_ok_other": "{count} browsers get notifications while Persona is closed",
+  "web_push_route": "Through {service}",
+  "web_push_stale": "{route}, but subscribed with an earlier key: it subscribes again the next time a Persona page opens in it"
 }

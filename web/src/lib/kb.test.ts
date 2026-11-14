@@ -4,7 +4,6 @@ import {
   agentPreset,
   askPersonaText,
   contextXml,
-  countLabel,
   dayClock,
   dayPart,
   dayTitle,
@@ -141,9 +140,7 @@ describe("tags", () => {
     expect(parseTags("")).toEqual([]);
   });
 
-  it("formats counts and initials", () => {
-    expect(countLabel(1985)).toBe("1985");
-    expect(countLabel(12000)).toBe("1万+");
+  it("formats initials", () => {
     expect(initial("「设计」评审")).toBe("设");
     expect(initial("  alice")).toBe("A");
     expect(initial("😀 group")).toBe("😀");

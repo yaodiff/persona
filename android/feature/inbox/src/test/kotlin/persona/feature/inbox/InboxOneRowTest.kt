@@ -274,12 +274,12 @@ class InboxOneRowTest {
         assertEquals(listOf("old"), inbox.itemReads)
     }
 
-    @Test fun anOlderHubWithoutEventsStillOpensTheSourcePage() {
+    @Test fun anOlderHubChatRowOpensTheCollapsedItemPage() {
         val inbox = FakeInbox(listOf(item("plain", "No event fields", "Plain preview")))
         screen(inbox)
         row("No event fields").performClick()
         rule.waitForIdle()
-        assertEquals(listOf<NavKey>(LarkRoute("shared-room", "plain", null)), opened)
+        assertEquals(listOf<NavKey>(InboxEventRoute("plain")), opened)
     }
 }
 

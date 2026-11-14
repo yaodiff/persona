@@ -14,6 +14,7 @@
   "title_settings": "設定",
   "title_agents": "個人エージェント",
   "title_extension": "拡張機能",
+  "title_not_found": "ページが見つかりません",
   "title_home": "概要",
   "sidebar": "サイドバー",
   "reconnecting": "ハブに接続できません。再試行中…",

@@ -1,4 +1,5 @@
 import { canonicalAppURL } from "../lib/compatibility";
+import { nodeStatusNote } from "../lib/extensions";
 // Pure helpers behind the admin pages, kept apart so they can be tested without a browser.
 import { formatDate, formatLocale, t } from "../i18n";
 import type { UIItem } from "../lib/extension-ui";
@@ -332,7 +333,13 @@ export function memberNotice(mesh: MeshView | null | undefined): { title: string
 // ── extensions ──
 
 // extensionStatus: the state's words (as the app's Settings › Extensions says them) and tone.
-export function extensionStatus(p: Pick<AdminExtension, "status">): { tone: "green" | "red" | "orange" | "gray"; label: string } {
+export function extensionStatus(p: Pick<AdminExtension, "status" | "node_status">): { tone: "green" | "red" | "orange" | "gray"; label: string } {
+  // A node-only extension's line is the aggregate across its machines ("Running on 2 machines"), not the idle hub process.
+  const node = nodeStatusNote(p);
+  if (node) {
+    const tone = p.status === "error" ? "red" : p.status === "starting" ? "orange" : "green";
+    return { tone, label: node };
+  }
   switch (p.status) {
     // Running or idle until something needs it (stopped): both are on, as the switch says.
     case "running":
@@ -353,7 +360,8 @@ export function extensionStatus(p: Pick<AdminExtension, "status">): { tone: "gre
 }
 
 // extensionRunNote: whether an enabled extension's program runs right now (the details' small print); "" otherwise.
-export function extensionRunNote(p: Pick<AdminExtension, "status" | "attached">): string {
+export function extensionRunNote(p: Pick<AdminExtension, "status" | "attached" | "node_status">): string {
+  if (p.node_status) return ""; // the node status line already says where it runs
   if (p.attached) return attachedRunNote(p.status, p.attached);
   return p.status === "running" ? t("admin-logic.run_running") : p.status === "stopped" ? t("admin-logic.run_stopped") : "";
 }

@@ -1,0 +1,43 @@
+{
+  "description" : "Tailscale over 30 ms: the second.",
+  "init" : {
+    "bias" : "auto",
+    "capKbps" : 12000,
+    "display" : {
+      "maxSize" : 2868,
+      "pixels" : [
+        3024,
+        1964
+      ],
+      "points" : [
+        1512,
+        982
+      ]
+    },
+    "link" : {
+      "kind" : "tailscale",
+      "minRttMs" : 60,
+      "srttMs" : null,
+      "via" : "cellular"
+    },
+    "maxFps" : 60,
+    "maxScale" : null,
+    "now" : 0,
+    "remembered" : null
+  },
+  "name" : "start_tailscale_slow",
+  "start" : {
+    "fps" : 60,
+    "height" : 1472,
+    "index" : 1,
+    "maxKbps" : 12000,
+    "minKbps" : 4006,
+    "reason" : "start",
+    "scale" : 1.5,
+    "targetKbps" : 4006,
+    "width" : 2268
+  },
+  "steps" : [
+
+  ]
+}

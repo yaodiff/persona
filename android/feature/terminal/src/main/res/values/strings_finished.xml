@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="terminal_stopped">This Agent has stopped. Resume runs it again in a terminal on its computer.</string>
+    <string name="terminal_panes_finished">Finished: %1$s</string>
+    <string name="terminal_panes_close_title">Close “%1$s”?</string>
+    <string name="terminal_panes_close_detail">Whatever runs in it stops. This can\'t be undone.</string>
+    <string name="terminal_panes_close_finished">Close finished terminals</string>
+    <string name="terminal_panes_no_finished">No finished terminals to close</string>
+    <plurals name="terminal_panes_finish_title">
+        <item quantity="one">Close %1$d finished terminal?</item>
+        <item quantity="other">Close %1$d finished terminals?</item>
+    </plurals>
+    <string name="terminal_panes_finish_detail">Agents that have stopped left these terminals. Closing them ends the shells in them; the Agents\' conversations stay, and Resume opens a new terminal.</string>
+    <string name="terminal_panes_confirm_close">Close terminals</string>
+    <plurals name="terminal_panes_closed">
+        <item quantity="one">Closed %1$d terminal</item>
+        <item quantity="other">Closed %1$d terminals</item>
+    </plurals>
+    <plurals name="terminal_panes_kept">
+        <item quantity="one">%1$d terminal kept because a program is still running or its state could not be checked.</item>
+        <item quantity="other">%1$d terminals kept because programs are still running or their state could not be checked.</item>
+    </plurals>
+    <string name="terminal_panes_close_failed">Couldn\'t close terminals: %1$s</string>
+</resources>

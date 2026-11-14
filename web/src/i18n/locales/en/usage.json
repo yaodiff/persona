@@ -11,6 +11,7 @@
   "minutes": "{m}m",
   "hours": "{h}h",
   "days_hours": "{d}d {h}h",
+  "days": "{d}d",
   "reset_in": "Resets in {countdown}",
   "reset_at": "Resets at {time}",
   "source_local": "Computer",

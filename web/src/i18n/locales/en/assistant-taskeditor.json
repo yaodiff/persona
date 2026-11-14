@@ -25,7 +25,7 @@
   "interval_hint_blank": "Runs every few minutes, counting from when you save.",
   "section_prompt": "Prompt",
   "prompt_placeholder": "What should Persona do?",
-  "prompt_hint": "Write it as you would in a chat: what to look at and how to report. It can use schedule_followup to set up one-time follow-ups, like 10 minutes before a meeting.",
+  "prompt_hint": "Write it as you would in a chat: what to look at and how to report. It can also set itself a one-time follow-up, like 10 minutes before a meeting.",
   "section_run": "How it runs",
   "permission_label": "Permission mode",
   "permission_default": "Default (ask first)",
@@ -33,7 +33,7 @@
   "bypass_body": "While this task runs, it won't ask before running any command, editing any file or using any tool, and no one can stop it midway. Use it only for prompts you trust and whose mistakes you can live with.",
   "bypass_confirm": "Allow everything",
   "bypass_on": "Allow everything: it won't ask before running commands or editing files.",
-  "permission_hint": "Leave empty to use the assistant's default. Scheduled tasks run in the background: when one needs your approval it notifies your phone and waits until someone responds. To let it run commands without asking, pick Auto (it judges the risk itself).",
+  "permission_hint": "Leave empty to use the assistant's default. Scheduled tasks run in the background: when one needs your approval it notifies your phone and waits until someone responds. To let it run commands without asking, pick {mode} (it judges the risk itself).",
   "permission_hint_resume": "When it continues the original chat, that chat switches to these settings too.",
   "section_push": "Push when done",
   "push_every": "Every run",
@@ -90,5 +90,7 @@
   "cron_hint_zone": "your time zone",
   "cron_checking": "Checking…",
   "cron_next": "Next runs ({zone})",
-  "cron_examples": "Examples"
+  "cron_examples": "Examples",
+  "daily_hint_zone": "{days} at {time}, in {zone} time.",
+  "cron_hint_named": "Minute, hour, day of month, month, day of week, in {zone} time. When both day fields are set, a day matching either runs."
 }

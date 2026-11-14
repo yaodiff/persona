@@ -141,20 +141,40 @@ func TestSpawnedConversationSilentEndTellsParent(t *testing.T) {
 }
 
 // The notice is a message from the opened conversation, held to the relay's hop limit like its own
-// conversation_send: past it the parent is not told, and the log says so.
+// conversation_send: its first message back is the answer to the opening request and keeps its hop (#7391), so one
+// opened at the last hop still reports; a second message back is past the limit, the parent is not told, and the log
+// says so.
 func TestSpawnedConversationNoticeKeepsHopLimit(t *testing.T) {
-	h := newSpawnHarness(t)
-	b := &h.s.relays
-	b.mu.Lock()
-	if !h.s.relayLocked(context.Background()) {
+	atLastHop := func(t *testing.T) (*spawnHarness, string) {
+		h := newSpawnHarness(t)
+		b := &h.s.relays
+		b.mu.Lock()
+		if !h.s.relayLocked(context.Background()) {
+			b.mu.Unlock()
+			t.Fatal("relay state")
+		}
+		b.st.Hops["parent-1"] = relayHop{Hop: relayMaxHops - 1, At: time.Now().UTC()} // the parent works on a relayed message
 		b.mu.Unlock()
-		t.Fatal("relay state")
+		return h, h.spawn(t) // the child is at the last hop
 	}
-	b.st.Hops["parent-1"] = relayHop{Hop: relayMaxHops - 1, At: time.Now().UTC()} // the parent works on a relayed message
-	b.mu.Unlock()
-	id := h.spawn(t) // the child is at the last hop: its own message back would be one too many
-	h.ended(proto.Session{SessionID: id, MachineID: "server", Assistant: true, Status: proto.StatusDone,
-		TurnError: "API Error: 503 no eligible upstream", UpdatedAt: time.Now()})
+	failed := func(id string) proto.Session {
+		return proto.Session{SessionID: id, MachineID: "server", Assistant: true, Status: proto.StatusDone,
+			TurnError: "API Error: 503 no eligible upstream", UpdatedAt: time.Now()}
+	}
+
+	h, id := atLastHop(t)
+	h.ended(failed(id))
+	if got := h.noticesToParent(); len(got) != 1 {
+		t.Fatalf("the answer at the last hop: %q\n%s", got, h.log())
+	}
+
+	h, id = atLastHop(t)
+	h.f.setSessions("server", h.parent, proto.Session{SessionID: id, MachineID: "server", Assistant: true, Status: proto.StatusWorking})
+	if res := h.s.Tool(context.Background(), ToolCall{MachineID: "server", SessionID: id, Name: "conversation_send",
+		Arguments: json.RawMessage(`{"id":"parent-1","text":"先回一句"}`)}); res.IsError {
+		t.Fatalf("its answer: %+v", res)
+	}
+	h.ended(failed(id))
 	if got := h.noticesToParent(); len(got) != 0 {
 		t.Fatalf("told past the hop limit: %q", got)
 	}

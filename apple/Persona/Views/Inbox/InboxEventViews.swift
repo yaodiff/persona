@@ -629,6 +629,11 @@ nonisolated extension InboxEventText {
         }
         return Set(latest.values)
     }
+
+    /// Plain reported detail has no expansion to reveal it, so it stays readable in full instead of being clipped.
+    internal static func chainLineLimit(_ e: InboxItem.ChainEntry, open: Bool) -> Int? {
+        open || (e.detailIsInLine && e.link == nil && (e.messages ?? []).isEmpty) ? nil : 2
+    }
 }
 
 /// The chain: collapsed to the three newest entries with 'show all (N)'; each row time · source icon · words, and a tap goes
@@ -729,7 +734,7 @@ struct InboxChainSection: View {
             Text(InboxEventText.chainText(e))
                 .font(Theme.Font.secondary)
                 .foregroundStyle(e.kind == "reported" ? .secondary : .primary)
-                .lineLimit(open ? nil : 2)
+                .lineLimit(InboxEventText.chainLineLimit(e, open: open))
                 .frame(maxWidth: .infinity, alignment: .leading)
             if showsLiveState, let key = e.link?.sessionKey {
                 InboxChainAgentState(key: key)

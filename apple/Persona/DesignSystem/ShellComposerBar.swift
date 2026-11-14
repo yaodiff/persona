@@ -48,6 +48,10 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     #if os(iOS)
     /// The mic held down (`ComposerHoldMic`): the box draws the strip, the circle and the lock over itself.
     @State private var hold = ComposerHold()
+    /// The mic tapped: the capsule is the dictation bar (`DictationBar`).
+    @State private var dictationBar = DictationBarModel()
+    /// The composer's row under the bar has left the accessibility tree (`Theme.DictationBar.treeAfter` after it opened).
+    @State private var rowOutOfTree = false
     /// Where 「+」 is in the window, for the panel it opens. Read when tapped, never drawn, so it is kept outside the
     /// view's state: as a `@State` rectangle it was written on every frame the shell's pages slid (the window frame of
     /// everything on a page changes with the strip) and the whole bar, its menus included, was drawn again 30 times a
@@ -132,7 +136,16 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         return Theme.Shell.composerRadius - well / 2 - (Theme.Size.tapTarget - well) / 2
     }
 
-    private var expanded: Bool { alwaysOpen || focused.wrappedValue || !text.isEmpty || hasAttachments }
+    private var expanded: Bool { !barOn && (alwaysOpen || focused.wrappedValue || !text.isEmpty || hasAttachments) }
+
+    /// The dictation bar is up: the composer keeps its one-line shape under it.
+    private var barOn: Bool {
+        #if os(iOS)
+        dictationBar.on
+        #else
+        false
+        #endif
+    }
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -254,8 +267,27 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
+        #if os(iOS)
+        // Under the bar the one-line composer stays in place, so the capsule keeps its size and the field its text. Out
+        // of the accessibility tree, children and all (hiding the row alone left the text view UIKit draws in it), once
+        // the bar's spring has run: rebuilding the tree on the tap's frame made it the longest one of the bar opening.
+        let layered = ZStack {
+            box
+                .opacity(barOn ? 0 : 1)
+                .allowsHitTesting(!barOn)
+                .accessibilityElement(children: rowOutOfTree ? .ignore : .contain)
+                .accessibilityHidden(rowOutOfTree)
+            DictationBar(model: dictationBar, meter: dictation.meter,
+                         cancel: { dictationBar.cancel(dictation, reduceMotion: reduceMotion) },
+                         stop: { dictationBar.end(.stop, dictation, text: $text, reduceMotion: reduceMotion, send: { false }) },
+                         send: { dictationBar.end(.send, dictation, text: $text, reduceMotion: reduceMotion, send: sendDictated) })
+        }
+        let erased = AnyView(layered)
+        #else
+        let erased = AnyView(box)
+        #endif
         // Erased (#6735): generic, so every intermediate of the chain below took a run-time-sized stack slot holding the box.
-        AnyView(box)
+        erased
         .padding(.horizontal, expanded ? 0 : Theme.Space.xs)
         .padding(.vertical, expanded ? 0 : Theme.Space.xxs)
         .modifier(ComposerSurface())
@@ -265,7 +297,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         #endif
         .composerGlow(glows)
         .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
-        .onTapGesture { focused.wrappedValue = true }
+        .onTapGesture { if !barOn { focused.wrappedValue = true } }
         .shellScaled()
         .animation(openMotion, value: expanded)
         .animation(Theme.Motion.state, value: canSend)
@@ -306,8 +338,51 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                 .presentationSizing(.page) // the iPad's too: a page's height, not the small form
         }
         #endif
-        .onDisappear { dictation.stop() } // a start still asking for permission too (#3407)
+        .onDisappear {
+            dictation.stop() // a start still asking for permission too (#3407)
+            #if os(iOS)
+            dictationBar.reset()
+            #endif
+        }
+        #if os(iOS)
+        .task { dictationBar.warm() }
+        .task(id: barOn) {
+            guard barOn else {
+                rowOutOfTree = false
+                return
+            }
+            try? await Task.sleep(for: Theme.DictationBar.treeAfter)
+            if !Task.isCancelled, barOn { rowOutOfTree = true }
+        }
+        .onChange(of: dictation.isListening) { _, on in
+            if !on { dictationBar.listeningEnded(dictation, text: $text, reduceMotion: reduceMotion) }
+        }
+        #endif
     }
+
+    #if os(iOS)
+    /// The mic tapped: the bar, with the keyboard down (what it was composing goes into the draft first). A hold
+    /// locked on keeps dictating into the draft; a tap then ends it, as before.
+    private func startDictationBar() {
+        if dictation.isListening {
+            dictation.stop()
+            return
+        }
+        if focused.wrappedValue {
+            TypedText.commitFocused(into: $text)
+            focused.wrappedValue = false
+        }
+        dictationBar.start(dictation, hints: [text] + dictationHints(), reduceMotion: reduceMotion)
+    }
+
+    /// ↑ on the bar, once the words are in the draft: sent as the card's send would, unless there is nothing to send
+    /// or the main conversation cannot take it yet (the draft waits, `gate`).
+    private func sendDictated() -> Bool {
+        guard gate == nil, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments else { return false }
+        send()
+        return true
+    }
+    #endif
 
     #if os(iOS)
     /// An icon in the text area's corner, never competing with the model and send controls below it.
@@ -489,7 +564,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// be held down (`ComposerHoldMic`).
     @ViewBuilder private var mic: some View {
         #if os(iOS)
-        ComposerHoldMic(dictation: dictation, text: $text, hold: hold, id: "shell-composer-mic", hints: dictationHints)
+        ComposerHoldMic(dictation: dictation, text: $text, hold: hold, id: "shell-composer-mic", hints: dictationHints,
+                        tap: startDictationBar, quiet: barOn)
         #else
         ComposerMicButton(dictation: dictation, text: $text, id: "shell-composer-mic", hints: dictationHints)
         #endif

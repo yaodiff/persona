@@ -247,6 +247,9 @@ type startProbe struct {
 	// startFile is the start file the typed line sources ("" when the command was typed out), firstWord the typed
 	// line's first word: the shell answering for either one did not take the line itself (rejects, #2570).
 	startFile, firstWord string
+	// acceptBypass: the start asked Claude for bypass itself (--permission-mode bypassPermissions, or a plan that goes on
+	// in bypass), the user's choice in Persona, so waitReady accepts Claude Code's Bypass Permissions confirmation.
+	acceptBypass bool
 }
 
 // typed has the probe know the line a start typed (typedStart): the start file it sources and its first word.

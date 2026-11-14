@@ -6,5 +6,4 @@
   - 只跑工具（todo_2）：在做，mac-a session_id=c1：现在在读 tasks.go（3 分钟了）
   - hub 重启无感（todo_1）：在做，mac-a session_id=b00502b8：已建 issue 并认领， 两个只读子任务在调查；现在在跑测试（3 分钟了）；子 Agent 在跑：Hub children lifecycle survey、Client reconnect survey
 - iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
-- 在跟的事：没有
 - 已安排的跟进：没有

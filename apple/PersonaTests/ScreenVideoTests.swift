@@ -18,6 +18,19 @@ struct ScreenVideoTests {
         #expect(ScreenVideoBudget.of(expensive: false, constrained: false, lowPower: false, thermal: .critical).fps == 15)
     }
 
+    /// With quality tiers (#6396), mobile data follows the user's choice: Data Saver (the default) 1.5 Mbit/s at 1×,
+    /// Clearer 4; Low Data Mode is always Data Saver; Wi-Fi is unchanged. Without tiers, as before.
+    @Test func mobileDataFollowsTheChoiceWithTiers() {
+        func of(_ expensive: Bool, _ constrained: Bool, _ m: ScreenMobileData?) -> ScreenVideoBudget {
+            ScreenVideoBudget.of(expensive: expensive, constrained: constrained, lowPower: false, thermal: .nominal, mobileData: m)
+        }
+        #expect(of(true, false, .saver) == .init(maxKbps: 1_500, fps: 60, maxScale: 1))
+        #expect(of(true, false, .clearer) == .init(maxKbps: 4_000, fps: 60))
+        #expect(of(true, true, .clearer) == .init(maxKbps: 1_500, fps: 60, maxScale: 1), "Low Data Mode")
+        #expect(of(false, false, .saver) == .init(maxKbps: 12_000, fps: 60), "Wi-Fi: the choice is for mobile data only")
+        #expect(of(true, false, nil) == .init(maxKbps: 4_000, fps: 60), "no tiers: as before")
+    }
+
     @Test func theWaitDoublesToFiveMinutes() {
         var b = ScreenVideoBackoff()
         let waits = (0..<7).map { _ in b.take() }
@@ -37,6 +50,20 @@ struct ScreenVideoTests {
             for word in ["RFB", "HEVC", "H.264", "codec", "stream", "helper"] {
                 #expect(!f.message.localizedCaseInsensitiveContains(word), "\(f): \(f.message)")
             }
+        }
+    }
+
+    /// "How to turn it on" (#3954): before the node has asked macOS, its alert is about to show on the Mac; once asked
+    /// (or when the grant was taken away later), Persona Screen is in System Settings' list.
+    @Test func howToAllowDependsOnWhetherMacOSAsked() {
+        let window = ScreenVideoFallback.howToAllow(permission: "missing", asked: false)
+        let settings = ScreenVideoFallback.howToAllow(permission: "missing", asked: true)
+        #expect(window != settings)
+        #expect(ScreenVideoFallback.howToAllow(permission: "granted", asked: false) == settings, "taken away while streaming")
+        #expect(ScreenVideoFallback.howToAllow(permission: nil, asked: false) == settings)
+        for text in [window, settings] {
+            #expect(text.contains("Persona Screen"))
+            for word in ["RFB", "HEVC", "helper", "TCC"] { #expect(!text.contains(word), "\(text)") }
         }
     }
 
@@ -142,6 +169,33 @@ struct ScreenVideoTests {
         #expect(second?.totalMs == 17, "capture 0 + encode 5 + network 8 + decode 4")
     }
 
+    /// The round trip to the hub the overlay shows (#6558): the median of the last five from the last 20 s, as the web
+    /// overlay's, so one slow answer doesn't make it jump and an old one isn't shown.
+    @Test func theHubRoundTripIsTheMedianOfTheRecentOnes() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        var trips = HubRoundTrips()
+        #expect(trips.median(at: t0) == nil, "none yet: no number")
+        trips.add(ms: .nan, at: t0)
+        trips.add(ms: -1, at: t0)
+        #expect(trips.median(at: t0) == nil, "not a time: not counted")
+        trips.add(ms: 20, at: t0)
+        #expect(trips.median(at: t0) == 20)
+        trips.add(ms: 400, at: t0.addingTimeInterval(2)) // one slow answer
+        trips.add(ms: 22, at: t0.addingTimeInterval(4))
+        #expect(trips.median(at: t0.addingTimeInterval(4)) == 22)
+        for i in 0..<HubRoundTrips.kept { trips.add(ms: 30, at: t0.addingTimeInterval(6 + Double(i))) }
+        #expect(trips.median(at: t0.addingTimeInterval(10)) == 30, "only the last five count")
+        #expect(trips.median(at: t0.addingTimeInterval(10 + HubRoundTrips.fresh + 1)) == nil, "stale: the app was away")
+    }
+
+    /// Bitrates as the overlay writes them: two decimals under 1 Mbps, so a small stream doesn't read as 0.0 (the web's
+    /// rule).
+    @Test func smallBitratesKeepTwoDecimals() {
+        #expect(ScreenStats.mbpsText(12.34) == "12.3 Mbps")
+        #expect(ScreenStats.mbpsText(1) == "1.0 Mbps")
+        #expect(ScreenStats.mbpsText(0.034) == "0.03 Mbps")
+    }
+
     @Test func aFrameThatDoesNotDecodeEnds() async throws {
         var bytes = try Self.prefix(messages: 2)
         bytes += Array(ScreenVideoMessage.frame(VideoFrame(number: 1, captureMicros: 0, flags: .keyframe, sample: Data([0, 0, 0, 4, 1, 2, 3, 4]))).framed())
@@ -196,6 +250,99 @@ struct ScreenVideoTests {
         try await Self.until { link.showing }
         #expect(link.fallback == nil)
         #expect(said == [.locked, nil])
+        link.want(nil)
+    }
+
+    /// ⋯ › Quality only once the helper says it has quality tiers (#6396): the fixture's helper, from before them, says
+    /// nothing, so none is offered; a hello with `features: ["tiers"]` offers it.
+    @MainActor @Test func qualityWaitsForAHelperWithTiers() async throws {
+        let link = ScreenVideoLink()
+        let t = VideoScript([try Self.prefix(messages: 4)], holds: true)
+        link.transport = { _ in t }
+        link.want(.init(display: nil, rect: nil))
+        link.rfb(.init(group: "", machine: "macbook", pair: "0123"))
+        try await Self.until { link.showing }
+        #expect(!link.tiers)
+        guard case var .hello(h) = try Self.messages()[0] else { Issue.record("the fixture starts with hello"); return }
+        h.features = ["tiers"]
+        t.feed(Array(ScreenVideoMessage.hello(h).framed()))
+        try await Self.until { link.tiers }
+        link.want(nil)
+    }
+
+    /// ⋯ › Quality needs this app's side of the tiers too (#6396): a release can pair a helper with tiers and an app
+    /// without them, and then nothing is offered. This app has them.
+    @Test func qualityAlsoWaitsForThisAppsTiers() {
+        #expect(ScreenTiers.appSupported, "the iPhone's tier policy is in (#6396)")
+        #expect(ScreenTiers.offered(helperHasTiers: true))
+        #expect(!ScreenTiers.offered(helperHasTiers: true, appSupported: false))
+        #expect(ScreenTiers.offered(helperHasTiers: true, appSupported: true))
+        #expect(!ScreenTiers.offered(helperHasTiers: false, appSupported: true))
+    }
+
+    /// A helper with tiers (#6396): its hello starts the policy, whose first tier goes to the helper as an update
+    /// (scale, frame rate, band and target) and to the link as an event. An older helper gets no tier at all.
+    @Test func aHelperWithTiersGetsATier() async throws {
+        guard case var .hello(h) = try Self.messages()[0] else { Issue.record("the fixture starts with hello"); return }
+        h.features = ["tiers"]
+        h.points = [1512, 982]
+        h.pixels = [3024, 1964]
+        let rest = try Self.messages().dropFirst().prefix(3).flatMap { Array($0.framed()) }
+        let t = VideoScript([Array(ScreenVideoMessage.hello(h).framed()) + rest], holds: true)
+        let seen = Events()
+        let context = ScreenVideoTiers.Context(bias: .auto, budget: .init(maxKbps: 12_000, fps: 60), maxSize: 2868,
+                                               link: LinkStats(kind: .relay, via: .wifi), remembered: nil)
+        let s = ScreenVideoStream(transport: t, start: Self.start, tiers: ScreenVideoTiers(context)) { seen.add($0) }
+        s.run()
+        try await seen.until { $0.contains { $0.hasPrefix("tier") } }
+        #expect(seen.all.contains("tier 2268x1472@60 band 4006-12000 target 4006 start"), "\(seen.all)")
+        let updates = t.sent.filter { $0.count > 4 && $0[4] == ScreenVideoWire.Kind.update.rawValue }
+        var parser = ScreenVideoParser()
+        let raws = try updates.flatMap { try parser.push(Data($0)) }
+        let sent = try raws.map { try ScreenVideoMessage.decode(type: $0.type, body: $0.body) }
+        #expect(sent.contains(.update(UpdateMessage(fps: 60, maxKbps: 12_000, scale: 1.5, minKbps: 4_006, targetKbps: 4_006))))
+        s.close()
+
+        let old = VideoScript([try Self.prefix(messages: 4)], holds: true)
+        let quiet = Events()
+        let o = ScreenVideoStream(transport: old, start: Self.start, tiers: ScreenVideoTiers(context)) { quiet.add($0) }
+        o.run()
+        try await quiet.until { $0.contains { $0.hasPrefix("picture") } }
+        #expect(!quiet.all.contains { $0.hasPrefix("tier") })
+        #expect(!old.sent.contains { $0.count > 4 && $0[4] == ScreenVideoWire.Kind.update.rawValue }, "nothing new for an old helper")
+        o.close()
+    }
+
+    /// Connection Stats' tier line (#6396): the Quality choice, the scale and frame rate; and why it last changed, in
+    /// plain words, with how long ago.
+    @MainActor @Test func theTierInPlainWords() {
+        let t = TierLadder.Tier(scale: 1.5, fps: 60, width: 2268, height: 1472, minKbps: 4_006, maxKbps: 12_000)
+        #expect(ScreenTierText.value(.auto, t) == "\(ScreenQuality.auto.label) · 1.5× · 60 fps")
+        let one = TierLadder.Tier(scale: 1, fps: 15, width: 1512, height: 982, minKbps: 200, maxKbps: 1_782)
+        #expect(ScreenTierText.value(.sharper, one).hasSuffix(" · 1× · 15 fps"))
+        let at = Date(timeIntervalSince1970: 1_000)
+        #expect(ScreenTierText.reason(.linkSlowed, at: at, now: at.addingTimeInterval(12))
+            == ScreenTierText.words(.linkSlowed) + " · " + String(localized: "\(12) s ago"))
+        #expect(ScreenTierText.reason(.choice, at: at, now: at.addingTimeInterval(150)).hasSuffix(String(localized: "\(2) min ago")))
+        for r in [TierReason.start, .linkSlowed, .linkSteady, .networkChanged, .phoneWarm, .phoneBehind, .choice] {
+            #expect(!ScreenTierText.words(r).isEmpty)
+        }
+    }
+
+    /// After a size change in place (#6396), the overlay's resolution is what the encoder runs at (`encoding`), not
+    /// what `hello` said.
+    @MainActor @Test func theSizeFollowsEncoding() async throws {
+        let link = ScreenVideoLink()
+        let t = VideoScript([try Self.prefix(messages: 4)], holds: true)
+        link.transport = { _ in t }
+        link.want(.init(display: nil, rect: nil))
+        link.rfb(.init(group: "", machine: "macbook", pair: "0123"))
+        try await Self.until { link.showing }
+        let before = link.size
+        t.feed(Array(ScreenVideoMessage.encoding(EncodingMessage(width: 1512, height: 982, fps: 30, scale: 1, minKbps: 891,
+                                                                  maxKbps: 3_563)).framed()))
+        try await Self.until { link.size == CGSize(width: 1512, height: 982) }
+        #expect(before != link.size)
         link.want(nil)
     }
 
@@ -284,6 +431,9 @@ private final class Events: @unchecked Sendable {
         case let .paused(why): word = "paused \(why)"
         case .resumed: word = "resumed"
         case let .timing(t): word = "timing encode \(t.encodeMs ?? -1) network \(t.networkMs ?? -1)"
+        case let .tier(c):
+            word = "tier \(c.tier.width)x\(c.tier.height)@\(c.tier.fps) band \(c.tier.minKbps)-\(c.tier.maxKbps) target \(c.targetKbps) \(c.reason.rawValue)"
+        case let .encoding(e): word = "encoding \(e.width)x\(e.height)@\(e.fps)"
         case let .ended(why): word = "ended \(why)"
         }
         lock.withLock { events.append(word) }

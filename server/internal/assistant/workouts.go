@@ -28,11 +28,25 @@ type WorkoutReport struct {
 	Distance  *float64           `json:"distance,omitempty"`
 	Energy    *float64           `json:"energy,omitempty"`
 	HeartRate []WorkoutHeartRate `json:"heart_rate,omitempty"`
+	// Since #2526's second step; an older phone sends none of them.
+	ElevationGain *float64       `json:"elevation_gain,omitempty"` // meters climbed, from the workout's own metadata
+	HeartRateAvg  *float64       `json:"heart_rate_avg,omitempty"` // bpm over the whole workout
+	HeartRateMax  *float64       `json:"heart_rate_max,omitempty"`
+	Splits        []WorkoutSplit `json:"splits,omitempty"` // whole kilometres in order, pauses left out
 }
 type WorkoutHeartRate struct {
 	Minute int     `json:"minute"`
 	BPM    float64 `json:"bpm"`
 }
+
+// WorkoutSplit is the time one whole kilometre took, the first being kilometre 1.
+type WorkoutSplit struct {
+	KM      int     `json:"km"`
+	Seconds float64 `json:"seconds"`
+}
+
+// workoutMaxSplits bounds the splits a report may carry: a 1000 km ride is past any single workout.
+const workoutMaxSplits = 1000
 
 var workoutUUID = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
@@ -45,10 +59,34 @@ func (v WorkoutReport) validate(now time.Time) error {
 	if !workoutUUID.MatchString(v.ID) || v.EnabledAt.IsZero() || v.Start.Before(v.EnabledAt) || !v.End.After(v.Start) || v.End.After(now.Add(workoutClockSkew)) || v.Duration < 600 || v.Duration > v.End.Sub(v.Start).Seconds()+1 || v.End.Sub(v.Start) > 7*24*time.Hour || len(v.Title) > 200 || len(v.Source) > 256 || len(v.Activity) > 80 || len(v.HeartRate) > 10080 {
 		return errors.New("invalid workout")
 	}
-	for _, n := range []*float64{&v.Duration, v.Distance, v.Energy} {
+	for _, n := range []*float64{&v.Duration, v.Distance, v.Energy, v.ElevationGain} {
 		if n != nil && (math.IsNaN(*n) || math.IsInf(*n, 0) || *n < 0) {
 			return errors.New("invalid measurement")
 		}
+	}
+	if v.ElevationGain != nil && *v.ElevationGain > 20000 {
+		return errors.New("invalid measurement")
+	}
+	for _, n := range []*float64{v.HeartRateAvg, v.HeartRateMax} {
+		if n != nil && (math.IsNaN(*n) || math.IsInf(*n, 0) || *n <= 0 || *n > 300) {
+			return errors.New("invalid heart rate")
+		}
+	}
+	if v.HeartRateAvg != nil && v.HeartRateMax != nil && *v.HeartRateAvg > *v.HeartRateMax {
+		return errors.New("invalid heart rate")
+	}
+	if len(v.Splits) > workoutMaxSplits {
+		return errors.New("invalid splits")
+	}
+	var total float64
+	for i, sp := range v.Splits {
+		if sp.KM != i+1 || math.IsNaN(sp.Seconds) || math.IsInf(sp.Seconds, 0) || sp.Seconds <= 0 {
+			return errors.New("invalid splits")
+		}
+		total += sp.Seconds
+	}
+	if total > v.End.Sub(v.Start).Seconds()+1 {
+		return errors.New("invalid splits")
 	}
 	last := -1
 	for _, p := range v.HeartRate {

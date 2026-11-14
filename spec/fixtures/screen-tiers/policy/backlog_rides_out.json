@@ -1,0 +1,326 @@
+{
+  "description" : "A tier whose floor fits what arrives rides out a backlog.",
+  "init" : {
+    "bias" : "auto",
+    "capKbps" : 12000,
+    "display" : {
+      "maxSize" : 2868,
+      "pixels" : [
+        3024,
+        1964
+      ],
+      "points" : [
+        1512,
+        982
+      ]
+    },
+    "link" : {
+      "kind" : "relay",
+      "minRttMs" : null,
+      "srttMs" : null,
+      "via" : "wifi"
+    },
+    "maxFps" : 60,
+    "maxScale" : null,
+    "now" : 0,
+    "remembered" : null
+  },
+  "name" : "backlog_rides_out",
+  "start" : {
+    "fps" : 60,
+    "height" : 1472,
+    "index" : 1,
+    "maxKbps" : 12000,
+    "minKbps" : 4006,
+    "reason" : "start",
+    "scale" : 1.5,
+    "targetKbps" : 4006,
+    "width" : 2268
+  },
+  "steps" : [
+    {
+      "helper" : {
+        "kbps" : 4100,
+        "skipped" : 3,
+        "targetKbps" : 4100
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 0.25,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 0.5,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 0.75,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 1,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 1.25,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 1.5,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 1.75,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 2,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 2.25,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 2.5,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 2.75,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "expected" : null,
+      "tick" : {
+        "now" : 3,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 5500,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    },
+    {
+      "helper" : {
+        "kbps" : 4100,
+        "skipped" : 0,
+        "targetKbps" : 4100
+      }
+    },
+    {
+      "expected" : {
+        "fps" : 30,
+        "height" : 1472,
+        "index" : 2,
+        "maxKbps" : 8012,
+        "minKbps" : 2003,
+        "reason" : "link_slowed",
+        "scale" : 1.5,
+        "targetKbps" : 3400,
+        "width" : 2268
+      },
+      "tick" : {
+        "now" : 3.25,
+        "signals" : {
+          "burstKbps" : [
+
+          ],
+          "decodeP95Ms" : 4,
+          "deliveredKbps" : 4000,
+          "frames" : 30,
+          "lateShare" : null,
+          "queueFalling" : false,
+          "queueP50Ms" : 700,
+          "queueP95Ms" : 700,
+          "queueRising" : false,
+          "replacedShare" : 0
+        }
+      }
+    }
+  ]
+}

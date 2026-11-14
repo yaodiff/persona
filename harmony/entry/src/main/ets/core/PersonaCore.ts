@@ -4,6 +4,7 @@ import { decodeChatPatch, decodeEffect, encodeAction } from './rustcore/Wire';
 
 export interface CoreHost {
   changed(version: number): void;
+  changedChat?(chat: string, version: number): void;
   run(effect: Effect): void;
 }
 
@@ -13,7 +14,13 @@ export class PersonaCore {
 
   open(host: CoreHost): void {
     if (this.handle !== null) throw new Error('core is already open');
-    this.handle = native.coreCreate(native.coreConfig(), host.changed, (bytes: Uint8Array): void => host.run(decodeEffect(bytes)));
+    if (host.changedChat) {
+      this.handle = native.coreCreateWithChat(native.coreConfig(), host.changed, host.changedChat,
+        (bytes: Uint8Array): void => host.run(decodeEffect(bytes)));
+    } else {
+      this.handle = native.coreCreate(native.coreConfig(), host.changed,
+        (bytes: Uint8Array): void => host.run(decodeEffect(bytes)));
+    }
   }
 
   dispatch(action: Action): boolean {

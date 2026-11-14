@@ -393,7 +393,31 @@ export const markdownComponents: Components = {
     ),
   blockquote: ({ children }) => <ReplyQuote>{children}</ReplyQuote>,
   table: ({ children, node: _node, ...rest }) => <TableBlock {...rest}>{children}</TableBlock>,
+  // a short cell stays on one line and its column as narrow as its words (styles.css `td[data-fit]`)
+  td: ({ children, node, ...rest }) => (
+    <td {...rest} data-fit={cellFits(node) ? "" : undefined}>
+      {children}
+    </td>
+  ),
 };
+
+// A table cell's words fit on one line in what a long cell keeps (7em less its padding, about 5.5em of text): the cell
+// doesn't wrap and needs no minimum width, so a column of numbers or names is as narrow as they are (audit item 77).
+// A wide character (CJK, full-width, emoji: from U+2E80 on) counts 1em, any other about half; a line break or a picture
+// never fits.
+type HastNode = { type: string; value?: string; tagName?: string; children?: HastNode[] };
+
+export function cellFits(node: unknown): boolean {
+  let em = 0;
+  const walk = (n: HastNode): boolean => {
+    if (n.type === "text") {
+      for (const ch of n.value ?? "") if ((em += ch.codePointAt(0)! >= 0x2e80 ? 1 : 0.55) > 5.5) return false;
+      return true;
+    }
+    return n.tagName !== "br" && n.tagName !== "img" && (n.children ?? []).every(walk);
+  };
+  return Boolean(node) && walk(node as HastNode);
+}
 
 /** The class of a block's <code>. */
 function codeClass(children: React.ReactNode): string {
@@ -437,23 +461,29 @@ function CodeBlock({ children, lang = "" }: { children: React.ReactNode; lang?: 
 // keeps its width, scroll and margin (styles.css passes the prose edge rule through). The button is out of the
 // table, so a copy does not pick it up as a cell, and it stays put while a wide table scrolls. It is the control's
 // own 24px, not the 44px touch pad: it sits on a cell, and that pad would take the tap meant for a corner link.
+// It never covers header words (audit item 77): the last header cell keeps room for it (styles.css), and it sits on a
+// cap the header row's height and color, so a wide table's header words scrolled under it fade out at the edge
+// instead of running under the button. The cap shows with the button: on hover and on keyboard focus, not on any focus
+// (a button keeps the focus after a click, and the cap would stay over the header with the button taking no clicks).
 // The first placement is the ResizeObserver's first report (after layout, before paint), not a read in the effect: that
 // read laid out every table's exchange when a long chat opened, the ones skipped off screen too (#2905). A table in a
 // skipped exchange is placed when the exchange is drawn; the button only shows on hover, so it is there before it is seen.
 function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"table">) {
   const tableRef = useRef<HTMLTableElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
+  const capRef = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const table = tableRef.current;
-    const button = buttonRef.current;
-    if (!table || !button) return;
+    const cap = capRef.current;
+    if (!table || !cap) return;
     const place = () => {
-      const host = button.parentElement;
+      const host = cap.parentElement;
       if (!host) return;
       const gap = Math.max(0, host.clientWidth - table.offsetWidth);
-      // 0.375rem is top-1.5 / right-1.5, so the inset matches a code block's button at any root font size.
-      button.style.top = `calc(${table.offsetTop}px + 0.375rem)`;
-      button.style.right = `calc(${gap}px + 0.375rem)`;
+      cap.style.top = `${table.offsetTop}px`;
+      cap.style.right = `${gap}px`;
+      // the header row, its bottom line left showing
+      const head = table.rows[0];
+      if (head) cap.style.height = `${Math.max(0, head.offsetHeight - 1)}px`;
     };
     if (typeof ResizeObserver === "undefined") {
       place();
@@ -461,7 +491,7 @@ function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"tabl
     }
     const obs = new ResizeObserver(place);
     obs.observe(table);
-    if (button.parentElement) obs.observe(button.parentElement);
+    if (cap.parentElement) obs.observe(cap.parentElement);
     return () => obs.disconnect();
   }, []);
   return (
@@ -469,28 +499,33 @@ function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"tabl
       <table {...rest} ref={tableRef}>
         {children}
       </table>
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-label={t("ui-markdown.copy_table")}
-        title={t("ui-markdown.copy_table")}
-        onClick={() => {
-          const table = tableRef.current;
-          if (!table) return;
-          const tsv = tableToTsv(table);
-          if (tsv === undefined) {
-            toast(t("ui-atoms.copy_failed"), "error");
-            return;
-          }
-          const html = tableHtml(table);
-          void writeTableClipboard(tsv, html).then((ok) => {
-            toast(ok ? t("ui-atoms.copied") : t("ui-atoms.copy_failed"), ok ? "ok" : "error");
-          });
-        }}
-        className="absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-[6px] bg-surface text-ink-3 opacity-0 shadow-btn pointer-events-none transition-opacity duration-150 group-hover/table:pointer-events-auto group-hover/table:opacity-100 hover:text-ink focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
+      <span
+        ref={capRef}
+        data-table-copy
+        className="pointer-events-none absolute top-0 right-0 flex h-9 w-9 items-center justify-end rounded-tr-card bg-linear-to-r from-transparent to-inset to-40% pr-1.5 opacity-0 transition-opacity duration-150 group-hover/table:opacity-100 has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
       >
-        <Icon name="copy" size={13} />
-      </button>
+        <button
+          type="button"
+          aria-label={t("ui-markdown.copy_table")}
+          title={t("ui-markdown.copy_table")}
+          onClick={() => {
+            const table = tableRef.current;
+            if (!table) return;
+            const tsv = tableToTsv(table);
+            if (tsv === undefined) {
+              toast(t("ui-atoms.copy_failed"), "error");
+              return;
+            }
+            const html = tableHtml(table);
+            void writeTableClipboard(tsv, html).then((ok) => {
+              toast(ok ? t("ui-atoms.copied") : t("ui-atoms.copy_failed"), ok ? "ok" : "error");
+            });
+          }}
+          className="flex size-6 shrink-0 items-center justify-center rounded-chip bg-surface text-ink-3 shadow-btn pointer-events-none group-hover/table:pointer-events-auto hover:text-ink focus-visible:pointer-events-auto [@media(hover:none)]:pointer-events-auto"
+        >
+          <Icon name="copy" size={13} />
+        </button>
+      </span>
     </div>
   );
 }

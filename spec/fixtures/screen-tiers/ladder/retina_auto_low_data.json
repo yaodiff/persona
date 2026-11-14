@@ -1,0 +1,37 @@
+{
+  "description" : "Low Data Mode: 1.5 Mbit/s cap; tiers whose floor is over it go.",
+  "expected" : [
+    {
+      "fps" : 30,
+      "height" : 982,
+      "maxKbps" : 1500,
+      "minKbps" : 891,
+      "scale" : 1,
+      "width" : 1512
+    },
+    {
+      "fps" : 15,
+      "height" : 982,
+      "maxKbps" : 1500,
+      "minKbps" : 200,
+      "scale" : 1,
+      "width" : 1512
+    }
+  ],
+  "input" : {
+    "bias" : "auto",
+    "capKbps" : 1500,
+    "codec" : "hevc",
+    "maxFps" : 60,
+    "maxSize" : 2556,
+    "pixels" : [
+      3024,
+      1964
+    ],
+    "points" : [
+      1512,
+      982
+    ]
+  },
+  "name" : "retina_auto_low_data"
+}

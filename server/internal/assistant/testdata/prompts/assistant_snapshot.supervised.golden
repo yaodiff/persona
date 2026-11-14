@@ -12,5 +12,4 @@
   - 清理旧分支（todo_7）：停着，没有 Agent 在做了（Agent 的标签已关闭，没有排定的唤醒）
   - 跑回归（todo_8）：停着，没有 Agent 在做了（Agent 所在的电脑离线）
 - iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
-- 在跟的事：没有
 - 已安排的跟进：没有

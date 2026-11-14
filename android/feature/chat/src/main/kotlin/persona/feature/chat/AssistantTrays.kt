@@ -314,7 +314,11 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             items(entries.running, key = { it.key }) { entry ->
                                 when (entry) {
                                     is RunningEntry.Task -> {
-                                        val row = progressByTodo[entry.todo.id] ?: TrayProgress("todo:${entry.todo.id}", entry.todo.title, todo = entry.todo)
+                                        val projected = progressByTodo[entry.todo.id] ?: TrayProgress("todo:${entry.todo.id}", entry.todo.title, todo = entry.todo)
+                                        // Only replace the projection's state when a shared Agent's requests belong elsewhere (#7531).
+                                        val row = if (entry.hasAgentsElsewhere) projected.copy(blocked = false,
+                                            stopped = entry.status == TriageStatus.Unread || entry.status == TriageStatus.FollowUp)
+                                        else projected
                                         TrayProgressRow(row, activity = entry.activity, waiting = entry.waiting,
                                             working = entry.status == TriageStatus.Working, onClick = { openTask(host, entry.todo) })
                                     }

@@ -215,6 +215,20 @@ describe("main conversation first-screen cache", () => {
     await fail();
     expect(shown.items).toEqual([]);
   });
+
+  it("discards a rewrite reported by an older page before the replacement read fails", async () => {
+    writeFeedCache(scope, saved());
+    render();
+    await answer({ items: saved().items, history: "v1", has_more: true });
+    act(() => { void shown.loadEarlier(); });
+    expect(calls[0].path).toContain("before_seq=10");
+    await answer({ items: [item("older-v2", 1)], history: "v2", has_more: true });
+    expect(shown.items).toEqual([]);
+    expect(readFeedCache(scope)).toBeNull();
+    await fail();
+    expect(shown.items).toEqual([]);
+    expect(readFeedCache(scope)).toBeNull();
+  });
 });
 
 describe("other chats' memory cache", () => {

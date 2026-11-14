@@ -275,13 +275,17 @@ nonisolated struct MachineScreenVideo: Codable, Hashable, Sendable {
     var codecs: [String] = []
     /// Screen Recording for Persona Screen: granted | missing | unknown. Missing keeps the phone on RFB.
     var permission: String? = nil
+    /// The node has asked macOS for this helper version's grant (once), so Persona Screen is in System Settings' list;
+    /// false while macOS's alert is still to come.
+    var asked = false
 
-    enum CodingKeys: String, CodingKey { case version, codecs, permission }
+    enum CodingKeys: String, CodingKey { case version, codecs, permission, asked }
 
-    init(version: Int = 0, codecs: [String] = [], permission: String? = nil) {
+    init(version: Int = 0, codecs: [String] = [], permission: String? = nil, asked: Bool = false) {
         self.version = version
         self.codecs = codecs
         self.permission = permission
+        self.asked = asked
     }
 
     init(from decoder: Decoder) throws {
@@ -289,6 +293,7 @@ nonisolated struct MachineScreenVideo: Codable, Hashable, Sendable {
         version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 0
         codecs = (try? c.decodeIfPresent([String].self, forKey: .codecs)) ?? []
         permission = try c.decodeIfPresent(String.self, forKey: .permission)
+        asked = (try? c.decodeIfPresent(Bool.self, forKey: .asked)) ?? false
     }
 
     /// The node offers the video channel at all: the Picture / Quality switcher appears only then (#3954).
@@ -1246,6 +1251,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
+        // The conversation's own pick (#5033): an odd one never drops the session, which then follows its default.
+        modelPick = (try? c.decodeIfPresent(ModelPick.self, forKey: .modelPick)).flatMap { $0 }
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
         contextWindow = try? c.decodeIfPresent(Int.self, forKey: .contextWindow)
         // An odd ultracode field never drops the session; omitted is unknown (an older hub or node), not off.

@@ -4,12 +4,13 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -92,7 +93,14 @@ class ChatQueueStripTest {
         assertTrue(sendNowFailure(Refusal(502, "node_unreachable", "rpc: connection closed"), res) != "rpc: connection closed")
     }
 
-    @Test fun sendNowAsksFirstThenGivesTheAgentItsQueue() {
+    /** The button keeps its name, speaks [words], and draws neither those words nor a dialog. */
+    private fun assertSendNowSpeaks(words: String) {
+        rule.onNodeWithText("立即发送").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, words))
+        rule.onNodeWithText(words).assertDoesNotExist()
+        rule.onAllNodes(isDialog()).assertCountEquals(0)
+    }
+
+    @Test fun sendNowSendsAtOnePressWithNoDialog() {
         val queue = Queue()
         val notices = mutableListOf<String>()
         rule.setContent {
@@ -100,20 +108,19 @@ class ChatQueueStripTest {
                 ChatQueueStrip(claude, queue, ChatComposerState(), { notices += it }, {})
             }
         }
-        // Folded: the line and its Send Now, no rows.
+        // Folded: the line and its Send Now, no rows. One press sends; TalkBack still hears what the dialog said.
         rule.onNodeWithContentDescription("第 1 条：先跑测试").assertDoesNotExist()
+        assertSendNowSpeaks(res.getString(R.string.chat_queue_send_now_message))
         rule.onNodeWithText("立即发送").performClick()
-        rule.onNodeWithText("现在就发送排队的消息？").assertExists()
-        assertEquals(0, queue.sentNow)
-        rule.onNode(hasText("立即发送") and hasAnyAncestor(isDialog())).performClick()
         rule.waitForIdle()
         assertEquals(1, queue.sentNow)
         assertEquals(listOf("已立即发给 Agent"), notices)
+        rule.onAllNodes(isDialog()).assertCountEquals(0)
         queue.refusal = Refusal(409, "nothing_queued", "排队里已经没有消息了")
         rule.onNodeWithText("立即发送").performClick()
-        rule.onNode(hasText("立即发送") and hasAnyAncestor(isDialog())).performClick()
         rule.waitForIdle()
         assertEquals("排队里已经没有消息了", notices.last())
+        rule.onAllNodes(isDialog()).assertCountEquals(0)
     }
 
     @Test fun aMessageMovesUpOrDownFromItsSheet() {
@@ -211,13 +218,13 @@ class ChatQueueStripTest {
         rule.waitForIdle()
         assertEquals(listOf(listOf(1, 0), listOf(1)), queue.kept)
         assertEquals("已从队列删除", notices.last())
-        // Send Now asks in Persona's words, then hands over the queue.
+        // Send Now hands over the queue at one press, speaking Persona's words and not the agent's (#7170).
+        assertSendNowSpeaks(res.getString(R.string.chat_queue_send_now_message_persona, "Persona"))
+        rule.onNodeWithText(res.getString(R.string.chat_queue_send_now_message)).assertDoesNotExist()
         rule.onNodeWithText("立即发送").performClick()
-        rule.onNodeWithText("Persona 会马上收到，不用等到下一步。它手头的这一步会停下，能转到后台的会在后台继续，然后带上你的消息重新开始。").assertExists()
-        rule.onNodeWithText("现在就把排队的消息发给 Agent。", substring = true).assertDoesNotExist()
-        rule.onNode(hasText("立即发送") and hasAnyAncestor(isDialog())).performClick()
         rule.waitForIdle()
         assertEquals(1, queue.sentNow)
+        rule.onAllNodes(isDialog()).assertCountEquals(0)
     }
 
     // Seeing one's own queue is behaviour: Brief and Board show Persona's too, as their always-open strip without Send now.

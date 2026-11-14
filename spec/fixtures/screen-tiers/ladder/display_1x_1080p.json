@@ -1,0 +1,45 @@
+{
+  "description" : "A 1× display: 2×, 1.5× and 1× are the same pixels and merge.",
+  "expected" : [
+    {
+      "fps" : 60,
+      "height" : 1080,
+      "maxKbps" : 9953,
+      "minKbps" : 2488,
+      "scale" : 2,
+      "width" : 1920
+    },
+    {
+      "fps" : 30,
+      "height" : 1080,
+      "maxKbps" : 4977,
+      "minKbps" : 1244,
+      "scale" : 1.5,
+      "width" : 1920
+    },
+    {
+      "fps" : 15,
+      "height" : 1080,
+      "maxKbps" : 2488,
+      "minKbps" : 200,
+      "scale" : 1,
+      "width" : 1920
+    }
+  ],
+  "input" : {
+    "bias" : "auto",
+    "capKbps" : 12000,
+    "codec" : "hevc",
+    "maxFps" : 60,
+    "maxSize" : 2556,
+    "pixels" : [
+      1920,
+      1080
+    ],
+    "points" : [
+      1920,
+      1080
+    ]
+  },
+  "name" : "display_1x_1080p"
+}

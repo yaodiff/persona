@@ -35,7 +35,7 @@ func init() {
 				var err error
 				switch {
 				case it.Notification != nil:
-					err = h.deliverPushFrom(from, *it.Notification)
+					_, err = h.deliverPushFrom(from, *it.Notification)
 				case len(it.Message) > 0:
 					err = h.relayBroadcastFrom(from, it.Message)
 				}

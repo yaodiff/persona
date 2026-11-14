@@ -41,6 +41,16 @@ enum ScreenQuality: String, CaseIterable {
     }
 }
 
+/// Whether ⋯ › Quality can do anything (#6396): both this app and the Mac's helper must have quality tiers. The helper
+/// says so in `hello.features`; this app says so here. One release carries the app and Persona Link together, so a
+/// helper with tiers can meet an app without its side of them, and a choice that changes nothing must not show.
+/// `appSupported`: the iPhone's tier policy is in (#6396).
+nonisolated enum ScreenTiers {
+    static let appSupported = true
+
+    static func offered(helperHasTiers: Bool, appSupported: Bool = appSupported) -> Bool { appSupported && helperHasTiers }
+}
+
 /// Whether the connection-stats overlay is shown for a Mac (#3954), kept per Mac. Off by default.
 enum ScreenStatsPref {
     private static func key(_ ref: MachineRef) -> String { "screen.stats." + ScreenCredentials.key(ref) }
@@ -73,8 +83,13 @@ struct ScreenStats: Equatable {
 
     var mode: Mode
     var path: Path? = nil
-    var tier: String? = nil            // #6396, e.g. "1080p · 60"
-    var tierReason: String? = nil      // #6396, a short reason shown on a tier change
+    /// The route's own numbers (#6398): its smoothed round trip and the share of packets lost, when measured.
+    var routeRttMs: Double? = nil
+    var routeLoss: Double? = nil
+    /// Why the route last changed, in plain words (`ScreenRouteReason`); nil at the start.
+    var routeReason: String? = nil
+    var tier: String? = nil            // #6396, e.g. "Auto · 1.5× · 60 fps" (`ScreenTierText`)
+    var tierReason: String? = nil      // #6396, why it last changed and how long ago, in plain words
     var bitrateMbps: Double? = nil
     var fps: Double? = nil
     var codec: String? = nil           // video only, e.g. "HEVC"
@@ -87,6 +102,16 @@ struct ScreenStats: Equatable {
     var totalMs: Double? = nil
     // VNC mode: what RFB can measure.
     var roundTripMs: Double? = nil
+    /// The phone's round trip to the hub on its own hub connection (#6558, `HubRoundTrips`): not the hub's way on to the
+    /// Mac, so the overlay names it on a line of its own and never shows it as the picture's latency. The web overlay
+    /// shows the same leg.
+    var hubRoundTripMs: Double? = nil
+
+    /// A bitrate as the overlay writes it, in Mbps: one decimal, two below 1 Mbps so a small stream that was measured
+    /// doesn't read as 0.0 (the web overlay's rule, `mbpsText`).
+    nonisolated static func mbpsText(_ mbps: Double) -> String {
+        String(format: mbps < 1 ? "%.2f Mbps" : "%.1f Mbps", mbps)
+    }
 
     /// The latency segments present, in pipeline order, for the overlay's "Capture · Encode · Network · Decode" line.
     var segments: [(label: String, ms: Double)] {
@@ -100,6 +125,48 @@ struct ScreenStats: Equatable {
 }
 
 #if os(iOS) || os(visionOS)
+
+// MARK: - Round trips to the hub
+
+/// The recent round trips to the hub (#6558), timed on the app's own hub connection while the stats overlay is shown.
+/// The overlay draws the median of the last `kept` from the last `fresh` seconds, as the web does, so one slow answer
+/// doesn't make it jump and an old one (the app was in the background) isn't shown.
+nonisolated struct HubRoundTrips: Equatable, Sendable {
+    static let kept = 5
+    static let fresh: TimeInterval = 20
+    private struct Sample: Equatable { var ms: Double; var at: Date }
+    private var samples: [Sample] = []
+
+    mutating func add(ms: Double, at: Date) {
+        guard ms.isFinite, ms >= 0 else { return }
+        samples.append(Sample(ms: ms, at: at))
+        if samples.count > Self.kept { samples.removeFirst(samples.count - Self.kept) }
+    }
+
+    /// The median of the fresh ones at `now`; nil when there are none.
+    func median(at now: Date) -> Double? {
+        let ms = samples.filter { now.timeIntervalSince($0.at) <= Self.fresh }.map(\.ms).sorted()
+        guard !ms.isEmpty else { return nil }
+        let m = ms.count / 2
+        return ms.count % 2 == 1 ? ms[m] : (ms[m - 1] + ms[m]) / 2
+    }
+}
+
+/// Why the live screen's route last changed (#6398), in words anyone reads.
+enum ScreenRouteReason {
+    enum Kind { case faster, lost, degraded, networkChanged, turnedOff, firewall }
+
+    static func text(_ k: Kind) -> String {
+        switch k {
+        case .faster: String(localized: "Faster route")
+        case .lost: String(localized: "Previous route dropped")
+        case .degraded: String(localized: "Previous route got worse")
+        case .networkChanged: String(localized: "Network changed")
+        case .turnedOff: String(localized: "Turned off in Settings")
+        case .firewall: String(localized: "The computer's firewall blocks direct connections")
+        }
+    }
+}
 
 // MARK: - Overlay
 
@@ -115,9 +182,24 @@ struct ScreenStatsOverlay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             header
-            if let tier = stats.tier { kv(String(localized: "Tier"), tier, note: stats.tierReason) }
+            if let route = routeText {
+                kv(String(localized: "Route [Screen Stats]"), route)
+                // Why it last changed, on its own line as the tier's: the reasons are words and would widen the panel
+                // past the screen at the larger text sizes.
+                if let why = stats.routeReason { Text(why).foregroundStyle(.tertiary) }
+            }
+            if let tier = stats.tier {
+                kv(String(localized: "Tier"), tier)
+                // Why it last changed, on its own line: the reasons are words and would widen the panel past the screen.
+                if let why = stats.tierReason { Text(why).foregroundStyle(.tertiary) }
+            }
             rateLine
             latencyLine
+            if let hub = stats.hubRoundTripMs {
+                Text("Round trip to the hub \(Int(hub.rounded())) ms")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("screen-stats-hub")
+            }
         }
         .font(Theme.Font.caption)
         .monospacedDigit()
@@ -165,7 +247,7 @@ struct ScreenStatsOverlay: View {
     /// bitrate · fps, and codec · resolution in video mode.
     private var rateLine: some View {
         var parts: [String] = []
-        if let mbps = stats.bitrateMbps { parts.append(String(format: "%.1f Mbps", mbps)) }
+        if let mbps = stats.bitrateMbps { parts.append(ScreenStats.mbpsText(mbps)) }
         if let fps = stats.fps { parts.append(String(format: "%.0f fps", fps)) }
         if let codec = stats.codec { parts.append(codec) }
         if let res = stats.resolution { parts.append(res) }
@@ -194,6 +276,15 @@ struct ScreenStatsOverlay: View {
     }
 
     private func ms(_ v: Double) -> String { String(format: "%.0f ms", v) }
+
+    /// The route's round trip and loss (#6398), "6 ms round trip · 0% lost"; nil with nothing measured.
+    private var routeText: String? {
+        var parts: [String] = []
+        if let rtt = stats.routeRttMs { parts.append(String(localized: "\(Int(rtt.rounded())) ms round trip")) }
+        if let loss = stats.routeLoss { parts.append(String(localized: "\(Int((loss * 100).rounded()))% lost")) }
+        if parts.isEmpty, stats.routeReason == nil { return nil }
+        return parts.isEmpty ? (stats.path?.label ?? "") : parts.joined(separator: " · ")
+    }
 }
 
 #if DEBUG
@@ -201,8 +292,10 @@ extension ScreenStats {
     /// Sample numbers for previews and `-showScreenStatsDemo` screenshots (video mode shows the per-segment latency).
     /// Capture ≈ 0 ms on the Mac (gate ①: the frame reaches us before its display time), so it's folded into the total.
     static let demoVideo = ScreenStats(
-        mode: .video, path: .directLAN, tier: "1080p · 60", tierReason: nil,
-        bitrateMbps: 1.8, fps: 60, codec: "HEVC", resolution: "1920×1080",
+        mode: .video, path: .directLAN, routeRttMs: 6, routeLoss: 0, routeReason: ScreenRouteReason.text(.faster),
+        tier: String(localized: "Auto") + " · 1.5× · 60 fps",
+        tierReason: String(localized: "Connection is steady") + " · " + String(localized: "\(12) s ago"),
+        bitrateMbps: 3.4, fps: 60, codec: "HEVC", resolution: "2268×1472",
         captureMs: nil, encodeMs: 9, networkMs: 6, decodeMs: 8, totalMs: 23, roundTripMs: nil)
     static let demoVNC = ScreenStats(
         mode: .vnc, path: .relay, tier: nil, tierReason: nil,

@@ -661,6 +661,46 @@ describe("ProviderWizard names", () => {
     type(keyInput(), "sk-test-123456");
   }
 
+  // audit item 19: Next with nothing filled in said why at the foot of a scrolled dialog, out of sight; each field now
+  // says its own problem, the first takes the focus and is brought into view, and a fixed field stops saying it
+  it("says what each empty field needs under it when Next is pressed, focusing and showing the first", async () => {
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    await custom();
+    const id = field("启动 ID")!;
+    const url = urlInput();
+    expect(id.getAttribute("aria-invalid")).toBeNull();
+    expect(url.getAttribute("aria-invalid")).toBeNull();
+    expect(keyInput().getAttribute("aria-invalid")).toBeNull();
+    act(() => button("下一步")!.click());
+    expect(addModelInput()).toBeNull();
+    expect(alertText()).toBeUndefined();
+    expect(id.getAttribute("aria-invalid")).toBe("true");
+    expect(note(id)).toBe("要填启动 ID");
+    expect(url.getAttribute("aria-invalid")).toBe("true");
+    expect(note(url)).toBe("要填地址");
+    expect(keyInput().getAttribute("aria-invalid")).toBe("true");
+    expect(note(keyInput())).toBe("要填 API Key");
+    // a red edge in place of the field's inset (an added edge would lose to the inset)
+    for (const input of [id, url, keyInput()]) {
+      expect(input.className).toContain("shadow-[inset_0_0_0_1px_var(--red)]");
+      expect(input.className).not.toContain("shadow-inset-field");
+    }
+    expect(document.activeElement).toBe(id);
+    expect(scrolled.at(-1)?.contains(id)).toBe(true);
+    expect(scrolled.at(-1)?.textContent).toContain("要填启动 ID");
+    // the next press goes to the first field still wrong
+    type(id, "team_relay");
+    expect(id.getAttribute("aria-invalid")).toBeNull();
+    act(() => button("下一步")!.click());
+    expect(document.activeElement).toBe(url);
+    connect();
+    expect(url.getAttribute("aria-invalid")).toBeNull();
+    expect(keyInput().getAttribute("aria-invalid")).toBeNull();
+    act(() => button("下一步")!.click());
+    expect(addModelInput()).not.toBeNull();
+  });
+
   it("names a new gateway in any language and leaves its startup ID to the hub", async () => {
     autoName();
     await custom();
@@ -692,7 +732,11 @@ describe("ProviderWizard names", () => {
     type(field("显示名")!, "Team relay");
     connect();
     act(() => button("下一步")!.click());
-    expect(alertText()).toBe("要填启动 ID");
+    // said under the field, which takes the focus (audit item 19)
+    expect(alertText()).toBeUndefined();
+    expect(id.getAttribute("aria-invalid")).toBe("true");
+    expect(note(id)).toBe("要填启动 ID");
+    expect(document.activeElement).toBe(id);
     type(id, "team_relay");
     act(() => button("下一步")!.click());
     expect(addModelInput()).not.toBeNull();
@@ -713,8 +757,9 @@ describe("ProviderWizard names", () => {
     act(() => button("更多选项")!.click());
     expect(button("更多选项")!.getAttribute("aria-expanded")).toBe("false");
     act(() => button("下一步")!.click());
-    expect(alertText()).toBe("启动 ID 只能用字母、数字、_ 和 -，以字母或 _ 开头");
+    expect(note(field("启动 ID")!)).toBe("启动 ID 只能用字母、数字、_ 和 -，以字母或 _ 开头");
     expect(button("更多选项")!.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(field("启动 ID"));
     expect(addModelInput()).toBeNull();
   });
 
@@ -729,7 +774,8 @@ describe("ProviderWizard names", () => {
     expect(button("测试连接")!.disabled).toBe(false);
     expect(button("获取模型列表")!.disabled).toBe(false);
     act(() => button("下一步")!.click());
-    expect(alertText()).toBe("显示名最多 64 个字，不能换行");
+    expect(note(display)).toBe("显示名最多 64 个字，不能换行");
+    expect(document.activeElement).toBe(display);
     type(display, "字".repeat(64));
     expect(display.getAttribute("aria-invalid")).toBeNull();
     act(() => button("下一步")!.click());

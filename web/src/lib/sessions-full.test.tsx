@@ -17,7 +17,7 @@ vi.mock("./api", () => {
     constructor(readonly status: number, message: string, readonly body: Record<string, unknown> = {}) { super(message); }
     get code() { return typeof this.body.code === "string" ? this.body.code : undefined; }
   }
-  return { api: fixture.api, credentialOwner: () => fixture.owner, ApiError };
+  return { api: fixture.api, credentialOwner: () => fixture.owner, ApiError, errorText: (e: unknown) => (e instanceof Error ? e.message : String(e)) };
 });
 vi.mock("./store", async () => {
   const { useSyncExternalStore } = await import("react");
@@ -36,7 +36,7 @@ vi.mock("./store", async () => {
     },
   };
 });
-import { useFullAgentSessions } from "./sessions";
+import { retryFullAgentSessions, useFullAgentSessions } from "./sessions";
 import { ApiError } from "./api";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,8 +50,8 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 function Probe() {
-  const { sessions, loaded } = useFullAgentSessions();
-  return <output data-loaded={loaded} data-states={sessions.map((s) => s.state).join(",")} data-titles={sessions.map((s) => s.title).join(",")}>{sessions.map((s) => s.session_id).join(",")}</output>;
+  const { sessions, loaded, error } = useFullAgentSessions();
+  return <output data-loaded={loaded} data-error={error} data-states={sessions.map((s) => s.state).join(",")} data-titles={sessions.map((s) => s.title).join(",")}>{sessions.map((s) => s.session_id).join(",")}</output>;
 }
 const publish = (patch: Partial<typeof fixture.state>) => {
   fixture.state = { ...fixture.state, ...patch };
@@ -438,6 +438,49 @@ describe("complete session snapshots for the sidebar fallback", () => {
     expect(fixture.api).toHaveBeenCalledTimes(2);
     expect(host.textContent).toBe("previous");
     expect(host.querySelector("output")!.dataset.loaded).toBe("true");
+  });
+
+  it("says why an initial read failed, until a read loads it (audit item 4: the list stayed blank)", async () => {
+    fixture.api.mockRejectedValueOnce(new Error("HTTP 500")).mockResolvedValueOnce({ sessions: [row("recovered")] });
+    await mount();
+    expect(host.querySelector("output")!.dataset.loaded).toBe("false");
+    expect(host.querySelector("output")!.dataset.error).toBe("HTTP 500");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(host.textContent).toBe("recovered");
+    expect(host.querySelector("output")!.dataset.error).toBe("");
+  });
+
+  it("reads again at once on Retry, loading (no error) until the answer, and keeps one retry timer", async () => {
+    const again = deferred();
+    fixture.api.mockRejectedValueOnce(new Error("HTTP 500")).mockReturnValueOnce(again.promise);
+    await mount();
+    expect(host.querySelector("output")!.dataset.error).toBe("HTTP 500");
+    await act(async () => { retryFullAgentSessions(); });
+    expect(fixture.api).toHaveBeenCalledTimes(2);
+    expect(host.querySelector("output")!.dataset.error).toBe("");
+    expect(host.querySelector("output")!.dataset.loaded).toBe("false");
+    await resolve(again, [row("recovered")]);
+    expect(host.textContent).toBe("recovered");
+    // the automatic retry it replaced does not read a third time
+    await advance(10_000);
+    expect(fixture.api).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a loaded list's rows and no error when a later read fails", async () => {
+    fixture.api.mockResolvedValueOnce({ sessions: [row("previous")] }).mockRejectedValueOnce(new Error("HTTP 500"));
+    await mount();
+    await act(async () => { push("sessions_list"); });
+    await advance(3_000);
+    expect(host.textContent).toBe("previous");
+    expect(host.querySelector("output")!.dataset.error).toBe("");
+  });
+
+  it("never says an old hub's pushed list failed", async () => {
+    fixture.state = { ...fixture.state, features: [], sessions: { demo: [row("pushed")] } };
+    await mount();
+    expect(host.textContent).toBe("pushed");
+    expect(host.querySelector("output")!.dataset.error).toBe("");
+    expect(fixture.api).not.toHaveBeenCalled();
   });
 
   it("retries an initial failure even when the hub sends no further hints", async () => {

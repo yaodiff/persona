@@ -1,14 +1,12 @@
 /// <reference types="vitest/config" />
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, type Logger, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { brotliCopies, firstScreenBytes, firstScreenOverBudget, gzipBytes, IDLE_TIER_BUDGET, idleImports, localeDirs, preloadScript, startupNamespaceGaps } from "./src/startup-preload";
+import { brotliCopies, firstScreenBytes, firstScreenOverBudget, firstScreenRoom, gzipBytes, IDLE_TIER_BUDGET, idleImports, localeDirs, preloadScript, startupGaps } from "./src/startup-preload";
 import { textScale } from "./src/lib/text-scale";
 import { classicWorkerProblem } from "./src/sw-entry-check";
-import { catalogFiles, i18nCatalogs, startupNamespacesFile } from "./i18n-catalogs";
+import { clientKeys, i18nCatalogs, startupEntries } from "./i18n-catalogs";
 import { pageTokensPlugin } from "./page-tokens";
 import { thirdPartyLicenses } from "./third-party-licenses";
 import { compatBootstrap } from "./compat-bootstrap";
@@ -74,15 +72,16 @@ const showcaseImages: Plugin = {
 //
 // The catalog is the first screen's part of it (client-startup, web/i18n-catalogs.ts): the rest loads once the page
 // has started (i18n/index.ts startI18n), and holdLazyImports makes every other module wait for it. So the first
-// screen's chunks, all that can run before it, must name only startup namespaces: the build fails, naming the
-// namespaces to add to src/i18n/startup-namespaces.json, if they name another.
+// screen's chunks, all that can run before it, must read only that part: the build fails, naming the keys (or the
+// namespaces) to add to src/i18n/startup-namespaces.json, if they name another.
 //
 // The same files, with main and everything it imports statically and the rest of the catalog, are what a cold first
 // screen fetches: once they are written, each of 1 KB or more gets a brotli copy beside it (name.br,
 // src/startup-preload.ts brotliCopies), which the hub sends as stored to a browser that takes br (docs/web/web.md
 // "Precompressed assets"). The build then fails if any language's first screen sends more than FIRST_SCREEN_BUDGET,
 // counted with the hashes of the files it names and the minified names its files import from each other as fixed
-// strings (src/startup-preload.ts firstScreenBytes).
+// strings (src/startup-preload.ts firstScreenBytes). Under it, the build prints each language's count and the room
+// left (firstScreenRoom), a warning when that is under FIRST_SCREEN_LOW_ROOM.
 //
 // After start the page also fetches, once the browser is idle, the chunks of each lazyPage(…, { idle: true }) and
 // what they import beyond those files (src/lib/lazy-page.ts): the build fails if they send more than IDLE_TIER_BUDGET.
@@ -91,9 +90,13 @@ function startupPreload(): Plugin {
   let screens: [string, string[]][] = []; // each language's first screen of the App (not the live screen)
   const idle = new Set<string>(); // the modules lazyPage loads at idle, found by transform
   let idleFiles: string[] = []; // their files beyond the first screen's, set by transformIndexHtml
+  let logger: Logger | undefined;
   return {
     name: "startup-preload",
     apply: "build",
+    configResolved(config) {
+      logger = config.logger;
+    },
     async transform(code, id) {
       if (!id.includes("/src/") || !code.includes("lazyPage(")) return;
       let specs: string[];
@@ -111,8 +114,12 @@ function startupPreload(): Plugin {
     async writeBundle({ dir }, bundle) {
       if (!startup) this.error("startup-preload: index.html was not transformed, so the first screen's files are unknown");
       await brotliCopies(dir!, startup);
-      const overBudget = firstScreenOverBudget(await firstScreenBytes(dir!, screens, Object.keys(bundle)));
+      const bytes = await firstScreenBytes(dir!, screens, Object.keys(bundle));
+      const overBudget = firstScreenOverBudget(bytes);
       if (overBudget) this.error(overBudget);
+      const room = firstScreenRoom(bytes);
+      if (room.low) logger?.warn(room.line);
+      else logger?.info(room.line);
       const idleBytes = await gzipBytes(dir!, idleFiles);
       if (idleBytes > IDLE_TIER_BUDGET) {
         this.error(`startup-preload: the pages loaded at idle send ${idleBytes} B, over their budget of ${IDLE_TIER_BUDGET} B (src/startup-preload.ts IDLE_TIER_BUDGET): load one on intent (lazyPage routes) instead`);
@@ -161,13 +168,9 @@ function startupPreload(): Plugin {
         const script = preloadScript(files);
         // What runs before the rest of the catalog is in: the groups, and main.tsx's other imports (not preloaded).
         const first = new Set([...entry, ...shared, ...files.app, ...files.screen, ...group(["/src/lib/back-close.ts", "/src/lib/error-reports-start.ts"].map(find), new Set())]);
-        const gaps = startupNamespaceGaps(
-          chunks.filter((c) => first.has(c.fileName)).map((c) => c.code),
-          catalogFiles(meta("en"), "client").map((file) => basename(file, ".json")),
-          JSON.parse(readFileSync(startupNamespacesFile(meta("en")), "utf8")) as string[],
-        );
+        const gaps = startupGaps(chunks.filter((c) => first.has(c.fileName)).map((c) => c.code), clientKeys(meta("en")), startupEntries(meta("en")));
         if (gaps.length) {
-          throw new Error(`startup-preload: the first screen's code names keys of ${gaps.join(", ")}, which the page reads before the rest of the catalog is in: add them to src/i18n/startup-namespaces.json`);
+          throw new Error(`startup-preload: the first screen's code names ${gaps.join(", ")}, which the page reads before the rest of the catalog is in: add them to src/i18n/startup-namespaces.json (a key there takes every key that begins with it, a namespace all of it; list a namespace whole only when the first screen reads most of it)`);
         }
         startup = [...new Set([...entry, ...shared, ...files.app, ...files.screen, ...Object.values(files.catalogs), ...Object.values(catalogs("client-rest"))])];
         if (!idle.size) throw new Error("startup-preload: no lazyPage(…, { idle: true }) was found, so the idle tier's budget would check nothing");

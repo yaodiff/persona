@@ -24,5 +24,7 @@
   "create_and_link": "作成して追加",
   "new_todo": "新規ToDo…",
   "space_unlink": "ToDoから外す",
-  "session_unlink": "関連付けを解除"
+  "session_unlink": "関連付けを解除",
+  "search": "未完了のToDoを検索",
+  "no_match": "一致するToDoはありません"
 }

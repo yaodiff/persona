@@ -1,7 +1,7 @@
 {
   "choose": "请选择",
   "project": "项目目录",
-  "harness": "Harness",
+  "harness": "Agent 类型",
   "launcher": "启动器",
   "model": "模型",
   "checking": "正在检查可用模型…",
@@ -10,7 +10,7 @@
   "no_override": "这个启动器没有可供选择的模型，将按自身设置启动。",
   "one_start": "所选模型仅用于这次启动。",
   "model_changed": "之前选的模型已不可用，请重新选择。",
-  "harness_changed": "启动器现在运行的是另一个 harness，请重新选择。",
+  "harness_changed": "这个启动器现在启动的是另一种 Agent，请重新选择。",
   "no_launchers": "这台设备没有可用的启动器。",
   "launcher_unavailable": "这个启动器目前无法在所选设备上启动会话。",
   "browse": "打开所选目录",

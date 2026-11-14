@@ -74,6 +74,7 @@ async function search(query: string, listShown = true) {
 }
 /** lib/agent-search.ts loads with the first query typed, or the Filter's first click. */
 async function ticks() {
+  await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 10; i++) await act(async () => { await new Promise((ok) => setTimeout(ok, 0)); });
 }
 /** The Agent rows' titles, top to bottom. */

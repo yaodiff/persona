@@ -7,6 +7,10 @@ for required in llvm/bin/clang llvm/bin/clang++ llvm/bin/llvm-ar build/cmake/oho
   [ -f "$OHOS_SDK_NATIVE/$required" ] || { printf 'Missing SDK component: %s\n' "$required" >&2; exit 1; }
 done
 export OHOS_SDK_NATIVE
+# napi-build-ohos takes its link directories from OHOS_NDK_HOME, the directory that holds `native`.
+if [ -z "${OHOS_NDK_HOME:-}" ]; then OHOS_NDK_HOME=$(CDPATH= cd -- "$OHOS_SDK_NATIVE/.." && pwd); fi
+[ -d "$OHOS_NDK_HOME/native/sysroot" ] || { printf 'OHOS_NDK_HOME (%s) has no native/sysroot; set it to the directory that holds the SDK'"'"'s native directory\n' "$OHOS_NDK_HOME" >&2; exit 1; }
+export OHOS_NDK_HOME
 if [ -z "${RUSTC:-}" ]; then RUSTC=$(rustup which --toolchain 1.98.0 rustc); export RUSTC; fi
 if [ -z "${RUSTDOC:-}" ]; then RUSTDOC=$(rustup which --toolchain 1.98.0 rustdoc); export RUSTDOC; fi
 export CARGO_NET_OFFLINE=true

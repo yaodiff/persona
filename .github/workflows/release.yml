@@ -1,6 +1,7 @@
 name: release
 on:
-  # Version tags publish Docker images and a GitHub Release.
+  # Version tags publish Docker images and a GitHub Release, and attach the
+  # signed desktop packages to it when their signing secrets are configured.
   # Manual runs publish only edge/sha images; no branch push, pull request,
   # merge group, or schedule starts this workflow.
   push:
@@ -109,3 +110,157 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "$RELEASE_TAG" "${args[@]}"
+  # Desktop packages (docs/desktop/desktop.md, "Updates"). They are attached to the Release created above only when
+  # they are signed: without the signing secrets the release still succeeds and this job says what was skipped and why.
+  desktop-gate:
+    name: Desktop packages gate
+    needs: authorize
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Environment secrets are visible only in this protected context. Keep the existence check here, not in an
+    # unbound job: the documented environment-only configuration would otherwise report every credential missing.
+    environment: persona-desktop-release
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      mac: ${{ steps.gate.outputs.mac }}
+      win: ${{ steps.gate.outputs.win }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: gate
+        name: Which desktop packages can be signed
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          # Only whether each secret exists reaches the script, never its value.
+          HAS_PERSONA_DESKTOP_APP_ID: ${{ secrets.PERSONA_DESKTOP_APP_ID != '' }}
+          HAS_MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK != '' }}
+          HAS_MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD != '' }}
+          HAS_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY != '' }}
+          HAS_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID != '' }}
+          HAS_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER != '' }}
+          HAS_WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK != '' }}
+          HAS_WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD != '' }}
+        run: scripts/ci/desktop-release-gate.sh
+  desktop-mac:
+    name: macOS desktop packages
+    needs: [authorize, desktop-gate]
+    if: needs.desktop-gate.outputs.mac == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    environment: persona-desktop-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Desktop checks
+        run: scripts/ci/desktop.sh
+      - name: Build signed and notarized universal packages
+        env:
+          PERSONA_DESKTOP_VERSION: ${{ needs.desktop-gate.outputs.version }}
+          PERSONA_DESKTOP_REQUIRE_SIGNING: '1'
+          PERSONA_DESKTOP_APP_ID: ${{ secrets.PERSONA_DESKTOP_APP_ID }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: scripts/ci/desktop-package.sh mac
+      - name: Verify the signature and notarization
+        run: |
+          app="desktop/release/mac-universal/Persona.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          # Gatekeeper accepts only a Developer ID signature with a notarization ticket.
+          spctl --assess --type execute --verbose=2 "$app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: persona-desktop-release-macos
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.blockmap
+            desktop/release/*-mac.yml
+          if-no-files-found: error
+          retention-days: 7
+  desktop-win:
+    name: Windows desktop package
+    needs: [authorize, desktop-gate]
+    if: needs.desktop-gate.outputs.win == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    environment: persona-desktop-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Desktop checks
+        shell: bash
+        run: scripts/ci/desktop.sh
+      - name: Build signed NSIS package
+        shell: bash
+        env:
+          PERSONA_DESKTOP_VERSION: ${{ needs.desktop-gate.outputs.version }}
+          PERSONA_DESKTOP_REQUIRE_SIGNING: '1'
+          PERSONA_DESKTOP_APP_ID: ${{ secrets.PERSONA_DESKTOP_APP_ID }}
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: scripts/ci/desktop-package.sh win
+      - name: Verify the signature
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem desktop/release/*.exe | Select-Object -First 1
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
+          Write-Host "$($installer.Name): $($signature.Status)"
+          if ($signature.Status -ne 'Valid') { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: persona-desktop-release-windows
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.blockmap
+            desktop/release/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+  desktop-publish:
+    name: Attach desktop packages to the Release
+    needs: [publish, desktop-gate, desktop-mac, desktop-win]
+    # One platform's packages are attached even when the other was skipped or failed.
+    if: ${{ !cancelled() && needs.publish.result == 'success' && (needs.desktop-mac.result == 'success' || needs.desktop-win.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: persona-desktop-release-*
+          path: desktop-release
+          merge-multiple: true
+      - name: Upload packages, then the update metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s nullglob
+          packages=(desktop-release/*.dmg desktop-release/*.zip desktop-release/*.exe desktop-release/*.blockmap)
+          metadata=(desktop-release/*.yml)
+          if (( ${#packages[@]} == 0 || ${#metadata[@]} == 0 )); then
+            echo "No desktop packages or update metadata were built." >&2
+            exit 1
+          fi
+          # Installed apps read the metadata first: it must never name a package that is not there yet.
+          gh release upload "$RELEASE_TAG" "${packages[@]}" --clobber
+          gh release upload "$RELEASE_TAG" "${metadata[@]}" --clobber
+          printf -- '- Attached to %s: %s\n' "$RELEASE_TAG" "$(basename -a "${packages[@]}" "${metadata[@]}" | tr '\n' ' ')" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,1345 @@
+{
+  "description" : "Slow decodes and pictures replaced before they showed.",
+  "name" : "decode_behind",
+  "steps" : [
+    {
+      "frame" : {
+        "arrival" : 6020000,
+        "bytes" : 20000,
+        "capture" : 1000000,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6044000,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6028000,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6036667,
+        "bytes" : 20000,
+        "capture" : 1016667,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6060667,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6044667,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6053334,
+        "bytes" : 20000,
+        "capture" : 1033334,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6077334,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6061334,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6070001,
+        "bytes" : 20000,
+        "capture" : 1050001,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6094001,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6078001,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6086668,
+        "bytes" : 20000,
+        "capture" : 1066668,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6110668,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6094668,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6103335,
+        "bytes" : 20000,
+        "capture" : 1083335,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6127335,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6111335,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6120002,
+        "bytes" : 20000,
+        "capture" : 1100002,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6144002,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6128002,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6136669,
+        "bytes" : 20000,
+        "capture" : 1116669,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6160669,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6144669,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6153336,
+        "bytes" : 20000,
+        "capture" : 1133336,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6177336,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6161336,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6170003,
+        "bytes" : 20000,
+        "capture" : 1150003,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6194003,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6178003,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6186670,
+        "bytes" : 20000,
+        "capture" : 1166670,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6210670,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6194670,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6203337,
+        "bytes" : 20000,
+        "capture" : 1183337,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6227337,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6211337,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6220004,
+        "bytes" : 20000,
+        "capture" : 1200004,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6244004,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6228004,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6236671,
+        "bytes" : 20000,
+        "capture" : 1216671,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6260671,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6244671,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6253338,
+        "bytes" : 20000,
+        "capture" : 1233338,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6277338,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6261338,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6270005,
+        "bytes" : 20000,
+        "capture" : 1250005,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6294005,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6278005,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6286672,
+        "bytes" : 20000,
+        "capture" : 1266672,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6310672,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6294672,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6303339,
+        "bytes" : 20000,
+        "capture" : 1283339,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6327339,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6311339,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6320006,
+        "bytes" : 20000,
+        "capture" : 1300006,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6344006,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6328006,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6336673,
+        "bytes" : 20000,
+        "capture" : 1316673,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6360673,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6344673,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6353340,
+        "bytes" : 20000,
+        "capture" : 1333340,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6377340,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6361340,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6370007,
+        "bytes" : 20000,
+        "capture" : 1350007,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6394007,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6378007,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6386674,
+        "bytes" : 20000,
+        "capture" : 1366674,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6410674,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6394674,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6403341,
+        "bytes" : 20000,
+        "capture" : 1383341,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6427341,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6411341,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6420008,
+        "bytes" : 20000,
+        "capture" : 1400008,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6444008,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6428008,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6436675,
+        "bytes" : 20000,
+        "capture" : 1416675,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6460675,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6444675,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6453342,
+        "bytes" : 20000,
+        "capture" : 1433342,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6477342,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6461342,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6470009,
+        "bytes" : 20000,
+        "capture" : 1450009,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6494009,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6478009,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6486676,
+        "bytes" : 20000,
+        "capture" : 1466676,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6510676,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6494676,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6503343,
+        "bytes" : 20000,
+        "capture" : 1483343,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6527343,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6511343,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6520010,
+        "bytes" : 20000,
+        "capture" : 1500010,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6544010,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6528010,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6536677,
+        "bytes" : 20000,
+        "capture" : 1516677,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6560677,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6544677,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6553344,
+        "bytes" : 20000,
+        "capture" : 1533344,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6577344,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6561344,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6570011,
+        "bytes" : 20000,
+        "capture" : 1550011,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6594011,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6578011,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6586678,
+        "bytes" : 20000,
+        "capture" : 1566678,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6610678,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6594678,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6603345,
+        "bytes" : 20000,
+        "capture" : 1583345,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6627345,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6611345,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6620012,
+        "bytes" : 20000,
+        "capture" : 1600012,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6644012,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6628012,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6636679,
+        "bytes" : 20000,
+        "capture" : 1616679,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6660679,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6644679,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6653346,
+        "bytes" : 20000,
+        "capture" : 1633346,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6677346,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6661346,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6670013,
+        "bytes" : 20000,
+        "capture" : 1650013,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6694013,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6678013,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6686680,
+        "bytes" : 20000,
+        "capture" : 1666680,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6710680,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6694680,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6703347,
+        "bytes" : 20000,
+        "capture" : 1683347,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6727347,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6711347,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6720014,
+        "bytes" : 20000,
+        "capture" : 1700014,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6744014,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6728014,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6736681,
+        "bytes" : 20000,
+        "capture" : 1716681,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6760681,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6744681,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6753348,
+        "bytes" : 20000,
+        "capture" : 1733348,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6777348,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6761348,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6770015,
+        "bytes" : 20000,
+        "capture" : 1750015,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6794015,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6778015,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6786682,
+        "bytes" : 20000,
+        "capture" : 1766682,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6810682,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6794682,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6803349,
+        "bytes" : 20000,
+        "capture" : 1783349,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6827349,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6811349,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6820016,
+        "bytes" : 20000,
+        "capture" : 1800016,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6844016,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6828016,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6836683,
+        "bytes" : 20000,
+        "capture" : 1816683,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6860683,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6844683,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6853350,
+        "bytes" : 20000,
+        "capture" : 1833350,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6877350,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6861350,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6870017,
+        "bytes" : 20000,
+        "capture" : 1850017,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6894017,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6878017,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6886684,
+        "bytes" : 20000,
+        "capture" : 1866684,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6910684,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6894684,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6903351,
+        "bytes" : 20000,
+        "capture" : 1883351,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6927351,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6911351,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6920018,
+        "bytes" : 20000,
+        "capture" : 1900018,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6944018,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6928018,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6936685,
+        "bytes" : 20000,
+        "capture" : 1916685,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6960685,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6944685,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6953352,
+        "bytes" : 20000,
+        "capture" : 1933352,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6977352,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6961352,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6970019,
+        "bytes" : 20000,
+        "capture" : 1950019,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 6994019,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6978019,
+        "replaced" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6986686,
+        "bytes" : 20000,
+        "capture" : 1966686,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 7010686,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 6994686,
+        "replaced" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7003353,
+        "bytes" : 20000,
+        "capture" : 1983353,
+        "firstByte" : null,
+        "fps" : 60,
+        "refinement" : false
+      }
+    },
+    {
+      "decoded" : {
+        "at" : 7027353,
+        "ms" : 24
+      }
+    },
+    {
+      "shown" : {
+        "at" : 7011353,
+        "replaced" : false
+      }
+    },
+    {
+      "expected" : {
+        "burstKbps" : [
+
+        ],
+        "decodeP95Ms" : 24,
+        "deliveredKbps" : 9599.8080038399239,
+        "frames" : 30,
+        "lateShare" : 0,
+        "queueFalling" : false,
+        "queueP50Ms" : 0,
+        "queueP95Ms" : 0,
+        "queueRising" : false,
+        "replacedShare" : 0.5
+      },
+      "take" : {
+        "now" : 7003353
+      }
+    }
+  ]
+}

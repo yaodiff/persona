@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, enc, errorText } from "../../lib/api";
+import { composing } from "../../lib/send-history";
 import type { KBUpdate } from "../../lib/kb";
 import { Button } from "../../ui/atoms";
 import { Card, SectionTitle } from "./KBParts";
@@ -84,7 +85,15 @@ function FactsEditor({ kind, id, value, auth, current, refresh, onSaved, onClose
   };
 
   return (
-    <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
+    <form
+      onSubmit={(event) => { event.preventDefault(); void save(); }}
+      // ⌘↩ / Ctrl+↩ saves, as the dialogs' multi-line fields do (audit item 70); Enter alone is a new line
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey) || composing(event.nativeEvent)) return;
+        event.preventDefault();
+        event.currentTarget.requestSubmit();
+      }}
+    >
       <label id={label} htmlFor={`${label}-input`} className="mb-2 block text-sm font-medium text-ink">{t("knowledge-confirmedfacts.title")}</label>
       <textarea
         id={`${label}-input`}

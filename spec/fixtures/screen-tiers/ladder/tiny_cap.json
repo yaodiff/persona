@@ -1,0 +1,29 @@
+{
+  "description" : "A cap at the helper's floor: only the last tier is left.",
+  "expected" : [
+    {
+      "fps" : 15,
+      "height" : 600,
+      "maxKbps" : 200,
+      "minKbps" : 200,
+      "scale" : 1,
+      "width" : 800
+    }
+  ],
+  "input" : {
+    "bias" : "auto",
+    "capKbps" : 200,
+    "codec" : "hevc",
+    "maxFps" : 60,
+    "maxSize" : 2556,
+    "pixels" : [
+      800,
+      600
+    ],
+    "points" : [
+      800,
+      600
+    ]
+  },
+  "name" : "tiny_cap"
+}

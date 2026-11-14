@@ -87,6 +87,17 @@ describe("By to-do's rows (#6458)", () => {
     expect(row("todo:none").textContent).toMatch(/^没挂待办的.*0 个 Agent$/);
   });
 
+  it("says 完成未看 over a finished agent not looked at yet, as its row and By status do, not 已完成", () => {
+    const unseen = [...onTodos, s("done", "unread", "/code/notes"), s("seen", "idle", "/code/notes")];
+    show(<TodoTreeView tree={buildTodoTree(unseen, machines, todos, { spaces: [], sessions: [] }, Date.now())} machines={machines} activeKey="" {...stable} />);
+    expect(row("todo:none").textContent).toMatch(/^没挂待办的.*2 个 Agent完成未看$/);
+    // Recent (not running) as the sidebar draws it under By to-do: its agents stopped
+    act(() => root.unmount());
+    root = createRoot(host);
+    show(<GroupBranch branch="recent" name="最近（未运行）" icon="history" n={1} state="done" label="未运行" folded onToggle={() => {}}>{null}</GroupBranch>);
+    expect(row("recent").textContent).toMatch(/1 个 Agent未运行$/);
+  });
+
   it("puts the agents opened in a terminal in the same group, each row ending with the Terminal source mark (#6591)", () => {
     show(<TodoTreeView tree={buildTodoTree(sessions, machines, todos, { spaces: [], sessions: [] }, Date.now())} machines={machines} activeKey="" {...stable} />);
     const marks = [...branch("todo:none").querySelectorAll("[data-tree-branch-list] [data-source]")].map((el) => [el.getAttribute("data-source"), el.getAttribute("aria-label")]);
@@ -112,9 +123,8 @@ describe("By to-do's rows (#6458)", () => {
     const tree = buildTodoTree(onTodos, machines, todos, { spaces: [], sessions: [] }, Date.now(), { keepEmpty: true });
     const hint = tree.loose[0]!.hint;
     show(<TodoTreeView tree={tree} machines={machines} activeKey="" {...stable} />);
-    const list = branch("todo:none").querySelector("[data-tree-branch-list]")!;
-    // folded: inert, nothing for a reader to land on
-    expect(list.closest("[inert]") ?? list.getAttribute("inert")).not.toBeNull();
+    // folded: nothing under it at all, so nothing for a reader to land on (a folded group mounts no rows)
+    expect(branch("todo:none").querySelector("[data-tree-branch-list]")).toBeNull();
     const info = row("todo:none").querySelector<HTMLButtonElement>('button[aria-label="关于「没挂待办的」"]')!;
     expect(info.hasAttribute("aria-expanded")).toBe(false);
     // the tip's words load the first time an ⓘ is asked (InfoTipPanel)
@@ -126,7 +136,7 @@ describe("By to-do's rows (#6458)", () => {
     act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
     act(() => chevron("todo:none").click());
-    expect(list.textContent).toBe(hint);
+    expect(branch("todo:none").querySelector("[data-tree-branch-list]")!.textContent).toBe(hint);
   });
 
   it("draws the groups as sections beside the sections of By pinned", () => {

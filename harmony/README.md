@@ -35,4 +35,10 @@ The builder packages the original `spec/fixtures/continuity` corpus and its exac
 ArkTS codec, and separately asserts one `Update` for a repeated full item. Host tests use a fake NAPI only for adapter
 behavior; they do not prove a HAP or device run. Native core notices are packaged with the core test resources.
 
+One host replay does check the generated ArkTS codec against the real core without a device: `scripts/ci/core.sh`
+builds `native/app-core`'s `host_replay` example and runs `tests/core-host/replay.test.mjs`, which replays the same
+38 cases / 94 steps through `persona-core-ohos`'s registry with ArkTS encoding and decoding, and compares ArkTS and
+Rust bytes for independently built values. It found the `u32` width defect (#7485). It exercises neither the NAPI glue
+(argument conversion, thread-safe callbacks) nor a HAP, so `coreReplay` above remains the only device test of those.
+
 The application icon reuses Persona's approved artwork. Run `python3 scripts/export-icons.py` from this directory to regenerate its layers, startup image and provenance manifest. The system applies its own launcher mask.

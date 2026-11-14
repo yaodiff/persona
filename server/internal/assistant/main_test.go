@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/db/dbtest"
 	"github.com/nwverse/persona/server/internal/testhome"
@@ -13,8 +14,13 @@ import (
 // skip. Run with a throw-away HOME (testhome): nothing in the package may write the default ~/.persona. Every inbox
 // list checks the item bytes GET /api/v1/inbox kept against a fresh encoding (inboxMemoVerify): a change of an item
 // that forgets nothing (touched, chainAdd, saveInboxPrepared) fails the run.
+//
+// Retries that give a real model or hub time to recover wait a millisecond here: the fakes answer a retry as they
+// answered the first try, so the real pause (three seconds for the done judge, half a second per phone tool list) only
+// added about a minute and a half to the package's run (#7644). The tests of the retries themselves set their own.
 func TestMain(m *testing.M) {
 	inboxMemoVerify = true
+	taskDoneRetryAfter, phoneToolRetry = time.Millisecond, time.Millisecond
 	os.Exit(testhome.Main(func() int { return staleListedCheck(dbtest.Main(m)) }))
 }
 

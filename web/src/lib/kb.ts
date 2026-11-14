@@ -533,11 +533,6 @@ export function groupEntries(kind: KBKind, items: KBEntry[], tag?: string): Entr
   return out.filter((s) => s.items.length);
 }
 
-/** 1985 → "1985" (no grouping comma, the chip is narrow), past 9999 → "10K+" (in Chinese units). */
-export function countLabel(n: number): string {
-  return n > 9999 ? t("lib-kb.count_over") : String(n);
-}
-
 /**
  * The tags a row shows: the list's filter tag left out (every row has it), duplicates and blanks dropped, at most
  * `max`. The row itself then shows as many of these as fit whole (a cut "#Manage…" says nothing).

@@ -82,5 +82,15 @@
   "machine_missing": "{name} (no such machine)",
   "launcher_missing": "{name} (no such launcher)",
   "launchers_loading": "Loading launchers…",
-  "from_provider": "From {provider}"
+  "from_provider": "From {provider}",
+  "node_running_one": "Running on {count} machine",
+  "node_running_other": "Running on {count} machines",
+  "node_abnormal_count_one": "{count} machine has an issue",
+  "node_abnormal_count_other": "{count} machines have an issue",
+  "node_offline_count_one": "{count} machine offline",
+  "node_offline_count_other": "{count} machines offline",
+  "node_starting_one": "Starting on {count} machine",
+  "node_starting_other": "Starting on {count} machines",
+  "node_stopped_one": "Stopped on {count} machine",
+  "node_stopped_other": "Stopped on {count} machines"
 }

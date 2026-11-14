@@ -92,7 +92,14 @@ func TestAgentNameDue(t *testing.T) {
 func namingFixture(t *testing.T, answer func(http.ResponseWriter, *http.Request)) (*Service, *fakeHub, *atomic.Int32) {
 	t.Helper()
 	calls := &atomic.Int32{}
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); answer(w, r) }))
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not a naming call
+			http.NotFound(w, r)
+			return
+		}
+		calls.Add(1)
+		answer(w, r)
+	}))
 	t.Cleanup(model.Close)
 	f := newFakeHub().withMachine()
 	f.ownModels = true

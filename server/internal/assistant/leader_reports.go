@@ -247,6 +247,10 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		return
 	}
 	for _, r := range out {
+		r.Level = s.leaderReportLevel(ctx, r.Kind)
+		if r.Plan != "" && r.Level == assistantwire.LevelP0 {
+			r.Level = assistantwire.LevelP1 // a plan waiting for Start is P1, as its own push (tasks_plan.go)
+		}
 		s.todoQueue(todoNotice{assistantwire.EventLeaderReport, r})
 	}
 	if len(stuckSigs) > 0 {

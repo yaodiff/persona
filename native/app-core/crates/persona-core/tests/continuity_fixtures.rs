@@ -52,7 +52,9 @@ fn request_json(request: &Request) -> Value {
         Request::FetchOlder { before_seq, fold_work } => {
             json!({"kind": "fetch_older", "before_seq": before_seq, "fold_work": fold_work})
         }
-        Request::FetchRange { from_seq, through_seq } => {
+        Request::FetchRange {
+            from_seq, through_seq, ..
+        } => {
             json!({"kind": "fetch_range", "from_seq": from_seq, "through_seq": through_seq})
         }
     }
@@ -74,7 +76,7 @@ fn step(session: &mut Session, event: &Map<String, Value>, label: &str) -> Step 
         Some("load_older") => session.load_older(),
         Some("reconnect") => session.reconnect(),
         Some("open_fold") => session.open_fold(&text(event, "fold_id").expect("open_fold fold_id")),
-        Some("http_range") => session.range(items(event), flag(event, "more")),
+        Some("http_range") => session.range("", items(event), flag(event, "more")),
         other => panic!("{label}: unknown event {other:?}"),
     }
 }

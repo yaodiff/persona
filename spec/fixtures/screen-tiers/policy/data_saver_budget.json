@@ -1,0 +1,87 @@
+{
+  "description" : "Choosing Data Saver moves the stream at once; Clearer back.",
+  "init" : {
+    "bias" : "auto",
+    "capKbps" : 4000,
+    "display" : {
+      "maxSize" : 2868,
+      "pixels" : [
+        3024,
+        1964
+      ],
+      "points" : [
+        1512,
+        982
+      ]
+    },
+    "link" : {
+      "kind" : "relay",
+      "minRttMs" : null,
+      "srttMs" : null,
+      "via" : "cellular"
+    },
+    "maxFps" : 60,
+    "maxScale" : null,
+    "now" : 0,
+    "remembered" : null
+  },
+  "name" : "data_saver_budget",
+  "start" : {
+    "fps" : 30,
+    "height" : 1472,
+    "index" : 0,
+    "maxKbps" : 4000,
+    "minKbps" : 2003,
+    "reason" : "start",
+    "scale" : 1.5,
+    "targetKbps" : 2003,
+    "width" : 2268
+  },
+  "steps" : [
+    {
+      "helper" : {
+        "kbps" : 2500,
+        "skipped" : 0,
+        "targetKbps" : 2500
+      }
+    },
+    {
+      "expected" : {
+        "fps" : 30,
+        "height" : 982,
+        "index" : 0,
+        "maxKbps" : 1500,
+        "minKbps" : 891,
+        "reason" : "network_changed",
+        "scale" : 1,
+        "targetKbps" : 1500,
+        "width" : 1512
+      },
+      "setBudget" : {
+        "capKbps" : 1500,
+        "maxFps" : 60,
+        "maxScale" : 1,
+        "now" : 1
+      }
+    },
+    {
+      "expected" : {
+        "fps" : 30,
+        "height" : 982,
+        "index" : 1,
+        "maxKbps" : 3563,
+        "minKbps" : 891,
+        "reason" : "network_changed",
+        "scale" : 1,
+        "targetKbps" : 2500,
+        "width" : 1512
+      },
+      "setBudget" : {
+        "capKbps" : 4000,
+        "maxFps" : 60,
+        "maxScale" : null,
+        "now" : 2
+      }
+    }
+  ]
+}

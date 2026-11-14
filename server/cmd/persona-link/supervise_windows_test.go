@@ -13,10 +13,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // TestSupervisorHelper is not a test: the tests below run this binary as the programs the supervisor looks after.
@@ -27,6 +30,11 @@ func TestSupervisorHelper(t *testing.T) {
 		fmt.Fprintln(f, os.Getpid())
 		f.Close()
 		os.Exit(3)
+	case "restart": // a node that asks to be started again at once, as after an update
+		f, _ := os.OpenFile(os.Getenv("SUPERVISE_TEST_FILE"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		fmt.Fprintln(f, os.Getpid())
+		f.Close()
+		os.Exit(nodeproto.RestartExitCode)
 	case "supervisor": // killWithMe, then a child that would run for a minute; its pid on stdout
 		if err := killWithMe(); err != nil {
 			fmt.Println("error", err)
@@ -60,22 +68,75 @@ func TestKeepRunningStartsItAgain(t *testing.T) {
 			return cmd
 		})
 	}()
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		b, _ := os.ReadFile(marks)
-		if strings.Count(string(b), "\n") >= 3 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("started %d times; log:\n%s", strings.Count(string(b), "\n"), logged.String())
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	waitStarts(t, marks, 3, logged.String)
 	cancel()
 	<-done
 	if !strings.Contains(logged.String(), "helper ended after") || !strings.Contains(logged.String(), "exit status 3") {
 		t.Fatalf("log:\n%s", logged.String())
 	}
+}
+
+// A node that installed an update asks with its exit code to be started again at once, not after the restart delay;
+// one that keeps asking right after it starts waits the delay like any other exit.
+func TestKeepRunningRestartsAtOnceWhenAsked(t *testing.T) {
+	marks := filepath.Join(t.TempDir(), "marks")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var logged lockedBuilder
+	go func() {
+		defer close(done)
+		keepRunning(ctx, log.New(&logged, "", 0), "node", time.Minute, func() *exec.Cmd {
+			cmd := exec.Command(os.Args[0], "-test.run=TestSupervisorHelper")
+			cmd.Env = append(os.Environ(), "SUPERVISE_TEST_ROLE=restart", "SUPERVISE_TEST_FILE="+marks)
+			return cmd
+		})
+	}()
+	waitStarts(t, marks, 2, logged.String)
+	time.Sleep(2 * time.Second) // sleep-ok: long enough for a third start, were the delay skipped again
+	if n := countStarts(marks); n != 2 {
+		t.Fatalf("a node asking again right after it started was restarted at once (%d starts); log:\n%s", n, logged.String())
+	}
+	cancel()
+	<-done
+	if !strings.Contains(logged.String(), "asking to start again: starting it now") || !strings.Contains(logged.String(), "starting it again in 1m0s") {
+		t.Fatalf("log:\n%s", logged.String())
+	}
+}
+
+// countStarts is how many times a helper program has started: each start appends its pid as a line to marks.
+func countStarts(marks string) int {
+	b, _ := os.ReadFile(marks)
+	return strings.Count(string(b), "\n")
+}
+
+// waitStarts polls until the helper program has started at least n times, or fails the test after 20 seconds.
+func waitStarts(t *testing.T, marks string, n int, logged func() string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for countStarts(marks) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("started %d times, want %d; log:\n%s", countStarts(marks), n, logged())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// lockedBuilder is a strings.Builder the supervisor's logger may write while the test reads it.
+type lockedBuilder struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuilder) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuilder) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 // persona-link starts once the node has made its socket anew; a leftover socket file from before does not count.

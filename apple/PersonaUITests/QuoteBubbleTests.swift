@@ -25,6 +25,12 @@ final class QuoteBubbleTests: XCTestCase {
         app.launchPinned()
     }
 
+    @MainActor private func expandSource() {
+        let source = app.buttons["inbox.detail.source"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 20), "the original source control did not appear")
+        source.tapCenter()
+    }
+
     @MainActor private func shot(_ name: String) {
         let a = XCTAttachment(screenshot: app.screenshot())
         a.name = "quote \(name) \(UITestStyle.name)"
@@ -104,6 +110,7 @@ final class QuoteBubbleTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-openInboxItem", "lark:f3:300"]
         app.launchPinned()
+        expandSource()
         let reply = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "那我也带一个")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 20), "the 周末徒步群 chat did not open")
         let quote = app.buttons.matching(identifier: "bubble.quote").firstMatch

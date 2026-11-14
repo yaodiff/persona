@@ -358,6 +358,22 @@ class HubChatRepository(
         }
     }
 
+    override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int): List<Item> {
+        require(fromSeq >= 0 && throughSeq >= fromSeq)
+        val out = mutableListOf<Item>()
+        var from = fromSeq
+        repeat(20) {
+            val page = transport.items(session, ItemsQuery(fromSeq = from, throughSeq = throughSeq))
+            out += page.items
+            val last = page.items.lastOrNull()?.seq
+            if (!page.more || last == null || last >= throughSeq) return out.distinctBy { it.id }
+            val next = last + 1
+            if (next <= from) return out.distinctBy { it.id }
+            from = next
+        }
+        return out.distinctBy { it.id }
+    }
+
     override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int): List<Item> {
         require(fromSeq >= 0 && toSeq >= fromSeq)
         val entry = existing(session) ?: return emptyList()

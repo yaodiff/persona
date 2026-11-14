@@ -1,7 +1,8 @@
 // The part of noVNC's RFB (core/rfb.js, @novnc/novnc 1.7) the live screen uses; the package ships no types.
 declare module "@novnc/novnc" {
   export default class RFB extends EventTarget {
-    constructor(target: HTMLElement, url: string, options?: { shared?: boolean; credentials?: { username?: string; password?: string }; wsProtocols?: string[] });
+    /** `urlOrChannel`: a WebSocket URL noVNC opens, or a WebSocket the page opened (noVNC takes it over and closes it). */
+    constructor(target: HTMLElement, urlOrChannel: string | WebSocket, options?: { shared?: boolean; credentials?: { username?: string; password?: string }; wsProtocols?: string[] });
     viewOnly: boolean;
     scaleViewport: boolean;
     clipViewport: boolean;

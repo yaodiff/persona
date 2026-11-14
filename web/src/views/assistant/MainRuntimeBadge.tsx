@@ -56,6 +56,8 @@ export function MainRuntimeBadge({ sid, starting }: { sid?: string; starting?: b
   const [expanded, setExpanded] = useState(false);
   if (!show || (!assistant && !starting)) return null;
   const summary = mainRuntimeSummary(main, report, starting);
+  // nothing known about where the main chat runs: no line at all (not "not reported")
+  if (!summary) return null;
   return (
     <div className="flex shrink-0 justify-end px-3 pb-1 sm:px-4">
       <button type="button" data-main-runtime className="group relative min-w-0 max-w-full rounded-control px-2 py-1 text-xs text-ink-2 hover:bg-hover focus-visible:outline focus-visible:outline-accent"

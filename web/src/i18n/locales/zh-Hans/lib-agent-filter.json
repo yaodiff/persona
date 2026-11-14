@@ -12,7 +12,7 @@
   "scope_user": "仅用户",
   "scope_assistant": "仅回答",
   "scope_errors": "报错异常",
-  "filter_harness": "Harness",
+  "filter_harness": "Agent 类型",
   "filter_project": "项目",
   "filter_model": "模型",
   "filter_machine": "机器",

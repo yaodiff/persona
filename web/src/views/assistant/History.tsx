@@ -5,13 +5,14 @@
 // copies its id.
 import { conversationChannel, useChannels } from "../../lib/channels";
 import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import { ago, stateOf } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { conversationPage } from "../../lib/conversation-page";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
-import { refreshAssistant, useStore } from "../../lib/store";
+import { onHubEvent, refreshAssistant, useStore } from "../../lib/store";
+import { isResumed } from "../../lib/reconnect";
 import type { AssistantInfo, Session } from "../../lib/types";
 import { leaderItem } from "../ConversationMenu";
 import { Button, Collapse, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
@@ -60,18 +61,40 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   }, [live]);
   const nowMs = useNow(60_000);
 
+  /** Reads the list; true when it went through. */
   const load = useCallback(async () => {
     try {
       const a = await api<AssistantInfo & { conversations: Conversation[] }>("/assistant?archived=1");
       setFetched(a.conversations ?? []);
       setError("");
+      return true;
     } catch (e) {
       setError(errorText(e));
+      return false;
     }
   }, []);
   useEffect(() => {
     void load();
   }, [load]);
+  // read again after a reconnect (#4954's rule, as the scheduled tasks are): always when the read failed while the hub
+  // was away, else when the hub could not resume, as the pushes missed meanwhile are not replayed
+  const failed = error !== "";
+  useEffect(() => onHubEvent("hello", (msg) => (failed || !isResumed(msg)) && void load()), [load, failed]);
+  const [retrying, setRetrying] = useState(false);
+  const [retried, setRetried] = useState(0);
+  const retry = () => {
+    setRetrying(true);
+    void load().then((ok) => {
+      setRetrying(false);
+      if (ok) setRetried((x) => x + 1);
+    });
+  };
+  // Retry goes with the error once the read works: focus that fell to the page's body goes to the first chat instead
+  const page = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!retried || (document.activeElement && document.activeElement !== document.body)) return;
+    page.current?.querySelector<HTMLElement>("a[href]")?.focus();
+  }, [retried]);
 
   const all = useMemo(
     () =>
@@ -140,7 +163,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[760px] px-4 py-5 sm:px-8 sm:py-6">
+        <div ref={page} className="mx-auto max-w-[760px] px-4 py-5 sm:px-8 sm:py-6">
           <label className="mb-5 flex h-9 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
             <Icon name="search" size={13} stroke={2} className="text-ink-3" />
             <input
@@ -170,10 +193,18 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
               <Loading />
             </div>
           )}
-          {error && fetched === null && (
-            <Empty icon="info" title={t("assistant-history.load_failed")}>
+          {/* The read failed: in place of the list when there is nothing else to show, else one line over the chats the
+              page has from elsewhere (the sidebar's, the live sessions), which may leave out the archived ones. */}
+          {error && fetched === null && all.length === 0 && (
+            <Empty icon="info" title={t("assistant-history.load_failed")} action={<Button icon="retry" busy={retrying} onClick={retry}>{t("assistant-history-load.retry")}</Button>}>
               {error}
             </Empty>
+          )}
+          {error && fetched === null && all.length > 0 && (
+            <div role="status" className="-mt-3 mb-4 flex items-center gap-2 px-1 text-label text-ink-3">
+              <span className="min-w-0 flex-1" title={error}>{t("assistant-history-load.load_partial")}</span>
+              <Button size="sm" tone="quiet" icon="retry" busy={retrying} onClick={retry} className="touch-hit">{t("assistant-history-load.retry")}</Button>
+            </div>
           )}
           {!loading && !error && all.length === 0 && (
             <Empty icon="chat" title={t("assistant-history.empty_title")}>
@@ -346,7 +377,8 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
 }
 
 function RenameDialog({ s, onClose, onDone }: { s: Conversation; onClose: () => void; onDone: (title: string) => void }) {
-  const [title, setTitle] = useState(conversationTitle(s) === t("assistant-conversations.untitled") ? "" : s.title);
+  // starts from the title as the list shows it (a chat titled by its context tag: the tag's title, not the tag)
+  const [title, setTitle] = useState(() => { const shown = conversationTitle(s); return shown === t("assistant-conversations.untitled") ? "" : shown; });
   const [busy, setBusy] = useState(false);
   const trimmed = title.trim();
   const save = async () => {

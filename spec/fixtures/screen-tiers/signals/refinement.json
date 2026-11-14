@@ -1,0 +1,148 @@
+{
+  "description" : "Idle refinement's large frames count as bursts but not in the queue or the delivered rate.",
+  "name" : "refinement",
+  "steps" : [
+    {
+      "frame" : {
+        "arrival" : 6020000,
+        "bytes" : 4000,
+        "capture" : 1000000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6120000,
+        "bytes" : 4000,
+        "capture" : 1100000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6500000,
+        "bytes" : 48000,
+        "capture" : 1200000,
+        "firstByte" : 6460000,
+        "fps" : 30,
+        "refinement" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6320000,
+        "bytes" : 4000,
+        "capture" : 1300000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6420000,
+        "bytes" : 4000,
+        "capture" : 1400000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6800000,
+        "bytes" : 48000,
+        "capture" : 1500000,
+        "firstByte" : 6760000,
+        "fps" : 30,
+        "refinement" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6620000,
+        "bytes" : 4000,
+        "capture" : 1600000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6720000,
+        "bytes" : 4000,
+        "capture" : 1700000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7100000,
+        "bytes" : 48000,
+        "capture" : 1800000,
+        "firstByte" : 7060000,
+        "fps" : 30,
+        "refinement" : true
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6920000,
+        "bytes" : 4000,
+        "capture" : 1900000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7020000,
+        "bytes" : 4000,
+        "capture" : 2000000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 7400000,
+        "bytes" : 48000,
+        "capture" : 2100000,
+        "firstByte" : 7360000,
+        "fps" : 30,
+        "refinement" : true
+      }
+    },
+    {
+      "expected" : {
+        "burstKbps" : [
+          9600,
+          9600,
+          9600,
+          9600
+        ],
+        "decodeP95Ms" : null,
+        "deliveredKbps" : 213.33333333333334,
+        "frames" : 2,
+        "lateShare" : 0,
+        "queueFalling" : false,
+        "queueP50Ms" : 0,
+        "queueP95Ms" : 0,
+        "queueRising" : false,
+        "replacedShare" : null
+      },
+      "take" : {
+        "now" : 7400000
+      }
+    }
+  ]
+}

@@ -14,18 +14,21 @@ final class TranslationTests: XCTestCase {
         self.hub = hub
     }
 
-    @MainActor private func launch(kind: String, chats: String) -> XCUIApplication {
+    @MainActor private func launch(item: String, kind: String, chats: String) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", kind, "-inbox.source", "", "-openInboxFirst", "YES",
+        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", kind, "-inbox.source", "", "-openInboxItem", item,
                                "-translate.enabled", "YES", "-translate.target", "zh-Hans", "-translate.mail", "YES",
                                "-translate.larkChats", chats]
         app.launchPinned()
+        let source = app.buttons["inbox.detail.source"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 20), "the original source control did not appear")
+        source.tapCenter()
         return app
     }
 
     @MainActor func testForeignMailOpensTranslated() {
-        let app = launch(kind: "mail", chats: "")
+        let app = launch(item: "mail:acc1:t4:504", kind: "mail", chats: "")
         XCTAssertTrue(app.staticTexts["设计评审能改期吗？"].waitForExistence(timeout: 20), "no translated subject:\n\(app.debugDescription)")
         XCTAssertTrue(app.staticTexts["已翻译成简体中文"].exists)
         app.buttons["显示原文"].tap()
@@ -35,7 +38,7 @@ final class TranslationTests: XCTestCase {
 
     @MainActor func testPickedChatGetsTranslations() {
         // A launch argument is read as a property list: the JSON goes in as a quoted string.
-        let app = launch(kind: "mention", chats: #""[{\"id\":\"f2\",\"name\":\"设计评审\"}]""#)
+        let app = launch(item: "lark:f2:200", kind: "mention", chats: #""[{\"id\":\"f2\",\"name\":\"设计评审\"}]""#)
         let translated = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "【译】")).firstMatch
         XCTAssertTrue(translated.waitForExistence(timeout: 20), "no translation under the English message:\n\(app.debugDescription)")
         // Only others' foreign messages: the Chinese one and my own are not translated.
@@ -44,7 +47,7 @@ final class TranslationTests: XCTestCase {
     }
 
     @MainActor func testOtherChatsAreNotTranslated() {
-        let app = launch(kind: "mention", chats: "")
+        let app = launch(item: "lark:f2:200", kind: "mention", chats: "")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "The new icon set")).firstMatch.waitForExistence(timeout: 20))
         sleep(2)
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "【译】")).firstMatch.exists, "a chat not picked was translated")

@@ -6,8 +6,8 @@ import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
 
-export type Tab = "general" | "persona" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar";
-export const TABS: Tab[] = ["general", "persona", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar"];
+export type Tab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar";
+export const TABS: Tab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
@@ -34,7 +34,10 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
   general: { label: t("settings-nav.tab_general"), icon: "gear", hint: t("settings-nav.hint_general") },
   persona: { label: t("settings-nav.tab_profile"), icon: "spark", hint: t("settings-nav.hint_persona") },
   avatar: { label: t("settings.avatar"), icon: "smile", hint: t("settings-nav.hint_avatar") },
-  knowledge: { label: t("settings-nav.tab_knowledge"), icon: "layers", hint: t("settings-nav.hint_knowledge") },
+  // the user's own "/" prompts, this assistant's (#7329, SavedPrompts.tsx)
+  prompts: { label: t("settings-nav.tab_prompts"), icon: "book", hint: t("settings-nav.hint_prompts") },
+  // what Persona reads and keeps: a filter on its sources (Models keeps the layers mark)
+  knowledge: { label: t("settings-nav.tab_knowledge"), icon: "filter", hint: t("settings-nav.hint_knowledge") },
   notifications: { label: t("settings-nav.tab_notifications"), icon: "bell", hint: t("settings-nav.hint_notifications") },
   models: { label: t("settings-nav.tab_models"), icon: "layers", hint: t("settings-nav.hint_models") },
   agents: { label: t("settings-nav.tab_agents"), icon: "terminal", hint: t("settings-nav.hint_agents") },
@@ -45,7 +48,7 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
   extensions: { label: t("settings-nav.tab_extensions"), icon: "extension", hint: t("settings-nav.hint_extensions") },
   shortcuts: { label: t("settings-nav.tab_shortcuts"), icon: "keyboard", hint: t("settings-nav.hint_shortcuts") },
   devices: { label: t("settings-nav.tab_devices"), icon: "key", hint: t("settings-nav.hint_devices") },
-  hub: { label: "hub", icon: "hub", hint: t("settings-nav.hint_hub") },
+  hub: { label: t("settings-nav.tab_hub"), icon: "hub", hint: t("settings-nav.hint_hub") },
   managers: { label: t("settings-nav.tab_managers"), icon: "person", hint: t("settings-nav.hint_managers") },
 };
 
@@ -54,7 +57,7 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
  *  ("<name>'s settings", with Switch); this device's; and the hub's, the same whichever assistant is current. */
 export type NavGroup = "assistant" | "device" | "hub";
 export const NAV_GROUPS: { key: NavGroup; tabs: Tab[] }[] = [
-  { key: "assistant", tabs: ["models", "persona", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
+  { key: "assistant", tabs: ["models", "persona", "prompts", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
   { key: "device", tabs: ["general", "notifications", "shortcuts"] },
   { key: "hub", tabs: ["hub", "managers", "avatar", "devices"] },
 ];

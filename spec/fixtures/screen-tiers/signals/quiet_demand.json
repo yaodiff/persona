@@ -1,0 +1,105 @@
+{
+  "description" : "A few frames, no queue: the delivered rate is what came over the last second.",
+  "name" : "quiet_demand",
+  "steps" : [
+    {
+      "frame" : {
+        "arrival" : 6020000,
+        "bytes" : 5000,
+        "capture" : 1000000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6120000,
+        "bytes" : 5000,
+        "capture" : 1100000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6220000,
+        "bytes" : 5000,
+        "capture" : 1200000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6320000,
+        "bytes" : 5000,
+        "capture" : 1300000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6420000,
+        "bytes" : 5000,
+        "capture" : 1400000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6520000,
+        "bytes" : 5000,
+        "capture" : 1500000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6620000,
+        "bytes" : 5000,
+        "capture" : 1600000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "frame" : {
+        "arrival" : 6720000,
+        "bytes" : 5000,
+        "capture" : 1700000,
+        "firstByte" : null,
+        "fps" : 30,
+        "refinement" : false
+      }
+    },
+    {
+      "expected" : {
+        "burstKbps" : [
+
+        ],
+        "decodeP95Ms" : null,
+        "deliveredKbps" : 400,
+        "frames" : 6,
+        "lateShare" : 0,
+        "queueFalling" : false,
+        "queueP50Ms" : 0,
+        "queueP95Ms" : 0,
+        "queueRising" : false,
+        "replacedShare" : null
+      },
+      "take" : {
+        "now" : 6720000
+      }
+    }
+  ]
+}

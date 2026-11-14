@@ -48,6 +48,40 @@ name. A meaningful original title starts with an observation baseline when perio
 Changing the maximum does not erase the ledger. A native or app rename stops automatic naming permanently
 for that session; app/API rename intent is persisted before contacting the node, even when its reply is uncertain.
 
+**Named on request (#7432).** `POST /api/v1/sessions/{mid}/{sid}/autoname` is the same model call asked for by the
+user from an Agent's menu (**Auto Rename**), for one session, answered with the new title
+(`docs/protocol/protocol.md`, "Naming an Agent on request"). It shares the dialogue, prompt and validity check with
+the background pass (`agentNameFromModel`) and skips the background's guards, because the request is the user's own
+wish: the change limit, the placeholder test, the automatic-naming switch, and the protection of custom titles.
+The ledger record is marked `requested` and is no longer `manual`. Such a name also stands over a native custom
+title or a title of unknown provenance, and its row is published with `title_source: "auto"`; it holds until the
+native title changes, or until the user renames the session by hand, exactly as an automatic name does. The
+background's change count is left as it is (a request neither spends nor resets it), its failure count and
+cooldown are cleared by a successful request, and a failed request records nothing. Requests for one session
+share one model call. Persona's own conversations are refused.
+
+The assistant-only `agent_autoname` tool is a narrow second entry to that same request, for an explicitly requested
+name in a Persona conversation. It accepts only an exact machine and full session id, never a URL, credential or
+arbitrary request. The usual assistant-source check applies, so a task Agent cannot call it. Every invocation asks
+for phone confirmation before the model call, including when the title was hand-written; declining or leaving the
+card unanswered changes nothing. The result is the same title or coded refusal in a text JSON object. The assistant
+tool is not a client dependency: iOS and other clients use the HTTP endpoint above (`agent_naming_tool.go`).
+
+The assistant-only read tool `agent_autoname_receipt` reads the calling conversation's existing `agent_autoname`
+permission records and one exact target's current naming snapshot, through the owning manager's existing stores
+(`agent_naming_receipt.go`). It takes an exact machine and full session id, with an optional bounded RFC3339 window
+`[since,before)` (at most 24 hours, 50 records per page, at most two pages). It never decorates the target's list, invokes a model,
+writes settings, answers a card, renames or publishes. A single card plus complete coverage returns only its id,
+status, `allow` and `resolved_at`; multiple cards return `ambiguous`; missing records, read errors or partial
+coverage return `unknown`. Its own four-field query is not confused with the original two-field autoname input:
+only the card's exact target is compared, independent of JSON field order or layout. The first history read and all
+subsequent pages use the exclusive upper bound and the `(created_at,id)` cursor, including equal timestamps at the
+window's lower bound. The snapshot separately reports `requested`, `title`, `named_at` and `observed_at`.
+Neither is the original model call's outcome: call ids are not propagated, an existing requested name may predate
+the request or belong to another caller, and `last_failure` can belong to background naming. Nothing in the result
+says it is safe to retry. Ordinary coding Agents, extensions, work machines and other assistant callers cannot read
+this conversation's cards. The tool is for evidence only and is not part of the iOS HTTP contract.
+
 Cost controls: list events coalesce into one worker, dispatching at most one candidate per 30-second pass.
 Queue-local one-shot wakes drain existing matches even without another list event, then stop; they do not
 install a timer on any node. A successful check that keeps the name advances its interval baseline without

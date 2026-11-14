@@ -1,0 +1,12 @@
+{
+  "test_title": "通知可以送达这个浏览器",
+  "test_body": "即使没有打开任何 Persona 页面，Persona 也能在这里通知你。",
+  "err_device": "这个浏览器的通知 ID 缺失或无效。",
+  "err_service": "{host} 不是 Persona 支持的推送服务。",
+  "err_endpoint": "这个浏览器的推送订阅地址无效。",
+  "err_keys": "这个浏览器的推送订阅密钥无效。",
+  "err_key_changed": "hub 的推送密钥已更换，请重新订阅。",
+  "err_owned": "这个浏览器的通知是另一台设备设置的。请在这个浏览器里重新登录后再打开。",
+  "err_none": "这个浏览器还没有打开“Persona 关闭时也通知”。",
+  "err_push": "推送服务没有接收这条通知：{error}"
+}

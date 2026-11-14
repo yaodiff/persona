@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../../lib/agents";
 
 const state = vi.hoisted(() => ({
+  messages: (() => Promise.resolve({ messages: [], hasMore: false })) as (id: string) => Promise<unknown>,
   features: [] as string[],
   list: { sessions: [] as unknown[], loaded: true, error: "", hints: [] as string[], sources: null },
 }));
@@ -14,6 +15,8 @@ vi.mock("../../lib/agents", async (original) => ({
   ...(await original<typeof import("../../lib/agents")>()),
   useAgentList: () => state.list,
   fetchHiddenSessions: async () => [],
+  fetchMessages: (id: string) => state.messages(id),
+  markRead: async () => {},
 }));
 vi.mock("../../lib/store", async (original) => ({
   ...(await original<typeof import("../../lib/store")>()),
@@ -22,6 +25,7 @@ vi.mock("../../lib/store", async (original) => ({
 // the paged list fetches its own rows; the notice is what is under test
 vi.mock("./PagedSessionList", () => ({ PagedSessionList: () => null }));
 import { AgentsView } from "./AgentsView";
+import { ApiError } from "../../lib/api";
 import { t } from "../../i18n";
 
 vi.hoisted(() => {
@@ -41,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   el.remove();
+  history.replaceState(null, "", "/");
 });
 
 describe.each([["paged", ["sessions_list"]], ["legacy", []]])("personal agents, %s list", (_, features) => {
@@ -57,5 +62,33 @@ describe.each([["paged", ["sessions_list"]], ["legacy", []]])("personal agents, 
     state.list = { ...state.list, sessions: [agent], hints: [] };
     await act(async () => root.render(<AgentsView onToggleSidebar={() => {}} />));
     expect(notice()).toBe("");
+  });
+});
+
+describe("a link to a personal agent's conversation the hub doesn't have (web usability audit item 39)", () => {
+  it("says so plainly with the way back to the list, and no box left loading", async () => {
+    state.features = ["sessions_list"];
+    state.list = { ...state.list, sessions: [], hints: [] };
+    state.messages = () => Promise.reject(new ApiError(404, "not found", { error: "not found" }));
+    await act(async () => root.render(<AgentsView id="does-not-exist" onToggleSidebar={() => {}} />));
+    // the header names the list it belongs to; what is missing is said once, in the empty state
+    expect(document.querySelector("h1")?.textContent).toBe(t("agents-agentsview.title"));
+    expect(document.querySelector("[role=status]")?.textContent).toContain(t("not-found.agent_title"));
+    expect(document.body.textContent?.split(t("not-found.agent_title")).length).toBe(2);
+    expect(document.body.textContent).toContain(t("not-found.agent_detail"));
+    expect(document.body.textContent).not.toContain("404");
+    expect(document.querySelector("textarea")).toBeNull();
+    history.replaceState(null, "", "/a/does-not-exist");
+    const back = [...document.querySelectorAll("button")].find((b) => b.textContent === t("not-found.agent_back"));
+    await act(async () => back!.click());
+    expect(location.pathname).toBe("/a");
+  });
+
+  it("keeps the conversation and its error for another failure", async () => {
+    state.list = { ...state.list, sessions: [], hints: [] };
+    state.messages = () => Promise.reject(new ApiError(500, "storage unavailable", {}));
+    await act(async () => root.render(<AgentsView id="lark:a" onToggleSidebar={() => {}} />));
+    expect(document.body.textContent).not.toContain(t("not-found.agent_title"));
+    expect(document.querySelector("textarea")).not.toBeNull();
   });
 });

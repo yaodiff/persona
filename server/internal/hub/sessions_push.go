@@ -380,11 +380,16 @@ func (h *Hub) broadcastSessions(m *Machine, list []proto.Session) {
 		next map[string][]byte
 	}
 	var deltas map[uintptr]delta
+	var hint *listHint
 	for c := range h.clients {
 		var b []byte
 		if c.listMode {
 			if before != revision {
-				c.sendJSON(map[string]any{"type": "sessions_list", "revision": revision})
+				if hint == nil {
+					x := h.sessionListHint(before, revision)
+					hint = &x
+				}
+				hint.send(c)
 			}
 			continue
 		}

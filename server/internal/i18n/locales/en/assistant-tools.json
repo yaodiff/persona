@@ -1,6 +1,7 @@
 {
   "new_worktree": " · new worktree: {branch}",
   "archive_close_card": "Archive {agent} · {machine} and close it on the computer (its transcript stays; a message resumes it)",
+  "autoname_card": "Use the model to rename {agent} · {machine}. Its current title, including a hand-written one, is replaced; the terminal tab keeps its name.",
   "with_model": " · model: {model}",
   "with_tier": " · preset {tier}: {runs}"
 }

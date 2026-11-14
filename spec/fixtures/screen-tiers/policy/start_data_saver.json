@@ -1,0 +1,43 @@
+{
+  "description" : "Data Saver on mobile data: 1.5 Mbit/s and one pixel per point.",
+  "init" : {
+    "bias" : "auto",
+    "capKbps" : 1500,
+    "display" : {
+      "maxSize" : 2868,
+      "pixels" : [
+        3024,
+        1964
+      ],
+      "points" : [
+        1512,
+        982
+      ]
+    },
+    "link" : {
+      "kind" : "relay",
+      "minRttMs" : null,
+      "srttMs" : null,
+      "via" : "cellular"
+    },
+    "maxFps" : 60,
+    "maxScale" : 1,
+    "now" : 0,
+    "remembered" : null
+  },
+  "name" : "start_data_saver",
+  "start" : {
+    "fps" : 15,
+    "height" : 982,
+    "index" : 1,
+    "maxKbps" : 1500,
+    "minKbps" : 200,
+    "reason" : "start",
+    "scale" : 1,
+    "targetKbps" : 200,
+    "width" : 1512
+  },
+  "steps" : [
+
+  ]
+}

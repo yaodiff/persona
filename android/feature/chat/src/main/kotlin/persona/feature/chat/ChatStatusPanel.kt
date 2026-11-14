@@ -16,6 +16,7 @@ import persona.core.designsystem.*
 internal fun OutboxStatus(
     message: OutboxMessage, busy: Boolean, onAction: ((DeliveryAction) -> Unit)?,
     receipt: persona.core.contracts.api.MessageSendReceipt? = null,
+    canSend: Boolean = true,
     onDetails: (() -> Unit)? = null,
 ) {
     var retryConfirmation by remember(message.clientMessageId) { mutableStateOf(false) }
@@ -31,9 +32,10 @@ internal fun OutboxStatus(
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             if (message.state.allows(DeliveryAction.Cancel)) {
                 JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_cancel), onClick = { onAction(DeliveryAction.Cancel) }, enabled = !busy)
-                JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_edit), onClick = { onAction(DeliveryAction.Edit) }, enabled = !busy)
             }
-            if (message.state.allows(DeliveryAction.Retry)) JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_retry), onClick = {
+            if (message.state.allows(DeliveryAction.Cancel) && message.state.allows(DeliveryAction.Edit, canSend))
+                JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_edit), onClick = { onAction(DeliveryAction.Edit) }, enabled = !busy)
+            if (message.state.allows(DeliveryAction.Retry, canSend)) JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_retry), onClick = {
                 if (message.state.resultUnknown) retryConfirmation = true else onAction(DeliveryAction.Retry)
             }, enabled = !busy)
             // Nothing of a refused message reached the computer: it can simply go.
@@ -45,7 +47,8 @@ internal fun OutboxStatus(
                 JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_discard), onClick = { onAction(DeliveryAction.Discard) }, enabled = !busy)
         }
     }
-    if (retryConfirmation) JDialog(onDismiss = { retryConfirmation = false }, title = stringResource(R.string.chat_delivery_resend_title),
+    LaunchedEffect(canSend) { if (!canSend) retryConfirmation = false }
+    if (retryConfirmation && canSend) JDialog(onDismiss = { retryConfirmation = false }, title = stringResource(R.string.chat_delivery_resend_title),
         text = stringResource(R.string.chat_delivery_resend_text),
         confirm = stringResource(R.string.chat_delivery_resend_confirm) to { retryConfirmation = false; onAction?.invoke(DeliveryAction.Retry) },
         confirmEnabled = !busy, dismiss = stringResource(R.string.chat_delivery_resend_dismiss) to { retryConfirmation = false })

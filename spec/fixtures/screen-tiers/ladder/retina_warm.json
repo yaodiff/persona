@@ -1,0 +1,45 @@
+{
+  "description" : "Low Power Mode or a warm phone: 15 fps at most; tiers merge.",
+  "expected" : [
+    {
+      "fps" : 15,
+      "height" : 1660,
+      "maxKbps" : 5092,
+      "minKbps" : 1273,
+      "scale" : 2,
+      "width" : 2556
+    },
+    {
+      "fps" : 15,
+      "height" : 1472,
+      "maxKbps" : 4006,
+      "minKbps" : 1002,
+      "scale" : 1.5,
+      "width" : 2268
+    },
+    {
+      "fps" : 15,
+      "height" : 982,
+      "maxKbps" : 1782,
+      "minKbps" : 200,
+      "scale" : 1,
+      "width" : 1512
+    }
+  ],
+  "input" : {
+    "bias" : "auto",
+    "capKbps" : 12000,
+    "codec" : "hevc",
+    "maxFps" : 15,
+    "maxSize" : 2556,
+    "pixels" : [
+      3024,
+      1964
+    ],
+    "points" : [
+      1512,
+      982
+    ]
+  },
+  "name" : "retina_warm"
+}

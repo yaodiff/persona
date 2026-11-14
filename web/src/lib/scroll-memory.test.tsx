@@ -83,6 +83,20 @@ describe("useScrollMemory", () => {
     expect(scroller().scrollTop).toBe(0);
   });
 
+  it("leaves a fresh scroller on a fresh visit alone: no scroll write that would lay the page out there and then", () => {
+    navigate("/overview");
+    const writes: number[] = [];
+    const own = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+    Object.defineProperty(Element.prototype, "scrollTop", { configurable: true, get: own.get, set(v: number) { writes.push(v); own.set!.call(this, v); } });
+    try {
+      act(() => root.render(<Shell />));
+    } finally {
+      Object.defineProperty(Element.prototype, "scrollTop", own);
+    }
+    expect(writes).toEqual([]);
+    expect(scroller().scrollTop).toBe(0);
+  });
+
   it("puts the settings list back after Back from a category, and opens the category at the top", async () => {
     history.replaceState(null, "", "/settings");
     act(() => root.render(<Swapping page="settings" />));

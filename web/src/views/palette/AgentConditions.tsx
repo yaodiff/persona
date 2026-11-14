@@ -1,6 +1,6 @@
 // ⌘K's Filter (#6589): the Agents list's filter choices at the end of the field, where they sat beside the list's own
 // search field before it went. The button is all the palette (idle-tier, src/startup-preload.ts) carries: its menu
-// (AgentConditionsMenu.tsx) and lib/agent-search.ts, which spells the choices as operators, load with its first click.
+// (AgentConditionsMenu.tsx) loads with its first click. The opened palette loads the shared query helpers.
 import { useEffect, useState } from "react";
 import { t } from "../../i18n";
 import type { Session } from "../../lib/types";

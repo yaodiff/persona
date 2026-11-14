@@ -3,9 +3,11 @@ import XCTest
 /// The assistant sidebar finds a chat by what was said in it and opens it at that message (#6284), against
 /// scripts/mock/mock_hub.py with `MOCK_CHAT_SEARCH=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`): the user's words in a result row,
 /// tapping it lands on that message; Persona's reply is found as well (one inside a folded turn opens it); an early one
-/// is paged back for; a thought is never found.
+/// is paged back for; a thought is never found. On an iPhone (the drawer) and an iPad (the open column, #7650);
+/// `TEST_RUNNER_PERSONA_ORIENTATION=landscape` runs it on its side.
 final class AssistantChatSearchUITests: XCTestCase {
     private var hub: String!
+    private var landscape: Bool { ProcessInfo.processInfo.environment["PERSONA_ORIENTATION"] == "landscape" }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -13,6 +15,12 @@ final class AssistantChatSearchUITests: XCTestCase {
             throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_CHAT_SEARCH=1 (PERSONA_MOCK_HUB)")
         }
         hub = value
+        if landscape { XCUIDevice.shared.orientation = .landscapeLeft }
+    }
+
+    override func tearDown() {
+        if landscape { XCUIDevice.shared.orientation = .portrait }
+        super.tearDown()
     }
 
     @MainActor private func launch() -> XCUIApplication {
@@ -26,8 +34,10 @@ final class AssistantChatSearchUITests: XCTestCase {
     @MainActor private func search(_ app: XCUIApplication, _ words: String) {
         let open = app.buttons["assistant-sidebar-button"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 20), "no sidebar button:\n\(app.debugDescription)")
-        open.tap()
-        // the drawer's search sits behind its button (a split's list column has it open already)
+        // An iPad starts with the sidebar column open, its search in the column's head, and there this button folds the
+        // column away (#7650); an iPhone's drawer opens with it, its search behind the button below.
+        let columnSearch = app.buttons["assistant-sidebar-search"].firstMatch
+        if !(columnSearch.waitForExistence(timeout: 2) && columnSearch.isHittable) { open.tap() }
         let reveal = app.buttons["搜索对话"].firstMatch
         if reveal.waitForExistence(timeout: 5), reveal.isHittable { reveal.tap() }
         let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@ OR label == %@", "搜索对话", "搜索对话")).firstMatch

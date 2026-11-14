@@ -16,4 +16,4 @@ nothing it never shows.
 - Snippets are cut from these texts only, so no hidden tag can show in one, nor a Markdown marker of a reply (the index keeps a reply as the chat shows it: `searchPlain` in `server/internal/assistant/search_text.go`, `search_plain` in the mock).
 - A card is its fallback text, as `AssistantCardText` in `sdk/go/wire` makes it; the cases only use cards that have one
   (without one, the hub writes a placeholder and the web app nothing).
-- Read by the web app (`web/src/lib/chat-search.test.ts`); the managers' index and Android follow (#6282, #6285).
+- Read by the web app (`web/src/lib/chat-search.test.ts`), the managers' index (#6282) and Android (`ChatSearchTest`, #6285).
