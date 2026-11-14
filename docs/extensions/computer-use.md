@@ -631,7 +631,9 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
     1×15; Sharper gives up frame rate first (2×60, 2×30, 2×15, 1.5×15, 1×15), Smoother pixels (2×60, 1.5×60, 1×60, 1×30,
     1×15). Every tier keeps at least a pixel per point, so text stays readable. Each band is 0.02–0.08 bits per pixel per
     frame, the ceiling at the phone's cap; a tier whose floor is above the cap is left out, and ones that come out the
-    same on a display merge. On `screenbench` the floor keeps scrolling text at SSIM ≥ 0.98 against what was encoded.
+    same on a display merge. Each tier also carries the scale its picture really has (`pixelsPerPoint`, #7842): on a
+    display at one pixel per point every tier is 1×, and 2× under the phone's long-edge cap is less; the tier line shows
+    it and Data Saver's one pixel per point holds to it. On `screenbench` the floor keeps scrolling text at SSIM ≥ 0.98 against what was encoded.
     The band is per codec (`TierLadder.bitsFactor`; #6558: a browser without HEVC gets H.264). H.264's factor is 1, the
     same as HEVC's, as `screenbench` measured it (2026-11-14, every Auto tier, scene and band end at the same targets):
     text (typing, scrolling) within 0.002 SSIM of HEVC, the video scene 0.003–0.007 lower, and 0–11% more data an hour
@@ -642,8 +644,10 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
     replays them, so a change on either side fails both until they agree; so do the policy's timelines (route starts, every way down and up, a route change, a new bias, Data Saver and a warm device).
   - **Signals** (the phone's, from the frames): queueing above the 10 s floor of the one-way delay (p50 / p95 over
     0.5 s, rising or falling over 1 s), the rate the link carried while busy (frames queued behind one another: their
-    bytes over their arrival gaps, so quiet stretches don't read as a slow link), bursts of large frames, late frames,
-    decode time and pictures replaced before they showed. The route's round trip, jitter and loss are `LinkStats`'.
+    bytes over their arrival gaps, so quiet stretches don't read as a slow link; frames read together all count, #7842),
+    bursts of large frames, late frames, decode time and pictures replaced before they showed. A keyframe (one every
+    10 s) and the frames queued behind it are left out of the p95 that says whether the link is calm: that queue is the
+    keyframe's size, not a slower link, and its burst is the proof of headroom (#7842). The route's round trip, jitter and loss are `LinkStats`'.
   - **Policy**, every 250 ms. A tier fits the link when its floor is at most 80% of what the link carries. Down, fast:
     a long queue (over 400 ms for a quarter second, or skipped frames) or one the bitrate can't fix (the helper's
     bitrate within 15% of the band's floor and over 150 ms), with a tier that no longer fits, goes straight to the best
@@ -652,13 +656,22 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
     first 10 s or after a route change) with proof the link carried 1.25× the next floor, or three large frames at 1.5×
     it; a step up undone within 15 s doubles that tier's window, to 60 s. The start comes from the route: the same
     network the best tier, Tailscale (direct IPv6 too) under 30 ms the best else the second, the relay the second over
-    Wi-Fi, the third over cellular. A slower route steps down at once; a new bias or cap takes the tier the rate fits.
+    Wi-Fi, the third over cellular. A slower route steps down at once; a new bias or cap takes the tier the rate fits,
+    the rate at least the current tier's floor, which the link carries. The helper's `timing` comes once a second only
+    while frames flow, so its skipped frames count until the next is due (1.25 s) and its bitrate proves headroom once:
+    a still screen never steps down or up on an old second's numbers (#7842).
   - **Simulated links** (`TierPolicySimulationTests`, the real types over a shaped link): a steady link never moves in
     10 minutes; the relay settles on 2×60 in 5 s; 25 → 3 Mbit/s steps down in 1 s to 1.5×30 and holds (queueing p50 32
-    / p95 179 ms, against 543 / 1,033 with 2×60 fixed); a link jittering 5–9 Mbit/s for 10 minutes never moves.
+    / p95 179 ms, against 543 / 1,033 with 2×60 fixed); a link jittering 5–9 Mbit/s for 10 minutes never moves. On a
+    display at one pixel per point with light content (scrolling text) and a keyframe every 10 s, as on a real Mac
+    (#7842), a 3 Mbit/s cap steps down once, to 1.5×30, frames read one at a time or several together, and back to 2×60
+    20.5 s after the cap lifts.
   - **The app** (`ScreenVideoTiers`, `ScreenVideoStream`, `ScreenVideoLink`): when the helper's `hello` lists `tiers`
     with the display's points and pixels and this app has them (`ScreenTiers.appSupported`), the stream starts a policy
-    and sends its first tier as an `update` (`scale`, `fps`, `min_kbps`, `max_kbps`, `target_kbps`). The stream feeds it
+    and sends its first tier as an `update` (`scale`, `fps`, `min_kbps`, `max_kbps`, `target_kbps`) once the first frame
+    arrives: on `hello` the helper's capture hasn't really started, and ScreenCaptureKit drops a configuration change
+    made then, so capture stayed at 60 fps (#7842). Every tier change waits the same way after `hello` and after
+    `paused`, the latest one kept. The stream feeds it
     every frame from its own task (arrival, the time a frame spread over several reads began, decode time, pictures
     replaced before they showed) and ticks it every 250 ms; a new tier goes out as an `update` and to the link (the
     overlay's tier and reason). ⋯ › Quality changes the bias on the running stream; a route change (#6398) restarts the
@@ -693,7 +706,8 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
   Connection Stats (⋯, off by default) reads the video once a second: frames shown and megabits that arrived, the
   helper's capture, encode and network from `timing`, the phone's decode, and their total first when encode, network
   and decode are all known (a helper before `timing` gives the phone's numbers only). With quality tiers (#6396) a Tier
-  line shows the Quality choice, the scale and frame rate ("Auto · 1.5× · 60 fps", `ScreenTierText`) and why it last
+  line shows the Quality choice, the picture's own scale and frame rate ("Auto · 1.5× · 60 fps", `ScreenTierText`;
+"1×" on a display at one pixel per point, #7842) and why it last
   changed in plain words with how long ago (picked for this connection, the connection slowed down or is steady, the
   network changed, the iPhone is warm or saving power or couldn't keep up, you changed Quality); the resolution is the
   encoder's after an in-place change (`encoding`), not `hello`'s. Over VNC it shows RFB's bitrate

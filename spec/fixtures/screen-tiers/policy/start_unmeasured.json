@@ -27,6 +27,7 @@
     "index" : 1,
     "maxKbps" : 12000,
     "minKbps" : 4006,
+    "pixelsPerPoint" : 1.5,
     "reason" : "start",
     "scale" : 1.5,
     "targetKbps" : 4006,

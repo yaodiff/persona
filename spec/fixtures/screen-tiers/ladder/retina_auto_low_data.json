@@ -6,6 +6,7 @@
       "height" : 982,
       "maxKbps" : 1500,
       "minKbps" : 891,
+      "pixelsPerPoint" : 1,
       "scale" : 1,
       "width" : 1512
     },
@@ -14,6 +15,7 @@
       "height" : 982,
       "maxKbps" : 1500,
       "minKbps" : 200,
+      "pixelsPerPoint" : 1,
       "scale" : 1,
       "width" : 1512
     }

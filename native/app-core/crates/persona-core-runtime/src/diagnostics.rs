@@ -114,13 +114,22 @@ pub(crate) fn measure_patch_held<T>(shared: &Shared, work: impl FnOnce() -> T) -
     value
 }
 
+#[cfg(any(target_os = "android", target_os = "linux"))]
 unsafe extern "C" {
     fn gettid() -> i32;
 }
 
 pub(crate) fn thread_id() -> u64 {
-    // SAFETY: Android's gettid has no arguments and returns the calling Linux task's kernel thread id.
-    unsafe { gettid() as u64 }
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    {
+        // SAFETY: Android and Linux gettid have no arguments and return the calling task's kernel thread id.
+        unsafe { gettid() as u64 }
+    }
+    #[cfg(not(any(target_os = "android", target_os = "linux")))]
+    {
+        // Non-Linux hosts have no Linux task id; zero keeps this diagnostic best-effort.
+        0
+    }
 }
 
 pub(crate) fn scheduler_switches(tid: u64) -> (u64, u64) {
@@ -149,4 +158,13 @@ pub(crate) fn add(counter: &AtomicU64, started: Instant) {
 
 pub(crate) fn increment(counter: &AtomicU64) {
     counter.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    #[test]
+    fn diagnostics_do_not_require_linux_thread_symbols_or_proc() {
+        let tid = super::thread_id();
+        assert_eq!(super::scheduler_switches(tid), (0, 0));
+    }
 }

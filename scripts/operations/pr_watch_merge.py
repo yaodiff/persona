@@ -1,10 +1,16 @@
 """The only generic merge exit: scan and squash exactly the reviewed head."""
 import argparse
-import fcntl
+import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pr_watch_common import WatchError, checked, pr_snapshot, repository, run
@@ -40,7 +46,17 @@ def merge_lock(root):
     directory = Path(root, common).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     handle = (directory / "persona-pr-merge.lock").open("a+")
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    if os.name == "nt":
+        # Windows Python has no fcntl: lock the first byte, as merge-pr.sh does, trying again each second while held.
+        handle.seek(0)
+        while True:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except PermissionError:
+                time.sleep(1)
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
     return handle
 
 

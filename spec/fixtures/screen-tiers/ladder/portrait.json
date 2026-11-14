@@ -6,6 +6,7 @@
       "height" : 2556,
       "maxKbps" : 12000,
       "minKbps" : 5092,
+      "pixelsPerPoint" : 1.6904276985743381,
       "scale" : 2,
       "width" : 1660
     },
@@ -14,6 +15,7 @@
       "height" : 2268,
       "maxKbps" : 12000,
       "minKbps" : 4006,
+      "pixelsPerPoint" : 1.4989816700610998,
       "scale" : 1.5,
       "width" : 1472
     },
@@ -22,6 +24,7 @@
       "height" : 2268,
       "maxKbps" : 8012,
       "minKbps" : 2003,
+      "pixelsPerPoint" : 1.4989816700610998,
       "scale" : 1.5,
       "width" : 1472
     },
@@ -30,6 +33,7 @@
       "height" : 1512,
       "maxKbps" : 3563,
       "minKbps" : 891,
+      "pixelsPerPoint" : 1,
       "scale" : 1,
       "width" : 982
     },
@@ -38,6 +42,7 @@
       "height" : 1512,
       "maxKbps" : 1782,
       "minKbps" : 200,
+      "pixelsPerPoint" : 1,
       "scale" : 1,
       "width" : 982
     }

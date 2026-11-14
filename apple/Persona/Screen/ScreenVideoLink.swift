@@ -555,8 +555,11 @@ nonisolated struct ScreenVideoTally {
 /// The tier as Connection Stats shows it (#6396): the Quality choice, the scale and frame rate, and why it last changed
 /// in plain words with how long ago.
 enum ScreenTierText {
+    /// The scale is the picture's own (#7842): "1×" for every tier of a display at one pixel per point, "1.9×" for 2×
+    /// under the phone's long-edge cap.
     static func value(_ quality: ScreenQuality, _ tier: TierLadder.Tier) -> String {
-        let scale = tier.scale == tier.scale.rounded() ? String(Int(tier.scale)) : String(format: "%.1f", tier.scale)
+        let tenths = (tier.pixelsPerPoint * 10).rounded() / 10
+        let scale = tenths == tenths.rounded() ? String(Int(tenths)) : String(format: "%.1f", tenths)
         return "\(quality.label) · \(scale)× · \(tier.fps) fps"
     }
 

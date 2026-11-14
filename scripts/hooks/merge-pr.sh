@@ -29,11 +29,24 @@ if [ -z "${PR_WATCH_MERGE_LOCKED:-}" ]; then
   # Not --path-format=absolute: git before 2.31 echoes that option back as a line of output.
   git_common="$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
   python3 - "$git_common/persona-pr-merge.lock" "$root/scripts/hooks/merge-pr.sh" "$@" <<'PY'
-import fcntl, os, subprocess, sys
+import os, subprocess, sys, time
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
-fcntl.flock(fd, fcntl.LOCK_EX)
+bash = "bash"
+if os.name == "nt":  # Windows Python has no fcntl: lock the file's first byte, trying again each second while held.
+    import msvcrt, shutil
+    while True:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            break
+        except PermissionError:
+            time.sleep(1)
+    # Through PATH (Git Bash puts its own bash first): a bare name would find WSL's bash.exe in System32 first.
+    bash = shutil.which("bash") or bash
+else:
+    import fcntl
+    fcntl.flock(fd, fcntl.LOCK_EX)
 with open(sys.argv[2], "rb") as source:
-    result = subprocess.run(["bash", "-s", "--"] + sys.argv[3:], stdin=source, env=os.environ)
+    result = subprocess.run([bash, "-s", "--"] + sys.argv[3:], stdin=source, env=os.environ)
 raise SystemExit(result.returncode)
 PY
   exit "$?"

@@ -9,6 +9,7 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
 - **Unix socket paths must not exceed 108 bytes**: Go supports AF_UNIX on Windows, but a long path makes `bind` return `invalid argument` (not “unsupported”).
   Paths such as `~/.persona/node-attach.sock` are fine; do not put test sockets deep inside temporary directories (Claude Code's scratchpad exceeded the limit).
 - **`/tmp` is not the temporary directory**: On Windows, `os.MkdirTemp("/tmp", …)` means `\tmp` on the current drive, which usually does not exist. Tests that need short paths should use platform-specific files (`listen_*.go` in `orcarttest`).
+- **Windows Python has no `fcntl`**: a repository script that locks with `fcntl.flock` fails with `ModuleNotFoundError` under Git Bash. One that must run on a Windows dev machine locks with `msvcrt.locking` there (`LK_NBLCK` on the first byte, trying again while it raises `PermissionError`), as `scripts/hooks/merge-pr.sh` and `scripts/operations/pr_watch_merge.py` do; two programs sharing a lock file must lock the same byte (seek to 0 first: `open("a+")` starts at the end). Its `subprocess.run(["bash", …])` also searches System32 before PATH, where `bash.exe` is WSL's: take `shutil.which("bash")`.
 
 ## Processes and shells
 

@@ -161,6 +161,7 @@ final class TierPolicyTests: XCTestCase {
         _ = p.tick(signals(queue: 600, delivered: 7_000), now: now)
         XCTAssertEqual(p.tick(signals(queue: 600, delivered: 7_000), now: now + 0.25)?.index, 1)
         now += 0.5
+        p.helper(timing(target: 12_000, sent: 11_500)) // a fresh second of motion: proof is used once (#7842)
         var up: Double?
         let start = now
         while up == nil, now < start + 40 {
@@ -191,15 +192,40 @@ final class TierPolicyTests: XCTestCase {
     }
 
     func testANewBiasTakesTheTierTheRateFits() {
-        var p = policy(LinkStats(kind: .lan, via: .wifi))
-        p.helper(timing(target: 3_000, sent: 3_000))
+        var p = policy(LinkStats(kind: .relay, via: .wifi)) // 1.5×60
+        p.helper(timing(target: 4_500, sent: 4_500))
         let sharper = p.setBias(.sharper, now: 1)
-        XCTAssertEqual(sharper.map { label($0.tier) }, "2868x1862@15", "Sharper keeps the pixels at 3 Mbit/s")
+        XCTAssertEqual(sharper.map { label($0.tier) }, "2868x1862@30", "Sharper keeps the pixels at 4.5 Mbit/s")
         XCTAssertEqual(sharper?.reason, .choice)
-        XCTAssertEqual(sharper?.targetKbps, 3_000)
+        XCTAssertEqual(sharper?.targetKbps, 4_500)
         XCTAssertNil(p.setBias(.sharper, now: 2))
         let smoother = p.setBias(.smoother, now: 3)
-        XCTAssertEqual(smoother.map { label($0.tier) }, "1512x982@30", "never richer in pixels a second than before")
+        XCTAssertEqual(smoother.map { label($0.tier) }, "1512x982@60", "never richer in pixels a second than before")
+    }
+
+    /// A still screen sends no `timing`, so the helper's last word can be far under the tier's floor: a new bias
+    /// starts from the floor, which the link carries, and Smoother keeps 60 fps (#7842: it fell to 15 fps).
+    func testANewBiasOnAStillScreenKeepsTheFrameRate() {
+        var p = policy(LinkStats(kind: .lan, via: .wifi))
+        p.helper(timing(target: 300, sent: 150))
+        let smoother = p.setBias(.smoother, now: 2)
+        XCTAssertEqual(smoother.map { label($0.tier) }, "2868x1862@60")
+        XCTAssertEqual(smoother?.targetKbps, p.ladder[0].minKbps)
+    }
+
+    /// Skipped frames count until the next `timing` is due: a still screen after them steps down once, not once a
+    /// second (#7842).
+    func testSkippedFramesThenAStillScreenStepDownOnce() {
+        var p = policy(LinkStats(kind: .lan, via: .wifi))
+        p.helper(timing(target: 9_000, sent: 9_000, skipped: 2))
+        var changes = 0
+        var now = 0.25
+        while now < 6 {
+            if p.tick(signals(queue: 5, frames: now <= 0.5 ? 30 : 0), now: now) != nil { changes += 1 }
+            now += 0.25
+        }
+        XCTAssertEqual(changes, 1)
+        XCTAssertEqual(p.index, 1)
     }
 
     /// Data Saver on mobile data (#6396): at most one pixel per point, so only the 1× tiers.

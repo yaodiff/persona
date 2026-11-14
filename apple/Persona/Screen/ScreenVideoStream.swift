@@ -184,6 +184,11 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
     private var quiet = false
     private var over = false
     private var total = 0
+    /// A frame came since `hello` (or since capture paused): the helper's capture is running. Until then a tier change
+    /// waits (`held`, the latest only): ScreenCaptureKit drops a configuration change made before capture has really
+    /// started, so a start tier sent on `hello` never took and capture stayed at 60 fps (#7842).
+    private var capturing = false
+    private var held: TierPolicy.Change?
 
     /// Every byte that came so far (the overlay's bitrate is what arrived, not what was sent).
     var receivedBytes: Int { lock.withLock { total } }
@@ -232,11 +237,39 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
         Task.detached { [transport] in try? await transport.send(bytes) }
     }
 
-    /// A tier the policy chose: to the helper, then to the link (#6396).
+    /// A tier the policy chose: to the helper, then to the link (#6396); held until capture runs (`capturing`).
     private func apply(_ change: TierPolicy.Change?) {
         guard let change else { return }
+        let now: Bool = lock.withLock {
+            if !capturing { held = change }
+            return capturing
+        }
+        if now { put(change) }
+    }
+
+    private func put(_ change: TierPolicy.Change) {
         send(ScreenVideoTiers.update(change))
         onEvent(.tier(change))
+    }
+
+    /// Capture stopped (a new `hello`, or `paused`): tier changes wait for its next frame. A new `hello` starts a new
+    /// policy, whose start replaces what was held; a pause keeps it.
+    private func captureStopped(newHello: Bool) {
+        lock.withLock {
+            capturing = false
+            if newHello { held = nil }
+        }
+    }
+
+    /// A frame came: capture runs, and a held tier change goes out.
+    private func captureRuns() {
+        let release: TierPolicy.Change? = lock.withLock {
+            guard !capturing else { return nil }
+            capturing = true
+            defer { held = nil }
+            return held
+        }
+        if let release { put(release) }
     }
 
     /// ⋯ › Quality, the phone's budget, or the route changed (#6396, #6398): the policy looks again.
@@ -296,11 +329,13 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
                     decoder = ScreenVideoDecoder(codec: h.codec)
                     newest = nil
                     onEvent(.hello(h))
+                    captureStopped(newHello: true)
                     apply(tiers?.hello(h, now: Double(Self.nowMicros) / 1_000_000))
                 case let .format(f):
                     do { try decoder?.setFormat(f) } catch { throw Ended(why: .undecodable) }
                 case let .frame(f):
                     heard()
+                    captureRuns()
                     report(f, bytes: bytes)
                     // Only the read's first message can have begun in an earlier read.
                     tiers?.frame(f, arrival: arrived, firstByte: firstOfRead ? waiting : nil, bytes: raw.body.count + 5)
@@ -319,6 +354,7 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
                     heard()
                 case let .paused(p):
                     heard(paused: true)
+                    captureStopped(newHello: false)
                     newest = nil
                     onEvent(.paused(p.reason))
                 case .resumed:
