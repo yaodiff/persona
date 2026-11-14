@@ -195,6 +195,8 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSCameraUsageDescription: "Persona uses the camera to scan the pairing QR code printed by `personad hub pair`, and to take a photo you add to a chat or a meeting, for example a whiteboard during a meeting."
+        # The live screen's direct route on the same Wi-Fi (#6398): iOS asks the first time one is tried.
+        NSLocalNetworkUsageDescription: "Persona connects straight to your computer when it's on the same Wi-Fi, to show its screen faster."
         NSFaceIDUsageDescription: "Persona asks for Face ID before it types a Mac's remembered password on that Mac's lock screen, when you tap One-Tap Unlock on the Mac's page."
         NSContactsUsageDescription: "Persona lets Claude look up your contacts when you ask, for example to find a colleague's phone number or email before drafting a message."
         # The iPhone system integrations (docs/apple/phone-tools.md, #2278 / #2284 / #2285).
@@ -204,6 +206,9 @@ targets:
         # Home's tools are offered only in a build signed with the HomeKit capability: YES there, with the
         # com.apple.developer.homekit entitlement (docs/apple/phone-tools.md "Home"). Empty: no Home tools.
         PersonaHomeKit: $(PERSONA_HOMEKIT)
+        # Workout reports right after a workout, Persona closed or not: YES in a build signed with the HealthKit background
+        # delivery entitlement (config.json app.health_background_delivery, docs/assistant/health.md). Else when Persona opens.
+        PersonaHealthBackgroundDelivery: $(PERSONA_HEALTH_BACKGROUND_DELIVERY)
         NSCalendarsFullAccessUsageDescription: "Persona lets Claude read and add calendar events when you ask, for example to check whether you are free on Friday afternoon or to book a meeting. It also names a meeting recording after the event happening now."
         NSCalendarsWriteOnlyAccessUsageDescription: "Persona adds events to your calendar when you ask Claude to, for example to save a meeting it scheduled for you."
         NSRemindersFullAccessUsageDescription: "Persona lets Claude read and create reminders when you ask, for example to add “review the PR” to your Today list."
@@ -633,7 +638,9 @@ targets:
         excludes: ["*.json", "*.py"] # Static checks and TokenBaseline.json are read from the source tree, not the bundle
     dependencies:
       - target: Persona
+      # The continuity fixture reader and C replay, test-only; it brings PersonaCore with it. The app never links it.
       - package: PersonaCore
+        product: PersonaCoreTestSupport
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PERSONA_BUNDLE_ID).tests

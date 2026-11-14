@@ -202,10 +202,22 @@ PUT /api/v1/machines/{mid}/codex-settings
 PUT /api/v1/machines/{mid}/omp-settings
 PUT /api/v1/mutes
 PUT /api/v1/pins
+PUT /api/v1/push/ln-mode # ln mode switch (lnmode.go)
 
 # Phone write delivery receipts (full credentials only).
 GET /api/v1/phone/write-queue
 POST /api/v1/phone/write-queue/{id}/cancel
+
+# Web Push to browsers (#7459): push delivery, the hub's own (hub/webpush_routes.go).
+DELETE /api/v1/push/web/{device}
+GET /api/v1/push/intercepts # ln mode held pushes, read-only (lnmode.go)
+GET /api/v1/push/ln-mode # ln mode switch (lnmode.go)
+GET /api/v1/push/stats/daily # push grading delivered/held counts per day, read-only (lnmode.go)
+GET /api/v1/push/web
+GET /api/v1/push/web/{device}
+POST /api/v1/push/web/{device}/test
+PUT /api/v1/push/web/{device}
+
 /api/v1/auth/password/
 GET /api/v1/auth/password/state
 POST /api/v1/auth/password/start

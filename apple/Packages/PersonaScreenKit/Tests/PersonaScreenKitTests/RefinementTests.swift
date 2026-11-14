@@ -36,6 +36,33 @@ final class RefinementTests: XCTestCase {
         XCTAssertFalse(r.due(at: 9_000 * ms, calm: true), "capture stopped: nothing to refine")
     }
 
+    /// VideoToolbox drops whole frames while over budget (screenbench, the lowest tier): a dropped pass is tried again
+    /// 200 ms later and doesn't count, up to `attempts` tries per still moment.
+    func testADroppedPassIsTriedAgain() {
+        var r = Refinement()
+        r.changed(at: 0)
+        var at: UInt64 = 300 * ms, sent = 0
+        for attempt in 0..<20 where r.due(at: at, calm: true) {
+            r.passed(at: at)
+            if attempt < 5 { r.dropped() } else { sent += 1 }
+            at += 200 * ms
+        }
+        XCTAssertEqual(sent, Refinement.passes, "five dropped, then three that went out")
+        XCTAssertEqual(r.done, Refinement.passes)
+
+        var never = Refinement()
+        never.changed(at: 0)
+        var tries = 0
+        at = 300 * ms
+        while never.due(at: at, calm: true), tries < 100 {
+            never.passed(at: at)
+            never.dropped()
+            tries += 1
+            at += 200 * ms
+        }
+        XCTAssertEqual(tries, Refinement.attempts, "a budget that never clears: it stops trying")
+    }
+
     func testABoostedBitrateStaysInTheHelpersRange() {
         XCTAssertEqual(Refinement.kbps(target: 1_000), 4_000)
         XCTAssertEqual(Refinement.kbps(target: 20_000), CapturePlan.maxKbps)

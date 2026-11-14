@@ -24,6 +24,8 @@ internal class SessionTerminalResumer(
     private val creation: () -> AgentCreationService?,
     private val machines: () -> List<Machine> = { emptyList() },
 ) : TerminalResumer {
+    override fun isStopped(key: SessionKey): Boolean = sessions().firstOrNull { it.key == key }?.isStoppedAgent == true
+
     override fun canResume(key: SessionKey): Boolean {
         val session = sessions().firstOrNull { it.key == key } ?: return false
         if (creation() == null) return false

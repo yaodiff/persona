@@ -84,6 +84,7 @@ type fakeHub struct {
 	pushes        []Notification
 	failNotify    int              // notify.request fails this many more times as when the hub is away and nothing was kept
 	refuseNotify  error            // notify.request is the hub's refusal (answered) while set
+	notifyResult  NotifyResult     // the held/reason answer notify.request returns once it succeeds
 	events        []string         // the type of each event the apps were sent
 	liveEvents    []map[string]any // the meeting_live events as sent
 	snaps         []Snapshot
@@ -156,11 +157,14 @@ type fakeHub struct {
 	// checkWait, when set, runs before each launchers.check is answered, outside the fake's lock, with the call's
 	// context: a check that takes its time; its error is the call's.
 	checkWait func(ctx context.Context) error
+	checkedAt []time.Time
 	repairs   []map[string]any
 	repairRes *proto.LauncherRepair
 	onRepair  func(f *fakeHub)
 	onSend    func(f *fakeHub, p map[string]any) // runs (under the fake's lock) after each session.send
 	onStart   func(f *fakeHub, p map[string]any) // runs (under the fake's lock) when session.start arrives, before slowStart blocks
+	down      map[string]bool                    // machines listed as not connected (devices.list) while f.devices is nil
+	downLists map[string]int                     // and for how many more devices.list answers a machine is listed so
 	onList    func(f *fakeHub, machine string)   // runs (under the fake's lock) before a sessions.list is answered, which then sends the list as it left it
 	// onAssistantSend runs (under the fake's lock) when assistant.send arrives, before it is answered
 	onAssistantSend func(f *fakeHub, p map[string]any)
@@ -258,7 +262,11 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if devices == nil {
 			devices = []Device{}
 			for id := range f.sessions {
-				devices = append(devices, Device{ID: id, Name: id, Online: true, Reachable: true})
+				up := !f.down[id] && f.downLists[id] == 0
+				if f.downLists[id] > 0 {
+					f.downLists[id]--
+				}
+				devices = append(devices, Device{ID: id, Name: id, Online: up, Reachable: up})
 			}
 		}
 		return json.Marshal(map[string]any{"devices": devices, "complete": f.devicesFull, "others": f.devicesOther})
@@ -337,6 +345,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.onCheck != nil {
 			f.onCheck(f)
 		}
+		f.checkedAt = append(f.checkedAt, time.Now())
 		if c, ok := f.checks[p.Device+"/"+name]; ok {
 			return json.Marshal(c)
 		}
@@ -621,23 +630,23 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	return nil, fmt.Errorf("unexpected %s %s", p.AppID, p.Method)
 }
 
-func (f *fakeHub) NotifyRequest(_ context.Context, p NotifyRequest) error {
+func (f *fakeHub) NotifyRequest(_ context.Context, p NotifyRequest) (NotifyResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch p.Notification.Kind {
 	case NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyInput, assistantwire.NotifyReply, assistantwire.NotifyDecide:
 	default:
-		return fmt.Errorf("kind %q", p.Notification.Kind)
+		return NotifyResult{}, fmt.Errorf("kind %q", p.Notification.Kind)
 	}
 	if f.refuseNotify != nil {
-		return f.refuseNotify
+		return NotifyResult{}, f.refuseNotify
 	}
 	if f.failNotify > 0 {
 		f.failNotify--
-		return errors.New("the hub is away")
+		return NotifyResult{}, errors.New("the hub is away")
 	}
 	f.pushes = append(f.pushes, p.Notification)
-	return nil
+	return f.notifyResult, nil
 }
 
 func (f *fakeHub) Broadcast(_ context.Context, b Broadcast) {

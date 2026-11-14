@@ -66,7 +66,7 @@ func (s *Service) refreshListIndex(ctx context.Context, opts sessionlist.Options
 }
 
 func (s *Service) ListPage(ctx context.Context, opts sessionlist.Options) (sessionlist.Page, error) {
-	if opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
+	if opts.Search != "" || opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
 		return sessionlist.Page{}, &sessionlist.Error{Code: "invalid_query"}
 	}
 	if opts.Cursor == "" {
@@ -80,7 +80,7 @@ func (s *Service) ListPage(ctx context.Context, opts sessionlist.Options) (sessi
 // ListPageWithCounts is a page and its view's current counts (with_counts=1) from one refresh of the sources: what
 // ListPage and a separate ListCounts with the same filters return, since and cursor left out of the counts (#6496).
 func (s *Service) ListPageWithCounts(ctx context.Context, opts sessionlist.Options) (sessionlist.PageWithCounts, error) {
-	if opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
+	if opts.Search != "" || opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
 		return sessionlist.PageWithCounts{}, &sessionlist.Error{Code: "invalid_query"}
 	}
 	if err := s.refreshListIndex(ctx, opts); err != nil {
@@ -100,7 +100,7 @@ func (s *Service) ListPageWithCounts(ctx context.Context, opts sessionlist.Optio
 }
 
 func (s *Service) ListCounts(ctx context.Context, opts sessionlist.Options) (sessionlist.Counts, error) {
-	if opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
+	if opts.Search != "" || opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
 		return sessionlist.Counts{}, &sessionlist.Error{Code: "invalid_query"}
 	}
 	if err := s.refreshListIndex(ctx, opts); err != nil {

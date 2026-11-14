@@ -14,6 +14,7 @@
   "title_settings": "设置",
   "title_agents": "个人 Agent",
   "title_extension": "扩展",
+  "title_not_found": "找不到页面",
   "title_home": "总览",
   "sidebar": "侧边栏",
   "reconnecting": "连不上 hub，正在重试…",

@@ -20,6 +20,7 @@
   "ultracode_skipped": "ultracode なしで開始しました：{reason}",
   "task_failed_title": "「{name}」を開始できませんでした",
   "task_failed_title_health": "タスクを開始できませんでした",
+  "ask_held_title": "「{name}」のカードが監督の対応を待っています",
   "task_failed_body": "{reason}。会話を開いて「再試行」をタップするか、別のパソコンに割り当ててください",
   "task_failed_body_no_reason": "会話を開いて「再試行」をタップするか、別のパソコンに割り当ててください",
   "not_retryable": "再試行できるのは、開始できなかったタスクか、モデルサービスのエラーで中断されたタスクだけです",
@@ -53,5 +54,8 @@
   "admission_recommend": " 推奨コンピューター：{machine}。",
   "admission_reroute": "{from} から {to} に変更しました：{reason}",
   "admission_queued": "順番待ちです。hub が自動で再試行します：{reason}",
-  "admission_queue_timeout": "{limit} 待っても開始できなかったため、開始を中止します。最後の理由：{reason}"
+  "admission_queue_timeout": "{limit} 待っても開始できなかったため、開始を中止します。最後の理由：{reason}",
+  "start_link_lost": "「{machine}」との接続が切れ、再接続後もタスクは起動していませんでした：{reason}",
+  "start_machine_busy": "「{machine}」は接続されたままですが、待機時間内に応答がありませんでした（混雑している可能性があります）：{reason}",
+  "start_link_down": "「{machine}」との接続が切れ、しばらく待っても再接続できませんでした：{reason}"
 }

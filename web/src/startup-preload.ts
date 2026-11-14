@@ -307,6 +307,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // five more), five namespaces no first-screen code names left it, and Tailwind no longer scans test files and e2e
 // scripts (styles.css). Every build prints the room left (firstScreenRoom); when it runs low, take bytes off the
 // first screen before raising this.
+// #7459 (Web Push) takes about 90 B of that room in each language: the client_hello's device_id (lib/device-id.ts), the
+// switch that says Web Push is on here (lib/web-push-flag.ts) and the two imports of lib/web-push.ts, a chunk of its own.
+// #7440 takes 1,356 B of that room in each language, measured in one environment against main at 8ab19cb754 (ja
+// 473,110 B to 474,466 B; en 469,919 B to 471,275 B, zh-Hans 470,752 B to 472,108 B): the sidebar's long groups drawn
+// a part at a time (views/WindowedRows.tsx), the fold-all a group missed while it was not drawn (lib/fold-all.ts) and
+// the headings' heights from one ResizeObserver (views/SidebarSection.tsx). WindowedRows is not a chunk of its own: the
+// sidebar has no error boundary, so a failed download of it would leave the whole app blank.
 export const FIRST_SCREEN_BUDGET = 480_639;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the

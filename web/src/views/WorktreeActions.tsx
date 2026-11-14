@@ -33,7 +33,7 @@ export function WorktreeActionsHost(props: WorktreeActionsHostProps) {
   const close = () => closeWorktreeActions(request.id);
   return <OverlayBoundary open onClose={close}>
     <Suspense fallback={<Menu anchor={request.at?.anchor || request.anchor} point={request.at?.point} onClose={close} align="right"
-      header={request.target.label || t("worktree-actions.worktree")}
+      header={request.target.label || t("worktree-actions.worktree")} headerAsWritten={Boolean(request.target.label)}
       items={[{ key: "loading", label: t("worktree-actions.checking_access"), note: true, onSelect: () => {} }]} />}>
       <ActiveWorktreeActions key={request.id} request={request} registry={registry.current} {...props} />
     </Suspense>

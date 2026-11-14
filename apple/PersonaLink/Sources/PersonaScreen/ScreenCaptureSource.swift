@@ -425,12 +425,17 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
                     self.boosted = false
                     self.setBitrate(self.rate.kbps)
                 }
+                // Over budget, VideoToolbox drops the whole frame (no sample, no error): the pass is tried again.
+                if refinement, status != noErr || out == nil { self.refiner.dropped() }
                 guard status == noErr, let out else { return }
                 self.emit(out, captured: captured, captureMicros: captureMicros, encodeMicros: encodeMicros,
                           refinement: refinement)
             }
         }
-        if status != noErr { inFlight = max(0, inFlight - 1) }
+        if status != noErr {
+            inFlight = max(0, inFlight - 1)
+            if refinement { refiner.dropped() }
+        }
     }
 
     /// Every 100 ms while capturing for a phone with a band: a refinement pass when one is due, the link is calm and the

@@ -94,6 +94,7 @@ func TestPlacesThatSealAreKnown(t *testing.T) {
 		"internal/hub/devices_service.go":   1, // the hub's key: the computers' connector credentials
 		"internal/hub/push_transport.go":    1, // a phone's push key (pushcrypto)
 		"internal/pushcrypto/pushcrypto.go": 1, // HPKE to a phone
+		"internal/webpush/webpush.go":       1, // RFC 8291 to a browser's subscription keys: a message, never stored
 		"internal/proto/secretenv.go":       1, // HPKE to a node's one-time stage key: a hand-off, never stored
 		"internal/relay/relay.go":           1, // the push relay's grants
 	}

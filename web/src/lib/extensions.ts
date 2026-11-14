@@ -55,6 +55,9 @@ export interface HubExtension {
   upgrade_note?: ExtensionUpgradeNote;
   /** An extension with a program on computers: how that program is on each machine it is switched on for. */
   nodes?: ExtensionNodeState[];
+  /** How that program is across all its machines, aggregated by the hub; the status follows it while the hub's own
+   *  process is idle, so a node-only extension does not say "stopped" while it runs on every machine. */
+  node_status?: NodeStatusSummary;
   /** An installed extension's sandbox and its connections through the hub's egress proxy (hub extension_sandbox.go). */
   sandbox?: ExtensionSandbox;
   /** An extension one signs in to (hub extension_auth, #4507): its state as the hub last knew it. */
@@ -109,6 +112,45 @@ export interface ExtensionNodeState {
   /** running | starting | stopped | error | missing | lease_expired | offline | outdated */
   state: string;
   error?: string;
+}
+
+/** The hub's aggregate of an extension's node program across its machines (Go ExtensionNodeStatusView). */
+export interface NodeStatusSummary {
+  total: number;
+  running: number;
+  starting: number;
+  stopped: number;
+  offline: number;
+  abnormal: number;
+}
+
+/**
+ * One line for an extension whose work happens on computers, from the hub's aggregate: "Running on 2 machines",
+ * with the abnormal or offline count when there is one. Null without a node summary, so the hub-process wording stands.
+ */
+export function nodeStatusNote(p: Pick<HubExtension, "node_status" | "status">): string | null {
+  const s = p.node_status;
+  if (!s || s.total === 0) return null;
+  const offlinePart = () => (s.offline > 0 ? ` · ${t("lib-extensions.node_offline_count", { count: s.offline })}` : "");
+  switch (p.status) {
+    case "running": {
+      const main = t("lib-extensions.node_running", { count: s.running });
+      const abnormal = s.abnormal > 0 ? ` · ${t("lib-extensions.node_abnormal_count", { count: s.abnormal })}` : "";
+      return main + abnormal + offlinePart();
+    }
+    case "error": {
+      const main = t("lib-extensions.node_abnormal_count", { count: s.abnormal });
+      return s.offline > 0 ? `${main} · ${t("lib-extensions.node_offline_count", { count: s.offline })}` : main;
+    }
+    case "starting":
+      return t("lib-extensions.node_starting", { count: s.starting }) + offlinePart();
+    case "stopped":
+      // All offline: no machine is merely stopped, so the offline count is the headline rather than "Stopped on 0".
+      if (s.stopped === 0 && s.offline > 0) return t("lib-extensions.node_offline_count", { count: s.offline });
+      return t("lib-extensions.node_stopped", { count: s.stopped }) + offlinePart();
+    default:
+      return null;
+  }
 }
 
 /** A market extension's newer version and where it stands. */
@@ -333,11 +375,13 @@ const STATES: Record<string, string> = {
   error: t("lib-extensions.state_error"),
 };
 
-export const extensionState = (p: HubExtension) => STATES[p.status] ?? t("lib-extensions.state_unknown");
+export const extensionState = (p: HubExtension) => nodeStatusNote(p) ?? STATES[p.status] ?? t("lib-extensions.state_unknown");
 
 /** Whether an enabled extension's program runs right now (the detail page's small print); "" for any other state. */
-export const runNote = (p: HubExtension) =>
-  p.attached ? attachedNote(p) : p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "";
+export const runNote = (p: HubExtension) => {
+  if (p.node_status) return ""; // the node status line already says where it runs
+  return p.attached ? attachedNote(p) : p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "";
+};
 
 /** An attached extension's small print: online or offline since when, and why while it is still reconnecting (its
  *  status says no error yet); "" while it is switched off. */

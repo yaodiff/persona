@@ -51,6 +51,46 @@ struct ExtensionsModelTests {
         }
     }
 
+    /// A node-only extension's line is the aggregate across its machines ("Running on 2 machines"), not the idle hub
+    /// process, and the hub-process small print gives way to it.
+    @Test func nodeProgramStatusDrivesTheStateLine() throws {
+        func plugin(_ json: String) throws -> HubExtension {
+            try JSON.decoder.decode(HubExtension.self, from: Data(json.utf8))
+        }
+        let running = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"running","# +
+            #""node_status":{"total":2,"running":2,"starting":0,"stopped":0,"offline":0,"abnormal":0}}"#)
+        #expect(ExtensionText.state(running) == "在 2 台机器上运行")
+        #expect(ExtensionText.runNote(running) == nil)
+
+        let mixed = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"running","# +
+            #""node_status":{"total":2,"running":1,"starting":0,"stopped":0,"offline":0,"abnormal":1}}"#)
+        #expect(ExtensionText.state(mixed) == "在 1 台机器上运行 · 1 台机器异常")
+
+        let abnormalOnly = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"error","# +
+            #""node_status":{"total":2,"running":0,"starting":0,"stopped":0,"offline":1,"abnormal":1}}"#)
+        #expect(ExtensionText.state(abnormalOnly) == "1 台机器异常 · 1 台机器离线")
+
+        let starting = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"starting","# +
+            #""node_status":{"total":1,"running":0,"starting":1,"stopped":0,"offline":0,"abnormal":0}}"#)
+        #expect(ExtensionText.state(starting) == "正在 1 台机器上启动")
+
+        let allStopped = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"stopped","# +
+            #""node_status":{"total":2,"running":0,"starting":0,"stopped":2,"offline":0,"abnormal":0}}"#)
+        #expect(ExtensionText.state(allStopped) == "2 台机器已停止")
+
+        let allOffline = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"stopped","# +
+            #""node_status":{"total":1,"running":0,"starting":0,"stopped":0,"offline":1,"abnormal":0}}"#)
+        #expect(ExtensionText.state(allOffline) == "1 台机器离线")
+
+        let stoppedAndOffline = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"stopped","# +
+            #""node_status":{"total":2,"running":0,"starting":0,"stopped":1,"offline":1,"abnormal":0}}"#)
+        #expect(ExtensionText.state(stoppedAndOffline) == "1 台机器已停止 · 1 台机器离线")
+
+        let runningAndOffline = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"running","# +
+            #""node_status":{"total":3,"running":2,"starting":0,"stopped":0,"offline":1,"abnormal":0}}"#)
+        #expect(ExtensionText.state(runningAndOffline) == "在 2 台机器上运行 · 1 台机器离线")
+    }
+
     @Test func detailDecodesTheForm() async throws {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/plugins/example-notes/-/", json: Self.detail)

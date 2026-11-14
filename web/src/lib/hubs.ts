@@ -43,6 +43,8 @@ export const here = () => (typeof location === "undefined" ? "" : location.origi
 export function normalizeHubURL(input: string): { url: string } | { error: string } {
   const raw = input.trim();
   if (!raw) return { error: t("lib-hubs.url_empty") };
+  // An address has no spaces. Chrome's parser takes "not a url" as the host "not%20a%20url" (others refuse it).
+  if (/\s/.test(raw)) return { error: t("lib-hubs.url_invalid") };
   let u: URL;
   try {
     u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
@@ -52,7 +54,9 @@ export function normalizeHubURL(input: string): { url: string } | { error: strin
   if (u.protocol !== "http:" && u.protocol !== "https:") return { error: t("lib-hubs.url_scheme") };
   if (u.username || u.password) return { error: t("lib-hubs.url_credentials") };
   if (u.search || u.hash) return { error: t("lib-hubs.url_path") };
-  if (!u.hostname) return { error: t("lib-hubs.url_invalid") };
+  // A host is a name (letters, digits, "-", "_", dots; another script's letters come out of URL as xn--…), an IPv4
+  // address or a bracketed IPv6 one: nothing escaped (%), which Chrome lets through.
+  if (!/^(\[[0-9a-f:.]+\]|[a-z0-9_-]+(\.[a-z0-9_-]+)*\.?)$/i.test(u.hostname)) return { error: t("lib-hubs.url_invalid") };
   const path = u.pathname.replace(/\/+$/, "");
   // only plain path segments, what the hub takes as X-Forwarded-Prefix (URL has already resolved any "..")
   if (path && !/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) return { error: t("lib-hubs.url_path") };

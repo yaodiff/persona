@@ -28,10 +28,45 @@ The table below is for Orca; where the herdr engine differs is in the table in t
 | Resume an exited Codex CLI thread from the phone | ❌ | The Orca engine does not resume Codex on any platform; it works with the herdr engine (herdr table below) |
 | Processes the node starts itself: managed launchers, `codex` start | ✅ | `osproc.Exec`: Windows has no exec, so it starts a child in the same console and exits with its exit code ("herdr" below) |
 | hub self-update | ❌ | Still `syscall.Exec`; the hub doesn't run natively on Windows (#1179) |
-| Updating the resident node through the hub ([node-update.md](node-update.md)) | ❌ | The node reports it as unsupported ("resident node is not managed by launchd/systemd"), and the App shows why; to upgrade, run `persona-link install --personad <new personad.exe>` again |
+| Updating the resident node through the hub ([node-update.md](node-update.md)) | ✅ | **Redeploy** works as on Linux and macOS once the scheduled task's supervisor runs the node with `--supervised` (persona-link from this change on). With no exec on Windows, the node moves its running file aside, puts the new one in place and exits asking the supervisor to start it again at once ("Updates through the hub" below). A node under an older supervisor says to run `persona-link install` once; the hub needs a `personad-windows-<arch>` build to send ("Node packages" in node-update.md) |
 | Passive mode (hub connects to this machine) | Not verified | Builds, and `install --listen` takes the same path; you have to open the port in Windows Firewall yourself (`install` prints the `New-NetFirewallRule` command) |
 
 ## Install and start at logon
+
+Releases publish `persona-link-windows-amd64.exe.gz` and `persona-link-windows-arm64.exe.gz` on [GitHub](https://github.com/nwverse/persona/releases/latest). They are single executables compressed with gzip, not ZIP archives. The POSIX `install.sh` is for Linux and macOS, not Windows; use PowerShell on Windows.
+
+The following downloads the matching architecture, verifies the archive against the release's `SHA256SUMS`, and expands it. It installs only the connector: a computer that should also run Agents needs a resident node, which can be built from source as shown below. Windows `personad` / `persona-node` release assets and their release-feed packages are outside the connector release.
+
+```powershell
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+$base = 'https://github.com/nwverse/persona/releases/latest/download'
+$name = "persona-link-windows-$arch.exe"
+$dir = Join-Path $env:USERPROFILE '.persona\downloads'
+New-Item -ItemType Directory -Force $dir | Out-Null
+curl.exe -fL "$base/$name.gz" -o "$dir\$name.gz"
+curl.exe -fL "$base/SHA256SUMS" -o "$dir\SHA256SUMS"
+$match = Select-String -LiteralPath "$dir\SHA256SUMS" -Pattern " $([regex]::Escape($name)).gz$"
+$expected = $match.Line.Split()[0]
+$actual = (Get-FileHash -LiteralPath "$dir\$name.gz" -Algorithm SHA256).Hash.ToLowerInvariant()
+if (-not $expected -or $actual -ne $expected) { throw 'SHA-256 mismatch; do not run this download' }
+
+$input = [IO.File]::OpenRead("$dir\$name.gz")
+try {
+  $gzip = [IO.Compression.GzipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
+  try {
+    $output = [IO.File]::Create("$dir\$name")
+    try { $gzip.CopyTo($output) } finally { $output.Dispose() }
+  } finally { $gzip.Dispose() }
+} finally { $input.Dispose() }
+
+& "$dir\$name" version
+& "$dir\$name" install --no-node --pair '<the persona://link?… link from the hub>'
+& "$env:USERPROFILE\.persona\bin\persona-link.exe" status
+```
+
+To include a locally built resident node instead, omit `--no-node` and pass `--personad .\personad.exe`. No administrator is needed. Active mode needs no SSH or VPN. Only the optional SSH tunnel uses the system `ssh`; install Windows' OpenSSH client if that feature is wanted and `ssh` is not already available. These command-line executables are not Authenticode-signed, so Windows may warn before the first run; the SHA-256 check verifies the download, not a publisher signature.
+
+To build both programs from source instead:
 
 ```powershell
 cd server
@@ -45,7 +80,7 @@ No administrator needed. On Windows, `install` does, in order:
 1. With `--pair`, pair first; `--listen` switches to passive mode (same as Linux, see [link.md](link.md), "Linux (headless)").
 2. If the scheduled task is running, end it first (a running program file can't be replaced) and wait for persona-link to release its run lock. If another persona-link is running (say, a foreground `persona-link run`), it asks you to stop it. Stop the retired tray UI yourself before upgrading; it is no longer managed by this CLI.
 3. Copy itself to `~/.persona/bin/persona-link.exe`; copy the personad given by `--personad` to `~/.persona/bin/personad.exe`. Unlike Linux, if one is given it is always replaced:
-   Windows can't update the node through the hub yet, so running `install` again is the upgrade. If none is given and there is no `personad.exe`, only persona-link is installed (same as `--no-node`).
+   running `install` again with a new personad is the way to upgrade by hand (the hub can update it too, "Updates through the hub" below). If none is given and there is no `personad.exe`, only persona-link is installed (same as `--no-node`).
 4. Put another copy at `~/.persona/bin/persona-link-service.exe`: the same program, with only the subsystem in the PE header changed from console to GUI (`guicopy.go`).
 5. Write `~/.persona/persona-link-task.xml` (UTF-16), register the scheduled task "Persona Link" with `schtasks /Create /XML`, start it with `schtasks /Run`, and wait for it to connect to the hub (same as Linux, up to 20 seconds).
 
@@ -59,7 +94,8 @@ The "Persona Link" scheduled task:
   The task's own "restart on failure" isn't used: it only covers the task failing to start, not the program exiting non-zero (tested on a real machine). "Repeat" on a logon trigger only starts at the next logon, so a separate time trigger is added.
 - No run-time limit (by default the task is ended after 72 hours), runs on battery, isn't stopped when idle ends, normal priority (the default 7 is "below normal", lowering both CPU and disk).
 - **What runs is the supervisor** `persona-link-service.exe supervise` (`supervise_windows.go`): it starts persona-link (`run --log ~/.persona/link.log`) with `CREATE_NO_WINDOW`
-  and the resident node (`personad.exe node --attach`, log `~/.persona/node-attach.log`, moved to `.1` at 10 MB), and restarts whichever exits after 5 and 10 seconds respectively (same as `RestartSec` on the two Linux units).
+  and the resident node (`personad.exe node --attach --supervised`, log `~/.persona/node-attach.log`, moved to `.1` at 10 MB), and restarts whichever exits after 5 and 10 seconds respectively (same as `RestartSec` on the two Linux units),
+  or at once when it exits with the node's restart code (`nodeproto.RestartExitCode`; a program that keeps asking right after it starts waits the delay).
   What the supervisor itself does goes to `~/.persona/link-service.log` (persona-link's output when it crashes is there too). Only one supervisor runs per computer (file lock on `~/.persona/link-service.run`).
   It starts the node first and waits for it to recreate `node-attach.sock` (it only checks the file's modification time and doesn't connect: each connection is an attach and would kick off the hub's connection; waits up to 10 seconds) before starting persona-link.
   The other way round, the hub connects the link first and immediately opens a stream to a node that isn't listening yet, briefly reporting this machine offline, and `install` concludes "the hub can't reach this machine's node" (#1984).
@@ -79,6 +115,19 @@ is a release or your own `go build`, the supervisor is the same program. Approac
 | `persona-link name [<new>\|--reset]` | As on Linux: shows or changes what the hub calls this computer ([link.md](link.md), "The computer's name") |
 | `persona-link node install` / `node uninstall` | Not installed separately: the node is in the same scheduled task; use `install` (with node) / `install --no-node` |
 | `persona-link node status [--json]` | Whether the scheduled task includes the node, and the task's state |
+
+## Updates through the hub
+
+The hub updates a Windows node the way it updates any other ([node-update.md](node-update.md)): the build goes over the node RPC, the node checks it, keeps a backup, starts the rollback watchdog and swaps the file. What differs is what Windows lets a running program do (`server/internal/nodeupdate/os_windows.go`):
+
+- **Who restarts it**: the scheduled task's supervisor starts the node as `node --attach --supervised`, which is what tells the node that something starts it again when it exits. Without that (a supervisor from before this, or a node run by hand) the node says to run `persona-link install` once on the computer, and the App shows that.
+- **Swapping its own file**: Windows will not replace the file of a running program, but lets it be renamed. The node moves its file aside (`.node-update-retired-…`), puts the new one in its place, and deletes the retired file once nothing runs from it (the next confirmation, startup or sweep).
+- **No exec**: the node exits with `nodeproto.RestartExitCode` and the supervisor starts the installed file again at once, as a new process: the hub sees the node reconnect a second or two later. A rollback, or a node that finds the restored old file at startup, does the same.
+- **The watchdog** runs detached from a copy of the old program (`personad.exe.node-update-backup-<id>.exe`: Windows runs only files that end in `.exe`) and says it is ready through the transaction marker, as the systemd one does. It stays in the supervisor's job: when the task ends, it ends too, and the next node's startup recovery starts another or rolls back.
+- **Stopping the new program on a rollback**: the restarted node is a new process. A build that can take updates here records its pid at startup; one that cannot (a build from before this, which therefore never confirms) does not. The marker also names the supervisor, and after putting the old file back the watchdog stops the supervisor's children that run from the node's file and started before the restore, so the supervisor starts the old program again.
+- **Backups in use**: the watchdog runs from the backup until it sees the update confirmed, so a backup that cannot be deleted yet is moved aside and deleted later.
+
+The first update needs a supervisor that passes `--supervised`: install once with a persona-link and personad from this change on. The hub sends the `personad-windows-<arch>` it finds among its node builds (`~/.persona/bin/nodes`, "Node packages" in [node-update.md](node-update.md)); release feeds do not carry Windows builds yet.
 
 ## Reconnect without a tray
 

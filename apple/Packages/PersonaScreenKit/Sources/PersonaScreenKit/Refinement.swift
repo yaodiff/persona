@@ -17,12 +17,17 @@ public struct Refinement: Equatable, Sendable {
     public static let betweenMicros: UInt64 = 200_000
     /// Passes per still moment. Each refines the one before (the encoder codes what is still off from the source).
     public static let passes = 3
+    /// Tries per still moment, dropped ones included: VideoToolbox's low-latency rate control drops whole frames while
+    /// the stream is over budget (screenbench: for seconds after a keyframe at the lowest tier), so a dropped pass is
+    /// tried again 200 ms later, and the screen's final picture still goes out once the budget allows.
+    public static let attempts = 12
     /// A pass's bitrate as a multiple of the stream's current target: one frame gets about this many frames' budget.
     public static let boost = 4
 
     private var changedAt: UInt64?
     private var lastPassAt: UInt64?
     public private(set) var done = 0
+    private var tries = 0
 
     public init() {}
 
@@ -31,6 +36,7 @@ public struct Refinement: Equatable, Sendable {
         changedAt = now
         lastPassAt = nil
         done = 0
+        tries = 0
     }
 
     /// Nothing to refine (capture stopped, or paused): no pass until the next change.
@@ -38,6 +44,7 @@ public struct Refinement: Equatable, Sendable {
         changedAt = nil
         lastPassAt = nil
         done = 0
+        tries = 0
     }
 
     /// A pass's frame came back queued past the rate controller's cut threshold: no more passes until the next change.
@@ -45,7 +52,7 @@ public struct Refinement: Equatable, Sendable {
 
     /// Whether a pass is due at `now`, the link being `calm`.
     public func due(at now: UInt64, calm: Bool) -> Bool {
-        guard calm, let changedAt, done < Self.passes else { return false }
+        guard calm, let changedAt, done < Self.passes, tries < Self.attempts else { return false }
         if let lastPassAt { return now &- lastPassAt >= Self.betweenMicros }
         return now &- changedAt >= Self.firstAfterMicros
     }
@@ -54,7 +61,11 @@ public struct Refinement: Equatable, Sendable {
     public mutating func passed(at now: UInt64) {
         lastPassAt = now
         done += 1
+        tries += 1
     }
+
+    /// The encoder dropped that pass: it doesn't count, and is tried again after `betweenMicros`.
+    public mutating func dropped() { done = max(0, done - 1) }
 
     /// The bitrate a pass is encoded at, in kbit/s: `boost` times the target, within the helper's range.
     public static func kbps(target: Int) -> Int { min(CapturePlan.maxKbps, max(CapturePlan.minKbps, target * boost)) }

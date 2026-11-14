@@ -48,6 +48,8 @@ vi.mock("../../lib/api", async (original) => {
   };
 });
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
+import { api } from "../../lib/api";
+import { chooseManager, resetManagerChoice } from "../../lib/manager-choice";
 import { resetSavedPrompts } from "../../lib/saved-prompts";
 import { toast } from "../../ui/atoms";
 import { SavedPrompts } from "./SavedPrompts";
@@ -81,6 +83,8 @@ const rows = () => [...document.querySelectorAll<HTMLElement>("[data-saved-promp
 const nameNote = () => document.getElementById(byTestId("saved-prompt-name")!.getAttribute("aria-describedby")!)!.textContent;
 
 beforeEach(() => {
+  localStorage.clear();
+  resetManagerChoice();
   hub.prompts = [];
   hub.calls.length = 0;
   hub.missing = false;
@@ -96,6 +100,7 @@ afterEach(() => {
   host.remove();
   document.body.innerHTML = "";
   resetSavedPrompts();
+  vi.unstubAllGlobals();
 });
 
 describe("an empty page", () => {
@@ -196,4 +201,34 @@ it("says so on an assistant from before saved prompts", async () => {
   await open();
   expect(host.textContent).toContain(t("settings-savedprompts.unsupported"));
   expect(byTestId("saved-prompt-add")).toBeNull();
+});
+
+
+it("keeps the selected assistant's settings rows when an earlier assistant's real POST completes", async () => {
+  hub.prompts = [{ id: "sp1", name: "alpha", text: "Assistant A" }];
+  await open();
+  await click(byTestId("saved-prompt-add"));
+  type(byTestId("saved-prompt-name"), "alpha-new");
+  type(byTestId("saved-prompt-text"), "Assistant A's new prompt");
+  const real = await vi.importActual<typeof import("../../lib/api")>("../../lib/api");
+  let finish!: (response: Response) => void;
+  const fetcher = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  vi.stubGlobal("fetch", fetcher);
+  vi.mocked(api).mockImplementationOnce(real.api);
+  await click(byTestId("saved-prompt-save"));
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+  expect(url).toBe("/api/v1/assistant/saved-prompts");
+  expect(init.method).toBe("POST");
+  expect(JSON.parse(init.body as string)).toEqual({ name: "alpha-new", text: "Assistant A's new prompt" });
+  hub.prompts = [{ id: "sp9", name: "beta", text: "Assistant B" }];
+  act(() => chooseManager("m-other"));
+  await flush();
+  expect(rows()).toEqual(["beta"]);
+  const reads = hub.calls.filter((c) => c.method === "GET").length;
+  act(() => finish(new Response(JSON.stringify({ prompt: { id: "sp2", name: "alpha-new", text: "Assistant A's new prompt" } }),
+    { status: 200, headers: { "Content-Type": "application/json" } })));
+  await flush();
+  expect(rows()).toEqual(["beta"]);
+  expect(hub.calls.filter((c) => c.method === "GET")).toHaveLength(reads);
 });

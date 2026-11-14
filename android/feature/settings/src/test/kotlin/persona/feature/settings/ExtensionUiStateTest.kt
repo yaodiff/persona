@@ -195,6 +195,40 @@ class ExtensionUiStateTest {
         assertEquals(1, api.renders.size)
     }
 
+    /** Set Up with … (#5308): `persona://ask` is taken only on the subscription pages, and refused everywhere else. */
+    @Test fun askIsTakenOnlyOnTheSubscriptionPages() = runBlocking {
+        val good = "persona://ask?text=Help%20me"
+        assertEquals("Help me", ExtensionViewText.askText(good))
+        assertEquals("Help me", ExtensionViewText.askFrom(SUBSCRIPTIONS_UI, good))
+        assertEquals("a+b", ExtensionViewText.askText("persona://ask?text=a%2Bb"))
+        assertEquals("a+b", ExtensionViewText.askText("persona://ask?text=a+b"))
+        assertEquals("hello", ExtensionViewText.askText("jarvis://ask?text=hello"))
+        assertEquals("hello", ExtensionViewText.askText("persona://ask/?text=hello"))
+        assertEquals(" hi", ExtensionViewText.askText("persona://ask?text=%20hi"))
+        assertEquals("a".repeat(ExtensionViewText.ASK_MOST), ExtensionViewText.askText("persona://ask?text=" + "a".repeat(ExtensionViewText.ASK_MOST)))
+        listOf(
+            "persona://ask?text=",
+            "persona://ask?text=%20",
+            "persona://ask/x?text=a",
+            "persona://asks?text=a",
+            "https://example.com/ask?text=a",
+            "persona://ask?text=" + "a".repeat(ExtensionViewText.ASK_MOST + 1),
+        ).forEach { assertNull(it, ExtensionViewText.askText(it)) }
+        assertNull(ExtensionViewText.askFrom("example-gateway", good))
+        assertNull(ExtensionViewText.askFrom("", good))
+        val api = FakeUi()
+        val ask = "persona://ask?text=" + java.net.URLEncoder.encode("<persona-context kind=\"context\" title=\"Source\" url=\"\">\nconnector: apps\nHelp me", "UTF-8")
+        api.answer = ExtensionUiResult(openUrl = ask)
+        val elsewhere = ExtensionViewModel(api, "example-gateway", "home")
+        elsewhere.load()
+        assertNull(elsewhere.press(ExtensionViewAction("setup")).openUrl)
+        val pages = ExtensionViewModel(api, SUBSCRIPTIONS_UI, "pages")
+        pages.load()
+        assertEquals(ask, pages.press(ExtensionViewAction("setup")).openUrl)
+        assertEquals(ExtensionViewText.askText(ask), ExtensionViewText.askFrom(SUBSCRIPTIONS_UI, ask))
+        assertNull(ExtensionViewText.askFrom("example-gateway", ask))
+    }
+
     @Test fun failuresSayWhyAndKeepTheView() = runBlocking {
         val api = FakeUi()
         val model = ExtensionViewModel(api, "example-gateway", "home")

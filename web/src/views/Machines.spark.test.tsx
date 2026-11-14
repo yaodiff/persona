@@ -52,6 +52,8 @@ const fixture = {
     { t: now, cpu: 2, mem: memoryTotal / 2, rx: 0, tx: 2048 },
   ],
 };
+// the metrics' cells: the grid's children (the grid sits in the container its columns are measured against)
+const cells = (host: HTMLElement) => host.querySelector("[data-testid=machine-metrics-summary]")!.children;
 function summary(metrics: import("../lib/types").MachineMetrics = fixture, machine: import("../lib/types").Machine = { id: "mac", name: "Mac", online: true }) {
   const host = document.createElement("div");
   host.innerHTML = renderToStaticMarkup(<MachineMetricsSummary machine={machine} metrics={metrics} />);
@@ -86,18 +88,18 @@ describe("machine metric summaries", () => {
 
   it("does not turn unknown memory capacity or network measurements into zero", () => {
     const host = summary({ ...fixture, latest: { ...fixture.latest, mem_total: undefined, net_rx: undefined, net_tx: undefined } });
-    const cells = host.firstElementChild!.children;
-    expect(cells[1].textContent).toContain("—");
-    expect(cells[1].textContent).not.toContain("0%");
-    expect(cells[1].querySelector("svg")).toBeNull();
-    expect(cells[2].textContent).toContain("↓ —");
-    expect(cells[2].textContent).toContain("↑ —");
+    const cell = cells(host);
+    expect(cell[1].textContent).toContain("—");
+    expect(cell[1].textContent).not.toContain("0%");
+    expect(cell[1].querySelector("svg")).toBeNull();
+    expect(cell[2].textContent).toContain("↓ —");
+    expect(cell[2].textContent).toContain("↑ —");
   });
 
   it("preserves 0% memory as a measured value", () => {
     const host = summary({ ...fixture, latest: { ...fixture.latest, mem_used: 0 } });
-    expect(host.firstElementChild!.children[1].textContent).toContain("0%");
-    expect(host.firstElementChild!.children[1].textContent).toContain("0 B / 8.00 GB");
+    expect(cells(host)[1].textContent).toContain("0%");
+    expect(cells(host)[1].textContent).toContain("0 B / 8.00 GB");
   });
 
   it.each(["machine", "metrics"])("hides cached live values when %s says offline", (source) => {
@@ -124,7 +126,7 @@ describe("machine metric summaries", () => {
 
   it("retains optional token values and their last-hour history", () => {
     const host = summary({ ...fixture, usage: { today: { in: 1000 }, per_minute: 25, recent: [0, 15, 25] } });
-    expect(host.firstElementChild!.children).toHaveLength(4);
+    expect(cells(host)).toHaveLength(4);
     expect(host.querySelectorAll("svg")).toHaveLength(4);
     expect(host.textContent).toContain("25/分");
     expect(host.textContent).toContain("今天 1K");

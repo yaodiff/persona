@@ -29,6 +29,9 @@ import Foundation
         return true
     }
 
+    /// Nobody holds it.
+    var isFree: Bool { owner == nil }
+
     @discardableResult func release(_ id: UUID) -> Bool {
         guard owner == id else { return false }
         owner = nil

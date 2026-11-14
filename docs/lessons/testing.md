@@ -198,6 +198,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - Runtime CLI element filtering uses `id`, not `identifier` (2026-11-06, #2024). The latter is an XCUITest property; passing it to the runtime omits ID filtering and is not card-readiness evidence. Validate real card IDs plus visibility/on-screen bounds; still use XCUITest for nested WebView body buttons. Never fall back to fixed-sleep screenshots when a button cannot be found.
 
 - Do not nest `#require` in Swift Testing macros (2026-11-05, #2024). `#require(JSONSerialization.jsonObject(with: try #require(body)) …)` fails real compilation with recursive expansion. Unwrap body in a separate `#require`, then parse/assert. `#expect(array.allSatisfy(keyPath))` can also be mistaken for a throwing closure during macro expansion; use an explicit nonthrowing closure. Preserve assertions rather than skip tests.
+
+- Never `return Issue.record(...)` in a void `@Test` (2026-11-14, #7677). `Issue.record` is `@discardableResult` and returns an `Issue`, so returning it from a void test fails compilation with "unexpected non-void return value in void function"; the error only surfaces when the test target compiles, so an app-target-only build stays green. Write two statements — `Issue.record("..."); return` — inside a guard's `else`, matching the repo's existing plain-statement usage.
+
+- The iOS simulator does not implement data protection (2026-11-14, #7677). `FileManager.attributesOfItem` always returns nil for `.protectionKey` there, so a test asserting `FileProtectionType` on a written file fails on every simulator run and can only pass on a physical device. Gate the protection-level assertions with `#if !targetEnvironment(simulator)` and keep the write/read round-trip assertion unconditional; do not "fix" the production `completeFileProtection…` write option to make the simulator assertion pass.
 - Another session can claim a build slot between inspection and launch (2026-11-05, #2024). `pgrep` observes, not locks. All `xcodebuild` must use `~/.local/bin/xcode-slot xcodebuild …` for the machine-wide slot, max two concurrent, queue when full. Never bypass the lock or increase `XCODE_SLOTS`. Outer waits have an overall timeout; distinguish not started, build failure, and success. A queue-exit code is neither test failure nor pass; serialize your own builds.
 
 - After resolving rebase conflicts, `git diff --check` covers only uncommitted edits; a clean worktree does not prove commits lack conflict markers (#2195). Before push/merge also run `git diff origin/main...HEAD --check` over the full PR diff.
@@ -823,6 +827,29 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 - **Prove the timing in the app, not the test**: a test cannot read the list during the glide without waiting for it.
   The app counts ↓ taps made while its scroll view `isDecelerating` (probe `glideTaps`), and the test asserts the count
   went up; `-scrollTrace YES` shows the frames.
+
+## On an iPad, XCTest can wait a minute before every step once a keyboard animation loses a stop (2026-11-14, #6100)
+
+- **What it looks like**: from one step on, every tap, `typeText` and orientation change logs "App animations complete
+  notification not received, will attempt to continue" after 60 s, until the app is relaunched. If the app is still
+  running when the next test turns the device, that test waits once too. `TodoCalendarTests/testCalendarShowsOpensAndAdds`
+  hit it in about 1 run in 4 on iPad Pro 11-inch and 13-inch simulators in landscape (iOS 27.0, Xcode 27.1): while
+  XCTest typed into the New To-Do sheet, or as the sheet closed with the keyboard up. The same path walked through the
+  runtime CLI never did.
+- **Why**: XCTest's idle check counts UIKit's view-animation callbacks (`UIViewAnimationState`'s `animationDidStart:` and
+  `animationDidStop:finished:`). In every stuck run one of the keyboard's animations (`_animationFactory` is a
+  `_UIInputViewAnimationFactory`, 0.3833 s, about 200 layer animations: the keyboard and what moves with it) was released
+  with 1 to 3 of its layer animations never reporting a stop, though UIKit marked it finished. The app is idle: a live
+  dump showed no `UIViewAnimationState` left and nothing presented. XCTest's iPad typing makes the software keyboard
+  step aside and come back, one more keyboard animation.
+- **Finding it**: `heap -q --addresses=UIViewAnimationState <app pid>` while it waits (no animation state alive means
+  the count, not the app, is stuck). lldb breakpoints on `-[UIViewAnimationState animationDidStart:]`,
+  `animationDidStop:finished:` and `.cxx_destruct` that only read registers catch the state released with more starts
+  than stops; a breakpoint on every `-[CALayer addAnimation:forKey:]` slowed the app enough that it stopped happening.
+- **In a test**: there is no public switch for the wait. Put the keyboard steps last, wait for what they should do (the
+  sheet gone, the mock's record, the row on screen), and `app.terminate()` before turning the device back. After
+  `typeText` on an iPad (Pinyin keyboard), also wait for the field's `value` and the button's `isEnabled` before the
+  tap: the keyboard can hold the words a moment, and a tap on the still-disabled Add did nothing.
 
 ## Local port discovery probes fake model servers in tests (2026-11-04)
 

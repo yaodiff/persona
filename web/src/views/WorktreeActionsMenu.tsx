@@ -160,7 +160,7 @@ export function ActiveWorktreeActions({ request, registry, onOpenWorkspace, sess
   ];
   return <>
     {view === "menu" && <Menu anchor={request.at?.anchor || anchor} point={request.at?.point} onClose={close} align="right"
-      header={context.workspace?.title || target.label || t("worktree-actions.worktree")} items={items} />}
+      header={context.workspace?.title || target.label || t("worktree-actions.worktree")} headerAsWritten={Boolean(context.workspace?.title || target.label)} items={items} />}
     {view === "rename" && <RenameWorktreeDialog target={target} name={context.workspace?.title || target.label || ""} model={model} onClose={close} />}
     {(view === "delete" || view === "close") && <DeleteWorktreeDialog target={target} machineName={context.machine?.name} closeOnly={view === "close"} model={model} onClose={close} />}
   </>;

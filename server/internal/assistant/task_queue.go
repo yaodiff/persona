@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -22,7 +23,7 @@ const (
 	admissionQueueMaxAttempts = 10
 	// admissionQueueMaxWait bounds the total time a task may spend queued before its start fails for good.
 	admissionQueueMaxWait = 30 * time.Minute
-	// admissionQueueLookback bounds the plan scan on a database-backed hub: a queued task is at most maxWait old.
+	// admissionQueueLookback bounds the recent-update side of the database scan; a serialized queue survives downtime.
 	admissionQueueLookback = time.Hour
 )
 
@@ -184,8 +185,15 @@ func (s *Service) failQueuedStart(ctx context.Context, p *TaskPlan, i int, pt Pl
 	s.logf("task %s: admission queue: gave up after %d attempt(s)", pt.TodoID, q.Attempt)
 }
 
-// queueCandidatePlans returns recently made started plans, from the database or the in-memory store, without scanning
-// historical plans.
+// taskQueueStore lists recently updated or durably queued plans whose task blobs may hold admission queue records.
+type taskQueueStore interface {
+	TaskPlansQueued(ctx context.Context, since time.Time) ([]db.TaskPlanRow, error)
+}
+
+var _ taskQueueStore = (*db.DB)(nil)
+
+// queueCandidatePlans returns recently updated or durably queued started plans, from the database or the in-memory
+// store, without returning unrelated historical plans. Queue writes refresh updated_at; created_at may be older.
 func (s *Service) queueCandidatePlans(ctx context.Context) []*TaskPlan {
 	st := s.store()
 	if st == nil {
@@ -199,13 +207,11 @@ func (s *Service) queueCandidatePlans(ctx context.Context) []*TaskPlan {
 		s.tasks.mu.Unlock()
 		return out
 	}
-	// The Store interface itself lists plans per conversation; the since-listing lives on the database behind the same
-	// narrow interface ruleEvidence already uses (rule_suggest.go).
-	ev, ok := st.(ruleEvidenceStore)
+	ev, ok := st.(taskQueueStore)
 	if !ok {
 		return nil
 	}
-	rows, err := ev.TaskPlansMadeSince(ctx, time.Now().Add(-admissionQueueLookback))
+	rows, err := ev.TaskPlansQueued(ctx, time.Now().Add(-admissionQueueLookback))
 	if err != nil {
 		s.logf("admission queue: list plans: %v", err)
 		return nil

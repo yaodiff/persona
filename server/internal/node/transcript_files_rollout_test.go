@@ -82,7 +82,9 @@ func TestTranscriptPathFollowsContinuationForRolloutAgent(t *testing.T) {
 	n, home := testNode(t)
 	n.pathsAt = map[string]time.Time{}
 	const thread = "0e000000-0000-4000-8000-0000000000f1"
-	writeRollout(t, home, thread, "/work/app", time.Now(), time.Now())
+	// The base was last written before the continuation began. Not dated time.Now(): Linux stamps a write with its
+	// coarse clock, up to a tick behind time.Now(), so the continuation written next read as the older file (#7381).
+	writeRollout(t, home, thread, "/work/app", time.Now(), time.Now().Add(-time.Hour))
 	n.agents[thread] = host.Agent{Agent: "codex"}
 	base := rolloutPath(n.codexHome(), thread)
 	if got := n.transcriptPath(thread); got != base || base == "" {

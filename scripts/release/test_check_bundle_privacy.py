@@ -1,10 +1,12 @@
 from contextlib import redirect_stdout
+import datetime
 import gzip
 import hashlib
 import io
 import ipaddress
 from pathlib import Path
 import plistlib
+import shutil
 import struct
 import subprocess
 import sys
@@ -686,6 +688,84 @@ class MacBundleTests(unittest.TestCase):
         self.assertNotEqual(code, 0, output)
 
 
+# Every kind of value `plutil -convert xml1` prints, and the text it prints for them (macOS 27.2), read as text like the
+# scan used to: key order by UTF-16 code unit, reals as %.17g, a UID as CF$UID, data lines of 68 columns at one tab and
+# 12 columns at the 8-tab cap, CR LF read as LF.
+EVERY_VALUE = {
+    "text": "a & b < c > d\r\ne",
+    "\U0001f600": True,
+    "\uffef": False,
+    "numbers": [-1, 2 ** 64 - 1, 0.1, -0.0, float("inf"), 1e300],
+    "date": datetime.datetime(2026, 11, 14, 10, 19, 52, 500000),
+    "data": bytes(range(52)),
+    "deep": [[[[[[[[bytes(range(12))]]]]]]]],
+    "archive": plistlib.UID(7),
+    "empty": [[], {}],
+}
+EVERY_VALUE_XML = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    '<plist version="1.0">\n'
+    "<dict>\n"
+    "\t<key>archive</key>\n"
+    "\t<dict>\n"
+    "\t\t<key>CF$UID</key>\n"
+    "\t\t<integer>7</integer>\n"
+    "\t</dict>\n"
+    "\t<key>data</key>\n"
+    "\t<data>\n"
+    "\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEy\n"
+    "\tMw==\n"
+    "\t</data>\n"
+    "\t<key>date</key>\n"
+    "\t<date>2026-11-14T10:19:52Z</date>\n"
+    "\t<key>deep</key>\n"
+    "\t<array>\n"
+    "\t\t<array>\n"
+    "\t\t\t<array>\n"
+    "\t\t\t\t<array>\n"
+    "\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t\t\t\t<data>\n"
+    "\t\t\t\t\t\t\t\tAAECAwQFBgcI\n"
+    "\t\t\t\t\t\t\t\tCQoL\n"
+    "\t\t\t\t\t\t\t\t\t</data>\n"
+    "\t\t\t\t\t\t\t\t</array>\n"
+    "\t\t\t\t\t\t\t</array>\n"
+    "\t\t\t\t\t\t</array>\n"
+    "\t\t\t\t\t</array>\n"
+    "\t\t\t\t</array>\n"
+    "\t\t\t</array>\n"
+    "\t\t</array>\n"
+    "\t</array>\n"
+    "\t<key>empty</key>\n"
+    "\t<array>\n"
+    "\t\t<array/>\n"
+    "\t\t<dict/>\n"
+    "\t</array>\n"
+    "\t<key>numbers</key>\n"
+    "\t<array>\n"
+    "\t\t<integer>-1</integer>\n"
+    "\t\t<integer>18446744073709551615</integer>\n"
+    "\t\t<real>0.10000000000000001</real>\n"
+    "\t\t<real>0.0</real>\n"
+    "\t\t<real>+infinity</real>\n"
+    "\t\t<real>1.0000000000000001e+300</real>\n"
+    "\t</array>\n"
+    "\t<key>text</key>\n"
+    "\t<string>a &amp; b &lt; c &gt; d\n"
+    "e</string>\n"
+    "\t<key>\U0001f600</key>\n"
+    "\t<true/>\n"
+    "\t<key>\uffef</key>\n"
+    "\t<false/>\n"
+    "</dict>\n"
+    "</plist>\n"
+)
+
+
 class BinaryPlistTests(unittest.TestCase):
     address = str(ipaddress.ip_address(0x0A01010B))
 
@@ -846,6 +926,61 @@ class BinaryPlistTests(unittest.TestCase):
             path.write_bytes(self.plist([self.string("safe")]))
             snapshot = self.plist([self.string(self.address, True)])
             self.assertTrue(any("private IP" in cbp.text_kinds(text, ()) for text in cbp.texts(str(path), snapshot)))
+
+    def odd_plists(self):
+        """Plists the scan reads differently: unvalidated object tables, values without printable bytes, empty XML."""
+        unreachable = b"\x7f"  # an unsupported object no reference reaches: the object table doesn't validate
+        return {
+            "integer": self.plist([b"\xd1\x00\x01\x00\x02", self.string("port"), b"\x11\x20\xfb", unreachable]),
+            "UTF-16": self.plist([b"\xd1\x00\x01\x00\x02", self.string("name"), self.string("\u5f20\u4e09", True),
+                                  unreachable]),
+            "float32": self.plist([b"\xa1\x00\x01", b"\x22" + struct.pack(">f", 0.1)]),
+            "16-byte integer": self.plist([b"\xa1\x00\x01", b"\x14" + bytes(15) + b"\x05"]),
+            "shared object": self.plist([b"\xa2\x00\x01\x00\x01", self.string("twice")]),
+            "cycle": self.plist([b"\xa1\x00\x01", b"\xa1\x00\x00"]),
+            "integer key": self.plist([b"\xd1\x00\x01\x00\x02", b"\x10\x05", self.string("value")]),
+            "NUL": self.plist([self.string("a\0b")]),
+            "set": self.plist([b"\xc1\x00\x01", self.string("member")]),
+            "not a plist": b"bplist00" + bytes(40),
+        }
+
+    def test_the_xml_view_is_plutils_text_without_plutil(self):
+        """#7571: plutil is macOS only; the XML view is the text the scan read from `plutil -convert xml1` before."""
+        for sort_keys in (True, False):
+            with self.subTest(sort_keys=sort_keys):
+                data = plistlib.dumps(EVERY_VALUE, fmt=plistlib.FMT_BINARY, sort_keys=sort_keys)
+                self.assertEqual(cbp.plist_xml(data), EVERY_VALUE_XML)
+        plists = self.odd_plists()
+        self.assertEqual(cbp.plist_xml(plists["integer"]).count("<integer>8443</integer>"), 1)
+        self.assertEqual(cbp.plist_xml(plists["float32"]).count("<real>0.10000000149011612</real>"), 1)
+        self.assertEqual(cbp.plist_xml(plists["shared object"]).count("<string>twice</string>"), 2)
+        for name in ("cycle", "integer key", "NUL", "set", "not a plist"):
+            with self.subTest(name=name):
+                self.assertEqual(cbp.plist_xml(plists[name]), "")
+
+    @unittest.skipUnless(shutil.which("plutil"), "plutil is macOS only")
+    def test_the_xml_view_matches_plutil(self):
+        samples = dict(self.odd_plists(), every=plistlib.dumps(EVERY_VALUE, fmt=plistlib.FMT_BINARY, sort_keys=False))
+        with tempfile.TemporaryDirectory(prefix="bundle-privacy-plutil-") as directory:
+            for name, data in samples.items():
+                with self.subTest(name=name):
+                    path = Path(directory) / "Info.plist"
+                    path.write_bytes(data)
+                    printed = subprocess.run(["plutil", "-convert", "xml1", "-o", "-", str(path)],
+                                             capture_output=True, text=True).stdout
+                    self.assertEqual(cbp.plist_xml(data), printed)
+
+    def test_values_only_the_xml_view_decodes_still_fail(self):
+        # An integer has no printable bytes, and a UTF-16 value outside ASCII reads only decoded: with an object table
+        # that doesn't validate, the XML view is the one text that holds them.
+        plists = self.odd_plists()
+        for word, name in (("8443", "integer"), ("\u5f20\u4e09", "UTF-16")):
+            with self.subTest(name=name):
+                self.assertEqual(cbp.plist_references(plists[name]), ([], []))
+                code, output = self.scan(plists[name], (word,))
+                self.assertNotEqual(code, 0)
+                self.assertIn("private value (%d chars)" % len(word), output)
+                self.assertNotIn(word, output)
 
 
 class MachOSignatureTests(unittest.TestCase):

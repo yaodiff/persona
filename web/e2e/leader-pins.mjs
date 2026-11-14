@@ -3,8 +3,8 @@
 // under each one's name from GET /api/v1/assistant/leaders with what waits on you (等你 N; what runs under it is the row's
 // arc, never 在做 N, #6626), then 最近, the newest
 // 5 other chats (a fresh browser's default, #5146 / #6228) whoever opened them except the scheduled tasks' own chats, the hub's
-// own with their origin's mark (#5195); every other chat is under 全部对话; the 最近 heading folds its rows and keeps that
-// (#6228); New chat is the compose icon on the section's title; a lead's menu has 取消常驻 (no 置顶 anywhere) which asks a second time
+// own with their origin's mark (#5195); every other chat is under 全部对话; the 最近 heading folds its rows away (#7440) and
+// keeps that (#6228); New chat is the compose icon on the section's title; a lead's menu has 取消常驻 (no 置顶 anywhere) which asks a second time
 // (确认取消常驻, saying the chat returns to 最近 and its open tasks go back to the main chat), then ends it on the hub and takes it
 // out of 常驻; 全部对话's menu has 设为常驻, which asks once (确认设为常驻) and brings it back.
 //
@@ -135,17 +135,9 @@ try {
       await fold.click();
       await page.waitForFunction(() => localStorage.getItem("fold:recent-chats") === "1", null, { timeout: 3000 });
       if ((await fold.getAttribute("aria-expanded")) !== "false") fail(`${where}: 最近 did not fold`);
-      // the rows stay mounted while the fold clips them to zero height (and makes them inert)
-      const clipOf = (id) => page.locator(`aside a[href^="/persona/${id}"]`).first().evaluate((a) => {
-        const grid = a.closest(".grid");
-        return { h: grid.getBoundingClientRect().height, inert: grid.hasAttribute("inert") };
-      });
-      await page.waitForFunction((id) => {
-        const a = document.querySelector(`aside a[href^="/persona/${id}"]`);
-        return a && a.closest(".grid").getBoundingClientRect().height === 0;
-      }, recent[0], { timeout: 3000 });
-      const foldedClip = await clipOf(recent[0]);
-      if (foldedClip.h !== 0 || !foldedClip.inert) fail(`${where}: folding 最近 did not clip its rows (${JSON.stringify(foldedClip)})`);
+      // once the fold has closed its rows are gone: a folded sidebar group holds no rows (#7440)
+      const gone = await page.waitForFunction((id) => !document.querySelector(`aside a[href^="/persona/${id}"]`), recent[0], { timeout: 3000 }).then(() => true, () => false);
+      if (!gone) fail(`${where}: folding 最近 left its rows in the page`);
       await fold.click();
       if ((await fold.getAttribute("aria-expanded")) !== "true") fail(`${where}: 最近 did not open again`);
       await page.waitForFunction((id) => {

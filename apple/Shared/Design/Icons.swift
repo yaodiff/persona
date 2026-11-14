@@ -198,6 +198,8 @@ extension Theme {
         static let undo = "arrow.uturn.backward"
         static let redo = "arrow.uturn.forward"
         static let interrupt = "stop.fill"
+        /// The dictation bar's stop: the words go into the draft, nothing is sent (`DictationBar`).
+        static let stopDictating = interrupt
         static let stopLoop = "stop.circle"
         static let run = "play.fill"
         /// Resume a stopped Agent in a terminal on its computer (#5521): the web's Resume shows the same play mark.
@@ -740,6 +742,8 @@ extension Theme {
         static let glossary = "character.book.closed"
         /// Hub transcription on Wi-Fi only (#3862 phase 5): Wi-Fi.
         static let wifiOnly = pluginWifi
+        /// Mobile data (#6396): the live screen's picture on cellular or a personal hotspot.
+        static let mobileData = "cellularbars"
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
         /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).

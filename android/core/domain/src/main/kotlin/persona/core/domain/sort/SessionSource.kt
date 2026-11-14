@@ -6,16 +6,16 @@ import persona.core.contracts.Session
 
 /*
  * Where a session comes from and what the phone may do with it (docs/protocol/protocol.md "Codex sources and capabilities", the same rules
- * as iOS `Session`). Older sources carry no source_kind and can do everything; a session with a source only gets
+ * as iOS `Session`). Older sources carry no source_kind and can do everything unless explicitly marked stopped; a session with a source only gets
  * what its capabilities explicitly allow, so a missing field is a refusal. The hub and the node refuse the same
  * operations: these only keep the phone from offering what would fail.
  */
 
 val Session.hasSource: Boolean get() = !sourceKind.isNullOrEmpty()
 val Session.canRead: Boolean get() = !hasSource || capabilities?.read == true
-val Session.canSend: Boolean get() = !hasSource || capabilities?.send == true
-val Session.canInterrupt: Boolean get() = !hasSource || capabilities?.interrupt == true
-val Session.canApprove: Boolean get() = !hasSource || capabilities?.approve == true
+val Session.canSend: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.send == true)
+val Session.canInterrupt: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.interrupt == true)
+val Session.canApprove: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.approve == true)
 /** A pane in a terminal engine: the terminal and its keys; closing and renaming where the node says nothing else ([canClose], [canRename]). */
 val Session.canTerminal: Boolean get() = !hasSource || capabilities?.terminal == true
 /**

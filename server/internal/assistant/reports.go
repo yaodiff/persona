@@ -427,6 +427,7 @@ func (s *Service) sendReports() {
 		return
 	}
 	var keep, asks []*reportItem // asks: decisions whose own card goes out without a line in the report (only_conclusions)
+	quiet := s.quietModeOn(ctx)
 	for _, it := range items {
 		t, ok := s.todoNow(it.todo)
 		if !ok {
@@ -440,6 +441,14 @@ func (s *Service) sendReports() {
 		}
 		if t.Quiet && f.Sync && it.state != reportClosed {
 			continue // told in the main conversation, whose turns the chat mirrors (sync); closing is not told there
+		}
+		if quiet {
+			// Low-distraction mode (push_quiet.go): no progress, stuck or conclusion lines in the chat; the briefing and the
+			// board have them. A decision still gets its own answerable card.
+			if it.state == reportNeeds && it.ix != nil {
+				asks = append(asks, it)
+			}
+			continue
 		}
 		if !f.ReportSteps {
 			if it.state == reportNeeds && it.ix != nil {

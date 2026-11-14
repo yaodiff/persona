@@ -11,7 +11,6 @@ import persona.core.contracts.api.hubCodedFailure
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
-import persona.core.designsystem.JDialog
 import persona.core.designsystem.LocalPersonaName
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.rememberCopy
@@ -90,10 +89,10 @@ private val SEND_NOW_REFUSALS = setOf("nothing_queued", "send_now_unsupported", 
  * Queue strip (iOS QueueStrip): what was typed while the agent works and not taken yet, right above the composer (on
  * Glass folded to its one line until tapped). Tapping a message offers "Take back to edit" (back into the box, after the
  * draft on a new line), "Copy" and "Delete"; for Claude in a terminal pane and Persona's conversations
- * ([reordersQueue]) also "Move up" / "Move down", and on Glass the line's "Send now", after a confirmation that says
- * what happens to what the agent (or Persona, by its name) is doing. In Persona's conversation the line names Persona,
- * and the messages relayed from other conversations or the system come last ([ownQueued]), each saying it arrives when
- * the chat is free and offering only "Copy". Editing and moving go
+ * ([reordersQueue]) also "Move up" / "Move down", and on Glass the line's "Send now" at one press (#7170, as the web
+ * since #7154). TalkBack reads what that confirmation used to say with the button. In Persona's conversation the line
+ * names Persona, and the messages relayed from other conversations or the system come last ([ownQueued]), each saying
+ * it arrives when the chat is free and offering only "Copy". Editing and moving go
  * through the node's session.queue.edit (POST …/queue {keep}): it pulls the whole queue out of the agent and puts the
  * kept ones back in the order given, and answers with what was queued, so a pulled-back message is read from that
  * answer. Send now is POST …/queue/send-now. Only for a session the phone may send to. [initiallyExpanded]: opened from
@@ -115,7 +114,6 @@ internal fun ChatQueueStrip(
     val resources = LocalResources.current
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
-    var confirmSend by remember { mutableStateOf(false) }
     // The row picked, with its words: if the queue moves under the open menu (the agent took one), the menu closes.
     var picked by remember { mutableStateOf<Pair<Int, String>?>(null) }
     LaunchedEffect(queued) { picked?.let { (index, text) -> if (queued.getOrNull(index) != text) picked = null } }
@@ -166,6 +164,9 @@ internal fun ChatQueueStrip(
         onNotice(resources.getString(R.string.chat_queue_sent_now))
     }
     val sendNowLabel = stringResource(R.string.chat_queue_send_now)
+    // What the confirmation used to say, now spoken with the button and not drawn (#7170).
+    val sendNowDescription = persona?.let { stringResource(R.string.chat_queue_send_now_message_persona, it) }
+        ?: stringResource(R.string.chat_queue_send_now_message)
     val photoMark = stringResource(R.string.chat_composer_photo_placeholder)
     val videoMark = stringResource(R.string.chat_composer_video_placeholder)
     // Glass says how many photos a Persona message carries under its words (iOS's "N images", from what this phone sent), not as a mark among them.
@@ -186,15 +187,12 @@ internal fun ChatQueueStrip(
         QueueStrip(queueTitle(queued.size, persona ?: session.agentLabel, resources),
             ownItems,
             onItem = { index -> queued.getOrNull(index)?.let { picked = index to it } }, busy = busy, enabled = enabled,
-            sendNow = sendNowLabel.takeIf { steers && own > 0 }, onSendNow = { confirmSend = true },
+            sendNow = sendNowLabel.takeIf { steers && own > 0 },
+            sendNowDescription = sendNowDescription.takeIf { steers && own > 0 }, onSendNow = { sendNow() },
             initiallyExpanded = initiallyExpanded, photos = photoCounts,
             relayedItems = relayedItems, relayedSummary = relayedSummary,
             onRelayedItem = { index -> queued.getOrNull(index)?.let { picked = index to it } })
     }
-    if (confirmSend) JDialog(onDismiss = { confirmSend = false }, title = stringResource(R.string.chat_queue_send_now_title),
-        text = persona?.let { stringResource(R.string.chat_queue_send_now_message_persona, it) }
-            ?: stringResource(R.string.chat_queue_send_now_message),
-        confirm = sendNowLabel to { confirmSend = false; sendNow() })
     val (index, text) = picked ?: return
     val labels = mapOf(
         QueueAction.Edit to stringResource(R.string.chat_queue_edit), QueueAction.MoveUp to stringResource(R.string.chat_queue_move_up),

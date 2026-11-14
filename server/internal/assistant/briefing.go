@@ -238,8 +238,9 @@ func (s *Service) briefProgress(ctx context.Context, skip map[string]bool) ([]br
 	})
 	var out []briefProgress
 	total := 0
+	lists := machineSessions{}
 	for _, t := range open {
-		if st := taskState(t, s.taskAgents(ctx, t)); st != "working" && st != "waiting" { // under way either way (#3274)
+		if st := taskState(t, s.taskAgentsIn(ctx, t, lists)); st != "working" && st != "waiting" { // under way either way (#3274)
 			continue
 		}
 		total++

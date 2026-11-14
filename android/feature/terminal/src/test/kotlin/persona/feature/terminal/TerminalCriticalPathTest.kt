@@ -112,6 +112,37 @@ class TerminalCriticalPathTest {
         override suspend fun resume(key: SessionKey) { calls++; gate?.await(); failure?.let { throw it } }
     }
 
+    @Test fun aStoppedAgentCanResumeWhileItsRetainedShellStreams() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            var stopped = true
+            var resumed = 0
+            val resumer = object : TerminalResumer {
+                override fun canResume(key: SessionKey) = true
+                override fun isStopped(key: SessionKey) = stopped
+                override suspend fun resume(key: SessionKey) { resumed++; stopped = false }
+            }
+            val transport = FakeTerminal()
+            val model = TerminalViewModel(SessionKey("machine", "session"), transport, dispatcher,
+                MemoryTerminalPreferences(drive = false), resumer)
+            val run = launch { model.run() }
+            runCurrent()
+            transport.events.emit(TerminalEvent("machine", "session", "shell", 1, true, 40, 20,
+                Base64.getEncoder().encodeToString("$ ".toByteArray())))
+            advanceTimeBy(250); runCurrent()
+            assertTrue(model.state.value.loaded)
+            assertNull(model.state.value.note)
+            assertTrue(model.state.value.resumable)
+            assertEquals(0, resumed)
+            model.resume(); runCurrent()
+            advanceTimeBy(250); runCurrent()
+            assertEquals(1, resumed)
+            assertFalse(model.state.value.resumable)
+            run.cancelAndJoin()
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun compositionCommitsOnceAndModifiersCoverTapLockAndHold() {
         val sent = mutableListOf<String>()
         val marked = mutableListOf<String>()

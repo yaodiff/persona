@@ -20,7 +20,7 @@ class ServerShardCommandTests(unittest.TestCase):
     node = ["example/server/internal/node", "example/server/internal/node/sub"]
 
     def test_the_node_shard_runs_internal_node_in_its_partitions_beside_its_other_packages(self):
-        runs = server.commands(self.node, "node", "/tmp/db.json", ["^(TestA|TestC)$", "^(TestB)$"])
+        runs = server.commands(self.node, "node", "/tmp/db.json", {"./internal/node": ["^(TestA|TestC)$", "^(TestB)$"]})
         self.assertEqual(len(runs), 3)
         for run in runs:
             self.assertEqual(run[run.index("go"):run.index("go") + 7],
@@ -30,13 +30,30 @@ class ServerShardCommandTests(unittest.TestCase):
         self.assertEqual([run[-3:] for run in runs[1:]], [["-run", "^(TestA|TestC)$", "./internal/node"],
                                                           ["-run", "^(TestB)$", "./internal/node"]])
 
-    def test_other_shards_and_a_node_shard_without_the_package_stay_one_process(self):
+    def test_the_managers_shard_runs_internal_assistant_in_its_partitions_beside_hub_and_voice(self):
+        managers = ["example/server/internal/assistant", "example/server/internal/assistant/fleet",
+                    "example/server/internal/hub", "example/server/internal/voice"]
+        self.assertEqual(server.select_packages(managers + self.node, "managers"), managers)
+        runs = server.commands(managers, "managers", "/tmp/db.json", {"./internal/assistant": ["^(TestX)$", "^(TestY)$"]})
+        self.assertEqual(len(runs), 3)
+        for run in runs:
+            self.assertEqual(run[run.index("go"):run.index("go") + 7],
+                             ["go", "test", "-json", "-p", "3", "-count=1", "-timeout=10m"])
+        self.assertEqual(runs[0][-3:], managers[1:])
+        self.assertEqual([run[-3:] for run in runs[1:]], [["-run", "^(TestX)$", "./internal/assistant"],
+                                                          ["-run", "^(TestY)$", "./internal/assistant"]])
+
+    def test_shards_without_a_partitioned_package_stay_one_process(self):
         self.assertEqual(len(server.commands(["example/server/internal/hub"], "managers", "/tmp/db.json")), 1)
         self.assertEqual(len(server.commands(["example/server/internal/node/sub"], "node", "/tmp/db.json")), 1)
+        self.assertEqual(len(server.commands(["example/server/internal/assistantwire"], "other", "/tmp/db.json")), 1)
 
-    def test_internal_node_never_runs_without_its_partitions(self):
-        with self.assertRaises(ValueError):
-            server.commands(self.node, "node", "/tmp/db.json", ())
+    def test_a_partitioned_package_never_runs_without_its_partitions(self):
+        for packages, shard in ((self.node, "node"), (["example/server/internal/assistant"], "managers")):
+            with self.assertRaises(ValueError):
+                server.commands(packages, shard, "/tmp/db.json", {})
+            with self.assertRaises(ValueError):
+                server.commands(packages, shard, "/tmp/db.json")
 
 
 def output(test, *lines, package="example/server/internal/node"):

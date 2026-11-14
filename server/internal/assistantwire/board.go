@@ -6,6 +6,8 @@ package assistantwire
 var boardRoutes = []string{
 	"GET /api/v1/workspace-board",
 	"POST /api/v1/workspace-board",
+	"GET /api/v1/workspace-board/activity",
+	"GET /api/v1/workspace-board/activity/{revision}",
 	"GET /api/v1/workspaces",
 	"GET /api/v1/workspace-board/settings",
 	"PUT /api/v1/workspace-board/settings",

@@ -3,6 +3,7 @@
 // showed only a caret (to-dos, Terminal, Agents), so a new search box takes this one.
 import type { KeyboardEvent } from "react";
 import { t } from "../i18n";
+import { composing } from "../lib/send-history";
 import { cx, IconButton } from "./atoms";
 import { Icon } from "./icons";
 
@@ -49,7 +50,15 @@ export function SearchField({
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
+        onKeyDown={(e) => {
+          onKeyDown?.(e);
+          // Esc empties a field with something in it, as search fields do, and is spent on that: a Dialog or a panel around
+          // it stays open. In an empty field it is theirs as before (the Dialog closes). Not the input method's Esc.
+          if (e.key !== "Escape" || !value || e.defaultPrevented || composing(e.nativeEvent)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onChange("");
+        }}
         autoFocus={autoFocus}
         placeholder={placeholder}
         aria-label={label ?? placeholder}

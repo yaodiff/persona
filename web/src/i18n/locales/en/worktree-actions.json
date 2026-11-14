@@ -7,7 +7,7 @@
   "new_child": "New child worktree…",
   "rename": "Rename worktree…",
   "copy_name": "Copy worktree name",
-  "copy_path": "Copy path",
+  "copy_path": "Copy folder path",
   "open_parent": "Open parent worktree",
   "delete": "Delete worktree…",
   "delete_title": "Delete worktree",

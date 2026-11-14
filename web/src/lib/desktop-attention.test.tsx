@@ -7,7 +7,7 @@ const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }));
 vi.mock("./router", () => ({ navigate: navigateMock }));
 
 import { useAttentionSignals } from "./attention-signals";
-import type { DesktopBridge, DesktopPresence } from "../../../spec/desktop-bridge.d.ts";
+import type { DesktopBridge, DesktopPresence } from "./desktop-types";
 import type { Interaction } from "./types";
 
 const { sendMock, connectMock, disconnectMock } = vi.hoisted(() => ({ sendMock: vi.fn(), connectMock: vi.fn(), disconnectMock: vi.fn() }));

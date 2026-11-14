@@ -1,6 +1,7 @@
 {
   "new_worktree": " · 新 worktree：{branch}",
   "archive_close_card": "归档 {agent} · {machine}，并在电脑上关闭它（对话记录保留，再发消息会接着这个会话）",
+  "autoname_card": "用模型重命名 {agent} · {machine}。当前标题（包括手动起的名字）会被替换，终端标签名不变。",
   "with_model": " · 模型：{model}",
   "with_tier": " · 预设 {tier}：{runs}"
 }

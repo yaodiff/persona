@@ -210,7 +210,7 @@ func (h *Hub) connectPort(w http.ResponseWriter, r *http.Request, m *Machine) {
 	if port == screenPort {
 		if pair := r.URL.Query().Get("pair"); pair != "" {
 			dial["pair"] = pair // ties this 5900 stream to a later screen/video/connect for the video channel (#3954)
-			link = askScreenLink(r, dial)
+			link = h.askScreenLink(r, dial)
 		}
 	}
 	var res struct {
@@ -242,8 +242,12 @@ const screenLinkSubprotocol = "persona-screen-link.1"
 
 // askScreenLink passes the phone's request for a screen session on to the node (link, and attach for a relay
 // rejoining a live one) when the phone offered the subprotocol; it reports whether it did. Any other client (the
-// web's noVNC, an app before it) asks for nothing and gets the raw stream, as before.
-func askScreenLink(r *http.Request, dial map[string]any) bool {
+// web's noVNC, an app before it) asks for nothing and gets the raw stream, as before, and so does every client while
+// hub.json's screen_link_off is set.
+func (h *Hub) askScreenLink(r *http.Request, dial map[string]any) bool {
+	if h.cfg.ScreenLinkOff {
+		return false
+	}
 	offered := false
 	for _, v := range r.Header.Values("Sec-WebSocket-Protocol") {
 		for _, p := range strings.Split(v, ",") {

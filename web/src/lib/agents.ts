@@ -263,14 +263,26 @@ let queued: Promise<void> | null = null;
 // Bumped by resetAgents(): a pull still on its way belongs to the previous login, so its answer (and the follow-up
 // pull queued behind it) is dropped.
 let listGen = 0;
-export function refreshAgentSessions(): Promise<void> {
+// The sources' status (GET /api/v1/agents: setup, error, accounts) is the hub asking every source's extension in turn.
+// It changes with the list, which the hub announces as an agents event with session_ids [] (a source removed, a source's
+// listing starting or stopping to fail, an extension's agentsrc.updated without keys, a hide), not with one session's
+// new message. So an event naming sessions re-reads only the list, and its pull no longer waits on every extension; the
+// status is read with it again once it is SOURCES_FRESH_MS old, for what an extension changes without saying so.
+export const SOURCES_FRESH_MS = 60_000;
+let sourcesReadAt = Number.NEGATIVE_INFINITY;
+// Whether one of the calls the queued follow-up stands for wanted the status too.
+let queuedSources = false;
+export function refreshAgentSessions(withSources = true): Promise<void> {
   if (inflight) {
     const gen = listGen;
+    queuedSources ||= withSources;
     if (!queued) {
       const next: Promise<void> = inflight.then(() => {
         // only clear our own slot: after resetAgents() a newer login may have queued its own follow-up
         if (queued === next) queued = null;
-        return gen === listGen ? refreshAgentSessions() : undefined;
+        const sources = queuedSources;
+        if (gen === listGen) queuedSources = false;
+        return gen === listGen ? refreshAgentSessions(sources) : undefined;
       });
       queued = next;
     }
@@ -278,7 +290,17 @@ export function refreshAgentSessions(): Promise<void> {
   }
   const gen = listGen;
   const read = bounded ? personalSessions.load().then(() => personalSessions.getSnapshot().rows) : fetchSessions();
-  const pull: Promise<void> = Promise.all([read, fetchSources().catch(() => null)])
+  const status =
+    withSources || Date.now() - sourcesReadAt >= SOURCES_FRESH_MS
+      ? fetchSources().then(
+          (sources) => {
+            if (gen === listGen) sourcesReadAt = Date.now();
+            return sources;
+          },
+          () => null,
+        )
+      : Promise.resolve(null);
+  const pull: Promise<void> = Promise.all([read, status])
     .then(([sessions, sources]) => {
       if (gen === listGen) emit({ sessions, loaded: true, error: "", ...(sources ? { sources, hints: setupHints(sources) } : {}) });
     })
@@ -295,7 +317,7 @@ export function refreshAgentSessions(): Promise<void> {
 // Called by the WebSocket handler: re-pull the list, and tell open sessions which ids moved (empty = all).
 export function agentsChanged(ids: string[]) {
   if (bounded) personalSessions.invalidate();
-  void refreshAgentSessions();
+  void refreshAgentSessions(ids.length === 0);
   changedListeners.forEach((l) => l(ids));
 }
 
@@ -318,6 +340,8 @@ export function resetAgents() {
   // the next login's first pull starts right away instead of waiting behind the old one
   inflight = null;
   queued = null;
+  queuedSources = false;
+  sourcesReadAt = Number.NEGATIVE_INFINITY;
   emit({ sessions: [], loaded: false, error: "", hints: [], sources: null });
 }
 

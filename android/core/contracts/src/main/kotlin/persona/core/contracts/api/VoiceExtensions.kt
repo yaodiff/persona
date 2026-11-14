@@ -38,6 +38,9 @@ data class HubExtension(
     @SerialName("upgrade_note") val upgradeNote: ExtensionUpgradeNote? = null,
     /** An extension with a program on computers: how that program is on each machine it is switched on for. */
     val nodes: List<ExtensionNodeState>? = null,
+    /** How that program is across all its machines, aggregated by the hub; the status follows it while the hub's own
+     *  process is idle, so a node-only extension does not say "stopped" while it runs on every machine. */
+    @SerialName("node_status") val nodeStatus: NodeStatusSummary? = null,
     /** Its sign-in (manifest `auth`, #4507), as the hub last saw it; null when it does not sign in, or an older hub. */
     val auth: ExtensionAuth? = null,
     /** The manager whose extension it is, in a hub's merged list (docs/protocol/protocol.md「Per-manager routing」); null: the default. */
@@ -94,6 +97,17 @@ data class ExtensionNodeState(
     /** `running | starting | stopped | error | missing | lease_expired | offline | outdated`. */
     val state: String = "",
     val error: String? = null,
+)
+
+/** The hub's aggregate of an extension's node program across its machines (Go `ExtensionNodeStatusView`). */
+@Serializable
+data class NodeStatusSummary(
+    val total: Int = 0,
+    val running: Int = 0,
+    val starting: Int = 0,
+    val stopped: Int = 0,
+    val offline: Int = 0,
+    val abnormal: Int = 0,
 )
 
 /** A voice (timbre) a voice extension offers for one model (`GET /api/v1/extensions/{id}/voices?model=`). */

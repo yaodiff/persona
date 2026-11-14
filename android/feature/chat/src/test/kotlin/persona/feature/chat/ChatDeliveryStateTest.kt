@@ -24,6 +24,18 @@ import org.junit.Test
 class ChatDeliveryStateTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private val res get() = context.resources
+    @Test fun chatsThatCannotSendOfferCleanupButNeverRetryOrEdit() {
+        for (state in DeliveryState.entries) {
+            for (action in listOf(DeliveryAction.Edit, DeliveryAction.Retry, DeliveryAction.RetryNow))
+                assertFalse("$state $action", state.allows(action, canSend = false))
+        }
+        assertTrue(DeliveryState.Refused.allows(DeliveryAction.Delete, canSend = false))
+        assertTrue(DeliveryState.Queued.allows(DeliveryAction.Cancel, canSend = false))
+        assertTrue(DeliveryState.NeedsConfirmation.allows(DeliveryAction.ConfirmDelivered, canSend = false))
+        assertEquals(listOf(DeliveryAction.Delete), outboxMarkActions(OutboxMark.Failed, canSend = false))
+        assertEquals(listOf(DeliveryAction.Cancel), outboxMarkActions(OutboxMark.Waiting, canSend = false))
+    }
+
     @Test fun deliveryActionsUseOriginalIdsAndPreserveDraftsAcrossRaces() = runTest {
         val sender = FakeSender()
         val actions = ChatDeliveryActions(sender)

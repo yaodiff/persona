@@ -37,7 +37,9 @@ func (n *Node) firstPrompt(ctx context.Context, pane, id, prompt string, a *host
 	prompt = inertControls(keepImagePaths(prompt)) // the same image-path/paste form as other Claude sends
 	since := time.Now()
 	if a != nil && a.AgentStatus == proto.StatusBlocked {
-		n.lostFirst.set(id, lostDialog, since) // a dialog of Claude's own has the keyboard: the message would answer it
+		// A dialog of Claude's own has the keyboard: the message would answer it. Held until the dialog is answered
+		// (from a screen card or at the computer), then typed (firstAfterDialog).
+		n.holdFirstForDialog(pane, id, prompt, since)
 		return nil
 	}
 	watch := n.watchPrompt(id, prompt)
@@ -48,7 +50,7 @@ func (n *Node) firstPrompt(ctx context.Context, pane, id, prompt string, a *host
 	draft := n.firstDraftFor(id, prompt)
 	err := n.hostPrompt(ctx, pane, prompt)
 	if errors.Is(err, host.ErrAgentBlocked) {
-		n.lostFirst.set(id, lostDialog, since)
+		n.holdFirstForDialog(pane, id, prompt, since)
 		return nil
 	}
 	if err != nil {
@@ -74,6 +76,130 @@ func (n *Node) firstPrompt(ctx context.Context, pane, id, prompt string, a *host
 		}
 	}()
 	return nil
+}
+
+// firstAfterDialogWait is how long a first message held back by a dialog waits for it to be answered;
+// firstAfterDialogPoll how often the pane is looked at meanwhile. Tests shorten both.
+var firstAfterDialogWait, firstAfterDialogPoll = 30 * time.Minute, time.Second
+
+// holdFirstForDialog lists the session as needing the user (lostDialogHeld) and, in the background, types its first
+// message once the dialog that kept it out is gone (firstAfterDialog).
+func (n *Node) holdFirstForDialog(pane, id, prompt string, since time.Time) {
+	n.lostFirst.set(id, lostDialogHeld, since)
+	wait, poll := firstAfterDialogWait, firstAfterDialogPoll // read here: a goroutine still waiting never races a test setting them
+	n.dialogWait.Add(1)
+	go func() {
+		defer n.dialogWait.Done()
+		n.firstAfterDialog(pane, id, prompt, since, wait, poll)
+	}()
+}
+
+// firstAfterDialog waits for the dialog that kept a new session's first message out to be answered, looking every
+// poll, then types the message and checks it went in as firstPrompt does. Before, the message was dropped and the user
+// had to send the task again. It gives up when anything else reaches the session first (a message from the phone or
+// the computer clears or replaces the lost mark: nothing is typed twice), when claude leaves the pane (the dialog's
+// "exit"), or after wait, leaving the session listed as needing the user as before.
+func (n *Node) firstAfterDialog(pane, id, prompt string, since time.Time, wait, poll time.Duration) {
+	ours := func() bool {
+		p, ok := n.lostFirst.get(id)
+		return ok && p.at.Equal(since) && !n.promptedSince(id, since)
+	}
+	deadline := time.Now().Add(wait)
+	for time.Now().Before(deadline) {
+		time.Sleep(poll)
+		if !ours() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ready, gone := n.boxFreeAfterDialog(ctx, pane)
+		cancel()
+		if gone {
+			log.Printf("start %s: claude left the pane while its first message waited for a dialog", id)
+			return
+		}
+		if !ready {
+			continue
+		}
+		unlock := n.typing.lock(id) // messages sent meanwhile wait, as for a first message being checked
+		if !ours() {
+			unlock()
+			return
+		}
+		// Look again under the lock: a send that held it may have left its text in the box (its delivery not
+		// confirmed, so ours still holds), and the held message must not be pasted onto that draft and sent with it.
+		ctx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		ready, gone = n.boxFreeAfterDialog(ctx, pane)
+		cancel()
+		if gone {
+			unlock()
+			log.Printf("start %s: claude left the pane while its first message waited for a dialog", id)
+			return
+		}
+		if !ready {
+			unlock()
+			continue
+		}
+		why := n.typeFirstAfterDialog(pane, id, prompt)
+		unlock()
+		if why == errDialogBack {
+			continue // another dialog came up first: wait for it too
+		}
+		if why != "" {
+			log.Printf("start %s: %s", id, why)
+			n.lostFirst.set(id, why, since)
+		} else {
+			log.Printf("start %s: first message delivered after its dialog was answered", id)
+			n.lostFirst.clear(id)
+		}
+		n.notifySessions()
+		return
+	}
+	log.Printf("start %s: the dialog holding the first message was not answered within %s", id, wait)
+}
+
+// errDialogBack: typeFirstAfterDialog found a dialog on screen again; nothing was typed.
+const errDialogBack = "dialog"
+
+// typeFirstAfterDialog types a held first message and waits for the transcript to have it: "" once it does, else why
+// not (errDialogBack when a dialog has the keyboard again). The caller holds the session's typing lock.
+func (n *Node) typeFirstAfterDialog(pane, id, prompt string) string {
+	ctx, cancel := context.WithTimeout(context.Background(),
+		firstPromptTries*firstPromptWait+(firstPromptTries-1)*firstPromptRecover+15*time.Second)
+	defer cancel()
+	typedAt := time.Now()
+	watch := n.watchPrompt(id, prompt) // as firstPrompt: the transcript may only appear with this message
+	if watch == nil {
+		watch = &promptWatch{want: echoWords(prompt)}
+	}
+	watch.after = typedAt
+	draft := n.firstDraftFor(id, prompt)
+	err := n.hostPrompt(ctx, pane, prompt)
+	if errors.Is(err, host.ErrAgentBlocked) {
+		return errDialogBack
+	}
+	if err != nil {
+		return fmt.Sprintf("首条消息没有送进去（%v），Agent 还没开始：在这里把任务重发一遍。", err)
+	}
+	n.typing.typed(pane, prompt)
+	return n.confirmFirst(ctx, pane, id, prompt, typedAt, watch, draft)
+}
+
+// boxFreeAfterDialog: Claude in pane is past its dialog, its input box on screen and empty (ready); gone when claude
+// is no longer in the pane.
+func (n *Node) boxFreeAfterDialog(ctx context.Context, pane string) (ready, gone bool) {
+	a, err := n.paneAgent(ctx, pane)
+	if errors.Is(err, host.ErrNoAgent) || err == nil && a.Agent != "" && a.Agent != "claude" {
+		return false, n.shellInFront(ctx, pane)
+	}
+	if err != nil || a.AgentStatus == proto.StatusBlocked || a.AgentStatus == proto.StatusWorking {
+		return false, false
+	}
+	s, err := n.readPaneANSI(ctx, pane, "visible", 60)
+	if err != nil {
+		return false, false
+	}
+	code, in := screen.CheckClaude(s)
+	return code == "" && in.Box, false
 }
 
 // confirmFirst waits for the transcript to get the first message typed at since, typing it again when it was
@@ -129,11 +255,14 @@ func (n *Node) confirmFirst(ctx context.Context, pane, id, prompt string, since 
 
 // User-facing reasons a first message did not go in.
 const (
-	lostDialog  = "终端上开着一个对话框，首条消息没有送进去，Agent 还没开始：先在终端里处理它，再在这里把任务重发一遍。"
-	lostDraft   = "首条消息停在输入框里没有发出去，Agent 还没开始：在电脑上按回车，或者清空输入框后在这里重发。"
-	lostOther   = "输入框里有别的内容，首条消息没有再送，Agent 还没开始：看看电脑上的终端，再在这里把任务重发一遍。"
-	lostNoBox   = "Claude 没有回到可以输入的状态，首条消息没有送进去，Agent 还没开始：看看电脑上的终端，再在这里把任务重发一遍。"
-	lostTimeout = "等首条消息送进去超时了，Agent 还没开始：看看电脑上的终端，或者在这里把任务重发一遍。"
+	lostDialog = "终端上开着一个对话框，首条消息没有送进去，Agent 还没开始：先在终端里处理它，再在这里把任务重发一遍。"
+	// lostDialogHeld: a dialog kept the first message out and the node types it once the dialog is answered
+	// (firstAfterDialog).
+	lostDialogHeld = "终端上开着一个对话框，首条消息还没有送进去，Agent 还没开始：在这里或终端上回答它，回答后首条消息会自动送进去。"
+	lostDraft      = "首条消息停在输入框里没有发出去，Agent 还没开始：在电脑上按回车，或者清空输入框后在这里重发。"
+	lostOther      = "输入框里有别的内容，首条消息没有再送，Agent 还没开始：看看电脑上的终端，再在这里把任务重发一遍。"
+	lostNoBox      = "Claude 没有回到可以输入的状态，首条消息没有送进去，Agent 还没开始：看看电脑上的终端，再在这里把任务重发一遍。"
+	lostTimeout    = "等首条消息送进去超时了，Agent 还没开始：看看电脑上的终端，或者在这里把任务重发一遍。"
 	// lostUltracode: the start's ultracode command may still sit in the input box (ultracode.go), or the box could
 	// not be read after it.
 	lostUltracode = "ultracode 的开关命令可能还停在电脑上的输入框里，首条消息没有送进去，Agent 还没开始：看看电脑上的终端，再在这里把任务重发一遍。"

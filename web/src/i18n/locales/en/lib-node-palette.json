@@ -1,4 +1,7 @@
 {
   "name_placeholder": "Name",
-  "close_confirm": "Programs running in the pane will also be closed."
+  "close_confirm": "Programs running in the pane will also be closed.",
+  "section_pane": "Pane · {name}",
+  "section_tab": "Tab · {name}",
+  "section_space": "Space · {name}"
 }

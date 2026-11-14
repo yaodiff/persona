@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { initI18n } from "../i18n";
 import { countdown, fullest, liveAccounts, pace, planNote, resetLabel, sampleAge, sourceNames, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime(); // local time, so same-day checks do not depend on the zone
@@ -47,15 +48,19 @@ describe("pace", () => {
 
 describe("countdown", () => {
   it("is minutes within the hour", () => {
-    expect(countdown(at(45 * 60_000), NOW)).toBe("45m");
-    expect(countdown(at(30_000), NOW)).toBe("1m");
+    expect(countdown(at(45 * 60_000), NOW)).toBe("45 分钟");
+    expect(countdown(at(30_000), NOW)).toBe("1 分钟");
   });
   it("is the clock time later the same day", () => {
     expect(countdown(at(3 * H + 5 * 60_000), NOW)).toBe("13:05");
   });
-  it("is days and hours beyond today", () => {
-    expect(countdown(at(2 * 24 * H + 3 * H), NOW)).toBe("2d 3h");
-    expect(countdown(at(15 * H), NOW)).toBe("15h"); // tomorrow, under a day
+  it("is days and hours beyond today, in the language's own units", () => {
+    expect(countdown(at(2 * 24 * H + 3 * H), NOW)).toBe("2 天 3 小时");
+    expect(countdown(at(15 * H), NOW)).toBe("15 小时"); // tomorrow, under a day
+  });
+  it("leaves out a zero hour", () => {
+    expect(countdown(at(5 * 24 * H), NOW)).toBe("5 天");
+    expect(countdown(at(5 * 24 * H + 30 * 60_000), NOW)).toBe("5 天"); // the hours are whole: 30 minutes over is still 5 days
   });
   it("handles a due or missing time", () => {
     expect(countdown(at(-1000), NOW)).toBe("即将重置");
@@ -66,11 +71,25 @@ describe("countdown", () => {
 
 describe("reset phrase", () => {
   it("is relative for minutes and days, a clock time for later today", () => {
-    expect(resetLabel(at(45 * 60_000), NOW)).toBe("45m 后重置");
+    expect(resetLabel(at(45 * 60_000), NOW)).toBe("45 分钟后重置");
     expect(resetLabel(at(3 * H + 5 * 60_000), NOW)).toBe("13:05 重置");
-    expect(resetLabel(at(2 * 24 * H + 3 * H), NOW)).toBe("2d 3h 后重置");
+    expect(resetLabel(at(2 * 24 * H + 3 * H), NOW)).toBe("2 天 3 小时后重置");
+    expect(resetLabel(at(5 * 24 * H), NOW)).toBe("5 天后重置");
     expect(resetLabel(at(-1), NOW)).toBe("即将重置");
     expect(resetLabel(undefined, NOW)).toBe("");
+  });
+  // each language its own units: no Latin unit letters in Chinese ("55m", "2d 3h") and no zero hour ("5d 0h")
+  it.each([
+    ["en", ["Resets in 45m", "Resets in 2d 3h", "Resets in 5d", "Resets in 15h"]],
+    ["ja", ["45分後にリセット", "2日3時間後にリセット", "5日後にリセット", "15時間後にリセット"]],
+    ["zh-Hans", ["45 分钟后重置", "2 天 3 小时后重置", "5 天后重置", "15 小时后重置"]],
+  ])("reads naturally in %s", async (lang, want) => {
+    await initI18n(lang);
+    try {
+      expect([45 * 60_000, 2 * 24 * H + 3 * H, 5 * 24 * H, 15 * H].map((ms) => resetLabel(at(ms), NOW))).toEqual(want);
+    } finally {
+      await initI18n("zh-Hans");
+    }
   });
 });
 

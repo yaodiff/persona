@@ -172,11 +172,12 @@
     <string name="chat_screen_empty_hint">Send a message to start this chat.</string>
     <string name="chat_screen_added_context">Added as context; it goes with your next message</string>
     <string name="chat_search_category_event">System events</string>
-    <string name="chat_search_category_text">Text</string>
+    <string name="chat_search_category_text">Messages</string>
+    <string name="chat_search_category_quoted">Quoted</string>
     <string name="chat_search_category_thinking">Thinking</string>
     <string name="chat_search_category_tool_input">Tool input</string>
     <string name="chat_search_category_tool_output">Tool output</string>
-    <string name="chat_search_category_tool_name">Tool name</string>
+    <string name="chat_search_category_tool_name">Tool names</string>
     <string name="chat_search_updating">The history is updating. Continue in a moment.</string>
     <string name="chat_search_older_failed">Couldn\'t load earlier history. Try again.</string>
     <string name="chat_search_older_none">No earlier history loaded this time. Try again later.</string>

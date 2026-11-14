@@ -86,6 +86,7 @@ import PersonaScreenKit
         #if os(iOS) && canImport(PersonaScreenKit)
         if ScreenRoutes.enabled {
             ScreenRoutes.listeners[pair] = { [weak self] change in self?.video.routeChanged(change) }
+            ScreenRoutes.meters[pair] = { [weak self] stats, why in self?.video.measured(stats, unavailable: why) }
         }
         #endif
         run(RFBClient(transport: Self.transport(api: api, ref: ref, pair: pair)) { [weak self] in await self?.credentials() })
@@ -266,10 +267,11 @@ import PersonaScreenKit
         move(to: p, buttons: 0)
     }
 
-    /// The wheel: up (positive) or down, a notch at a time.
+    /// The wheel: up (positive) or down, a notch at a time, every one of them (#7775: it once dropped any past 20;
+    /// VNCWheel sends a few each display frame).
     func scroll(notches: Int, at p: CGPoint) {
         let b: UInt8 = notches > 0 ? 8 : 16
-        for _ in 0..<min(abs(notches), 20) {
+        for _ in 0..<abs(notches) {
             move(to: p, buttons: buttons | b)
             move(to: p, buttons: buttons & ~b)
         }

@@ -7,6 +7,8 @@
 
 pub mod wire;
 
+pub use persona_core::transport;
+
 #[cfg(any(target_os = "android", feature = "test-support"))]
 mod diagnostics;
 #[cfg(any(target_os = "android", feature = "test-support"))]
@@ -23,12 +25,18 @@ use std::time::{Duration, Instant};
 
 use persona_core::Item;
 use persona_core::continuity::{Batch, Session, Step};
-use wire::{Action, ChatEvent, ChatPatch, ChatSnapshot, Effect, ListOp, WireBatch};
+use persona_core::transport::{DecodeError, Frame, LatestPage};
+use wire::{Action, ChatEvent, ChatPatch, ChatSnapshot, Effect, ListOp, Payload, WireBatch};
 
 /// The client's side: called on the core's worker thread, so implementations must be thread-safe and quick.
 pub trait Host: Send + Sync + 'static {
     /// Something changed at `version`: pull patches on the next frame.
-    fn changed(&self, version: u64);
+    fn changed(&self, _version: u64) {}
+    /// The chat whose patch changed. Existing hosts keep the version-only callback by default; adapters that need a
+    /// targeted wake override this without changing the bincode or continuity state machine.
+    fn changed_chat(&self, _chat: &str, version: u64) {
+        self.changed(version)
+    }
     /// An encoded `wire::Effect` for the client to run.
     fn run(&self, effect: &[u8]);
 }
@@ -321,6 +329,8 @@ struct Chat {
     session: Session,
     /// The list as the client last received it, to diff against.
     published: Vec<Arc<Item>>,
+    /// The highest acknowledged input sequence number, for `Action::Ack`.
+    acked: Option<u64>,
 }
 
 struct Worker {
@@ -410,6 +420,7 @@ impl Worker {
                     Chat {
                         session,
                         published: Vec::new(),
+                        acked: None,
                     },
                 );
                 self.publish(&chat);
@@ -422,7 +433,7 @@ impl Worker {
             }
             Action::Chat { chat, event } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("event for a chat that is not open: {chat}"));
+                    return self.reject("event for a chat that is not open".into());
                 };
                 let step = match apply(&mut state.session, event) {
                     Ok(step) => step,
@@ -430,12 +441,39 @@ impl Worker {
                 };
                 self.after_step(&chat, step);
             }
+            Action::WirePayload { chat, payload } => {
+                let Some(state) = self.chats.get_mut(&chat) else {
+                    return self.reject("payload for a chat that is not open".into());
+                };
+                let step = match payload_step(&mut state.session, &chat, payload) {
+                    Ok(Some(step)) => step,
+                    Ok(None) => return,
+                    Err(error) => return self.reject(error),
+                };
+                self.after_step(&chat, step);
+            }
             Action::ContinueFill { chat } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("fill for a chat that is not open: {chat}"));
+                    return self.reject("fill for a chat that is not open".into());
                 };
                 let step = state.session.continue_fill();
                 self.after_step(&chat, step);
+            }
+            Action::HubChanged { chat } => {
+                let Some(state) = self.chats.get_mut(&chat) else {
+                    return self.reject("hub change for a chat that is not open".into());
+                };
+                let step = state.session.hub_changed();
+                self.after_step(&chat, step);
+            }
+            Action::Ack { chat, seq } => {
+                let Some(state) = self.chats.get_mut(&chat) else {
+                    return self.reject("ack for a chat that is not open".into());
+                };
+                state.acked = Some(state.acked.map_or(seq, |previous| previous.max(seq)));
+                // An acknowledgement must reach the client even when nothing else changed, so publish with a
+                // forced wake rather than relying on the diff.
+                self.publish_ack(&chat);
             }
         }
         #[cfg(any(target_os = "android", feature = "test-support"))]
@@ -483,7 +521,9 @@ impl Worker {
             let state_changed = patch.covered != reducer.covered()
                 || patch.history.as_deref() != reducer.history()
                 || patch.has_more != reducer.has_more()
-                || patch.loaded_once != reducer.loaded_once();
+                || patch.loaded_once != reducer.loaded_once()
+                || patch.verified != state.session.verified()
+                || patch.acked != state.acked;
             if !items_changed && !state_changed && patch.version != 0 {
                 None
             } else {
@@ -492,6 +532,8 @@ impl Worker {
                 patch.history = reducer.history().map(str::to_owned);
                 patch.has_more = reducer.has_more();
                 patch.loaded_once = reducer.loaded_once();
+                patch.verified = state.session.verified();
+                patch.acked = state.acked;
                 patches.version += 1;
                 let version = patches.version;
                 patches.chats.get_mut(chat).expect("patch inserted above").version = version;
@@ -504,13 +546,93 @@ impl Worker {
             #[cfg(any(target_os = "android", feature = "test-support"))]
             if let Some(diagnostics) = self.shared.diagnostics.get() {
                 let started = Instant::now();
-                self.host.changed(version);
+                self.host.changed_chat(chat, version);
                 diagnostics::add(&diagnostics.counters.worker_host_changed, started);
                 return;
             }
-            self.host.changed(version);
+            self.host.changed_chat(chat, version);
         }
     }
+}
+
+impl Worker {
+    /// Publishes an acknowledgement, waking the client even though the chat's items did not change.
+    fn publish_ack(&mut self, chat: &str) {
+        let Some(state) = self.chats.get_mut(chat) else { return };
+        let mut patches = lock(&self.shared.patches);
+        let patch = patches.chats.entry(chat.to_owned()).or_default();
+        patch.covered = state.session.reducer().covered();
+        patch.history = state.session.reducer().history().map(str::to_owned);
+        patch.has_more = state.session.reducer().has_more();
+        patch.loaded_once = state.session.reducer().loaded_once();
+        patch.verified = state.session.verified();
+        patch.acked = state.acked;
+        patches.version += 1;
+        let version = patches.version;
+        patches.chats.get_mut(chat).expect("patch inserted above").version = version;
+        drop(patches);
+        self.host.changed(version);
+    }
+}
+
+/// A refused payload, reported without any of its content: a reason code, and key names or positions only
+/// (`transport::DecodeError`). The chat id is not content either, but it is not part of the decoder's errors.
+fn refused(error: DecodeError) -> String {
+    format!("refused payload: {error}")
+}
+
+/// Applies a transport payload to its chat. `Ok(None)` is a frame that is not an `items` frame or one iOS would
+/// drop, so it is not an error and changes nothing.
+fn payload_step(session: &mut Session, chat: &str, payload: Payload) -> Result<Option<Step>, String> {
+    let step = match payload {
+        Payload::Latest { body } => {
+            session.received(transport::decode_latest(body.as_bytes()).map_err(refused)?.into_batch())
+        }
+        Payload::Newer { body } => {
+            session.after(transport::decode_newer(body.as_bytes()).map_err(refused)?.into_batch())
+        }
+        Payload::Reloaded { body } => {
+            let LatestPage {
+                items,
+                has_more,
+                history,
+                to_seq,
+            } = transport::decode_latest(body.as_bytes()).map_err(refused)?;
+            session.reload(items, history, to_seq, has_more)
+        }
+        Payload::Older { body } => {
+            let page = transport::decode_latest(body.as_bytes()).map_err(refused)?;
+            session.older(page.items, page.has_more)
+        }
+        Payload::Range { fold_id, body } => {
+            let (items, more) = transport::decode_range(body.as_bytes()).map_err(refused)?.into_parts();
+            // A transport range page answers the opening it was requested for; with no fold id on the wire payload,
+            // it answers the single opening, matching the older callers.
+            session.range(fold_id.as_deref().unwrap_or(""), items, more)
+        }
+        Payload::Frame { body } => match transport::decode_frame(body.as_bytes()) {
+            Ok(Frame::Other) => return Ok(None),
+            // iOS's `ServerEvent.decode` drops a frame it cannot decode; that is not a failure of the chat.
+            Err(_) => return Ok(None),
+            Ok(Frame::Items(frame)) => {
+                // The frame names its own machine and session but no hub group, so the client's chat id may be
+                // `machine_id/session_id`, iOS's `group|machine_id/session_id` for a non-default group, or either
+                // bare id. Anything else routed the frame wrongly: report it rather than apply another chat's items.
+                let full = format!("{}/{}", frame.machine_id, frame.session_id);
+                let routed = chat == full
+                    || chat
+                        .strip_suffix(full.as_str())
+                        .is_some_and(|prefix| prefix.ends_with('|'))
+                    || frame.machine_id == chat
+                    || frame.session_id == chat;
+                if !routed {
+                    return Err("payload frame is for another chat".into());
+                }
+                session.received(frame.into_batch())
+            }
+        },
+    };
+    Ok(Some(step))
 }
 
 fn items_from(json: &str) -> Result<Vec<Item>, String> {
@@ -547,7 +669,15 @@ fn apply(session: &mut Session, event: ChatEvent) -> Result<Step, String> {
             has_more,
         } => session.reload(items_from(&items_json)?, history, to_seq, has_more),
         ChatEvent::Older { items_json, has_more } => session.older(items_from(&items_json)?, has_more),
-        ChatEvent::Range { items_json, more } => session.range(items_from(&items_json)?, more),
+        ChatEvent::Range {
+            fold_id,
+            items_json,
+            more,
+        } => {
+            // A page without a fold id answers the only opening, for older callers; with one, it answers that fold.
+            let id = fold_id.unwrap_or_default();
+            session.range(&id, items_from(&items_json)?, more)
+        }
         ChatEvent::Reconnected => session.reconnect(),
         ChatEvent::LoadOlder => session.load_older(),
         ChatEvent::OpenFold { fold_id } => session.open_fold(&fold_id),
@@ -559,8 +689,8 @@ fn apply(session: &mut Session, event: ChatEvent) -> Result<Step, String> {
             session.finish_older();
             Step::default()
         }
-        ChatEvent::RangeFailed => {
-            session.cancel_fold();
+        ChatEvent::RangeFailed { fold_id } => {
+            session.cancel_fold(fold_id.as_deref());
             Step::default()
         }
     })

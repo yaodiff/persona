@@ -251,6 +251,11 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		return "", interactionEnded(id, got.Status)
 	}
 	ix := got.Interaction
+	if ix.Kind == proto.IxScreen {
+		// A terminal dialog (Claude's Bypass Permissions confirmation, a safety check): its card offers the user its
+		// choices; it is never answered for them.
+		return "", fmt.Errorf("interaction %s is a screen (a terminal dialog), only the user can answer it in the app, where its card offers its choices", ix.ID)
+	}
 	if ix.Kind != proto.IxQuestion {
 		return "", fmt.Errorf("interaction %s is a %s (approval), only the user can answer it in the app", ix.ID, ix.Kind)
 	}

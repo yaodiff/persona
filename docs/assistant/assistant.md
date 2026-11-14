@@ -1355,6 +1355,10 @@ Requested: "Generate titles after starting new chats; standardize as ‘MMDD | T
   not node's first-message title (headless transcripts lack Claude ai-title), no `MMDD | Type | Topic` (discard pending-title on first-turn completion without model call),
   App rename returns 400 "Main chat has no title to rename" (`conversation_rename` already rejects). Top bars show the avatar: iOS / Mac / Android avatar name (default "Persona"), web "Persona".
 - App drawer rows draw `MMDD | Type | ` in secondary color, topic primary, truncating topic end in narrow space (`ConversationTitle`); other titles unchanged.
+- **A title that is a context tag** (web, 2026-11-14): a chat whose title is still its first message's `<persona-context …>` tag (one started from picked context
+  before it was named) shows what was typed after the tag, else the tag's `title` with its entities decoded, else **New chat**, in the sidebar, the
+  header, All chats, ⌘K and Rename (`conversationTitle`, `web/src/views/assistant/conversations.ts`); before, the raw tag showed. A leader's header says its
+  direction's name, as its sidebar row does ("Leader conversations" in `docs/assistant/unified-entry.md`), not its `MMDD | Type | ` title.
 
 ## Guest conversations (2026-11-06, #5195)
 
@@ -1568,12 +1572,26 @@ Bypass controls tool execution, not authorization for an action. The assistant m
 
 ### Main conversation execution on the web
 
-The welcome and main conversation headers read `GET /api/v1/assistant?view=main-runtime`, with the same manager
-selection and access as the ordinary assistant view. Its `machine_id` and the optional `main_machine_id` in the
-ordinary view are routing identities. The main route is kept separately from the default for new conversations.
+The welcome and main conversation headers, and Settings › Assistant's **Runs on** group, read
+`GET /api/v1/assistant?view=main-runtime`, with the same manager selection and access as the ordinary assistant view.
+Its `machine_id` and the optional `main_machine_id` in the ordinary view are routing identities. The main route is kept separately from the default for new conversations.
 Execution location is reported separately: a native process uses its execution environment's hostname; a deployment
 can explicitly name its container via `PERSONA_EXECUTION_CONTAINER` on that node. The hostname alone does not prove
 the presence of a container. An external runtime can opt in with `caps.execution` and answer
 `session.execution {session_id}` with `{state, location?: {host?, container?}}` for that exact session. The connecting
 node is never substituted for the runtime's execution location. Older nodes and runtimes can leave the location
 unknown. A stopped or offline main can show its last observed location; a missing observation remains unknown.
+
+The header line is for everyday people (super rules 0 and 4): the product's name for the conversation, **Main chat**
+(`主对话`, `メインチャット`), as the sidebar and Settings call it, and its state in plain words: "Main chat · Running",
+"Main chat · Offline", "Main chat · Stopped" or "Main chat · Starting…". Where and with what it runs (the execution
+host or container, a proxy, Claude Code / Claude Agent SDK / Codex) is engineering detail, so it is not on that screen:
+Settings › Assistant's **Runs on** group lists it under the computer, as **Main chat runs in** (the container or host;
+"Last ran on <location>" while stopped or offline; "Via <proxy>" for a proxy without a location, never named as the
+location) and **Main chat runs with** (the harness). What is not known is left out rather than reported as missing: no
+location, no row for it. When nothing about the main chat's execution is known (an older hub without the view, a failed
+read, a report for another conversation or routed through another node, the `unknown` state) the header line is not
+drawn at all and Settings adds no row. The line used to read "Main conversation · Runtime not reported" to everyday
+users, and named the host, container and harness when they were known (web usability audit 2026-11-14, item 80;
+`web/src/lib/main-runtime.ts`, `web/src/views/assistant/MainRuntimeBadge.tsx`,
+`web/src/views/settings/AssistantSettings.tsx`).

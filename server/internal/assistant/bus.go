@@ -131,7 +131,7 @@ func NewBusHub(o BusOptions) *BusHub {
 		HelloParams: func() any {
 			return map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
 				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
-					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityMachinesOwn,
+					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
@@ -395,7 +395,9 @@ func (b *BusHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, error
 	return out, busError(err)
 }
 
-func (b *BusHub) NotifyRequest(ctx context.Context, p NotifyRequest) error { return b.sendPush(ctx, p) }
+func (b *BusHub) NotifyRequest(ctx context.Context, p NotifyRequest) (NotifyResult, error) {
+	return b.sendPush(ctx, p)
+}
 
 func (b *BusHub) Tell(event string, params any) error { return b.client.Notify(event, params) }
 

@@ -246,7 +246,8 @@ export function setAttentionSoundEnabled(on: boolean): void {
   listeners.forEach((l) => l());
 }
 
-function subscribe(l: () => void) {
+/** Calls `l` when the setting changes here or in another tab; returns the unsubscribe. */
+export function onAttentionSoundChange(l: () => void): () => void {
   listeners.add(l);
   window.addEventListener("storage", l);
   return () => {
@@ -256,5 +257,5 @@ function subscribe(l: () => void) {
 }
 
 export function useAttentionSoundSetting(): boolean {
-  return useSyncExternalStore(subscribe, attentionSoundEnabled, () => false);
+  return useSyncExternalStore(onAttentionSoundChange, attentionSoundEnabled, () => false);
 }

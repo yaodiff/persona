@@ -1,6 +1,6 @@
 // ── the rail: the sidebar folded to its icons on a wide screen (#2524) ──
 // Imports only SidebarParts among the sidebar's files.
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { stateOf } from "../lib/format";
 import { href, type Route } from "../lib/router";
@@ -11,16 +11,22 @@ import { StatusMark } from "../ui/StatusMark";
 import { AppMark } from "../ui/AppMark";
 import { Icon } from "../ui/icons";
 import { formatChord, jumpHint, useBindings } from "../lib/shortcuts";
-import { toggleSidebarColumn } from "../lib/layout";
+import { takeFocusHandoff, toggleSidebarColumn } from "../lib/layout";
 import { CURRENT_ROW, DOT_CLASS, morePagesMenu, type NavPage, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 
 /** The button that folds the sidebar to the rail and opens it again (⌘⌥B by default; the hint follows a rebinding). */
 export function CollapseButton({ collapsed, chord }: { collapsed: boolean; chord?: string }) {
   const label = collapsed ? t("sidebar.expand") : t("sidebar.collapse");
+  // pressed with the focus on it, this one is drawn in place of the other (the rail ⇄ the sidebar) and takes the focus
+  const self = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (takeFocusHandoff()) self.current?.focus({ preventScroll: true });
+  }, []);
   return (
     <button
+      ref={self}
       type="button"
-      onClick={toggleSidebarColumn}
+      onClick={(e) => toggleSidebarColumn(document.activeElement === e.currentTarget)}
       aria-label={label}
       aria-expanded={!collapsed}
       title={chord ? `${label} (${formatChord(chord)})` : label}

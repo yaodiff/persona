@@ -25,6 +25,10 @@ jobs:
           key: core-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/app-core/Cargo.lock', 'native/app-core/rust-toolchain.toml') }}-${{ hashFiles('native/app-core/crates/**') }}
           restore-keys: |
             core-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/app-core/Cargo.lock', 'native/app-core/rust-toolchain.toml') }}-
+      - uses: actions/setup-node@v4
+        with:
+          # The ArkTS codec tests load the generated TypeScript with module.registerHooks / stripTypeScriptTypes.
+          node-version: 24
       - name: Rust core checks
         run: scripts/ci/core.sh
       - name: Save Cargo caches

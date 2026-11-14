@@ -103,5 +103,6 @@
   "secret_handoff_lead_bare": "Agent 只在这一次运行中拿到：",
   "secret_handoff_note": "Persona 和助手都看不到这些值。",
   "secret_handoff_always_scope": "总是允许：{scope}。",
-  "secret_handoff_card_only": "请在聊天里的卡片上批准。"
+  "secret_handoff_card_only": "请在聊天里的卡片上批准。",
+  "show_card": "查看完整请求"
 }

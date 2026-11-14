@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import Persona
@@ -153,6 +154,32 @@ struct MeetingAudioRingTests {
         #expect(ring.lostGaps == [MeetingGap(from: 1, to: 2)])
     }
 
+    /// The iPhone's crash on the tap's thread (#7740): with the ring full, an `ack` inside the second it holds made what
+    /// falls out a reversed range, and `..<` trapped. What falls out acknowledged is no gap.
+    @Test func anAckInsideTheHeldAudioSurvivesTheRingFilling() {
+        var ring = MeetingAudioRing(seconds: 1)
+        ring.append(samples(16000), at: 0)
+        ring.ready(from: 0)
+        while ring.next() != nil {}
+        ring.ack(12000)
+        ring.append(samples(1600, from: 16000), at: 16000)
+        #expect(ring.start == 1600 && ring.end == 17600)
+        #expect(ring.lostGaps.isEmpty)
+        ring.append(samples(16000, from: 17600), at: 17600)
+        #expect(ring.lostGaps == [MeetingGap(from: 0.75, to: 1.1)], "only what fell out past the hub's ack")
+    }
+
+    /// The same trap through a reconnect: `ready.from` inside the audio held counts as acknowledged.
+    @Test func aReadyInsideTheHeldAudioSurvivesTheRingFilling() {
+        var ring = MeetingAudioRing(seconds: 1)
+        ring.append(samples(16000), at: 0)
+        ring.ready(from: 8000)
+        ring.append(samples(1600, from: 16000), at: 16000)
+        #expect(ring.start == 1600 && ring.end == 17600)
+        #expect(ring.lostGaps.isEmpty)
+        #expect(ring.next() == .audio(MeetingPCM.data(samples(1600, from: 8000)[...]), at: 8000))
+    }
+
     @Test func aSendThatFallsBehindSeeksToTheOldestHeld() {
         var ring = MeetingAudioRing(seconds: 1)
         ring.append(samples(1600), at: 0)
@@ -298,6 +325,32 @@ struct MeetingAudioRingTests {
         late.ready(from: 0, generation: late.currentGeneration)
         late.drain()
         #expect(decoded(other.audio.reduce(Data(), +)) == samples(1600))
+    }
+
+    /// The iPhone's crash (#7740): a hub-mode meeting past its first minute, the hub acknowledging every 5 seconds as it
+    /// does, on the tap's own path (converted buffers of 4096 frames at 48 kHz). It trapped at the minute.
+    @Test func aHubModeMeetingGoesOnPastTheRingsMinute() throws {
+        let uplink = MeetingAudioUplink(recording: UUID())
+        let socket = open(uplink)
+        uplink.ready(from: 0, generation: uplink.currentGeneration)
+        let format = try #require(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false))
+        let frames: AVAudioFrameCount = 1365
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        buffer.frameLength = frames
+        var fed: Int64 = 0, acked: Int64 = 0
+        while fed < 90 * 16000 {
+            uplink.feed(buffer, at: MeetingAudioClock.seconds(fed))
+            fed += Int64(frames)
+            if fed - acked >= 5 * 16000 {
+                uplink.drain()
+                acked = fed
+                uplink.ack(MeetingAudioClock.seconds(acked))
+            }
+        }
+        uplink.drain()
+        #expect(uplink.heldEnd == MeetingAudioClock.seconds(fed))
+        #expect(uplink.lost.isEmpty, "what fell out was acknowledged")
+        #expect(socket.audio.reduce(0) { $0 + $1.count } == Int(fed) * 2, "all of it went, once")
     }
 }
 

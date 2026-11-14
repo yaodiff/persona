@@ -5,9 +5,9 @@
 // lib/saved-prompt-rows.ts loads it the first time a composer has the focus, the settings page imports it.
 import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
-import { api, ApiError, errorText } from "./api";
+import { api, ApiError, credentialOwner, errorText, getToken, subscribeCredentialOwner } from "./api";
 import type { ComposerCommand } from "./extension-prompts";
-import { onManagerChoice, shownManager } from "./manager-choice";
+import { chosenManager, currentHeaders, defaultKnown, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
 import { setSavedPromptRows } from "./saved-prompt-rows";
 import { onHubEvent } from "./store";
 
@@ -39,6 +39,39 @@ let view: SavedPromptsView = { manager: "", prompts: [], status: "loading", erro
 const listeners = new Set<() => void>();
 let stop: (() => void)[] | null = null;
 let reads = 0;
+let managerGeneration = 0;
+let lastManager = shownManager();
+let lastDefaultKnown = defaultKnown();
+let viewOwner = "";
+// Switching away and back still retires the earlier assistant's work.
+onManagerChoice(() => {
+  const manager = shownManager();
+  const known = defaultKnown();
+  // Initial discovery identifies the existing implicit default; a later replacement retires it.
+  if (manager !== lastManager && (lastDefaultKnown || !known)) {
+    managerGeneration++;
+  }
+  lastManager = manager;
+  lastDefaultKnown = known;
+});
+onDefaultManager(() => { lastDefaultKnown = defaultKnown(); });
+
+function requestOwner() {
+  const credential = credentialOwner();
+  const manager = shownManager();
+  const unresolvedDefault = !defaultKnown() && chosenManager() === null;
+  const generation = managerGeneration;
+  const key = JSON.stringify([credential, manager, generation]);
+  const valid = () => credential === credentialOwner() && generation === managerGeneration;
+  const current = () => valid() && manager === shownManager();
+  // An unidentified default's response cannot be applied optimistically, but its completion can refresh
+  // the canonical list if no actual assistant or credential switch has intervened.
+  const recoverable = () => unresolvedDefault && valid() && chosenManager() === null;
+  return {
+    manager, key, current, recoverable, identified: !unresolvedDefault,
+    options: { token: getToken(), tokenOwner: credential, headers: currentHeaders(), isAuthContextCurrent: current },
+  };
+}
 
 function show(next: SavedPromptsView) {
   view = next;
@@ -52,14 +85,18 @@ const isPrompt = (p: unknown): p is SavedPrompt =>
 /** Reads the current assistant's list; the latest read wins. */
 export async function reloadSavedPrompts(): Promise<void> {
   const n = ++reads;
-  const manager = shownManager();
-  if (view.manager !== manager) show({ manager, prompts: [], status: "loading", error: "" });
+  const owner = requestOwner();
+  const { manager } = owner;
+  if (viewOwner !== owner.key) {
+    viewOwner = owner.key;
+    show({ manager, prompts: [], status: "loading", error: "" });
+  }
   try {
-    const r = await api<{ prompts?: unknown }>(PATH);
-    if (n !== reads) return;
+    const r = await api<{ prompts?: unknown }>(PATH, owner.options);
+    if (n !== reads || !owner.current()) return;
     show({ manager, prompts: Array.isArray(r.prompts) ? r.prompts.filter(isPrompt) : [], status: "ready", error: "" });
   } catch (e) {
-    if (n !== reads) return;
+    if (n !== reads || !owner.current()) return;
     if (e instanceof ApiError && e.status === 404) return show({ manager, prompts: [], status: "unsupported", error: "" });
     show({ ...view, manager, status: view.status === "ready" ? "ready" : "failed", error: errorText(e) });
   }
@@ -68,11 +105,14 @@ export async function reloadSavedPrompts(): Promise<void> {
 /** Starts following the list (once a page): read now, and again on each of the events above. */
 export function startSavedPrompts() {
   if (stop) return;
+  credentialOwner();
   const reload = () => void reloadSavedPrompts();
   stop = [
     onHubEvent("hello", reload),
     onHubEvent("assistant_saved_prompts", reload), // only the current assistant's (lib/store.ts PAGE_EVENTS)
     onManagerChoice(reload),
+    onDefaultManager((was) => { if (!was.settled && was.id === shownManager()) reload(); }),
+    subscribeCredentialOwner(reload),
   ];
   reload();
 }
@@ -137,24 +177,30 @@ export function suggestedSavedPromptName(text: string, prompts: readonly SavedPr
   for (let i = 2; ; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
 }
 
-function keep(change: (prompts: readonly SavedPrompt[]) => readonly SavedPrompt[]) {
-  if (view.status === "ready" && view.manager === shownManager()) show({ ...view, prompts: change(view.prompts), error: "" });
+function keep(owner: string, change: (prompts: readonly SavedPrompt[]) => readonly SavedPrompt[]) {
+  if (view.status === "ready" && viewOwner === owner) show({ ...view, prompts: change(view.prompts), error: "" });
 }
 
 /** Adds a prompt (`id` null) or changes one; the list shows it at once and is read again. */
 export async function saveSavedPrompt(id: string | null, input: { name: string; text: string }): Promise<SavedPrompt> {
+  const owner = requestOwner();
   const body = { name: savedPromptName(input.name), text: input.text.trim() };
-  const r = await api<{ prompt: SavedPrompt }>(id ? `${PATH}/${encodeURIComponent(id)}` : PATH, { method: id ? "PUT" : "POST", json: body });
-  keep((prompts) => (id ? prompts.map((p) => (p.id === id ? r.prompt : p)) : [...prompts, r.prompt]));
-  void reloadSavedPrompts();
+  const r = await api<{ prompt: SavedPrompt }>(id ? `${PATH}/${encodeURIComponent(id)}` : PATH, { ...owner.options, method: id ? "PUT" : "POST", json: body });
+  if (owner.current() && owner.identified) {
+    keep(owner.key, (prompts) => (id ? prompts.map((p) => (p.id === id ? r.prompt : p)) : [...prompts, r.prompt]));
+  }
+  if (owner.current() || owner.recoverable()) void reloadSavedPrompts();
   return r.prompt;
 }
 
 /** Deletes a prompt; one already gone is fine. */
 export async function deleteSavedPrompt(id: string): Promise<void> {
-  await api(`${PATH}/${encodeURIComponent(id)}`, { method: "DELETE" });
-  keep((prompts) => prompts.filter((p) => p.id !== id));
-  void reloadSavedPrompts();
+  const owner = requestOwner();
+  await api(`${PATH}/${encodeURIComponent(id)}`, { ...owner.options, method: "DELETE" });
+  if (owner.current() && owner.identified) {
+    keep(owner.key, (prompts) => prompts.filter((p) => p.id !== id));
+  }
+  if (owner.current() || owner.recoverable()) void reloadSavedPrompts();
 }
 
 /** Moves a prompt one place up (-1) or down (1) in the "/" list. The hub refuses an order made from a list that changed
@@ -165,11 +211,13 @@ export async function moveSavedPrompt(id: string, by: -1 | 1): Promise<void> {
   const j = i + by;
   if (i < 0 || j < 0 || j >= ids.length) return;
   [ids[i], ids[j]] = [ids[j], ids[i]];
+  const owner = requestOwner();
   try {
-    const r = await api<{ prompts?: unknown }>(`${PATH}/order`, { method: "PUT", json: { ids } });
-    if (Array.isArray(r.prompts)) keep(() => (r.prompts as unknown[]).filter(isPrompt));
+    const r = await api<{ prompts?: unknown }>(`${PATH}/order`, { ...owner.options, method: "PUT", json: { ids } });
+    if (owner.current() && owner.identified && Array.isArray(r.prompts)) keep(owner.key, () => (r.prompts as unknown[]).filter(isPrompt));
+    else if (owner.recoverable()) void reloadSavedPrompts();
   } catch (e) {
-    void reloadSavedPrompts();
+    if (owner.current() || owner.recoverable()) void reloadSavedPrompts();
     throw e;
   }
 }
@@ -180,6 +228,8 @@ export function resetSavedPrompts() {
   stop?.forEach((off) => off());
   stop = null;
   reads++;
+  managerGeneration++;
+  viewOwner = "";
   setSavedPromptRows([]);
   listeners.forEach((l) => l());
 }

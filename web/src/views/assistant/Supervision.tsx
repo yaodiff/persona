@@ -117,7 +117,7 @@ function ReportBody({ item, title, onOpenTask }: { item: FeedItem; title: string
 export function ReviewLine({ item, title, by, onOpenTask }: { item: FeedItem; title: string; by?: string; onOpenTask?: () => void }) {
   const body = (item.body ?? {}) as { verdict?: string; round?: number; note?: string };
   const [open, setOpen] = useState(false);
-  const { ref, cut } = useClamped<HTMLSpanElement>(open, "x");
+  const { ref, cut } = useClamped<HTMLSpanElement>(open, "x", body.note);
   const expandable = Boolean(body.note) && (cut || open);
   const fit = Boolean(by);
   return (

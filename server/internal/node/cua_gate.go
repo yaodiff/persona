@@ -5,7 +5,8 @@ package node
 // manager, which refuses those (extmgr/computer_protected.go). An Agent Persona starts may have Cua Driver's own MCP
 // server, or run `cua-driver call` in Bash; neither goes through the hub. The sessions Persona starts load PreToolUse
 // hooks for both (doctor.go hookSettingsForOS, on a Mac): this decides them here, at once, with no card, by the same
-// rules (protectedapps). Reads pass. What a script does once it runs, the sessions the user starts themselves (their
+// rules (protectedapps.Look.Check): a call is refused when it could reach System Settings or a prompt, not because
+// one is open (#7560). Reads pass. What a script does once it runs, the sessions the user starts themselves (their
 // global hooks only report, globalhooks.go), and any other program driving the screen are not covered.
 
 import (
@@ -34,95 +35,35 @@ func cuaToolOf(name string) string {
 	return rest[i+2:]
 }
 
-// cuaArgs is what a Cua Driver tool's arguments say of its target.
-type cuaArgs struct {
-	App      string          `json:"app"`
-	Name     string          `json:"name"`
-	BundleID string          `json:"bundle_id"`
-	PID      int             `json:"pid"`
-	Script   string          `json:"script"`
-	Steps    json.RawMessage `json:"steps"`
+// cuaRead is the gate's own read of the Mac through Cua Driver (list_apps, list_windows, and get_window_state to trace
+// an element token, protectedapps.Look), a variable so tests can say what is on the screen.
+var cuaRead = func(ctx context.Context, tool string, args map[string]any) (json.RawMessage, bool) {
+	params, _ := json.Marshal(map[string]any{"tool": tool, "args": args, "session": "persona-gate"})
+	res, err := computerCall(ctx, params)
+	if err != nil || res == nil || len(res.Output) == 0 {
+		return nil, false
+	}
+	return res.Output, true
 }
-
-// cuaLook is the node's own look at the Mac for the gate: Cua Driver's list_apps and list_windows (variables so
-// tests can say what is on the screen).
-var (
-	cuaLookApps = func(ctx context.Context) []protectedapps.App {
-		res, err := computerCall(ctx, json.RawMessage(`{"tool": "list_apps", "session": "persona-gate"}`))
-		if err != nil {
-			return nil
-		}
-		return protectedapps.Apps(res.Output)
-	}
-	cuaLookWindows = func(ctx context.Context) ([]protectedapps.Window, bool) {
-		res, err := computerCall(ctx, json.RawMessage(`{"tool": "list_windows", "session": "persona-gate"}`))
-		if err != nil {
-			return nil, false
-		}
-		return protectedapps.Windows(res.Output)
-	}
-)
 
 // cuaGateOS is the system the gate runs on (tests set it): the protected apps are macOS's, so elsewhere it lets
 // everything go.
 var cuaGateOS = runtime.GOOS
 
-// cuaVerdict is why a Cua Driver tool call is refused, "" to let it go. args nil: they could not be read (a
-// `cua-driver call` given its input some other way), so it is refused unless the tool only reads.
+// cuaVerdict is why a Cua Driver tool call is refused, "" to let it go (protectedapps.Look.Check, the same rules as
+// the assistant's computer_run). args nil: they could not be read (a `cua-driver call` given its input some other
+// way), so it is refused unless the tool only reads.
 func cuaVerdict(ctx context.Context, tool string, args json.RawMessage) string {
 	if cuaGateOS != "darwin" || !protectedapps.Acts(tool) {
 		return ""
 	}
-	const where = "this Mac"
-	var a cuaArgs
-	if args != nil && json.Unmarshal(args, &a) != nil {
-		args = nil
-	}
-	var named []string
-	switch tool {
-	case "run_script":
-		apps, all := protectedapps.ScriptApps(a.Script)
-		if args != nil && !all {
-			return protectedapps.UnreadableScript
-		}
-		named = apps
-	case "run_steps":
-		named, _ = protectedapps.StepsApps(a.App, a.Steps)
-	default:
-		for _, n := range []string{a.App, a.Name, a.BundleID} {
-			if strings.TrimSpace(n) != "" {
-				named = append(named, n)
-			}
-		}
-	}
-	for _, n := range named {
-		if protectedapps.Is(n, n) {
-			return protectedapps.Refusal(where, "it would operate "+n)
-		}
-	}
-	apps := cuaLookApps(ctx)
-	for _, n := range named { // a name in the Mac's own language, through the list's bundle ids
-		for _, k := range apps {
-			if (strings.EqualFold(k.Name, n) || strings.EqualFold(k.BundleID, n)) && protectedapps.Is(k.BundleID, k.Name) {
-				return protectedapps.Refusal(where, "it would operate "+k.Name)
-			}
-		}
-	}
-	if app, ok := protectedapps.AppOf(apps, a.PID); ok && protectedapps.Is(app.BundleID, app.Name) {
-		return protectedapps.Refusal(where, "it would operate "+app.Name)
-	}
-	windows, ok := cuaLookWindows(ctx)
-	if !ok {
-		return protectedapps.Unchecked
-	}
-	if found, _ := protectedapps.OnScreen(windows, apps, func() []protectedapps.App { return cuaLookApps(ctx) }); len(found) > 0 {
-		return protectedapps.Refusal(where, strings.Join(found, ", ")+" is open on its screen")
-	}
-	if args == nil {
+	var object map[string]json.RawMessage
+	if args == nil || json.Unmarshal(args, &object) != nil {
 		return "Refused: Persona could not read this cua-driver call's arguments to check them. Give them as one JSON " +
 			"object after the tool's name, or use the Cua Driver MCP tools."
 	}
-	return ""
+	look := protectedapps.NewLook(func(tool string, in map[string]any) (json.RawMessage, bool) { return cuaRead(ctx, tool, in) }, nil)
+	return look.Check("this Mac", tool, args).Why
 }
 
 // cuaCall is one `cua-driver call <tool> [json]` of a Bash command; args nil when it has none there (read from stdin).

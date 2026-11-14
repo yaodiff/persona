@@ -71,7 +71,7 @@ describe("negotiated bounded runtime lists", () => {
     expect(getState().sessionSummaries).toHaveLength(50);
     expect(getState().sessionCounts?.total).toBe(8000);
     expect(getState().sessions).toEqual({});
-    expect(Socket.last.url).toContain("features=sessions_list,sessions_delta,session_live");
+    expect(Socket.last.url).toContain("features=sessions_list,sessions_list_changes,sessions_delta,session_live");
   });
 
   it("keeps chat details separate and consumes title-only invalidations via since", async () => {

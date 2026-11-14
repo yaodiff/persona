@@ -3,7 +3,7 @@ import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
-import { onHubEvent } from "../../lib/store";
+import { onShownHint } from "../../lib/shown-hints";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
 import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
@@ -11,7 +11,8 @@ import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
 import type { AgentState } from "../../lib/types";
 import type { FilterCounts } from "../../lib/agent-filter";
-import { Button, cx, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../../ui/atoms";
+import { cx, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../../ui/atoms";
+import { ListError } from "../../ui/ListError";
 import { Icon } from "../../ui/icons";
 import { SegmentedTrack } from "../../ui/Segmented";
 import { StatusMark } from "../../ui/StatusMark";
@@ -63,6 +64,9 @@ export interface PagedSessionListProps<T> {
    *  complete list does, with no value pill or search field of its own. A search lists its matches flat. `label` names
    *  the dimension. */
   grouping?: PagedGrouping;
+  /** The words a failed read of the list's rows or groups is said in, given its reason (the reason alone by default): the
+   *  sidebar's says it could not read the Agents list, as its complete list does. */
+  failureText?: (reason: string) => string;
 }
 
 export interface PagedGrouping {
@@ -96,6 +100,8 @@ const browseBy = (stored: string | null, personal: boolean): GroupDimension | ""
 /** A counts query in a stable key order, so the same scope reached through different filters compares equal. */
 const countsQuery = (filters: ListFilters) => filterQuery(filters);
 
+const sameText = (reason: string) => reason;
+
 export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   for (let p = el?.parentElement; p; p = p.parentElement) {
     if (/auto|scroll/.test(getComputedStyle(p).overflowY)) return p;
@@ -103,7 +109,7 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, catalog = false, placeOf, activeAt, needsYou, isOpen, parentOf, grouping }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, catalog = false, placeOf, activeAt, needsYou, isOpen, parentOf, grouping, failureText = sameText }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [typed, setTyped] = useState("");
   // the sidebar's groupings take ⌘K's words (#6589); every other list its own field's, once typing pauses
@@ -155,6 +161,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
   const [facets, setFacets] = useState<ListCounts | null>(null);
   const [facetError, setFacetError] = useState("");
+  // Retry on a failed scoped facets read: read it again now
+  const [facetAttempt, setFacetAttempt] = useState(0);
   const [scopeCounts, setScopeCounts] = useState<ListCounts | null>(null);
   const [scopeError, setScopeError] = useState("");
   const scopeQuery = useMemo(() => {
@@ -195,9 +203,9 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       }, (e) => { if (live && request === sequence) setFacetError(errorText(e)); });
     };
     read();
-    const off = onHubEvent(event, read);
+    const off = onShownHint(event, read);
     return () => { live = false; controller.abort(); off(); };
-  }, [countsPath, event, facetScoped, facetsFromList, facetQuery]);
+  }, [countsPath, event, facetScoped, facetsFromList, facetQuery, facetAttempt]);
   useEffect(() => {
     // Keep the last counts while a refresh or a new scope is loading, including a root rebaseline.
     if (scopeQuery !== "counts=1") return;
@@ -222,7 +230,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       }, (e) => { if (request === sequence) setScopeError(errorText(e)); });
     };
     read();
-    const off = onHubEvent(event, read);
+    const off = onShownHint(event, read);
     return () => { sequence++; abort.abort(); off(); };
   }, [scopeQuery, scopeFromFacets, countsPath, event]);
   useEffect(() => {
@@ -230,7 +238,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     if (filtered && sections) return;
     if (filtered) void list.setFilters(filters).catch(() => {});
     else if (!list.getSnapshot().loaded) void list.load().catch(() => {});
-    const off = filtered ? onHubEvent(event, () => list.invalidate()) : () => {};
+    const off = filtered ? onShownHint(event, () => list.invalidate()) : () => {};
     return () => { off(); if (filtered) list.reset(); };
   }, [list, filters, filtered, sections, event]);
 
@@ -238,7 +246,14 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   // group itself. Their counts follow the state tab, so a group's number is the number of rows it lists.
   const groupScope: ListFilters = useMemo(() => ({ ...facetFilters, ...chip }), [facetFilters, chip]);
   const scopeNeeds = scopeCounts?.state?.needs_you;
-  const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos });
+  // the facets' own read when the groups are drawn from them: its failure is theirs (audit item 4: the root list's read
+  // failing left the sections on "Loading…" for good)
+  const facetsFailure = facetScoped ? facetError : rootPage.error ?? "";
+  const retryFacets = useCallback(() => {
+    if (facetScoped) setFacetAttempt((n) => n + 1);
+    else void root.retry().catch(() => {});
+  }, [facetScoped, root]);
+  const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, facetsError: facetsFailure, retryFacets, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos });
   // "Recently updated" as the complete list orders its computers and spaces (lib/agent-sort.ts): by their newest session,
   // as far as the root's newest page tells (the hub reads no group's time); the ones it has none of keep their order
   // after them, and the sessions on no space stay last. Its to-dos keep the To-dos page's order there too.
@@ -441,14 +456,15 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
           {activeAt && !sections && <ActiveWindowMenu value={win} onChange={chooseWindow} />}
         </div>
       </div>
-      {(facetError || scopeError) && <p role="alert" className="px-2 text-xs text-red">{facetError || scopeError}</p>}
+      {/* not twice: the list's own error with its Retry says it (its groups', or its rows') */}
+      {(facetError || scopeError) && !(sections ? grouped.error : page.error) && <p role="alert" className="px-2 text-xs text-red">{facetError || scopeError}</p>}
       {sections && <>
         {allGroups && allGroups.length > 0 && <Suspense fallback={loadingLine}>
           <GroupedSessions groups={allGroups} dimension={dimension as GroupDimension} kind={personal ? "personal" : "runtime"} scope={groupScope} source={source}
             renderRow={renderRow} groupName={groupName} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} />
         </Suspense>}
         {!allGroups && !grouped.error && loadingLine}
-        {grouped.error && <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{grouped.error}</p><Button onClick={grouped.retry}>{t("sidebar.retry")}</Button></div>}
+        {grouped.error && <ListError text={failureText(grouped.error)} onRetry={grouped.retry} />}
         {allGroups && !allGroups.length && !grouped.error && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       </>}
       {!sections && <><div ref={container} data-virtual-sessions className="relative" style={{ height: totalSize }}>
@@ -463,7 +479,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
         })}
       </div>
       {page.loading && loadingLine}
-      {page.error && <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
+      {page.error && <ListError text={failureText(page.error)} onRetry={() => void list.retry().catch(() => {})} />}
       {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       {hasMore && !page.loading && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={() => void list.more().catch(() => {})} />}
       </>}

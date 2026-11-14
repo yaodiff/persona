@@ -229,6 +229,15 @@ class TagReleaseTests(unittest.TestCase):
             files[plat] = {"name": name, "size": len(data), "sha256": tag_release.hashlib.sha256(data).hexdigest(),
                            "binary_sha256": tag_release.hashlib.sha256(body).hexdigest()}
         (directory / "latest.json").write_text(json.dumps({"version": "0.2.1", "build": build, "files": files}))
+        name = "persona-link-windows-amd64.exe.gz"
+        body = ("\x00main.build\x00%d\x00the Windows connector" % binary_builds.get(name, build)).encode()
+        (directory / name).write_bytes(gzip.compress(body, mtime=0))
+        data = (directory / name).read_bytes()
+        index = json.loads((directory / "latest.json").read_text())
+        index["links"] = {"windows-amd64": {"name": name, "size": len(data),
+                          "sha256": tag_release.hashlib.sha256(data).hexdigest(),
+                          "binary_sha256": tag_release.hashlib.sha256(body).hexdigest()}}
+        (directory / "latest.json").write_text(json.dumps(index))
         return [{"path": str(path), "name": path.name} for path in sorted(directory.iterdir())]
 
     def test_release_manifest_must_be_its_binaries_build(self):
@@ -237,9 +246,13 @@ class TagReleaseTests(unittest.TestCase):
         here = "personad-%s.gz" % tag_release.host_platform()
         with self.assertRaisesRegex(tag_release.ConfigError, "says .*another build"):
             tag_release.check_release_manifest(self.release_receipt(binary_builds={here: 202611110745}))
-        other = next(item["name"] for item in self.release_receipt() if item["name"] not in (here, "latest.json"))
+        other = next(item["name"] for item in self.release_receipt() if item["name"] not in (here, "latest.json")
+                     and not item["name"].startswith("persona-link-"))
         with self.assertRaisesRegex(tag_release.ConfigError, "is not build 202611110749"):
             tag_release.check_release_manifest(self.release_receipt(binary_builds={other: 202611110745}))
+        with self.assertRaisesRegex(tag_release.ConfigError, "is not build 202611110749"):
+            tag_release.check_release_manifest(self.release_receipt(binary_builds={
+                "persona-link-windows-amd64.exe.gz": 202611110745}))
         assets = self.release_receipt()
         Path(next(item["path"] for item in assets if item["name"] == other)).write_bytes(b"replaced")
         with self.assertRaisesRegex(tag_release.ConfigError, "size or sha256"):

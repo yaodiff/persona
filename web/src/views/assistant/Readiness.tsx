@@ -189,9 +189,9 @@ export function ChatOnlyNote({ gate }: { gate: ReadinessGate }) {
 
 // ── a refused start or send ─────────────────────────────
 
-/** A start or a send that did not go: the hub's words, a button for its code, the original under "Error details" (4.6). */
-/** `onRetry`: a send that did not go and is back in the box (#4270): a "Send again" button that sends the box again. */
-export function FailureCard({ failure, onClose, onHelp, onConfirm, onRetry }: { failure: CodedFailure; onClose: () => void; onHelp: (topic: HelpTopic) => void; onConfirm?: () => void; onRetry?: () => void }) {
+/** A start or a send that did not go: the hub's words, a button for its code, the original under "Error details" (4.6).
+ *  A send's own Retry is its failed bubble's, in the chat above: the card has none, so there is one way to send again. */
+export function FailureCard({ failure, onClose, onHelp, onConfirm }: { failure: CodedFailure; onClose: () => void; onHelp: (topic: HelpTopic) => void; onConfirm?: () => void }) {
   const action = failure.action && knownAction(failure.action) ? failure.action : undefined;
   const raw = [failure.detail, failure.requestId && t("assistant-readiness.request_id", { id: failure.requestId })].filter(Boolean).join("\n");
   // the same error notice as a model error over the composer (#5313): the hub's sentence, its buttons, the original
@@ -204,18 +204,11 @@ export function FailureCard({ failure, onClose, onHelp, onConfirm, onRetry }: { 
       message={failure.error}
       onDismiss={onClose}
       actions={
-        <>
-          {onRetry && (
-            <Button tone={action ? "quiet" : "primary"} size="sm" className="touch-hit" onClick={onRetry}>
-              {t("assistant-readiness.resend")}
-            </Button>
-          )}
-          {action && (
-            <Button tone="primary" size="sm" className="touch-hit" onClick={() => runAction(action, { launcher: failure.launcher, onHelp, onConfirm })}>
-              {actionLabel(action)}
-            </Button>
-          )}
-        </>
+        action && (
+          <Button tone="primary" size="sm" className="touch-hit" onClick={() => runAction(action, { launcher: failure.launcher, onHelp, onConfirm })}>
+            {actionLabel(action)}
+          </Button>
+        )
       }
       details={
         raw ? (

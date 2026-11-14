@@ -111,19 +111,24 @@ func TestOnlyAPhoneOfferingTheScreenLinkGetsIt(t *testing.T) {
 		newNode   bool
 		wantLink  bool // the dial asked the node for a session
 		wantProto string
+		off       bool // hub.json's screen_link_off
 	}{
-		{"the web's noVNC", "port", []string{"binary"}, false, true, false, "binary"},
-		{"today's iPhone app", "port", nil, false, true, false, ""},
-		{"a rejoin without the offer", "port", []string{"binary"}, true, true, false, "binary"},
-		{"a new app, an older node", "port", []string{link, "binary"}, false, false, true, "binary"},
-		{"a new app, a new node", "port", []string{link, "binary"}, false, true, true, link},
-		{"a new app rejoining", "port", []string{link, "binary"}, true, true, true, link},
-		{"video: today's app", "video", nil, false, true, false, ""},
-		{"video: a new app, an older node", "video", []string{link, "binary"}, false, false, true, "binary"},
-		{"video: a new app, a new node", "video", []string{link, "binary"}, false, true, true, link},
+		{"the web's noVNC", "port", []string{"binary"}, false, true, false, "binary", false},
+		{"today's iPhone app", "port", nil, false, true, false, "", false},
+		{"a rejoin without the offer", "port", []string{"binary"}, true, true, false, "binary", false},
+		{"a new app, an older node", "port", []string{link, "binary"}, false, false, true, "binary", false},
+		{"a new app, a new node", "port", []string{link, "binary"}, false, true, true, link, false},
+		{"a new app rejoining", "port", []string{link, "binary"}, true, true, true, link, false},
+		{"video: today's app", "video", nil, false, true, false, "", false},
+		{"video: a new app, an older node", "video", []string{link, "binary"}, false, false, true, "binary", false},
+		{"video: a new app, a new node", "video", []string{link, "binary"}, false, true, true, link, false},
+		{"the hub's switch off: a new app, a new node", "port", []string{link, "binary"}, false, true, false, "binary", true},
+		{"the hub's switch off: video", "video", []string{link, "binary"}, false, true, false, "binary", true},
+		{"the hub's switch off: a rejoin", "port", []string{link, "binary"}, true, true, false, "binary", true},
 	} {
 		t.Run(tc.why, func(t *testing.T) {
 			h := newTestHub(t)
+			h.cfg.ScreenLinkOff = tc.off
 			h.store = &tokenStore{memStore: *newMemStore(), rows: map[string]db.DeviceToken{}, rev: map[string]bool{}}
 			tok := "jd_" + randomHex(24)
 			_ = h.store.CreateDeviceToken(context.Background(), db.DeviceToken{ID: "dev", Name: "iPhone", Kind: "phone", Role: roleFull}, hashToken(tok))

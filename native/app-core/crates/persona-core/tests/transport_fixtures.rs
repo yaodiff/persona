@@ -329,7 +329,7 @@ fn by_hand(session: &mut Session, event: &Map<String, Value>) -> Step {
             boolean(event, "has_more").expect("http_reload has_more"),
         ),
         Some("http_older") => session.older(items(event), boolean(event, "has_more").expect("http_older has_more")),
-        Some("http_range") => session.range(items(event), flag(event, "more")),
+        Some("http_range") => session.range("", items(event), flag(event, "more")),
         _ => local(session, event),
     }
 }
@@ -394,7 +394,7 @@ fn by_bytes(session: &mut Session, event: &Map<String, Value>, case: &str, index
         }
         "http_range" => {
             let (items, more) = transport::decode_range(&bytes).expect("range").into_parts();
-            session.range(items, more)
+            session.range("", items, more)
         }
         _ => return None,
     };

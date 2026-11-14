@@ -24,7 +24,15 @@ def terminate(process):
     """Stop the command and everything it started: a process group on POSIX, the process tree on Windows."""
     if WINDOWS:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, check=False)
-        process.wait()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            # A failed taskkill must not hold up the verdict: kill the child directly, then stop waiting.
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         return
     os.killpg(process.pid, signal.SIGTERM)
     try:

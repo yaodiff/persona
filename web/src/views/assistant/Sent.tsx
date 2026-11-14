@@ -1,15 +1,28 @@
 // What Persona sent to its tasks' agents (`routed` items it wrote, #1542, docs/assistant/unified-entry.md "Messages to
 // agents"): never the user's bubble. A message on its own is one folded line on the left (SentLine); a task's card lists
 // the hand-off sent together with a task's card is not drawn on its own (lib/feed takenIn).
+// Persona writes them in Markdown: the folded line is its first line without the marks, the opened text is drawn as
+// Markdown, never with its ** and ` showing, and line by line as it was written, as Persona's replies are (`lineBreaks`).
 import { useState } from "react";
-import { field, firstLine, type FeedItem } from "../../lib/feed";
+import { field, type FeedItem } from "../../lib/feed";
+import { plainMarkdown } from "../../lib/plain-markdown";
 import { Collapse, copyText, cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { Markdown } from "../../ui/Markdown";
 import { t } from "../../i18n";
 
 /** "Sent to “task”", or "Stopped “task” and sent" when Persona cut in first. */
 export function sentTitle(item: FeedItem, title: string): string {
   return item.body?.interrupted === true ? t("assistant-tasks.sent_interrupting", { title }) : t("assistant-tasks.sent_to", { title });
+}
+
+/** The first line with words in it, as plain text: what the folded line shows (no **, `, list or heading marks). */
+export function sentPreview(text: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const plain = plainMarkdown(line);
+    if (plain) return plain;
+  }
+  return "";
 }
 
 /** One of Persona's messages to a task's agent in the conversation: a capsule like the answered and review lines, with its
@@ -18,7 +31,7 @@ export function sentTitle(item: FeedItem, title: string): string {
 export function SentLine({ item, title, onOpenTask }: { item: FeedItem; title: string; onOpenTask?: () => void }) {
   const [open, setOpen] = useState(false);
   const text = field(item, "text") ?? "";
-  const first = firstLine(text);
+  const first = sentPreview(text);
   const label = sentTitle(item, title);
   return (
     <div data-testid="sent-line" className={cx("flex max-w-full flex-col self-start bg-field text-[12px] text-ink-2", open ? "w-full rounded-card" : "rounded-full")}>
@@ -43,11 +56,14 @@ export function SentLine({ item, title, onOpenTask }: { item: FeedItem; title: s
   );
 }
 
-/** The whole text Persona sent, newlines kept and selectable, with Copy under it. */
+/** The whole text Persona sent, drawn as Markdown and selectable, with Copy (its words as written) under it. A single line
+ *  break stays one, as in Persona's replies: its hand-offs and rework notes are written a line per point. */
 function SentText({ text, className }: { text: string; className?: string }) {
   return (
     <div data-testid="sent-detail" className={cx("flex flex-col gap-2", className)}>
-      <div className="whitespace-pre-wrap text-[13px] leading-[1.55] text-ink select-text [overflow-wrap:anywhere]">{text}</div>
+      <div className="min-w-0 text-ink select-text [overflow-wrap:anywhere]">
+        <Markdown text={text} compact lineBreaks />
+      </div>
       <button
         type="button"
         onClick={(e) => {

@@ -52,6 +52,10 @@ const HOLD_MS = 350;
 const MOVE_SLOP = 5;
 /** Within this many px of the axis's top or bottom edge, a drag scrolls it. */
 const EDGE = 32;
+/** Today's date in the week's head and the month: the accent fill of the design system's buttons (ui/atoms Button
+ *  `accent`), whose words keep 4.5:1 in both schemes (theme-contrast.test.ts, `--accent-ink` on `--surface`); white on
+ *  the lighter `--accent` was 2.9:1 in dark and 3.6:1 in light (audit item 79). */
+const TODAY = "bg-accent-ink font-semibold text-surface";
 
 /** Where a new to-do made on the calendar is due: at `at`, or all day on `day` without it. */
 export interface CalendarSlot {
@@ -219,7 +223,7 @@ function Axis({
                 className="flex items-center gap-1.5 border-l border-line px-2.5 py-2 text-left hover:bg-hover"
               >
                 <span className="text-[12px] text-ink-3">{names[i]}</span>
-                <span className={cx("inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[14px] tabular-nums", isToday ? "bg-accent font-semibold text-white" : "text-ink")}>
+                <span className={cx("inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[14px] tabular-nums", isToday ? TODAY : "text-ink")} data-today={isToday || undefined}>
                   {new Date(d).getDate()}
                 </span>
               </button>
@@ -387,8 +391,9 @@ function Month({
                 <span
                   className={cx(
                     "inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-full px-1 text-[12.5px] tabular-nums",
-                    isToday ? "bg-accent font-semibold text-white" : inMonth ? "text-ink" : "text-ink-3",
+                    isToday ? TODAY : inMonth ? "text-ink" : "text-ink-3",
                   )}
+                  data-today={isToday || undefined}
                 >
                   {date.getDate() === 1 && !compact ? formatMonthDay(d) : date.getDate()}
                 </span>

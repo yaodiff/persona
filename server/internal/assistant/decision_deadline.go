@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -364,9 +365,11 @@ func (s *Service) askTodoDue(ctx context.Context, id string, inline bool, now ti
 	l, loc := s.lang(ctx), s.location(ctx)
 	if !a.Reversible {
 		s.logf("ask_user to-do %s: deadline passed on a question that cannot be undone: reminded, not taken", id)
+		// The owner's own decision, past its deadline: P0 even in the hub's low-distraction mode.
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: s.settings(ctx).MachineID,
 			Title: i18n.T(l, "assistant-ask_todo.overdue_title"),
-			Body:  clip(oneLine(t.Title), 120) + "\n" + deadlineText(l, loc, a.Deadline, false, now)})
+			Body:  clip(oneLine(t.Title), 120) + "\n" + deadlineText(l, loc, a.Deadline, false, now),
+			Level: assistantwire.LevelP0, RelatedKey: "ask-overdue:" + id + "@" + a.Deadline.UTC().Format(time.RFC3339)})
 		return nil
 	}
 	reason := defaultReason(l, loc, a.Deadline)
@@ -408,7 +411,8 @@ func (s *Service) askTodoDue(ctx context.Context, id string, inline bool, now ti
 			s.logf("ask_user to-do %s: the default goes nowhere: %v; the owner is reminded", id, err)
 			s.askDefaultFailed(ctx, id)
 			s.push(ctx, Notification{Subtitle: "Persona", DeviceID: s.settings(ctx).MachineID,
-				Title: i18n.T(l, "assistant-ask_todo.overdue_title"), Body: clip(oneLine(t.Title), 120)})
+				Title: i18n.T(l, "assistant-ask_todo.overdue_title"), Body: clip(oneLine(t.Title), 120),
+				Level: assistantwire.LevelP0, RelatedKey: "ask-overdue:" + id + "@" + a.Deadline.UTC().Format(time.RFC3339)})
 			return
 		}
 		record(ctx)

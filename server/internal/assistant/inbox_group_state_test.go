@@ -507,7 +507,7 @@ func TestInboxGroupStateProcessesReportWithRules(t *testing.T) {
 	assertInboxGroupStateContent(t, before, it)
 }
 
-// With the twin off, a reply is only a chain record and a read only a flag: no note, wake or forced Looking state.
+// With the twin off, a reply records and waits without a wake, and a read only sets its flag; neither forces Looking.
 func TestInboxGroupStateTwinDisabledOnlyRecords(t *testing.T) {
 	for _, tc := range []struct {
 		name string

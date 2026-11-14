@@ -115,6 +115,7 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
   return (
     <>
       <Group
+        anchor="skills"
         title={<span className="flex items-center gap-2">{t("settings-skills.title")}{list && list.length > 0 && <span className="font-normal tabular-nums">{t("settings-skills.count", { count: list.length })}</span>}</span>}
         right={<div ref={uploadButton}><Button className="min-h-11" onClick={() => setView({ phase: "select" })}>{t("settings-skills.upload")}</Button></div>}
         footer={t("settings-skills.discovery")}

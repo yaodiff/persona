@@ -121,8 +121,16 @@ impl From<KeyFault> for ItemFault {
     }
 }
 
+/// A cached or fixture item the core could not read. The message is a code and a position only: serde's own error
+/// text quotes the offending value, which may be a message's words, and these errors reach a client's diagnostics.
 #[derive(Debug)]
 pub struct ItemError(String);
+
+impl ItemError {
+    fn at(context: &str, error: &serde_json::Error) -> Self {
+        ItemError(format!("{context}: line {} column {}", error.line(), error.column()))
+    }
+}
 
 impl std::fmt::Display for ItemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -135,7 +143,7 @@ impl std::error::Error for ItemError {}
 impl Item {
     /// Reads one item from its JSON object.
     pub fn from_raw(raw: Box<RawValue>) -> Result<Item, ItemError> {
-        let head: Head<'_> = serde_json::from_str(raw.get()).map_err(|e| ItemError(format!("item: {e}")))?;
+        let head: Head<'_> = serde_json::from_str(raw.get()).map_err(|e| ItemError::at("item", &e))?;
         let fold_supervision_user = head
             .fold
             .as_ref()
@@ -244,7 +252,7 @@ impl Item {
 
     /// Reads a JSON array of items.
     pub fn list_from_json(json: &str) -> Result<Vec<Item>, ItemError> {
-        let raws: Vec<Box<RawValue>> = serde_json::from_str(json).map_err(|e| ItemError(format!("items: {e}")))?;
+        let raws: Vec<Box<RawValue>> = serde_json::from_str(json).map_err(|e| ItemError::at("items", &e))?;
         raws.into_iter().map(Item::from_raw).collect()
     }
 
@@ -322,6 +330,24 @@ pub(crate) fn part(id: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_item_error_never_repeats_the_payload() {
+        let secret = "SYNTHETIC-MESSAGE-TEXT";
+        let bad = format!(r#"[{{"id":"a#0","seq":"{secret}"}}]"#);
+        let error = Item::list_from_json(&bad).expect_err("a wrong-typed seq");
+        assert!(
+            !error.to_string().contains(secret),
+            "the error must not quote the value: {error}"
+        );
+        assert!(error.to_string().starts_with("item: line "), "{error}");
+        // `from_raw` reads the head with serde; a missing required id is refused, and its error carries a position,
+        // not the item's words.
+        let raw = serde_json::value::RawValue::from_string(format!(r#"{{"seq":1,"text":"{secret}"}}"#)).unwrap();
+        let error = Item::from_raw(raw).expect_err("an item without an id");
+        assert!(!error.to_string().contains(secret), "{error}");
+        assert!(error.to_string().starts_with("item: line "), "{error}");
+    }
 
     #[test]
     fn parts_and_defaults() {
