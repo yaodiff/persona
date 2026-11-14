@@ -3,7 +3,7 @@
 // never from what an agent says about itself. The rules are the SOP's table, in its order; the first that holds wins.
 
 import { acceptanceStands, latestReview, reviewState } from "./supervision";
-import { openAsk, todoDueBy, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { openAsk, todoDueBy, todoStatus, type PRFacts, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 
 /** Where a to-do shows. */
 export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "pr" | "other" | "shelved" | "done";
@@ -26,19 +26,30 @@ function normalizedPR(url: string | undefined): string {
   return (url ?? "").trim().replace(/[#?].*$/, "").replace(/\/+$/, "").toLowerCase();
 }
 
-/** True only for a matching, fresh open non-draft PR with no active agent or owner decision. */
+/** Its PRs with fresh facts saying open and non-draft: the current one first, then earlier ones newest first (#7935). */
+export function openMergePRs(todo: Todo, now: number): PRFacts[] {
+  const fresh = (f: PRFacts) => {
+    const checked = ms(f.checked_at);
+    return !!checked && now - checked >= 0 && now - checked <= PR_STATUS_FRESH_MS && f.state === "open" && !f.draft;
+  };
+  const out: PRFacts[] = [];
+  const current = todo.pr_status;
+  if (current && todo.pr_url && normalizedPR(todo.pr_url) === normalizedPR(current.url) && fresh(current)) out.push(current);
+  for (const f of todo.other_prs ?? []) if (normalizedPR(f.url) !== normalizedPR(todo.pr_url) && fresh(f)) out.push(f);
+  return out;
+}
+
+/** True only for a fresh open non-draft PR of the to-do with no active agent or owner decision. */
 export function waitingForMerge(todo: Todo, lookup: SessionLookup | undefined, now: number): boolean {
-  const facts = todo.pr_status;
-  const checked = ms(facts?.checked_at);
-  if (!facts || !todo.pr_url || normalizedPR(todo.pr_url) !== normalizedPR(facts.url) || !checked || now - checked < 0 || now - checked > PR_STATUS_FRESH_MS || facts.state !== "open" || facts.draft || todo.done_at) return false;
+  if (todo.done_at || !openMergePRs(todo, now).length) return false;
   const status = todoStatus(todo, lookup);
   if (status === "failed" || status === "needs_you" || status === "interrupted" || status === "working" || status === "waiting") return false;
   if (reviewState(todo) === "needs_user" || openAsk(todo)?.outcome === "decide" || openAsk(todo)?.outcome === "cannot") return false;
   return true;
 }
 
-export function prBlockers(todo: Todo): string[] {
-  const facts = todo.pr_status;
+/** What holds one PR (its own facts), or the to-do's current PR when none is given. */
+export function prBlockers(todo: Todo, facts: PRFacts | undefined = todo.pr_status): string[] {
   if (!facts) return [];
   const blockers: string[] = [];
   if (facts.review === "required") blockers.push("review_required");

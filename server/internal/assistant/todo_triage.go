@@ -290,16 +290,31 @@ func triageNormalizePRURL(raw string) string {
 	return strings.ToLower(strings.TrimRight(raw, "/"))
 }
 
-// triageWaitingForMerge requires a fresh observation of the same open, non-draft PR. PR facts are display signals on
-// the existing todo lifecycle: active Agents and genuine owner decisions retain priority, while stale or legacy
-// delivery/stage hints cannot claim that a PR is waiting for merge.
-func triageWaitingForMerge(t listedTodo, status string, now time.Time) bool {
-	facts := t.PRStatus
-	if t.DoneAt != nil || facts == nil || t.PRURL == "" || triageNormalizePRURL(t.PRURL) != triageNormalizePRURL(facts.URL) || facts.State != "open" || facts.Draft || facts.CheckedAt.IsZero() {
-		return false
+// triageOpenPRs are t's PRs with a fresh observation saying open and non-draft: its current PR first, then its earlier
+// ones newest first (#7935). Stale, absent or mismatched facts count for nothing.
+func triageOpenPRs(t Todo, now time.Time) []TodoPRStatus {
+	fresh := func(f TodoPRStatus) bool {
+		age := now.Sub(f.CheckedAt)
+		return f.State == "open" && !f.Draft && !f.CheckedAt.IsZero() && age >= 0 && age <= triagePRStatusFreshFor
 	}
-	age := now.Sub(facts.CheckedAt)
-	if age < 0 || age > triagePRStatusFreshFor {
+	var out []TodoPRStatus
+	if f := t.PRStatus; f != nil && t.PRURL != "" && triageNormalizePRURL(t.PRURL) == triageNormalizePRURL(f.URL) && fresh(*f) {
+		out = append(out, *f)
+	}
+	for _, f := range t.OtherPRs {
+		if triageNormalizePRURL(f.URL) != triageNormalizePRURL(t.PRURL) && fresh(f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// triageWaitingForMerge requires a fresh observation of an open, non-draft PR of the task, its current one or an
+// earlier one still open (#7935). PR facts are display signals on the existing todo lifecycle: active Agents and
+// genuine owner decisions retain priority, while stale or legacy delivery/stage hints cannot claim that a PR is
+// waiting for merge.
+func triageWaitingForMerge(t listedTodo, status string, now time.Time) bool {
+	if t.DoneAt != nil || len(triageOpenPRs(t.Todo, now)) == 0 {
 		return false
 	}
 	if status == "failed" || status == "needs_you" || status == "interrupted" || status == "working" || status == "waiting" {

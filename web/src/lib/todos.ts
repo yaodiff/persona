@@ -37,6 +37,9 @@ export interface TodoSpace {
   linked_at: string;
 }
 
+/** What the hub last read of a PR on GitHub (pr_status.go). */
+export interface PRFacts { url: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
+
 export interface Todo {
   id: string;
   title: string;
@@ -84,7 +87,9 @@ export interface Todo {
   /** The pull or merge request the work is in, when the hub knows one. */
   pr_url?: string;
   /** Fresh, observational pull request facts; these do not change the task lifecycle. */
-  pr_status?: { url: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string };
+  pr_status?: PRFacts;
+  /** Facts of its earlier PRs, newest first (#7935): work spanning several PRs waits for merge while any is open. */
+  other_prs?: PRFacts[];
   /** How far its finished work went out; short of live, where it is held and who can unhold it (docs/assistant/todos.md "Delivery"). */
   delivery?: TodoDelivery;
   /** The hub's latest automatic completion check of its work, while still current (#3180, docs/assistant/todos.md

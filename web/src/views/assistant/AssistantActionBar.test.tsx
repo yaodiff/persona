@@ -103,6 +103,19 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(getPanel()).toEqual({ kind: "task", todo: "tray-task" });
   });
 
+  it("keeps a task whose last PR merged in the waiting tray while an earlier PR of it is open, each PR with its own blockers", () => {
+    const merged = "https://github.com/example/demo/pull/43", open = "https://github.com/example/demo/pull/42";
+    const checked = new Date(now.getTime() - 60_000).toISOString();
+    act(() => putTodo({ ...todo, agents: [], pr_url: merged,
+      pr_status: { url: merged, state: "merged", draft: false, review: "approved", checks: "success", conflicts: false, checked_at: checked },
+      other_prs: [{ url: open, state: "open", draft: false, review: "required", checks: "success", conflicts: false, checked_at: checked }] }));
+    expect(entry("pr").textContent).toContain("1");
+    act(() => entry("pr").click());
+    const row = host.querySelector<HTMLElement>("[data-pr-waiting-row='tray-task']")!;
+    expect([...row.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([open]);
+    expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_review_required"));
+  });
+
   it("uses the Working mark and live subtitle for background work, with a clock only after all work ends", () => {
     act(() => entry("running").click());
     const row = host.querySelector("[data-task-slot]")!;

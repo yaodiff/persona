@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -137,6 +138,46 @@ func joinCheckState(a, b string) string {
 	return "none"
 }
 
+// prsPolled bounds how many of a task's earlier PRs the poll reads besides its current one, newest first.
+const prsPolled = 4
+
+// polledPRs are the PRs of t the poll reads: its current PR, then its earlier ones newest first, skipping an earlier
+// one already known merged or closed (#7935).
+func polledPRs(t Todo) []string {
+	out := []string{t.PRURL}
+	known := map[string]TodoPRStatus{}
+	for _, f := range t.OtherPRs {
+		known[f.URL] = f
+	}
+	for i := len(t.PRs) - 1; i >= 0 && len(out) <= prsPolled; i-- {
+		u := t.PRs[i]
+		if u == t.PRURL || !ciPRURL.MatchString(u) {
+			continue
+		}
+		if f, ok := known[u]; ok && (f.State == "merged" || f.State == "closed") {
+			continue
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
+// prFacts are t's last observed facts for PR url: its current PR's, or an earlier one's.
+func prFacts(t Todo, url string) *TodoPRStatus {
+	if url == t.PRURL {
+		if t.PRStatus != nil && t.PRStatus.URL == url {
+			return t.PRStatus
+		}
+		return nil
+	}
+	for i := range t.OtherPRs {
+		if t.OtherPRs[i].URL == url {
+			return &t.OtherPRs[i]
+		}
+	}
+	return nil
+}
+
 // The existing minute deploy pass owns polling. Reads never block a task list or
 // snapshot, and failures leave the last observation to expire rather than invent success.
 func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
@@ -156,54 +197,73 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 	}
 	s.todos.mu.RUnlock()
 	for _, t := range tasks {
-		m := ciPRURL.FindStringSubmatch(t.PRURL)
-		if t.DoneAt != nil || t.Cancelled() || m == nil {
+		if t.DoneAt != nil || t.Cancelled() {
 			continue
 		}
-		if old := t.PRStatus; old != nil && old.URL == t.PRURL && now.Sub(old.CheckedAt) < deployRecheck {
-			continue
-		}
-		if ctx.Err() != nil {
-			return
-		}
-		p := &s.deploy
-		p.mu.Lock()
-		last := p.seen[t.ID]
-		if last.statusPR == t.PRURL && now.Sub(last.statusAt) < deployRecheck {
+		for _, url := range polledPRs(t) {
+			m := ciPRURL.FindStringSubmatch(url)
+			if m == nil {
+				continue
+			}
+			if old := prFacts(t, url); old != nil && now.Sub(old.CheckedAt) < deployRecheck {
+				continue
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			key := t.ID
+			if url != t.PRURL {
+				key = t.ID + "|" + url
+			}
+			p := &s.deploy
+			p.mu.Lock()
+			last := p.seen[key]
+			if last.statusPR == url && now.Sub(last.statusAt) < deployRecheck {
+				p.mu.Unlock()
+				continue
+			}
+			if p.seen == nil || len(p.seen) > 2000 {
+				p.seen = map[string]prSeen{}
+			}
+			last.statusPR, last.statusAt = url, now
+			p.seen[key] = last // failures are attempts too, not fresh evidence
 			p.mu.Unlock()
-			continue
-		}
-		if p.seen == nil || len(p.seen) > 2000 {
-			p.seen = map[string]prSeen{}
-		}
-		last.statusPR, last.statusAt = t.PRURL, now
-		p.seen[t.ID] = last // failures are attempts too, not fresh evidence
-		p.mu.Unlock()
-		number, _ := strconv.Atoi(m[2])
-		status, err := f.PRStatus(ctx, m[1], number)
-		if err != nil {
-			s.logf("task %s: PR status: %v", t.ID, err)
-			continue
-		}
-		status.URL, status.CheckedAt = t.PRURL, now.UTC()
-		if err := s.applyPRStatus(ctx, t, status); err != nil {
-			s.logf("task %s: keep PR status: %v", t.ID, err)
+			number, _ := strconv.Atoi(m[2])
+			status, err := f.PRStatus(ctx, m[1], number)
+			if err != nil {
+				s.logf("task %s: PR status: %v", t.ID, err)
+				continue
+			}
+			status.URL, status.CheckedAt = url, now.UTC()
+			if err := s.applyPRStatus(ctx, t, status); err != nil {
+				s.logf("task %s: keep PR status: %v", t.ID, err)
+			}
 		}
 	}
 }
 
 func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus) error {
 	current, ok := s.todoNow(t.ID)
-	if !ok || current.DoneAt != nil || current.PRURL != status.URL {
+	if !ok || current.DoneAt != nil || current.PRURL != status.URL && !slices.Contains(current.PRs, status.URL) {
 		return nil
 	}
 	t = current
-	// Returning from a known open PR (or a legacy PR-stage hold) wakes the same
-	// supervisor. A merged PR alone is never acceptance, and unrelated later parks stay put.
-	wasOpen := t.PRStatus != nil && t.PRStatus.URL == status.URL && t.PRStatus.State == "open"
-	legacyHold := t.PRStatus == nil && (t.Delivery != nil && t.Delivery.State == deliveryPR || t.Stage == "review")
+	// Returning from a known open PR (or a legacy PR-stage hold) wakes the same supervisor once no other PR of the task
+	// is still open (#7935). A merged PR alone is never acceptance, and unrelated later parks stay put.
+	old := prFacts(t, status.URL)
+	wasOpen := old != nil && old.State == "open"
+	// A PR-stage hold first read terminal; "merge" too, which the task's own current PR merging records before an
+	// earlier PR of it is read.
+	legacyHold := old == nil && (t.Delivery != nil && t.Delivery.State == deliveryPR || t.Stage == "review" || t.Stage == "merge" && len(t.PRs) > 0)
 	terminal := status.State == "merged" || status.State == "closed"
-	if terminal && (wasOpen || legacyHold) && t.Supervision != nil {
+	// Another PR the poll follows counts as open until it is read otherwise: no wake while it may still hold the task.
+	othersOpen := false
+	for _, u := range polledPRs(t) {
+		if f := prFacts(t, u); u != status.URL && (f == nil || f.State == "open") {
+			othersOpen = true
+		}
+	}
+	if terminal && (wasOpen || legacyHold) && !othersOpen && t.Supervision != nil {
 		v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 			if v.State == reviewNeedsUser || v.State == reviewAccepted || v.State == reviewCancelled {
 				return false
@@ -233,12 +293,21 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		return fmt.Errorf("stages could not be read")
 	}
 	cur := b.stages[t.ID]
-	if cur.PR != status.URL {
+	switch {
+	case cur.PR == status.URL:
+		cur.PRStatus = &status
+	case slices.Contains(cur.PRs, status.URL):
+		facts := make(map[string]TodoPRStatus, len(cur.EarlierPRStatus)+1)
+		for u, f := range cur.EarlierPRStatus {
+			facts[u] = f
+		}
+		facts[status.URL] = status
+		cur.EarlierPRStatus = facts
+	default:
 		b.mu.Unlock()
 		b.stageWriting.Unlock()
 		return nil // a new Agent reply replaced the PR while the request was in flight
 	}
-	cur.PRStatus = &status
 	if store := s.store(); store != nil {
 		stages := make(map[string]todoStage, len(b.stages))
 		for id, stage := range b.stages {
@@ -254,13 +323,13 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	b.stages[t.ID] = cur
 	b.mu.Unlock()
 	s.todos.mu.Lock()
-	if todo := s.todos.todos[t.ID]; todo != nil && todo.PRURL == status.URL {
-		todo.PRStatus = &status
+	if todo := s.todos.todos[t.ID]; todo != nil && todo.PRURL == cur.PR {
+		todo.PRStatus, todo.OtherPRs = cur.PRStatus, cur.otherPRFacts()
 	}
 	s.todos.mu.Unlock()
 	b.stageWriting.Unlock()
 	s.todosChanged(ctx)
-	if status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
+	if status.URL == t.PRURL && status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
 		s.setTaskStage(ctx, t.ID, "merge", "")
 	}
 	return nil

@@ -52,7 +52,7 @@ The first rule that holds wins.
 | 6 | `accepted` | The latest review accepted it and no review came since, even when the hub reopened it (see "Accepted tasks") | Just finished for 24 hours after the review or until seen, then Done |
 | 7 | `deployed` | `delivery.state` is `live` | Just finished for 24 hours or until seen, then Done |
 | 8 | `finished_unseen` | An agent finished a turn nobody has seen, the review is pending, or its ask says done / please verify; not seen since it last moved | Just finished |
-| 9 | `pr_open` | Fresh `pr_status` matches `pr_url`, says open and non-draft; no active agent or owner decision. Stale, absent or mismatched facts do not imply waiting for merge; merged/closed facts suppress legacy `delivery.state=pr` | Waiting for merge |
+| 9 | `pr_open` | Fresh facts of one of its PRs (`pr_status` matching `pr_url`, or an earlier PR in `other_prs`, #7935) say open and non-draft; no active agent or owner decision. Stale, absent or mismatched facts do not imply waiting for merge; merged/closed facts suppress legacy `delivery.state=pr` | Waiting for merge |
 | 9a | `seen` | Rule 8's signals, seen by the owner since it last moved (see "Seen"); not an open concern | Done |
 | 10 | `stale` | Shelvable (see "Shelving") and no activity for 48 hours | Shelved |
 | 11 | `rest` | Anything else | Other open |

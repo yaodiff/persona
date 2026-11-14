@@ -989,6 +989,187 @@
       "from_test": "web/src/lib/todo-triage.test.ts > an open PR is PR to merge however old, a merged one is not"
     },
     {
+      "name": "pr_open_earlier_pr",
+      "description": "最后记下的 PR 已合并，更早的 PR 还开着：仍在「待合并」。",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "web/src/lib/todo-triage.ts triage"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "ask",
+            "state": "needs_you",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "run",
+            "state": "working",
+            "status": "working",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "unseen",
+            "state": "unread",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "idle",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-10T10:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "old",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-06T08:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "t",
+          "title": "t",
+          "created_at": "2026-10-29T00:00:00.000Z",
+          "updated_at": "2026-10-29T00:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "old",
+              "linked_at": "2026-11-02T04:00:00.000Z"
+            }
+          ],
+          "origin": "conv",
+          "delivery": {
+            "state": "pr"
+          },
+          "pr_url": "https://example.com/synthetic/pull/2",
+          "pr_status": {
+            "url": "https://example.com/synthetic/pull/2",
+            "state": "merged",
+            "draft": false,
+            "review": "pending",
+            "checks": "none",
+            "conflicts": false,
+            "checked_at": "2026-11-10T12:00:00Z"
+          },
+          "other_prs": [
+            {
+              "url": "https://example.com/synthetic/pull/1",
+              "state": "open",
+              "draft": false,
+              "review": "pending",
+              "checks": "none",
+              "conflicts": false,
+              "checked_at": "2026-11-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "section": "pr",
+        "rule": "pr_open"
+      },
+      "from_test": "spec fixture (#7935): every PR of the task"
+    },
+    {
+      "name": "pr_all_merged",
+      "description": "记下的 PR 都已合并：不在「待合并」。",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "web/src/lib/todo-triage.ts triage"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "ask",
+            "state": "needs_you",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "run",
+            "state": "working",
+            "status": "working",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "unseen",
+            "state": "unread",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "idle",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-10T10:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "old",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-06T08:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "t",
+          "title": "t",
+          "created_at": "2026-10-29T00:00:00.000Z",
+          "updated_at": "2026-10-29T00:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "old",
+              "linked_at": "2026-11-02T04:00:00.000Z"
+            }
+          ],
+          "origin": "conv",
+          "pr_url": "https://example.com/synthetic/pull/2",
+          "pr_status": {
+            "url": "https://example.com/synthetic/pull/2",
+            "state": "merged",
+            "draft": false,
+            "review": "pending",
+            "checks": "none",
+            "conflicts": false,
+            "checked_at": "2026-11-10T12:00:00Z"
+          },
+          "other_prs": [
+            {
+              "url": "https://example.com/synthetic/pull/1",
+              "state": "merged",
+              "draft": false,
+              "review": "pending",
+              "checks": "none",
+              "conflicts": false,
+              "checked_at": "2026-11-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "section": "shelved",
+        "rule": "stale"
+      },
+      "from_test": "spec fixture (#7935): every PR of the task"
+    },
+    {
       "name": "pr_url_old",
       "description": "只有 pr_url、没有交付状态：待合并。",
       "source": [
