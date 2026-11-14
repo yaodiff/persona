@@ -63,7 +63,7 @@ func TestInboxGitHubCommentGoesToTheTaskAgent(t *testing.T) {
 	}
 	// The same comment taken again is not sent again.
 	s.superviseInbox(context.Background(), []*InboxItem{it}, nil)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) // sleep-ok: a deduplicated comment starts no send, so there is no event to wait for
 	if got := len(sentToAgent(f)) - before; got != 1 {
 		t.Fatalf("the same comment went to the agent %d times", got)
 	}
