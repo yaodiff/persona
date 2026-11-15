@@ -130,8 +130,12 @@ func negatedBefore(pre string) bool {
 // stageOf is how far a reply says the work got (at least develop: the agent worked), and the PR it names.
 func stageOf(text string) (stage, pr string) {
 	stage = "develop"
-	if prs := prLink.FindAllString(text, -1); len(prs) > 0 {
+	if ref := closeoutPRRef(text); ref != "" {
+		pr = prLink.FindString(ref)
+	} else if prs := prLink.FindAllString(text, -1); len(prs) > 0 {
 		pr = prs[len(prs)-1]
+	}
+	if pr != "" {
 		stage = "review"
 		if said(mergedWords, text) {
 			stage = "merge"
@@ -261,8 +265,8 @@ func keptPRs(prs []string, pr string) []string {
 	return out[max(0, len(out)-stagePRsKept):]
 }
 
-// forgetTaskPR removes a confirmed non-PR from both current and historical delivery links before publishing it.
-func (s *Service) forgetTaskPR(ctx context.Context, id, pr string) error {
+// forgetTaskPR removes a confirmed non-PR and installs a recovered delivery PR, if any, in the same saved update.
+func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) error {
 	b := &s.reports
 	b.stageWriting.Lock()
 	defer b.stageWriting.Unlock()
@@ -277,8 +281,11 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr string) error {
 	changed := removed || len(history) != len(cur.PRs)
 	cur.PRs = history
 	if removed {
-		cur.PR = ""
-		if len(cur.PRs) > 0 {
+		cur.PR = replacement
+		if replacement != "" {
+			cur.PRs = slices.DeleteFunc(cur.PRs, func(p string) bool { return p == replacement })
+		}
+		if cur.PR == "" && len(cur.PRs) > 0 {
 			cur.PR = cur.PRs[len(cur.PRs)-1]
 			cur.PRs = cur.PRs[:len(cur.PRs)-1]
 		}
@@ -286,10 +293,11 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr string) error {
 			cur.Stage = "develop"
 		}
 	}
-	if cur.Deploy != nil && cur.Deploy.PR == pr {
+	removedWatch := cur.Deploy != nil && cur.Deploy.PR == pr
+	if removedWatch {
 		cur.Deploy, changed = nil, true
 	}
-	if removed && cur.PR == "" && cur.Delivery != nil &&
+	if (removed || removedWatch) && cur.Delivery != nil &&
 		(cur.Delivery.State == deliveryPR || cur.Delivery.State == deliveryMerged) {
 		cur.Delivery = nil
 	}

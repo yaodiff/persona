@@ -230,7 +230,7 @@ func TestForgetTaskPRKeepsStateOnWriteFailure(t *testing.T) {
 	st.mu.Lock()
 	st.failPut = errors.New("database unavailable")
 	st.mu.Unlock()
-	if err := s.forgetTaskPR(ctx, todo.ID, pr); err == nil {
+	if err := s.forgetTaskPR(ctx, todo.ID, pr, "https://github.com/o/r/pull/8"); err == nil {
 		t.Fatal("non-PR removal succeeded without persisting it")
 	}
 	st.mu.Lock()
@@ -258,7 +258,7 @@ func TestForgetTaskPRPersistsRemoval(t *testing.T) {
 	s.setTaskStage(ctx, todo.ID, "review", real)
 	s.setTaskStage(ctx, todo.ID, "review", pr)
 	s.watchDeploy(ctx, todo.ID, deployWatch{PR: pr, Since: time.Now()})
-	if err := s.forgetTaskPR(ctx, todo.ID, pr); err != nil {
+	if err := s.forgetTaskPR(ctx, todo.ID, pr, real); err != nil {
 		t.Fatal(err)
 	}
 	restarted, _ := newTaskServiceOn(t, st)

@@ -2,10 +2,12 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -25,9 +27,18 @@ var (
 // repoRootsKey keeps, per computer and repository root, the GitHub repository its agents' PRs went to.
 const repoRootsKey = "assistant.repo_roots"
 
-// prNumberIn is the one PR number text names without a URL: the single "PR #N", else the single "#N" in text that
-// speaks of a PR. "" when there is none, or several different ones.
+// prNumberIn prefers the closeout's explicit PR artifact, else the single "PR #N" or single "#N" in PR-related
+// prose. Full URLs are handled by stageOf; ambiguous prose records nothing.
 func prNumberIn(text string) string {
+	if ref := closeoutPRRef(text); ref != "" {
+		if ciArtifactNumber.MatchString(ref) {
+			return strings.TrimPrefix(ref, "#")
+		}
+		if m := ciArtifactRepo.FindStringSubmatch(ref); m != nil {
+			return m[2]
+		}
+		return "" // an explicit artifact outranks incidental PR numbers in the prose
+	}
 	one := func(re *lazyre.Regexp) string {
 		n := ""
 		for _, m := range re.FindAllStringSubmatch(text, -1) {
@@ -54,6 +65,17 @@ func prNumberIn(text string) string {
 	return ""
 }
 
+func closeoutPRRef(text string) string {
+	_, artifacts, _ := closeout.Parse(text)
+	ref := ""
+	for _, a := range artifacts {
+		if a.Kind == "pr" {
+			ref = strings.TrimSpace(a.Ref)
+		}
+	}
+	return ref
+}
+
 // githubRepoIn is the one GitHub repository ("owner/repo") the texts link an issue or PR of; "" for none or several.
 func githubRepoIn(texts ...string) string {
 	repo := ""
@@ -71,11 +93,25 @@ func githubRepoIn(texts ...string) string {
 
 // prFromNumber is the full URL of the PR text names by number alone, when the repository is known (above); "" else.
 func (s *Service) prFromNumber(ctx context.Context, t Todo, machine, session, text string) string {
+	pr, err := s.numberedPR(ctx, t, machine, session, text)
+	if err != nil {
+		s.logf("task %s: numbered PR could not be confirmed: %v", t.ID, err)
+	}
+	return pr
+}
+
+func (s *Service) numberedPR(ctx context.Context, t Todo, machine, session, text string) (string, error) {
 	n := prNumberIn(text)
 	if n == "" {
-		return ""
+		return "", nil
 	}
-	repo := githubRepoIn(t.PRURL)
+	repo := ""
+	if m := ciArtifactRepo.FindStringSubmatch(closeoutPRRef(text)); m != nil {
+		repo = strings.ToLower(m[1])
+	}
+	if repo == "" {
+		repo = githubRepoIn(t.PRURL)
+	}
 	for i := len(t.PRs) - 1; repo == "" && i >= 0; i-- {
 		repo = githubRepoIn(t.PRs[i])
 	}
@@ -89,23 +125,56 @@ func (s *Service) prFromNumber(ctx context.Context, t Todo, machine, session, te
 		repo = s.repoOfRoot(ctx, machine, session)
 	}
 	if repo == "" {
-		return ""
+		return "", nil
 	}
 	number, err := strconv.Atoi(n)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	isPR, err := s.forge().IsPR(ctx, repo, number)
 	if err != nil {
-		s.logf("task %s: PR number %s could not be confirmed: %v", t.ID, n, err)
-		return ""
+		return "", err
 	}
 	if !isPR {
-		return ""
+		return "", nil
 	}
-	return "https://github.com/" + repo + "/pull/" + n
+	return "https://github.com/" + repo + "/pull/" + n, nil
+}
+
+// reportedTaskPR recovers a delivery artifact hidden by a clipped session-list preview. It reads only linked
+// agents' latest turns, and only while repairing a confirmed false PR; normal session polling never fetches text.
+func (s *Service) reportedTaskPR(ctx context.Context, t Todo, wrong string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	for i := len(t.Agents) - 1; i >= 0; i-- {
+		a := t.Agents[i]
+		if a.ReleasedAt != nil || a.DismissedAt != nil {
+			continue
+		}
+		items, ok := s.lastTurnItems(ctx, a.MachineID, a.SessionID)
+		if !ok {
+			continue
+		}
+		_, text := turnExchange(items)
+		ref := closeoutPRRef(text)
+		if ref == "" {
+			continue
+		}
+		pr := prLink.FindString(ref)
+		if pr == "" {
+			var err error
+			pr, err = s.numberedPR(ctx, t, a.MachineID, a.SessionID, text)
+			if err != nil {
+				return "", fmt.Errorf("the reported delivery PR could not be confirmed: %w", err)
+			}
+		}
+		if pr != "" && pr != wrong {
+			return pr, nil
+		}
+	}
+	return "", nil
 }
 
 // rootKey names the repository root session on machine works in; "" when the node does not say.

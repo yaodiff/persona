@@ -50,7 +50,11 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		isPR, err := s.forge().IsPR(cctx, m[1], number)
 		cancel()
 		if err == nil && !isPR {
-			if err := s.forgetTaskPR(ctx, t.ID, pr); err != nil {
+			replacement, err := s.reportedTaskPR(ctx, t, pr)
+			if err != nil {
+				return err
+			}
+			if err := s.forgetTaskPR(ctx, t.ID, pr, replacement); err != nil {
 				return err
 			}
 			current, ok := s.todoNow(t.ID)

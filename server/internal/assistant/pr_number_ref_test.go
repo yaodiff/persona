@@ -17,6 +17,11 @@ func TestPRNumberIn(t *testing.T) {
 		"PR #1 and PR #2":                                     "",
 		"Both #5 and #9 are in the PR":                        "",
 		"https://github.com/o/r/pull/3":                       "", // a link is prLink's
+		"Earlier PR #4\n<closeout status=\"done\">\nartifact: pr #5\n</closeout>":                               "5",
+		"Earlier PR #4\n<closeout status=\"done\">\nartifact: pr 5\n</closeout>":                                "5",
+		"Earlier PR #4\n<closeout status=\"done\">\nartifact: pr o/r#5\n</closeout>":                            "5",
+		"Earlier PR #4\n<closeout status=\"done\">\nartifact: pr https://github.com/o/r/pull/5\n</closeout>":    "",
+		"<closeout status=\"done\">\nartifact: pr #5\nartifact: url https://github.com/o/r/pull/4\n</closeout>": "5",
 	} {
 		if got := prNumberIn(text); got != want {
 			t.Errorf("prNumberIn(%q) = %q, want %q", text, got, want)
@@ -122,5 +127,36 @@ func TestTaskRecordsAPRNamedByNumber(t *testing.T) {
 	s.advanceTaskReply(ctx, cur, "box", "s1", "The 423 fix is pushed to #7350 and deployed; the PR waits for review")
 	if got := todoNow(s, todo.ID); got.PRURL != "https://github.com/o/app/pull/7350" {
 		t.Fatalf("pr_url = %q (stage %s)", got.PRURL, got.Stage)
+	}
+}
+
+func TestTaskCloseoutArtifactReplacesEarlierPR(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		close string
+	}{
+		{"number with old PR in prose", "PR #4 was the earlier attempt.\n<closeout status=\"done\">\nartifact: pr #5\n</closeout>"},
+		{"bare number with old PR in prose", "PR #4 was the earlier attempt.\n<closeout status=\"done\">\nartifact: pr 5\n</closeout>"},
+		{"repo-qualified number with old PR in prose", "PR #4 was the earlier attempt.\n<closeout status=\"done\">\nartifact: pr o/r#5\n</closeout>"},
+		{"full link with old PR in prose", "PR #4 was the earlier attempt.\n<closeout status=\"done\">\nartifact: pr https://github.com/o/r/pull/5\n</closeout>"},
+		{"later wrong URL artifact", "<closeout status=\"done\">\nartifact: pr #5\nartifact: url https://github.com/o/r/pull/4\n</closeout>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := newTaskService(t)
+			s.deploy.forge = &fakeForge{}
+			todo := startedTask(t, s, f)
+			ctx := context.Background()
+			s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/4")
+			if got := todoNow(s, todo.ID).PRURL; got != "https://github.com/o/r/pull/4" {
+				t.Fatalf("initial PR = %q, want /pull/4", got)
+			}
+
+			s.taskStageItems(ctx, SessionItems{MachineID: "box", SessionID: "s1", Items: []proto.Item{{
+				Role: "assistant", Kind: proto.KindText, Text: tc.close,
+			}}})
+			if got := todoNow(s, todo.ID).PRURL; got != "https://github.com/o/r/pull/5" {
+				t.Fatalf("current PR = %q, want /pull/5 (stage %s)", got, todoNow(s, todo.ID).Stage)
+			}
+		})
 	}
 }
