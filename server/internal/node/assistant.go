@@ -318,8 +318,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return "", externalAdapterError(ctx, ctx.Err())
 	}
 	timing.mark("typing_locked", true)
-	if err := n.answerAgainCurrent(ctx, id); err != nil {
-		return "", err
+	after, _ := ctx.Value(answerAgainAfterKey{}).(string)
+	guardedRuntime := after != "" && n.runtimeAssistant(id)
+	if after != "" && !guardedRuntime {
+		if err := n.answerAgainProcessCurrent(ctx, id, after); err != nil {
+			return "", err
+		}
 	}
 	recovery, restart := assistantRecoveryOf(ctx)
 	if recovery != nil {
@@ -451,7 +455,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
-	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
+	if onRuntime, runs := n.assistantRuntime(rl), guardedRuntime || n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
 		if origin == originInbox {
@@ -479,6 +483,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			eff = execution.Effort
 		}
 		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
+		if guardedRuntime {
+			onRuntime = nil // use the connection that owns the conversation being checked
+		}
 		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Model, eff)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {

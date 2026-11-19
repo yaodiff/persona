@@ -161,6 +161,11 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if live != "" {
 		params["context"] = live
 	}
+	if after, _ := ctx.Value(answerAgainAfterKey{}).(string); after != "" {
+		if err := n.answerAgainRuntimeCurrent(ctx, h, id, after); err != nil {
+			return "", err
+		}
+	}
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
 	if err := h.peer.Call(cctx, "session.send", params, nil); err != nil {
