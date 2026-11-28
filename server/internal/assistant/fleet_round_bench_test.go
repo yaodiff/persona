@@ -71,20 +71,20 @@ func BenchmarkRound(b *testing.B) {
 		if st := r.buildFleet("en", agents, ixs); st.NeedsYou == 0 || st.Working == 0 || st.Unread == 0 {
 			b.Fatalf("the fleet: %+v", st)
 		}
-		if a, v := r.linkAndCounts("en", agents, ixs, told, todos); a.NeedsYou == 0 || v.Counts.AgentsNeedsYou.N == 0 ||
-			v.Counts.TodosNeedsYou == nil {
+		if a, v := r.linkAndCounts("en", agents, ixs, told, nil, todos); a.NeedsYou == 0 || v.Counts.AgentsNeedsYou.N == 0 ||
+			v.Counts.TodosNeedsYou == nil || v.Counts.PersonaCards == nil {
 			b.Fatalf("the summary: %+v; the view: %+v", a, v.Counts)
 		}
 		b.ReportAllocs()
 		for b.Loop() {
 			r.buildFleet("en", agents, ixs)
-			r.linkAndCounts("en", agents, ixs, told, todos)
+			r.linkAndCounts("en", agents, ixs, told, nil, todos)
 		}
 	})
 	b.Run("counts-tell", func(b *testing.B) {
 		s := New(Options{Hub: newFakeHub(), Logf: func(string, ...any) {}, Devices: newFleetDevs()})
 		var r fleetRound
-		_, v := r.linkAndCounts("en", agents, ixs, told, todos)
+		_, v := r.linkAndCounts("en", agents, ixs, told, nil, todos)
 		s.tellCounts(v)
 		b.ReportAllocs()
 		for b.Loop() {

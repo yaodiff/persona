@@ -91,6 +91,7 @@ func TestHubSendMessageDetachesPendingCommandApprovalOverBus(t *testing.T) {
 		Cwd:          "/home/u/.persona/assistant",
 		ExecutionCwd: "/home/u/.persona/assistant",
 		Kind:         proto.IxPermission,
+		OutwardWrite: true,
 		ToolName:     "Bash",
 		ToolInput:    json.RawMessage(`{"command":"printf bus_detach"}`),
 		Detachable:   true,

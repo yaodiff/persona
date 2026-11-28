@@ -86,4 +86,89 @@ final class PortForwardTests: XCTestCase {
         XCTAssertTrue(toast.waitForExistence(timeout: 10), "no word on the stopped server:\n\(app.debugDescription)")
         shot(app, "gone")
     }
+
+    @MainActor func testMultiModuleSPAErrorOverlayAndSelfSignedTLS() throws {
+        let info = try json("/mock/ports")
+        let spaPort = try XCTUnwrap(info["spa_port"] as? Int)
+        let failPort = try XCTUnwrap(info["fail_port"] as? Int)
+        let tlsPort = info["tls_port"] as? Int ?? 0
+        let looks = ProcessInfo.processInfo.environment["PERSONA_LOOKS"]?.split(separator: ",").map(String.init) ?? [""]
+
+        for look in looks {
+            if look == "dark" { XCUIDevice.shared.appearance = .dark }
+            else if look == "light" { XCUIDevice.shared.appearance = .light }
+
+            let app = XCUIApplication()
+            let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+            var args = ["-pairURL", pair, "-tab", "dev", "-openSession", "macbook/" + landing, "-openChatsFresh", "YES"]
+            if look == "light" || look == "dark" { args += ["-ui.scheme", look] }
+            app.launchArguments = args
+            app.launchPinned()
+
+            // 1. Multi-module SPA (12 external ES modules/CSS + 1 HMR WebSocket) mounts cleanly without white screen.
+            if look == looks.first {
+                let spaChip = app.buttons.matching(identifier: "port-chip-\(spaPort)").firstMatch
+                XCTAssertTrue(spaChip.waitForExistence(timeout: 20), "no badge for SPA :\(spaPort):\n\(app.debugDescription)")
+                let started = Date()
+                spaChip.tap()
+                let mounted = app.webViews.staticTexts["SPA 已挂载"]
+                XCTAssertTrue(mounted.waitForExistence(timeout: 10), "multi-module SPA stayed blank:\n\(app.debugDescription)")
+                let status = app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS 'modules=12' AND label CONTAINS 'hmr=open'")).firstMatch
+                XCTAssertTrue(status.waitForExistence(timeout: 5), "SPA status missing:\n\(app.debugDescription)")
+                let elapsed = Date().timeIntervalSince(started)
+                XCTAssertLessThan(elapsed, 8.0, "SPA load took too long: \(elapsed)s")
+                app.buttons["link-close"].firstMatch.tap()
+                sleep(1)
+            }
+
+            // 2. Stale cached port returning 404 shows the design-system EmptyStateView error overlay instead of blank white.
+            let failChips = app.buttons.matching(identifier: "port-chip-\(failPort)")
+            XCTAssertTrue(failChips.firstMatch.waitForExistence(timeout: 15), "no badge for fail :\(failPort):\n\(app.debugDescription)")
+            failChips.element(boundBy: failChips.count - 1).tap()
+            let overlay = app.descendants(matching: .any)["webview-error-overlay"].firstMatch
+            XCTAssertTrue(overlay.waitForExistence(timeout: 15), "no error overlay for 404 port:\n\(app.debugDescription)")
+            let retryButton = app.buttons["重试"].firstMatch
+            XCTAssertTrue(retryButton.waitForExistence(timeout: 5), "no Retry button on error overlay:\n\(app.debugDescription)")
+            sleep(1)
+            saveShot(app, name: "error-overlay", look: look)
+            app.buttons["link-close"].firstMatch.tap()
+            sleep(1)
+
+            // 3. Self-signed HTTPS loopback dev server prompts explicitly, defaults to Don't Trust, and loads on Trust.
+            if tlsPort > 0 {
+                let tlsChips = app.buttons.matching(identifier: "port-chip-\(tlsPort)")
+                XCTAssertTrue(tlsChips.firstMatch.waitForExistence(timeout: 15), "no badge for TLS :\(tlsPort):\n\(app.debugDescription)")
+                // Reply badge carries the https:// scheme (PortLink.secure == true).
+                tlsChips.element(boundBy: tlsChips.count - 1).tap()
+                let certAlert = app.alerts.firstMatch
+                XCTAssertTrue(certAlert.waitForExistence(timeout: 15), "no self-signed certificate prompt:\n\(app.debugDescription)")
+                sleep(1)
+                saveShot(app, name: "self-signed-cert", look: look)
+
+                if look == looks.last {
+                    // Declining keeps it untrusted and shows the error overlay instead of a blank screen.
+                    certAlert.buttons["不信任"].tap()
+                    XCTAssertTrue(overlay.waitForExistence(timeout: 10), "declining cert left blank screen:\n\(app.debugDescription)")
+                    retryButton.tap()
+                    XCTAssertTrue(certAlert.waitForExistence(timeout: 10), "retry did not re-prompt for self-signed cert:\n\(app.debugDescription)")
+                    certAlert.buttons["本次会话信任"].tap()
+                    let httpsHeadline = app.webViews.staticTexts["本地 HTTPS 服务已连接"]
+                    XCTAssertTrue(httpsHeadline.waitForExistence(timeout: 15), "HTTPS page did not load after trusting:\n\(app.debugDescription)")
+                } else {
+                    certAlert.buttons["不信任"].tap()
+                }
+                app.buttons["link-close"].firstMatch.tap()
+            }
+        }
+    }
+
+    @MainActor private func saveShot(_ app: XCUIApplication, name: String, look: String) {
+        let s = app.screenshot()
+        if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
+            let suffix = look.isEmpty ? "" : "-" + look
+            try? s.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("preview-\(name)\(suffix).png"))
+        } else {
+            shot(app, name + (look.isEmpty ? "" : "-" + look))
+        }
+    }
 }

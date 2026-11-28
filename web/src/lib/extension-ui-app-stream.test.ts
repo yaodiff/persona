@@ -237,6 +237,10 @@ describe("actual app UI stream adapter contract", () => {
     for (const result of [
       { toast: "Wrong", view: {} },
       { open_url: "https://user:pass@example.com" },
+      { open_url: "https:/admin" },
+      { open_url: "https://@evil.example/a" },
+      { open_url: "https://good.example\\@evil.example/a" },
+      { open_url: "https://evil.example/a\tb" },
       // the one in-app URL allowed is a well-formed persona://compose; no other persona:// action, and malformed compose, pass
       { open_url: "persona://settings/extensions/other" },
       { open_url: "persona://ask?text=today" },

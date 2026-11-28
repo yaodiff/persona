@@ -19,11 +19,11 @@ func deployedForReview(t *testing.T, s *Service, f *fakeHub, todo string) {
 	s.ownerVerifiesAll = true
 	f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置看开关"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "the 请验收 card", func() bool { a := askOf(s, todo); return a != nil && a.MessageID != "" })
 	f.judge = `{"verdict":"done","reason":"已部署"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "the review", func() bool { return todoNow(s, todo).Supervision.State == reviewPending })
 }
 
@@ -150,14 +150,14 @@ func TestSupervisorUserCheckStillAsksTheOwner(t *testing.T) {
 		s, f, todo, posts, _ := conclusionService(t, false)
 		f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置看开关"}`
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		waitFor(t, "the assistant's acceptance", func() bool { a := askOf(s, todo.ID); return a != nil && !a.AcceptedAt.IsZero() })
 		if n := countAcceptCards(posts()); n != 0 {
 			t.Fatalf("%d 请验收 cards before the review", n)
 		}
 		f.judge = `{"verdict":"done","reason":"已部署"}`
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 		f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置看开关"}`
 		reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "界面改好了", "user_check": true, "checks": completeReviewChecks(todoNow(s, todo.ID))})
@@ -233,7 +233,7 @@ func TestUnsupervisedTaskStillAsksTheOwner(t *testing.T) {
 		t.Fatalf("the task has a supervisor: %+v", todo.Supervision)
 	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitAcceptCard(t, s, todo.ID, posts)
 	ctx := context.Background()
 	if ok, err := s.autoDoneTodo(ctx, todo.ID, "做完了", time.Now().Add(-time.Minute)); err != nil || !ok {

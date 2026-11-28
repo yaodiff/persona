@@ -90,6 +90,7 @@ struct AssistantView: View {
     private static let listKey = "assistant.list"
     /// The history column as UIKit has it (`SplitColumnControl`).
     @State private var columnState = SplitColumnState()
+    @State private var replySpeechContext = ReplySpeechContext()
     #else
     /// Regular width: the sidebar is a column beside the conversation; Chat History shows or hides it.
     @State private var columns = SplitColumns.shown
@@ -289,6 +290,13 @@ struct AssistantView: View {
                     .id(key)
                     #if os(iOS)
                     .environment(\.messageLiftHost, liftHost)
+                    .background {
+                        if phonePage, atRoot, key == model.assistantMain, !activeDrawer.isOut, liftHost.menu?.lift == nil {
+                            Color.clear
+                                .background { ReplySpeechObserver(key: key) }
+                                .modifier(ReplySpeechInputObservation(context: replySpeechContext))
+                        }
+                    }
                     #endif
                     // The iPad draws the shell's composer too (`ChatComposerKind.padCard`): the assistant's, as on the iPhone.
                     // The Sidebar layout's phone page too: the iPhone's conversation, as in the shell (#6332).
@@ -392,6 +400,7 @@ struct AssistantView: View {
         #if os(iOS)
         // A message pressed in the conversation, over the bar too: the whole page dims (#3188).
         .overlay { MessageLiftHostLayer(host: liftHost) }
+        .environment(\.replySpeechContext, phonePage ? replySpeechContext : nil)
         #endif
     }
 

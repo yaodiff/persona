@@ -994,6 +994,9 @@ export interface ChatLinesOptions {
   /** The latest turn is paused waiting for the user (needs_you or an open interaction card on this session) and has not
    *  finished yet, so it is not marked empty even while not actively working. */
   needsYou?: boolean;
+  /** The session's live state is currently unknown (for example, a runtime summary lagging behind the transcript):
+   *  the latest turn may still be running or finalizing, so it is not marked empty until a definite settled state lands. */
+  statusUnknown?: boolean;
 }
 
 const COMPACT_COMMAND_RE = /^\/compact(?:\s|$)/;
@@ -1060,12 +1063,12 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   const source = feed.at(-1);
   // The live exchange is the owner of the latest source item, not the last drawn block.
   const attentionReply = opts.latestReplyNeedsAttention && opts.foldRoutineRelayReplies ? feed.findLast(isAnswerText)?.id : undefined;
-  const latestTurn = (opts.live || opts.needsYou) && source
+  const latestTurn = (opts.live || opts.needsYou || opts.statusUnknown) && source
     ? blocks.find((b) => b.kind === "turn" && (b.turn.ordered.some((i) => i.id === source.id) || b.turn.trailing.some((i) => i.id === source.id)))
     : undefined;
   const latestTurnId = latestTurn && latestTurn.kind === "turn" ? latestTurn.turn.id : undefined;
   const liveId = opts.live ? latestTurnId : undefined;
-  const waitingId = opts.needsYou ? latestTurnId : undefined;
+  const waitingId = (opts.needsYou || opts.statusUnknown) ? latestTurnId : undefined;
   const out: ChatLine[] = [];
   // A result can land after another segment or user input; associate it with its original call, not its position.
   const results = new Map(items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => [i.tool_use_id!, i]));

@@ -41,5 +41,17 @@
   "recording_transcript": "Transcript",
   "recording_photos": "Photos",
   "recording_photo_label": "Photo {n}",
-  "recording_paused_module_off": "Meeting recording is turned off on the hub machine, so minutes and transcription are paused. Everything already stored stays readable."
+  "recording_paused_module_off": "Meeting recording is turned off on the hub machine, so minutes and transcription are paused. Everything already stored stays readable.",
+  "recording_speakers": "Speakers",
+  "recording_speaker_n": "Speaker {n}",
+  "recording_speaker_possibly": "possibly",
+  "recording_speakers_waiting": "Telling speakers apart…",
+  "recording_speakers_waiting_done": "Telling speakers apart ({done} min)…",
+  "recording_speakers_waiting_progress": "Telling speakers apart ({done} of {total} min)…",
+  "recording_speakers_low_quality": "Speakers may not be reliable in this meeting.",
+  "recording_speakers_failed_too_long": "This meeting was too long to tell speakers apart.",
+  "recording_speakers_failed_timeout": "The hub couldn’t finish telling speakers apart in time.",
+  "recording_speakers_failed_engine_unavailable": "Speaker separation wasn’t available on the hub for this meeting.",
+  "recording_speakers_failed_no_audio": "The hub received too little audio to tell speakers apart.",
+  "recording_speakers_failed_other": "The hub couldn’t finish telling speakers apart for this meeting."
 }

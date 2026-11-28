@@ -165,5 +165,10 @@
   "agy_hooks_stale": "PersonaのAntigravity CLIフックが別のプログラムを指しています",
   "agy_hooks_hint": "personad node doctor --fix を実行してください（どのエンジンのagyペインでも会話を読めるようになります）",
   "agy_hooks_off": "PersonaのAntigravity CLIフックは意図的に削除されています（personad node agy-hooks install で戻せます）",
-  "agy_hooks_unreadable": "Antigravity CLIのフックファイルを読み取れません（{error}）"
+  "agy_hooks_unreadable": "Antigravity CLIのフックファイルを読み取れません（{error}）",
+  "orca_ok": "Orca {version} は実行中です",
+  "orca_stopped": "Orca はインストールされていますが、起動していません",
+  "orca_stopped_hint": "このコンピューターのエンジンが Orca の場合は先に開いてください。別のエンジンを使う場合は無視してかまいません",
+  "orca_incompatible": "Orca {version} は実行中ですが、このバージョンの Persona と互換性がありません",
+  "orca_incompatible_hint": "Orca と Persona を最新バージョンに更新してください"
 }

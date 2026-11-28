@@ -634,10 +634,15 @@ func (r *linkSwitchRun) resume(ctx context.Context) {
 // ssh runs script on the computer, its output kept up to 64 KiB (and never logged); exit -1 when ssh did not end by
 // itself.
 func (r *linkSwitchRun) ssh(ctx context.Context, what, script string, stdin io.Reader, timeout time.Duration) (int, []byte) {
+	host := r.rec.host()
+	if err := validateSSHHost(host); err != nil {
+		r.logf("%s: %v", what, err)
+		return -1, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	argv := []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15",
-		"-o", "ServerAliveCountMax=3", r.rec.host(), script}
+		"-o", "ServerAliveCountMax=3", "--", host, script}
 	run := r.d.switches.run
 	if run == nil {
 		run = runSSH
@@ -758,8 +763,8 @@ func (r *linkSwitchRun) stage(ctx context.Context, path string) (why string) {
 		return proto.LinkSwitchReasonTransferFailed
 	}
 	defer f.Close()
-	pr := gzipPipe(f)
-	defer pr.Close() // once ssh is done (gzipPipe)
+	pr, closePipe := gzipPipe(f)
+	defer closePipe() // once ssh is done (gzipPipe)
 	exit, out := r.ssh(ctx, "stage", lsStageScript(r.rec.Operation, r.rec.SHA256), pr, r.t.Transfer)
 	switch {
 	case exit == 0 && outputOf(out)["staged"] == "1":

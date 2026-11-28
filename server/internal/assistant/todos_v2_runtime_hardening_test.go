@@ -4,15 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
-	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistant/todo/conflict"
 	"github.com/nwverse/persona/server/internal/assistant/todo/mergetrain"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func runMergeTrainRestartPersistenceScenario(t *testing.T, newBoot1, newRestarted func() *Service, st todoBlockerStore, requireTodoReload bool) {
@@ -20,61 +16,33 @@ func runMergeTrainRestartPersistenceScenario(t *testing.T, newBoot1, newRestarte
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	// Boot 1: enable todos_v2 and record strike 1 on head-1.
 	s1 := newBoot1()
 	setMergeTrainTodosV2Flag(t, s1, true, false)
-
-	prURL := "https://github.com/example/hardening-repo/pull/101"
+	const repo = "github.com/example/hardening-repo"
+	const prURL = "https://github.com/example/hardening-repo/pull/101"
 	task := newMergeTrainTask(t, s1, "Persistent merge train PR", prURL)
-	blockerID := mergeTrainBlockerID(task.ID, triageNormalizePRURL(prURL))
 
-	if err := s1.applyPRStatus(ctx, task, TodoPRStatus{
-		URL:       prURL,
-		State:     "open",
-		HeadOID:   "head-1",
-		Review:    "approved",
-		Checks:    "failure",
-		Conflicts: true,
-		CheckedAt: now,
-	}); err != nil {
-		t.Fatalf("strike 1 applyPRStatus: %v", err)
+	// Legacy rows were keyed by repository and counted conflicting heads as attempts.
+	const legacyID = "mt_legacy"
+	legacy := db.TodoBlockerRow{
+		ID: legacyID, TodoID: task.ID, Kind: todoBlockerKindMergeTrain, TargetRef: repo, Attempts: 2,
+		ConditionJSON: `{"repo_key":"github.com/example/hardening-repo","pr_url":"https://GitHub.com/Example/Hardening-Repo/pull/101/","last_head_oid":"old-head","max_attempts":2}`,
 	}
-
-	rows, err := st.ListTodoBlockersByTodo(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListTodoBlockersByTodo after strike 1: %v", err)
+	if _, err := st.UpsertTodoBlocker(ctx, legacy); err != nil {
+		t.Fatal(err)
 	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 merge_train blocker row after strike 1, got %d: %+v", len(rows), rows)
-	}
-	if rows[0].ID != blockerID || rows[0].Kind != todoBlockerKindMergeTrain || rows[0].State != db.TodoBlockerStateActive || rows[0].Attempts != 1 {
-		t.Fatalf("unexpected blocker row after strike 1: %+v", rows[0])
-	}
-	var cond mergeTrainBlockerCondition
-	if err := json.Unmarshal([]byte(rows[0].ConditionJSON), &cond); err != nil {
-		t.Fatalf("unmarshal condition_json: %v", err)
-	}
-	if cond.LastHeadOID != "head-1" || cond.RepoKey != "github.com/example/hardening-repo" {
-		t.Fatalf("unexpected condition after strike 1: %+v", cond)
-	}
-
-	// Pull-based blocker reconciliation must not falsely resolve an active merge_train conflict blocker.
 	recSum, err := s1.ReconcileTodoBlockers(ctx, "")
-	if err != nil {
-		t.Fatalf("ReconcileTodoBlockers after strike 1: %v", err)
-	}
-	if slices.Contains(recSum.ResolvedIDs, blockerID) {
-		t.Fatalf("ReconcileTodoBlockers falsely resolved active merge_train blocker %s", blockerID)
+	if err != nil || slices.Contains(recSum.ResolvedIDs, legacyID) || slices.Contains(recSum.EscalatedIDs, legacyID) {
+		t.Fatalf("legacy conflict evidence was cleared or escalated: %+v, %v", recSum, err)
 	}
 
-	// Simulate Hub restart: shut down Service 1 and construct a brand-new Service attached to the same persistent store.
 	s1.stopSuperviseTimers()
 	s2 := newRestarted()
 	if !s2.settings(ctx).todosV2On() {
 		t.Fatal("expected todos_v2=true to persist across Service restart")
 	}
 	if err := s2.ensureTodosLoaded(ctx); err != nil {
-		t.Fatalf("s2.ensureTodosLoaded: %v", err)
+		t.Fatal(err)
 	}
 	reloadedTask := todoNow(s2, task.ID)
 	if reloadedTask.ID == "" {
@@ -84,69 +52,20 @@ func runMergeTrainRestartPersistenceScenario(t *testing.T, newBoot1, newRestarte
 		reloadedTask = task
 	}
 
-	// Re-polling the exact same head-1 after restart must hydrate Attempts=1 without incrementing.
-	sameHead := s2.onPRStatusMergeTrain(ctx, reloadedTask, TodoPRStatus{
-		URL:       prURL,
-		State:     "open",
-		HeadOID:   "head-1",
-		Review:    "approved",
-		Checks:    "failure",
-		Conflicts: true,
-		CheckedAt: now.Add(time.Second),
+	out := s2.onPRStatusMergeTrain(ctx, reloadedTask, TodoPRStatus{
+		URL: prURL, State: "open", HeadOID: "new-head", Conflicts: true, CheckedAt: now.Add(time.Second),
 	})
-	if sameHead.Escalate || sameHead.Decision.State == mergetrain.StateEscalated {
-		t.Fatalf("re-polling same head-1 after restart unexpectedly escalated: %+v", sameHead)
+	repoSnap, _ := findRepoSnapshot(s2.mergeTrainSnapshot(ctx), repo)
+	if out.Decision.Action != mergetrain.ActionWaitQueue || repoSnap.Head == nil || repoSnap.Head.RebaseFailures != 0 {
+		t.Fatalf("legacy attempts became rebase failures after restart: head=%+v outcome=%+v", repoSnap.Head, out)
 	}
-	repoSnap, ok := findRepoSnapshot(s2.mergeTrainSnapshot(ctx), "github.com/example/hardening-repo")
-	if !ok || repoSnap.Head == nil || repoSnap.Head.RebaseFailures != 1 {
-		t.Fatalf("expected hydrated RebaseFailures=1 after restart, got %+v", repoSnap.Head)
+	rows, err := st.ListTodoBlockersByTodo(ctx, task.ID)
+	if err != nil || len(rows) != 1 || rows[0].ID != legacyID || rows[0].State != db.TodoBlockerStateActive || rows[0].Attempts != 2 {
+		t.Fatalf("legacy blocker was overwritten or duplicated: %+v, %v", rows, err)
 	}
-
-	// Strike 2 on a new head-2 after restart must increment durable Attempts to 2 and trigger StateEscalated.
-	strike2 := s2.onPRStatusMergeTrain(ctx, reloadedTask, TodoPRStatus{
-		URL:       prURL,
-		State:     "open",
-		HeadOID:   "head-2",
-		Review:    "approved",
-		Checks:    "failure",
-		Conflicts: true,
-		CheckedAt: now.Add(2 * time.Second),
-	})
-	if !strike2.Escalate || strike2.Decision.Action != mergetrain.ActionEscalateNeedsUser || strike2.Decision.State != mergetrain.StateEscalated {
-		t.Fatalf("strike 2 after restart did not escalate: %+v", strike2)
-	}
-	sig, hasSig := pendingPRConflict(s2, reloadedTask.ID)
-	if !hasSig || !strings.Contains(sig.Detail, "circuit breaker") || !strings.Contains(sig.Detail, "needs_user") {
-		t.Fatalf("expected escalated sigPRConflict after restart strike 2, got (%v, %+v)", hasSig, sig)
-	}
-
-	rows, err = st.ListTodoBlockersByTodo(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListTodoBlockersByTodo after strike 2: %v", err)
-	}
-	if len(rows) != 1 || rows[0].State != db.TodoBlockerStateActive || rows[0].Attempts != 2 {
-		t.Fatalf("expected active blocker with Attempts=2 after strike 2, got %+v", rows)
-	}
-	cond = mergeTrainBlockerCondition{}
-	if err := json.Unmarshal([]byte(rows[0].ConditionJSON), &cond); err != nil {
-		t.Fatalf("unmarshal condition_json after strike 2: %v", err)
-	}
-	if cond.LastHeadOID != "head-2" {
-		t.Fatalf("expected last_head_oid=head-2 after strike 2, got %+v", cond)
-	}
-
-	// Repeated poll at head-2 must deduplicate escalation.
-	dup := s2.onPRStatusMergeTrain(ctx, reloadedTask, TodoPRStatus{
-		URL:       prURL,
-		State:     "open",
-		HeadOID:   "head-2",
-		Review:    "approved",
-		Checks:    "failure",
-		Conflicts: true,
-		CheckedAt: now.Add(3 * time.Second),
-	})
-	if dup.Escalate {
-		t.Fatalf("duplicate escalation emitted for head-2: %+v", dup)
+	var cond mergeTrainBlockerCondition
+	if err := json.Unmarshal([]byte(rows[0].ConditionJSON), &cond); err != nil || cond.LastHeadOID != "new-head" {
+		t.Fatalf("legacy blocker did not record its current observation: %+v, %v", cond, err)
 	}
 
 	// Clearing conflicts resolves the persistent merge_train blocker row.
@@ -179,6 +98,11 @@ func runMergeTrainRestartPersistenceScenario(t *testing.T, newBoot1, newRestarte
 		Conflicts: true,
 		CheckedAt: now.Add(5 * time.Second),
 	})
+
+	newRows, err := st.ListTodoBlockersByTodo(ctx, task2.ID)
+	if err != nil || len(newRows) != 1 || newRows[0].ID != mergeTrainBlockerID(prURL2) || newRows[0].TargetRef != prURL2 || newRows[0].Attempts != 0 {
+		t.Fatalf("new conflict row is not keyed by PR or counted as an attempt: %+v, %v", newRows, err)
+	}
 
 	s2.stopSuperviseTimers()
 	s3 := newRestarted()
@@ -256,105 +180,6 @@ func TestTodosV2RuntimeHardeningMergeTrainRestartPersistencePostgres(t *testing.
 	runMergeTrainRestartPersistenceScenario(t, newBoot1, newRestarted, database, true)
 }
 
-func TestTodosV2RuntimeHardeningLiveChangedFilesLayer2AndCache(t *testing.T) {
-	ctx := context.Background()
-	s, _ := newQuietServiceOn(t, nil)
-	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
-	setMergeTrainTodosV2Flag(t, s, true, false)
-
-	// Create two open supervised tasks in the same repo with disjoint static prefixes and force_parallel=true.
-	taskA, err := s.createTodo(ctx, "Live task A", "write_prefixes: server/a\nforce_parallel: true", "conv1", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.superviseTodo(ctx, taskA.ID, "conv1", []string{"done"}, 0)
-	_ = s.linkTodoAgent(ctx, taskA.ID, "box", "sess-a", "Live task A", "/code/app", "claude")
-	taskA = todoNow(s, taskA.ID)
-
-	taskB, err := s.createTodo(ctx, "Live task B", "write_prefixes: server/b\nforce_parallel: true", "conv1", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.superviseTodo(ctx, taskB.ID, "conv1", []string{"done"}, 0)
-	_ = s.linkTodoAgent(ctx, taskB.ID, "box", "sess-b", "Live task B", "/code/app", "claude")
-	taskB = todoNow(s, taskB.ID)
-
-	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
-	s.setRuntimeChangedFilesClock(func() time.Time { return now })
-
-	var fetchCalls atomic.Int32
-	s.setRuntimeChangedFilesFetcher(func(_ context.Context, machineID, cwd string) ([]string, error) {
-		fetchCalls.Add(1)
-		if machineID != "box" || cwd != "/code/app" {
-			t.Errorf("unexpected workspace query (%q, %q)", machineID, cwd)
-		}
-		return []string{"./server/shared/util.go", "server/shared/util.go", "/abs/ignored.go"}, nil
-	})
-
-	agentsA := []proto.Session{{MachineID: "box", SessionID: "sess-a", Cwd: "/code/app", State: proto.StateWorking}}
-	agentsB := []proto.Session{{MachineID: "box", SessionID: "sess-b", Cwd: "/code/app", State: proto.StateWorking}}
-
-	// First collection for task A fetches once and records normalized file path.
-	if got := s.refreshTodoRuntimeChangedFiles(ctx, taskA, agentsA); len(got) != 0 {
-		t.Fatalf("expected no runtime conflict with only task A collected, got %+v", got)
-	}
-	if fetchCalls.Load() != 1 {
-		t.Fatalf("fetchCalls = %d, want 1", fetchCalls.Load())
-	}
-
-	// Second call within TTL (30s) must hit cache and NOT invoke git fetcher again.
-	now = now.Add(10 * time.Second)
-	_ = s.refreshTodoRuntimeChangedFiles(ctx, taskA, agentsA)
-	if fetchCalls.Load() != 1 {
-		t.Fatalf("cache TTL missed: fetchCalls = %d, want 1", fetchCalls.Load())
-	}
-
-	// Advancing past TTL (30s) allows a fresh collection.
-	now = now.Add(25 * time.Second)
-	_ = s.refreshTodoRuntimeChangedFiles(ctx, taskA, agentsA)
-	if fetchCalls.Load() != 2 {
-		t.Fatalf("expected refresh after TTL expiry: fetchCalls = %d, want 2", fetchCalls.Load())
-	}
-
-	// Collecting for task B touches the same file -> Layer-2 runtime intersection fires even with force_parallel=true!
-	liveConflicts := s.refreshTodoRuntimeChangedFiles(ctx, taskB, agentsB)
-	if len(liveConflicts) != 1 {
-		t.Fatalf("expected 1 live runtime conflict between task A and task B, got %+v", liveConflicts)
-	}
-	c := liveConflicts[0]
-	if c.Layer != conflict.LayerRuntime || c.Action != conflict.ActionSerialize || !slices.Equal(c.RuntimeFiles, []string{"server/shared/util.go"}) {
-		t.Fatalf("unexpected live runtime conflict: %+v", c)
-	}
-
-	sig, hasSig := pendingPRConflict(s, taskB.ID)
-	if !hasSig || !strings.Contains(sig.Detail, "Runtime write-scope conflict") || !strings.Contains(sig.Detail, "server/shared/util.go") {
-		t.Fatalf("expected deduplicated runtime write-scope conflict signal, got (%v, %+v)", hasSig, sig)
-	}
-
-	// A subsequent task_plan with force_parallel=true touching the same file is also intercepted as ActionSerialize.
-	planned := s.detectPlannedWriteScopeConflicts(ctx, []plannedWriteScopeInput{
-		{
-			Task:          PlanTask{Title: "Planned C", Machine: "box", Cwd: "/code/app"},
-			WritePrefixes: []string{"server/c"},
-			ChangedFiles:  []string{"server/shared/util.go"},
-			ForceParallel: true,
-		},
-	})
-	matched := false
-	for _, pc := range planned {
-		if (pc.TodoA == taskA.ID || pc.TodoB == taskA.ID) &&
-			pc.Layer == conflict.LayerRuntime &&
-			pc.Action == conflict.ActionSerialize &&
-			slices.Equal(pc.RuntimeFiles, []string{"server/shared/util.go"}) {
-			matched = true
-			break
-		}
-	}
-	if !matched {
-		t.Fatalf("expected planned Layer-2 ActionSerialize against %s even with force_parallel=true, got %+v", taskA.ID, planned)
-	}
-}
-
 func TestTodosV2RuntimeHardeningBypassWhenFlagOff(t *testing.T) {
 	ctx := context.Background()
 	store := newMemBlockerStore()
@@ -369,7 +194,7 @@ func TestTodosV2RuntimeHardeningBypassWhenFlagOff(t *testing.T) {
 	_ = s.linkTodoAgent(ctx, task.ID, "box", "sess-off", "Off flag task", "/code/app", "claude")
 	task = todoNow(s, task.ID)
 
-	// 1. mergetrain conflicts under todos_v2=false must write zero rows to todo_blockers.
+	// Merge-train conflicts under todos_v2=false must write zero rows to todo_blockers.
 	now := time.Now().UTC()
 	for i, head := range []string{"off-1", "off-2"} {
 		if err := s.applyPRStatus(ctx, task, TodoPRStatus{
@@ -390,19 +215,5 @@ func TestTodosV2RuntimeHardeningBypassWhenFlagOff(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Fatalf("todos_v2=false wrote todo_blockers rows: %+v", rows)
-	}
-
-	// 2. Runtime changed-files collector under todos_v2=false must perform zero git calls.
-	var fetchCalls atomic.Int32
-	s.setRuntimeChangedFilesFetcher(func(_ context.Context, _, _ string) ([]string, error) {
-		fetchCalls.Add(1)
-		return []string{"server/shared/util.go"}, nil
-	})
-	agents := []proto.Session{{MachineID: "box", SessionID: "sess-off", Cwd: "/code/app", State: proto.StateWorking}}
-	if got := s.refreshTodoRuntimeChangedFiles(ctx, task, agents); len(got) != 0 {
-		t.Fatalf("todos_v2=false returned runtime conflicts: %+v", got)
-	}
-	if fetchCalls.Load() != 0 {
-		t.Fatalf("todos_v2=false invoked runtime changed-files fetcher %d times, want 0", fetchCalls.Load())
 	}
 }

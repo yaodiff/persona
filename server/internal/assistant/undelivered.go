@@ -919,7 +919,7 @@ func (s *Service) undeliveredRoutes() {
 			return
 		}
 		if !found {
-			if s.heldAction(w, r, sid, mid, true) {
+			if s.logicalOwnerAction(w, r, sid, mid, true) || s.heldAction(w, r, sid, mid, true) {
 				return
 			}
 			apierr.Write(w, http.StatusNotFound, errors.New("no such message"))
@@ -949,7 +949,7 @@ func (s *Service) undeliveredRoutes() {
 			return
 		}
 		if !s.undeliveredDrop(sid, mid) {
-			if s.heldAction(w, r, sid, mid, false) {
+			if s.logicalOwnerAction(w, r, sid, mid, false) || s.heldAction(w, r, sid, mid, false) {
 				return
 			}
 			apierr.Write(w, http.StatusNotFound, errors.New("no such message"))

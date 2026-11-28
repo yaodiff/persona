@@ -433,6 +433,10 @@ func setAgyContextBreakdown(s *proto.Session, stats transcript.ContextStats) {
 
 // agyTranscriptMeta reads the cached token usage, background work and latest turn of an agy conversation on disk.
 func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
+	return n.agyTranscriptMetaAt(conversation, time.Now().UTC())
+}
+
+func (n *Node) agyTranscriptMetaAt(conversation string, now time.Time) (agySessionMeta, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
 		return agySessionMeta{}, false
 	}
@@ -454,9 +458,11 @@ func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	key := filepath.Join(dir, conversation)
 	n.mu.Lock()
 	if n.agyMetas != nil {
-		if cached, ok := n.agyMetas.get(key); ok && cached.path == rel && sameAgyFile(info, cached.file) && time.Since(info.ModTime()) > time.Second {
-			n.mu.Unlock()
-			return cached.meta, true
+		if cached, ok := n.agyMetas.get(key); ok && cached.path == rel && sameAgyFile(info, cached.file) && now.Sub(info.ModTime()) > time.Second {
+			if expiry := cached.meta.background.nextExpiry; expiry.IsZero() || now.Before(expiry) {
+				n.mu.Unlock()
+				return cached.meta, true
+			}
 		}
 	}
 	n.mu.Unlock()
@@ -471,7 +477,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	usage.turn = summarizeAgyTurn(steps)
 	usage.modTime = info.ModTime().UTC()
 	usage.size = info.Size()
-	meta := agySessionMeta{agyTranscriptUsage: usage, background: agyBackground(steps, conversation, dir, root)}
+	meta := agySessionMeta{agyTranscriptUsage: usage, background: agyBackgroundAt(steps, conversation, dir, root, now)}
 
 	n.mu.Lock()
 	if n.agyMetas == nil {

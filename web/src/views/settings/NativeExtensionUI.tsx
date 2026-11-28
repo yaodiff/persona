@@ -13,6 +13,7 @@ import { confirmedDefaultManager, onDefaultManager } from "../../lib/manager-cho
 import { uuid } from "../../lib/format";
 import { takeOverlayEntry, withoutOverlayState } from "../../lib/back-close";
 import { navigate } from "../../lib/router";
+import { safeWebURL } from "../../lib/format";
 import { openLink } from "../../lib/links";
 import { wideView } from "../../lib/code-view";
 import { currentLanguage, t } from "../../i18n";
@@ -97,7 +98,15 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; onL
   useEffect(() => {
     if (props.page.legacy) return;
     setFallback(false);
-    const page = appUIStreamPage({ identity, state: props.page.state ?? "", context: { ...uiContext(props.context), locale: currentLanguage(), ui_version: NATIVE_UI_VERSION, stream: { protocol: 1, components: [...NATIVE_STREAM_COMPONENTS] } } }, props.manager,
+    const page = appUIStreamPage({
+      identity, state: props.page.state ?? "",
+      context: {
+        ...uiContext(props.context),
+        // Electron uses the web renderer for protocol 1. HTTP dashboards have a separate desktop context.
+        platform: "web", locale: currentLanguage(), ui_version: NATIVE_UI_VERSION,
+        stream: { protocol: 1, components: [...NATIVE_STREAM_COMPONENTS] },
+      },
+    }, props.manager,
       (result) => {
         if (result.toast) toast(result.toast, "ok");
         if (result.open_url) {
@@ -105,7 +114,10 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; onL
           // other answer's URL opens as a link.
           const prompt = composeText(result.open_url);
           if (prompt) composeAssistant(prompt);
-          else openLink(result.open_url);
+          else {
+            const safe = safeWebURL(result.open_url, true);
+            if (safe) openLink(safe);
+          }
         }
         if (result.push) callbacks.current.push(result.push);
         if (result.pop) callbacks.current.pop();

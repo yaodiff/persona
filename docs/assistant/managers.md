@@ -125,6 +125,7 @@ selector is accepted from the model.
 
 The roster is the bus's identity table `bus_identities` (`docs/protocol/protocol.md`, "Bus"): every row with role `manager` is a manager. Migration 0419 adds where its last handshake said it runs (`host`, `os`, `arch`, `deploy`, `version`) and `last_seen` (recorded on handshake and on disconnect), and a later migration adds `machine_uid` (the host's `~/.persona/machine-uid` when present, additive/omitempty), so clients can correlate hosted managers with their host computer even when display names differ and still show an offline manager's place and "Last synced…". While connected, the hub also keeps ephemeral `pending_restart` in memory (`manager.hello` and live `manager.status` events), cleared on disconnect.
 
+- `extension_info_access_scoped` is true in `GET /api/v1/managers` for a connected Assistant when the hub enforces the scoped authorization contract and that Assistant advertises `extension_info_access_scoped` in `manager.hello`. Clients can offer information-access settings for a non-default Assistant once its roster entry reports this capability and its explicitly targeted trust list loads. An absent field keeps the legacy entry rules. The capability is independent of the `integrations_v2` Labs setting.
 - The hub gives the assistant it starts a new token on every start, but **the name stays**: a name the user gave it is kept.
 - Manager ids: `m-` plus 6 hex digits for one made in the app; `assistant` for the hub's own.
 - **The hub's own can be kept out of the switcher while it is not used (#9055)**: `PATCH /api/v1/managers/assistant {"hide": true}` stores the choice in the hub's settings (`managers.builtin_hide`). The roster then says `hide` and, while it is not the default, owns no machine and has nothing in its inbox that needs the user (`inbox_needs_you`), `hidden`. A machine that falls back to it (its manager revoked) or making it the default shows it again, the choice kept. It is refused (`409 builtin_in_use`) while it is in use; showing it again always works. It stays the carrier, and nothing else changes.
@@ -296,6 +297,20 @@ The built-in manager runs on the hub's machine: its extensions call the hub ther
 - **Never logged**: neither the relay nor the hub logs a token, a proof or its key (the relay says only the method of a request that failed, the hub never logs headers and only fixed paths for refusals), and the token is not in the program's start environment the manager keeps, only in the one it hands the program each start. The tests look for them in every log line.
 
 Not yet covered: the built-in voice extension (off until it is turned on) also calls routes open to full credentials only (`/api/v1/ws`, `/api/v1/channels`, `/api/v1/agents/triage`). Turned on in another manager, those calls are refused.
+
+### Extension information access
+
+`GET /api/v1/assistant/extension-trust` and `PUT /api/v1/assistant/extension-trust/{id}` require a full-access client.
+The request's Assistant owns the trust and category grants. Use `X-Persona-Manager` to name the Assistant, including
+the default Assistant when addressing a known owner.
+
+For reads served by the hub, `extensions.authorize` adds an optional `owner` boolean. The Assistant that recognizes
+the token reads the current trust row from its own database. A current Assistant grants the extra reads through
+`owner: true` and the existing route scope on a live connection. A missing trust row or a failed lookup produces
+`owner: false`. An older Assistant that omits the verdict can establish owner trust through `Profile.ExtensionOwners`
+in its latest snapshot on the same connection. A missing profile, a disconnected or replaced connection, or an
+advertised capability with a missing verdict leaves the extension with ordinary third-party access. Current
+Assistants still send `Profile.ExtensionOwners` for older hubs.
 
 ### After it is revoked
 

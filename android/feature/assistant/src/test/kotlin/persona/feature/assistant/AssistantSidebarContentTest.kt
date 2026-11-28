@@ -362,6 +362,39 @@ class AssistantSidebarContentTest {
         assertEquals(listOf(second.key), retired)
     }
 
+    // The shell draws this sidebar outside AssistantAppHost, so LocalAssistantHost is null there. The management passed
+    // in must keep the conversation menu's Pin/Rename/Archive/End actions instead of falling back to the two copies
+    // (#17123).
+    @Test fun theConversationMenuKeepsManagementActionsWithoutAnAssistantHost() {
+        val choice = AssistantManagerChoice.current.value
+        val main = Session(machineId = "hub", sessionId = "main", title = "主对话", assistant = true)
+        val first = Session(machineId = "hub", sessionId = "first", title = "First conversation", assistant = true)
+        val snapshot = AssistantSnapshot(mainSession = main.key, conversations = listOf(main, first),
+            manager = choice.manager, managerId = choice.shown)
+        val repository = object : AssistantRepository {
+            override val assistant = MutableStateFlow(snapshot)
+            override suspend fun refresh() = Unit
+        }
+        val management = object : AssistantManagement by testManagement(emptyList()) {
+            override fun forManager(manager: String?): AssistantManagement = this
+        }
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Brief, reduceMotion = true) {
+                Box(Modifier.width(400.dp).height(1200.dp)) {
+                    AssistantSidebarContent(snapshot, repository, first.key, operations, demo = false,
+                        onOpen = {}, onAction = {}, onSettings = {}, onInbox = {}, onKnowledge = {}, onTodos = {},
+                        todoCount = 0, showTodos = false, inboxCount = 0, settingsCount = 0, settingsDot = false,
+                        settingsBadge = null, pages = emptyList(), onPage = {}, onRetired = {},
+                        management = management)
+                }
+            }
+        }
+        rule.onAllNodesWithContentDescription("对话操作")[1].performClick()
+        rule.onNodeWithText("重命名…").assertExists()
+        rule.onNodeWithText("归档").assertExists()
+        rule.onNodeWithText("拷贝会话 ID").assertExists()
+    }
+
     private fun testManagement(archived: List<Session>) = object : AssistantManagement {
         override suspend fun warm() = Unit
         override suspend fun endConversation(session: SessionKey) = Unit

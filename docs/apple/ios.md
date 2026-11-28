@@ -6,6 +6,26 @@ XcodeGen source is `apple/project.yml`, generating `apple/Persona.xcodeproj` (ge
 Performance rules, budgets and how to measure: `docs/apple/performance.md` (read before changing `apple/` code).
 Bundle ID comes from configuration (`app.bundle_id`, watch `<id>.watchkitapp`, `docs/operations/config.md`). The UI supports English, Simplified Chinese and Japanese (`en` / `zh-Hans` / `ja`).
 
+
+## Native Agent console templates (#17129)
+
+Settings › **Templates** imports the shared `../schema/template.schema.json` link or JSON. The native preview separates
+changes from unsupported parts and never writes on import. Applying the Agent console stores the choice on this iPhone;
+**Default** restores it. The normal shell is unchanged until the owner applies a template.
+
+The console has three native tabs: **Main Chat**, **Agents**, and **Settings**. External conversations are the **External**
+segment inside Agents, not a fourth tab. The Running segment lists live terminal Agents by computer, with the herdr tab
+name above the Agent session name and no redundant terminal source chip. Settings keeps its common categories and
+**More Settings**, and search still finds every category. Main Chat keeps replies, live work and cards waiting on the
+owner while finished supervision rounds and briefing/day/inbox-suggestion feed lines stay out of its timeline.
+
+A shared `/settings?...&template=...` URL is claimed by the app and opens the same preview. Device looks do not sync to
+web or iPad. Hub navigation, extension and assistant-settings parts are explicitly marked Not applied in this native
+preview rather than being reported as successful. `NativeTemplateStore` persists the opt-in in `UserDefaults`.
+
+Checks: `PersonaTests/NativeTemplatesTests.swift`, `PersonaUITests/AgentConsoleUITests.swift`, and the Linux
+`apple-build check --include-tests` / Release build evidence in the change's PR.
+
 ## Side sessions (#7944)
 
 Who it serves: people who use Agents with the Claude desktop app. A desktop app's side chat, /btw question or spawned
@@ -348,6 +368,7 @@ Chat page:
   Shows current and fitting neighbors, horizontal scroll all, and an end fades while there is more to scroll that way (`.edgeFade()`); at the end the space icon and the tab count (not ⋯, the page's menu) opens the full list (dot, name, state,
   current checkmark; blue top-right dot when another Agent needs you), first All Agents in space X opens space page; chat ⋯ › All Agents in space same.
   Swipe tab rows left for Close (no full-swipe execution); list rows and capsules also long-press Stop and close Agent. Confirm if working, awaiting interaction, unknown, or holding background / queued / loop tasks; idle and completed close directly.
+- **Auto Rename** (#7430) asks the hub to name a coding Agent from its conversation. Long-press its Agents row, its row in a worktree, or the session title. The same action is in the session’s More menu. It appears when the hub advertises `agent_autoname`. The row shows **Renaming…** until the request finishes. The session feed supplies the new name on success. A refusal shows the hub’s explanation and keeps the current name. Manual Rename remains available wherever the runtime supports it.
 - Delete chat (#1749, web #801): nonrunning sessions (`Session.canDelete`: Not running / Done / Seen (idle) / Unknown, not starting, not assistant) offer Delete chat… in Agents long-press / chat ⋯ (Mac also Agent › Delete Chat…); system confirmation explains removal from client lists only, computer records retained, reappears when reused (`DeleteSessionText`). `AppModel.deleteSession` calls `DELETE /api/v1/sessions/{mid}/{sid}`, removes locally on success (matches next hub sessions push), exits every open page (split details, separate Mac windows, `AppModel.deletedSession`); failure shows hub message.
 - Node menus (#3098, web #2329, `docs/integrations/terminal.md` ("Node menus")): running herdr Agent long-press adds Split pane ▸ Right / Down, Git ▸ Pull / Push / Fetch (pane cwd; Push asks first in a system confirmation, #1883), Close tab… (system confirms all panes and Agents close); space ⋯ adds Run Agent here… and Git ▸ (workspace cwd). Run Agent here… sheet loads `GET /machines/{mid}/panes`, lists workspace shell panes with no Agent/bound session and directly startable Claude Code launchers (Codex starts from New Session in a tab of its own; the footer says so only on a computer with a Codex launcher, `NodeMenu.runHereFooter`, #5275; screenshots: fake hub `MOCK_TERMINAL_PANES=1`, plus `MOCK_NO_CODEX=macbook` for a computer without Codex, and `-tab dev -showRunAgentHere macbook -showRunHereLauncher claude`), Run calls `panes/agent` and, once the list is refreshed, opens the started agent's chat (`NodeMenu.startedChat`, #3287); if no idle shell, create New terminal tab (`POST /panes`) then select. herdr only (not Orca, herdr-core or alternative hosts); rename retains Rename…. Logic `Views/Chats/NodeActions.swift` (`NodeMenu` pure + `NodeActions` execution/confirmation, `nodeActionPrompts()` on Agents list); menus stay Equatable, no changing push-data reads; the Git result is the node's `outcome` in the app's strings (`NodeMenu.GitOp.outcome`, else the node's message), a failure the hub's reason in the app's language in a red toast (#1888). `NodeMenuTests`.
 - New worktree… (#3099, web #2431, `docs/integrations/terminal.md` ("New worktree…")): herdr space ⋯ sheet `NewWorktreeSheet` calls `worktree/prepare` for repo ("persona · Current branch main"), branch and checkout path (tracks branch like herdr/web until manually edited, clears to resume; immediate `git check-ref-format` validation), Create calls `worktree/create`. Git refusal shown unchanged; old hub/node says "Persona on this computer is too old; update to create worktrees". No phone terminal page to navigate to; after creation sheet becomes New chat prefilled with workspace / checkout directory (`SpacePreset`), starting inside new worktree. Logic `WorktreeForm` (`Views/Chats/NodeActions.swift`), tests `WorktreeFormTests`, `NodeMenuUITests`.

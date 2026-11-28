@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
@@ -62,22 +64,56 @@ var launchHerdr = launchHerdrServer
 // findHerdr is herdrBinary; tests replace it.
 var findHerdr = herdrBinary
 
+// dialHerdr connects to herdr's API socket; tests replace it to simulate stalled probes.
+var dialHerdr = herdr.Dial
+
 // errHerdrNotInstalled: neither the node's PATH nor the login shell has a herdr command.
 var errHerdrNotInstalled = errors.New("herdr is not installed (no herdr command in PATH or the login shell)")
 
+// errHerdrBusy: probing herdr's socket timed out or was inconclusive, so the server may be busy rather than missing (#13578).
+var errHerdrBusy = errors.New("herdr did not answer within its probe timeout (busy or overloaded)")
+
+// herdrProbe distinguishes a live herdr server (true, true), a definitively absent/refusing listener (false, true),
+// and an inconclusive/timed-out probe under load (false, false) so Persona does not misreport a busy herdr as not
+// running or spawn a duplicate server (#13578).
+func herdrProbe(ctx context.Context, sock string) (running, known bool) {
+	if sock == "" {
+		return false, true
+	}
+	if ctx.Err() != nil {
+		return false, false
+	}
+	pctx, cancel := context.WithTimeout(ctx, herdrDialWait)
+	defer cancel()
+	c, err := dialHerdr(pctx, sock) // a named pipe on Windows
+	if err == nil {
+		_ = c.Close()
+		return true, true
+	}
+	if isHerdrProbeInconclusive(ctx, pctx, err) {
+		return false, false
+	}
+	return false, true
+}
+
+func isHerdrProbeInconclusive(parent, probe context.Context, err error) bool {
+	if parent.Err() != nil || probe.Err() != nil {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK)
+}
+
 // herdrAlive says whether something answers on herdr's socket (a stale socket file refuses the connection).
 func herdrAlive(ctx context.Context, sock string) bool {
-	if sock == "" {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(ctx, herdrDialWait)
-	defer cancel()
-	c, err := herdr.Dial(ctx, sock) // a named pipe on Windows
-	if err != nil {
-		return false
-	}
-	_ = c.Close()
-	return true
+	running, _ := herdrProbe(ctx, sock)
+	return running
 }
 
 // ensureHerdr starts herdr's server when the engine is classic herdr, starting it is on, and its socket does not
@@ -111,16 +147,22 @@ func (n *Node) startHerdrServer(ctx context.Context) (map[string]any, error) {
 	return map[string]any{"running": herdrAlive(ctx, h.c.Socket)}, nil
 }
 
-// startHerdr starts herdr's server unless it already answers, whatever asked for it.
+// startHerdr starts herdr's server unless it already answers or its probe timed out (busy), whatever asked for it.
 func (n *Node) startHerdr(ctx context.Context, h *herdrHost, why string) error {
 	sock := h.c.Socket
-	if herdrAlive(ctx, sock) {
+	if running, known := herdrProbe(ctx, sock); running {
 		return nil
+	} else if !known {
+		n.logf("herdr: probe timed out on %s (%s); leaving server alone", sock, why)
+		return errHerdrBusy
 	}
 	n.hstart.mu.Lock()
 	defer n.hstart.mu.Unlock()
-	if herdrAlive(ctx, sock) { // started by the call this one waited for
+	if running, known := herdrProbe(ctx, sock); running { // started by the call this one waited for
 		return nil
+	} else if !known {
+		n.logf("herdr: probe timed out on %s (%s); leaving server alone", sock, why)
+		return errHerdrBusy
 	}
 	dir := filepath.Dir(sock)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -131,8 +173,11 @@ func (n *Node) startHerdr(ctx context.Context, h *herdrHost, why string) error {
 		return fmt.Errorf("herdr: lock %s: %w", dir, err)
 	}
 	defer unlock()
-	if herdrAlive(ctx, sock) {
+	if running, known := herdrProbe(ctx, sock); running {
 		return nil
+	} else if !known {
+		n.logf("herdr: probe timed out on %s (%s); leaving server alone", sock, why)
+		return errHerdrBusy
 	}
 	bin := findHerdr(ctx, h.c.Bin)
 	if bin == "" {

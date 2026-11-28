@@ -297,6 +297,7 @@ showFreezeProbe
 showFromSeq
 showFullOutput
 showGitReload
+showGroupAccess
 showHandOffNewAgent
 showHealthActivityExample
 showHealthHomeTrendsExample

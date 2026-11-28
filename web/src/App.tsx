@@ -56,8 +56,9 @@ import { onOpenNewAgent, type NewAgentPreset } from "./lib/new-agent";
 import { closeHelp, useHelpOpen } from "./lib/shortcut-help";
 import { closePalette, openPalette, usePalette } from "./lib/palette";
 import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
-import { macChromeMode, useMacChrome } from "./lib/mac-chrome";
-import { MacBayTools, MacMainContour } from "./views/MacChrome";
+import { useMacChromeMode } from "./lib/mac-chrome";
+import { useSidebarTransition, type SidebarMode } from "./lib/sidebar-transition";
+import { MacBayTools, MacMainContour, type MacContourDriver } from "./views/MacChrome";
 import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
 import { Sidebar, SidebarRail } from "./views/Sidebar";
 import { SidebarResize } from "./views/SidebarResize";
@@ -479,9 +480,24 @@ function Shell() {
   const a11y = drawerA11y(narrow, drawer);
   // folded to its icons on a wide screen (⌘⌥B, kept in this browser); a narrow screen keeps the full drawer
   const rail = !narrow && sidebarRail(layout);
-  const macChrome = useMacChrome();
-  const macWindowed = macChrome.unifiedTitlebar && !macChrome.fullScreen && !narrow;
-  const macBay = macWindowed ? (rail ? "rail" : sidebarShown(layout) ? "expanded" : "hidden") : undefined;
+  const macChrome = useMacChromeMode();
+  const macWindowed = macChrome === "windowed" && !narrow;
+  const sidebarMode: SidebarMode = rail ? "rail" : sidebarShown(layout) ? "expanded" : "hidden";
+  const macBay = macWindowed ? sidebarMode : undefined;
+  const fullLayerRef = useRef<HTMLDivElement>(null);
+  const railLayerRef = useRef<HTMLDivElement>(null);
+  const contourDriverRef = useRef<MacContourDriver>(null);
+  const { animating: sidebarAnimating, leaving: leavingSidebar } = useSidebarTransition({
+    shellRef: shell,
+    columnRef: drawerBox,
+    mainEl,
+    fullLayerRef,
+    railLayerRef,
+    contourDriverRef,
+    mode: sidebarMode,
+    narrow,
+    macWindowed,
+  });
   useEffect(() => {
     if (!narrow) setDrawer(false);
   }, [narrow]);
@@ -681,7 +697,7 @@ function Shell() {
       ref={shell}
       data-app-shell
       data-sidebar-hidden={!sidebarShown(layout) || undefined}
-      data-mac-chrome={macChromeMode(macChrome)}
+      data-mac-chrome={macChrome}
       data-mac-bay={macBay}
       className="flex h-full overflow-hidden bg-page"
     >
@@ -699,12 +715,48 @@ function Shell() {
           drawer ? "translate-x-0 shadow-overlay" : "-translate-x-full",
           // ⌘⌥B folds it to the rail, ⌘⇧↵ hides it, on a wide screen; unfolded, its right edge drags (SidebarResize)
           rail ? "lg:w-14" : "lg:w-[var(--sidebar-w,284px)]",
-          !sidebarShown(layout) && "lg:hidden",
+          !sidebarShown(layout) && !sidebarAnimating && "lg:hidden",
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} hideCollapse={macWindowed} /> : <Sidebar active={narrow ? drawer : sidebarShown(layout)} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} hideCollapse={macWindowed} />}
-        {!narrow && !rail && <SidebarResize column={sidebarId} />}
+        {(narrow || sidebarMode === "expanded" || leavingSidebar === "expanded") && (
+          <div
+            key="full"
+            ref={fullLayerRef}
+            inert={leavingSidebar === "expanded" || undefined}
+            aria-hidden={leavingSidebar === "expanded" || undefined}
+            className={cx(
+              "h-full",
+              leavingSidebar === "expanded"
+                ? "pointer-events-none absolute inset-y-0 left-0 overflow-hidden"
+                : sidebarAnimating
+                  ? "overflow-hidden"
+                  : "w-full",
+            )}
+            style={leavingSidebar === "expanded" || (sidebarAnimating && sidebarMode === "expanded") ? { width: "var(--sidebar-w, 284px)" } : undefined}
+          >
+            <Sidebar active={narrow ? drawer : sidebarMode === "expanded" || leavingSidebar === "expanded"} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} hideCollapse={macWindowed} />
+          </div>
+        )}
+        {!narrow && (sidebarMode === "rail" || leavingSidebar === "rail") && (
+          <div
+            key="rail"
+            ref={railLayerRef}
+            inert={leavingSidebar === "rail" || undefined}
+            aria-hidden={leavingSidebar === "rail" || undefined}
+            className={cx(
+              "h-full",
+              leavingSidebar === "rail"
+                ? "pointer-events-none absolute inset-y-0 left-0 w-14 overflow-hidden"
+                : sidebarAnimating
+                  ? "w-14 overflow-hidden"
+                  : "w-full",
+            )}
+          >
+            <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} hideCollapse={macWindowed} />
+          </div>
+        )}
+        {!narrow && !rail && sidebarShown(layout) && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
       <div
@@ -714,7 +766,7 @@ function Shell() {
         onClick={close}
       />
       <main ref={setMainRef} inert={a11y.modal || undefined} className="relative flex min-w-0 flex-1 flex-col">
-        {macChrome.unifiedTitlebar && <MacMainContour mainEl={mainEl} bay={macBay} />}
+        {macChrome !== undefined && <MacMainContour mainEl={mainEl} bay={macBay} animating={macWindowed && sidebarAnimating} contourRef={contourDriverRef} />}
         {/* dropped after loading: which phase, and a click explains with "Retry now" (views/ConnectionPill.tsx). A strip
             over the page that pushes it down while it shows, never a layer over its header, its fields or its title
             (web usability audit item 87); its details open over the page. */}

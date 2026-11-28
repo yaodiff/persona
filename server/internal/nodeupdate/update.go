@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/osproc"
@@ -55,6 +56,7 @@ type upload struct {
 	At               time.Time
 	Accepted         bool
 	Restarted        bool
+	HandoverArmed    bool
 	PreflightErr     error
 	AdoptionDeadline time.Time
 }
@@ -109,15 +111,17 @@ type Manager struct {
 	restart                 func(string)
 	timer                   *time.Timer
 	sweep                   *time.Timer
-	closed                  bool
+	closed                  atomic.Bool
 	requireResidentHandover bool
 	signer                  Signer
 	logf                    func(format string, args ...any)
 	// Tests can shorten deadlines without modifying the production environment.
-	timeout     time.Duration
-	startWatch  func(string, string, string) error
-	drainCancel context.CancelFunc
-	drainDone   chan struct{}
+	timeout      time.Duration
+	startWatch   func(string, string, string) error
+	drainMu      sync.Mutex
+	drainCancel  context.CancelFunc
+	drainDone    chan struct{}
+	activeDrains atomic.Int32
 }
 
 // SetTimeoutForTest overrides the confirmation timeout on a Manager constructed by New.
@@ -544,9 +548,10 @@ func (m *Manager) BeginDrain(id string) error {
 	if m == nil || id == "" {
 		return nil
 	}
-	m.stopDrain()
+	m.drainMu.Lock()
+	defer m.drainMu.Unlock()
 	m.mu.Lock()
-	if m.closed || m.upload == nil || m.upload.ID != id || !m.upload.Accepted {
+	if m.closed.Load() || m.upload == nil || m.upload.ID != id || !m.upload.Accepted || m.upload.HandoverArmed {
 		m.mu.Unlock()
 		return nil
 	}
@@ -557,10 +562,14 @@ func (m *Manager) BeginDrain(id string) error {
 		m.upload.AdoptionDeadline = time.Now().Add(timeout)
 	}
 	m.mu.Unlock()
+	m.stopDrainLocked()
 	if exe == "" {
 		return nil
 	}
 	if err := locked(exe, func() error {
+		if m.closed.Load() {
+			return nil
+		}
 		p, err := loadPending(markerPath(exe))
 		if os.IsNotExist(err) {
 			return nil
@@ -583,15 +592,17 @@ func (m *Manager) BeginDrain(id string) error {
 	dctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	m.mu.Lock()
-	if m.closed || m.upload == nil || m.upload.ID != id || !m.upload.Accepted {
+	if m.closed.Load() || m.upload == nil || m.upload.ID != id || !m.upload.Accepted || m.upload.HandoverArmed {
 		m.mu.Unlock()
 		cancel()
 		return nil
 	}
 	m.drainCancel, m.drainDone = cancel, done
+	m.activeDrains.Add(1)
 	m.mu.Unlock()
 	go func() {
 		defer close(done)
+		defer m.activeDrains.Add(-1)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -629,6 +640,12 @@ func (m *Manager) stopDrain() {
 	if m == nil {
 		return
 	}
+	m.drainMu.Lock()
+	defer m.drainMu.Unlock()
+	m.stopDrainLocked()
+}
+
+func (m *Manager) stopDrainLocked() {
 	m.mu.Lock()
 	cancel, done := m.drainCancel, m.drainDone
 	m.drainCancel, m.drainDone = nil, nil
@@ -645,14 +662,23 @@ func (m *Manager) ArmHandover(id string) error {
 	if m == nil || id == "" {
 		return nil
 	}
-	m.stopDrain()
+	m.drainMu.Lock()
+	defer m.drainMu.Unlock()
 	m.mu.Lock()
+	if m.upload != nil && m.upload.ID != id {
+		m.mu.Unlock()
+		return nil
+	}
 	exe := m.exe
 	timeout := m.confirmTimeout()
-	if u := m.upload; u != nil && u.ID == id && !u.AdoptionDeadline.IsZero() {
-		u.AdoptionDeadline = time.Now().Add(timeout)
+	if u := m.upload; u != nil && u.ID == id {
+		u.HandoverArmed = true
+		if !u.AdoptionDeadline.IsZero() {
+			u.AdoptionDeadline = time.Now().Add(timeout)
+		}
 	}
 	m.mu.Unlock()
+	m.stopDrainLocked()
 	if exe == "" {
 		return nil
 	}
@@ -676,7 +702,9 @@ func (m *Manager) ArmHandover(id string) error {
 // PreflightFailed records why a committed reload could not proceed so a repeated commit returns the same error.
 // The installed file and transaction marker still belong to the rollback watchdog, whose deadline is armed now.
 func (m *Manager) PreflightFailed(id string, err error) {
-	m.stopDrain()
+	if m == nil {
+		return
+	}
 	m.mu.Lock()
 	if u := m.upload; u != nil && u.ID == id && u.Restarted {
 		u.PreflightErr = err
@@ -736,9 +764,7 @@ func (m *Manager) Confirm(version string) error {
 // Close removes abandoned uploads; an accepted transaction belongs to the watchdog.
 func (m *Manager) Close() {
 	m.mu.Lock()
-	m.closed = true
-	cancel, done := m.drainCancel, m.drainDone
-	m.drainCancel, m.drainDone = nil, nil
+	m.closed.Store(true)
 	if m.sweep != nil {
 		m.sweep.Stop()
 	}
@@ -749,10 +775,9 @@ func (m *Manager) Close() {
 		m.clearLocked()
 	}
 	m.mu.Unlock()
-	if cancel != nil {
-		cancel()
-		<-done
-	}
+	m.drainMu.Lock()
+	m.stopDrainLocked()
+	m.drainMu.Unlock()
 }
 
 func (m *Manager) expireLocked() {
@@ -785,7 +810,7 @@ func (m *Manager) armSweepLocked() {
 	m.sweep = time.AfterFunc(UploadTTL, func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if m.closed {
+		if m.closed.Load() {
 			return
 		}
 		m.expireLocked()

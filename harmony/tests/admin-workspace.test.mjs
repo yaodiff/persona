@@ -651,3 +651,39 @@ test('new launcher controls use the actual default harness rather than previous 
   assert.equal(effectiveAgent.call({ workspace: { launcherNew: true, launcherDetail: { agent: 'codex' } } }), 'claude');
   assert.equal(effectiveAgent.call({ workspace: { launcherNew: false, launcherDetail: { agent: 'codex' } } }), 'codex');
 });
+
+test('assistant Next-Message Suggestions switch writes directly via AdminWorkspace, syncs ClientModel, and rolls back on error', async () => {
+  const store = { next_suggestions: false, notes: 'Keep' };
+  let failPut = false;
+  const env = fixture({ root: { onCall: async (call) => {
+    if (call.path !== '/api/v1/assistant') return undefined;
+    if (call.method === 'PUT') {
+      if (failPut) throw new HttpFailure(500, 'server_error');
+      Object.assign(store, call.body);
+    }
+    return { ...store };
+  } } });
+  const synced = [];
+  env.root.syncNextSuggestions = (data) => synced.push(data.next_suggestions);
+
+  const workspace = new AdminWorkspace();
+  await workspace.open(env.root, 'assistant', true);
+  assert.deepEqual(synced, [false]);
+  workspace.setForm('notes', 'Unsaved draft');
+  const ticket = workspace.capture('/api/v1/assistant');
+  assert.equal(await workspace.setNextSuggestions(ticket, true), true);
+  assert.deepEqual(env.shared.calls.filter((c) => c.method === 'PUT').map((c) => c.body), [{ next_suggestions: true }]);
+  assert.equal(workspace.assistantData.next_suggestions, true);
+  assert.equal(workspace.formText('notes'), 'Unsaved draft');
+  assert.deepEqual(synced, [false, true]);
+
+  failPut = true;
+  assert.equal(await workspace.setNextSuggestions(workspace.capture('/api/v1/assistant'), false), false);
+  assert.equal(workspace.assistantData.next_suggestions, true);
+
+  const legacy = fixture();
+  const old = new AdminWorkspace();
+  await old.open(legacy.root, 'assistant', true);
+  assert.equal(await old.setNextSuggestions(old.capture('/api/v1/assistant'), true), false);
+  assert.deepEqual(legacy.shared.calls.filter((c) => c.method === 'PUT'), []);
+});

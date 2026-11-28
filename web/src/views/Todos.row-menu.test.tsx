@@ -44,7 +44,7 @@ const click = async (el: Element | undefined | null) => {
 const dialog = () => document.querySelector<HTMLElement>("[role=dialog]");
 const listText = () => document.querySelector<HTMLElement>("[data-testid=todos-list-column]")?.textContent ?? "";
 const row = (title: string) =>
-  [...document.querySelectorAll<HTMLElement>("[data-testid=todos-list-column] [role=button]")].find((r) => r.textContent?.includes(title));
+  [...document.querySelectorAll<HTMLElement>("[data-testid=todos-list-column] [data-todo]")].find((r) => r.textContent?.includes(title));
 const menuItems = () => [...document.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio]")];
 const menuItem = (label: string) => menuItems().find((m) => m.textContent?.trim().startsWith(label));
 const button = (label: string, scope: ParentNode = document) =>
@@ -104,7 +104,7 @@ describe("a to-do row's menu", () => {
   });
 
   it("opens from the keyboard with Shift+F10 on a focused row", async () => {
-    const el = row("deploy web")!;
+    const el = row("deploy web")!.querySelector<HTMLButtonElement>("[data-testid=todo-row-open]")!;
     el.focus();
     await act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
     await flush();

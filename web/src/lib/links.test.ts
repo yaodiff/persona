@@ -128,7 +128,8 @@ describe("where a link opens", () => {
     expect(linkRoute(`${hub}/s/m1/abc-1/more`, false, hub).kind).toBe("page"); // the router draws its agent
     expect(linkRoute(`${hub}/admin`, false, hub).kind).toBe("web");
     expect(linkRoute(`${hub}/share/abc`, false, hub).kind).toBe("web");
-    expect(linkRoute(`https://user:pw@hub.example.com/s/m1/abc-1`, false, hub).kind).toBe("web");
+    // embedded credentials are rejected completely rather than falling through to window.open
+    expect(linkRoute(`https://user:pw@hub.example.com/s/m1/abc-1`, false, hub).kind).toBe("none");
     // the app's other pages (the Inbox, settings, knowledge…) open in place (docs/protocol/deep-links.md, #9930)
     for (const path of ["/todos", "/inbox", "/inbox/assistant%3A9f?manager=m2", "/settings?tab=extensions&extension=gh", "/overview", "/persona", "/persona/new", "/kb/spells/x"]) {
       expect(linkRoute(`${hub}${path}`, false, hub), path).toEqual({ kind: "page", path });
@@ -231,6 +232,57 @@ describe("where a link opens", () => {
     expect(linkRoute("not a url").kind).toBe("none");
     expect(linkRoute("/relative/path").kind).toBe("none");
     expect(opensInApp("javascript:alert(1)")).toBe(false);
+  });
+
+  it("rejects single-slash relative URLs, userinfo, backslashes, control chars, and unsafe linkHref schemes", () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("window", { open: openSpy });
+    try {
+      for (const bad of [
+        "https:/admin",
+        "https:admin",
+        "https://user:pw@evil.example/a",
+        "https://@evil.example/a",
+        "https://good.example\\@evil.example/a",
+        "https://evil.example/a\tb",
+        "https://user:@example.feishu.cn/docx/AbC",
+        "https://@example.feishu.cn/docx/AbC",
+        "persona://user:pw@session/macbook/abc-1",
+        "mailto:",
+        "tel:",
+        "mailto://user:pw@evil.example",
+        "mailto:me@example.com\r\nBcc:evil@example.com",
+        "javascript:alert(1)",
+        "data:text/html,hi",
+        "file:///etc/hosts",
+        "//evil.example/a",
+        "/admin",
+        "/api/../admin",
+        "/api/..",
+      ]) {
+        expect(linkRoute(bad, true), bad).toEqual({ kind: "none" });
+        expect(linkHref(bad), bad).toBeUndefined();
+        openLink(bad);
+      }
+      expect(openSpy).not.toHaveBeenCalled();
+
+      // Same-origin /api/ download/media paths remain valid for <a href={linkHref(...)}>.
+      expect(linkHref("/api/v1/media/1?token=t")).toBe("/api/v1/media/1?token=t");
+      expect(linkHref("mailto:me@example.com")).toBe("mailto:me@example.com");
+
+      // Valid external http(s) links open their normalized URL.
+      openLink("  https://example.com/a  ");
+      expect(openSpy).toHaveBeenCalledWith("https://example.com/a", "_blank", "noopener,noreferrer");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a link to a section of the page or to a file beside it, never one above its folder (#17669)", () => {
+    for (const ok of ["#heading", "./other.md", "./notes/a.md#L3"]) expect(linkHref(ok), ok).toBe(ok);
+    for (const bad of ["other.md", "../other.md", "./notes/../../admin", "./%2e%2e/admin", "./..%2fadmin", "./a%5c..%5cadmin", "./a\\b.md", "#a\tb"]) {
+      expect(linkHref(bad), bad).toBeUndefined();
+    }
   });
 });
 

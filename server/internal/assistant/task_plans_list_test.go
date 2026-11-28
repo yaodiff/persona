@@ -29,16 +29,14 @@ func TestTaskPlansList(t *testing.T) {
 	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
 		setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
 		e.sessions("server", scopeListed()...)
-		if plans := listedTaskPlans(t, e.do("GET", "/api/v1/task-plans", "")); len(plans) != 0 {
-			t.Fatalf("initial list contains %v", plans)
-		}
-		for _, p := range []*TaskPlan{
+		own := []*TaskPlan{
 			{ID: "plan_main", Conversation: "conv1", State: planOpen},
 			{ID: "plan_side", Conversation: "side", State: planOpen},
 			{ID: "plan_health", Conversation: "h0", State: planOpen},
 			{ID: "plan_started", Conversation: "conv1", State: planStarted},
 			{ID: "plan_dismissed", Conversation: "conv1", State: planDismissed},
-		} {
+		}
+		for _, p := range own {
 			if err := e.s.savePlan(t.Context(), p); err != nil {
 				t.Fatal(err)
 			}

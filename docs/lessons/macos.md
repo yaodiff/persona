@@ -431,3 +431,16 @@ the same cause. Recheck scrolling, folding and layout separately with synthetic 
   `respondsToSelector:`).
 - A `type: "panel"` window stays non-activating without the titled style: Electron's `ElectronNSPanel` adds
   `NSWindowStyleMaskNonactivatingPanel` to every style mask it reports or is given (0x82 read back after the change).
+
+## Electron transparent: true + vibrancy drops to opaque gray under macOS Stage Manager (2026-11-28)
+
+- Under macOS 26 Stage Manager, an Electron `BrowserWindow` configured with both `transparent: true` and `vibrancy`
+  (`"hud"` / `"popover"`, even with `visualEffectState: "active"`, `backgroundThrottling: false`, and zero web DOM
+  updates) drops out of behind-window vibrancy ~700 ms after Stage Manager brings the window back onto the stage:
+  frosted blue areas snap to opaque dark gray (`#1D1E21`) for ~400 ms (`939–1205 ms` from activate) before
+  recovering. Both `"active"` and `"followWindow"` hit this when `transparent: true` is set.
+- Leaving `transparent` at its default (`false`) while enabling `vibrancy` (`"hud"` dark / `"popover"` light),
+  `visualEffectState: "active"`, and `backgroundColor: "#00000000"` yields identical behind-window frosted tinting
+  with zero gray dropout across Stage Manager switches (`DIPS = 0` in dark, light, and runtime Default -> Glass
+  toggles), while `[data-desktop-glass="1"]` suppresses redundant CSS `backdrop-filter` across the document (`<main>`, split panel `<aside>`, and overlays) so Chromium
+  never needs `transparent: true` to composite cleanly.

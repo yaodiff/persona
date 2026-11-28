@@ -83,10 +83,11 @@ describe("folding the whole sidebar", () => {
     expect(getLayout().sidebarCollapsed).toBe(false);
   });
 
-  it("omits duplicate collapse and top rail buttons when MacBayTools hosts them (#17136)", async () => {
+  it("omits duplicate collapse, search bar, and top rail buttons when MacBayTools hosts them (#17136)", async () => {
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} hideCollapse />));
     await flush();
     expect(button("收起侧边栏")).toBeUndefined();
+    expect([...host.querySelectorAll("button")].find((b) => b.textContent?.includes("搜索会话"))).toBeUndefined();
 
     act(() => root.render(<SidebarRail route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} hideCollapse />));
     await flush();

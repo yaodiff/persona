@@ -67,6 +67,10 @@ type Outbound interface {
 // ErrNoChannel: this build has no chat channel (the lark module is left out).
 var ErrNoChannel = errors.New("no chat channel in this build")
 
+// ErrGuestGone: the node no longer has the guest conversation, so the caller starts a fresh one. The module matches
+// this error by its text (modules/lark/guest.go); it cannot import this package.
+var ErrGuestGone = errors.New("the guest conversation is gone")
+
 // None is Outbound without a channel: as a bot that is switched off.
 type None struct{}
 
@@ -182,6 +186,20 @@ type Handoffs interface {
 	HandoffTick(ctx context.Context)
 }
 
+// Guests is a non-owner's @bot the group access policy let through (modules/lark/guest.go). It runs as a guest
+// conversation, one per chat and thread, and never enters the owner's conversations.
+type Guests interface {
+	// Guest accepts a trigger the manager already kept. The call returns once it is kept; the run starts afterwards.
+	// The conversation still answering its last question returns an error with assistantwire.CodeGuestBusy.
+	Guest(ctx context.Context, p assistantwire.FeishuGuestTurn) error
+	// GuestToolCall runs the guest's reply tool. own is false for any other tool, which the caller runs itself.
+	GuestToolCall(ctx context.Context, key, session, name string, args json.RawMessage) (proto.ToolResult, bool)
+	// GuestToolStep records one sanitized step of an owner-listed tool. The returned func finishes the step.
+	GuestToolStep(ctx context.Context, key, name string) func(failed bool)
+	// GuestTick ends turns nobody answered. The core's minute sweep calls it, as HandoffTick.
+	GuestTick(ctx context.Context)
+}
+
 // Layer is what the core asks of the lark module: the outbound port, the Feishu turns, the cards of what is asked, the
 // workbench, the board, the chat, pushes and the proxy replies (#13404).
 type Layer interface {
@@ -194,6 +212,7 @@ type Layer interface {
 	Board
 	Chat
 	Handoffs
+	Guests
 }
 
 // Chat is the bot's chat: the hub's events it takes (the owner's messages and presses, pairing, recalls, what the
@@ -287,7 +306,6 @@ type Host interface {
 	SetRunExt(r *channel.Run, key, value string)
 	// SetLiveRunExt sets a value on the live run as well when r is a copy of it (an answer works on a copy).
 	SetLiveRunExt(r *channel.Run, key, value string)
-	RunTo(ext map[string]string) assistantwire.ChannelTarget
 	// RunState is the module's own state of live run id (made with make the first time); done closes when the run
 	// ends. False when the run is not live or, with kept, no longer among the channels' runs.
 	RunState(id string, kept bool, make func() any) (state any, done <-chan struct{}, ok bool)
@@ -334,6 +352,8 @@ type Host interface {
 	// whether the bot's switches allow it, and the run that answers a message sent to it (StartRun: rt, t and the
 	// owner's message; ext the run's channel values besides the reaction).
 	ResolveTarget(ctx context.Context, t assistantwire.ChatTarget) (assistantwire.ChatResolved, error)
+	// SessionExists reads the named session. An empty machine uses the configured assistant machine.
+	SessionExists(ctx context.Context, machine, session string) bool
 	TargetLabel(ctx context.Context, t assistantwire.ChatTarget) string
 	Allowed(l i18n.Lang, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) error
 	StartRun(ctx context.Context, rt assistantwire.ChatResolved, t assistantwire.ChatTarget, messageID, text string, images []proto.Image, probe, reaction string, ext map[string]string) error
@@ -361,7 +381,10 @@ type Host interface {
 	// model.
 	InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (kind, message string)
 	TurnPending(machine, session string) bool
-	StopProgressCard(ctx context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget, messageID string) (kind, message string)
+	// FindInterruptibleRun returns a guard if the first matching run is watched. The guard rechecks the same run
+	// and watcher after resolution. match may only read the run during the call, under the channel state lock.
+	// The guard calls interrupt with the progress lock alone and stores the returned last successful stop.
+	FindInterruptibleRun(match func(*channel.Run) bool) (guard func(session proto.Session, interrupt func(lastStop string) string))
 	Conversations(ctx context.Context) (list []proto.Session, main string)
 	ConversationName(sess proto.Session, main string) string
 	Devices(ctx context.Context) []assistantwire.Device
@@ -426,9 +449,9 @@ type Host interface {
 	SourceChannels() []string
 	EnsureTodosLoaded(ctx context.Context) error
 	TodoOfThread(chatID, threadID string) (assistantwire.ChatTodo, bool)
-	ThreadNoReply(ctx context.Context, ev botcard.MessageEvent, todoID, chatID, threadID string)
-	// ThreadRoutes are who can get what was said in an open to-do's topic, best first; the error says why none.
-	ThreadRoutes(ctx context.Context, todoID string, f assistantwire.FeishuFeatures) ([]assistantwire.ChatTarget, error)
+	ThreadNoReply(ctx context.Context, messageID, todoID string, to assistantwire.ChannelTarget)
+	// ThreadRouteCandidates reads the to-do's active agent and opening or asking conversation, in that order.
+	ThreadRouteCandidates(ctx context.Context, todoID string) []assistantwire.ChatTarget
 	// TopicDecision notes a topic message as the to-do's decision (assistantwire.Decision*).
 	TopicDecision(ctx context.Context, todoID, question, text, messageID string) string
 	// TopicWake tells the to-do's supervisor what the owner said in its topic, when it waits for that.
@@ -436,8 +459,6 @@ type Host interface {
 	AskTodoTopicAnswer(ctx context.Context, todoID, text string) (answer string, ok bool)
 	SettleAskClaim(ctx context.Context, todoID string, ok bool)
 	CloseAskTodo(ctx context.Context, todoID string)
-	// OpenTarget is who takes a to-do opened from the chat: the main conversation, origin its id; fail says why not.
-	OpenTarget(ctx context.Context, st assistantwire.FeishuStatus) (target assistantwire.ChatTarget, origin, fail string)
 	// TodoTitle is an opened to-do's title from the words (linkLabel: they are a link's label, kept as they are);
 	// retitle: it is named again later.
 	TodoTitle(ctx context.Context, words string, l i18n.Lang, linkLabel bool) (title string, retitle bool)
@@ -449,10 +470,21 @@ type Host interface {
 	StartHandoffGuest(ctx context.Context, handoff, text, launcher string) (machine, session string, err error)
 	RaiseHandoffDecision(ctx context.Context, handoff string, req assistantwire.OutsideDecisionRequest) (id string, err error)
 	WithdrawHandoffDecision(ctx context.Context, id string)
+	// What a group guest asks of the core (modules/lark/guest.go): start its conversation, and send a later question
+	// into the one it already has. A conversation the node no longer has comes back as ErrGuestGone.
+	StartGroupGuest(ctx context.Context, group, text, launcher string, tools []string) (machine, session string, err error)
+	SendGroupGuest(ctx context.Context, machine, session, turn, text string) error
 }
 
 // The Feishu turns without a channel: nothing is shown and an answer has nowhere to go (a run of the bot kept from a
 // build that had it ends).
+func (None) StartGroupGuest(context.Context, string, string, string, []string) (string, string, error) {
+	return "", "", ErrNoChannel
+}
+func (None) SendGroupGuest(context.Context, string, string, string, string) error {
+	return ErrNoChannel
+}
+
 func (None) TurnProgress(context.Context, *channel.Run, time.Duration, []string, string) {}
 func (None) TurnFolded(context.Context, *channel.Run, any)                               {}
 func (None) TurnRecalled(context.Context, channel.Folded)                                {}
@@ -538,6 +570,16 @@ func (None) HandoffToolCall(context.Context, string, string, json.RawMessage) pr
 }
 func (None) HandoffDecided(context.Context, string, string) {}
 func (None) HandoffTick(context.Context)                    {}
+
+// Group guests without a channel: nothing is taken, and a tool call is not the module's.
+func (None) Guest(context.Context, assistantwire.FeishuGuestTurn) error { return ErrNoChannel }
+func (None) GuestToolCall(context.Context, string, string, string, json.RawMessage) (proto.ToolResult, bool) {
+	return proto.ToolResult{}, false
+}
+func (None) GuestToolStep(context.Context, string, string) func(bool) {
+	return func(bool) {}
+}
+func (None) GuestTick(context.Context) {}
 
 // noBook is the records of a chat switched off: none, and nothing kept.
 type noBook struct{}

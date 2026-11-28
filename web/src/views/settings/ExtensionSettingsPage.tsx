@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { errorText } from "../../lib/api";
-import { ago } from "../../lib/format";
+import { ago, safeWebURL } from "../../lib/format";
 import { extensionTypeText, extensionUpgrades, sourceText, upgradeAction, upgradeDetail, upgradeNote, type ExtensionUpgrade, type HubExtensionDetail } from "../../lib/extensions";
 import { getCatalog, marketOf, type CatalogItem } from "../../lib/extension-market";
 import { toolText } from "../../lib/extension-auth";
@@ -162,8 +162,7 @@ export function Updates({ d, manager, busy, market, canCheck, automatic, reason,
 }
 
 export function Information({ d }: { d: HubExtensionDetail }) {
-  let home = "";
-  try { home = d.homepage && new URL(d.homepage).protocol === "https:" ? d.homepage : ""; } catch { /* Invalid manifest URL stays unavailable. */ }
+  const home = safeWebURL(d.homepage, true) ?? "";
   const missing = t("settings-extensions.not_provided");
   const source = d.attached ? t("settings-extensions.source_attached") : d.source === "hub.json" ? t("settings-extensions.source_configured") : d.source === "dev" ? t("settings-extensions.source_development") : sourceText(d.source) || missing;
   const provenance = d.attached ? t("settings-extensions.source_attached") : d.source === "installed" && d.origin && !marketOf(d.origin) ? t("settings-extensions.local_source") : d.origin || missing;

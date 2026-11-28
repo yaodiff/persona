@@ -37,7 +37,7 @@ type Tally struct {
 // TallyVisitor is told every row of a tally, then the total.
 type TallyVisitor interface {
 	VisitAgent(agent slot.Slot, why Why, since instant.Instant) // an agent waiting with no card standing for it
-	VisitCard(card slot.Slot, why Why)                          // a card on no session: a row of its own
+	VisitCard(card slot.Slot, why Why)                          // a card counted by itself, without an agent row
 	VisitAgentByCard(agent, card slot.Slot, why Why)            // an agent its oldest standing card stands for
 	VisitCardUnder(card slot.Slot)                              // a further card of the row told just before
 	VisitTotal(total RowCount)
@@ -64,8 +64,7 @@ func (t Tally) Accept(v TallyVisitor) {
 // On says whether the tally is a surface's rows: what renders one surface's rows refuses another's.
 func (t Tally) On(surface Surface) bool { return t.on == surface && surface != (Surface{}) }
 
-// AgentsNeedsYou is the agents and cards that need the owner on a surface: one row per agent that waits, by the card
-// that stands for it (or by the dialog in its terminal when none does), and the surface's number.
+// AgentsNeedsYou is the agents and cards that need the owner on a surface, and the surface's number.
 //
 //   - The Agents list (SurfaceBadge) is the needs-you fixture's (spec/fixtures/needs-you): a row per waiting session,
 //     its cards under it oldest first, a child's and a side session's under the row the hub folds them under, and a
@@ -77,6 +76,7 @@ func (t Tally) On(surface Surface) bool { return t.on == surface && surface != (
 //     Link's card is the first one handed to the owner while the agent has one (its summary orders the rows newest first
 //     itself). An agent whose every card its task's supervisor holds is none of theirs, and neither is a quiet task's
 //     agent or a directory-hidden one (Visibility.LeftOut), with its cards.
+//   - Persona counts one row per pending owner card on its conversations and quiet tasks' agents (PersonaCards).
 //
 // So one list of agents and cards serves every surface: the caller hands in the quiet and the hidden with the rest. The
 // zero Surface is a defect.
@@ -87,12 +87,50 @@ func AgentsNeedsYou(on Surface, agents Agents, cards Cards) Tally {
 		t = badgeRows(agents.agents, cards.cards)
 	case SurfaceLiveActivity(), SurfaceLink():
 		t = fleetRows(on, agents.agents, cards.cards)
+	case SurfacePersonaCards():
+		return PersonaCards(agents, Agents{}, cards)
 	default:
 		defect.Raise("fleetcount.AgentsNeedsYou", "the zero Surface")
 		return Tally{}
 	}
 	t.on = on
 	return t
+}
+
+// PersonaCards is one row per pending card for the owner on a Persona conversation or a quiet task's agent (D9/D11).
+// The manager can supply the quiet agents it keeps out of the other surfaces as a second list. Each card follows the
+// session that asked it, including when the session folds under another row. Forms count too, and a terminal wait
+// contributes only through its pending card. Sessionless cards belong to the Agents badge.
+func PersonaCards(agents, quiet Agents, cards Cards) Tally {
+	on := SurfacePersonaCards()
+	if len(cards.cards) == 0 {
+		return Tally{on: on}
+	}
+	eligible := make(map[agentref.Ref]struct{})
+	for _, list := range [2][]Agent{agents.agents, quiet.agents} {
+		for i := range list {
+			a := &list[i]
+			if a.Counts(on) {
+				eligible[a.ref] = struct{}{}
+			}
+		}
+	}
+	if len(eligible) == 0 {
+		return Tally{on: on}
+	}
+	var rows []row
+	for i := range cards.cards {
+		c := &cards.cards[i]
+		if c.holding != HoldingForTheOwner() || c.standing == CardStandingDisplayCopy() {
+			continue
+		}
+		c.asker.Match(func(ref agentref.Ref) {
+			if _, ok := eligible[ref]; ok {
+				rows = append(rows, row{kind: cardRow(), card: c.at, why: WhyNeedsYou()})
+			}
+		}, func() {})
+	}
+	return Tally{tally: rows, total: RowCount{rowCount: len(rows)}, on: on}
 }
 
 // mark is what the cards say of one agent that counts on the surface, as the bits below.
@@ -118,6 +156,9 @@ func fleetRows(on Surface, agents []Agent, cards []Card) Tally {
 		marks = make([]mark, len(agents))
 		for i := range cards {
 			c := &cards[i]
+			if c.standing == CardStandingDisplayCopy() {
+				continue
+			}
 			bits := uint8(markOther)
 			if c.holding == HoldingHeldBySupervisor() {
 				bits = markSupervised
@@ -131,6 +172,9 @@ func fleetRows(on Surface, agents []Agent, cards []Card) Tally {
 	rows := make([]row, 0, fleetBound(agents, cards))
 	for i := range cards {
 		c := &cards[i]
+		if c.standing == CardStandingDisplayCopy() {
+			continue
+		}
 		c.asker.Match(func(ref agentref.Ref) {
 			j := lastCounting(on, agents, ref)
 			if j < 0 || marks[j].has(markAsked) || marks[j].supervisedOnly() || !stands(on, c, marks[j]) {
@@ -359,6 +403,9 @@ func lastListed(agents []Agent, ref agentref.Ref) int {
 // as having a card in the list, or one its task's supervisor holds.
 func badgeHost(agents []Agent, host []int, c *Card, carded, supervised []bool) int {
 	h := -2
+	if c.standing == CardStandingDisplayCopy() {
+		return h
+	}
 	c.asker.Match(func(ref agentref.Ref) {
 		j := -1
 		for i := len(agents) - 1; i >= 0; i-- {

@@ -447,23 +447,34 @@ fi`
 
 func claudeExecutable() (string, error) { return agentExecutable("claude") }
 
-// A managed model probe can skip the user's rc file when Claude and its interpreter are already available.
-// Otherwise run the original shell command so it gets the launcher and PATH established by the user's setup.
-func canProbeManagedClaudeDirectly() bool {
+func canProbeManagedClaudeDirectly() bool { return canProbeManagedDirectly("claude") }
+
+func canProbeManagedCodexDirectly() bool { return canProbeManagedDirectly("codex") }
+
+func managedProbeExecutable(agent string) string {
+	path := agentExecutableOnDisk(agent)
+	if path == "" && agent == "codex" {
+		return bundledCodexCLI()
+	}
+	return path
+}
+
+// A managed model probe can skip the user's rc file when its CLI and interpreter are already available.
+func canProbeManagedDirectly(agent string) bool {
 	if runtime.GOOS == "windows" {
 		return true // keep the Windows executable and wrapper handling in Launch
 	}
-	claude := agentExecutableOnDisk("claude")
-	if claude == "" {
+	exe := managedProbeExecutable(agent)
+	if exe == "" {
 		return false
 	}
-	dir, needsNode := launcherNodeDir(claude)
+	dir, needsNode := launcherNodeDir(exe)
 	if dir != "" {
 		return true
 	}
 	if !needsNode {
 		// An arbitrary wrapper may depend on tools added by the user's shell.
-		return nativeExecutable(claude)
+		return nativeExecutable(exe)
 	}
 	_, err := exec.LookPath("node")
 	return err == nil
@@ -511,9 +522,16 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 	if agent == "" {
 		agent = "claude"
 	}
-	exe, err := agentExecutable(agent)
-	if err != nil {
-		return fmt.Errorf("personad launch: %w", err)
+	var exe string
+	if os.Getenv(managedModelProbeEnv) == "1" {
+		// Prefer the probe's on-disk CLI before agentExecutable would look in the user's shell.
+		exe = managedProbeExecutable(agent)
+	}
+	if exe == "" {
+		exe, err = agentExecutable(agent)
+		if err != nil {
+			return fmt.Errorf("personad launch: %w", err)
+		}
 	}
 	var env []string
 	if agent == "claude" {
@@ -843,7 +861,7 @@ func launchExec(agent, exe string, argv, env []string) (string, []string, []stri
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "personad launch: "+format+"\n", a...) }
 	command := append([]string{exe}, rest...)
-	if agent == "claude" && os.Getenv(managedModelProbeEnv) == "1" {
+	if (agent == "claude" || agent == "codex") && os.Getenv(managedModelProbeEnv) == "1" {
 		if dir, _ := launcherNodeDir(exe); dir != "" {
 			// Only the probe needs this interpreter. Keep the child environment's PATH order for every other command.
 			exe = filepath.Join(dir, "node")

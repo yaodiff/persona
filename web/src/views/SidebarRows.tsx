@@ -4,7 +4,7 @@ import { memo, useCallback, useMemo, useState, useSyncExternalStore, type ReactN
 import { formatList, t } from "../i18n";
 import { awaitsReply, justFinished, sessionSource, sourceName } from "../lib/agent-groups";
 import { addSection, arrangeSessions, assignSection, GROUP_LABEL, isDefaultView, providerLabel, refreshAgentSessions, removeSection, resetView, setView, SHOW_LABEL, SORT_LABEL, toggleProvider, togglePin, totalUnread, updateAgentPrefs, useAgentList, useAgentPrefs, viewOf, type AgentPrefs, type AgentSession, type GroupBy, type ShowMode, type SortBy } from "../lib/agents";
-import { activityOf, backgroundWaiting, sessionDisplayTab, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
+import { activityOf, backgroundWaiting, externalLink, sessionDisplayTab, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
 import { useHerdrTabName } from "../lib/agents-display";
 import { firstAndCurrent } from "../lib/persona-nav";
 import { pickMainChat } from "../lib/handoff";
@@ -54,7 +54,9 @@ import { personalHideDeps, personalOrder, personalSessions, removeAgentSession, 
 import { BADGE_CLASS, CURRENT_ROW, type GoFn, GroupCount, pageIconStyle, type RegFn, ROW_TITLE_MIN, type RowMenuFn, Section } from "./SidebarParts";
 import { sidebarRowHover } from "./SidebarRowHover";
 import { requestDirectWaiting } from "../lib/direct-waiting";
+import { needsYouAutoOpen } from "../lib/needs-you-auto-open";
 import type { UIColor } from "../lib/extension-ui-v6";
+import { deliverySummary } from "../lib/undelivered";
 
 // The main conversation uses the home symbol (Back to main chat's) and one Main conversation line.
 // The assistant's identity belongs to the sidebar head; a left draft keeps its existing second line.
@@ -73,7 +75,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   const open = (e: React.MouseEvent) => {
     // set to Full page, picked from another place it opens the page the conversation kept over it (#13164)
     go(to, () => pickMainChat(active))(e);
-    if (e.defaultPrevented && main && pending > 0) requestDirectWaiting(main.session_id);
+    if (e.defaultPrevented && main && pending > 0 && needsYouAutoOpen()) requestDirectWaiting(main.session_id);
   };
   const link = (
     <a
@@ -89,7 +91,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
       aria-keyshortcuts={chord ? ariaKeyshortcuts(chord) : undefined}
       aria-description={t("sidebar.persona_main")}
       // pinned over the list (#5581), its own hover fill: the gliding highlight passes under the pinned box
-      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-[background-color,transform] duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active ? CURRENT_ROW : "hover:bg-hover focus-visible:bg-hover", onMenu && active && "pr-8", onMenu && "[@media(hover:none)]:pr-11")}
+      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-[background-color,transform] duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active ? CURRENT_ROW : "hover:bg-hover focus-visible:bg-hover", onMenu && (active ? "pr-8" : "group-hover/row:pr-8"), onMenu && "[@media(hover:none)]:pr-11")}
     >
       <Icon name="home" size={14} stroke={1.8} className="shrink-0 text-ink" />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -115,7 +117,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
         title={t("sidebar.more")}
         tabIndex={-1}
         onClick={(e) => onMenu(e.currentTarget.parentElement ?? e.currentTarget)}
-        className={cx("absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent", active ? "flex hover:bg-hover" : "hidden bg-hover hover:bg-hover-2")}
+        className={cx("absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent", active ? "flex hover:bg-hover" : "hidden hover:bg-hover-2")}
       >
         <Icon name="more" size={14} />
       </button>
@@ -162,7 +164,7 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
       onBlur={() => hover(null)}
       aria-label={notice ? `${label}, ${notice}` : undefined}
       aria-current={active ? "page" : undefined}
-      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW)}
+      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW, onMenu && (active ? "pr-8" : "group-hover/row:pr-8"), onMenu && "[@media(hover:none)]:pr-11")}
     >
       <span className={active ? "text-ink" : "text-ink-3"} style={pageIconStyle(color, active)}>
         {agent ? <AgentMark agent={agent} size={14} decorative /> : <Icon name={icon} size={14} stroke={1.8} />}
@@ -194,7 +196,7 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
           const box = e.currentTarget.parentElement ?? e.currentTarget;
           onMenu({ anchor: box }, box, true);
         }}
-        className="absolute top-1/2 right-1 z-20 hidden size-6 -translate-y-1/2 items-center justify-center rounded-[6px] bg-hover text-ink-3 hover:bg-hover-2 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent"
+        className="absolute top-1/2 right-1 z-20 hidden size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:bg-hover-2 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent"
       >
         <Icon name="more" size={14} />
       </button>
@@ -236,7 +238,7 @@ export const ShellRow = memo(function ShellRow({ k, reg, hover, active, to, go, 
       className={cx(
         "relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11",
         active && CURRENT_ROW,
-        onMenu && active && "pr-8",
+        onMenu && (active ? "pr-8" : "group-hover/row:pr-8"),
         onMenu && "[@media(hover:none)]:pr-11",
       )}
     >
@@ -273,7 +275,7 @@ export const ShellRow = memo(function ShellRow({ k, reg, hover, active, to, go, 
         }}
         className={cx(
           "absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent",
-          active ? "flex hover:bg-hover" : "hidden bg-hover hover:bg-hover-2",
+          active ? "flex hover:bg-hover" : "hidden hover:bg-hover-2",
         )}
       >
         <Icon name="more" size={14} />
@@ -297,12 +299,13 @@ function SourceTag({ s, className }: { s: Session; className?: string }) {
   const label = sourceName(source);
   const mark = source === "feishu" ? <BrandMark brand="lark" size={16} fit="badge" /> : <Icon name={SOURCE_ICON[source].name} size={14} className={SOURCE_ICON[source].tone} />;
   const cls = cx("flex size-4 shrink-0 items-center justify-center", className);
-  if (source === "feishu" && s.external_url) {
+  const ext = source === "feishu" ? externalLink(s) : undefined;
+  if (ext) {
     // a link inside the row's link: opened by hand, so the row does not navigate too
     const open = (e: React.SyntheticEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      window.open(s.external_url, "_blank", "noopener");
+      window.open(ext, "_blank", "noopener,noreferrer");
     };
     const title = t("lib-agent-groups.open_feishu_topic");
     return (
@@ -473,6 +476,11 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const now = useNow(60_000, showsAge || runningWorkflows(s).length > 0 || s.turn_error_kind === "usage_limit" || Boolean(s.background_stalled_since));
   // background commands that look stuck (#13744): it is still Working, the row says they are quiet
   const stall = showState && !s.assistant ? backgroundStall(s, now) : null;
+  // a logical conversation's input that has not gone in (#17431): said on its row, never an idle row that swallowed it
+  const delivery = deliverySummary(s.undelivered);
+  const undelivered = delivery.expired.length
+    ? { expired: true, text: t("sidebar.undelivered_expired", { count: delivery.expired.length }) }
+    : delivery.waiting ? { expired: false, text: t("sidebar.undelivered_waiting", { count: delivery.waiting }) } : null;
   const detail = withDetail ? rowDetail(s, now) : [];
   const workflow = showState && !s.assistant && st !== "offline" ? workflowShortLine(s) : "";
   const workflowTitle = workflow ? workflowLine(s, now) : "";
@@ -553,7 +561,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
         endRoom ? "pr-[108px] [@media(hover:none)]:pr-[120px]" : keepTrailing
           // the ⋯ is an in-flow slot of its own, so the anchor itself leaves no room for an overlay
           ? "pr-1 [@media(hover:none)]:pr-1"
-          : cx(onMenu && active && "pr-8", onMenu && "[@media(hover:none)]:pr-11"))}
+          : cx(onMenu && (active ? "pr-8" : "group-hover/row:pr-8"), onMenu && "[@media(hover:none)]:pr-11"))}
     >
       {/* the agent's mark before its state (#6390): what runs there, then how it is doing */}
       {showState && !s.assistant && <SessionMark s={s} size={14} />}
@@ -562,7 +570,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
       {holdSides && <HoldSides mid={row.machine_id} sid={row.session_id} />}
-      {ultra || detail.length > 0 || workflow || line || sideLine || childLine || plan || stall ? (
+      {ultra || detail.length > 0 || workflow || line || sideLine || childLine || plan || stall || undelivered ? (
         <span className={cx("flex flex-1 flex-col", titleMin, titleFirst)}>
           {ultra ? (
             <span className="flex min-w-0 items-center gap-1">
@@ -607,6 +615,13 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
             <span data-bg-stalled title={stall.title} className="flex h-4 min-w-0 items-center gap-1 text-submeta leading-4 text-ink-3">
               <Icon name="clock" size={10} stroke={2.2} className="shrink-0" />
               <span className="truncate">{stall.text}</span>
+            </span>
+          )}
+          {undelivered && (
+            <span data-undelivered-line={undelivered.expired ? "expired" : "waiting"} role={undelivered.expired ? "alert" : "status"} title={undelivered.text}
+              className={cx("flex h-4 min-w-0 items-center gap-1 text-submeta leading-4", undelivered.expired ? "font-medium text-red" : "text-orange")}>
+              <Icon name={undelivered.expired ? "warning" : "clock"} size={10} stroke={2.2} className="shrink-0" />
+              <span className="truncate tabular-nums">{undelivered.text}</span>
             </span>
           )}
           {plan && (
@@ -676,7 +691,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       className={inFlow
         ? cx("relative z-20 my-1 flex size-6 shrink-0 items-center justify-center self-center rounded-[6px] text-ink-3 transition-opacity hover:bg-hover hover:text-ink [@media(hover:none)]:size-11",
           active ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100")
-        : cx("absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent", active ? "flex hover:bg-hover" : "hidden bg-hover hover:bg-hover-2")}
+        : cx("absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent", active ? "flex hover:bg-hover" : "hidden hover:bg-hover-2")}
     >
       <Icon name="more" size={14} />
     </button>

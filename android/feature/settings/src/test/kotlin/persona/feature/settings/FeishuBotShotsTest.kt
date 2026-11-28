@@ -52,7 +52,7 @@ class FeishuBotShotsTest {
     private var dark by mutableStateOf(false)
     private fun out(): File = File(System.getProperty("persona.shots") ?: "build/feishu-bot-shots").also { it.mkdirs() }
 
-    private class Bot(val status: FeishuBotStatus, override val sync: LarkSyncSettings? = null) : FeishuBotSettings {
+    private class Bot(val status: FeishuBotStatus, override val sync: LarkSyncSettings? = null, override val groupAccess: FeishuGroupAccessSettings? = null) : FeishuBotSettings {
         override suspend fun status() = status
         override suspend fun update(update: FeishuBotUpdate) = status
     }
@@ -133,9 +133,11 @@ class FeishuBotShotsTest {
         }
     }
 
-    /** Scrolls the page until [text] is on screen, once the page has it. */
+    /** Scrolls the page until [text] is on screen, once the page has it. A test tag is a node the list can scroll to too. */
     private fun bringIn(text: String) = rule.waitUntil(5_000) {
-        runCatching { rule.onAllNodes(hasScrollToNodeAction())[0].performScrollToNode(hasText(text)) }.isSuccess
+        runCatching {
+            rule.onAllNodes(hasScrollToNodeAction())[0].performScrollToNode(hasText(text) or androidx.compose.ui.test.hasTestTag(text))
+        }.isSuccess
     }
 
     @Test fun theDailySync() {
@@ -168,6 +170,48 @@ class FeishuBotShotsTest {
         show(Bot(paired.copy(agents = null), FakeLarkSync(null)))
         bringIn("怎么建机器人")
         rule.onAllNodes(hasText("每天同步到知识库")).assertCountEquals(0)
+    }
+
+    /** Group access (#16848): an allowlist, one recent request and one tool, in every style, light and dark. */
+    private val groupAccess = FeishuGroupAccess(
+        revision = 3, paired = true,
+        policy = FeishuGroupAccessPolicy(mode = FeishuGroupAccessMode.Allowlist,
+            allowedUsers = listOf(FeishuGroupUser("ou_1", "示例用户")),
+            allowedChats = listOf(FeishuGroupChat("oc_1", "项目群")),
+            blockedUsers = listOf(FeishuGroupUser("ou_9", "已屏蔽的人")),
+            guestTools = listOf("wiki_search"), perChatHourly = 20),
+        availableTools = listOf(FeishuGuestToolOption("wiki_search", "知识库")),
+        recentRequests = listOf(FeishuGroupRequest("ou_2", "同事乙", "oc_1", "项目群", 1795000000)),
+    )
+
+    private class GroupAccessApi(private val access: FeishuGroupAccess?) : FeishuGroupAccessSettings {
+        override suspend fun read() = access
+        override suspend fun update(revision: Long, policy: FeishuGroupAccessPolicy) = access ?: error("nothing to update")
+    }
+
+    @Test fun groupAccess() {
+        show(Bot(paired.copy(agents = null), groupAccess = GroupAccessApi(groupAccess)))
+        for (text in listOf("群聊访问", "我允许的人", "只有你添加的人可以 @ 机器人，并且只能在你允许的群里。", "每个群每小时的提问数",
+            "允许的群", "项目群", "允许的人", "示例用户", "最近的请求", "同事乙", "已屏蔽", "屏蔽在任何模式下都优先生效。",
+            "访客可用的工具", "知识库 · wiki_search")) {
+            bringIn(text)
+            rule.onAllNodes(hasText(text, substring = true), useUnmergedTree = true)[0].assertIsDisplayed()
+        }
+        bringIn("group-access-caution")
+        rule.onNodeWithTag("group-access-caution").assertIsDisplayed()
+        syncShots("group-access", "访客可用的工具") {}
+    }
+
+    @Test fun anOlderHubShowsNoGroupAccess() {
+        show(Bot(paired.copy(agents = null), groupAccess = GroupAccessApi(null)))
+        bringIn("怎么建机器人")
+        rule.onAllNodes(hasText("群聊访问")).assertCountEquals(0)
+    }
+
+    @Test fun anUnpairedBotShowsNoGroupAccess() {
+        show(Bot(FeishuBotStatus(enabled = true, hasSecret = true, connected = true), groupAccess = GroupAccessApi(groupAccess)))
+        bringIn("怎么建机器人")
+        rule.onAllNodes(hasText("群聊访问")).assertCountEquals(0)
     }
 
     @Test fun noCredentialsYet() {

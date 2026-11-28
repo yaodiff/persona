@@ -98,6 +98,8 @@ class HttpMachineManagement internal constructor(
 
     override suspend fun setBotmux(machineId: String, on: Boolean): Boolean = setBoolSwitch(machineId, "botmux", on)
 
+    override suspend fun setOrcaChatStarts(machineId: String, on: Boolean): Boolean = setBoolSwitch(machineId, "orca-chat-starts", on)
+
     override suspend fun claudeLiveReplies(machineId: String): Boolean? = boolSwitch(machineId, "claude-live-replies")
 
     override suspend fun setClaudeLiveReplies(machineId: String, on: Boolean): Boolean =

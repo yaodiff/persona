@@ -133,6 +133,7 @@ func (s *Service) nudgeLoop(ctx context.Context) {
 			cctx, cancel := context.WithTimeout(ctx, time.Minute)
 			s.larkModule().NudgeTick(cctx)
 			s.larkModule().HandoffTick(cctx)
+			s.larkModule().GuestTick(cctx)
 			cancel()
 		}
 	}
@@ -183,6 +184,14 @@ func (h larkHost) RecallRun(messageID string) {
 func (h larkHost) ResolveTarget(ctx context.Context, t botTarget) (assistantwire.ChatResolved, error) {
 	rt, err := h.s.resolveBotTarget(ctx, t)
 	return chatResolved(rt), err
+}
+
+func (h larkHost) SessionExists(ctx context.Context, machine, session string) bool {
+	if machine == "" {
+		machine = h.s.settings(ctx).MachineID
+	}
+	_, ok := h.s.session(ctx, machine, session)
+	return ok
 }
 
 // chatResolved is a resolved target as the module names it.
@@ -251,11 +260,6 @@ func (h larkHost) InterruptConversation(ctx context.Context, rt assistantwire.Ch
 }
 
 func (h larkHost) TurnPending(machine, session string) bool { return h.s.turnPending(machine, session) }
-
-func (h larkHost) StopProgressCard(ctx context.Context, f FeishuFeatures, t botTarget, messageID string) (string, string) {
-	out := h.s.stopProgressCard(ctx, f, t, messageID)
-	return out.kind, out.message
-}
 
 func (h larkHost) Conversations(ctx context.Context) ([]proto.Session, string) {
 	return h.s.conversations(ctx, false, "")
@@ -503,20 +507,13 @@ func (h larkHost) TodoOfThread(chatID, threadID string) (assistantwire.ChatTodo,
 	return out, true
 }
 
-func (h larkHost) ThreadNoReply(ctx context.Context, ev botcard.MessageEvent, todoID, chatID, threadID string) {
+// ThreadNoReply records the owner's choice to stop reporting back, then replies in the to-do's topic.
+func (h larkHost) ThreadNoReply(ctx context.Context, messageID, todoID string, to assistantwire.ChannelTarget) {
 	t, ok := h.s.todoNow(todoID)
 	if !ok {
 		t = Todo{ID: todoID}
 	}
-	h.s.threadNoReply(ctx, ev, t, &feishuTopic{Chat: chatID, Thread: threadID})
-}
-
-func (h larkHost) ThreadRoutes(ctx context.Context, todoID string, f FeishuFeatures) ([]botTarget, error) {
-	t, ok := h.s.todoNow(todoID)
-	if !ok {
-		t = Todo{ID: todoID}
-	}
-	return h.s.threadRoutes(ctx, t, f)
+	h.s.stopReportOf(ctx, messageID, t, to, "thread_question", db.DecisionThread)
 }
 
 // TopicDecision notes text, said in a topic as message messageID, as a decision of todo todoID (asked as question).
@@ -560,10 +557,6 @@ func (h larkHost) SettleAskClaim(ctx context.Context, todoID string, ok bool) {
 }
 
 func (h larkHost) CloseAskTodo(ctx context.Context, todoID string) { h.s.closeAskTodo(ctx, todoID) }
-
-func (h larkHost) OpenTarget(ctx context.Context, st FeishuStatus) (botTarget, string, string) {
-	return h.s.openTarget(ctx, st)
-}
 
 func (h larkHost) TodoTitle(ctx context.Context, words string, l i18n.Lang, linkLabel bool) (string, bool) {
 	var title string
@@ -639,4 +632,14 @@ func (h larkHost) RaiseHandoffDecision(ctx context.Context, handoff string, req 
 // WithdrawHandoffDecision takes back a confirmation nobody answered.
 func (h larkHost) WithdrawHandoffDecision(ctx context.Context, id string) {
 	h.s.WithdrawHandoffDecision(ctx, id)
+}
+
+// StartGroupGuest starts the guest that answers one chat and thread (bot_guest.go).
+func (h larkHost) StartGroupGuest(ctx context.Context, group, text, launcher string, tools []string) (string, string, error) {
+	return h.s.StartGroupGuest(ctx, group, text, launcher, tools)
+}
+
+// SendGroupGuest sends a later question into the conversation that already answers the group.
+func (h larkHost) SendGroupGuest(ctx context.Context, machine, session, turn, text string) error {
+	return h.s.SendGroupGuest(ctx, machine, session, turn, text)
 }

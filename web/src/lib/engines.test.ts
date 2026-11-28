@@ -5,6 +5,8 @@ import {
   currentEngine,
   detectionText,
   engineDetail,
+  engineState,
+  orcaStopped,
   engineFooter,
   engineName,
   engineOptions,
@@ -92,6 +94,36 @@ describe("engine choice (iOS EngineSelectionModel)", () => {
     expect(detectionText("tern", on)).toBe("检测到可用 · 0.4.1");
     expect(detectionText("paseo", on)).toBe("暂无检测结果");
     expect(detectionText("herdr", machine({ engines }))).toBe("电脑离线，暂无检测结果");
+  });
+
+  it("tells a closed Orca from one that is not there, and shows an incompatible one's version (#17037)", () => {
+    const on = (orca: Record<string, unknown>) => machine({ online: true, engines: [{ id: "orca", name: "Orca", available: false, ...orca }] });
+    expect(detectionText("orca", on({ state: "stopped" }))).toBe("已安装，未运行");
+    expect(detectionText("orca", on({ state: "stopped", version: "1.4.277" }))).toBe("已安装，未运行 · 1.4.277");
+    expect(detectionText("orca", on({ state: "incompatible", version: "1.4.100", note: "update" }))).toBe("不兼容 · 1.4.100");
+    expect(detectionText("orca", on({ state: "missing" }))).toBe("未检测到");
+    expect(detectionText("orca", on({ state: "from-the-future" }))).toBe("未检测到");
+    expect(detectionText("orca", on({ available: true, state: "running", version: "1.4.277" }))).toBe("检测到可用 · 1.4.277");
+  });
+
+  it("reads a state it does not know as unknown", () => {
+    expect(engineState({ state: "stopped" })).toBe("stopped");
+    expect(engineState({ state: "sleeping" })).toBe("unknown");
+    expect(engineState({})).toBe("unknown");
+    expect(engineState(undefined)).toBe("unknown");
+  });
+
+  it("says Orca is stopped only for an online computer that enables it and whose node says so (#17037)", () => {
+    const stopped = [{ id: "orca", name: "Orca", available: false, state: "stopped" }];
+    const m = (extra: Partial<Machine>) => machine({ online: true, engine_hosts: ["herdr", "orca"], engine_default: "herdr", engines: stopped, ...extra });
+    expect(orcaStopped(m({}))).toBe(true); // in the set, not the default
+    expect(orcaStopped(m({ engine_hosts: ["orca"], engine_default: "orca" }))).toBe(true);
+    expect(orcaStopped(m({ engine_hosts: ["herdr"], engine_default: "herdr" }))).toBe(false); // not enabled
+    expect(orcaStopped(m({ online: false }))).toBe(false);
+    expect(orcaStopped(m({ engines: [{ id: "orca", name: "Orca", available: true, state: "running" }] }))).toBe(false);
+    expect(orcaStopped(m({ engines: [{ id: "orca", name: "Orca", available: false, state: "incompatible", note: "x" }] }))).toBe(false);
+    expect(orcaStopped(m({ engines: [{ id: "orca", name: "Orca", available: false }] }))).toBe(false); // an older node
+    expect(orcaStopped(machine({ online: true, engine: "orca", engines: stopped }))).toBe(true); // an older hub: its single engine
   });
 
   it("offers 保存 only for a change the hub can take", () => {

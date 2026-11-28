@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 )
 
+// planInboxSource validates a caller-selected item. matchPlannedInbox handles source inference for plans.
 func (s *Service) planInboxSource(ctx context.Context, machine, conversation string, t *PlanTask) error {
 	source := strings.TrimSpace(t.InboxItem)
 	if source == "none" {

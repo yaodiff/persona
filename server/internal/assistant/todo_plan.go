@@ -313,39 +313,19 @@ func (s *Service) editTodoWithCloseActivity(ctx context.Context, id string, e db
 	} else if e.SetResponsible && e.Responsible != nil && e.Responsible.Kind == db.ResponsibleSession && e.Responsible.SessionID != "" {
 		fencedSessions = [][2]string{{e.Responsible.MachineID, e.Responsible.SessionID}}
 	}
-	for {
-		if reopening {
-			// Keep a concurrent ledger writer from publishing an older state over the reopened row.
-			s.supervise.writeMu.Lock()
-		}
-		s.todos.writing.Lock()
-		if ch := s.idleCloseFenceForSessions(fencedSessions); ch != nil {
-			s.todos.writing.Unlock()
-			if reopening {
-				s.supervise.writeMu.Unlock()
-			}
-			select {
-			case <-ch:
-				continue
-			case <-ctx.Done():
-				return Todo{}, ctx.Err()
-			}
-		}
-		break
+	// The idle-close fence is checked with the to-do writer held. Waiting releases it before taking the ledger
+	// writer, so terminal review and guarded park can still enter in to-do → ledger order.
+	if err := s.lockTodoWritingForSessions(ctx, fencedSessions); err != nil {
+		return Todo{}, err
+	}
+	if reopening {
+		s.supervise.writeMu.Lock()
 	}
 	unlock := func() {
 		if reopening {
 			s.supervise.writeMu.Unlock()
 		}
 		s.todos.writing.Unlock()
-	}
-	if e.Done != nil && *e.Done {
-		if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
-			if err := s.investigationCloseError(ctx, current); err != nil {
-				unlock()
-				return Todo{}, err
-			}
-		}
 	}
 	if e.Done != nil && *e.Done {
 		if current, ok := s.todoNow(id); ok && current.DoneAt == nil {

@@ -61,6 +61,9 @@ export interface QuickCommandLabels {
   readonly starredMessages?: string;
   readonly archivedChats?: string;
   readonly exportChat?: string;
+  readonly standingAuth?: string;
+  readonly fullSearch?: string;
+  readonly allChats?: string;
   readonly needsYou?: string;
   readonly working?: string;
   readonly unread?: string;
@@ -78,6 +81,9 @@ export interface QuickCommandBuildOptions {
   readonly showStarred?: boolean;
   readonly showArchived?: boolean;
   readonly showExportChat?: boolean;
+  readonly showStandingAuth?: boolean;
+  readonly showFullSearch?: boolean;
+  readonly showAllChats?: boolean;
   readonly isDark?: boolean;
   readonly labels?: QuickCommandLabels;
 }
@@ -466,6 +472,48 @@ function buildActionEntries(
       iconKey: 'export',
       actionId: 'export_chat',
       keywords: ['export', 'markdown', 'share', 'copy', 'transcript', '导出', 'エクスポート']
+    });
+  }
+
+  if (options.showStandingAuth === true) {
+    candidates.push({
+      id: 'action:open_standing_auth',
+      category: 'actions',
+      title: labels?.standingAuth || 'Standing Authorizations',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'standing_auth',
+      actionId: 'open_standing_auth',
+      keywords: ['standing', 'authorization', 'authorizations', 'grants', 'always', 'permissions', '授权', '权限', '常時許可']
+    });
+  }
+
+  if (options.showFullSearch === true) {
+    candidates.push({
+      id: 'action:open_full_search',
+      category: 'actions',
+      title: labels?.fullSearch || 'Search Chats & Agents',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'search',
+      actionId: 'open_full_search',
+      keywords: ['search', 'find', 'chats', 'agents', 'full', '搜索', '检索', '検索']
+    });
+  }
+
+  if (options.showAllChats === true) {
+    candidates.push({
+      id: 'action:open_all_chats',
+      category: 'actions',
+      title: labels?.allChats || 'All Chats & Auto',
+      subtitle: '',
+      badge: '',
+      tone: 'neutral',
+      iconKey: 'all_chats',
+      actionId: 'open_all_chats',
+      keywords: ['all', 'chats', 'auto', 'automatic', 'inbox', 'tasks', '全部对话', '自动对话', 'すべてのチャット']
     });
   }
 

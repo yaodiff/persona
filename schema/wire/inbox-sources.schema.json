@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "inbox-sources.schema.json",
+  "title": "Inbox stored sources",
+  "description": "Whether a manager retains items from each built-in Inbox source, covering every open item and all completed items kept in history, not only the bounded GET /api/v1/inbox list. The field is absent or null when any manager is too old or cannot answer, which means unknown and preserves the clients' previous behavior (docs/protocol/protocol.md, #17399).",
+  "x-out": {
+    "go": "server/internal/assistantwire/inbox_sources_gen.go",
+    "ts": "web/src/lib/inbox-sources-wire.ts",
+    "kotlin": "android/core/contracts/src/main/kotlin/persona/core/contracts/generated/InboxSourcesWire.kt"
+  },
+  "x-guard": ["swift", "arkts", "rust"],
+  "$defs": {
+    "InboxStoredSources": {
+      "description": "Core-computed source presence. Lark covers both lark and larkcli items. These are facts about retained data, independent of whether the corresponding module or extension is offered.",
+      "type": "object",
+      "required": ["lark", "mail"],
+      "properties": {
+        "lark": {
+          "type": "boolean",
+          "description": "At least one retained open or completed item has source lark or larkcli."
+        },
+        "mail": {
+          "type": "boolean",
+          "description": "At least one retained open or completed item has source mail."
+        }
+      }
+    }
+  }
+}

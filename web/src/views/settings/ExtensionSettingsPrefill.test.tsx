@@ -93,7 +93,7 @@ describe("a proposed extension settings change", () => {
       repos: ["~/code"],
       limits: { max: 5, label: "Saved" },
       accounts: [{ _id: "entry_one", name: "One" }],
-    });
+    }, expect.objectContaining({ managerId: "assistant" }));
   });
 
   it("keeps the saved configuration as the base and applies once, so Revert removes the proposal", async () => {

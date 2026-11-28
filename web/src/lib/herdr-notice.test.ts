@@ -33,6 +33,14 @@ describe("herdrWatched", () => {
     expect(herdrWatched(m("a", true, "orca"))).toBe(false);
     expect(herdrWatched(m("a", false))).toBe(false);
   });
+
+  it("follows the engine set, not only its default (#17037)", () => {
+    const set = (hosts: string[], def: string) => ({ ...m("a", true, def), engine_hosts: hosts, engine_default: def });
+    expect(herdrWatched(set(["herdr", "orca"], "orca"))).toBe(true); // herdr in the set, Orca the default
+    expect(herdrWatched(set(["herdr-core", "orca"], "orca"))).toBe(false);
+    expect(herdrWatched(set([], ""))).toBe(false); // no terminal engine
+    expect(herdrWatched({ ...set(["herdr", "orca"], "orca"), online: false })).toBe(false);
+  });
 });
 
 describe("HerdrWatch", () => {

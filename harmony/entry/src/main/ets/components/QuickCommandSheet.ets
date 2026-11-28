@@ -97,6 +97,9 @@ export struct QuickCommandSheet {
       starredMessages: tr('starred_messages'),
       archivedChats: tr('archived_chats'),
       exportChat: tr('export_chat'),
+      standingAuth: tr('standing_auth_title'),
+      fullSearch: tr('assistant_full_search_title'),
+      allChats: tr('flow_all_chats'),
       needsYou: tr('needs_you'),
       working: tr('working'),
       unread: tr('agent_group_unread'),
@@ -116,6 +119,9 @@ export struct QuickCommandSheet {
       showStarred: starredStore.isOffered(this.model),
       showArchived: this.model.connected,
       showExportChat: this.showExportChat,
+      showStandingAuth: this.model.connected,
+      showFullSearch: this.model.connected,
+      showAllChats: this.model.connected,
       isDark: this.env.dark,
       labels: this.paletteLabels()
     });
@@ -169,6 +175,9 @@ export struct QuickCommandSheet {
     if (entry.iconKey === 'star') return $r('sys.symbol.star_fill');
     if (entry.iconKey === 'archive') return $r('sys.symbol.archivebox');
     if (entry.iconKey === 'export') return $r('sys.symbol.share');
+    if (entry.iconKey === 'standing_auth') return $r('sys.symbol.checkmark_shield');
+    if (entry.iconKey === 'search') return Symbols.search;
+    if (entry.iconKey === 'all_chats') return Symbols.persona;
     return Symbols.agent;
   }
 

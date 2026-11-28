@@ -8,20 +8,30 @@ import { Symbols } from '../design/Symbols';
 import { tr } from '../design/Strings';
 import { Tokens } from '../design/Tokens';
 import {
+  ActivityBarItem,
+  buildProjectActivityBars,
+  buildRecentHourlyActivity,
   buildTokenHeatmap,
   cacheHitRatePercent,
   emptyUsageTokens,
+  formatAgentDisplayName,
+  formatLauncherDisplayName,
   formatSharePercent,
   HeatmapCell,
   HeatmapMonthLabel,
+  HourlyActivitySummary,
   parseUsageDaysResponse,
   parseUsageHoursResponse,
   parseUsageProjectDetailResponse,
   parseUsageProjectsResponse,
   RankedUsagePart,
+  RankedUsagePlace,
   RankedUsageProject,
+  rankAgentShares,
+  rankMachineShares,
   rankProjectsForRange,
   rankUsageParts,
+  rankUsagePlaces,
   selectProjectBreakdown,
   sumLastDaysTokens,
   TokenFormat,
@@ -36,6 +46,7 @@ import {
   UsageTokens
 } from '../core/TokenUsage';
 import { ClientModel } from '../models/ClientModel';
+import { Wire } from '../models/Wire';
 import { HttpFailure } from '../platform/HubTransport';
 import { Haptics } from '../platform/Haptics';
 import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
@@ -58,6 +69,9 @@ export struct TokenUsageSheet {
   @Local private projectDetail: UsageProjectDetailResponse | undefined = undefined;
   @Local private detailLoading: boolean = false;
   @Local private detailError: string = '';
+  @Local private pickedHourId: string = '';
+  @Local private pickedProjectBarId: string = '';
+  @Local private launcherNames: Record<string, string> = {};
   private loadSerial: number = 0;
   private detailSerial: number = 0;
 
@@ -132,6 +146,7 @@ export struct TokenUsageSheet {
     Haptics.tap();
     this.selectedProject = project;
     this.projectDetail = undefined;
+    this.pickedProjectBarId = '';
     this.detailError = '';
     this.detailLoading = true;
     const serial = ++this.detailSerial;
@@ -139,8 +154,21 @@ export struct TokenUsageSheet {
     const scope = owner.scope();
     const generation = owner.connectionGeneration();
     try {
-      const raw = await owner.repo().call('/api/v1/usage/projects/detail?key=' + encodeURIComponent(project.key));
+      const repo = owner.repo();
+      const detailPromise = repo.call('/api/v1/usage/projects/detail?key=' + encodeURIComponent(project.key));
+      const launchersPromise = Object.keys(this.launcherNames).length === 0
+        ? repo.call('/api/v1/launchers').catch((): Record<string, Object> => ({}))
+        : Promise.resolve({} as Record<string, Object>);
+      const raw = await detailPromise;
+      const rawLaunchers = await launchersPromise;
       if (serial !== this.detailSerial || !owner.owns(generation, scope)) return;
+      const names: Record<string, string> = {};
+      for (const entry of Wire.rows(rawLaunchers, 'launchers')) {
+        const key = Wire.text(entry, 'name');
+        const title = Wire.text(entry, 'title');
+        if (key && title) names[key] = title;
+      }
+      if (Object.keys(names).length > 0) this.launcherNames = names;
       const parsed = parseUsageProjectDetailResponse(raw);
       if (parsed) {
         this.projectDetail = parsed;
@@ -310,15 +338,15 @@ export struct TokenUsageSheet {
   }
 
   @Builder heatmapCard() {
-    Column({ space: Tokens.spaceS }) {
+    Column({ space: Tokens.spaceXs }) {
       PersonaSectionLabel({
         text: tr('token_usage_heatmap_title'),
         trailing: this.pickedDate ? this.pickedDate : tr('token_usage_heatmap_tap_hint')
       })
 
-      Column({ space: Tokens.spaceS }) {
+      Column({ space: Tokens.spaceSm }) {
         if (this.heatmap.months.length > 0) {
-          Row({ space: Tokens.spaceXs }) {
+          Row({ space: Tokens.spaceXxs }) {
             ForEach(this.heatmap.months, (m: HeatmapMonthLabel) => {
               Text(m.label)
                 .fontSize(Tokens.typeLabel)
@@ -331,18 +359,18 @@ export struct TokenUsageSheet {
           .width('100%')
         }
 
-        Row({ space: Tokens.spaceXs }) {
+        Row({ space: 3 }) {
           ForEach(this.heatmap.columns, (col: HeatmapCell[], colIdx: number) => {
-            Column({ space: Tokens.spaceXs }) {
+            Column({ space: 3 }) {
               ForEach(col, (cell: HeatmapCell, rowIdx: number) => {
                 if (cell.level < 0 || !cell.date) {
-                  Blank().width('100%').aspectRatio(1)
+                  Blank().width('100%').height(12)
                 } else {
                   Button({ type: ButtonType.Normal }) {
                     Row().width('100%').height('100%')
                   }
                   .width('100%')
-                  .aspectRatio(1)
+                  .height(12)
                   .padding(0)
                   .backgroundColor(this.heatCellColor(cell.level))
                   .opacity(this.heatCellOpacity(cell.level))
@@ -375,8 +403,8 @@ export struct TokenUsageSheet {
             .fontColor(Colors.secondary)
           ForEach([0, 1, 2, 3, 4], (level: number) => {
             Rect()
-              .width(10)
-              .height(10)
+              .width(9)
+              .height(9)
               .radius(2)
               .fill(this.heatCellColor(level))
               .opacity(this.heatCellOpacity(level))
@@ -390,7 +418,7 @@ export struct TokenUsageSheet {
         .alignItems(VerticalAlign.Center)
       }
       .width('100%')
-      .padding(Tokens.spaceL)
+      .padding(Tokens.spaceM)
       .backgroundColor(Colors.surface)
       .borderRadius(Tokens.radiusCard)
       .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
@@ -591,19 +619,223 @@ export struct TokenUsageSheet {
     .id('token.usage.project.detail')
   }
 
+  private selectedBarFrom(summary: HourlyActivitySummary, pickedId: string): ActivityBarItem | undefined {
+    const id = pickedId || summary.peakId;
+    return summary.bars.find((b: ActivityBarItem) => b.id === id) || summary.bars[summary.bars.length - 1];
+  }
+
+  private formattedAgentParts(parts: RankedUsagePart[]): RankedUsagePart[] {
+    const notSplit = tr('token_usage_not_split');
+    return parts.map((entry: RankedUsagePart): RankedUsagePart => ({
+      part: {
+        key: entry.part.key,
+        name: formatAgentDisplayName(entry.part.key || entry.part.name, notSplit),
+        tokens: entry.part.tokens
+      },
+      progressFraction: entry.progressFraction,
+      sharePercent: entry.sharePercent
+    }));
+  }
+
+  private formattedLauncherParts(parts: RankedUsagePart[]): RankedUsagePart[] {
+    const terminal = tr('token_usage_launcher_terminal');
+    return parts.map((entry: RankedUsagePart): RankedUsagePart => ({
+      part: {
+        key: entry.part.key,
+        name: formatLauncherDisplayName(entry.part.key, terminal, this.launcherNames),
+        tokens: entry.part.tokens
+      },
+      progressFraction: entry.progressFraction,
+      sharePercent: entry.sharePercent
+    }));
+  }
+
+  @Builder activityStripCard(title: string, summary: HourlyActivitySummary, pickedId: string, onPick: (id: string) => void, identity: string) {
+    if (summary.bars.length > 0) {
+      Column({ space: Tokens.spaceS }) {
+        PersonaSectionLabel({
+          text: title,
+          trailing: this.selectedBarFrom(summary, pickedId)
+            ? this.selectedBarFrom(summary, pickedId)!.label + ' · ' + TokenFormat.count(this.selectedBarFrom(summary, pickedId)!.tokens.total)
+            : ''
+        })
+        Column({ space: Tokens.spaceS }) {
+          Row({ space: 3 }) {
+            ForEach(summary.bars, (bar: ActivityBarItem) => {
+              Button({ type: ButtonType.Normal }) {
+                Column() {
+                  Blank().layoutWeight(1)
+                  Row()
+                    .width('100%')
+                    .height(Math.max(4, Math.round(bar.fraction * 68)))
+                    .borderRadius(2)
+                    .backgroundColor((pickedId || summary.peakId) === bar.id ? Colors.link : Colors.accentWell)
+                }
+                .width('100%')
+                .height(72)
+                .justifyContent(FlexAlign.End)
+              }
+              .layoutWeight(1)
+              .height(72)
+              .padding(0)
+              .backgroundColor(Color.Transparent)
+              .accessibilityText(bar.label + ' · ' + TokenFormat.count(bar.tokens.total))
+              .onClick(() => {
+                Haptics.tap();
+                onPick(bar.id);
+              })
+              .id(identity + '.bar.' + bar.id)
+            }, (bar: ActivityBarItem) => bar.id + ':' + String(bar.tokens.total) + ':' + ((pickedId || summary.peakId) === bar.id ? '1' : '0'))
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Bottom)
+
+          Row() {
+            Text(summary.bars[0].shortLabel)
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+              .fontColor(Colors.secondary)
+            Blank().layoutWeight(1)
+            if (summary.bars.length > 2) {
+              Text(summary.bars[Math.floor(summary.bars.length / 2)].shortLabel)
+                .fontSize(Tokens.typeLabel)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                .fontColor(Colors.secondary)
+              Blank().layoutWeight(1)
+            }
+            Text(summary.bars[summary.bars.length - 1].shortLabel)
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+              .fontColor(Colors.secondary)
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .padding(Tokens.spaceM)
+        .backgroundColor(Colors.surface)
+        .borderRadius(Tokens.radiusCard)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
+        .shadow(PhoneStyle.cardElevation(this.env.dark))
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .id(identity)
+    }
+  }
+
+  @Builder hoursSection() {
+    if (this.hoursData) {
+      Column({ space: Tokens.spaceM }) {
+        this.activityStripCard(
+          tr('token_usage_recent_hourly'),
+          buildRecentHourlyActivity(this.hoursData.hours, 24),
+          this.pickedHourId,
+          (id: string) => { this.pickedHourId = id; },
+          'token.usage.hours'
+        )
+        this.breakdownPartsCard(
+          tr('token_usage_by_machine_7d'),
+          rankMachineShares(this.hoursData.machines),
+          tr('token_usage_removed_computer')
+        )
+        this.breakdownPartsCard(
+          tr('token_usage_by_agent_7d'),
+          this.formattedAgentParts(rankAgentShares(this.hoursData.agents)),
+          tr('token_usage_not_split')
+        )
+      }
+      .width('100%')
+    }
+  }
+
+  @Builder placesCard(places: RankedUsagePlace[]) {
+    if (places.length > 0) {
+      Column({ space: Tokens.spaceS }) {
+        PersonaSectionLabel({ text: tr('token_usage_by_place') })
+        Column({ space: Tokens.spaceM }) {
+          ForEach(places, (entry: RankedUsagePlace) => {
+            Column({ space: Tokens.spaceXs }) {
+              Row({ space: Tokens.spaceS }) {
+                SymbolGlyph(entry.place.worktree ? $r('sys.symbol.arrow_triangle_divide') : Symbols.folder)
+                  .fontSize('14vp')
+                  .fontColor([Colors.link])
+                Column({ space: Tokens.spaceXxs }) {
+                  Text(entry.place.place)
+                    .fontSize(Tokens.typeSecondary)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+                    .fontColor(Colors.ink)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text((entry.place.machineName || tr('token_usage_removed_computer')) +
+                    (entry.place.worktree ? ' · ' + tr('token_usage_worktree') : ''))
+                    .fontSize(Tokens.typeLabel)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                    .fontColor(Colors.secondary)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+
+                Text(TokenFormat.count(entry.place.tokens.total) + ' · ' + formatSharePercent(entry.sharePercent))
+                  .fontSize(Tokens.typeCaption)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+                  .fontColor(Colors.secondary)
+                  .fontFeature('tnum 1')
+                  .maxLines(1)
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Top)
+
+              this.progressMeter(entry.progressFraction)
+            }
+            .width('100%')
+          }, (entry: RankedUsagePlace) => entry.place.machine + ':' + entry.place.place + ':' + String(entry.place.tokens.total))
+        }
+        .width('100%')
+        .padding(Tokens.spaceL)
+        .backgroundColor(Colors.surface)
+        .borderRadius(Tokens.radiusCard)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
+        .shadow(PhoneStyle.cardElevation(this.env.dark))
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .id('token.usage.project.places')
+    }
+  }
+
   @Builder projectDetailBreakdown(detail: UsageProjectDetailResponse) {
     if (selectProjectBreakdown(detail, this.projectRange)) {
       Column({ space: Tokens.spaceL }) {
         this.projectDetailSummaryCard(selectProjectBreakdown(detail, this.projectRange)!)
+        this.activityStripCard(
+          tr(this.projectRange === 'today' ? 'token_usage_project_by_hour' : 'token_usage_project_each_day'),
+          buildProjectActivityBars(detail, this.projectRange),
+          this.pickedProjectBarId,
+          (id: string) => { this.pickedProjectBarId = id; },
+          'token.usage.project.activity'
+        )
+        this.placesCard(rankUsagePlaces(selectProjectBreakdown(detail, this.projectRange)!.places))
         this.breakdownPartsCard(
           tr('token_usage_by_machine'),
           rankUsageParts(selectProjectBreakdown(detail, this.projectRange)!.machines),
-          tr('machines')
+          tr('token_usage_removed_computer')
+        )
+        this.breakdownPartsCard(
+          tr('token_usage_by_agent'),
+          this.formattedAgentParts(rankUsageParts(selectProjectBreakdown(detail, this.projectRange)!.agents)),
+          tr('token_usage_not_split')
         )
         this.breakdownPartsCard(
           tr('token_usage_by_model'),
           rankUsageParts(selectProjectBreakdown(detail, this.projectRange)!.models),
           tr('model')
+        )
+        this.breakdownPartsCard(
+          tr('token_usage_by_launcher'),
+          this.formattedLauncherParts(rankUsageParts(selectProjectBreakdown(detail, this.projectRange)!.launchers)),
+          tr('token_usage_launcher_terminal')
         )
       }
       .width('100%')
@@ -629,6 +861,7 @@ export struct TokenUsageSheet {
 
       Row({ space: Tokens.spaceS }) {
         this.summaryStat(tr('token_usage_share'), formatSharePercent(b.share * 100))
+        this.summaryStat(tr('token_usage_requests'), String(b.total.requests))
         this.summaryStat(tr('token_usage_input'), TokenFormat.count(b.total.input))
         this.summaryStat(tr('token_usage_output'), TokenFormat.count(b.total.output))
       }
@@ -696,7 +929,7 @@ export struct TokenUsageSheet {
               .fontColor(Colors.secondary)
               .textAlign(TextAlign.Center)
             Button(tr('retry'), { type: ButtonType.Capsule })
-              .height(Tokens.controlCompact)
+              .constraintSize({ minWidth: Tokens.controlBar, minHeight: Tokens.controlBar })
               .padding({ left: Tokens.spaceL, right: Tokens.spaceL })
               .backgroundColor(Colors.action)
               .fontColor(Colors.onAction)
@@ -711,12 +944,13 @@ export struct TokenUsageSheet {
           .alignItems(HorizontalAlign.Center)
         } else {
           Scroll() {
-            Column({ space: Tokens.spaceL }) {
+            Column({ space: Tokens.spaceM }) {
               this.totalsSummaryCard()
               if (this.heatmap.columns.length > 0) {
                 this.heatmapCard()
               }
               this.projectsSection()
+              this.hoursSection()
             }
             .width('100%')
             .padding({ left: Tokens.spaceL, right: Tokens.spaceL, top: Tokens.spaceM, bottom: Tokens.spaceXl })

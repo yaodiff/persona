@@ -355,9 +355,10 @@ func (s *Service) decorateSubagents(ctx context.Context, machine string, list []
 }
 
 // pruneSubagentChecked drops negative lookup entries for sessions no longer in machine's final
-// complete list (including archived sessions) while retaining known positive subagent hits.
-// Entries are partitioned per machine so pruning scans only machine's own bucket, never the fleet.
-func (s *Service) pruneSubagentChecked(machine string, list []proto.Session) {
+// complete list (including archived rows and archive-only tail records) while retaining known
+// positive subagent hits. Entries are partitioned per machine so pruning scans only machine's
+// own bucket, never the fleet.
+func (s *Service) pruneSubagentChecked(machine string, list []proto.Session, archived archivedPart) {
 	f := &s.fleet
 	f.subagentsMu.RLock()
 	n := len(f.subagentsChecked[machine])
@@ -365,19 +366,33 @@ func (s *Service) pruneSubagentChecked(machine string, list []proto.Session) {
 	if n == 0 {
 		return
 	}
-	listed := make(map[string]struct{}, len(list))
+	listed := make(map[string]struct{}, len(list)+len(archived.rows))
 	for i := range list {
 		if sid := list[i].SessionID; sid != "" {
 			listed[sid] = struct{}{}
 		}
 	}
+	for i := range archived.rows {
+		if sid := archived.rows[i].SessionID; sid != "" {
+			listed[sid] = struct{}{}
+		}
+	}
+	// Query archived.records directly via the zero-allocation lookupRuntimeListID path so
+	// Hello.ArchivedApart publishes never copy or iterate thousands of archive-only tail keys.
+	checkArchiveRecords := len(archived.keys) > 0 && len(archived.records) > 0
 	f.subagentsMu.Lock()
 	if bucket := f.subagentsChecked[machine]; len(bucket) > 0 {
 		for sid := range bucket {
-			if _, ok := listed[sid]; !ok {
-				if _, isHit := f.subagents[[2]string{machine, sid}]; !isHit {
-					delete(bucket, sid)
+			if _, ok := listed[sid]; ok {
+				continue
+			}
+			if checkArchiveRecords {
+				if rec, ok := lookupRuntimeListID(archived.records, machine, sid); ok && rec.Archived && rec.Session.MachineID == machine && rec.Session.SessionID == sid {
+					continue
 				}
+			}
+			if _, isHit := f.subagents[[2]string{machine, sid}]; !isHit {
+				delete(bucket, sid)
 			}
 		}
 		if len(bucket) == 0 {

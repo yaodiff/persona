@@ -243,6 +243,8 @@ go server/internal/quota core
 go server/internal/recordingcli core
 go server/internal/recordingwire core
 go server/internal/recordinghost core
+go server/internal/recordingspeakers core
+go server/internal/recordingspeakers/recordingspeakersadapt core
 go server/internal/relay core
 go server/internal/relayproto core
 go server/internal/remoteimage core
@@ -415,6 +417,7 @@ web web/src/views core
 web web/src/views/agents core
 web web/src/views/assistant core
 web web/src/views/chat core
+web web/src/views/execution core
 web web/src/views/extensions core
 web web/src/views/inbox core
 web web/src/views/knowledge knowledge-ui

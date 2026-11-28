@@ -87,6 +87,10 @@ export function parseFrame(text: string): VoiceFrame | null {
     }
     case "link":
       return { type, state: str(o.state) ?? "" };
+    case "reply": {
+      const state = str(o.state);
+      return state === "start" || state === "end" ? { type, state } : { type: "other", name: type };
+    }
     case "error":
       return { type, failure: { code: nonEmpty(o.code), message: str(o.message) ?? "", fatal: o.fatal === true } };
     default:

@@ -54,6 +54,7 @@ func (h *Manager) Run(ctx context.Context) error {
 	h.migrateWeChatState(ctx) // into the channels' state before the assistant and the WeChat program read it
 	h.startBots(ctx)
 	go h.agentsLoop(ctx)
+	go h.orcaBotsLoop(ctx) // the computers' Orca bots as Agents → Bots sources (orcabots.go)
 	go h.inboxLoop(ctx)
 	go h.noLockLoop(ctx)
 	go h.extensionLeaseLoop(ctx)
@@ -766,6 +767,7 @@ func (h *Manager) AgentTools(ctx context.Context, assistant bool) (agents, assis
 		assistantOnly = append(assistantOnly, h.browserTools()...)
 		assistantOnly = append(assistantOnly, h.iphoneTools()...)
 		assistantOnly = append(assistantOnly, h.subscriptionTools()...)
+		assistantOnly = append(assistantOnly, h.orcaBotTools()...)
 		if hp, _ := h.larkImageSource(); hp != nil && connector.StatusOf(ctx, h.connectors.Get(connector.Lark)).State == connector.StateOK {
 			assistantOnly = append(assistantOnly, mcpTool(larkImageTool))
 		}
@@ -806,6 +808,8 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 		return h.callIPhoneTool(ctx, session, name, args), true
 	case assistant && isSubscriptionTool(name):
 		return h.callSubscriptionTool(ctx, asker{machine, session}, name, args), true
+	case assistant && isOrcaBotTool(name):
+		return h.callOrcaBotTool(ctx, name, args), true
 	}
 	return proto.ToolResult{}, false
 }
@@ -849,6 +853,8 @@ func (h *Manager) ToolAccess(name string) (known, readOnly bool) {
 	case isSubscriptionTool(name):
 		return true, name == "subscription_list" || name == "subscription_get" ||
 			name == "subscription_sources" || name == "subscription_dry_run"
+	case isOrcaBotTool(name):
+		return true, name != orcaBotSendTool
 	}
 	return false, false
 }

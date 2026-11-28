@@ -345,7 +345,8 @@ func decodeSingleJSONObject(w http.ResponseWriter, r *http.Request, dst any, lim
 // mergeTierInput is the tiers a PUT stores, given the profile's own (was). A tier the body sends without candidates
 // is in an older client's shape, which knows only the flat fields: they replace its first candidate, and the other
 // candidates and the aliases stay as they were, also when that client renamed the tier (renamedTiers). A tier with
-// candidates, or with aliases, says them itself (an empty list clears them). A tier the body leaves out is removed, as
+// candidates, or with aliases, says them itself (an empty list clears them). Omitting the tier host keeps its stored
+// value. A tier the body leaves out is removed, as
 // it always was. An alias kept for a client that did not send it gives way to a tier name or an alias the body did
 // send, and to one another tier kept first (in name order): that client cannot see it, so it could not fix the
 // refusal. An alias the body sends itself is checked as it is (checkModelTiers).
@@ -367,6 +368,9 @@ func mergeTierInput(was, in map[string]ModelTier) map[string]ModelTier {
 			first := t.first()
 			t.Candidates = slices.Clone(old.Candidates)
 			t.setFirst(first)
+		}
+		if ok && t.Host == nil {
+			t.Host = old.Host
 		}
 		if t.Aliases == nil {
 			if ok {

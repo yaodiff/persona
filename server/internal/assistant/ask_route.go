@@ -14,7 +14,6 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -205,7 +204,7 @@ func routable(ix proto.Interaction) bool {
 	}
 	switch ix.Kind {
 	case proto.IxQuestion:
-		return len(ix.Questions) > 0 && ix.ToolName != "ask_user" && asksForInput(ix)
+		return len(ix.Questions) > 0 && (ix.ToolName != "ask_user" || questionOwnerSource(ix) == "") && asksForInput(ix)
 	case proto.IxPermission, proto.IxPlan:
 		return true
 	case proto.IxScreen:
@@ -214,10 +213,9 @@ func routable(ix proto.Interaction) bool {
 	return false
 }
 
-// supervisorConversation: session is one of the assistant's supervising conversations, the main conversation, the
-// background supervisor or a leader. Their own cards stay the user's: no conversation above them is woken for a card
-// and can hand it up (ask_escalate takes a task), and the main conversation's would wait on itself. Neither askLadder
-// nor handNonOwnerCard routes them (#15360).
+// supervisorConversation identifies supervising sessions. Their ordinary internal
+// cards go to an independent reviewer through handNonOwnerCard, never back to
+// themselves. Owner-only cards retain their explicit owner path.
 func (v Settings) supervisorConversation(session string) bool {
 	return session != "" && (session == v.Main || session == v.BackgroundSupervisor || slices.Contains(v.Leaders, session))
 }
@@ -252,8 +250,18 @@ func (s *Service) noLeaderAskRoutable(ix proto.Interaction) bool {
 func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder []string, todo, home string, ok bool) {
 	machine, sid := ix.MachineID, ix.SessionID
 	cfg := s.settings(ctx)
-	if cfg.Main == "" || sid == "" || cfg.supervisorConversation(sid) {
+	if cfg.Main == "" || sid == "" {
 		return nil, "", "", false
+	}
+	if cfg.supervisorConversation(sid) {
+		if !routable(ix) || !s.internalCard(ix) {
+			return nil, "", "", false
+		}
+		to, home := s.internalReviewer(ctx, ix)
+		if to == "" || home == "" {
+			return nil, "", "", false
+		}
+		return []string{to}, "", home, true
 	}
 	if len(cfg.Leaders) == 0 && !s.noLeaderAskRoutable(ix) {
 		return nil, "", "", false
@@ -304,6 +312,9 @@ func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder [
 
 // routeAsk sends new card ix to its supervisor instead of the user (announce); false when it is not one to route.
 func (s *Service) routeAsk(ix proto.Interaction) bool {
+	if s.activeInternalCard(ix) {
+		return s.handNonOwnerCard(ix)
+	}
 	if !routable(ix) {
 		return false
 	}
@@ -343,9 +354,8 @@ func (s *Service) signalAsk(todo, to string, ix proto.Interaction, step int) {
 }
 
 // quietRemind is the timeout of card ix of task todo past its last rung: instead of ringing the user, supervisor to
-// gets the card once more (the nth time). On the first, with low-distraction mode on, the owner gets a P1 notice the
-// hub holds for the "Needs you" list and the briefing (and records among the pushes it held back), never an alert;
-// with it off nothing goes to the owner at all (a P1 would push): the card is on their apps as the supervisor's.
+// gets the card once more (the nth time). Only the work event and supervisor signal
+// are emitted: an internal reminder never constructs an owner notification.
 func (s *Service) quietRemind(todo, to string, ix proto.Interaction, nth int) {
 	s.logf("ask %s of task %s: not handled in time; not pushed to the user, %s reminded (%d/%d)", ix.ID, todo, to, nth, askRemindMax)
 	s.workEvent(ix.MachineID, ix.SessionID, "ask_quiet_reminded", map[string]any{"to": to, "kind": ix.Kind, "todo": todo, "id": ix.ID, "nth": nth})
@@ -354,18 +364,6 @@ func (s *Service) quietRemind(todo, to string, ix proto.Interaction, nth int) {
 		key += strconv.Itoa(nth)
 	}
 	s.signal(superviseSignal{Todo: todo, Kind: sigAsk, To: to, Machine: ix.MachineID, Session: ix.SessionID, Key: key})
-	if nth > 1 || !s.quietModeOn(context.Background()) {
-		return
-	}
-	l := s.lang(context.Background())
-	name := todo
-	if t, ok := s.todoNow(todo); ok && t.Title != "" {
-		name = t.Title
-	}
-	title := i18n.T(l, "assistant-tasks.ask_held_title", i18n.Args{"name": name})
-	s.deliverCard(cardAskHeld, Notification{Kind: assistantwire.NotifyPush, Level: assistantwire.LevelP1, RelatedKey: "ask:" + todo,
-		DeviceID: ix.MachineID, Subtitle: s.machineName(ix.MachineID), SessionID: ix.SessionID, Title: title,
-		Body: clip(oneLine(noticeAsk(ix)), 200)})
 }
 
 // heldAsks are the cards of task todo waiting with conversation to, oldest first, as a supervision entry lists them.
@@ -415,7 +413,7 @@ func (s *Service) routedTo(id, self string, main bool) (string, bool) {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	p := s.fleet.interactions[id]
-	if p == nil || p.route == nil || p.claimed || p.route.step >= len(p.route.ladder) || !main && !slices.Contains(p.route.ladder[p.route.step:], self) {
+	if p == nil || p.route == nil || p.claimed || self == p.ix.SessionID || p.route.step >= len(p.route.ladder) || !main && !slices.Contains(p.route.ladder[p.route.step:], self) {
 		return "", false
 	}
 	return p.route.todo, true

@@ -123,7 +123,9 @@ func TestTodosV2ProjectionUnifyDirectionTree(t *testing.T) {
 		t.Fatalf("listedTodos: %v", err)
 	}
 	p := e.s.viewed(ctx, listed, now)
-	board := buildTodoBoardProjection(listed, e.s.todoBoardDirectionLabels(ctx))
+	directions := e.s.todoDirectionLabels(ctx, e.s.settings(ctx))
+	e.s.populateTodoEffectiveDirections(listed, directions)
+	board := buildTodoBoardProjectionWithOptions(listed, directions, true, p.counts())
 	treeOpen := leadDir.Counts.NeedsYou + leadDir.Counts.Working + leadDir.Counts.Review + leadDir.Counts.Stuck + leadDir.Counts.Planned
 	if treeOpen != board.Counts.OpenTotal {
 		t.Fatalf("direction tree open count (%d) != board projection OpenTotal (%d)", treeOpen, board.Counts.OpenTotal)
@@ -377,6 +379,30 @@ func TestTodosV2ProjectionUnifyTasksSnapshot(t *testing.T) {
 	// Legacy ignores ForBriefing and immediately treats outcomeDecide as ruleOwnerDecides.
 	if rule := snapshotDoneRuleWithConfig(plainTodo, nil, canWaitFresh, nil, nil, now, time.UTC, cfgLegacy); rule != ruleOwnerDecides {
 		t.Fatalf("todos_v2=false can_wait should preserve legacy %q, got %q", ruleOwnerDecides, rule)
+	}
+}
+
+func TestTodosV2ChildSummaryExcludesSomedayAndDeferredAttention(t *testing.T) {
+	items := []listedTodo{
+		{Todo: Todo{ID: "parent"}},
+		{Todo: Todo{ID: "immediate", PartOf: "parent"}},
+		{Todo: Todo{ID: "quiet", PartOf: "parent", Quiet: true}},
+		{Todo: Todo{ID: "deferred", PartOf: "parent"}},
+		{Todo: Todo{ID: "someday", PartOf: "parent"}},
+		{Todo: Todo{ID: "closed", PartOf: "parent"}},
+	}
+	views := []assistantwire.TodoSummary{
+		{Phase: assistantwire.TodoPhaseNeedsYou, Section: assistantwire.TodoListSectionNeedsYou},
+		{Phase: assistantwire.TodoPhaseNeedsYou, Section: assistantwire.TodoListSectionNeedsYou},
+		{Phase: assistantwire.TodoPhaseNeedsYou, Section: assistantwire.TodoListSectionNeedsYou},
+		{Phase: assistantwire.TodoPhaseNeedsYou, Section: assistantwire.TodoListSectionCanWait, CanWait: true},
+		{Phase: assistantwire.TodoPhaseSomeday, Section: assistantwire.TodoListSectionSomeday},
+		{Phase: assistantwire.TodoPhaseDone, Section: assistantwire.TodoListSectionJustFinished},
+	}
+	populateTodoChildSummaries(items, views)
+	want := todoChildSummary{Total: 5, Open: 3, NeedsYou: 1, Done: 1}
+	if got := items[0].ChildSummary; got == nil || *got != want {
+		t.Fatalf("child_summary = %+v, want %+v", got, want)
 	}
 }
 

@@ -15,7 +15,7 @@ import { Peer, RpcError } from '../lib/wire.js'
  *   session the runtime's last list does not have is refused, as the node refuses it.
  * @returns {Promise<{ path: string, ready: Promise<void>, hello: any, peer: Peer, peers: Set<Peer>, events: {event: string, params: any}[],
  *   last(event: string): any, all(event: string): any[], asked: any[], refused: any[], resolve: (ix: any) => any,
- *   close(): void }>}
+ *   input(request: import('../index.js').SessionInput): Promise<import('../index.js').TypedInput>, close(): void }>}
  *   Also: tools / toolCalls / callTool (how mcp.call answers), refuseHello (an RpcError hello answers with, or none),
  *   holdHello (a promise the next hellos wait on before they are answered, or none),
  *   offer (a package {name, hash, version, files} this node carries: hello offers it to a runtime running another hash
@@ -41,7 +41,7 @@ export async function startFakeNode(t, opts = {}) {
           n.hello = params
           n.peer = p
           setImmediate(connected)
-          const res = { protocol: 1, node_version: 'fake', hub: n.hub, features: opts.features ?? ['prefer_running', 'resume_argv', 'handover'] }
+          const res = { protocol: 1, node_version: 'fake', hub: n.hub, features: opts.features ?? ['prefer_running', 'resume_argv', 'handover', 'input'] }
           if (n.offerUpdates !== false && n.offer && params?.package?.name === n.offer.name && params.package.hash !== n.offer.hash) {
             res.update = { name: n.offer.name, hash: n.offer.hash, version: n.offer.version ?? 'fake' }
           }
@@ -75,6 +75,7 @@ export async function startFakeNode(t, opts = {}) {
     void p.done.finally(() => n.peers.delete(p))
   })
   await new Promise((r) => server.listen(path, r))
+  n.input = (request) => n.peer.call('session.input', request)
   n.last = (event) => n.events.filter((e) => e.event === event).at(-1)?.params
   n.all = (event) => n.events.filter((e) => e.event === event).map((e) => e.params)
   /** The hub comes or goes: the runtime is told, as a resident node tells it. */

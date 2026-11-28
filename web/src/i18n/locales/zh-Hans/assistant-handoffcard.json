@@ -23,5 +23,7 @@
   "failed_hint": "请在收件箱或原会话查看需要处理的问题。",
   "retry": "重试",
   "current_suggestion": "当前建议",
-  "retry_after": "来源建议在 {seconds} 秒后重试。"
+  "retry_after": "来源建议在 {seconds} 秒后重试。",
+  "mentions_will": "将 @：",
+  "mentions_sent": "已 @："
 }

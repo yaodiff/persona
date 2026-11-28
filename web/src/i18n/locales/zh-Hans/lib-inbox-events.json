@@ -20,5 +20,9 @@
   "filed": "已标为已处理",
   "kind_todo": "建议添加待办",
   "add_todo": "加入待办",
-  "todo_added": "已加入待办"
+  "todo_added": "已加入待办",
+  "kind_handoff": "建议转交给「{target}」",
+  "hand_off": "转交",
+  "handed_off": "已转交",
+  "handoff_unavailable": "目标会话已不可用，未转交。"
 }

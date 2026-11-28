@@ -324,6 +324,7 @@ func TestProjectReviewRejectsInvalidConfig(t *testing.T) {
 }
 
 func TestProjectReviewPairedFeishuOwnerInput(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	store := todoTestDB(t)
 	s, f := reviewTestService(t, store)

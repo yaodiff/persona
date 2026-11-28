@@ -133,5 +133,7 @@
   "market_unread": "市场索引读取成功后，扩展将显示在此处。",
   "token_create_hint": "还没有 token？可前往 GitHub 快速创建：名称、用途和 1 年有效期均已预填，无需勾选任何权限，点击 Generate token 后复制并粘贴到上方即可。",
   "token_create": "前往 GitHub 创建",
-  "for_manager": "仅针对助手「{name}」生效（每个助手各自管理独立的扩展）。"
+  "for_manager": "仅针对助手「{name}」生效（每个助手各自管理独立的扩展）。",
+  "newer_incompatible_title": "有更新版本 {version}，当前 Persona 暂不兼容",
+  "newer_incompatible_inline": "新版本 {version} 暂不兼容：{reason}"
 }

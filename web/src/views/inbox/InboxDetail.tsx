@@ -26,7 +26,7 @@ import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { t } from "../../i18n";
 import { Button, cx, IconButton, Loading, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { ConnectorBody, openSystem } from "./ConnectorThread";
+import { ConnectorBody, openSystem, safeSystemURL } from "./ConnectorThread";
 import { DocBody, MailBody, MomentBody } from "./InboxBodies";
 import { DraftDialog, HandOffDialog, InboxExternalSourceDialog } from "./InboxDialogs";
 import { markFromRow } from "./InboxList";
@@ -140,6 +140,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
     if (embed && !originalOpen) setOriginalOpen(true);
     setSource(at);
   };
+  const openTarget = safeSystemURL(openURL(item));
   const own = () => (
     <div className={cx("min-h-0 flex-1", item.lark || item.connector ? "flex flex-col overflow-hidden" : "overflow-y-auto")}>
       {item.doc ? <DocBody item={item} /> : item.moment ? <MomentBody item={item} /> : item.lark ? <LarkThread chat={at.position ? { ...chatOfItem(item), focus: at.position } : chatOfItem(item)} pinsOpen={pins} onPinsOpen={setPins} /> : item.connector ? <ConnectorBody item={item} /> : item.mail ? <MailBody key={at.uid ?? ""} item={itemAtUid(item, at.uid)} onLatest={at.uid !== undefined && at.uid !== item.mail.uids[item.mail.uids.length - 1] ? () => setSource(null) : undefined} /> : (
@@ -226,11 +227,11 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                 <Button tone="accent" icon="write" onClick={() => setDialog("draft")}>{draft && !done ? t("inbox-inboxdetail.view_draft") : t("inbox-inboxdetail.ai_draft")}</Button>
               ) : (
                 // Answered in the source's own app (a CI run has nothing to answer: only "Hand to AI").
-                item.source !== "larkcli" && openURL(item) && <Button tone="accent" icon="external" onClick={() => openSystem(openURL(item)!)}>{openTitle(item)}</Button>
+                item.source !== "larkcli" && openTarget && <Button tone="accent" icon="external" onClick={() => openSystem(openTarget.href)}>{openTitle(item)}</Button>
               )}
-              {item.source === "larkcli" && openURL(item) && (
-                <Button tone="secondary" icon="external" onClick={() => openSystem(openURL(item)!)}>
-                  {openURL(item)!.startsWith("https://applink.larksuite.com/") ? t("inbox-inboxdetail.open_in_lark") : t("inbox-inboxdetail.open_in_feishu")}
+              {item.source === "larkcli" && openTarget && (
+                <Button tone="secondary" icon="external" onClick={() => openSystem(openTarget.href)}>
+                  {openTarget.href.startsWith("https://applink.larksuite.com/") ? t("inbox-inboxdetail.open_in_lark") : t("inbox-inboxdetail.open_in_feishu")}
                 </Button>
               )}
               {item.source !== "assistant" && <Button tone="secondary" icon="spark" onClick={() => setDialog("handoff")}>{t("inbox-inboxdetail.hand_to_ai")}</Button>}

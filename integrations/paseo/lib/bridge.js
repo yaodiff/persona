@@ -164,9 +164,34 @@ export function createPaseoBridge(deps = {}, options = {}) {
   let workspacesTimer
   let workspacesSaid // the rows told to the node last (JSON), so an update that changes nothing it lists says nothing
   // session id → a start the node was answered before Paseo was done with it (start, takeOver; #8130): { row, work,
-  // failed }. work: the agent once Paseo has it. Its row is listed until then (inFlightRows), and a message to it waits
-  // for the agent (send); once Paseo refused it, failed: { error, at } says why on that row for START_FAILED_FOR.
+  // failed, again, readonly }. work: the agent once Paseo has it. Its row is listed until then (inFlightRows), and a
+  // message to it waits for the agent (send); once Paseo refused it, failed: { error, at } says why on that row for
+  // START_FAILED_FOR.
   const inFlight = new Map()
+  // Session ids and agent ids currently starting or resuming with permission_mode='plan' (reference-counted):
+  // an unsolicited non-plan agent_update from Paseo must not expose a writable agent before verification.
+  const pendingReadonly = new Map()
+  const pendingReadonlyAgents = new Map()
+  // Active start/takeOver operations from T=0 until settled (closing the 0..callWait blind spot before inFlight).
+  const pendingOps = new Map()
+  const beginReadonly = (sid) => { if (sid) pendingReadonly.set(sid, (pendingReadonly.get(sid) ?? 0) + 1) }
+  const endReadonly = (sid) => {
+    if (!sid) return
+    const n = (pendingReadonly.get(sid) ?? 0) - 1
+    if (n > 0) pendingReadonly.set(sid, n)
+    else pendingReadonly.delete(sid)
+  }
+  const beginReadonlyAgent = (aid) => { if (aid) pendingReadonlyAgents.set(aid, (pendingReadonlyAgents.get(aid) ?? 0) + 1) }
+  const endReadonlyAgent = (aid) => {
+    if (!aid) return
+    const n = (pendingReadonlyAgents.get(aid) ?? 0) - 1
+    if (n > 0) pendingReadonlyAgents.set(aid, n)
+    else pendingReadonlyAgents.delete(aid)
+  }
+  const archiveReadonlyViolation = (agentId, reason) =>
+    paseo.request('archive_agent_request', { agentId }).catch((err) => {
+      log(`paseo: archiving non-readonly agent ${agentId} (${reason}): ${err?.message ?? err}`)
+    })
   // The connections to Paseo that came up, and the last one whose directory was read (onPaseo): a request asked again
   // after a reconnect waits for both (whenBack), and first looks there for what the lost answer would have said.
   let connections = 0
@@ -281,6 +306,26 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const prev = agents.get(agent.id)
     if (prev && (Date.parse(prev.agent.updatedAt) || 0) > (Date.parse(agent.updatedAt) || 0) && prev.agent.status === agent.status) return
     if (agent.archivedAt) return remove(agent.id, agent, project)
+    if ((pendingReadonly.size > 0 || pendingReadonlyAgents.size > 0) && agent.currentModeId !== 'plan') {
+      const rawLabel = agent.labels?.[SESSION_LABEL]
+      const explicitLabel = typeof rawLabel === 'string' && SESSION_ID.test(rawLabel) ? rawLabel : undefined
+      const baseSid = sessionIdOf(agent, roots)
+      const cid = !explicitLabel && agentRoot(agent, roots) === 'claude' ? claudeId(agent) : undefined
+      const sharedSid = cid ? sharedId(agent, cid) : undefined
+      const prevObj = prev ?? archived.get(agent.id)
+      const prevSid = prevObj ? sessionIdOf(prevObj.agent, roots) : undefined
+      const keptSid = keptIds.get(agent.id)
+      const lineageSid = !explicitLabel && cid && !sharedSid && !keptSid && !loading
+        ? lineage.rootOf(cid, { cwd: agent.cwd, createdAt: agent.createdAt, taken: (s) => takenBy(s, agent.id, true) })
+        : undefined
+      const readonlyPending = pendingReadonlyAgents.has(agent.id)
+        || [explicitLabel, baseSid, sharedSid, prevSid, keptSid, lineageSid, cid].some((s) => s && pendingReadonly.has(s))
+      if (readonlyPending) {
+        void archiveReadonlyViolation(agent.id, `non-plan update (${agent.currentModeId || 'unknown'}) while readonly pending`)
+        remove(agent.id)
+        return
+      }
+    }
     agent = withFeatures(withKept(agent, prev ?? archived.get(agent.id), !loading))
     archived.delete(agent.id) // back from the archive: listed again
     const oldSession = prev ? sessionIdOf(prev.agent, roots) : undefined
@@ -292,9 +337,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
       index(agent)
       retarget()
     }
-    // The agent is its session now: a start of it answered before Paseo was done (track) is over, whatever it said.
+    // The agent is its session now: a start of it answered before Paseo was done (track) is over, whatever it said
+    // (keep a pending read-only start tracked until its response finishes verification, in case mode downgrades first).
     const sid = sessionOf(agent.id)
-    if (sid) inFlight.delete(sid)
+    if (sid && !pendingReadonly.has(sid)) inFlight.delete(sid)
     // Its requests: new ones to the phone, those no longer pending off it (and forgotten).
     const pending = new Set((agent.pendingPermissions ?? []).map((r) => r?.id))
     for (const r of agent.pendingPermissions ?? []) askFor(agent.id, r)
@@ -1527,6 +1573,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
    * (repeat) waits for this. Rejects once until passed, or when the bridge stops.
    */
   function whenBack(until) {
+    if (!started) return Promise.reject(new Error('the bridge stopped'))
     if (paseo.connected && setUp === connections) return Promise.resolve()
     return new Promise((resolve, reject) => {
       const w = {
@@ -1570,19 +1617,25 @@ export function createPaseoBridge(deps = {}, options = {}) {
    * (inFlightRows), until Paseo has the agent, whose own row takes over. One Paseo did not start says why on that row
    * (and in the log): what the phone was told had started does not just vanish.
    */
-  function track(sessionId, row, work, what, again) {
-    const entry = { row, work, failed: undefined, again }
+  function track(sessionId, row, work, what, again, readonly = false) {
+    const entry = { row, work, failed: undefined, again, readonly: Boolean(readonly), done: false }
     inFlight.set(sessionId, entry)
     work.then(() => {
+      entry.done = true
       if (inFlight.get(sessionId) === entry) inFlight.delete(sessionId)
       rt.sessionsChanged()
     }, (err) => {
+      entry.done = true
       log(`paseo: ${what}: failed after the start was answered: ${err.message}`)
       // Not when another start of the session came since, nor while an agent Paseo lists is the session after all (an
       // outcome Paseo could not tell). Its agent being listed took the entry away (upsert): one the start then archived
       // (read-only in another mode, off the list) still says why.
       const now = inFlight.get(sessionId)
-      if ((now && now !== entry) || bySession.has(sessionId)) return
+      if (now && now !== entry) return
+      if (bySession.has(sessionId)) {
+        if (now === entry) inFlight.delete(sessionId)
+        return
+      }
       entry.failed = { error: err.message, at: Date.now() }
       inFlight.set(sessionId, entry)
       rt.sessionsChanged()
@@ -1591,7 +1644,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
 
   /** The start of session id that Paseo is still on, or did not start lately (track), when no agent it lists has the id. */
   function inFlightOf(sessionId) {
-    return bySession.has(sessionId) ? undefined : inFlight.get(sessionId)
+    return bySession.has(sessionId) && !pendingReadonly.has(sessionId) ? undefined : inFlight.get(sessionId)
   }
 
   /**
@@ -1623,19 +1676,30 @@ export function createPaseoBridge(deps = {}, options = {}) {
    */
   async function send(params) {
     const end = Date.now() + callWait
-    let e = inFlightOf(params.session_id)
+    const sid = params.session_id
+    const notStarted = (error) => new RpcError(`This session did not start (${error}). Nothing was sent.`, 'start_failed')
+    let e = inFlightOf(sid)
     if (e?.failed && e.again) {
       // A takeover that failed: this message takes the session over again.
       await e.again(callWait)
-      e = inFlightOf(params.session_id)
+      e = inFlightOf(sid)
     }
     if (e) {
-      const notStarted = (error) => new RpcError(`This session did not start (${error}). Nothing was sent.`, 'start_failed')
       if (e.failed) throw notStarted(e.failed.error)
       const got = await within(e.work, Math.max(end - Date.now(), 1000)).catch((err) => { throw notStarted(err.message) })
       if (got === TIMEOUT) {
-        e.work.then(() => deliverMessage(params, startGiveUp)).catch((err) => log(`paseo: the message to ${params.session_id} that waited for its start: ${err.message}`))
+        e.work.then(() => deliverMessage(params, startGiveUp)).catch((err) => log(`paseo: the message to ${sid} that waited for its start: ${err.message}`))
         return { queued: true }
+      }
+    } else {
+      const activeOp = pendingOps.get(sid)
+      if (activeOp) {
+        const got = await within(activeOp.promise, Math.max(end - Date.now(), 1000)).catch((err) => { throw notStarted(err.message) })
+        if (got === TIMEOUT) {
+          activeOp.promise.then(() => deliverMessage(params, startGiveUp)).catch((err) => log(`paseo: the message to ${sid} that waited for its start: ${err.message}`))
+          return { queued: true }
+        }
+        await activeOp.done
       }
     }
     return deliverMessage(params, Math.max(end - Date.now(), 1000))
@@ -2356,6 +2420,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
     // it, whichever Paseo agent ends up holding it.
     let agentId = randomUUID()
     const sessionId = namedSession(params.session_id) ?? `${RUNTIME}-${agentId}`
+    const createdAgentIds = new Set([agentId])
+    const startDeadline = Date.now() + callWait
     const until = Date.now() + startGiveUp
     let tries = 0
     // One creation request, under a Paseo agent id of its own (the retry's is new; the Persona session stays). Claude
@@ -2370,100 +2436,174 @@ export function createPaseoBridge(deps = {}, options = {}) {
         labels: { [SESSION_LABEL]: sessionId } }
       const policy = mcpServers && withPolicy && root === 'claude' ? preapproved(mcpServers) : undefined
       if (policy) req.config.toolPolicy = policy
-      if (prompt.trim() && !params.backend_workspace_root) req.initialPrompt = prompt
+      // Never send initialPrompt before read-only (plan) mode is verified (caps.readonly contract).
+      if (prompt.trim() && !params.backend_workspace_root && !readonly) req.initialPrompt = prompt
       if (workspaceId) req.workspaceId = workspaceId
       // Paseo answers once the agent's provider is up, which has no bound of its own: the start gives up at until.
       const ask = () => paseo.request('agent.create.request', req, { timeoutMs: Math.max(until - Date.now(), 1000) })
       return repeat(`creating agent ${req.agentId}`, ask, until, () => listedAs(sessionId))
         .then((res) => ({ res, withTools: Boolean(mcpServers), policy: Boolean(policy) }))
     }
-    // A provider that takes no MCP servers fails the creation outright (Paseo closes that session before it has an
-    // agent): it gets the agent as it did before the Persona tools, in one more request, and for that error only. One
-    // that cannot preapprove them gets them without, asking as before (allowOwn answers those asks).
-    const created = (async () => {
-      if (!workspaceId) {
-        if (!implicitWorkspace) projectId = await projectAt(cwd)
-        if (projectId) {
-          // agent.create has no projectId field. Create the directory workspace with explicit ownership, then start
-          // in it. Keep this inside the start's existing wait/late-result flow, with one key across reconnects.
-          const req = { source: { kind: 'directory', path: cwd, projectId }, idempotencyKey: `persona:workspace:${sessionId}` }
-          const made = await repeat(`creating workspace for ${sessionId}`,
-            () => paseo.request('workspace.create.request', req, { timeoutMs: Math.max(until - Date.now(), 1000) }), until, () => undefined)
-          const d = made?.workspace
-          if (params.backend_workspace_root && (!d?.id || d.projectId !== projectId || !samePath(d.workspaceDirectory, cwd))) {
-            throw new RpcError('Paseo could not open the prepared task directory', 'backend_workspace_start_refused')
+    const trackAgentId = (aid) => {
+      if (!createdAgentIds.has(aid)) {
+        createdAgentIds.add(aid)
+        if (readonly) beginReadonlyAgent(aid)
+      }
+    }
+    let readonlyCleaned = false
+    const cleanupReadonly = () => {
+      if (!readonly || readonlyCleaned) return
+      readonlyCleaned = true
+      endReadonly(sessionId)
+      for (const aid of createdAgentIds) endReadonlyAgent(aid)
+    }
+    if (readonly) {
+      beginReadonly(sessionId)
+      beginReadonlyAgent(agentId)
+    }
+    let finishOp
+    let rejectOp
+    let markOpDone
+    let opSettled = false
+    const opPromise = new Promise((resolve, reject) => { finishOp = resolve; rejectOp = reject })
+    opPromise.catch(() => {})
+    const opDone = new Promise((resolve) => { markOpDone = resolve })
+    const opEntry = { readonly, promise: opPromise, done: opDone, row: undefined }
+    const settleOp = (agent, err) => {
+      if (opSettled) return
+      opSettled = true
+      if (pendingOps.get(sessionId) === opEntry) pendingOps.delete(sessionId)
+      cleanupReadonly()
+      if (err) rejectOp(err)
+      else finishOp(agent)
+      markOpDone()
+    }
+    pendingOps.set(sessionId, opEntry)
+    let readonlyHandedOff = false
+    const clientMsgId = (typeof params.client_msg_id === 'string' && params.client_msg_id) || `readonly-start:${sessionId}`
+    try {
+      // A provider that takes no MCP servers fails the creation outright (Paseo closes that session before it has an
+      // agent): it gets the agent as it did before the Persona tools, in one more request, and for that error only. One
+      // that cannot preapprove them gets them without, asking as before (allowOwn answers those asks).
+      const created = (async () => {
+        if (!workspaceId) {
+          if (!implicitWorkspace) projectId = await projectAt(cwd)
+          if (projectId) {
+            // agent.create has no projectId field. Create the directory workspace with explicit ownership, then start
+            // in it. Keep this inside the start's existing wait/late-result flow, with one key across reconnects.
+            const req = { source: { kind: 'directory', path: cwd, projectId }, idempotencyKey: `persona:workspace:${sessionId}` }
+            const made = await repeat(`creating workspace for ${sessionId}`,
+              () => paseo.request('workspace.create.request', req, { timeoutMs: Math.max(until - Date.now(), 1000) }), until, () => undefined)
+            const d = made?.workspace
+            if (params.backend_workspace_root && (!d?.id || d.projectId !== projectId || !samePath(d.workspaceDirectory, cwd))) {
+              throw new RpcError('Paseo could not open the prepared task directory', 'backend_workspace_start_refused')
+            }
+            if (!d?.id || d.projectId !== projectId) {
+              throw new RpcError(`Paseo did not create the workspace in the selected project: ${made?.error || 'no matching workspace returned'}`, 'create_failed')
+            }
+            if (!workspaces.get(d.id)?.project) keepWorkspace(d)
+            workspaceId = d.id
+            scheduleWorkspaces(0)
+          } else {
+            // No existing Paseo project yet: canonicalize cwd so Paseo registers the physical root, not a symlink alias.
+            config.cwd = physicalPath(cwd)
           }
-          if (!d?.id || d.projectId !== projectId) {
-            throw new RpcError(`Paseo did not create the workspace in the selected project: ${made?.error || 'no matching workspace returned'}`, 'create_failed')
-          }
-          if (!workspaces.get(d.id)?.project) keepWorkspace(d)
-          workspaceId = d.id
-          scheduleWorkspaces(0)
-        } else {
-          // No existing Paseo project yet: canonicalize cwd so Paseo registers the physical root, not a symlink alias.
-          config.cwd = physicalPath(cwd)
         }
-      }
-      return attempt(true, true)
-    })().then(({ res, withTools, policy }) => {
-      if (!withTools || res?.agent) return res
-      if (policy && POLICY_UNSUPPORTED.test(res?.error ?? '')) {
-        log(`paseo: provider ${provider} cannot preapprove the Agent's own tools; creating the agent again without that`)
+        return attempt(true, true)
+      })().then(({ res, withTools, policy }) => {
+        if (!withTools || res?.agent) return res
+        if (policy && POLICY_UNSUPPORTED.test(res?.error ?? '')) {
+          log(`paseo: provider ${provider} cannot preapprove the Agent's own tools; creating the agent again without that`)
+          agentId = randomUUID()
+          trackAgentId(agentId)
+          return attempt(true, false).then((again) => again.res)
+        }
+        if (!MCP_UNSUPPORTED.test(res?.error ?? '')) return res
+        log(`paseo: provider ${provider} takes no MCP servers; creating the agent again without the Persona tools`)
         agentId = randomUUID()
-        return attempt(true, false).then((again) => again.res)
+        trackAgentId(agentId)
+        return attempt(false, false).then((again) => again.res)
+      })
+      created.then((res) => !readonly && res?.agent && upsert(res.agent), () => {})
+      // Paseo started a read-only start in another or unknown mode after all: archive it so it never runs writable.
+      const notReadonly = async (agent) => {
+        if (!readonly || (modeId && agent.currentModeId === modeId)) return false
+        await archiveReadonlyViolation(agent.id, `started in ${agent.currentModeId || 'unknown'} mode`)
+        remove(agent.id)
+        return true
       }
-      if (!MCP_UNSUPPORTED.test(res?.error ?? '')) return res
-      log(`paseo: provider ${provider} takes no MCP servers; creating the agent again without the Persona tools`)
-      agentId = randomUUID()
-      return attempt(false, false).then((again) => again.res)
-    })
-    created.then((res) => res?.agent && upsert(res.agent), () => {})
-    // Paseo started a read-only start in another mode after all: it does not run on as a writable agent.
-    const notReadonly = async (agent) => {
-      if (!readonly || !agent.currentModeId || agent.currentModeId === modeId) return false
-      await paseo.request('archive_agent_request', { agentId: agent.id }).catch(() => {})
-      remove(agent.id)
-      return true
-    }
-    // The row the session will have while Paseo is still creating it.
-    const placeholder = () => ({
-      session_id: sessionId, cwd, title: prompt.trim() ? snippet(prompt) : basename(cwd), status: 'idle', starting: true,
-      updated_at: new Date().toISOString(), rev: Date.now(), ...placeOf(workspaceId, cwd), agent: appAgent(root), launcher: provider,
-      started_by_persona: true, ...(config.model ? { model: config.model } : {}),
-      // Labelled as the listed row will be: a provider the apps do not know carries its label (#8142).
-      ...(appAgent(root) === RUNTIME && labels[provider] ? { agent_label: labels[provider] } : {}),
-      ...(EFFORTS.includes(config.thinkingOptionId) ? { effort: config.thinkingOptionId } : {}),
-    })
-    const said = Object.keys(instead).length ? { instead } : {}
-    const res = params.backend_workspace_root ? await created : await within(created, callWait)
-    if (res === TIMEOUT) {
-      // Still being created (its provider starting, Paseo restarting): listed as starting until Paseo is done (track).
-      // Then the agent's row takes over, or this one says why it did not start.
-      const row = placeholder()
-      track(sessionId, row, created.then(async (late) => {
-        if (!late?.agent) throw new Error(late?.error || 'no reason given')
-        if (await notReadonly(late.agent)) throw new Error(`it came up in ${late.agent.currentModeId} mode, not read-only (plan), and was archived`)
-        return late.agent
-      }), `starting ${sessionId}`)
-      return { session: row, ...said }
-    }
-    if (!res?.agent) throw new RpcError(`Paseo 没能新建：${res?.error ?? '原因不明'}`, 'start_failed')
-    if (await notReadonly(res.agent)) {
-      throw new RpcError(`Paseo 没有以只读（plan）模式启动（实际：${res.agent.currentModeId}），已经归档。`, 'readonly_unsupported')
-    }
-    upsert(res.agent)
-    const row = rowOf(res.agent)
-    if (params.backend_workspace_root) {
-      if (!row || !samePath(res.agent.cwd, cwd) || !samePath(row.cwd, cwd)) {
-        throw new RpcError('Paseo returned an agent outside the prepared task directory', 'backend_workspace_cwd_mismatch')
+      const deliverReadonlyPrompt = async (agent, waitMs) => {
+        const live = agents.get(agent.id)?.agent
+        if (!live || live.currentModeId !== modeId) {
+          await archiveReadonlyViolation(agent.id, `mode changed before initial prompt (${live?.currentModeId || 'evicted'})`)
+          remove(agent.id)
+          throw new RpcError(`Paseo 没有保持只读（plan）模式（实际：${live?.currentModeId || 'unknown'}），已经归档。`, 'readonly_unsupported')
+        }
+        const liveRow = rowOf(live)
+        if (!liveRow) throw new RpcError('Paseo started the read-only agent without a session id', 'start_failed')
+        await deliverMessage({ session_id: liveRow.session_id, text: prompt, client_msg_id: clientMsgId }, waitMs)
       }
-      if (prompt.trim()) {
-        await deliverMessage({ session_id: row.session_id, text: prompt, client_msg_id: `workspace-start:${sessionId}` }, startGiveUp)
+      // The row the session will have while Paseo is still creating it.
+      const placeholder = () => ({
+        session_id: sessionId, cwd, title: prompt.trim() ? snippet(prompt) : basename(cwd), status: 'idle', starting: true,
+        updated_at: new Date().toISOString(), rev: Date.now(), ...placeOf(workspaceId, cwd), agent: appAgent(root), launcher: provider,
+        started_by_persona: true, ...(config.model ? { model: config.model } : {}),
+        // Labelled as the listed row will be: a provider the apps do not know carries its label (#8142).
+        ...(appAgent(root) === RUNTIME && labels[provider] ? { agent_label: labels[provider] } : {}),
+        ...(EFFORTS.includes(config.thinkingOptionId) ? { effort: config.thinkingOptionId } : {}),
+      })
+      const said = Object.keys(instead).length ? { instead } : {}
+      const res = params.backend_workspace_root ? await created : await within(created, callWait)
+      if (res === TIMEOUT) {
+        // Still being created (its provider starting, Paseo restarting): listed as starting until Paseo is done (track).
+        // Then the agent's row takes over, or this one says why it did not start.
+        const row = placeholder()
+        readonlyHandedOff = true
+        opEntry.row = row
+        const tracked = created.then(async (late) => {
+          if (!late?.agent) throw new Error(late?.error || 'no reason given')
+          if (await notReadonly(late.agent)) throw new Error(`it came up in ${late.agent.currentModeId || 'unknown'} mode, not read-only (plan), and was archived`)
+          upsert(late.agent)
+          if (readonly && prompt.trim()) {
+            await deliverReadonlyPrompt(late.agent, startGiveUp)
+          }
+          return late.agent
+        }).then((agent) => {
+          settleOp(agent)
+          return agent
+        }, (err) => {
+          settleOp(undefined, err)
+          throw err
+        })
+        track(sessionId, row, tracked, `starting ${sessionId}`, undefined, readonly)
+        return { session: row, ...said }
       }
+      if (!res?.agent) throw new RpcError(`Paseo 没能新建：${res?.error ?? '原因不明'}`, 'start_failed')
+      if (await notReadonly(res.agent)) {
+        throw new RpcError(`Paseo 没有以只读（plan）模式启动（实际：${res.agent.currentModeId || 'unknown'}），已经归档。`, 'readonly_unsupported')
+      }
+      upsert(res.agent)
+      const row = rowOf(res.agent)
+      if (params.backend_workspace_root) {
+        if (!row || !samePath(res.agent.cwd, cwd) || !samePath(row.cwd, cwd)) {
+          throw new RpcError('Paseo returned an agent outside the prepared task directory', 'backend_workspace_cwd_mismatch')
+        }
+        if (prompt.trim()) {
+          await deliverMessage({ session_id: row.session_id, text: prompt, client_msg_id: `workspace-start:${sessionId}` }, startGiveUp)
+        }
+      } else if (readonly && prompt.trim()) {
+        await deliverReadonlyPrompt(res.agent, Math.max(startDeadline - Date.now(), 1000))
+      }
+      // The effort it runs at, while Paseo's record does not say it yet.
+      if (row && !row.effort && config.thinkingOptionId && EFFORTS.includes(config.thinkingOptionId)) row.effort = config.thinkingOptionId
+      settleOp(res.agent)
+      return { session: row ?? placeholder(), ...said }
+    } catch (err) {
+      if (!readonlyHandedOff) settleOp(undefined, err)
+      throw err
+    } finally {
+      if (!readonlyHandedOff && !opSettled) settleOp(undefined, new Error('start did not complete'))
     }
-    // The effort it runs at, while Paseo's record does not say it yet.
-    if (row && !row.effort && config.thinkingOptionId && EFFORTS.includes(config.thinkingOptionId)) row.effort = config.thinkingOptionId
-    return { session: row ?? placeholder(), ...said }
   }
 
   /**
@@ -2473,7 +2613,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
    */
   function namedSession(id) {
     if (typeof id !== 'string' || !SESSION_ID.test(id)) return undefined
-    if (bySession.has(id) || inFlight.has(id) || takenBy(id, undefined, true)) {
+    if (bySession.has(id) || inFlight.has(id) || pendingOps.has(id) || takenBy(id, undefined, true)) {
       log(`paseo: session ${id} is someone else's already; this start gets an id of its own`)
       return undefined
     }
@@ -2530,15 +2670,23 @@ export function createPaseoBridge(deps = {}, options = {}) {
    */
   async function takeOver(params, wait = callWait) {
     const id = params.resume
+    const readonly = params.permission_mode === 'plan'
+    const deadline = Date.now() + wait
     if (!paseo.connected) throw new RpcError('Paseo 现在没有连上（没在运行，或正在重启），这次没有发送。', 'unavailable')
-    let mine
-    for (const { agent } of agents.values()) {
-      if (claudeId(agent) === id && agentRoot(agent, roots) === 'claude' && (!mine || mine.status === 'closed')) mine = agent
+    // Resolve the actual active receiver first (bySession), so shared-session agents validate and return the real target.
+    let mine = agents.get(bySession.get(id))?.agent
+    if (!mine) {
+      for (const { agent } of agents.values()) {
+        if (claudeId(agent) === id && agentRoot(agent, roots) === 'claude' && (!mine || mine.status === 'closed')) mine = agent
+      }
+      if (mine) {
+        const activeId = bySession.get(sessionIdOf(mine, roots))
+        if (activeId) mine = agents.get(activeId)?.agent ?? mine
+      }
     }
-    mine ??= agents.get(bySession.get(id))?.agent // a session listed under an id of its own (Persona's label)
     const kept = mine ? undefined : archivedOf(id)
     const was = mine || kept ? undefined : archivedWith(id)
-    if (params.permission_mode === 'plan' && (mine ?? kept ?? was)?.currentModeId !== 'plan') {
+    if (readonly && (mine ?? kept ?? was)?.currentModeId !== 'plan') {
       // A takeover keeps the session's own mode (an import sets none): it cannot promise read-only (caps.readonly).
       throw new RpcError('Paseo 接着已有的会话时不能保证只读（plan）模式，这次没有发送。', 'readonly_unsupported')
     }
@@ -2546,9 +2694,44 @@ export function createPaseoBridge(deps = {}, options = {}) {
       const row = rowOf(mine)
       if (row) return { session: row }
     }
-    // Paseo is importing it already (an earlier takeover answered before Paseo was done): that one is the takeover.
+    // Check both active pre-timeout ops (0..callWait) and tracked in-flight ops.
+    const activeOp = pendingOps.get(id)
     const going = inFlightOf(id)
-    if (going && !going.failed) return { session: going.row }
+    const goingActive = going && !going.failed && !going.done
+    if (activeOp || goingActive) {
+      const opReadonly = activeOp ? activeOp.readonly : going.readonly
+      if (readonly && !opReadonly) {
+        throw new RpcError('Paseo 接着已有的会话时不能保证只读（plan）模式，这次没有发送。', 'readonly_unsupported')
+      }
+      if (!readonly && opReadonly) {
+        // Do not bind a writable takeover to a readonly op (which force-archives non-plan results and disables retries).
+        const waited = activeOp?.done ?? going.work.then(() => {}, () => {})
+        const settled = await within(waited, Math.max(deadline - Date.now(), 0))
+        if (settled === TIMEOUT) {
+          throw new RpcError('这个会话正在以只读（plan）模式恢复中，请稍后再试。', 'session_busy')
+        }
+        // Yield once so track() settles inFlight; never spin if the op or deadline did not advance.
+        await Promise.resolve()
+        if (going && inFlight.get(id) === going && !going.done) inFlight.delete(id)
+        const left = deadline - Date.now()
+        if (left <= 0 || (activeOp && pendingOps.get(id) === activeOp)) {
+          throw new RpcError('这个会话正在以只读（plan）模式恢复中，请稍后再试。', 'session_busy')
+        }
+        return takeOver(params, left)
+      }
+      if (goingActive) return { session: going.row }
+      const joined = await within(activeOp.promise, Math.max(deadline - Date.now(), 0))
+      if (joined === TIMEOUT) {
+        const lateGoing = inFlightOf(id)
+        if (lateGoing && !lateGoing.failed && !lateGoing.done) return { session: lateGoing.row }
+        if (activeOp.row) return { session: activeOp.row }
+        throw new RpcError('Paseo 正在接管这个会话，请稍后再试。', 'timeout')
+      }
+      await activeOp.done
+      const joinedRow = rowOf(joined)
+      if (!joinedRow) throw new RpcError('Paseo 接上了这个会话，但它没有会话 id', 'start_failed')
+      return { session: joinedRow }
+    }
     if (params.open_elsewhere) {
       throw new RpcError('这个会话正在别处的 Claude Code 里开着（Paseo 之外），Paseo 再接着它就会有两个进程写同一个会话。先在那边关掉它。这次没有发送。', 'open_elsewhere')
     }
@@ -2591,21 +2774,49 @@ export function createPaseoBridge(deps = {}, options = {}) {
         throw err
       }
     }
-    const imported = repeat(`continuing session ${id}`, ask, until, () => agents.get(bySession.get(id))?.agent).then((agent) => {
+    if (inFlight.get(id)?.failed) inFlight.delete(id)
+    const rowPlaceholder = {
+      session_id: id, cwd, title: (from?.title ?? '').trim() || basename(cwd), status: 'idle', starting: true,
+      updated_at: new Date().toISOString(), rev: Date.now(), ...placeOf(workspaceId, cwd), agent: appAgent(roots[provider] ?? provider),
+      launcher: provider, started_by_persona: true, ...(transcript ? { transcript } : thread ? { codex_thread: thread } : {}),
+    }
+    let markOpDone
+    const opDone = new Promise((resolve) => { markOpDone = resolve })
+    const opEntry = { readonly, promise: null, done: opDone, row: rowPlaceholder }
+    const fromAgentId = from?.id
+    if (readonly) {
+      beginReadonly(id)
+      if (fromAgentId) beginReadonlyAgent(fromAgentId)
+    }
+    const imported = repeat(`continuing session ${id}`, ask, until, () => agents.get(bySession.get(id))?.agent).then(async (agent) => {
+      if (readonly && agent.currentModeId !== 'plan') {
+        await archiveReadonlyViolation(agent.id, `resumed in ${agent.currentModeId || 'unknown'} mode`)
+        remove(agent.id)
+        for (const [aid, u] of archived) {
+          if (aid === from?.id || aid === agent.id) {
+            archived.set(aid, { ...u, agent: { ...u.agent, currentModeId: agent.currentModeId ?? null } })
+          }
+        }
+        throw new RpcError(`Paseo 没有以只读（plan）模式恢复该会话（实际：${agent.currentModeId || 'unknown'}），已经归档。`, 'readonly_unsupported')
+      }
       upsert(agent)
       return agent
-    })
-    const res = await within(imported, wait)
-    if (res === TIMEOUT) {
-      const row = {
-        session_id: id, cwd, title: (from?.title ?? '').trim() || basename(cwd), status: 'idle', starting: true,
-        updated_at: new Date().toISOString(), rev: Date.now(), ...placeOf(workspaceId, cwd), agent: appAgent(roots[provider] ?? provider),
-        launcher: provider, started_by_persona: true, ...(transcript ? { transcript } : thread ? { codex_thread: thread } : {}),
+    }).finally(() => {
+      if (pendingOps.get(id) === opEntry) pendingOps.delete(id)
+      if (readonly) {
+        endReadonly(id)
+        if (fromAgentId) endReadonlyAgent(fromAgentId)
       }
+      markOpDone()
+    })
+    opEntry.promise = imported
+    pendingOps.set(id, opEntry)
+    const res = await within(imported, Math.max(deadline - Date.now(), 0))
+    if (res === TIMEOUT) {
       // Should it fail, the next message to the session takes it over again (send), as one did before the import
       // had a row: the session is still the user's conversation, which a start that failed was not.
-      track(id, row, imported, `continuing session ${id}`, (left) => takeOver(params, left))
-      return { session: row }
+      track(id, rowPlaceholder, imported, `continuing session ${id}`, readonly ? undefined : (left) => takeOver(params, left), readonly)
+      return { session: rowPlaceholder }
     }
     const row = rowOf(res)
     if (!row) throw new RpcError('Paseo 接上了这个会话，但它没有会话 id', 'start_failed')

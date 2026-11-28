@@ -14,16 +14,18 @@ export function countsText(c: SubscriptionCounts): string {
 export function SubscriptionsEntry({
   pick,
   scope,
+  manager,
   onOpen,
   description,
 }: {
   pick: (l: SubscriptionSummaryLine) => boolean;
   scope: SubscriptionsScope;
+  manager?: string;
   onOpen?: (state?: string) => void;
   /** One line saying what subscriptions do, where the row appears without the subscriptions page's context. */
   description?: string;
 }) {
-  const counts = countsOf(useSubscriptionSummary(), pick);
+  const counts = countsOf(useSubscriptionSummary(manager), pick);
   if (!counts) return null;
   return (
     <Group footer={description}>

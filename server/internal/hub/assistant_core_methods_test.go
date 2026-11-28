@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/buswire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -84,7 +86,7 @@ func TestAssistantToolContextAndActionBusRoundTrip(t *testing.T) {
 	}
 
 	call := assistantwire.ToolCall{Name: "ask_user", MachineID: "box", SessionID: "conversation",
-		Arguments: json.RawMessage(`{"questions":[{"question":"Continue?","options":[{"label":"Yes"},{"label":"No"}]}]}`)}
+		Arguments: json.RawMessage(`{"why_owner":"priority","questions":[{"question":"Continue?","options":[{"label":"Yes"},{"label":"No"}]}]}`)}
 	done := make(chan proto.ToolResult, 1)
 	go func() { done <- a.Tool(ctx, call) }()
 	var question proto.Interaction
@@ -122,6 +124,39 @@ func TestAssistantToolContextAndActionBusRoundTrip(t *testing.T) {
 
 	for _, method := range []string{assistantwire.MethodTools, assistantwire.MethodTool, assistantwire.MethodContext, assistantwire.MethodAction} {
 		err := h.callBus(ctx, id, method, json.RawMessage(`[]`), nil)
+		checkCoreBusInvalidParams(t, method, err)
+	}
+}
+
+func TestAssistantDeviceAndAppBusRoundTrip(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "box", Name: "Box"})
+	registerMachine(h, m)
+	a := connectAssistant(t, h)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	list := assistantwire.DeviceCall{Device: assistantwire.DeviceAll, Method: assistantwire.DeviceInteractionsList}
+	if raw, err := a.bh.DeviceCall(ctx, list); err != nil || string(raw) != `{"interactions":[]}` {
+		t.Fatalf("device list = %s, %v, want the raw interactions reply", raw, err)
+	}
+	retire := assistantwire.DeviceCall{Device: m.cfg.ID, Method: nodeproto.StopIfIdle}
+	if _, err := a.bh.DeviceCall(ctx, retire); !errors.Is(err, apierr.ErrOffline) {
+		t.Fatalf("retirement on an offline machine = %v, want the relayed offline error", err)
+	}
+
+	call := assistantwire.AppCall{AppID: assistantwire.AppNotify, Method: assistantwire.NotifyQuietGet}
+	if raw, err := a.bh.AppCall(ctx, call); err != nil || string(raw) != `{"quiet":false}` {
+		t.Fatalf("app call = %s, %v, want the raw quiet-hours reply", raw, err)
+	}
+
+	err := a.bh.Client().Call(ctx, assistantwire.MethodDeviceRetire, list, nil)
+	var coded *rpc.Error
+	if !errors.As(err, &coded) || coded.Code != bus.CodeInvalidParams || coded.Message != "device.retire requires session.stop_if_idle" {
+		t.Fatalf("non-retirement call = %v, want invalid_params requiring session.stop_if_idle", err)
+	}
+	for _, method := range []string{assistantwire.MethodDevice, assistantwire.MethodDeviceRetire, assistantwire.MethodApp} {
+		err := a.bh.Client().Call(ctx, method, json.RawMessage(`[]`), nil)
 		checkCoreBusInvalidParams(t, method, err)
 	}
 }

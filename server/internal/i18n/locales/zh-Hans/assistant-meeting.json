@@ -47,5 +47,10 @@
   "bad_audio": "音频格式不正确。请发送带有效起始时间的 16 kHz 单声道 PCM16 音频。",
   "bad_transcription_mode": "meeting_transcription_default 必须是 device 或 hub。",
   "bad_glossary": "meeting_glossary 必须是字符串列表，最多 200 个词条，每条不超过 40 个字符。",
-  "bad_transcription_extension": "请选择已安装的转写扩展，以 extension-id/contribution-id 指定；留空则使用内置服务。"
+  "bad_transcription_extension": "请选择已安装的转写扩展，以 extension-id/contribution-id 指定；留空则使用内置服务。",
+  "speakers_stale": "发言人名单已经更新，请刷新后再试。",
+  "speakers_cleared": "这场会议的发言人信息已清除。",
+  "bad_speakers": "发言人请求无效。",
+  "speaker_run_reused": "这个发言人时间线 run id 已经用于另一份时间线。",
+  "too_many_speaker_turns": "每次导入最多 {max} 条发言人片段。"
 }

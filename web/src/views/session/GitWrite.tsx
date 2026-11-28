@@ -124,7 +124,7 @@ export function CommitBox({ s, writer }: { s: GitStatus; writer: GitWriter }) {
         value={message}
         onChange={(e) => setMessage(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing && can) void commit();
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229 && can) void commit();
         }}
         rows={2}
         placeholder={t("session-gitwrite.message_placeholder")}

@@ -199,23 +199,23 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const sidebarList = Boolean(grouping);
   useLayoutEffect(() => { if (presentation || sidebarList) root.setPresentation(presentation); }, [root, presentation, sidebarList]);
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
-  const [facets, setFacets] = useState<ListCounts | null>(null);
-  const [facetError, setFacetError] = useState("");
-  // Retry on a failed scoped facets read: read it again now
-  const [facetAttempt, setFacetAttempt] = useState(0);
-  const [scopeCounts, setScopeCounts] = useState<ListCounts | null>(null);
-  const [scopeError, setScopeError] = useState("");
+  const rootPage = useSyncExternalStore(root.subscribe, root.getSnapshot, root.getSnapshot);
   const scopeQuery = useMemo(() => {
     const scope = { ...filters };
     for (const key of CHIP_KEYS) delete scope[key];
     return countsQuery(scope);
   }, [filters]);
-  const rootPage = useSyncExternalStore(root.subscribe, root.getSnapshot, root.getSnapshot);
   // Counts without state keep other state tabs reachable; machine scopes disambiguate computer-local groups.
   const facetFilters = useMemo(() => ({ ...(q ? { q } : {}), ...(provider ? { provider } : {}), ...(spaceMachine ? { machine_id: spaceMachine } : {}), ...narrowed, ...exclude }), [q, provider, spaceMachine, narrowed, exclude]);
   // Unscoped counts are the root's own: follow them. Scoped counts are read on their own, now and after hints (one read
   // per hint window, lib/hinted-read.ts); they do not follow the root's counts, which land for that same hint.
   const facetScoped = Object.keys(facetFilters).length > 0;
+  const [facets, setFacets] = useState<ListCounts | null>(() => (facetScoped ? null : rootPage.counts));
+  const [facetError, setFacetError] = useState("");
+  // Retry on a failed scoped facets read: read it again now
+  const [facetAttempt, setFacetAttempt] = useState(0);
+  const [scopeCounts, setScopeCounts] = useState<ListCounts | null>(() => (scopeQuery === "counts=1" ? rootPage.counts : null));
+  const [scopeError, setScopeError] = useState("");
   const facetQuery = useMemo(() => countsQuery(facetFilters), [facetFilters]);
   // With no state tab and no browsed value the filtered list's own per-hint counts read is the facet query: follow it.
   // Drawn as groups the filtered list is not read, so the facets are read on their own.

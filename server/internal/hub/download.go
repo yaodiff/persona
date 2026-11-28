@@ -44,20 +44,18 @@ func (h *Hub) downloadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	p.Path, p.Revision = info.Path, info.Revision
-	w.Header().Set("Content-Type", info.Mime)
-	if info.Mime == "" {
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
+	contentType, mediaType := downloadMIME(info.Mime)
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("ETag", fmt.Sprintf("%q", info.Revision))
 	disposition := "attachment"
-	if q.Get("inline") == "1" && inlineMime(info.Mime) {
+	if q.Get("inline") == "1" && inlineMime(mediaType) {
 		disposition = "inline"
 	}
-	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": info.Name}))
+	w.Header().Set("Content-Disposition", contentDisposition(disposition, info.Name))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// The hub serves the web app on this origin: a file opened by itself (an SVG, an HTML page saved as .png) must
 	// not run as the app. Chrome will not show a PDF in a sandbox, and a PDF runs no page script anyway.
-	if !strings.HasPrefix(info.Mime, "application/pdf") {
+	if contentType != "application/pdf" {
 		w.Header().Set("Content-Security-Policy", "sandbox")
 	}
 	reader := &remoteFileReader{get: get, request: p, size: info.Size,
@@ -115,11 +113,56 @@ func nodeAway(err error) bool {
 	return errors.Is(err, rpc.ErrClosed) || errors.Is(err, errOffline) || errors.Is(err, errManagerOffline)
 }
 
+// downloadMIME parses a node-supplied MIME type into a safe Content-Type header value and its canonical lowercase
+// type/subtype. Malformed, empty, or slashless values fall back to application/octet-stream (with an empty mediaType
+// so the response stays an attachment and sandboxed). application/pdf is emitted without parameters because it is the
+// only type served without Content-Security-Policy: sandbox.
+func downloadMIME(raw string) (contentType, mediaType string) {
+	mt, params, err := mime.ParseMediaType(raw)
+	if err != nil {
+		return "application/octet-stream", ""
+	}
+	typ, sub, ok := strings.Cut(mt, "/")
+	if !ok || typ == "" || sub == "" {
+		return "application/octet-stream", ""
+	}
+	if mt == "application/pdf" {
+		return "application/pdf", "application/pdf"
+	}
+	if formatted := mime.FormatMediaType(mt, params); formatted != "" {
+		return formatted, mt
+	}
+	return mt, mt
+}
+
+func contentDisposition(disposition, filename string) string {
+	if cd := mime.FormatMediaType(disposition, map[string]string{"filename": filename}); cd != "" {
+		return cd
+	}
+	return disposition
+}
+
 // inlineMime: what a browser may show in place (?inline=1: <img>, <video>, <audio>, a PDF in a frame); anything
-// else is always downloaded. HTML is previewed from file.read text in a sandboxed frame (docs/protocol/protocol.md "File preview").
-func inlineMime(m string) bool {
-	return strings.HasPrefix(m, "image/") || strings.HasPrefix(m, "video/") || strings.HasPrefix(m, "audio/") ||
-		strings.HasPrefix(m, "application/pdf")
+// else is always downloaded. Expects a canonical type/subtype from downloadMIME. HTML is previewed from file.read
+// text in a sandboxed frame (docs/protocol/protocol.md "File preview").
+func inlineMime(mt string) bool {
+	return strings.HasPrefix(mt, "image/") || strings.HasPrefix(mt, "video/") || strings.HasPrefix(mt, "audio/") ||
+		mt == "application/pdf"
+}
+
+// safeThumbMime allows only raster image formats for thumbnails: nodes always rasterize thumbnails (even for SVGs),
+// so rejecting image/svg+xml and malformed MIME values prevents active content on the hub origin.
+func safeThumbMime(raw string) (string, bool) {
+	mt, _, err := mime.ParseMediaType(raw)
+	if err != nil {
+		return "", false
+	}
+	switch mt {
+	case "image/png", "image/jpeg", "image/webp", "image/gif", "image/avif":
+		return mt, true
+	default:
+		return "", false
+	}
 }
 
 // fileThumb is a file's thumbnail (node file.thumb): 304 for the ETag the client has, 404 no_thumbnail when the
@@ -146,18 +189,24 @@ func (h *Hub) fileThumb(w http.ResponseWriter, r *http.Request, m *Machine) {
 		}
 		return
 	}
-	w.Header().Set("ETag", fmt.Sprintf("%q", out.ETag))
-	w.Header().Set("Cache-Control", "private, max-age=86400")
-	if out.NotModified {
+	if out.NotModified && p.ETag != "" {
+		w.Header().Set("ETag", fmt.Sprintf("%q", out.ETag))
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "sandbox")
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	if !strings.HasPrefix(out.Mime, "image/") {
+	thumbMIME, ok := safeThumbMime(out.Mime)
+	if !ok {
 		writeErr(w, http.StatusBadGateway, errors.New("invalid thumbnail"))
 		return
 	}
-	w.Header().Set("Content-Type", out.Mime)
+	w.Header().Set("ETag", fmt.Sprintf("%q", out.ETag))
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Header().Set("Content-Type", thumbMIME)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox")
 	_, _ = w.Write(out.Data)
 }
 

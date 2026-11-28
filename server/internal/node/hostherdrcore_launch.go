@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 )
 
-// Starting sessions in the Herdr app (#2532, docs/plans/plan-orca-support.md "herdr-core host"). A new terminal opens the
+// Starting sessions in the Herdr app (#2532, docs/integrations/herdr-core.md "herdr-core host"). A new terminal opens the
 // way the app opens one — the machine's shell, kept, with the app's terminal identity and labels — and goes into the
 // app's layout document as a tab of its own, so the app shows it like a tab the user opened. The document is the app's:
 // the node edits it as generic JSON, only adding a space or a tab and renaming, so whatever else the app keeps there is

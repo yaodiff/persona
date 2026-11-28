@@ -1,3 +1,4 @@
+import { withoutInputFields } from './command-input.js'
 // Shared runtime history pagination (docs/integrations/runtimes.md "History").
 import{RpcError}from"./wire.js";
 export const HISTORY_LIMIT=200,HISTORY_MAX=500;
@@ -26,5 +27,5 @@ export function historyPage(rows,params,o={}){const{since,until,limit,cursor}=hi
 // A custom adapter can still return zero to signal a missing timestamp.
 const list=[];for(const r of rows??[]){const k=id(r),u=t(r);if(!k||!Number.isFinite(u)||(customTime!=null&&u===0)||u<since||u>=until||deleted(r))continue;if(after&&(u>after.t||u===after.t&&k<=after.k))continue;list.push({r,u,k})}
 list.sort((a,b)=>b.u-a.u||(a.k<b.k?-1:a.k>b.k?1:0));const page=list.slice(0,limit),last=page[page.length-1];
-return{rows:page.map(x=>x.r),next_cursor:list.length>limit?Buffer.from(JSON.stringify({t:last.u,k:last.k})).toString("base64url"):"",complete:o.complete!==!1}}
-export function historyResult(res){return{rows:Array.isArray(res?.rows)?res.rows.filter(r=>r&&typeof r.session_id=="string"&&r.session_id&&!deleted(r)):[],next_cursor:typeof res?.next_cursor=="string"?res.next_cursor:"",complete:res?.complete===!0}}
+return{rows:page.map(x=>withoutInputFields(x.r)),next_cursor:list.length>limit?Buffer.from(JSON.stringify({t:last.u,k:last.k})).toString("base64url"):"",complete:o.complete!==!1}}
+export function historyResult(res){return{rows:Array.isArray(res?.rows)?res.rows.filter(r=>r&&typeof r.session_id=="string"&&r.session_id&&!deleted(r)).map(withoutInputFields):[],next_cursor:typeof res?.next_cursor=="string"?res.next_cursor:"",complete:res?.complete===!0}}

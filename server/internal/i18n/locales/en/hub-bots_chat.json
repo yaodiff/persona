@@ -23,5 +23,8 @@
   "topics_space_none": "This group chat is not bound to a space.",
   "topics_space_bad": "Space {space} does not exist or cannot be bound to a topic group.",
   "chat_not_enabled": "This chat isn't turned on for the bot. Send /topics in it first.",
-  "chat_unknown": "Couldn't tell which chat this card is in. Try again in a moment."
+  "chat_unknown": "Couldn't tell which chat this card is in. Try again in a moment.",
+  "guest_busy": "Still answering the last question in this thread. Try again in a moment.",
+  "guest_rate_limited": "Too many questions here right now. Try again later.",
+  "guest_too_long": "That message is too long for me to answer here."
 }

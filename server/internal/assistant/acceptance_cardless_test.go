@@ -51,7 +51,7 @@ var botNotSetUp = FeishuStatus{}
 // deployedCardless runs the deploying turn and waits for the ask the hub keeps.
 func deployedCardless(t *testing.T, s *Service, f *fakeHub, id string) *acceptAsk {
 	t.Helper()
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "the ask", func() bool { a := askOf(s, id); return a != nil && !a.AskedAt.IsZero() })
 	return askOf(s, id)
 }
@@ -78,7 +78,7 @@ func TestAcceptanceIsKeptWithoutABot(t *testing.T) {
 	}
 	// Another turn that says deployed does not ask twice.
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	time.Sleep(6 * testReportDelay)
 	if b := askOf(s, id); !b.AskedAt.Equal(a.AskedAt) {
 		t.Fatalf("asked again: %+v then %+v", a, b)
@@ -123,7 +123,7 @@ func TestAcceptButtonVerifiesACardlessAsk(t *testing.T) {
 	}
 	// The next deploy asks again, card-less; its button verifies.
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "the next round's ask", func() bool { b := askOf(s, id); return b != nil && b.AskedAt.After(a.AskedAt) })
 	b := askOf(s, id)
 	if code := post(b.AskedAt); code != http.StatusOK {
@@ -159,7 +159,7 @@ func TestAcceptanceWithReportsOffHasNoCard(t *testing.T) {
 func TestAcceptanceWithABotKeepsItsCard(t *testing.T) {
 	needsLarkLayer(t)
 	s, f, posts, id := cardlessService(t, FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", Features: FeishuFeatures{Main: true, Cards: true, Reports: true}})
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitAcceptCard(t, s, id, posts)
 	if a := askOf(s, id); a.NoCard || len(a.Messages) != 1 {
 		t.Fatalf("ask: %+v", a)

@@ -823,3 +823,53 @@ func TestAgentStartConfirmationShowsPermissionMode(t *testing.T) {
 		t.Fatalf("agent_start: %s, starts %v", out, f.starts)
 	}
 }
+
+func TestAgyUnavailableAutoModeDegradesAndHidesOption(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	noAuto := proto.PermissionModeSetOf("default", "acceptEdits", "plan", "bypassPermissions")
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {
+			{Name: "agy", Agent: "agy", Source: "agy", Assistant: true, PermissionModes: noAuto},
+		},
+	}
+	f.assistantAnswer = func(params map[string]any) map[string]any {
+		return map[string]any{"session_id": "agy-degraded-conv", "permission_mode": proto.ModeBypass}
+	}
+	f.mu.Unlock()
+
+	// Model configuration rejects auto once agy advertises permission_modes without auto, while accepting bypassPermissions.
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.agy","permission_mode":"auto"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("assistant on restricted agy accepted auto: %d %s", w.Code, w.Body.String())
+	}
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.agy","permission_mode":"bypassPermissions"}`); w.Code != http.StatusOK {
+		t.Fatalf("assistant on restricted agy rejected bypassPermissions: %d %s", w.Code, w.Body.String())
+	}
+
+	// Older client explicitly requesting permission_mode=auto still succeeds with the degraded mode returned by the node.
+	sess, err := s.startOn(ctx, "server", StartParams{Text: "hi", Launcher: "agy", PermissionMode: "auto"}, false)
+	if err != nil {
+		t.Fatalf("startOn explicit auto on agy: %v", err)
+	}
+	if sess.SessionID != "agy-degraded-conv" || sess.PermissionMode != proto.ModeBypass {
+		t.Fatalf("degraded session = %+v, want session_id=agy-degraded-conv permission_mode=%q", sess, proto.ModeBypass)
+	}
+
+	// Implicit DefaultPermissionMode=auto is dropped for restricted agy and returns the settled mode.
+	setSettings(t, s, func(v *Settings) { v.DefaultPermissionMode = "auto" })
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":1,"provider":"launcher.agy","permission_mode":null}`); w.Code != http.StatusOK {
+		t.Fatalf("clear assistant permission_mode: %d %s", w.Code, w.Body.String())
+	}
+	sess, err = s.startOn(ctx, "server", StartParams{Text: "hi default", Launcher: "agy"}, false)
+	if err != nil {
+		t.Fatalf("startOn implicit auto default on agy: %v", err)
+	}
+	lastSend := f.sends[len(f.sends)-1]
+	if _, forwarded := lastSend["permission_mode"]; forwarded {
+		t.Fatalf("restricted agy forwarded unsupported implicit auto mode: %v", lastSend)
+	}
+	if sess.PermissionMode != proto.ModeBypass {
+		t.Fatalf("implicit default degraded session = %+v, want permission_mode=%q", sess, proto.ModeBypass)
+	}
+}

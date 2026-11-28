@@ -95,7 +95,9 @@ SERVER = {
     # way. Its absence is TestKnowledgeUIFollowsItsModule's; here, its flag and the manager's line.
     "knowledge-ui": {},
     "recording": {
-        "routes": ["/api/v1/recordings"],
+        "features": ["meeting_speakers"],
+        "routes": ["/api/v1/recordings",
+                   ["POST", f"/api/v1/recordings/{smoke.KEPT_SPEAKERS}/speakers", {"rev": 999, "ops": []}]],
         "kept": "recordings",
         # started an hour ago: an upload older than recording_days (14) is refused as expired
         "seed": [["PUT", f"/api/v1/recordings/{RECORDING_ID}", {

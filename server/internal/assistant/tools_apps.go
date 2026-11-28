@@ -324,6 +324,31 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		Reason        string          `json:"reason"`
 	}
 	_ = json.Unmarshal(args, &a)
+	if ix, ok := s.pendingIx(strings.TrimSpace(a.InteractionID)); ok && s.activeInternalCard(ix) {
+		todo, routed := s.routedTo(ix.ID, self, s.isMain(ctx, self))
+		if !routed || self == ix.SessionID {
+			return "", errors.New("this internal interaction was not handed to you")
+		}
+		if ix.MachineID != a.Machine || ix.SessionID != a.SessionID || !time.Now().Before(ix.ExpiresAt) {
+			return "", errors.New("internal interaction source changed or expired")
+		}
+		if ix.Kind == proto.IxPermission {
+			return s.answerApprovalCard(ctx, self, ix, a.Allow, a.Reason)
+		}
+		if ix.Kind == proto.IxScreen {
+			return s.answerScreenCard(ctx, self, ix, a.Answers, a.Allow, a.Reason)
+		}
+		answers, err := interactionAnswers(ix, a.Answers)
+		if err != nil {
+			return "", err
+		}
+		if err := s.resolveRemembered(ix.ID, proto.Resolution{Answers: answers, AnsweredBy: proto.AnsweredByAssistant, Reason: a.Reason}, false); err != nil {
+			return "", err
+		}
+		s.askAnswered(ctx, todo, self, ix, answers, a.Reason)
+		s.workEvent(ix.MachineID, ix.SessionID, "ask_supervisor_answered", map[string]any{"by": self, "card": ix.ID, "kind": ix.Kind})
+		return "Answered as the designated supervisor.", nil
+	}
 	am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
 	if err != nil {
 		return "", err
@@ -400,7 +425,7 @@ func (s *Service) answerApprovalCard(ctx context.Context, self string, ix proto.
 		return "", errors.New("allow is required for a permission or plan card: true allows the tool (approves the plan), false denies it")
 	}
 	if *allow {
-		if why := userApproval(ix); why != "" {
+		if why := userApproval(ix); why != "" && !(s.internalCard(ix) && s.inputCardSource(ix, false) == cardConfirmOutbound) {
 			return "", fmt.Errorf("interaction %s %s: only the user decides it; hand it to them with ask_escalate (todo_id %s), with your recommendation", ix.ID, why, todo)
 		}
 	}

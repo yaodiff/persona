@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { searchSettings } from "./search";
-import { ASSISTANT_TABS, categoryState, FROM_LIST, itemState, NAV_GROUPS, navGroups, openedFromList, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, stepsToList, TAB_INFO, TABS } from "./nav";
+import { ASSISTANT_TABS, categoryState, FROM_LIST, itemState, NAV_GROUPS, navGroups, openedFromList, redirectLegacySettings, settingsAt, settingsHref, stepsToList, TAB_INFO, TABS } from "./nav";
 
 describe("settings location", () => {
   it("names no category on plain /settings: the phone's list (通用 on a wide screen)", () => {
@@ -150,19 +150,19 @@ describe("settings sidebar groups", () => {
     expect(redirectLegacySettings("?tab=channels&channel=feishu", "", "/settings", true))
       .toBe("/settings?tab=integrations&integration=builtin%3Afeishu-bot");
     expect(redirectLegacySettings("?tab=channels&channel=wechat%40work", "", "/settings", true))
-      .toBe("/settings?tab=integrations&integration=channel%3Awechat%40work");
+      .toBe("/settings?tab=integrations&manager=work&integration=channel%3Awechat%40work");
     expect(redirectLegacySettings("?tab=extensions&extension=larkx%40work", "", "/settings", true))
-      .toBe("/settings?tab=integrations&integration=ext%3Alarkx%40work");
+      .toBe("/settings?tab=integrations&manager=work&integration=ext%3Alarkx%40work");
     expect(redirectLegacySettings("?tab=extensions&extension=larkx%40work%2Fui%2Fboard", "", "/settings", true))
-      .toBe("/settings?tab=integrations&integration=ext%3Alarkx%40work%2Fui%2Fboard");
+      .toBe("/settings?tab=integrations&manager=work&integration=ext%3Alarkx%40work%2Fui%2Fboard");
     expect(redirectLegacySettings("?tab=extensions&extension=-market%2Fofficial%2Flarkx", "", "/settings", true))
       .toBe("/settings?tab=integrations&integration=-market%2Fofficial%2Flarkx");
     expect(redirectLegacySettings("", "", "/settings/connectors/github@work", true))
-      .toBe("/settings?tab=integrations&integration=connector%3Agithub%40work");
+      .toBe("/settings?tab=integrations&manager=work&integration=connector%3Agithub%40work");
     expect(redirectLegacySettings("", "", "/settings/channels/wechat@work", true))
-      .toBe("/settings?tab=integrations&integration=channel%3Awechat%40work");
+      .toBe("/settings?tab=integrations&manager=work&integration=channel%3Awechat%40work");
     expect(redirectLegacySettings("", "", "/settings/extensions/larkx@work", true))
-      .toBe("/settings?tab=integrations&integration=ext%3Alarkx%40work");
+      .toBe("/settings?tab=integrations&manager=work&integration=ext%3Alarkx%40work");
     expect(redirectLegacySettings("", "", "/settings/sent", true))
       .toBe("/settings?tab=integrations&integration=-sent");
     expect(redirectLegacySettings("?tab=integrations&integration=ext%3Alarkx", "", "/settings", true)).toBeNull();
@@ -181,29 +181,29 @@ describe("settings sidebar groups", () => {
     expect(redirectLegacySettings(`?tab=integrations&integration=${encodeURIComponent(`-sources/${encodedState}`)}`, "", "/settings", false))
       .toBe(`/settings?tab=sources&state=${encodedState}`);
     expect(redirectLegacySettings(`?tab=integrations&integration=${encodeURIComponent(`-sources@work/${encodedState}`)}`, "", "/settings", false))
-      .toBe(`/settings?tab=sources&state=${encodedState}&manager=work`);
+      .toBe(`/settings?tab=sources&manager=work&state=${encodedState}`);
     expect(redirectLegacySettings("", "", "/settings/integrations/-sources", false)).toBe("/settings?tab=sources");
     expect(redirectLegacySettings("", "", "/settings/integrations/-sources@work", false)).toBe("/settings?tab=sources&manager=work");
     expect(redirectLegacySettings("", "", `/settings/integrations/-sources/${encodedState}`, false))
       .toBe(`/settings?tab=sources&state=${encodedState}`);
     expect(redirectLegacySettings("", "", `/settings/integrations/-sources@work/${encodedState}`, false))
-      .toBe(`/settings?tab=sources&state=${encodedState}&manager=work`);
+      .toBe(`/settings?tab=sources&manager=work&state=${encodedState}`);
     expect(redirectLegacySettings("", "", "/settings/sources", false)).toBe("/settings?tab=sources");
     expect(redirectLegacySettings("", "", `/settings/sources/${encodedState}`, false))
       .toBe(`/settings?tab=sources&state=${encodedState}`);
     expect(redirectLegacySettings("?tab=sources", "", "/settings", false)).toBeNull();
     expect(redirectLegacySettings("", "", "/settings/integrations", false)).toBe("/settings?tab=extensions");
-    expect(redirectLegacySettings("", "", "/settings/integrations/builtin:mail", false)).toBe("/settings?tab=connectors");
+    expect(redirectLegacySettings("", "", "/settings/integrations/builtin:mail", false)).toBe("/settings?tab=connectors&connector=mail");
     expect(redirectLegacySettings("", "", "/settings/integrations/builtin:feishu-bot@work", false))
-      .toBe("/settings?tab=connectors&connector=feishu-bot%40work");
+      .toBe("/settings?tab=connectors&manager=work&connector=feishu-bot%40work");
     expect(redirectLegacySettings("", "", "/settings/integrations/connector:github@work", false))
-      .toBe("/settings?tab=connectors&connector=github%40work");
+      .toBe("/settings?tab=connectors&manager=work&connector=github%40work");
     expect(redirectLegacySettings("", "", "/settings/integrations/channel:wechat@work", false))
-      .toBe("/settings?tab=channels&channel=wechat%40work");
+      .toBe("/settings?tab=channels&manager=work&channel=wechat%40work");
     expect(redirectLegacySettings("", "", "/settings/integrations/ext:larkx@work", false))
-      .toBe("/settings?tab=extensions&extension=larkx%40work");
+      .toBe("/settings?tab=extensions&manager=work&extension=larkx%40work");
     expect(redirectLegacySettings("", "", "/settings/integrations/ext:larkx@work/ui/board", false))
-      .toBe("/settings?tab=extensions&extension=larkx%40work%2Fui%2Fboard");
+      .toBe("/settings?tab=extensions&manager=work&extension=larkx%40work%2Fui%2Fboard");
     expect(redirectLegacySettings("", "", "/settings/integrations/-market", false))
       .toBe("/settings?tab=extensions&extension=-market");
     expect(redirectLegacySettings("", "", "/settings/integrations/-sent", false))
@@ -211,19 +211,7 @@ describe("settings sidebar groups", () => {
     // While assistant state is still loading ("loading"), do not redirect away from integrations or sources yet.
     expect(redirectLegacySettings("?tab=integrations&integration=builtin%3Amail", "", "/settings", "loading")).toBeNull();
     expect(redirectLegacySettings("?tab=sources", "", "/settings", "loading")).toBeNull();
-    // Target helper matches bidirectional rules.
-    expect(resolveSettingsTarget("extensions", "larkx@work", true)).toEqual({ tab: "integrations", sub: "ext:larkx@work" });
-    expect(resolveSettingsTarget("sources", null, true)).toEqual({ tab: "integrations", sub: "-sources" });
-    expect(resolveSettingsTarget("sources", sampleState, true, null, "work")).toEqual({
-      tab: "integrations",
-      sub: `-sources@work/${encodedState}`,
-    });
-    expect(resolveSettingsTarget("integrations", "channel:wechat@work", false)).toEqual({ tab: "channels", sub: "wechat@work" });
-    expect(resolveSettingsTarget("integrations", `-sources@work/${encodedState}`, false)).toEqual({
-      tab: "sources",
-      sub: sampleState,
-      manager: "work",
-    });
+
   });
 
   it("remaps Settings search to integrations when integrations_v2 is on and hides integrations when off", () => {

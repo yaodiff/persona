@@ -138,31 +138,31 @@ func TestSentLedgerRecordsWhatWentOut(t *testing.T) {
 		t.Fatalf("let through %s, the card was %s", row.LetThrough, cards[0].ID)
 	}
 
-	// The assistant answered the card for the user.
+	// An assistant answer cannot authorize an outward write on the owner's behalf.
 	answer(proto.Resolution{Allow: &yes, AnsweredBy: proto.AnsweredByAssistant})
-	send(asker{machine: "box"}, `{"chat":"u1","text":"second"}`)
+	result := send(asker{machine: "box"}, `{"chat":"u1","text":"second"}`)
 	rows = st.all()
-	if len(rows) != 2 || objectOf(t, rows[1].LetThrough)["answered_by"] != proto.AnsweredByAssistant || objectOf(t, rows[1].Origin)["session_id"] != nil {
-		t.Fatalf("answered by the assistant: %+v", rows)
+	if !result.IsError || len(rows) != 1 {
+		t.Fatalf("assistant authorization sent an outward message: result %+v, rows %+v", result, rows)
 	}
 
 	// A rule allowed it: no card, the rule is the reason.
 	asked := len(hubOf(h).asked())
 	send(asker{machine: "box", session: "conv2"}, `{"chat":"auto","text":"routine"}`)
 	rows = st.all()
-	if len(rows) != 3 || len(hubOf(h).asked()) != asked {
+	if len(rows) != 2 || len(hubOf(h).asked()) != asked {
 		t.Fatalf("by rule: %d rows, %d cards", len(rows), len(hubOf(h).asked())-asked)
 	}
-	through = objectOf(t, rows[2].LetThrough)
+	through = objectOf(t, rows[1].LetThrough)
 	rule, _ := through["rule"].(map[string]any)
 	if through["kind"] != "rule" || through["interaction_id"] != nil || rule["connector"] != "example" || rule["action"] != "example_send" ||
-		rule["decision"] != "allow" || objectOf(t, rows[2].Target)["chat"] != "auto" {
-		t.Fatalf("let through by rule %s", rows[2].LetThrough)
+		rule["decision"] != "allow" || objectOf(t, rows[1].Target)["chat"] != "auto" {
+		t.Fatalf("let through by rule %s", rows[1].LetThrough)
 	}
 
 	// Declined: nothing went out, nothing is kept.
 	answer(proto.Resolution{Allow: &no})
-	if r := send(asker{machine: "box"}, `{"chat":"u1","text":"never sent"}`); !r.IsError || len(st.all()) != 3 {
+	if r := send(asker{machine: "box"}, `{"chat":"u1","text":"never sent"}`); !r.IsError || len(st.all()) != 2 {
 		t.Fatalf("declined: %+v, %d rows", r, len(st.all()))
 	}
 
@@ -171,14 +171,14 @@ func TestSentLedgerRecordsWhatWentOut(t *testing.T) {
 	mux := h.routes()
 	answer(proto.Resolution{Allow: &yes})
 	body := `{"thread":"u1","action":"example_send","text":"from the thread page"}`
-	if code, out := call(t, mux, "POST", "/api/v1/connectors/example/thread/reply", deviceToken("dev_phone", roleFull), body); code != 200 || len(st.all()) != 3 {
+	if code, out := call(t, mux, "POST", "/api/v1/connectors/example/thread/reply", deviceToken("dev_phone", roleFull), body); code != 200 || len(st.all()) != 2 {
 		t.Fatalf("from the user's device: %d %v, %d rows", code, out, len(st.all()))
 	}
 	if code, out := call(t, mux, "POST", "/api/v1/connectors/example/thread/reply", h.cfg.Token, body); code != 200 {
 		t.Fatalf("from the pairing token: %d %v", code, out)
 	}
 	rows = st.all()
-	if len(rows) != 4 || rows[3].Text != "from the thread page" || string(rows[3].Origin) != `{}` {
+	if len(rows) != 3 || rows[2].Text != "from the thread page" || string(rows[2].Origin) != `{}` {
 		t.Fatalf("the pairing token's reply: %+v", rows)
 	}
 }

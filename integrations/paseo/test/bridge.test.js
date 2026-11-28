@@ -53,7 +53,7 @@ async function setup(t, o = {}) {
   // The fake node answers a card at once, as no person can: such a dismissal is taken for a person's unless a test
   // says how soon the hub's own answer comes (atOnceMs).
   const bridge = createPaseoBridge({ paseo, log: (m) => logs.push(m) },
-    { socketPath: node.path, mcpConfig: o.mcpConfig, allowTools: o.allowTools, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500,
+    { socketPath: node.path, mcpConfig: o.mcpConfig, allowTools: o.allowTools, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: o.callWait ?? 1500,
       startGiveUp: o.startGiveUp, listMax: o.listMax, pageSize: o.pageSize, closedChecks: o.closedChecks, sweepMs: o.sweepMs ?? 0, atOnceMs: o.atOnceMs ?? 0,
       resumeWaitMs: o.resumeWaitMs })
   bridge.start()
@@ -2988,4 +2988,331 @@ test("a native pinned workspace keeps old conversations beyond the list limit, i
   fake.upsertWorkspace(workspace)
   await until('unpin releases the old conversations', () => !rows().some((r) => r.session_id === 'paseo-old-child'))
   assert.equal(node.last('runtime.workspaces').workspaces.find((w) => w.workspace_id === workspace.id).pinned_at, undefined)
+})
+
+test('read-only (plan) start and takeover fail closed on missing mode, initialPrompt, dual-agent, pendingReadonly bypasses, and 0..callWait races', async (t) => {
+  const { fake, node, bridge, rows } = await setup(t, { callWait: 80 })
+  const plan = (params) => call(node, 'session.start', { cwd: '/tmp', prompt: 'inspect only', permission_mode: 'plan', ...params })
+
+  // 1. Synchronous start with missing/null/empty/uppercase currentModeId must withhold initialPrompt, archive, and refuse.
+  for (const mode of [undefined, null, '', 'PLAN']) {
+    const sendsBefore = fake.requestsOf('send_agent_message_request').length
+    fake.handlers['agent.create.request'] = (msg) => ({
+      payload: { agent: agentSnapshot({ id: msg.agentId, provider: 'my-claude', cwd: '/tmp', currentModeId: mode }) },
+    })
+    const err = await plan({ launcher: 'my-claude' }).catch((e) => e)
+    assert.equal(err.code, 'readonly_unsupported', `sync start mode=${String(mode)}`)
+    const req = fake.requestsOf('agent.create.request').at(-1)
+    assert.equal(req.initialPrompt, undefined, 'readonly start must not send initialPrompt before mode is verified')
+    assert.equal(fake.requestsOf('send_agent_message_request').length, sendsBefore, 'prompt must never execute on non-plan agent')
+    assert.equal(fake.requestsOf('archive_agent_request').at(-1).agentId, req.agentId)
+    assert.equal(rows().some((r) => r.session_id === `paseo-${req.agentId}`), false)
+  }
+
+  // 1b. Verified plan start withholds initialPrompt in create and delivers it only after plan mode is confirmed.
+  const sendsBeforeOk = fake.requestsOf('send_agent_message_request').length
+  fake.handlers['agent.create.request'] = (msg) => ({
+    payload: { agent: agentSnapshot({ id: msg.agentId, provider: 'my-claude', cwd: '/tmp', currentModeId: 'plan', labels: msg.labels }) },
+  })
+  const okPlan = await plan({ launcher: 'my-claude', prompt: 'verified readonly prompt' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).initialPrompt, undefined)
+  assert.equal(fake.requestsOf('send_agent_message_request').length, sendsBeforeOk + 1)
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).text, 'verified readonly prompt')
+  assert.equal(okPlan.session.permission_mode, 'plan')
+
+  // 2. Premature non-plan agent_update during late readonly start (BEFORE session.send and BEFORE response):
+  // pendingReadonly must archive it, keep starting:true, keep send queued, and never deliver to the writable agent.
+  let createMsg
+  let finishCreate
+  fake.handlers['agent.create.request'] = (msg, c) => {
+    createMsg = msg
+    finishCreate = () => answerWith(c, 'agent.create.response', {
+      requestId: msg.requestId,
+      agent: agentSnapshot({ id: msg.agentId, provider: 'my-claude', cwd: '/tmp', currentModeId: null, labels: msg.labels }),
+    })
+    return null
+  }
+  const late = await plan({ launcher: 'my-claude', session_id: 'plan-late-1', prompt: 'never execute' })
+  assert.equal(late.session.starting, true)
+  assert.equal(createMsg.initialPrompt, undefined)
+  const archivesBeforePush = fake.requestsOf('archive_agent_request').length
+  // (a) Push premature non-plan update WITH empty string label "" (tests empty-string ?? bypass fix).
+  fake.upsert(agentSnapshot({
+    id: createMsg.agentId, provider: 'my-claude', cwd: '/tmp', currentModeId: 'default',
+    labels: { 'persona.session': '' },
+  }), PROJECT)
+  await until('premature non-plan update archived by pendingReadonly', () => fake.requestsOf('archive_agent_request').length > archivesBeforePush)
+  assert.equal(bridge.state.agents.has(createMsg.agentId), false)
+  assert.equal(rows().find((r) => r.session_id === 'plan-late-1')?.starting, true)
+  // (b) Push a 'plan' update then downgrade it to 'default' while still pending: must evict stale 'plan' entry!
+  const planFirst = agentSnapshot({
+    id: createMsg.agentId, provider: 'my-claude', cwd: '/tmp', currentModeId: 'plan',
+    labels: createMsg.labels, updatedAt: new Date(Date.now() + 1000).toISOString(),
+  })
+  fake.upsert(planFirst, PROJECT)
+  await until('plan update indexed temporarily', () => bridge.state.agents.has(createMsg.agentId))
+  fake.upsert({ ...planFirst, currentModeId: 'default', updatedAt: new Date(Date.now() + 2000).toISOString() }, PROJECT)
+  await until('downgraded plan->default evicted while pending', () => !bridge.state.agents.has(createMsg.agentId))
+  const sendsBeforeLate = fake.requestsOf('send_agent_message_request').length
+  const queued = await call(node, 'session.send', { session_id: 'plan-late-1', text: 'do not deliver', client_msg_id: 'cm-plan-late' })
+  assert.deepEqual(queued, { ok: true, queued: true })
+  finishCreate()
+  await until('late readonly start marked failed', () => rows().find((r) => r.session_id === 'plan-late-1')?.start_error)
+  assert.equal(fake.requestsOf('send_agent_message_request').length, sendsBeforeLate, 'writable agent must never receive queued message or prompt')
+
+  // 3. Dual live agents sharing a Claude session (older plan + newer default): readonly takeOver must validate active receiver!
+  const sharedClaude = 'bbbbbbbb-0000-4000-8000-000000000201'
+  const olderPlan = agentSnapshot({
+    id: 'dual-old-plan', provider: 'my-claude', cwd: '/tmp', status: 'idle', currentModeId: 'plan',
+    createdAt: '2026-11-20T00:00:00.000Z', persistence: { provider: 'my-claude', sessionId: sharedClaude },
+  })
+  const newerWritable = agentSnapshot({
+    id: 'dual-new-default', provider: 'my-claude', cwd: '/tmp', status: 'idle', currentModeId: 'default',
+    createdAt: '2026-11-21T00:00:00.000Z', persistence: { provider: 'my-claude', sessionId: sharedClaude },
+  })
+  fake.upsert(olderPlan, PROJECT)
+  fake.upsert(newerWritable, PROJECT)
+  await until('newer writable agent wins bySession', () => bridge.state.bySession.get(sharedClaude) === 'dual-new-default')
+  const dualErr = await call(node, 'session.start', { cwd: '/tmp', resume: sharedClaude, permission_mode: 'plan' }).catch((e) => e)
+  assert.equal(dualErr.code, 'readonly_unsupported', 'must check active receiver, not older plan agent')
+
+  // 4. Takeover of archived plan agent whose import returns non-plan or null: archive, refuse, and invalidate stale archived mode.
+  for (const [idx, mode] of ['default', null].entries()) {
+    const archTranscript = `aaaaaaaa-0000-4000-8000-00000000010${idx + 1}`
+    const archSid = `paseo-arch-plan-${idx + 1}`
+    const archAgent = agentSnapshot({
+      id: `arch-plan-${idx + 1}`, provider: 'my-claude', cwd: '/tmp', status: 'idle', currentModeId: 'plan',
+      persistence: { provider: 'my-claude', sessionId: archTranscript }, labels: { 'persona.session': archSid },
+    })
+    fake.upsert(archAgent, PROJECT)
+    await until('live plan agent listed', () => rows().some((r) => r.session_id === archSid && r.status === 'idle'))
+    fake.archive(archAgent.id)
+    await until('archived plan agent cached', () => rows().find((r) => r.session_id === archSid)?.status === 'offline')
+    fake.handlers.import_agent_request = (msg) => ({
+      type: 'status',
+      payload: {
+        status: 'agent_resumed',
+        agent: agentSnapshot({
+          id: `resumed-${idx + 1}`, provider: 'my-claude', cwd: '/tmp', currentModeId: mode,
+          persistence: { provider: 'my-claude', sessionId: archTranscript }, labels: msg.labels,
+        }),
+      },
+    })
+    const err = await call(node, 'session.start', { cwd: '/tmp', resume: archSid, permission_mode: 'plan' }).catch((e) => e)
+    assert.equal(err.code, 'readonly_unsupported', `takeover resumed mode=${String(mode)}`)
+    assert.equal(fake.requestsOf('archive_agent_request').at(-1).agentId, `resumed-${idx + 1}`)
+    // Stale archived mode invalidated: immediate retry fails before calling import_agent_request again.
+    const importsAfter = fake.requestsOf('import_agent_request').length
+    const cachedErr = await call(node, 'session.start', { cwd: '/tmp', resume: archSid, permission_mode: 'plan' }).catch((e) => e)
+    assert.equal(cachedErr.code, 'readonly_unsupported')
+    assert.equal(fake.requestsOf('import_agent_request').length, importsAfter)
+  }
+
+  // 5. Late readonly takeover + unlabelled sharedId premature non-plan update + no auto-retry.
+  const archTranscript3 = 'aaaaaaaa-0000-4000-8000-000000000103'
+  const archSid3 = 'paseo-arch-plan-3'
+  const archAgent3 = agentSnapshot({
+    id: 'arch-plan-3', provider: 'my-claude', cwd: '/tmp', status: 'idle', currentModeId: 'plan',
+    persistence: { provider: 'my-claude', sessionId: archTranscript3 }, labels: { 'persona.session': archSid3 },
+  })
+  fake.upsert(archAgent3, PROJECT)
+  await until('third live plan agent listed', () => rows().some((r) => r.session_id === archSid3 && r.status === 'idle'))
+  fake.archive(archAgent3.id)
+  await until('third archived plan agent cached', () => rows().find((r) => r.session_id === archSid3)?.status === 'offline')
+  let finishLateImport
+  fake.handlers.import_agent_request = (msg, c) => {
+    finishLateImport = () => answerWith(c, 'status', {
+      status: 'agent_resumed', requestId: msg.requestId,
+      agent: agentSnapshot({
+        id: 'resumed-late-bad', provider: 'my-claude', cwd: '/tmp', currentModeId: 'default',
+        persistence: { provider: 'my-claude', sessionId: archTranscript3 }, labels: msg.labels,
+      }),
+    })
+    return null
+  }
+  const lateTake = await call(node, 'session.start', { cwd: '/tmp', resume: archSid3, permission_mode: 'plan' })
+  assert.equal(lateTake.session.starting, true)
+  // Unlabelled agent_update whose persistence.sessionId resolves via sharedId to archSid3 must be blocked!
+  const archivesBeforeUnlabelled = fake.requestsOf('archive_agent_request').length
+  fake.upsert(agentSnapshot({
+    id: 'unlabelled-bad-import', provider: 'my-claude', cwd: '/tmp', currentModeId: 'default',
+    persistence: { provider: 'my-claude', sessionId: archTranscript3 },
+  }), PROJECT)
+  await until('unlabelled sharedId non-plan update archived', () => fake.requestsOf('archive_agent_request').length > archivesBeforeUnlabelled)
+  assert.equal(bridge.state.bySession.has(archSid3), false)
+  const sendsBeforeTake = fake.requestsOf('send_agent_message_request').length
+  const queuedTake = await call(node, 'session.send', { session_id: archSid3, text: 'do not deliver takeover', client_msg_id: 'cm-take-late' })
+  assert.deepEqual(queuedTake, { ok: true, queued: true })
+  const importsBefore = fake.requestsOf('import_agent_request').length
+  finishLateImport()
+  await until('late readonly takeover marked failed', () => rows().find((r) => r.session_id === archSid3)?.start_error)
+  assert.equal(fake.requestsOf('send_agent_message_request').length, sendsBeforeTake)
+  const retryErr = await call(node, 'session.send', { session_id: archSid3, text: 'after fail', client_msg_id: 'cm-take-after' }).catch((e) => e)
+  assert.equal(retryErr.code, 'start_failed')
+  assert.equal(fake.requestsOf('import_agent_request').length, importsBefore, 'failed readonly takeover must not auto-retry')
+
+  // 6. 0..callWait blind-spot race: concurrent readonly takeover during pre-timeout writable takeover must fail closed.
+  const archTranscript4 = 'aaaaaaaa-0000-4000-8000-000000000104'
+  const archSid4 = 'paseo-arch-plan-4'
+  const archAgent4 = agentSnapshot({
+    id: 'arch-plan-4', provider: 'my-claude', cwd: '/tmp', status: 'idle', currentModeId: 'plan',
+    persistence: { provider: 'my-claude', sessionId: archTranscript4 }, labels: { 'persona.session': archSid4 },
+  })
+  fake.upsert(archAgent4, PROJECT)
+  await until('fourth live plan agent listed', () => rows().some((r) => r.session_id === archSid4 && r.status === 'idle'))
+  fake.archive(archAgent4.id)
+  await until('fourth archived plan agent cached', () => rows().find((r) => r.session_id === archSid4)?.status === 'offline')
+  let finishImport4
+  fake.handlers.import_agent_request = (msg, c) => {
+    finishImport4 = () => answerWith(c, 'status', {
+      status: 'agent_resumed', requestId: msg.requestId,
+      agent: agentSnapshot({
+        id: 'resumed-writable-4', provider: 'my-claude', cwd: '/tmp', currentModeId: 'default',
+        persistence: { provider: 'my-claude', sessionId: archTranscript4 }, labels: msg.labels,
+      }),
+    })
+    return null
+  }
+  const writablePromise = call(node, 'session.start', { cwd: '/tmp', resume: archSid4 })
+  await until('writable import sent before callWait expires', () => Boolean(finishImport4))
+  // Arrives BEFORE callWait expires (0..callWait window): must STILL reject!
+  const raceReadonlyErr = await call(node, 'session.start', { cwd: '/tmp', resume: archSid4, permission_mode: 'plan' }).catch((e) => e)
+  assert.equal(raceReadonlyErr.code, 'readonly_unsupported')
+  // Also wait until writablePromise times out to inFlight, and verify post-timeout readonly join STILL rejects.
+  const writableStart = await writablePromise
+  assert.equal(writableStart.session.starting, true)
+  const postTimeoutErr = await call(node, 'session.start', { cwd: '/tmp', resume: archSid4, permission_mode: 'plan' }).catch((e) => e)
+  assert.equal(postTimeoutErr.code, 'readonly_unsupported')
+  finishImport4()
+  await until('writable import finishes cleanly', () => rows().some((r) => r.session_id === archSid4 && !r.starting))
+
+  // 7. Reverse direction: writable takeover arriving while a readonly takeover is in flight waits and succeeds writable.
+  const archTranscript5 = 'aaaaaaaa-0000-4000-8000-000000000105'
+  const archSid5 = 'paseo-arch-plan-5'
+  const archAgent5 = agentSnapshot({
+    id: 'arch-plan-5', provider: 'my-claude', cwd: '/tmp', status: 'idle', currentModeId: 'plan',
+    persistence: { provider: 'my-claude', sessionId: archTranscript5 }, labels: { 'persona.session': archSid5 },
+  })
+  fake.upsert(archAgent5, PROJECT)
+  await until('fifth live plan agent listed', () => rows().some((r) => r.session_id === archSid5 && r.status === 'idle'))
+  fake.archive(archAgent5.id)
+  await until('fifth archived plan agent cached', () => rows().find((r) => r.session_id === archSid5)?.status === 'offline')
+  let importCount5 = 0
+  let finishReadonly5
+  fake.handlers.import_agent_request = (msg, c) => {
+    importCount5 += 1
+    if (importCount5 === 1) {
+      finishReadonly5 = () => answerWith(c, 'status', {
+        status: 'agent_resumed', requestId: msg.requestId,
+        agent: agentSnapshot({
+          id: 'resumed-readonly-fail-5', provider: 'my-claude', cwd: '/tmp', currentModeId: 'default',
+          persistence: { provider: 'my-claude', sessionId: archTranscript5 }, labels: msg.labels,
+        }),
+      })
+      return null
+    }
+    return {
+      type: 'status',
+      payload: {
+        status: 'agent_resumed',
+        agent: agentSnapshot({
+          id: 'resumed-writable-ok-5', provider: 'my-claude', cwd: '/tmp', currentModeId: 'default',
+          persistence: { provider: 'my-claude', sessionId: archTranscript5 }, labels: msg.labels,
+        }),
+      },
+    }
+  }
+  const readonly5 = await call(node, 'session.start', { cwd: '/tmp', resume: archSid5, permission_mode: 'plan' })
+  assert.equal(readonly5.session.starting, true)
+  const writable5 = call(node, 'session.start', { cwd: '/tmp', resume: archSid5 })
+  // FIFO barrier on the same RPC connection ensures writable5 has entered takeOver and parked on readonly5.
+  await call(node, 'session.start', { cwd: '/tmp', resume: 'cccccccc-0000-4000-8000-000000000999', permission_mode: 'plan' }).catch(() => {})
+  finishReadonly5()
+  const writable5Res = await writable5
+  assert.equal(writable5Res.session.session_id, archSid5)
+  assert.equal(writable5Res.session.starting, undefined)
+  assert.equal(importCount5, 2, 'writable takeover must run its own import after readonly fails')
+
+  // 8. [CRITICAL-1] Writable takeOver while readonly start is awaiting deliverMessage must NOT livelock;
+  //    AND [CRITICAL-2A] concurrent session.send during readonly start delivers strictly AFTER initialPrompt.
+  let finishPrompt8
+  const sentTexts8 = []
+  fake.handlers['agent.create.request'] = (msg) => ({
+    payload: { agent: agentSnapshot({ id: msg.agentId, provider: 'my-claude', cwd: '/tmp', currentModeId: 'plan', labels: msg.labels }) },
+  })
+  fake.handlers.send_agent_message_request = (msg, c) => {
+    sentTexts8.push(msg.text)
+    if (msg.text === 'initial readonly prompt 8') {
+      finishPrompt8 = () => answerWith(c, 'send_agent_message_response', { requestId: msg.requestId, agentId: msg.agentId, accepted: true, error: null })
+      return null
+    }
+    return undefined
+  }
+  const start8 = plan({ launcher: 'my-claude', session_id: 'plan-order-8', prompt: 'initial readonly prompt 8', client_msg_id: 'cm-init-8' })
+  await until('initialPrompt sent and held open', () => Boolean(finishPrompt8))
+  // Both a concurrent writable takeOver AND a concurrent session.send arrive while start8 is awaiting deliverMessage:
+  const takeover8 = call(node, 'session.start', { cwd: '/tmp', resume: 'plan-order-8' })
+  const followUp8 = call(node, 'session.send', { session_id: 'plan-order-8', text: 'follow-up 8', client_msg_id: 'cm-follow-8' })
+  // FIFO barrier confirms both entered bridge before releasing initialPrompt.
+  await call(node, 'session.start', { cwd: '/tmp', resume: 'cccccccc-0000-4000-8000-000000000998', permission_mode: 'plan' }).catch(() => {})
+  assert.deepEqual(sentTexts8, ['initial readonly prompt 8'], 'follow-up send must wait until initialPrompt finishes')
+  finishPrompt8()
+  const [start8Res, takeover8Res, followUp8Res] = await Promise.all([start8, takeover8, followUp8])
+  assert.equal(start8Res.session.session_id, 'plan-order-8')
+  assert.equal(takeover8Res.session.session_id, 'plan-order-8')
+  assert.equal(followUp8Res.ok, true)
+  assert.deepEqual(sentTexts8, ['initial readonly prompt 8', 'follow-up 8'])
+  assert.equal(bridge.state.echoes.has(uuidOf(`persona:${fake.requestsOf('agent.create.request').at(-1).agentId}:cm-init-8`)), true)
+  delete fake.handlers.send_agent_message_request
+
+  // 9. [CRITICAL-2A] 0..callWait session.send during a readonly takeOver on an archived agent must NOT wake it when import rejects!
+  const archTranscript6 = 'aaaaaaaa-0000-4000-8000-000000000106'
+  const archSid6 = 'paseo-arch-plan-6'
+  const archAgent6 = agentSnapshot({
+    id: 'arch-plan-6', provider: 'my-claude', cwd: '/tmp', status: 'idle', currentModeId: 'plan',
+    persistence: { provider: 'my-claude', sessionId: archTranscript6 }, labels: { 'persona.session': archSid6 },
+  })
+  fake.upsert(archAgent6, PROJECT)
+  await until('sixth live plan agent listed', () => rows().some((r) => r.session_id === archSid6 && r.status === 'idle'))
+  fake.archive(archAgent6.id)
+  await until('sixth archived plan agent cached', () => rows().find((r) => r.session_id === archSid6)?.status === 'offline')
+  let finishImport6
+  fake.handlers.import_agent_request = (msg, c) => {
+    finishImport6 = () => answerWith(c, 'status', {
+      status: 'agent_resumed', requestId: msg.requestId,
+      agent: agentSnapshot({
+        id: 'resumed-bad-6', provider: 'my-claude', cwd: '/tmp', currentModeId: 'default',
+        persistence: { provider: 'my-claude', sessionId: archTranscript6 }, labels: msg.labels,
+      }),
+    })
+    return null
+  }
+  const sendsBefore6 = fake.requestsOf('send_agent_message_request').length
+  const roTake6 = call(node, 'session.start', { cwd: '/tmp', resume: archSid6, permission_mode: 'plan' })
+  await until('readonly import 6 sent before callWait', () => Boolean(finishImport6))
+  // Arrives BEFORE callWait expires (0..callWait window): must wait on pendingOps, NOT wake archived agent!
+  const send6 = call(node, 'session.send', { session_id: archSid6, text: 'must not wake archived', client_msg_id: 'cm-wake-6' })
+  await call(node, 'session.start', { cwd: '/tmp', resume: 'cccccccc-0000-4000-8000-000000000997', permission_mode: 'plan' }).catch(() => {})
+  assert.equal(fake.requestsOf('send_agent_message_request').length, sendsBefore6, 'must not wake archived agent while readonly takeOver is pending')
+  finishImport6()
+  const [roTake6Err, send6Err] = await Promise.all([roTake6.catch((e) => e), send6.catch((e) => e)])
+  assert.equal(roTake6Err.code, 'readonly_unsupported')
+  assert.equal(send6Err.code, 'start_failed')
+  assert.equal(fake.requestsOf('send_agent_message_request').length, sendsBefore6)
+
+  // 10. [CRITICAL-2B] track() reject while bySession already has sessionId must delete inFlight (zero zombie starting:true row).
+  let finishCreate10
+  fake.handlers['agent.create.request'] = (msg, c) => {
+    finishCreate10 = () => {
+      fake.upsert(agentSnapshot({ id: msg.agentId, provider: 'my-claude', cwd: '/tmp', currentModeId: 'plan', labels: msg.labels }), PROJECT)
+      answerWith(c, 'agent.create.response', { requestId: msg.requestId, agent: null, error: 'late synthetic failure' })
+    }
+    return null
+  }
+  const late10 = await plan({ launcher: 'my-claude', session_id: 'plan-zombie-10', prompt: '' })
+  assert.equal(late10.session.starting, true)
+  finishCreate10()
+  await until('zombie-10 listed live and inFlight cleaned', () => bridge.state.bySession.has('plan-zombie-10') && !bridge.state.inFlight.has('plan-zombie-10'))
+  fake.archive(fake.requestsOf('agent.create.request').at(-1).agentId)
+  await until('archived zombie-10 shows no zombie starting row', () => !rows().some((r) => r.session_id === 'plan-zombie-10' && r.starting))
 })

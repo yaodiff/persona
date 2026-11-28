@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError, enc, errorText, fileDownloadURL, isAbort, pastHub } from "../../lib/api";
 import { extOf, OFFICE_RENDERED } from "../../lib/files";
 import { SANS, withFallback } from "../../lib/fonts";
-import { bytes } from "../../lib/format";
+import { bytes, safeWebURL } from "../../lib/format";
 import { IWORK_PREVIEWS, readZipEntry } from "../../lib/zip-range";
 import { Button, Loading } from "../../ui/atoms";
 import { fileBytes } from "../../views/session/files/file-data";
@@ -181,14 +181,15 @@ function DocFrame({ doc, title }: { doc: Rendered; title: string }) {
   const dark = document.documentElement.classList.contains("dark");
   const natural = doc.width + PAD * 2;
   const scale = Math.min(1, size.w / natural);
-  const srcDoc = `<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">
+  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'">
 <style>:root{--muted:${dark ? "#9aa0a6" : "#5f6368"};color-scheme:${dark ? "dark" : "light"}}html,body{margin:0;background:${dark ? "#161719" : "#eceef1"}}body{padding:${PAD}px}${doc.css}</style>
 </head><body>${doc.html}</body></html>`;
   return (
     <div ref={box} className="relative min-h-0 flex-1 overflow-hidden bg-inset">
       <iframe
         title={title}
+        referrerPolicy="no-referrer"
         // no allow-scripts, no allow-same-origin: links may open a new tab, nothing else
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         srcDoc={srcDoc}
@@ -199,14 +200,19 @@ function DocFrame({ doc, title }: { doc: Rendered; title: string }) {
   );
 }
 
-/** Web links open in a new tab; any other kind of link (javascript:, file:, the document's own anchors) is dropped. */
-function tameLinks(root: Element) {
+/** Web links open in a new tab; any other kind of link (javascript:, file:, userinfo URLs, anchors) is dropped. */
+export function tameLinks(root: Element) {
   for (const a of root.querySelectorAll("a[href]")) {
-    const href = a.getAttribute("href") ?? "";
-    if (/^https?:\/\//i.test(href)) {
+    const safe = safeWebURL(a.getAttribute("href") ?? undefined);
+    if (safe) {
+      a.setAttribute("href", safe);
       a.setAttribute("target", "_blank");
       a.setAttribute("rel", "noopener noreferrer");
-    } else a.removeAttribute("href");
+    } else {
+      a.removeAttribute("href");
+      a.removeAttribute("target");
+      a.removeAttribute("rel");
+    }
   }
 }
 

@@ -7,16 +7,20 @@ import { api, ApiError, enc, errorText } from "../../lib/api";
 import { addCodeComment, commentKey } from "../../lib/comment-target";
 import { sendDraft } from "../../lib/drafts";
 import {
-  addressOf, buttonName, commandLine, editCommand, elementQuote, keyMessage, LAUNCH_EXAMPLE, modsOf, parseBinary, PHONE_SIZE, previewOptions,
-  previewProblems, previewSocketURL, safeExternal, toPage, type PickedElement, type PreviewMessage, type PreviewOption, type PreviewServers,
+  addressOf, buttonName, canvasFit, commandLine, DIRECT_IFRAME_SANDBOX, DIRECT_LOAD_TIMEOUT_MS, directOriginURL, editCommand,
+  elementQuote, frameImageMime, initialPreviewMode, keyMessage, LAUNCH_EXAMPLE, modsOf, normalizeSelectOpen, parseBinary,
+  parseDirectNav, parsePreviewGrant, parseUnreachableMessage, PHONE_SIZE, PREVIEW_ORIGIN_FEATURE, previewOptions, previewPortKey,
+  previewProblems, previewSocketURL, safeExternal, toPage, type PickedElement, type PreviewGrant, type PreviewMessage,
+  type PreviewMode, type PreviewOption, type PreviewSelectState, type PreviewServers,
 } from "../../lib/preview";
 import { sessionCan } from "../../lib/format";
 import { hasFinePointer } from "../../lib/viewport";
 import { navigate } from "../../lib/router";
-import { useStore } from "../../lib/store";
+import { hubHas, useStore } from "../../lib/store";
 import { Button, cx, Dialog, IconButton, Menu, Spinner, toast, useMenu } from "../../ui/atoms";
 import type { MenuItem } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
+import { SelectListbox } from "../../ui/SelectListbox";
 import { hasKey, t } from "../../i18n";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { Empty } from "./files/parts";
@@ -54,7 +58,9 @@ type Phase =
 export function PreviewPanel({ mid, sid, cwd, port, path, onClose }: { mid: string; sid: string; cwd: string; port?: number; path?: string; onClose: () => void }) {
   const session = useStore((s) => (s.sessions[mid] ?? []).find((x) => x.session_id === sid));
   const machine = useStore((s) => s.machines.find((m) => m.id === mid));
+  const hasPreviewOrigin = useStore((s) => hubHas(s.features, PREVIEW_ORIGIN_FEATURE));
   const machineName = machine?.name || mid;
+  const hostnames = useMemo(() => (machine?.hostname ? [machine.hostname] : []), [machine?.hostname]);
   const ports = session?.ports;
   // A server runs in a new tab of the session's terminal workspace; a runtime engine's session (Paseo's) names a workspace with none.
   const startable = Boolean(session?.workspace_id) && sessionCan(session, "terminal");
@@ -63,6 +69,9 @@ export function PreviewPanel({ mid, sid, cwd, port, path, onClose }: { mid: stri
   const [confirm, setConfirm] = useState<PreviewOption | null>(null);
   const [starting, setStarting] = useState(false);
   const [other, setOther] = useState(false);
+  // Remembers automatic fallback and explicit mode choices per (machine, port) within this panel session.
+  const [fallbackPorts, setFallbackPorts] = useState<Record<string, boolean>>({});
+  const [manualModes, setManualModes] = useState<Record<string, PreviewMode>>({});
   const options = useMemo(() => previewOptions(servers, ports ?? []), [servers, ports]);
   const menu = useMenu();
 
@@ -164,6 +173,34 @@ export function PreviewPanel({ mid, sid, cwd, port, path, onClose }: { mid: stri
     { key: "other", label: t("preview.other_port"), icon: "plus", divider: options.length > 0, onSelect: () => setOther(true) },
   ];
   const live = phase.kind === "live" ? phase : null;
+  const livePortKey = live ? previewPortKey(mid, live.port) : "";
+  const liveMode: PreviewMode = live
+    ? initialPreviewMode({
+        hasPreviewOrigin,
+        rememberedFallback: Boolean(fallbackPorts[livePortKey]),
+        manualChoice: manualModes[livePortKey],
+      })
+    : "stream";
+  const rememberFallback = useCallback((portKey: string) => {
+    setFallbackPorts((prev) => (prev[portKey] ? prev : { ...prev, [portKey]: true }));
+    setManualModes((prev) => {
+      if (!(portKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[portKey];
+      return next;
+    });
+  }, []);
+  const selectMode = useCallback((portKey: string, nextMode: PreviewMode) => {
+    if (nextMode === "direct") {
+      setFallbackPorts((prev) => {
+        if (!prev[portKey]) return prev;
+        const next = { ...prev };
+        delete next[portKey];
+        return next;
+      });
+    }
+    setManualModes((prev) => (prev[portKey] === nextMode ? prev : { ...prev, [portKey]: nextMode }));
+  }, []);
   const title = live ? live.name : t("preview.title");
   const subtitle = live ? `${machineName} · localhost:${live.port}` : machineName;
 
@@ -198,7 +235,17 @@ export function PreviewPanel({ mid, sid, cwd, port, path, onClose }: { mid: stri
           port={live.port}
           path={live.path}
           machineName={machineName}
+          hostnames={hostnames}
+          canDirect={hasPreviewOrigin}
+          mode={liveMode}
+          initialNotice={liveMode === "stream" && fallbackPorts[livePortKey] ? "direct_fallback" : null}
           onPath={(p) => remember(mid, sid, live.port, p)}
+          onNavigatePort={(nextPort, nextPath) => {
+            const pick = options.find((o) => o.port === nextPort);
+            show({ port: nextPort, path: nextPath, name: pick?.name ?? `:${nextPort}` });
+          }}
+          onFallback={() => rememberFallback(livePortKey)}
+          onSelectMode={(nextMode) => selectMode(livePortKey, nextMode)}
           onGone={() => {
             void load();
             setPhase({ kind: "choose" });
@@ -403,28 +450,41 @@ function OtherPort({ open, onClose, onOpen }: { open: boolean; onClose: () => vo
 
 // ── the page ──────────────────────────────────────────
 
+type ModeNoticeCode = "direct_fallback" | "switched_for_pick" | "switched_for_shot";
+type PendingAction = { kind: "pick" } | { kind: "shot"; full: boolean };
+
 type Bar =
   | { kind: "external"; url: string }
   | { kind: "failed"; url: string; error: string }
   | { kind: "crashed" }
   | { kind: "notice"; code: string }
+  | { kind: "mode_notice"; code: ModeNoticeCode }
   | { kind: "dialog"; dialog: Extract<PreviewMessage, { t: "dialog" }> };
 
 type Conn = { kind: "connecting" } | { kind: "open" } | { kind: "lost"; tries: number } | { kind: "error"; code: string; error: string } | { kind: "closed" };
 
-/** One server shown: the socket, the picture, the input and the bars around them. */
-function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }: {
+/** One server shown: isolated-origin direct iframe (when available) or headless-browser stream, with toolbar and fallback. */
+function PreviewView({ mid, sid, cwd, port, path, machineName, hostnames, canDirect, mode, initialNotice, onPath, onNavigatePort, onFallback, onSelectMode, onGone }: {
   mid: string;
   sid: string;
   cwd: string;
   port: number;
   path: string;
   machineName: string;
+  hostnames: readonly string[];
+  canDirect: boolean;
+  mode: PreviewMode;
+  initialNotice: ModeNoticeCode | null;
   onPath: (path: string) => void;
+  onNavigatePort: (port: number, path: string) => void;
+  onFallback: () => void;
+  onSelectMode: (mode: PreviewMode) => void;
   onGone: () => void;
 }) {
+  const direct = mode === "direct";
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const keys = useRef<HTMLTextAreaElement>(null);
   const addressField = useRef<HTMLInputElement>(null);
   const sock = useRef<WebSocket | null>(null);
@@ -435,20 +495,69 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
   const [phone, setPhone] = useState(false);
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState<PickedElement | null>(null);
-  const [bar, setBar] = useState<Bar | null>(null);
+  const [bar, setBar] = useState<Bar | null>(() => (initialNotice ? { kind: "mode_notice", code: initialNotice } : null));
   const [area, setArea] = useState<{ w: number; h: number } | null>(null);
   const [drawn, setDrawn] = useState(false);
+  const [frameMetrics, setFrameMetrics] = useState<{ page: { w: number; h: number }; backing: { w: number; h: number } } | null>(null);
+  const [selectOpen, setSelectOpen] = useState<PreviewSelectState | null>(null);
+  const selectOpenRef = useRef<PreviewSelectState | null>(null);
+  const selectPopupRef = useRef<HTMLDivElement>(null);
+  const suppressedPointer = useRef<number | null>(null);
+  const swallowKeyUp = useRef(new Set<string>());
+  const lastDrawnSeq = useRef(0);
   const pageSize = useRef({ w: 1, h: 1 });
   const at = useRef(path);
   const shots = useRef(new Map<number, boolean>());
   const shotSeq = useRef(0);
   const [reconnect, setReconnect] = useState(0);
+  const [grant, setGrant] = useState<PreviewGrant | null>(null);
+  const [iframeSrc, setIframeSrc] = useState<string | null>(null);
+  const [iframeKey, setIframeKey] = useState(0);
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [grantSeq, setGrantSeq] = useState(0);
+  const [loadGen, setLoadGen] = useState(0);
+  const authRetriesRef = useRef(0);
+  const pendingActionRef = useRef<PendingAction | null>(null);
   const key = commentKey(mid, sid);
+
+  const triggerFallback = useCallback(() => {
+    setBar({ kind: "mode_notice", code: "direct_fallback" });
+    onFallback();
+  }, [onFallback]);
 
   const send = useCallback((m: Record<string, unknown>) => {
     const s = sock.current;
     if (s?.readyState === WebSocket.OPEN) s.send(JSON.stringify(m));
   }, []);
+
+  // The keys field is a real editable: focusing it raises a phone's keyboard, which shrinks the panel and so the page.
+  // On a touch screen only a tap that lands on the page focuses it (onPointerUp); a scroll, a pick or Go does not.
+  const focusKeys = useCallback(() => keys.current?.focus({ preventScroll: true }), []);
+
+  const dismissSelect = useCallback((notify = true, restoreFocus = true) => {
+    const cur = selectOpenRef.current;
+    if (!cur) return;
+    selectOpenRef.current = null;
+    setSelectOpen(null);
+    if (notify) send({ t: "select_close", id: cur.id });
+    if (restoreFocus) {
+      const active = document.activeElement;
+      const popup = selectPopupRef.current;
+      const ours = !active || active === document.body || Boolean(popup?.contains(active));
+      if (ours) focusKeys();
+    }
+  }, [send, focusKeys]);
+
+  const chooseSelect = useCallback((index: number) => {
+    const cur = selectOpenRef.current;
+    if (!cur) return;
+    const opt = cur.options.find((o) => o.index === index);
+    if (!opt || opt.disabled) return;
+    selectOpenRef.current = null;
+    setSelectOpen(null);
+    send({ t: "select_choose", id: cur.id, index });
+    focusKeys();
+  }, [send, focusKeys]);
 
   // the page's size: the panel's (desktop) or a phone's, in CSS pixels
   const size = useMemo(() => {
@@ -467,13 +576,84 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     return () => ro.disconnect();
   }, []);
 
-  // the socket: opened once the panel's size is known, opened again after it drops (1, 2, 4, 8, 15 s)
+  // direct isolated-origin mode: open port, grant one-time redemption URL, load in sandboxed iframe
+  useEffect(() => {
+    if (!direct) {
+      setGrant(null);
+      setIframeSrc(null);
+      setIframeLoaded(false);
+      return;
+    }
+    let gone = false;
+    setGrant(null);
+    setIframeSrc(null);
+    setIframeLoaded(false);
+    const openDirect = async () => {
+      await api(`/machines/${enc(mid)}/ports/${port}/open`, { method: "POST" }).catch(() => undefined);
+      if (gone) return;
+      try {
+        const raw = await api<unknown>(`/machines/${enc(mid)}/preview/grant`, {
+          method: "POST",
+          json: { port, path: at.current || "/" },
+        });
+        if (gone) return;
+        const parsed = parsePreviewGrant(raw);
+        if (!parsed) {
+          triggerFallback();
+          return;
+        }
+        setGrant(parsed);
+        setIframeSrc(parsed.url);
+        setIframeKey((k) => k + 1);
+        setLoadGen((n) => n + 1);
+      } catch {
+        if (gone) return;
+        triggerFallback();
+      }
+    };
+    void openDirect();
+    return () => {
+      gone = true;
+    };
+  }, [direct, mid, port, grantSeq, triggerFallback]);
+
+  // direct load timeout: fall back to stream if the iframe does not finish loading in time
+  useEffect(() => {
+    if (!direct || !iframeSrc || iframeLoaded) return;
+    const timer = setTimeout(() => {
+      triggerFallback();
+    }, DIRECT_LOAD_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [direct, iframeSrc, iframeLoaded, loadGen, triggerFallback]);
+
+  // direct unreachable fallback signal from the isolated preview origin
+  useEffect(() => {
+    if (!direct || !grant) return;
+    const onWindowMessage = (ev: MessageEvent) => {
+      const msg = parseUnreachableMessage(ev, grant.origin, iframeRef.current?.contentWindow);
+      if (!msg) return;
+      if (msg.code === "auth_failed" && authRetriesRef.current < 1) {
+        authRetriesRef.current += 1;
+        setGrantSeq((n) => n + 1);
+        return;
+      }
+      triggerFallback();
+    };
+    window.addEventListener("message", onWindowMessage);
+    return () => window.removeEventListener("message", onWindowMessage);
+  }, [direct, grant, triggerFallback]);
+
+  // the socket: opened in stream mode once the panel's size is known, opened again after it drops (1, 2, 4, 8, 15 s)
   const ready = size !== null;
   useEffect(() => {
-    if (!ready) return;
+    if (direct || !ready) return;
     let gone = false;
     let tries = 0;
     let timer: ReturnType<typeof setTimeout>;
+    setConn({ kind: "connecting" });
+    setDrawn(false);
+    setPicking(false);
+    setPicked(null);
     const open = async () => {
       // the hub lets a port be shown once the user opened it (an agent's always): this is that open
       try {
@@ -493,13 +673,17 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
       const s = new WebSocket(previewSocketURL(location, mid, port, at.current, sizeNow.current!));
       s.binaryType = "arraybuffer";
       sock.current = s;
+      lastDrawnSeq.current = 0;
       let refused = false;
       s.onopen = () => setConn((c) => (c.kind === "error" ? c : { kind: "open" }));
       s.onmessage = (ev) => {
         if (typeof ev.data !== "string") {
           const b = parseBinary(ev.data as ArrayBuffer);
-          if (b?.kind === "frame") void draw(b.data, b.w, b.h).then(() => s.readyState === WebSocket.OPEN && s.send(JSON.stringify({ t: "ack", seq: b.seq })));
-          else if (b?.kind === "shot" && shots.current.delete(b.id)) addShot(b.data);
+          if (b?.kind === "frame") {
+            void draw(b.seq, b.data, b.w, b.h).finally(() => {
+              if (s.readyState === WebSocket.OPEN) s.send(JSON.stringify({ t: "ack", seq: b.seq }));
+            });
+          } else if (b?.kind === "shot" && shots.current.delete(b.id)) addShot(b.data);
           return;
         }
         let m: PreviewMessage;
@@ -508,12 +692,24 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
         } catch {
           return;
         }
-        if (m.t === "ready") tries = 0;
+        if (m.t === "ready") {
+          tries = 0;
+          if (s.readyState === WebSocket.OPEN) {
+            s.send(JSON.stringify({ t: "features", select: true, png: true }));
+            if (pendingActionRef.current?.kind === "pick") {
+              pendingActionRef.current = null;
+              setPicking(true);
+              s.send(JSON.stringify({ t: "pick", on: true }));
+              if (hasFinePointer()) focusKeys();
+            }
+          }
+        }
         if (m.t === "error") refused = true;
         onMessage(m);
       };
       s.onclose = () => {
         if (sock.current === s) sock.current = null;
+        dismissSelect(false, false);
         if (gone || refused) return;
         tries++;
         setConn({ kind: "lost", tries });
@@ -524,31 +720,62 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     return () => {
       gone = true;
       clearTimeout(timer);
+      dismissSelect(false, false);
       sock.current?.close();
       sock.current = null;
     };
-    // a new socket for another server, or after "Try again"; a new size goes as a message
-  }, [ready, mid, port, reconnect]);
+    // a new socket for another server, mode switch, or after "Try again"; a new size goes as a message
+  }, [direct, ready, mid, port, reconnect, dismissSelect, focusKeys]);
+
+  // Dismiss an open <select> popup when the panel itself resizes or switches Desktop <-> Phone.
+  const prevArea = useRef<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const prev = prevArea.current;
+    prevArea.current = area;
+    if (prev && area && (prev.w !== area.w || prev.h !== area.h)) dismissSelect(true, true);
+  }, [area, dismissSelect]);
 
   // a new size (the panel resized, Desktop ⇄ Phone) goes to the page, settled first
   useEffect(() => {
-    if (!size) return;
+    if (direct || !size) return;
     const id = setTimeout(() => send({ t: "size", ...size }), 150);
     return () => clearTimeout(id);
-  }, [size, send]);
+  }, [direct, size, send]);
 
-  const draw = async (data: Uint8Array, w: number, h: number) => {
+  const draw = async (seq: number, data: Uint8Array, w: number, h: number) => {
     const c = canvas.current;
     if (!c) return;
-    const bmp = await createImageBitmap(new Blob([data as BlobPart], { type: "image/jpeg" }));
-    if (c.width !== bmp.width || c.height !== bmp.height) {
-      c.width = bmp.width;
-      c.height = bmp.height;
+    const mime = frameImageMime(data);
+    if (!mime) return;
+    let bmp: ImageBitmap;
+    try {
+      bmp = await createImageBitmap(new Blob([data as BlobPart], { type: mime }));
+    } catch {
+      return;
     }
-    c.getContext("2d")?.drawImage(bmp, 0, 0);
-    bmp.close();
-    pageSize.current = { w, h };
-    setDrawn(true);
+    try {
+      if (seq < lastDrawnSeq.current) return;
+      lastDrawnSeq.current = seq;
+      if (c.width !== bmp.width || c.height !== bmp.height) {
+        c.width = bmp.width;
+        c.height = bmp.height;
+      }
+      c.getContext("2d")?.drawImage(bmp, 0, 0);
+      pageSize.current = { w, h };
+      setFrameMetrics((prev) =>
+        prev && prev.page.w === w && prev.page.h === h && prev.backing.w === bmp.width && prev.backing.h === bmp.height
+          ? prev
+          : { page: { w, h }, backing: { w: bmp.width, h: bmp.height } },
+      );
+      setDrawn(true);
+      if (pendingActionRef.current?.kind === "shot") {
+        const { full } = pendingActionRef.current;
+        pendingActionRef.current = null;
+        shoot(full);
+      }
+    } finally {
+      bmp.close();
+    }
   };
 
   const addShot = (png: Uint8Array) => {
@@ -579,6 +806,11 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
           if (a.startsWith("/")) onPath(a);
         }
         setBar((b) => (b?.kind === "failed" || b?.kind === "crashed" ? null : b));
+        if (!m.loading && pendingActionRef.current?.kind === "shot") {
+          const { full } = pendingActionRef.current;
+          pendingActionRef.current = null;
+          shoot(full);
+        }
         break;
       case "external":
         setBar({ kind: "external", url: m.url });
@@ -616,10 +848,25 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
       case "copied":
         void navigator.clipboard?.writeText(m.text).catch(() => undefined);
         break;
+      case "select_open": {
+        const next = normalizeSelectOpen(m);
+        if (next) {
+          selectOpenRef.current = next;
+          setSelectOpen(next);
+        }
+        break;
+      }
+      case "select_close":
+        if (selectOpenRef.current?.id === m.id) dismissSelect(false, true);
+        break;
       case "error":
+        pendingActionRef.current = null;
+        dismissSelect(false, false);
         setConn({ kind: "error", code: m.code, error: m.error });
         break;
       case "closed":
+        pendingActionRef.current = null;
+        dismissSelect(false, false);
         setConn({ kind: "closed" });
         break;
     }
@@ -638,15 +885,46 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     moved.current = null;
     if (m) send({ t: "mouse", type: "move", x: m.x, y: m.y, buttons: m.buttons, mods: m.mods, button: m.buttons & 1 ? "left" : "none" });
   };
-  // The keys field is a real editable: focusing it raises a phone's keyboard, which shrinks the panel and so the page.
-  // On a touch screen only a tap that lands on the page focuses it (onPointerUp); a scroll, a pick or Go does not.
-  const focusKeys = () => keys.current?.focus({ preventScroll: true });
+
+  // Click / tap outside an open <select> popup dismisses it; clicks inside the preview box are swallowed so they don't hit the page.
+  useEffect(() => {
+    if (!selectOpen) return;
+    const onOutsideDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (target && selectPopupRef.current?.contains(target)) return;
+      const inBox = Boolean(target && box.current?.contains(target));
+      if (inBox) {
+        e.preventDefault();
+        e.stopPropagation();
+        suppressedPointer.current = e.pointerId;
+        dismissSelect(true, true);
+      } else {
+        dismissSelect(true, false);
+      }
+    };
+    const onOutsideWheel = (e: WheelEvent) => {
+      const target = e.target as Node | null;
+      if (target && selectPopupRef.current?.contains(target)) return;
+      if (target && box.current?.contains(target)) e.preventDefault();
+      dismissSelect(true, true);
+    };
+    window.addEventListener("pointerdown", onOutsideDown, true);
+    window.addEventListener("wheel", onOutsideWheel, { capture: true, passive: false });
+    return () => {
+      window.removeEventListener("pointerdown", onOutsideDown, true);
+      window.removeEventListener("wheel", onOutsideWheel, true);
+    };
+  }, [selectOpen, dismissSelect]);
 
   useEffect(() => {
     const el = canvas.current;
     if (!el) return;
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (selectOpenRef.current) {
+        dismissSelect(true, true);
+        return;
+      }
       const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
       const p = where(e);
       send({ t: "wheel", ...p, dx: e.deltaX * scale, dy: e.deltaY * scale, mods: modsOf(e) });
@@ -657,6 +935,12 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (conn.kind !== "open") return;
+    if (selectOpenRef.current) {
+      e.preventDefault();
+      suppressedPointer.current = e.pointerId;
+      dismissSelect(true, true);
+      return;
+    }
     e.preventDefault();
     const touch = e.pointerType === "touch";
     if (!touch) focusKeys();
@@ -667,6 +951,7 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
   };
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (conn.kind !== "open") return;
+    if (suppressedPointer.current === e.pointerId || selectOpenRef.current) return;
     const p = pointer.current;
     if (p?.touch && p.id === e.pointerId) {
       const dx = p.x - e.clientX;
@@ -684,9 +969,13 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     if (!frame.current) frame.current = requestAnimationFrame(flushMove);
   };
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (suppressedPointer.current === e.pointerId) {
+      suppressedPointer.current = null;
+      return;
+    }
     const p = pointer.current;
     pointer.current = null;
-    if (conn.kind !== "open") return;
+    if (conn.kind !== "open" || selectOpenRef.current) return;
     if (frame.current) {
       cancelAnimationFrame(frame.current);
       flushMove();
@@ -707,6 +996,16 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>, type: "down" | "up") => {
     if (conn.kind !== "open") return;
+    if (selectOpenRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (type === "up" && swallowKeyUp.current.delete(e.key)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (type === "down" && e.key === "Escape" && picking) {
       e.preventDefault();
       e.stopPropagation();
@@ -732,19 +1031,74 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
   };
 
   const togglePick = (on: boolean) => {
+    if (direct) {
+      pendingActionRef.current = { kind: "pick" };
+      setBar({ kind: "mode_notice", code: "switched_for_pick" });
+      onSelectMode("stream");
+      return;
+    }
+    dismissSelect(true, false);
     setPicking(on);
     send({ t: "pick", on });
     // for Esc; a touch screen cancels with the bar's button instead of a keyboard
     if (on && hasFinePointer()) focusKeys();
   };
   const shoot = (full: boolean) => {
+    if (direct) {
+      pendingActionRef.current = { kind: "shot", full };
+      setBar({ kind: "mode_notice", code: "switched_for_shot" });
+      onSelectMode("stream");
+      return;
+    }
     const id = ++shotSeq.current;
     shots.current.set(id, true);
     send({ t: "shot", id, full });
   };
+  const reloadDirect = () => {
+    authRetriesRef.current = 0;
+    const resolved = grant && iframeLoaded ? directOriginURL(grant.origin, at.current || "/") : null;
+    if (resolved) {
+      setIframeLoaded(false);
+      setIframeSrc(resolved);
+      setIframeKey((k) => k + 1);
+      setLoadGen((n) => n + 1);
+    } else {
+      setGrantSeq((n) => n + 1);
+    }
+  };
   const go = (s: string) => {
     const v = s.trim();
     if (!v) return;
+    if (direct) {
+      setEditing(false);
+      const target = parseDirectNav(v, port, hostnames);
+      if (target.kind === "same_port") {
+        at.current = target.path;
+        setAddress(target.path);
+        onPath(target.path);
+        setBar((b) => (b?.kind === "external" ? null : b));
+        authRetriesRef.current = 0;
+        const resolved = grant && iframeLoaded ? directOriginURL(grant.origin, target.path) : null;
+        if (resolved) {
+          setIframeLoaded(false);
+          setIframeSrc(resolved);
+          setIframeKey((k) => k + 1);
+          setLoadGen((n) => n + 1);
+        } else {
+          setGrantSeq((n) => n + 1);
+        }
+      } else if (target.kind === "other_port") {
+        onNavigatePort(target.port, target.path);
+      } else if (target.kind === "external") {
+        setBar({ kind: "external", url: target.url });
+        setAddress(at.current);
+      } else {
+        setAddress(at.current);
+      }
+      addressField.current?.blur();
+      return;
+    }
+    dismissSelect(true, false);
     setEditing(false);
     send({ t: "nav", url: v });
     // a touch screen puts its keyboard away instead
@@ -752,22 +1106,42 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     else addressField.current?.blur();
   };
   const shotMenu = useMenu();
+  const moreMenu = useMenu();
 
-  const lost = conn.kind === "lost";
-  const stopped = conn.kind === "error" || conn.kind === "closed";
+  const lost = !direct && conn.kind === "lost";
+  const stopped = !direct && (conn.kind === "error" || conn.kind === "closed");
   // the picture, letterboxed into the panel at the page's proportions (a phone's is narrower than the panel)
   const fit = useMemo(() => {
     if (!area || !size) return null;
-    const s = Math.min(area.w / size.w, area.h / size.h, 1);
-    return { w: Math.floor(size.w * s), h: Math.floor(size.h * s) };
-  }, [area, size]);
+    const css = frameMetrics?.page ?? size;
+    return canvasFit(area, css, { mobile: phone, dpr: window.devicePixelRatio || 1, backing: frameMetrics?.backing });
+  }, [area, size, frameMetrics, phone]);
+  const directPhoneFit = useMemo(() => {
+    if (!area) return { w: PHONE_SIZE.w, h: PHONE_SIZE.h, scale: 1 };
+    return canvasFit(area, PHONE_SIZE, { mobile: true, dpr: window.devicePixelRatio || 1 });
+  }, [area]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-2">
-        <IconButton icon="arrowLeft" label={t("preview.back")} onClick={() => send({ t: "back" })} disabled={!page.back || conn.kind !== "open"} />
-        <IconButton icon="arrowRight" label={t("preview.forward")} onClick={() => send({ t: "forward" })} disabled={!page.forward || conn.kind !== "open"} />
-        <IconButton icon="retry" label={t("preview.reload")} onClick={() => send({ t: "reload" })} disabled={conn.kind !== "open"} />
+        {!direct && (
+          <>
+            <IconButton icon="arrowLeft" label={t("preview.back")} onClick={() => { dismissSelect(true, false); send({ t: "back" }); }} disabled={!page.back || conn.kind !== "open"} />
+            <IconButton icon="arrowRight" label={t("preview.forward")} onClick={() => { dismissSelect(true, false); send({ t: "forward" }); }} disabled={!page.forward || conn.kind !== "open"} />
+          </>
+        )}
+        <IconButton
+          icon="retry"
+          label={t("preview.reload")}
+          onClick={() => {
+            if (direct) reloadDirect();
+            else {
+              dismissSelect(true, false);
+              send({ t: "reload" });
+            }
+          }}
+          disabled={direct ? !grant && !iframeSrc : conn.kind !== "open"}
+        />
         <form
           className="min-w-0 flex-1"
           onSubmit={(e) => {
@@ -779,16 +1153,17 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
             ref={addressField}
             value={address}
             onFocus={(e) => {
+              dismissSelect(true, false);
               setEditing(true);
               e.currentTarget.select();
             }}
             onBlur={() => {
               setEditing(false);
-              setAddress(addressOf(page.url, port) || at.current);
+              setAddress(direct ? at.current : addressOf(page.url, port) || at.current);
             }}
             onChange={(e) => setAddress(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Escape") {
+              if (e.key === "Escape" && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
                 e.preventDefault();
                 e.stopPropagation();
                 e.currentTarget.blur();
@@ -800,10 +1175,10 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
             data-preview-address
           />
         </form>
-        {page.loading && conn.kind === "open" && <Spinner />}
-        <IconButton icon={phone ? "phone" : "monitor"} label={phone ? t("preview.size_phone") : t("preview.size_desktop")} active={phone} onClick={() => setPhone((p) => !p)} />
-        <IconButton icon="target" label={t("preview.pick")} active={picking} onClick={() => togglePick(!picking)} disabled={conn.kind !== "open"} />
-        <IconButton icon="image" label={t("preview.screenshot")} onClick={shotMenu.open} disabled={conn.kind !== "open"} />
+        {(direct ? !iframeLoaded : page.loading && conn.kind === "open") && <Spinner />}
+        <IconButton icon={phone ? "phone" : "monitor"} label={phone ? t("preview.size_phone") : t("preview.size_desktop")} active={phone} onClick={() => { dismissSelect(true, false); setPhone((p) => !p); }} />
+        <IconButton icon="target" label={t("preview.pick")} active={!direct && picking} onClick={() => togglePick(!picking)} disabled={!direct && conn.kind !== "open"} />
+        <IconButton icon="image" label={t("preview.screenshot")} onClick={shotMenu.open} disabled={!direct && conn.kind !== "open"} />
         {shotMenu.anchor && (
           <Menu
             items={[
@@ -816,8 +1191,44 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
             header={key ? t("preview.shot_header") : t("preview.shot_header_save")}
           />
         )}
+        {canDirect && (
+          <>
+            <IconButton icon="more" label={t("preview.more")} onClick={moreMenu.open} />
+            {moreMenu.anchor && (
+              <Menu
+                items={[
+                  direct
+                    ? {
+                        key: "mode_stream",
+                        label: t("preview.mode_stream"),
+                        icon: "monitor",
+                        onSelect: () => {
+                          pendingActionRef.current = null;
+                          setBar((b) => (b?.kind === "mode_notice" ? null : b));
+                          onSelectMode("stream");
+                        },
+                      }
+                    : {
+                        key: "mode_direct",
+                        label: t("preview.mode_direct"),
+                        icon: "web",
+                        onSelect: () => {
+                          pendingActionRef.current = null;
+                          authRetriesRef.current = 0;
+                          setBar((b) => (b?.kind === "mode_notice" ? null : b));
+                          onSelectMode("direct");
+                        },
+                      },
+                ]}
+                anchor={moreMenu.anchor}
+                onClose={moreMenu.close}
+                align="right"
+              />
+            )}
+          </>
+        )}
       </div>
-      {picking && (
+      {!direct && picking && (
         <div className="flex shrink-0 items-center gap-2 border-b border-line bg-accent/[0.08] px-3 py-1.5 text-[12px] text-ink-2" data-preview-picking>
           <Icon name="target" size={13} className="shrink-0 text-accent-ink" />
           <span className="min-w-0 flex-1 truncate">{t("preview.picking")}</span>
@@ -827,72 +1238,144 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
         </div>
       )}
       {bar && <PreviewBar bar={bar} onClose={() => setBar(null)} send={send} />}
-      <div ref={box} className={cx("relative flex min-h-0 flex-1 items-center justify-center overflow-hidden", phone ? "bg-inset p-4" : "bg-page")}>
-        <canvas
-          ref={canvas}
-          tabIndex={-1}
-          aria-label={t("preview.page_label", { title: page.title || `localhost:${port}` })}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={() => (pointer.current = null)}
-          onContextMenu={(e) => e.preventDefault()}
-          className={cx(
-            "block touch-none bg-white transition-opacity duration-200 select-none",
-            phone && "rounded-[18px] shadow-overlay",
-            picking ? "cursor-crosshair" : "cursor-default",
-            (lost || stopped) && drawn && "opacity-40",
-            !drawn && "opacity-0",
-          )}
-          style={fit ? { width: fit.w, height: fit.h } : undefined}
-          data-preview-canvas
-        />
-        {/* the keyboard's target: typed keys, an input method's text and a paste go to the page from here */}
-        <textarea
-          ref={keys}
-          aria-label={t("preview.keyboard_label")}
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          className="pointer-events-none absolute top-0 left-0 size-px resize-none opacity-0"
-          onKeyDown={(e) => onKey(e, "down")}
-          onKeyUp={(e) => onKey(e, "up")}
-          onPaste={(e) => {
-            const text = e.clipboardData.getData("text/plain");
-            e.preventDefault();
-            if (text) send({ t: "text", text });
-          }}
-          onCompositionEnd={(e) => {
-            if (e.data) send({ t: "text", text: e.data });
-            e.currentTarget.value = "";
-          }}
-          onInput={(e) => {
-            // a phone's keyboard types without key codes: what landed here goes as text
-            const el = e.currentTarget;
-            if ((e.nativeEvent as InputEvent).isComposing || !el.value) return;
-            send({ t: "text", text: el.value });
-            el.value = "";
-          }}
-        />
-        {!drawn && !stopped && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[12.5px] text-ink-3">
-            <Spinner />
-            {t("preview.connecting", { machine: machineName })}
-          </div>
-        )}
-        {lost && (
-          <div className="absolute top-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-surface px-3 py-1.5 text-[12px] text-ink-2 shadow-overlay" data-preview-lost>
-            <Spinner />
-            {t("preview.reconnecting")}
-          </div>
-        )}
-        {stopped && (
-          <div className="absolute inset-0 flex bg-page/80">
-            <Stopped conn={conn} port={port} machineName={machineName} onRetry={() => {
-              setConn({ kind: "connecting" });
-              setReconnect((n) => n + 1);
-            }} onGone={onGone} />
-          </div>
+      <div ref={box} className={cx("relative flex min-h-0 flex-1 overflow-hidden", phone ? "items-center justify-center bg-inset p-4" : "items-start justify-start bg-page")}>
+        {direct ? (
+          <>
+            <div
+              className={cx("relative overflow-hidden bg-white", phone ? "rounded-[18px] shadow-overlay" : "size-full")}
+              style={phone ? { width: directPhoneFit.w, height: directPhoneFit.h } : undefined}
+              data-preview-phone-frame={phone ? "" : undefined}
+            >
+              {iframeSrc && (
+                <iframe
+                  key={iframeKey}
+                  ref={iframeRef}
+                  src={iframeSrc}
+                  sandbox={DIRECT_IFRAME_SANDBOX}
+                  referrerPolicy="no-referrer"
+                  title={t("preview.page_label", { title: `localhost:${port}` })}
+                  onLoad={() => setIframeLoaded(true)}
+                  onError={() => triggerFallback()}
+                  className={cx("block border-0 bg-white transition-opacity duration-200", !phone && "size-full", !iframeLoaded && "opacity-0")}
+                  style={
+                    phone
+                      ? {
+                          width: PHONE_SIZE.w,
+                          height: PHONE_SIZE.h,
+                          transform: directPhoneFit.scale < 1 ? `scale(${directPhoneFit.scale})` : undefined,
+                          transformOrigin: "top left",
+                        }
+                      : undefined
+                  }
+                  data-preview-iframe
+                />
+              )}
+            </div>
+            {!iframeLoaded && (
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-label text-ink-3">
+                <Spinner />
+                {t("preview.direct_connecting")}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <canvas
+              ref={canvas}
+              tabIndex={-1}
+              aria-label={t("preview.page_label", { title: page.title || `localhost:${port}` })}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={(e) => {
+                if (suppressedPointer.current === e.pointerId) suppressedPointer.current = null;
+                pointer.current = null;
+              }}
+              onContextMenu={(e) => e.preventDefault()}
+              className={cx(
+                "block touch-none bg-white transition-opacity duration-200 select-none",
+                phone && "rounded-[18px] shadow-overlay",
+                picking ? "cursor-crosshair" : "cursor-default",
+                (lost || stopped) && drawn && "opacity-40",
+                !drawn && "opacity-0",
+              )}
+              style={fit ? { width: fit.w, height: fit.h } : undefined}
+              data-preview-canvas
+            />
+            {selectOpen && (
+              <SelectListbox
+                select={selectOpen}
+                pageSize={frameMetrics?.page ?? pageSize.current}
+                fit={fit}
+                area={area}
+                boxRef={box}
+                canvasRef={canvas}
+                keysRef={keys}
+                popupRef={selectPopupRef}
+                label={t("preview.select_label")}
+                emptyLabel={t("preview.select_empty")}
+                onChoose={chooseSelect}
+                onDismiss={() => dismissSelect(true, true)}
+                onSwallowKeyUp={(k) => swallowKeyUp.current.add(k)}
+              />
+            )}
+            {/* the keyboard's target: typed keys, an input method's text and a paste go to the page from here */}
+            <textarea
+              ref={keys}
+              aria-label={t("preview.keyboard_label")}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              className="pointer-events-none absolute top-0 left-0 size-px resize-none opacity-0"
+              onKeyDown={(e) => onKey(e, "down")}
+              onKeyUp={(e) => onKey(e, "up")}
+              onPaste={(e) => {
+                if (selectOpenRef.current) return;
+                const text = e.clipboardData.getData("text/plain");
+                e.preventDefault();
+                if (text) send({ t: "text", text });
+              }}
+              onCompositionEnd={(e) => {
+                if (selectOpenRef.current) {
+                  e.currentTarget.value = "";
+                  return;
+                }
+                if (e.data) send({ t: "text", text: e.data });
+                e.currentTarget.value = "";
+              }}
+              onInput={(e) => {
+                // a phone's keyboard types without key codes: what landed here goes as text
+                const el = e.currentTarget;
+                if (selectOpenRef.current) {
+                  el.value = "";
+                  return;
+                }
+                if ((e.nativeEvent as InputEvent).isComposing || !el.value) return;
+                send({ t: "text", text: el.value });
+                el.value = "";
+              }}
+            />
+            {!drawn && !stopped && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[12.5px] text-ink-3">
+                <Spinner />
+                {t("preview.connecting", { machine: machineName })}
+              </div>
+            )}
+            {lost && (
+              <div className="absolute top-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-surface px-3 py-1.5 text-[12px] text-ink-2 shadow-overlay" data-preview-lost>
+                <Spinner />
+                {t("preview.reconnecting")}
+              </div>
+            )}
+            {stopped && (
+              <div className="absolute inset-0 flex bg-page/80">
+                <Stopped conn={conn} port={port} machineName={machineName} onRetry={() => {
+                  setConn({ kind: "connecting" });
+                  setReconnect((n) => n + 1);
+                }} onGone={onGone} />
+              </div>
+            )}
+          </>
         )}
       </div>
       {picked && key && (
@@ -979,7 +1462,23 @@ function PreviewBar({ bar, onClose, send }: { bar: Bar; onClose: () => void; sen
         <Icon name="info" size={13} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{d.kind === "beforeunload" ? t("preview.leave") : d.message}</span>
         {d.kind === "prompt" && (
-          <input autoFocus value={answer} onChange={(e) => setAnswer(e.target.value)} onKeyDown={(e) => e.key === "Enter" && answerIt(true)} className="h-7 min-w-0 flex-1 rounded-[6px] bg-field px-2 text-[12.5px] text-ink outline-none" />
+          <input
+            autoFocus
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                answerIt(true);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                answerIt(false);
+              }
+            }}
+            className="h-7 min-w-0 flex-1 rounded-[6px] bg-field px-2 text-[12.5px] text-ink outline-none"
+          />
         )}
         {d.kind !== "alert" && (
           <Button tone="quiet" onClick={() => answerIt(false)}>
@@ -989,6 +1488,19 @@ function PreviewBar({ bar, onClose, send }: { bar: Bar; onClose: () => void; sen
         <Button tone="accent" onClick={() => answerIt(true)}>
           {t("preview.ok")}
         </Button>
+      </div>
+    );
+  }
+  if (bar.kind === "mode_notice") {
+    const text = t(`preview.${bar.code}`);
+    const fallback = bar.code === "direct_fallback";
+    return (
+      <div className={row} data-preview-bar="notice" data-preview-notice={bar.code}>
+        <Icon name={fallback ? "warning" : "info"} size={13} className={cx("shrink-0", fallback ? "text-orange" : "text-ink-3")} />
+        <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]" title={text}>
+          {text}
+        </span>
+        <IconButton icon="x" label={t("preview.dismiss")} size={24} iconSize={13} onClick={onClose} />
       </div>
     );
   }

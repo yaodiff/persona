@@ -77,7 +77,7 @@ jobs:
           set -euo pipefail
           test -n "$GH_TOKEN" || { echo 'persona-release is missing RELEASE_PR_TOKEN; no release PR or branch was created' >&2; exit 1; }
           test "$CHANNEL" = release || test "$CHANNEL" = beta
-          gh api "repos/$REPOSITORY/pulls?state=open&base=main&per_page=100" > release-open-prs.json
+          gh api "repos/$REPOSITORY/pulls?state=open&base=main&per_page=100" --paginate > release-open-prs.json
           # An active candidate already owns its fixed source and verification. Do not displace it with another -rN
           # PR merely because main advanced. A real repair explicitly supersedes the old PR before the next selection.
           python3 scripts/operations/release_candidate.py --repository "$REPOSITORY" --channel "$CHANNEL" --pulls release-open-prs.json > release-active-candidate.txt
@@ -91,6 +91,10 @@ jobs:
           # history to pin the newest commit whose full CI run passed.
           git fetch --no-tags origin main
           git switch --detach FETCH_HEAD
+          # Stage the main-HEAD release candidate helper before detaching to an older green commit so --branch and
+          # paginated JSON handling stay available regardless of what the selected green commit contains.
+          mkdir -p "$RUNNER_TEMP/release-ops"
+          cp scripts/operations/release_candidate.py scripts/operations/release_pr.py "$RUNNER_TEMP/release-ops/"
           head_commit="$(git rev-parse HEAD)"
           stable="$(gh api "repos/$REPOSITORY/releases/latest" --jq .tag_name)"
           previous="$(git rev-parse "$stable^{commit}")"
@@ -128,8 +132,17 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || exit 0
           branch="release/$version"
           title="release: v$version"
-          if [[ "$(gh api "repos/$REPOSITORY/pulls?state=open&base=main&per_page=100" --jq --arg branch "$branch" "[.[] | select(.head.ref == \$branch)] | length")" -gt 0 ]]; then
+          gh api "repos/$REPOSITORY/pulls?state=open&base=main&per_page=100" --paginate > release-open-prs-current.json
+          python3 "$RUNNER_TEMP/release-ops/release_candidate.py" --repository "$REPOSITORY" --channel "$CHANNEL" --pulls release-open-prs-current.json > release-active-candidate-current.txt
+          if [[ -s release-active-candidate-current.txt ]]; then
+            echo 'An open release PR already owns this channel; inspect its fixed-source verification instead of duplicating it:'
+            cat release-active-candidate-current.txt
+            exit 0
+          fi
+          python3 "$RUNNER_TEMP/release-ops/release_candidate.py" --repository "$REPOSITORY" --branch "$branch" --pulls release-open-prs-current.json > release-branch-candidate.txt
+          if [[ -s release-branch-candidate.txt ]]; then
             echo "Release PR already exists for $version; inspect its current source and verification instead of duplicating it."
+            cat release-branch-candidate.txt
             exit 0
           fi
           # An earlier unmerged candidate keeps its immutable source. Give the replacement a fresh branch rather than

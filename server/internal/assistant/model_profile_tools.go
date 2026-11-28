@@ -230,6 +230,9 @@ func (s *Service) applyStartTier(ctx context.Context, params map[string]any) err
 		if mode == "" && t.PermissionMode != "" {
 			mode = t.PermissionMode
 		}
+		if asked, _ := params["host"].(string); asked == "" && t.Host != nil {
+			params["host"] = *t.Host
+		}
 		if slot != nil {
 			slot.pick = &pick // the tier gave the start its launcher: its pick is the dispatch's
 		}

@@ -95,6 +95,8 @@
   "preset_left_out": "Not applied here: {what}. The launcher's or model's own setting runs.",
   "follow_row": "Follow Model settings",
   "carry_dropped": "{name} can’t run on {computer}, so its default is used.",
+  "opens_orca_chat": "Opens as {name}: this computer starts new Agents as Orca chats.",
+  "opens_orca_chat_own": "Opens as {name}, with Orca’s own model: this computer starts new Agents as Orca chats.",
   "preset_picked": "Preset {name} · {what}",
   "typed_now": "Typed for this start",
   "temporary_session": "Temporary session",

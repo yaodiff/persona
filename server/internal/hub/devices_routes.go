@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -156,8 +157,8 @@ func (h *Hub) managerHTTP(ctx context.Context, id, method, path string, body any
 		}
 		req.Body = b
 	}
-	var res assistantwire.HTTPResponse
-	if err := h.callBus(ctx, id, assistantwire.MethodHTTP, req, &res); err != nil {
+	res, err := buswire.Call(ctx, h.managerCaller(id), assistantwire.HTTPMethod, req)
+	if err != nil {
 		if errors.Is(err, errBusOffline) {
 			return errAssistantOffline
 		}

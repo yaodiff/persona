@@ -346,7 +346,7 @@ The built-in Mochi face on Android uses `Tokens.Mochi.DarkOffline` for the body 
 | `Theme.Motion.recordingLevelFrame` | a 1/30 s clock | the live recording's level meter only (`RecordingLevelMeter`); fixed-height bars scaled vertically, one still frame with Reduce Motion or Low Power Mode. Reason: the level changes many times a second, and a 30 fps clock read inside the meter redraws only the meter (#4240) |
 | Built-in Mochi motion | `personaFrameInterval` (15 fps requested) | On iOS and visionOS, thinking, working and needs-you retain static SwiftUI pieces in `PersonaFaceMotion` and animate only transforms and opacities in the render server. Keyframes come from the shared drawing's actual motion functions, use wall-clock phase and do not restart for equivalent updates. `VisibleWork` remains the visibility owner; ineligible, Reduce Motion, Low Power Mode and held cases use `PersonaFace(moving: false)`, and idle keeps its separate infrequent blink. Mac, widgets and the Live Activity keep their existing renderers |
 
-The composer and attach panel own about 20 more one-off tokens (Telegram-derived; the attach panel itself is a system sheet since #4312). Web: 150 ms state, 220 ms glide, 300 ms collapse, `--ease-out-strong` and `--ease-spring` (used by `.seg-thumb`, switches, menus, and dialogs), plus `.card-interactive` grounded hover tonal lift in dark mode, whisper hairline sharpening, and press compression (`150 ms`); the reply bar (#5314, cindy's) stays 250 ms after the pointer leaves and fades over 250 ms (`REPLY_BAR_LINGER_MS`, `REPLY_BAR_FADE_MS` in `web/src/ui/motion.ts`). Web sidebar group folds use `--sidebar-fold-open` / `--sidebar-fold-close` (250 / 200 ms) and `--sidebar-fold-open-ease` / `--sidebar-fold-close-ease`, shared by the clipped, fully visible content and its chevron. `spec/tokens/motion.json` carries this shared set (state, layout, expand, reveal, conceal, drawer, springBack, keyboard, the needs-you breath, and the composer's send swap and press, `composerSwap` and `composerPress`: its curve, durations, scales and blur, section 3.1), checked against `Theme.Motion` by `scripts/assets/test_gen_tokens.py`. Android Glass moves with the `state` and `layout` springs (`IosSpring` in `PersonaTheme.kt`: damping ratio `1 - bounce`, stiffness `(2π / duration)²`) and swaps and presses the composer's send as iOS does (`ComposerActionSlot`, `SendButton(pressScales)`); Brief and Board keep their tweens for those style-local springs (DS-11). Every shared entry in `spec/tokens/motion.json` is on generated `Tokens.Motion`. `SharedMotion` exposes the shared call-site specs `expand`, `reveal`, `conceal`, `drawer`, `springBack` and `keyboard` (via `IosMassSpring`); `state` / `layout` live on Glass's `PersonaMotion` / `IosSpring` (Brief and Board keep style tweens); composer send uses `ComposerMotion` / `Tokens.Motion.Composer*`; Needs You breath uses `Tokens.Motion.NeedsYouBreath`. Chat unfolding and the closeout card fold use `reveal` (`CloseoutCard.swift:48`, #9897). Literal `tween` / `spring` / default `AnimatedVisibility` / `Crossfade` counts are ratcheted per file by `scripts/app/android_motion_baseline.py`. Android page stacks share `rememberPageTransitions()` (`PageTransitions.kt`). Glass push and a tapped pop run 350 ms on cubic-bezier(0.28, 1.02, 0.48, 0.96); the page behind travels round(0.3 × width), a black dim of 0.10 × coverage darkens it, and the front card's shadow is black at opacity 0.04, radius 12, offset (0, −3), only while that transition runs. A predictive pop uses the same 350 ms and travel with a linear ease, so the gesture tracks the finger. Those values were measured on the iPhone simulator (Xcode 27.2): a CADisplayLink read the navigation coordinator's 0.35 s transition, `_UIParallaxTransitionCardView`'s shadow and `_UIParallaxDimmingView`, and the cubic was fit to presentation-layer x at the vsync marks. The procedure, including which private views were read, is in `docs/android/android-design.md` (Design system). Brief and Board keep the previous opaque trailing-edge push/pop (300/260 ms, quarter-width parallax, RTL mirrored), their predictive pop uses that same easing, and all three are instant when system animations are off. Beside the sidebar column that page slot is clipped to its inset, so the slide stays in the detail column (`SplitNavigation.swift:140-143`). An upright overlaid Agents list replaces its detail instantly and only the list slides away with Glass's `layout` spring (Brief/Board keep their tweens), copying `SplitNavigation.swift:125-208`. A swiped message springs back with `springBack` in every style (`swipeToReply`, `MessageMenu.swift:470`).
+The composer and attach panel own about 20 more one-off tokens (Telegram-derived; the attach panel itself is a system sheet since #4312). Web: 150 ms state, 220 ms glide, 300 ms collapse, `--ease-out-strong` and `--ease-spring` (used by `.seg-thumb`, switches, menus, and dialogs), plus `.card-interactive` grounded hover tonal lift in dark mode, whisper hairline sharpening, and press compression (`150 ms`); the reply bar (#5314, cindy's) stays 250 ms after the pointer leaves and fades over 250 ms (`REPLY_BAR_LINGER_MS`, `REPLY_BAR_FADE_MS` in `web/src/ui/motion.ts`). Web sidebar group folds use `--sidebar-fold-open` / `--sidebar-fold-close` (250 / 200 ms) and `--sidebar-fold-open-ease` / `--sidebar-fold-close-ease`, shared by the clipped, fully visible content and its chevron. Wide-screen sidebar expand/collapse transitions (`web/src/lib/sidebar-transition.ts`, `280 ms` expand / `240 ms` collapse on `cubic-bezier(0.22, 1, 0.36, 1)`) cross-morph locked-width full/rail layers in lockstep with the column width and macOS G2 contour while remaining instant under Reduce Motion and disabled during drag resizing. `spec/tokens/motion.json` carries this shared set (state, layout, expand, reveal, conceal, drawer, springBack, keyboard, the needs-you breath, and the composer's send swap and press, `composerSwap` and `composerPress`: its curve, durations, scales and blur, section 3.1), checked against `Theme.Motion` by `scripts/assets/test_gen_tokens.py`. Android Glass moves with the `state` and `layout` springs (`IosSpring` in `PersonaTheme.kt`: damping ratio `1 - bounce`, stiffness `(2π / duration)²`) and swaps and presses the composer's send as iOS does (`ComposerActionSlot`, `SendButton(pressScales)`); Brief and Board keep their tweens for those style-local springs (DS-11). Every shared entry in `spec/tokens/motion.json` is on generated `Tokens.Motion`. `SharedMotion` exposes the shared call-site specs `expand`, `reveal`, `conceal`, `drawer`, `springBack` and `keyboard` (via `IosMassSpring`); `state` / `layout` live on Glass's `PersonaMotion` / `IosSpring` (Brief and Board keep style tweens); composer send uses `ComposerMotion` / `Tokens.Motion.Composer*`; Needs You breath uses `Tokens.Motion.NeedsYouBreath`. Chat unfolding and the closeout card fold use `reveal` (`CloseoutCard.swift:48`, #9897). Literal `tween` / `spring` / default `AnimatedVisibility` / `Crossfade` counts are ratcheted per file by `scripts/app/android_motion_baseline.py`. Android page stacks share `rememberPageTransitions()` (`PageTransitions.kt`). Glass push and a tapped pop run 350 ms on cubic-bezier(0.28, 1.02, 0.48, 0.96); the page behind travels round(0.3 × width), a black dim of 0.10 × coverage darkens it, and the front card's shadow is black at opacity 0.04, radius 12, offset (0, −3), only while that transition runs. A predictive pop uses the same 350 ms and travel with a linear ease, so the gesture tracks the finger. Those values were measured on the iPhone simulator (Xcode 27.2): a CADisplayLink read the navigation coordinator's 0.35 s transition, `_UIParallaxTransitionCardView`'s shadow and `_UIParallaxDimmingView`, and the cubic was fit to presentation-layer x at the vsync marks. The procedure, including which private views were read, is in `docs/android/android-design.md` (Design system). Brief and Board keep the previous opaque trailing-edge push/pop (300/260 ms, quarter-width parallax, RTL mirrored), their predictive pop uses that same easing, and all three are instant when system animations are off. Beside the sidebar column that page slot is clipped to its inset, so the slide stays in the detail column (`SplitNavigation.swift:140-143`). An upright overlaid Agents list replaces its detail instantly and only the list slides away with Glass's `layout` spring (Brief/Board keep their tweens), copying `SplitNavigation.swift:125-208`. A swiped message springs back with `springBack` in every style (`swipeToReply`, `MessageMenu.swift:470`).
 
 Agents and Inbox rows move only for the tap that changed them (#9600), the same `withAnimation` the iPhone, the open iPhone Duo and iPad already use. On Glass that is the state spring (`Tokens.Motion.State`, `Theme.Motion.standard`) for a section fold (`ChatsView.swift:1168`, a tab at `:2080`), a quiet space (`:2595`, `:3114`, `:3214`, `:3237`), Show all and idle rows (`:3010`, `:3048`, `:3074`), Codex subtasks (`:3289`), Collapse All and Expand All (`AgentsMenus.swift:125`, `:128`), the computer chip (`ChatsView.swift:1646`), pin, unpin, mute and a failed save put back (`PinsStore.swift:131`, `:139`, `:163`), and for Inbox a group's fold (`InboxView.swift:458`), Done's fold (`:1029`), a section fold (`:1127`, `:1130`), bulk Mark as Done (`:634`), Clean up all (`:703`), Clear all (`:1143`), the filter chips (`:1263`, `:1294`) and Clear Filters (`:768`). Changing how Agents are grouped uses the layout spring (`AgentsMenus.swift:405`, `Tokens.Motion.Layout`). Brief and Board use their existing tweens for both. The spec is null unless that tap is in flight. It stays on the rows whose place that tap changed, for the spring (state 250 ms, layout 300 ms): clearing it early draws those rows at their end on the next frame. A row the tap did not move, and a row that arrives afterwards, has no spec, so it jumps. Only a row that was on screen the frame before the tap moves; one that comes back, or that was off screen, fades in where it lands. A group title that is not stuck to the top moves with the rows (`InboxView.swift:456`); the one clamped there stays (`:827`). Inbox keeps an inline title (`InboxView.swift:152-153`); ending a selection inserts no title and does not shift the list (`:632`). Android's large title just appears. The shift it gives every row is not animated; only a row whose order the tap changed springs. The Agents page is throttled to 300 ms. A tap waits for the emission that carries that tap, and a page built before it is ignored. A single swipe (`InboxView.swift:1202`), a section switch (`:1292`), the chat list, the sidebar rows and the search swap are not animated, on either platform. Jump to scrolls (`:924`, `:1099`). `PersonaTheme.reduceMotion`, including the system's animations turned off, makes every one of these instant. iOS passes `nil` under Reduce Motion only for the grouping picker; the other listed `withAnimation(Theme.Motion.standard)` calls do not read it.
 
@@ -1971,6 +1971,21 @@ browses folders to choose a file in the task's execution directory.
 shared document keeps the text, references and caret through local edits and the full-screen editor. Quotes, forwards,
 uploads, pasted blocks and selections brought in from a reader continue to use their existing space above the field.
 The wire format is in `docs/protocol/protocol.md` under "Tags in messages (parsed by clients)".
+
+#### Combination verdicts (#17524)
+
+`views/execution/VerdictNote.tsx` shows the hub's check of a runtime · channel · model · effort combination in three
+levels, built from `bg-inset`, `rounded-control`, `text-label`, `Pill` and `Button`:
+
+- **Allowed**: nothing.
+- **Notice**: `role="status"`, `text-ink-2`, one line per reason with a 12 px icon in `text-ink-3`; an experimental bridge
+  adds an orange small `Pill` ("Compatibility bridge (experimental)") above them.
+- **Blocked**: `role="alert"`, `text-red` with the alert-circle icon; the first reason only; then "Try instead:" and one
+  secondary small `Button` per alternative (model · effort · engine · channel). The form's confirm is disabled while any
+  of its parts is blocked.
+
+The words are always the hub's `reasons[].text`. The route fields next to it (`RouteFields`) are the same 36 px field as
+Settings' model pickers, one column on a phone and two from `sm`.
 
 ### 3.11 Code blocks, inline code and quotes in replies
 
@@ -3695,7 +3710,9 @@ recording.
     below another, so a breath doesn't flicker);
   - **You're speaking** instead when the microphone is a headset's, which hears little but its wearer;
   - **Quiet** otherwise, **Paused** while paused.
-  - No numbered speakers: the phone can't tell people apart.
+  - No numbered speakers on in-meeting screens: while a meeting runs the phone can't tell people apart (after a
+    hub-transcribed meeting ends, hub speaker separation may label lines and disagreements with numbered speakers until
+    the owner names them; see "Web: speakers in the transcript and the minutes (#17675)" below).
 - **Interaction:**
   - a tap brings the room back (`MeetingRecorder.openRecordings`);
   - dragged, it settles on the nearer side at that height, inside a band clear of the top bar and the bottom's composer
@@ -4412,6 +4429,74 @@ the flat Key points / Decisions lists made them read every line (principle 2).
   speaker name, with every topic card, disagreement card and line checked for running past its box; and the legacy
   no-disagreement baseline).
 
+### Web: speakers in the transcript and the minutes (#17675)
+
+Who it serves: everyday people reading a hub-transcribed meeting in the browser and naming the speakers once
+(contract: `docs/assistant/meeting-minutes.md` "Speakers (#17674)"). A recording without a `speakers` block (or with
+`state: "cleared"`, or an unknown state or failure reason) looks pixel for pixel identical to before. Nothing about
+speakers appears while a meeting is live (`RecordingLiveView.tsx` and partial transcripts stay unchanged).
+
+- **No colour per speaker.** Every speaker avatar (`SpeakerAvatar`) is neutral (`bg-field text-ink-2`, circular,
+  showing the name's first character or the speaker number) and hidden from screen readers (`aria-hidden="true"`).
+  People are told apart by number and name, never by per-speaker hues; state and certainty never rest on colour alone.
+- **Where.**
+  - `web/src/lib/recording-speakers.ts` holds closed speaker types, defensive `decodeSpeakers`, `speakerLabel`,
+    `speakerAvatarGlyph`, `waitingSpeakerMinutes` and `groupLinesBySpeaker` — kept outside `web/src/lib/kb.ts` so
+    nothing enters the first screen (`FIRST_SCREEN_BUDGET`) and outside `web/src/modules/recording/` so
+    `web/src/views/knowledge/RecordingReadOnlyDetail.tsx` shares the exact decoding without importing the recording
+    module.
+  - `web/src/modules/recording/speakers.ts` implements the pure display-name and roster edit rules verified directly
+    against `spec/fixtures/speakers-names/cases.json` (`resolvePositionDisplays`, `applySpeakerEdit`,
+    `applyOptimisticSpeakerEdit`, candidate names, sample lines and attributed positions).
+  - `web/src/modules/recording/RecordingSpeakersDialog.tsx` owns `useRecordingSpeakers` (local-first optimistic edits
+    reconciled with `POST /api/v1/recordings/{id}/speakers`, `meeting_live` `"speakers"` reloads, 5 s visible polling
+    while `waiting`, rollback on failure and inline Undo), `RecordingSpeakersBar`, `RecordingSpeakersDialog` and
+    `DeleteSpeakersConfirmDialog`.
+  - Avatar sizing (`.speaker-avatar`, `.speaker-avatar-lg`, in `em` so they scale with `--text-scale`) lives in
+    `web/src/modules/recording/minutes-overview.css` alongside the lazy minutes tokens.
+- **Transcript groups.** In `RecordingTranscript.tsx`, consecutive spoken lines that share the same canonical speaker
+  and certainty state form one group headed by the neutral avatar and the display name (`Speaker N` / `发言人 N` /
+  `話者 N` until named). Every line keeps its own `<li id="recording-line-…">` anchor so minutes timestamps and sample
+  jumps land on the exact line. An unsure line — or every line when `quality` is `"low"` — shows `?` after the name
+  with `role="img"` and `aria-label` set to the localized word for "possibly" (`possibly` / `可能是` / `おそらく`).
+- **Speakers row and states.** Directly above the transcript inside the transcript `Card`, `RecordingSpeakersBar` shows
+  the current state in plain text (never a model or engine name, and no "try again" action):
+  - `waiting`: spinner and "Telling speakers apart…" (with minutes done/total when `done` is present).
+  - `ready` (`quality: "ok"`): single row ("Speakers", summary of named speakers or speaker count, chevron) opening the
+    naming dialog.
+  - `ready` (`quality: "low"`): the same row plus a calm neutral notice ("Speakers may not be reliable in this
+    meeting.") above the transcript and at the top of the naming dialog; every speaker carries `?` and disagreement
+    positions show no speaker attribution.
+  - `failed`: reason-specific plain message (`too_long`, `timeout`, `engine_unavailable`, `no_audio`, or general failure
+    for `gave_up` / `audio_gone` / `error`) with a single-line **Delete** button (no retry).
+  - `trimmed`: the naming row stays available after the transcript expires; the naming dialog shows names, speaking
+    statistics and attributed disagreement stances (without sample lines) and still allows naming, merging, unmerging
+    and deleting.
+- **Naming page.** One shared `Dialog` (`RecordingSpeakersDialog`) showing one inset card per unmerged main speaker:
+  neutral avatar, display name (plus `Me` pill when marked), speaking stats ("spoke 12 min · 34 lines"), single-line
+  text input (max 100 characters, Enter saves, Clear button when named), one-tap candidate chips (`Me` plus hub
+  `candidates` and other speakers' names for one-tap merge, single-line pill buttons on `bg-surface` with
+  `shadow-hairline`), two or three clickable sample lines that jump to the transcript and close the dialog, and the
+  disagreement stances attributed to that speaker.
+  - `minor` speakers are folded in a collapsed **Rarely spoke** section (`Collapse`, `aria-expanded`).
+  - Merged speakers appear at the bottom with a single-line **Unmerge** button (returning the speaker unnamed).
+  - Giving two speakers the same name automatically merges the shorter-speaking one into the longer-speaking one; every
+    name, merge or unmerge updates the transcript, minutes and dialog on the same frame before the hub responds, shows
+    an inline Undo bar backed by the hub's `undo` payload, and reverts with an alert if the hub rejects the write.
+  - The footer overflow menu (`IconButton` + `Menu`) holds **Delete this meeting’s speakers**, opening a single
+    confirmation `Dialog` (`DeleteSpeakersConfirmDialog`); confirming clears the timeline and returns the page to the
+    exact no-speakers state. All controls work by keyboard alone (Tab through every control, Enter to name, Esc to close).
+- **Disagreements attribution.** `MinutesDebatesSection` (`web/src/modules/recording/MinutesOverview.tsx`) resolves
+  each position's display name through `resolvePositionDisplays` (named sure speaker -> `Speaker N` -> transcript
+  `who` -> none, joining `also` supporters and suppressing speaker attribution on `quality: "low"`).
+- **Module off.** `RecordingReadOnlyDetail.tsx` displays the read-only speakers summary/status and grouped transcript
+  lines (neutral avatar, name, `?` with `aria-label`) using `knowledge-kbdetail` strings and zero edit controls.
+- Checks: `web/src/modules/recording/speakers.test.ts` (directly running every case of
+  `spec/fixtures/speakers-names/cases.json`), `web/src/modules/recording/RecordingSpeakers.test.tsx`,
+  `web/src/modules/recording/minutes-debates.test.ts`, `web/src/views/knowledge/RecordingReadOnlyDetail.test.tsx`, and
+  `web/e2e/recording-speakers.mjs` (en, zh-Hans and ja, 1440 and 390, light and dark, Large text, keyboard-only,
+  screen-reader labels, all states, trimmed, low quality, read-only detail, and pixel-identical no-speakers baseline).
+
 ### The summary card (#6563)
 
 Minutes that carry an overview (`docs/assistant/meeting-minutes.md`, "Summary card (#6563)") show it in the Summary
@@ -4780,6 +4865,20 @@ through Configure runners, and saving an empty list disables polling.
 
 Center the Persona mark and title above the primary control. A phone opens its scanner. A browser takes a pairing link and submits it with the arrow inside the field group. Place the secondary actions in one centered row of icons with short labels. Keep the action and its label in a single tap target. Allow wrapping or stacking at larger text sizes. Help explains where to get a code or link. A warning about replacing an existing pairing stays beside the action.
 
+## Preview native `<select>` overlay (#17849)
+
+Audience: people previewing local dev servers inside an Agent session on the web (the Agents workspace). Because headless Chromium does not composite native `<select>` OS popups into the screencast canvas, `SelectListbox` (`web/src/ui/SelectListbox.tsx`, logic in `web/src/lib/preview.ts`) renders the bridged option list directly above the preview `<canvas>`.
+
+- **Reused tokens and grammar**: draws the same surface, elevation, corners, gliding active highlight, edge scroll fades (`data-menu-more`), motion (`EASE`, `pop-in`, reduced-motion aware), check icon (`Icon` `check` in `--accent-ink`), semantic colors (`bg-surface`, `bg-hover`, `text-ink`, `text-ink-3`, `border-line`), named type roles (`text-meta`, `text-label`, `text-submeta`), and 44 px coarse-pointer row target (`pointer-coarse:min-h-11`) as `Menu`. Adds no new color, font-size, radius, or motion tokens, and no settings.
+- **Why not `Menu` directly**: a bridged `<select>` popup requires `role="listbox"` / `role="option"` with `aria-selected`, `aria-disabled`, and `aria-activedescendant`; selection on `Space` as well as `Enter`; initial highlight and scroll to the selected option; as-written `optgroup` headings; canvas-scaled positioning with non-passthrough outside-click dismissal; and staying inside the lazy preview chunk off the first screen.
+
+## Direct dev server preview and mode fallback (#17899)
+
+Audience: people previewing local dev servers inside an Agent session on the web (the Agents workspace). When the hub advertises `preview_origin`, `PreviewPanel` (`web/src/views/session/PreviewPanel.tsx`) renders the dev server directly in an isolated-origin `<iframe>` by default without asking the user to pick a mode, and falls back automatically to the computer-browser stream when direct rendering fails or times out.
+
+- **Reused components and tokens**: reuses `IconButton` (`more`, `retry`, `monitor`, `phone`, `target`, `image`, `x`), `Menu`, `Spinner`, `PreviewBar` notice strip (`bg-surface`, `border-line`, `text-ink-2`, `text-ink-3`, `text-orange`, `line-clamp-2`), Phone frame styling (`rounded-[18px] shadow-overlay`), and named type role `text-label`. Adds no new tokens, settings, or first-screen bytes.
+- **Progressive disclosure & controls**: the manual switch (**View through the computer** / **View directly**) appears only when `preview_origin` is advertised, inside the preview toolbar's trailing `⋯` `Menu` rather than as a top-level button. Back and Forward buttons are omitted in direct mode because cross-origin iframe history cannot be observed or controlled safely. Triggering Pick an element or Screenshot in direct mode switches smoothly to viewing through the computer with a quiet info notice and completes the action once the stream is ready. Automatic fallback displays a dismissible notice strip and is remembered per `(machine, port)` within the panel session until the user chooses **View directly**.
+
 ## Removable chips (#13500)
 
 A chip the user may take away (a space conversation's categories on iOS) is a `Chip` with the close mark whose tap opens
@@ -4896,6 +4995,8 @@ People connecting a service can find its account, delivery and sync settings und
 the selected assistant’s Integrations experiment on, each service appears once. The capability chips
 (All, Chat channels, Data sources, Tools & appearance) filter those rows. A service can match more
 than one chip. Each chip exposes its selection with `aria-pressed` and shows its matching count.
+When the assistant supplies the Integrations projection, the chips show its counts. A failed
+catalog or section read uses a `SettingsHint` alert and Retry in a `Group`. Sections that loaded remain usable.
 
 Opening a detail uses a single column on phones and narrow Settings hosts. On desktop the split
 starts at **740 CSS pixels of Settings content width**, measured after both sidebars. The
@@ -4908,3 +5009,18 @@ catalog or a full-width view of where data goes. A `SubscriptionAlertBadge` belo
 owns the subscription. A single alert names its state, multiple alerts show their count. The most
 severe state supplies the detail and tone (failure red, missing recipe, rate limit or disconnected
 source orange). Standalone push sources have their own rows. See [web Settings](../web/web.md#labs).
+
+Settings keeps the visited parent route, including its assistant and filter, for the phone header,
+narrow desktop Back, and split-pane drill-downs. Back from an upgrade returns to its extension.
+Back from a source returns to the list, detail, or Data Flow page that opened it. A bookmarked
+detail without a visited parent returns to the same assistant's directory. Conflicting assistant
+names in a link show an unavailable page with Back. Browsing a linked assistant keeps the sidebar
+selection. The explicit switch action changes it.
+
+All integration kinds — built-in services, standalone channels and connectors, extensions, and
+standalone push or subscription sources — share one capability-composed detail shell mounted by
+`(manager, kind, id)` so crossing the 740 px split breakpoint changes only layout, scroll container,
+and Back placement without losing drafts. Capability sections mount in one canonical order:
+Account & connection, Chat & delivery, Inbox & sync, External sources, Extension settings,
+Information access, and Extension management. Single-pane standalone source details provide a
+same-assistant **Data flow** row when the split-pane view switcher is not visible.

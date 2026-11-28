@@ -13,7 +13,7 @@ A new package declares one; the packages in `server/internal/archguard/testdata/
 
 - Layers: `layer-declared`, `layer-one`, `layer-kit`, `layer-contract`, `layer-shared`, `layer-application`, `layer-library`, `layer-testkit`, `core-importers`, `adapter-no-application`, `adapter-import`, `path-no-core`.
 - Inside a core: `core-import`, `core-effect`, `core-clock-call`, `core-package-var`, `core-exported-const`, `core-type-param`, `core-any`, `core-exported-field`, `core-tag`, `core-bare-type`, `core-alias`, `core-field-name`, `core-distinct-shape`, `core-primitive-field`, `core-primitive-signature`, `core-collection`, `core-interface-param`, `core-accessor`, `core-pointer-receiver`, `core-receiver-write`, `core-codec-method`, `core-wire-method`, `core-constructor`, `core-params`, `core-outcome-return`, `core-fail-family`, `core-part-name`, `core-visitor-name`, `core-public-evolve`, `core-service-name`, `core-map-range`, `core-zero-doc`, `core-doc`, `core-test-package`, `core-hook`.
-- Seams: `seam-exported-field`, `seam-any`.
+- Seams: `seam-exported-field`, `seam-any`, and `core-accessor` for an exported method on an exported struct whose only statement directly returns a receiver field.
 - Outside a core: `out-dot-import`, `out-alias`, `out-literal`, `out-conversion`, `out-wire-ref`, `out-parse-call`, `out-visitor-impl`, `out-clock-read`, `out-slot-mint`, `out-code-mint`, `out-unsafe`, `out-rules-import`, `out-log-use`, `adapter-name`, `adapter-exported-result`.
 - Counts that only fall, in code that predates the rules: `app-exported-record`, `app-named-primitive`, `app-lifecycle-write`, `app-bridge-call`.
 

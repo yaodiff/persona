@@ -192,6 +192,7 @@ private class Projection(val tasks: TaskIndex, val menu: List<String?>, val now:
                 "status" to line.info.status, "reason" to line.info.reason)
             is ChatLine.Recaps -> obj("type" to "recaps", "item_ids" to line.items.map { it.id })
             is ChatLine.Viewed -> obj("type" to "viewed", "image_ids" to line.images.map { it.id })
+            is ChatLine.BotmuxReplies -> obj("type" to "botmux_replies", "reply_ids" to line.replies.map { it.id })
             is ChatLine.Extra -> obj("type" to "extra", "id" to line.id)
             is ChatLine.ModelChange -> obj("type" to "model_change", "from" to line.from, "to" to line.to)
             is ChatLine.EngineChanged -> obj("type" to "engine_change", "from" to line.change.from, "to" to line.change.to)

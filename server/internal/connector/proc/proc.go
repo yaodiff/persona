@@ -119,6 +119,9 @@ type Conn struct {
 	// run is the context of the Run under way (hold), nil outside one: what calls with no caller's context of their
 	// own (MachineOnline, SetOptions) use, so they end with the connector instead of outliving it.
 	run context.Context
+	// gen advances on setDown so an in-flight refresh from before the connector went down
+	// cannot overwrite status or tools after setDown.
+	gen uint64
 }
 
 // New is the connector of the program cfg describes; nothing runs until Run.
@@ -183,6 +186,7 @@ func (c *Conn) Status(context.Context) connector.Status {
 
 func (c *Conn) setDown(why string) {
 	c.mu.Lock()
+	c.gen++
 	c.peer = nil
 	c.status = connector.Status{State: connector.StateError, Error: why}
 	c.mu.Unlock()

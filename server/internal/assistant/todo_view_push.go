@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -388,17 +389,11 @@ func (s *Service) todoViewsOf(ctx context.Context, ids map[string]bool, now time
 	if err != nil {
 		return todoProjection{}, err
 	}
-	facts := s.todoFactsOf(ctx, list)
-	for i := range list {
-		if list[i].StartError != "" {
-			superseded := s.todoSuperseded()
-			for j := range facts {
-				facts[j].Superseded = superseded[facts[j].ID]
-			}
-			break
-		}
+	var superseded map[string]bool
+	if slices.ContainsFunc(list, func(row listedTodo) bool { return row.StartError != "" }) {
+		superseded = s.todoSuperseded()
 	}
-	return todoProjection{facts: facts, views: projection.Views(facts, now)}, nil
+	return s.projectTodoRows(ctx, list, now, superseded), nil
 }
 
 // todoSuperseded are the failed starts whose work finished in a related to-do anywhere in the list

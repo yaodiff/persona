@@ -1,7 +1,7 @@
 // Popover-only pure helpers for subscription usage cards and the reset timeline (#13173, #13870, #13964).
 // Kept in a separate module so UsagePopover's lazy chunk owns them instead of the cold first screen.
 import { t as tr } from "../i18n";
-import { canonicalUsageProvider, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { canAliasUsageAccount, canonicalUsageProvider, isHistoricalCodexReading, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
 const PLAN_ACRONYMS = new Set(["api", "ai", "vip", "gpt", "llm", "mcp", "sso", "cli", "ide"]);
 
@@ -24,10 +24,13 @@ export function formatPlanLabel(raw: string | undefined): string {
     .join(" ");
 }
 
+/** Browser-only presentation of a sampled account. */
+export type PopoverAccount = UsageAccount & { alias?: string };
+
 /** The normalized plan to write beside the name, unless the name already says it ("Codex Pro" and plan "pro"). */
-export function planNote(a: UsageAccount): string {
+export function planNote(a: PopoverAccount): string {
   const plan = formatPlanLabel(a.plan);
-  if (!plan) return "";
+  if (!plan || a.alias) return plan;
   const raw = (a.plan ?? "").trim().toLowerCase();
   const nameLower = a.name.toLowerCase();
   return !nameLower.includes(plan.toLowerCase()) && (!raw || !nameLower.includes(raw)) ? plan : "";
@@ -97,21 +100,32 @@ export function sortForCard(accounts: UsageAccount[]): UsageAccount[] {
 export interface ProviderGroup {
   provider: string;
   /** Sorted by `sortForCard`. */
-  accounts: UsageAccount[];
+  accounts: PopoverAccount[];
+  historicalReadings: UsageAccount[];
   /** The newest `sampled_at` of the group, "" when none reads as a time. */
   sampledAt: string;
 }
 
 /** The accounts grouped by provider (account type), groups in the order the hub first listed them. */
-export function groupByProvider(accounts: UsageAccount[]): ProviderGroup[] {
+export function groupByProvider(accounts: UsageAccount[], aliases?: ReadonlyMap<string, string>): ProviderGroup[] {
   const by = new Map<string, UsageAccount[]>();
   for (const a of accounts) {
     const provider = canonicalUsageProvider(a.provider);
     by.set(provider, [...(by.get(provider) ?? []), a]);
   }
   return [...by].map(([provider, list]) => {
-    const newest = list.reduce((m, a) => Math.max(m, Date.parse(a.sampled_at) || -Infinity), -Infinity);
-    return { provider, accounts: sortForCard(list), sampledAt: Number.isFinite(newest) ? new Date(newest).toISOString() : "" };
+    const historicalReadings: UsageAccount[] = [];
+    const counted: UsageAccount[] = [];
+    for (const a of list) {
+      if (isHistoricalCodexReading(a)) historicalReadings.push(a);
+      else counted.push(a);
+    }
+    const newest = counted.reduce((m, a) => Math.max(m, Date.parse(a.sampled_at) || -Infinity), -Infinity);
+    const sorted = sortForCard(counted).map((a) => {
+      const alias = canAliasUsageAccount(a) ? aliases?.get(a.id) : undefined;
+      return alias ? { ...a, alias } : a;
+    });
+    return { provider, accounts: sorted, historicalReadings, sampledAt: Number.isFinite(newest) ? new Date(newest).toISOString() : "" };
   });
 }
 

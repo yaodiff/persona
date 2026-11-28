@@ -79,6 +79,23 @@ class NativeColors {
   readonly toastSurface: ResourceColor = $r('app.color.persona_toast_surface');
   readonly codeSurface: ResourceColor = $r('app.color.persona_code_surface');
   readonly subtleScrim: ResourceColor = $r('app.color.persona_subtle_scrim');
+  readonly floatingShadow: ResourceColor = $r('app.color.persona_floating_shadow');
+  readonly healthRose: ResourceColor = $r('app.color.persona_health_rose');
+  readonly healthRoseWash: ResourceColor = $r('app.color.persona_health_rose_wash');
+  readonly healthWater: ResourceColor = $r('app.color.persona_health_water');
+  readonly healthWaterWash: ResourceColor = $r('app.color.persona_health_water_wash');
+  readonly healthProtein: ResourceColor = $r('app.color.persona_health_protein');
+  readonly healthProteinWash: ResourceColor = $r('app.color.persona_health_protein_wash');
+  readonly healthActionSurface: ResourceColor = $r('app.color.persona_health_action_surface');
+  readonly chartBlue: ResourceColor = $r('app.color.persona_chart_blue');
+  readonly indigo: ResourceColor = $r('app.color.persona_indigo');
+  readonly onActionWash: ResourceColor = $r('app.color.persona_on_action_wash');
+  readonly mutedInk: ResourceColor = $r('app.color.persona_muted_ink');
+  readonly secondaryGlassInk: ResourceColor = $r('app.color.persona_secondary_glass_ink');
+  readonly surfaceTransparent: ResourceColor = $r('app.color.persona_surface_transparent');
+  readonly groupedTransparent: ResourceColor = $r('app.color.persona_grouped_transparent');
+  readonly canvasFogStart: ResourceColor = $r('app.color.persona_canvas_fog_start');
+  readonly canvasFogEnd: ResourceColor = $r('app.color.persona_canvas_fog_end');
 }
 
 export const Colors: NativeColors = new NativeColors();

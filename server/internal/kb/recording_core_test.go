@@ -33,13 +33,14 @@ func TestRecordingCoreDefersAPausedModel(t *testing.T) {
 // writers pass are the store's.
 func TestRecordingPortSetsAreTheStores(t *testing.T) {
 	for f, name := range map[recordingwire.File]string{recordingwire.FileHubSegments: hubSegmentsFile,
-		recordingwire.DirAttachments: photosDir, recordingwire.FileTranscript: "transcript.md"} {
+		recordingwire.FileSpeakerTurns: speakerTurnsFile,
+		recordingwire.DirAttachments:   photosDir, recordingwire.FileTranscript: "transcript.md"} {
 		if string(f) != name || !f.Known() {
 			t.Errorf("file %q: the store's is %q (known %v)", f, name, f.Known())
 		}
 	}
 	for _, p := range []string{PartRoom, PartAsks, PartPrivate, PartFollowup, PartPhotos, PartLines, PartTopics, PartHighlights,
-		PartTranscription, PartInterim} {
+		PartTranscription, PartInterim, PartSpeakers} {
 		if !recordingwire.MeetingPart(p).Known() {
 			t.Errorf("meeting part %q is not one the port knows", p)
 		}

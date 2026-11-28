@@ -24,7 +24,7 @@ import { PhoneStyle } from '../design/PhoneStyle';
 import { Colors } from '../design/Colors';
 import { ButtonStyles, SelectStyles } from '../design/Controls';
 import { Symbols } from '../design/Symbols';
-import { tr } from '../design/Strings';
+import { tr, trError } from '../design/Strings';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
 import { nativeSheetInset } from '../platform/NativeInsets';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
@@ -465,6 +465,15 @@ export struct AgentListPage {
       } } });
   }
 
+  private async triggerAutoRename(row: ResourceRow): Promise<void> {
+    const label = row.title || tr('agent_untitled');
+    const err = await this.model.autoRenameAgent(row);
+    if (err && this.active) {
+      Haptics.error();
+      toastCenter.error(trError(err) + ' · ' + label);
+    }
+  }
+
   @Builder rowMenu(binding:BoundAgentRow) { this.sessionMenu(binding.bound.value,binding.presentation.spaceName) }
   @Builder sessionMenu(row:ResourceRow,spaceName:string) {
     Menu() {
@@ -486,6 +495,12 @@ export struct AgentListPage {
         .enabled(!this.workspace.busy).onClick(() => this.workspace.markSeen(row).catch(() => undefined))
       if (this.workspace.canRename(row)) MenuItem({ content: tr('rename') }).enabled(!this.workspace.busy)
         .onClick(() => this.openRename(row))
+      if (this.model.canAutoRenameAgent(row)) {
+        MenuItem({ content: tr('agent_auto_rename') })
+          .enabled(!this.workspace.busy && !this.model.isAutoRenamingRow(row))
+          .onClick(() => { void this.triggerAutoRename(row); })
+          .id('agents.menu.autoname')
+      }
       if (this.workspace.canClose(row)) MenuItem({ content: tr('close') }).enabled(!this.workspace.busy)
         .onClick(() => this.confirmClose(row))
       if (this.workspace.canDelete(row)) MenuItem({ content: tr('delete') }).enabled(!this.workspace.busy)
@@ -529,7 +544,7 @@ export struct AgentListPage {
             .padding({left:6,right:6}).height(PhoneStyle.formSize(18.33,25.67,this.environment.fontScale))
             .constraintSize({minWidth:PhoneStyle.formSize(20.33,23.67,this.environment.fontScale)})
             .backgroundColor(Colors.systemControls && Colors.styleID==='glass' ? $r('app.color.phone_agent_count_fill') : Colors.control)
-            .borderRadius(20)
+            .borderRadius(Tokens.radiusCapsule)
         }
         Blank().layoutWeight(1)
         if (binding.value.folded) SymbolGlyph(Symbols.expand).fontSize(Tokens.interfaceFontVp(12,this.environment.fontScale)).fontColor([Colors.tertiary])
@@ -599,8 +614,8 @@ export struct AgentListPage {
     }.width('100%').padding({ top: 6 }).alignItems(HorizontalAlign.Start)
   }
   @Builder activityTotal(value:number) {
-    Text(String(value)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(600).fontColor(Colors.secondary)
-      .padding({left:6,right:6,top:1,bottom:1}).backgroundColor(Colors.control).borderRadius(9)
+    Text(String(value)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontWeight(600).fontColor(Colors.secondary)
+      .padding({left:6,right:6,top:1,bottom:1}).backgroundColor(Colors.control).borderRadius(Tokens.radiusBadge)
   }
 
   private rowStatus(presentation: AgentRowPresentation): string {
@@ -843,7 +858,8 @@ export struct AgentListPage {
           showsSource:!!binding.presentation.activitySource,sourceTitle:binding.presentation.activitySource ? tr(binding.presentation.activitySource) : '',
           narrow:this.listWidth>0 && this.listWidth<296,leftInset:(groupId.includes('/project/') ? 36 : 20)+16*depth,
           controlScale:Math.max(1,Math.min(this.environment.fontScale,67/51)),fontScale:this.environment.fontScale,
-          tint:this.rowStatusColor(binding.presentation),activityList:true,useHerdrTabName:this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName})
+          tint:this.rowStatusColor(binding.presentation),activityList:true,useHerdrTabName:this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName,
+          renaming:!!(this.model.namingAgentKeys && this.model.namingAgentKeys.length > 0 && this.model.isAutoRenamingRow(binding.bound.value))})
       }.width('100%').backgroundColor(this.isRowSelected(binding) ? Colors.selection : this.displayedAgentStyle==='cards'?Colors.grouped:Colors.surface)
        .borderRadius({topLeft:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,topRight:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,
          bottomLeft:this.endsSurface(binding,groupId) && endOfSurface ? 26:0,bottomRight:this.endsSurface(binding,groupId) && endOfSurface ? 26:0})
@@ -878,7 +894,7 @@ export struct AgentListPage {
               } else if (binding.presentation.provider) {
                 Text(binding.presentation.provider.slice(0, 1).toUpperCase()).fontSize('16vp').fontWeight(FontWeight.Medium).fontColor(Colors.ink)
               } else SymbolGlyph(Symbols.agent).fontSize('17vp').fontColor([this.rowStatusColor(binding.presentation)])
-            }.width(36).height(36).backgroundColor(Colors.subtle).borderRadius(18)
+            }.width(36).height(36).backgroundColor(Colors.subtle).borderRadius(Tokens.radiusCapsule)
             if (binding.presentation.status === 'needs_you') {
               NeedsYouPulseDot({ dotSize: 10, tint: Colors.needs, surface: Colors.surface, bordered: true }).offset({ x: 3, y: 3 })
             } else if (binding.presentation.status === 'working') {
@@ -904,12 +920,12 @@ export struct AgentListPage {
                   .maxLines(this.narrowRow() ? 4 : this.look.density === 'compact' ? 1 : 2).textOverflow({ overflow: TextOverflow.Ellipsis })
                 if (!this.narrowRow() && binding.presentation.status === 'needs_you') {
                   Text(tr('needs_you')).fontSize(11).maxFontScale(Tokens.interfaceScaleFor(11)).fontWeight(FontWeight.Medium).fontColor(Colors.needs)
-                    .padding({ left: 6, right: 6, top: 2, bottom: 2 }).backgroundColor(Colors.selection).borderRadius(6).maxLines(1)
+                    .padding({ left: 6, right: 6, top: 2, bottom: 2 }).backgroundColor(Colors.selection).borderRadius(Tokens.radiusBadge).maxLines(1)
                 }
               }.width('100%').alignItems(VerticalAlign.Top)
             } else if (!this.narrowRow() && binding.presentation.status === 'needs_you') {
               Text(tr('needs_you')).fontSize(11).maxFontScale(Tokens.interfaceScaleFor(11)).fontWeight(FontWeight.Medium).fontColor(Colors.needs)
-                .padding({ left: 6, right: 6, top: 2, bottom: 2 }).backgroundColor(Colors.selection).borderRadius(6).maxLines(1)
+                .padding({ left: 6, right: 6, top: 2, bottom: 2 }).backgroundColor(Colors.selection).borderRadius(Tokens.radiusBadge).maxLines(1)
             }
             this.rowContext(this.rowPlace(binding.presentation), this.needsStatusLabel(groupId) ? this.rowStatus(binding.presentation) : '',
               this.rowStatusColor(binding.presentation))
@@ -968,6 +984,9 @@ export struct AgentListPage {
   }
 
   private rowTitle(binding: BoundAgentRow): string {
+    if (this.model.namingAgentKeys && this.model.namingAgentKeys.length > 0 && this.model.isAutoRenamingRow(binding.bound.value)) {
+      return tr('agent_renaming');
+    }
     const preferTab = this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName;
     if (preferTab && binding.presentation.herdrTabName) {
       return binding.presentation.herdrTabName;
@@ -1254,9 +1273,9 @@ export struct AgentListPage {
       .width('100%')
       .padding(0)
       .backgroundColor(Colors.surface)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: this.compactRoot && !this.rail ? 22 : 13 })
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: this.compactRoot && !this.rail ? Tokens.radiusPanel : Tokens.radiusCard })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
-      .borderRadius(this.compactRoot && !this.rail ? 22 : 13)
+      .borderRadius(this.compactRoot && !this.rail ? Tokens.radiusPanel : Tokens.radiusCard)
       .enabled(!this.workspace.busy)
       .accessibilityText(tr('agent_mark_all_seen') + ' · ' + String(this.workspace.unreadShownRows.length))
       .onClick(() => this.confirmMarkAllSeen())
@@ -1292,7 +1311,7 @@ export struct AgentListPage {
                       .fontColor(this.workspace.quickFilter === key ? Colors.link : Colors.ink).maxLines(1)
                     if (key !== 'all' && this.workspace.filterCounts[key] !== undefined) Text(String(Wire.number(this.workspace.filterCounts,key)))
                       .fontSize(Tokens.interfaceFontVp(15,this.environment.fontScale)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
-                  }.padding({left:8,right:8,top:4,bottom:4}).borderRadius(40)
+                  }.padding({left:8,right:8,top:4,bottom:4}).borderRadius(Tokens.radiusCapsule)
                     .backgroundColor(this.compactRoot && this.workspace.quickFilter === key ? Colors.selection : Color.Transparent)
                     .animation(Motion.state(this.environment.reduceMotion))
                 }
@@ -1320,11 +1339,11 @@ export struct AgentListPage {
             .linearGradient({
               direction: GradientDirection.Right,
               colors: this.compactRoot ? [
-                [this.environment.dark ? '#001C1C1E' : '#00FFFFFF', 0],
-                [this.environment.dark ? '#FF1C1C1E' : '#FFFFFFFF', 1]
+                [Colors.surfaceTransparent, 0],
+                [Colors.surface, 1]
               ] : [
-                [this.environment.dark ? '#00000000' : '#00F2F2F7', 0],
-                [this.environment.dark ? '#FF000000' : '#FFF2F2F7', 1]
+                [Colors.groupedTransparent, 0],
+                [Colors.grouped, 1]
               ]
             })
             .hitTestBehavior(HitTestMode.None)
@@ -1332,10 +1351,10 @@ export struct AgentListPage {
         }.layoutWeight(1).height(this.quickHeight())
         if (this.compactRoot) Divider().vertical(true).strokeWidth(0.5).height(22*this.quickHeight()/44).color(Colors.divider)
         this.filterControl()
-      }.width('100%').height(this.quickHeight()).borderRadius(this.compactRoot ? 44 : 0).clip(this.compactRoot)
+      }.width('100%').height(this.quickHeight()).borderRadius(this.compactRoot ? Tokens.radiusCapsule : 0).clip(this.compactRoot)
         .backgroundColor(this.compactRoot ? Colors.surface : Color.Transparent)
         .shadow(this.compactRoot ? PhoneStyle.cardElevation(this.environment.dark) : { radius: 0, color: Color.Transparent })
-        .outlineWidth(this.compactRoot ? 0.5 : 0).outlineColor(Colors.divider).outlineRadius(44)
+        .outlineWidth(this.compactRoot ? 0.5 : 0).outlineColor(Colors.divider).outlineRadius(Tokens.radiusCapsule)
       if (this.workspace.machineFilter) {
         Button({ type: ButtonType.Capsule }) {
           Row({ space: 5 }) {
@@ -1382,11 +1401,11 @@ export struct AgentListPage {
           .width(40)
           .height(40)
           .backgroundColor(this.isRowSelected(binding) ? Colors.selection : Colors.surface)
-          .borderRadius(20)
+          .borderRadius(Tokens.radiusCapsule)
           .border({
             width: this.isRowSelected(binding) ? 2 : PhoneStyle.surfaceEdgeWidth(0.5),
             color: this.isRowSelected(binding) ? Colors.link : Colors.divider,
-            radius: 20
+            radius: Tokens.radiusCapsule
           })
           .shadow(PhoneStyle.cardElevation(this.environment.dark))
           if (binding.presentation.status === 'needs_you') {

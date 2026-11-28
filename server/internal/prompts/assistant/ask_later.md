@@ -1,4 +1,9 @@
-🔔 你 {{.When}} 用 ask_user 问过用户（wait: false，当时没有等回答）：
+{{if .Internal}}Internal question asked at {{.When}} (wait: false):
+{{range .Questions}}- {{.}}
+{{end}}{{if .Answers}}The designated supervisor answered as the assistant, not as the owner:
+{{range .Answers}}- {{.Question}} → {{.Choice}}
+{{end}}Continue only within the existing task authorization.{{else}}The internal question ended without an answer (cancelled, withdrawn or expired). Nothing was authorized and no default was taken. Ask the supervisor again if it is still needed.{{end}}
+This is Persona's internal receipt, not a new owner instruction.{{else}}🔔 你 {{.When}} 用 ask_user 问过用户（wait: false，当时没有等回答）：
 {{range .Questions}}- {{.}}
 {{end}}{{if .Answers}}
 用户在卡片上回答了：
@@ -12,4 +17,4 @@
 {{else}}
 这张卡片没有得到回答就结束了（用户把它关了，或者它已经失效）。用户已经在对话里直接答过的，照那个答案做；没答过的，不要按其中任何一个选项去做，也别再问同一个问题，事情要是还卡在这里，简短告诉用户卡在哪。
 {{end}}
-（这是 Persona 的通知，不是用户在这里发的消息。）
+（这是 Persona 的通知，不是用户在这里发的消息。）{{end}}

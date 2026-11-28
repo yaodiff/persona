@@ -149,6 +149,9 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		switch m.Method {
+		case "thread/queue/add":
+			f.push(map[string]any{"id": m.ID, "error": &codexError{Code: -32601, Message: "method not found"}})
+			continue
 		case "initialize":
 			result = map[string]any{"codexHome": f.home}
 		case "thread/loaded/list":
@@ -373,7 +376,7 @@ func TestCodexSharedOriginKeepsTheLiveOwnerRoute(t *testing.T) {
 	}
 }
 
-func TestCodexRemoteSendAndSteerNeverFallback(t *testing.T) {
+func TestCodexRemoteQueuesBeforeSteering(t *testing.T) {
 	n := remoteTestNode(t)
 	home := t.TempDir()
 	f, c := connectRemoteFixture(t, n, home, "one", remoteRaw)
@@ -385,10 +388,32 @@ func TestCodexRemoteSendAndSteerNeverFallback(t *testing.T) {
 		t.Fatal("first message routing")
 	}
 	f.mu.Lock()
+	f.response = func(method string, _ map[string]any) (any, bool) {
+		return map[string]any{"queuedSubmission": map[string]any{"id": "accepted"}}, method == "thread/queue/add"
+	}
+	f.mu.Unlock()
+	for i, status := range []string{proto.StatusWorking, proto.StatusBlocked} {
+		c.mu.Lock()
+		thread := c.threads[remoteRaw]
+		thread.status = status
+		c.threads[remoteRaw] = thread
+		c.mu.Unlock()
+		ctx, queued := withSendQueued(context.WithValue(t.Context(), sendTraceKey{}, "message-id"))
+		if err := n.send(ctx, id, "follow up", nil, sendOpts{}); err != nil || !*queued {
+			t.Fatalf("%s send = %v, queued = %v", status, err, *queued)
+		}
+		adds := f.sent("thread/queue/add")
+		if len(adds) != i+1 || inputText(adds[i]) != "follow up" || adds[i]["threadId"] != remoteRaw ||
+			adds[i]["clientUserMessageId"] != "message-id" || f.count("turn/steer") != 0 {
+			t.Fatalf("%s queue requests = %v", status, adds)
+		}
+	}
+	f.mu.Lock()
+	f.response = nil // older server rejects the queue method
 	f.reject = "turn/steer"
 	f.mu.Unlock()
 	err := n.send(context.Background(), id, "合成插话", nil, sendOpts{})
-	if err == nil || f.count("turn/start") != 1 || f.count("turn/steer") != 1 {
+	if err == nil || f.count("thread/queue/add") != 3 || f.count("turn/start") != 1 || f.count("turn/steer") != 1 {
 		t.Fatalf("steer fallback: %v", err)
 	}
 	if err := n.interruptCodex(context.Background(), id); err != nil {

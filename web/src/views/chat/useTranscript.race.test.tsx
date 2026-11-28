@@ -199,4 +199,15 @@ describe("useTranscript older pages", () => {
     await answer(["from_seq=3", "through_seq=4"], { items: [item("a4", 4)], more: false });
     expect(await pending).toBe(true);
   });
+
+  it("reports an empty fold range as incomplete instead of spinning forever", async () => {
+    render("A");
+    const fold: Item = { ...item("f", 3), kind: "fold", fold: { through_seq: 4 } } as Item;
+    await answer(["/m/A/items?", "turns=2"], { items: [fold], to_seq: 3 });
+    let pending!: Promise<unknown>;
+    act(() => void (pending = shown.expandFold(fold)));
+    await answer(["from_seq=3", "through_seq=4"], { items: [], more: false });
+    expect(await pending).toBe(false);
+    expect(ids()).toEqual(["f"]);
+  });
 });

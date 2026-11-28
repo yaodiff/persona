@@ -108,6 +108,16 @@ final class X264PlanTests: XCTestCase {
         XCTAssertFalse(X264Watch.overdue(oldest: nil, now: 5_000_000))
         XCTAssertFalse(X264Watch.overdue(oldest: 1_000_000, now: 1_200_000))
         XCTAssertTrue(X264Watch.overdue(oldest: 1_000_000, now: 1_200_001))
+        // Backward clock must not wrap into a false overdue stall or evict the slow-frame window.
+        XCTAssertFalse(X264Watch.overdue(oldest: 1_000_000, now: 900_000))
+        var backward = X264Watch()
+        var bt: UInt64 = 10_000_000
+        for k in 0 ..< (X264Watch.minFrames - 1) {
+            bt += 16_000
+            XCTAssertFalse(backward.encoded(micros: 9_000, at: bt, index: X264Watch.warmupFrames + 1 + k))
+        }
+        // A slightly earlier timestamp must keep the existing 59 slow samples so sample #60 still triggers fallback.
+        XCTAssertTrue(backward.encoded(micros: 9_000, at: 9_000_000, index: X264Watch.warmupFrames + X264Watch.minFrames))
     }
 
     /// A frame's own time starts when ffmpeg could start on it: when it was given, or when the one before it came out.
@@ -115,6 +125,8 @@ final class X264PlanTests: XCTestCase {
         XCTAssertEqual(X264Watch.ownMicros(given: 1_000, lastOut: 0, now: 3_000), 2_000)
         XCTAssertEqual(X264Watch.ownMicros(given: 1_000, lastOut: 30_000, now: 32_000), 2_000) // waited behind the one before
         XCTAssertEqual(X264Watch.ownMicros(given: 5_000, lastOut: 4_000, now: 6_500), 1_500)
+        XCTAssertEqual(X264Watch.ownMicros(given: 5_000, lastOut: 4_000, now: 3_000), 0) // backward clock clamps to 0
+        XCTAssertEqual(X264Watch.ownMicros(given: 0, lastOut: 0, now: UInt64.max), Int64.max) // saturates instead of wrapping negative
     }
 
     /// Frames 60 fps apart, each taking `cost(i)` of its own; what the watch says, frame by frame, as X264Session feeds it.
@@ -286,7 +298,161 @@ final class FLVReaderTests: XCTestCase {
 }
 
 #if os(macOS)
+import Darwin
 import VideoToolbox
+
+/// Lifecycle safety of `X264Process` and `X264Session` without requiring ffmpeg: releasing without an explicit `stop()`
+/// must neither resurrect `self` during `deinit` nor leave child processes running.
+final class X264ProcessLifecycleTests: XCTestCase {
+    func testDeinitWithoutStopTerminatesProcessCleanly() throws {
+        guard X264Process.canSpawn else { throw XCTSkip("disclaim unavailable") }
+        let ended = DispatchSemaphore(value: 0)
+        var process: X264Process? = try X264Process(ffmpeg: "/bin/sleep", arguments: ["60"]) { event in
+            if case .ended = event { ended.signal() }
+        }
+        let spawnedPid = process!.pid
+        XCTAssertGreaterThan(spawnedPid, 0)
+        process = nil // deallocates here without `stop()`
+        XCTAssertEqual(ended.wait(timeout: .now() + 5), .success, "reader thread must observe child exit and reap it")
+        let rc = kill(spawnedPid, 0)
+        let err = errno
+        XCTAssertEqual(rc, -1)
+        XCTAssertEqual(err, ESRCH, "child process must be gone after deinit")
+    }
+
+    func testSessionDeinitWithoutStopTerminatesBothProcesses() throws {
+        guard X264Process.canSpawn else { throw XCTSkip("disclaim unavailable") }
+        let queue = DispatchQueue(label: "test.x264.deinit")
+        let ended = DispatchSemaphore(value: 0)
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func inc() { lock.withLock { value += 1 } }
+            func get() -> Int { lock.withLock { value } }
+        }
+        let sessionEvents = Counter()
+        var pids: [pid_t] = []
+        var session: X264Session<Int>? = X264Session<Int>(
+            ffmpeg: "/bin/sleep", width: 320, height: 180, fps: 30, threads: 1, capKbps: 1_000,
+            queue: queue, clock: { DispatchTime.now().uptimeNanoseconds / 1000 },
+            makeProcess: { _, _, onEvent in
+                let proc = try X264Process(ffmpeg: "/bin/sleep", arguments: ["60"]) { event in
+                    if case .ended = event { ended.signal() }
+                    onEvent(event)
+                }
+                pids.append(proc.pid)
+                return proc
+            },
+            onEvent: { _ in sessionEvents.inc() }
+        )
+        var started = false
+        queue.sync { started = session!.start() }
+        XCTAssertTrue(started)
+        XCTAssertEqual(pids.count, 2)
+        session = nil // deallocates here without `stop()`
+        XCTAssertEqual(ended.wait(timeout: .now() + 5), .success, "first process must exit and be reaped")
+        XCTAssertEqual(ended.wait(timeout: .now() + 5), .success, "second process must exit and be reaped")
+        for pid in pids {
+            let rc = kill(pid, 0)
+            let err = errno
+            XCTAssertEqual(rc, -1)
+            XCTAssertEqual(err, ESRCH, "child process \(pid) must be gone after session deinit")
+        }
+        // Drain the serial queue to confirm no stray session callbacks after deinit.
+        queue.sync {}
+        XCTAssertEqual(sessionEvents.get(), 0)
+    }
+
+    func testStopAfterNaturalExitDoesNotSignalReapedPid() throws {
+        guard X264Process.canSpawn else { throw XCTSkip("disclaim unavailable") }
+        final class SignalLog: @unchecked Sendable {
+            private let lock = NSLock()
+            private var calls: [(pid_t, Int32)] = []
+            func record(_ pid: pid_t, _ sig: Int32) -> Int32 {
+                lock.withLock { calls.append((pid, sig)) }
+                return Darwin.kill(pid, sig)
+            }
+            func all() -> [(pid_t, Int32)] { lock.withLock { calls } }
+        }
+        let signals = SignalLog()
+        let ended = DispatchSemaphore(value: 0)
+        let process = try X264Process(ffmpeg: "/usr/bin/true", arguments: [], signal: { signals.record($0, $1) }) { event in
+            if case .ended = event { ended.signal() }
+        }
+        XCTAssertEqual(ended.wait(timeout: .now() + 5), .success, "child should exit naturally and be reaped")
+        process.stop()
+        XCTAssertTrue(signals.all().isEmpty, "must not send SIGKILL to an already-reaped PID: \(signals.all())")
+    }
+
+    func testSessionStartPartialFailureStopsFirstProcess() throws {
+        guard X264Process.canSpawn else { throw XCTSkip("disclaim unavailable") }
+        let queue = DispatchQueue(label: "test.x264.partial-start")
+        let firstEnded = DispatchSemaphore(value: 0)
+        var attempts = 0
+        var firstPid: pid_t = 0
+        let session = X264Session<Int>(
+            ffmpeg: "/bin/sleep", width: 320, height: 180, fps: 30, threads: 1, capKbps: 1_000,
+            queue: queue, clock: { DispatchTime.now().uptimeNanoseconds / 1000 },
+            makeProcess: { _, _, onEvent in
+                attempts += 1
+                if attempts == 1 {
+                    let proc = try X264Process(ffmpeg: "/bin/sleep", arguments: ["60"]) { event in
+                        if case .ended = event { firstEnded.signal() }
+                        onEvent(event)
+                    }
+                    firstPid = proc.pid
+                    return proc
+                }
+                throw X264Process.SpawnError.system("posix_spawn", ENOMEM)
+            },
+            onEvent: { _ in }
+        )
+        var started = true
+        queue.sync { started = session.start() }
+        XCTAssertFalse(started)
+        XCTAssertEqual(attempts, 2)
+        XCTAssertGreaterThan(firstPid, 0)
+        XCTAssertEqual(firstEnded.wait(timeout: .now() + 5), .success, "first process must be stopped when second spawn fails")
+        let rc = kill(firstPid, 0)
+        let err = errno
+        XCTAssertEqual(rc, -1)
+        XCTAssertEqual(err, ESRCH)
+    }
+
+    func testMalformedOutputKillsChildAndPostExitStopDoesNotResignal() throws {
+        guard X264Process.canSpawn else { throw XCTSkip("disclaim unavailable") }
+        final class SignalLog: @unchecked Sendable {
+            private let lock = NSLock()
+            private var calls: [(pid_t, Int32)] = []
+            func record(_ pid: pid_t, _ sig: Int32) -> Int32 {
+                lock.withLock { calls.append((pid, sig)) }
+                return Darwin.kill(pid, sig)
+            }
+            func all() -> [(pid_t, Int32)] { lock.withLock { calls } }
+        }
+        let signals = SignalLog()
+        let ended = DispatchSemaphore(value: 0)
+        final class ErrorBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value: Error?
+            func set(_ e: Error?) { lock.withLock { value = e } }
+            func get() -> Error? { lock.withLock { value } }
+        }
+        let box = ErrorBox()
+        let process = try X264Process(ffmpeg: "/bin/echo", arguments: ["RIFF000000000000"], signal: { signals.record($0, $1) }) { event in
+            if case let .ended(err) = event {
+                box.set(err)
+                ended.signal()
+            }
+        }
+        XCTAssertEqual(ended.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(box.get() as? FLVReader.Failure, .notFLV)
+        let beforeStop = signals.all().count
+        XCTAssertEqual(beforeStop, 1, "reader should kill child once on malformed FLV")
+        process.stop()
+        XCTAssertEqual(signals.all().count, beforeStop, "stop() after reap must not signal the PID again")
+    }
+}
 
 /// The real thing, with the ffmpeg named by `PERSONA_TEST_FFMPEG` (e.g. Homebrew's /opt/homebrew/bin/ffmpeg, built with
 /// libx264); skipped without it. Frames go in, come out in order as keyframe-first H.264 the phone's decoder takes

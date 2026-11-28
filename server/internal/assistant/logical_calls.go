@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 func logicalRefusal(ctx context.Context, code string) error {
@@ -186,6 +187,13 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 		}
 		withEpoch = st.WithDrainedConversationEpoch
 	}
+	// The queue may outlive these permissions and dispatch to another physical segment. Its
+	// durable payload and receipt always use the ordinary text prepared by the manager.
+	diagnostic, _ := ctx.Value(agyRelayContextKey{}).(agyRelayContext)
+	withDiagnostic := diagnostic.matches(machine, method, p)
+	if withDiagnostic {
+		p["text"] = diagnostic.plain
+	}
 	dispatched := false
 	err = withEpoch(ctx, machine, id, c.Epoch, func(current *db.LogicalConversation) error {
 		active, ok = current.Active()
@@ -260,7 +268,15 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 							return e
 						}
 					}
-					out, e = json.Marshal(map[string]any{"ok": true, "queued": seen != "accepted" && seen != "rejected", "duplicate": seen != "", "session_id": id, "client_msg_id": client})
+					reply := logicalQueuedReply{OK: true, Queued: seen != "accepted" && seen != "rejected" && seen != db.ConversationInputDismissed, Duplicate: seen != "", SessionID: wireids.SessionID(id), ClientMsgID: wireids.ClientMsgID(client)}
+					if reply.Queued {
+						// Not gone in yet: the sender sees its bubble with why at once (logical_undelivered.go), and so does
+						// every other device from the next snapshot. Never a bare success that then vanishes.
+						kept := s.logicalQueuedMessage(ctx, machine, id, client)
+						reply.Delivered, reply.Undelivered = logicalDeliveredLater, &kept
+						s.publishSoon()
+					}
+					out, e = json.Marshal(reply)
 					s.historyWake()
 					return e
 				}
@@ -281,6 +297,10 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 			}
 		}
 		physical := cloneLogicalParams(p, active)
+		if withDiagnostic && active.MachineID == machine && active.SessionID == id {
+			// This delivery neither queues nor changes the verified recipient, under the same epoch lock.
+			physical["text"] = diagnostic.block + diagnostic.plain
+		}
 		for _, key := range []string{"at_item_id", "answer_again_after"} {
 			if ref, _ := physical[key].(string); ref != "" {
 				source, err := activeLogicalItemID(active, ref)

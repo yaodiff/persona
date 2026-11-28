@@ -96,6 +96,9 @@ const (
 	SessionStartSpeed = "session_start_speed"
 	// SessionStartServiceTier lets session.start apply a native Codex service_tier before the first turn.
 	SessionStartServiceTier = "session_start_service_tier"
+	// SessionStartModelAliases: session.start and session.start.work take model_aliases for a new Claude Code
+	// terminal session. A node without it would drop the requested aliases and run the launcher's models.
+	SessionStartModelAliases = "session_start_model_aliases"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -228,6 +231,10 @@ const (
 	// StartOpID: session.start and session.start.work record op_id on the started session (persisted via state.put)
 	// and answer start.status for reconnect reconciliation of held Agent starts (#10674).
 	StartOpID = "start_op_id_v1"
+	// OrcaBots: the node answers agentbot.roster and agentbot.items, and agentbot.describe / history / send take a
+	// bot_id they resolve to the bot's open Home Chat (docs/integrations/orca.md "Bots found on a computer",
+	// #16891). Without it the manager finds no bots there; endpoints registered by hand work as before.
+	OrcaBots = "orca_bots_v1"
 )
 
 // ResumeWindowSeconds is how long the manager tries to resume a dropped connection that can resume, from when it
@@ -284,6 +291,54 @@ const RestartExitCode = 75
 // TaskWorkspace supports explicit backend-created task workspaces.
 const TaskWorkspace = "task_workspace_v1"
 
+// ScratchWorkspace supports workspace.scratch.prepare, creating or safely reusing a
+// node-managed isolated scratch directory under <persona-data>/scratch/<todo_id> for
+// non-repository task_plan dispatches. Older nodes without it fail clearly instead of
+// falling back to an arbitrary or assistant directory.
+const ScratchWorkspace = "scratch_workspace_v1"
+
+// MethodWorkspaceScratchPrepare is the node RPC method gated by ScratchWorkspace.
+const MethodWorkspaceScratchPrepare = "workspace.scratch.prepare"
+
+// ScratchID is a validated single-segment identifier for a managed scratch directory.
+type ScratchID string
+
+// ScratchWorkspaceRequest is the params for workspace.scratch.prepare.
+type ScratchWorkspaceRequest struct {
+	TodoID ScratchID `json:"todo_id"`
+	DryRun bool      `json:"dry_run,omitempty"`
+}
+
+// ScratchWorkspaceResult is the reply to workspace.scratch.prepare.
+type ScratchWorkspaceResult struct {
+	Path    string `json:"path"`
+	Created bool   `json:"created,omitempty"`
+	Reused  bool   `json:"reused,omitempty"`
+}
+
+// ValidScratchID reports whether id is a safe single path segment for a managed scratch
+// directory: 1-96 ASCII characters starting with a letter or digit, followed by letters,
+// digits, hyphens, or underscores (no dots, separators, whitespace, or control bytes).
+func ValidScratchID(id string) bool {
+	if len(id) == 0 || len(id) > 96 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		isAlnum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if i == 0 {
+			if !isAlnum {
+				return false
+			}
+			continue
+		}
+		if !isAlnum && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 // TaskWorkspaceCapabilities is the reply to task.workspace.capabilities.
 type TaskWorkspaceCapabilities struct {
 	Capability        string `json:"capability"`
@@ -296,7 +351,7 @@ type TaskWorkspaceCapabilities struct {
 const MarkdownCloseout = "closeout.markdown.v1"
 
 // Announced is what a node built from this code announces.
-var Announced = []string{MarkdownCloseout, TaskWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, SessionStartServiceTier, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, SecretRunEnv, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, NodeUpdateDrain, PaneNewSpace, MachineDiagnose, MachineStorageUsage, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, HerdrSessionsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs, StartOpID}
+var Announced = []string{MarkdownCloseout, TaskWorkspace, ScratchWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, SessionStartServiceTier, SessionStartModelAliases, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, SecretRunEnv, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, NodeUpdateDrain, PaneNewSpace, MachineDiagnose, MachineStorageUsage, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, HerdrSessionsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs, StartOpID, OrcaBots}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

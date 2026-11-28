@@ -650,6 +650,43 @@ func TestUsagePollKeepsCodexSamplesWithoutMatchingKeysApart(t *testing.T) {
 	}
 }
 
+func TestUsagePollPreservesStaleCodexRollout(t *testing.T) {
+	now := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+	sampled := now.Add(-31 * time.Minute)
+	reset := now.Add(4 * time.Hour)
+	machine := func(name, accountKey string, readingSource proto.UsageReadingSource, at time.Time, used float64) usageSource {
+		return usageSource{id: name, online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageNodeAccount{{
+				AccountKey: accountKey,
+				UsageAccount: proto.UsageAccount{Provider: "codex", Name: "Codex Pro", ReadingSource: readingSource,
+					SampledAt: at, Windows: []proto.UsageWindow{uw("5h", 300, used, reset)}},
+			}}}, nil
+		}}
+	}
+	sources := []usageSource{machine("Machine A", "account-a", "", now, 13), machine("Machine B", "", "rollout", sampled, 47)}
+	var u usageWindowsHub
+	got := u.poll(t.Context(), sources, now)
+	if len(got) != 2 {
+		t.Fatalf("expected separate live and historical rows, got %+v", got)
+	}
+	live, old := got[0], got[1] // live accounts are sorted before stale readings
+	if live.ReadingSource != "" || live.Stale || !slices.Equal(live.Machines, []string{"Machine A"}) ||
+		old.ReadingSource != "rollout" || !old.Stale || !old.SampledAt.Equal(sampled) ||
+		!slices.Equal(old.Machines, []string{"Machine B"}) || len(old.Windows) != 1 || old.Windows[0].UsedPercent != 47 {
+		t.Fatalf("expected a live account and Machine B's original stale rollout, got %+v", got)
+	}
+
+	// An unambiguously matching extension seat still absorbs local readings for all clients.
+	u.gateways = func(time.Time) []proto.UsageAccount {
+		return []proto.UsageAccount{{Provider: "codex", Name: "Seat", Pass: true, Sources: []string{"Pool"},
+			SampledAt: now, Windows: []proto.UsageWindow{uw("5h", 300, 13, reset)}}}
+	}
+	got = u.poll(t.Context(), sources, now.Add(usageHubFresh+time.Second))
+	if len(got) != 1 || !got[0].Pass || got[0].ReadingSource != "" || !slices.Equal(got[0].Machines, []string{"Machine A", "Machine B"}) {
+		t.Fatalf("expected one extension account for the matching local readings, got %+v", got)
+	}
+}
+
 func TestUsagePollDistinguishesUnidentifiedCodexHomesOnOneMachine(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	sample := func(key string, used float64) proto.UsageNodeAccount {

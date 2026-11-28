@@ -564,9 +564,25 @@ func resolveMergeTrainBlocker(b todoBlockerRecord, facts todoBlockerFactSnapshot
 	var cond struct {
 		MaxAttempts int    `json:"max_attempts"`
 		RepoKey     string `json:"repo_key"`
+		PRURL       string `json:"pr_url"`
 	}
 	if err := decodeTodoBlockerCondition(b.ConditionJSON, &cond); err != nil {
 		return todoBlockerResolution{}, fmt.Errorf("merge_train condition_json: %w", err)
+	}
+	target := strings.TrimSpace(b.TargetRef)
+	prURL := strings.TrimSpace(cond.PRURL)
+	if prURL == "" && strings.Contains(target, "://") &&
+		(strings.Contains(target, "/pull/") || strings.Contains(target, "/merge_requests/")) {
+		prURL = target
+	}
+	if prURL != "" {
+		if pr, ok := lookupTodoBlockerPRFact(facts.PRs, prURL); ok &&
+			(pr.Merged || strings.EqualFold(pr.State, "merged") || strings.EqualFold(pr.State, "closed")) {
+			return todoBlockerResolution{Resolved: true, Reason: "merge_train_pr_cleared"}, nil
+		}
+		// PR-specific rows written by earlier versions counted observations. Only this
+		// PR's status can clear the wait, regardless of the repository's current head.
+		return todoBlockerResolution{Resolved: false, Reason: "merge_train_waiting"}, nil
 	}
 	maxAttempts := cond.MaxAttempts
 	if maxAttempts <= 0 {
@@ -576,7 +592,6 @@ func resolveMergeTrainBlocker(b todoBlockerRecord, facts todoBlockerFactSnapshot
 		return todoBlockerResolution{Resolved: false, Escalate: true, Reason: "merge_train_max_attempts"}, nil
 	}
 
-	target := strings.TrimSpace(b.TargetRef)
 	repoKey := strings.TrimSpace(cond.RepoKey)
 	if repoKey == "" {
 		repoKey = target

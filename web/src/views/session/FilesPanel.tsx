@@ -46,6 +46,16 @@ import { Empty, FileGlyph, GitDot, GitBadge, useStoredFlag } from "./files/parts
 type Listed = { at: string; listing?: FsListing; error?: string };
 type OpenFile = { path: string; line?: number; to?: number };
 
+const NON_TEXT_INPUT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "file", "image", "color"]);
+
+function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target instanceof HTMLInputElement) return !NON_TEXT_INPUT.has(target.type);
+  if (target.closest("textarea, select")) return true;
+  const ce = target.closest("[contenteditable]");
+  return ce ? ce.getAttribute("contenteditable") !== "false" : Boolean((target as HTMLElement).isContentEditable);
+}
+
 export function FilesPanel({
   mid,
   sid,
@@ -168,12 +178,21 @@ export function FilesPanel({
     },
     menu: (x, at, open) => setRowMenu({ scope: ops.scope, x, at, open }),
   };
+  const onSelectEscape = useCallback((e: { key: string; defaultPrevented: boolean; isComposing?: boolean; keyCode?: number; target: EventTarget | null; preventDefault(): void; stopPropagation(): void }) => {
+    if (!selecting || e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+    const panel = splitContainerRef.current?.closest("[data-side-panel]");
+    if (panel && getComputedStyle(panel).display === "none") return;
+    if ([...document.querySelectorAll("[role=dialog],[role=menu],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]"))) return;
+    if (isTextField(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    endSelect();
+  }, [selecting, endSelect]);
   useEffect(() => {
     if (!selecting) return;
-    const key = (e: KeyboardEvent) => e.key === "Escape" && !document.querySelector("[role=dialog],[role=menu]") && endSelect();
-    addEventListener("keydown", key);
-    return () => removeEventListener("keydown", key);
-  }, [selecting, endSelect]);
+    addEventListener("keydown", onSelectEscape);
+    return () => removeEventListener("keydown", onSelectEscape);
+  }, [selecting, onSelectEscape]);
 
   const viewing = open[open.length - 1];
   const treeRoot = dir === "~" && home ? home : dir.startsWith("~/") && home ? home + dir.slice(1) : dir;
@@ -280,6 +299,15 @@ export function FilesPanel({
       ref={splitContainerRef}
       data-files-panel
       data-testid={viewing ? "file-workbench" : undefined}
+      onKeyDown={(e) => onSelectEscape({
+        key: e.key,
+        defaultPrevented: e.defaultPrevented,
+        isComposing: e.nativeEvent.isComposing,
+        keyCode: e.nativeEvent.keyCode,
+        target: e.target,
+        preventDefault: () => e.preventDefault(),
+        stopPropagation: () => e.stopPropagation(),
+      })}
       className={cx("relative flex min-h-0 flex-1 overflow-hidden", splitWorkbench ? "flex-row" : "flex-col")}
     >
       {overlayTree && <div className="absolute inset-0 z-10 bg-black/20" onClick={() => setTreePref(false)} />}

@@ -1,24 +1,12 @@
 # Persona plugin for Claude Code
 
-A Claude Code plugin that lets the owner's own messages from the Persona apps reach a Claude Code session the way
-typed input does, in sessions Persona has no terminal for: Claude's desktop app, a terminal herdr / Orca / Tern do not
-run, a background session. Without it the node can only use Claude Code's peer inbox there, which tells the model the
-words come from another session and that they are not the person's approval (`docs/integrations/claude-integration.md`,
-"Owner input through the Persona plugin").
+In Claude Desktop, background sessions and terminals outside Persona's engines, this plugin delivers the owner's
+messages as typed input. The peer inbox identifies them as coming from another session. See
+`docs/integrations/claude-integration.md`, "Owner input through the Persona plugin".
 
-The plugin polls the local Persona node while its session lives: it submits the owner's messages with
-`$.prompt.submit({ text, asUser: true })` (immediately when idle, or into Claude Code's prompt queue while a turn runs),
-cancels the active main-loop turn via `$.turn.abort({ turnId })` when the owner presses Stop, applies session-scoped
-model / effort picks on main-loop `turn.step` calls when `settings` is advertised, and bridges interactive tool
-permission prompts, `ExitPlanMode`, and `AskUserQuestion` cards through `classic.PermissionRequest` when the node
-explicitly authorizes `permissions: true` on `/poll`. It reads no file but its own manifest and stays quiet when no
-node is running.
-
-On a computer with managed settings, Claude Code's `cc-plugin-sec-default` guard can pass every `classic.*` event over
-the user-tier plugin. Persona does not try to work around that policy: after a main-loop turn uses tools without a
-`classic.PreToolUse` reaching the plugin, the plugin reports `classic_passed_over: true`. The node then keeps permission
-bridging off for that session and the row says to approve on the computer or start the session from Persona in a
-terminal engine. Question cards (`clq_`) are unchanged.
+The plugin polls the local node for messages, Stop, session model and effort choices, and authorized permission,
+plan and question cards. It reports the main loop's effort for Desktop sessions. It reads only its manifest and
+stays quiet when the node is unavailable.
 
 ## Packaging
 
@@ -58,7 +46,7 @@ another session, gets `403`.
 `POST /claude-plugin/v1/poll`
 
 ```json
-{"session_id": "<uuid>", "plugin_version": "0.3.1", "engine_version": "2.1.331", "capabilities": ["busy_input", "interrupt", "settings", "permissions"], "classic_passed_over": true, "wait_ms": 25000}
+{"session_id": "<uuid>", "plugin_version": "0.3.2", "engine_version": "2.1.331", "capabilities": ["busy_input", "interrupt", "settings", "permissions"], "classic_passed_over": true, "wait_ms": 25000}
 ```
 
 - Held until work comes or `wait_ms` passes (at most 25 s; Claude Code's fetch gives up at 30 s), then asked
@@ -71,10 +59,15 @@ another session, gets `403`.
   `permissions: true` is returned only when the session is served by the plugin and not managed by `persona-hooks` or an
   external tmux pane. `retry_ms`, when present, is how long to wait before the next poll: a session the node does not
   deliver to this way (one in a Persona terminal, the assistant's own) is told to come back much later.
+- For a Desktop session, `observed_effort` reports the last main-loop step after session overrides, for example
+  `{"at_ms": 1790000000000, "level": "high"}`. The timestamp belongs to the step. A missing or numeric effort has no
+  named level. An applied `auto` choice remains automatic. A timestamped `reset: true` clears the observation on reload
+  or session change. Subagent steps do not update it. The node uses the observation while the same session and process are
+  live, and compares it with transcript evidence and newer session choices. A machine default is never a readback.
 - `classic_passed_over: true` is sent after a main-loop turn used tools but no `classic.PreToolUse` arrived.
   Claude Code's managed-settings guard can do that to every `classic.*` hook in a user-tier plugin. The node then
   returns no `permissions: true` for that session, refuses direct `/permission` calls with `passthrough`, withdraws any
-  active plugin card, and leaves `clq_` question cards alone. The field is omitted while classic hooks reach the plugin.
+  active plugin card and leaves `clq_` question cards alone. Approve on the computer or start a session in a Persona terminal. The field is omitted while classic hooks reach the plugin.
 - `403 {"error": "not_this_session"}`: the caller is not the claude that has this session open. `404`, or an answer
   that is not HTTP: a node without this protocol. The plugin backs off (up to a minute) and tries again.
 

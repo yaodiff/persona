@@ -122,6 +122,27 @@ func (n *Node) agyPaneStartModel(ctx context.Context, launcher, model, effort st
 // Code. plan never gets here: a read-only start on a work agent is refused (control.go).
 func agyStartMode(mode string) string { return cmp.Or(mode, proto.ModeBypass) }
 
+// agyAutoModeUnavailable reports whether this node's connected Antigravity runtime has advertised a restricted
+// permission_modes set that omits "auto".
+func (n *Node) agyAutoModeUnavailable(launcher string) bool {
+	if n.runtimes == nil {
+		return false
+	}
+	name := cmp.Or(launcher, agyAgent)
+	h := n.runtimes.launcherRuntime(name)
+	if h == nil && name != agyAgent {
+		h = n.runtimes.launcherRuntime(agyAgent)
+	}
+	if h == nil {
+		return false
+	}
+	l, ok := h.launcherNamed(name)
+	if !ok && name != agyAgent {
+		l, ok = h.launcherNamed(agyAgent)
+	}
+	return ok && l.PermissionModes != 0 && !slices.Contains(l.PermissionModes.List(), "auto")
+}
+
 // agyModeFlags are agy's own flags for a permission mode (agy --help: --dangerously-skip-permissions, --mode
 // accept-edits|auto|plan). default is agy's own approval, and "" (a record from before modes were kept) is no flag.
 func agyModeFlags(mode string) string {
@@ -171,6 +192,9 @@ func (n *Node) startWorkAgentWithResume(ctx context.Context, launch host.Launche
 			return nil, err
 		}
 		mode = agyStartMode(mode)
+		if mode == "auto" && n.agyAutoModeUnavailable(launcher) {
+			mode = proto.ModeBypass
+		}
 		n.ensureAgyHooksForLaunch() // agyhooks.go (#13950): ensure hooks exist before agy starts
 	} else {
 		effort, mode = "", ""

@@ -114,15 +114,17 @@ func (realClock) Sleep(ctx context.Context, d time.Duration) error {
 type Service struct {
 	o Options
 
-	mu       sync.Mutex
-	catalogs map[string]catalogEntry
-	reading  map[string]bool // catalogs being read in the background
-	gates    map[string]*gate
-	busy     map[string]bool // connectors whose subscriptions are running now
-	running  int
-	asked    map[string]time.Time // subscriptions asked to run now (due at or after the stored time; zero means immediately)
-	kicked   map[string]time.Time // when a connector's changed event makes each of its subscriptions due (ConnectorChanged)
-	wake     chan struct{}
+	mu        sync.Mutex
+	catalogs  map[string]catalogEntry
+	reading   map[string]bool // catalogs being read in the background
+	gates     map[string]*gate
+	busy      map[string]bool // connectors whose subscriptions are running now
+	running   int
+	retryBusy map[string]bool      // busy connectors whose due work was skipped by startDue; re-poked on worker exit
+	retryCap  bool                 // due connectors skipped because running == maxRunning; re-poked on worker exit
+	asked     map[string]time.Time // subscriptions asked to run now (due at or after the stored time; zero means immediately)
+	kicked    map[string]time.Time // when a connector's changed event makes each of its subscriptions due (ConnectorChanged)
+	wake      chan struct{}
 
 	// Push sources (push.go): one push at a time, and each device's items in the last hour.
 	pushMu sync.Mutex
@@ -165,7 +167,7 @@ func New(o Options) *Service {
 		o.Delivered = func(Subscription) {}
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
-		busy: map[string]bool{}, asked: map[string]time.Time{}, kicked: map[string]time.Time{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
+		busy: map[string]bool{}, retryBusy: map[string]bool{}, asked: map[string]time.Time{}, kicked: map[string]time.Time{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
 }
 
 func (s *Service) now() time.Time { return s.o.Clock.Now().UTC() }

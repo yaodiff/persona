@@ -130,6 +130,22 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 			return nil, nil, err
 		}
 	}
+	// The ordinary runtime inventory is self-reported. Authorize protected
+	// input only for a fresh session ID chosen here or supplied by the manager.
+	var binding *runtimeInputBinding
+	inputSession := p.SessionID
+	if p.Resume == "" && h.reportsInput() {
+		if inputSession == "" {
+			inputSession = newUUID()
+		}
+		if runtimeIDRe.MatchString(inputSession) && !n.hasOwnSession(inputSession) && !n.isAssistantSession(inputSession) {
+			binding = n.runtimes.beginInputStart(h, inputSession)
+			if binding != nil {
+				params["session_id"], params["input_binding"] = inputSession, binding.proof
+				defer n.runtimes.finishInputStart(inputSession, binding)
+			}
+		}
+	}
 	sentAt := time.Now()
 	if p.SessionID != "" && p.Prompt != "" {
 		n.ttft.arm(p.SessionID, sentAt, "")
@@ -153,6 +169,11 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	started, err := n.listStarted(h, s, row.Transcript)
 	if err != nil {
 		return nil, nil, err
+	}
+	if binding != nil && started.SessionID == inputSession {
+		n.runtimes.mu.Lock()
+		binding.confirmed = true
+		n.runtimes.mu.Unlock()
 	}
 	if p.Prompt != "" && started.SessionID != "" && p.SessionID == "" {
 		n.ttft.armIfUnarmed(started.SessionID, sentAt, "")

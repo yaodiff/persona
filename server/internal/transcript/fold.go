@@ -215,9 +215,20 @@ func thinkingPreview(it proto.Item) *proto.Item {
 // Range returns the items of lines fromSeq through throughSeq, at most about limit of them (whole lines); more says
 // the range goes on after the last one. It is how a fold is opened.
 func (f *File) Range(fromSeq, throughSeq, limit int) ([]proto.Item, bool) {
+	items, more, _ := f.RangeSpan(fromSeq, throughSeq, limit)
+	return items, more
+}
+
+// RangeSpan returns the items of lines fromSeq through throughSeq, at most about limit of them (whole lines),
+// whether more lines remain in the range, and the transcript span covering the returned lines.
+func (f *File) RangeSpan(fromSeq, throughSeq, limit int) ([]proto.Item, bool, Span) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.ensureAfter(fromSeq - 1)
+	from := max(0, fromSeq-1)
+	f.ensureAfter(from)
+	if f.base > from {
+		from = f.base
+	}
 	i := sort.Search(len(f.items), func(k int) bool { return f.items[k].Seq >= fromSeq })
 	end := i
 	for end < len(f.items) && f.items[end].Seq <= throughSeq && end-i < limit {
@@ -227,7 +238,16 @@ func (f *File) Range(fromSeq, throughSeq, limit int) ([]proto.Item, bool) {
 		end++
 	}
 	more := end < len(f.items) && f.items[end].Seq <= throughSeq
-	return append([]proto.Item(nil), f.items[i:end]...), more
+	to := min(f.lines, max(0, throughSeq))
+	if more && end > i {
+		to = f.items[end-1].Seq
+	} else if end > i {
+		to = max(to, f.items[end-1].Seq)
+	}
+	if to < from {
+		from = to
+	}
+	return append([]proto.Item(nil), f.items[i:end]...), more, Span{History: f.history(), From: from, To: to}
 }
 
 // TurnWindow returns the surrounding items in f needed to evaluate full turn boundaries for a slice spanning

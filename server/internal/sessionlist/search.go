@@ -1,9 +1,9 @@
 package sessionlist
 
 import (
-	"encoding/json"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -78,8 +78,28 @@ func allowedMachineKey(ids []string) string {
 	ids = slices.Clone(ids)
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
-	data, _ := json.Marshal(ids)
-	return string(data)
+	var b strings.Builder
+	b.WriteByte('1')
+	for _, id := range ids {
+		b.WriteString(strconv.Itoa(len(id)))
+		b.WriteByte(':')
+		b.WriteString(id)
+	}
+	return b.String()
+}
+
+func inAllowedMachines(spelled, machine string) bool {
+	if spelled == "" {
+		return true
+	}
+	for rest := spelled[1:]; rest != ""; {
+		var id string
+		id, rest = lengthPrefixed(rest)
+		if id == machine {
+			return true
+		}
+	}
+	return false
 }
 
 // SearchNeedsPins lets adapters avoid a database read for queries that never
@@ -210,7 +230,11 @@ func (i *Index) searchCandidates(o Options, f filters, allowed map[string]bool, 
 		}
 		row, rowID, side := item, id, ""
 		if fold := item.item.Fold; o.Roots && fold != nil && fold.SearchAs != "" && fold.Root != "" {
-			if (f.NoPrivate || f.AgentsOnly) && item.item.Private || f.AgentsOnly && item.item.Assistant {
+			if (f.NoPrivate || f.AgentsOnly) && item.item.Private ||
+				f.AgentsOnly && item.item.Assistant ||
+				(f.Manager != "" && item.owner != f.Manager) ||
+				(o.AllowedMachines != nil && !allowed[item.item.Machine]) ||
+				(f.ExcludePaneSource != "" && f.ExcludePaneSource == f.paneSource(item.item)) {
 				continue
 			}
 			row, rowID, side = i.items[fold.SearchAs], fold.SearchAs, fold.SearchSession

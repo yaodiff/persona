@@ -193,4 +193,66 @@ describe("UI 6：行内控件", () => {
     expect(acts()).toHaveLength(0);
     expect(sw().getAttribute("aria-checked")).toBe("false");
   });
+
+  it("drops queued follow-up control requests and late side effects after unmount", async () => {
+    await open(page(false));
+    await flip(); // in-flight
+    await flip(); // queued
+    expect(acts()).toHaveLength(1);
+    const firstAct = acts()[0];
+    const drawsBefore = hub.asked.filter((a) => a.kind === "draw").length;
+
+    act(() => root.unmount());
+    await answer(firstAct, { toast: "late", reload: true });
+    expect(acts()).toHaveLength(1);
+    expect(hub.asked.filter((a) => a.kind === "draw")).toHaveLength(drawsBefore);
+    expect(hub.toasts).toEqual([]);
+  });
+
+  it("drops queued follow-up control requests and late reload/toast after switching pages", async () => {
+    await open(page(false));
+    await flip(); // in-flight on ui="home"
+    await flip(); // queued on ui="home"
+    const firstAct = acts()[0];
+
+    await act(async () => root.render(<ExtensionUI extension="demo" ui="other" history={false} />));
+    await settle();
+    const otherDraw = hub.asked.filter((a) => a.kind === "draw").at(-1);
+    await answer(otherDraw, page(false));
+    const drawsBefore = hub.asked.filter((a) => a.kind === "draw").length;
+
+    await answer(firstAct, { toast: "stale", reload: true });
+    expect(acts()).toHaveLength(1);
+    expect(hub.asked.filter((a) => a.kind === "draw")).toHaveLength(drawsBefore);
+    expect(hub.toasts).toEqual([]);
+  });
+
+  it("drops queued control follow-up and late side effects across push -> pop ABA back to the same page", async () => {
+    const pageWithPush = (on: boolean) => ({
+      sections: [{ items: [lamp(on), { type: "row", title: "详情", action: { id: "open-b", push: { state: "b" } } }] }],
+    });
+    await open(pageWithPush(false));
+    await flip(); // in-flight during visit 1
+    await flip(); // queued during visit 1
+    const visit1Act = acts()[0];
+
+    // Push Page B, then pop back to Page A (visit 2 has the exact same pageKey & top.id).
+    const openB = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("详情"))!;
+    await act(async () => openB.click());
+    await settle();
+    await answer(hub.asked.filter((a) => a.kind === "draw").at(-1), page(false));
+
+    const backBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("返回"))!;
+    await act(async () => backBtn.click());
+    await settle();
+    await answer(hub.asked.filter((a) => a.kind === "draw").at(-1), pageWithPush(false));
+    const drawsBefore = hub.asked.filter((a) => a.kind === "draw").length;
+
+    // Visit 1's control finishes now: must NOT fire queued edit, patch view, toast, or reload Visit 2.
+    await answer(visit1Act, { items: [lamp(true)], toast: "aba-stale", reload: true });
+    expect(acts()).toHaveLength(1);
+    expect(hub.asked.filter((a) => a.kind === "draw")).toHaveLength(drawsBefore);
+    expect(hub.toasts).toEqual([]);
+    expect(sw().getAttribute("aria-checked")).toBe("false");
+  });
 });

@@ -70,7 +70,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const ask = openAsk(todo);
   const hasStepAction = todo.part_of && todo.view?.section === "needs_you" && ask && !deferred && !decisionDismissed(todo);
   const head = hasStepAction ? todoStatusLabel(todo, "needs_you") :
-    st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : starting ? t("assistant-tasks.status_starting") : statusWord(st.status, st.wait);
+    st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : starting ? t("assistant-tasks.status_starting") : st.supervisorLabel ?? statusWord(st.status, st.wait);
   const subtitle = [head, chosen ? place({ ...todo, agents: [chosen] }, shown ?? lead) : place(todo, lead)].filter(Boolean).join(" · ");
   const taskItems: MenuItem[] = [
     openInWindow(chosen ? { name: "session", mid: chosen.machine_id, sid: chosen.session_id } : { name: "todos", id: todo.id }),

@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // `personad node doctor` looks at what a node on this machine needs for the sessions Persona starts to reach the
@@ -91,6 +92,9 @@ type DoctorOptions struct {
 	Preflight func(context.Context, i18n.Lang) DoctorCheck
 	// AgyHooksFile is agy's global hooks file (node/agyhooks.go); "" leaves the check out (agy is not here).
 	AgyHooksFile string
+	// Orca says what this machine has of Orca (orcaEngine); nil leaves the orca check out, and so does an Orca that
+	// is not installed.
+	Orca func(context.Context) proto.Engine
 	// Fix writes the generated files again when they are stale or missing, and (outside the node) writes
 	// ProcessType=Interactive into the LaunchAgent and loads it again.
 	Fix bool
@@ -113,6 +117,7 @@ func DefaultDoctorOptions() (DoctorOptions, error) {
 		Dir: dir, Bin: bin,
 		NodeSock: nodeclient.SocketPath(), RuntimeSock: RuntimeSocketPath(), HerdrSock: herdr.SocketPath(),
 		ClaudeConfigDir: claudeDirOf(home), ClaudeVersion: claudeVersion, ClaudeProbe: claudeProbe,
+		Orca: doctorOrca,
 	}
 	if an := (&Node{home: home, dir: dir, bin: bin}); an.agyInstalled() {
 		opts.AgyHooksFile = an.agyHooksFile()
@@ -237,6 +242,11 @@ func doctorChecks(ctx context.Context, opts DoctorOptions) DoctorReport {
 	add(checkCommandPathsIn(opts.Dir, opts.Lang))
 	add(checkClaudeVersionIn(ctx, opts.claudeProbe(), opts.Lang))
 	add(checkHerdrIn(ctx, opts.HerdrSock, opts.Lang))
+	if opts.Orca != nil {
+		if c, ok := checkOrcaIn(ctx, opts.Orca, opts.Lang); ok {
+			add(c)
+		}
+	}
 	add(checkGlobalPermissionHooksIn(opts.ClaudeConfigDir, opts.Dir, opts.Lang))
 	if opts.AgyHooksFile != "" {
 		add(checkAgyHooks(opts))

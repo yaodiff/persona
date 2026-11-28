@@ -3,16 +3,14 @@ package assistant
 import (
 	"context"
 	"errors"
-	"github.com/nwverse/persona/server/internal/closeout"
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -45,9 +43,8 @@ type triageOut struct {
 	Artifacts []proto.WorkArtifact `json:"artifacts"`
 }
 
-// triageTurnModel asks the triage model where c stands after its turn. An answer it cannot read is unsure: a work state
-// with no phase (nothing shown, nothing done; the turn is not triaged again).
-// same: the model says the turn still waits on the very step the user approved (#3824), false when there is none.
+// triageTurnModel settles a structured closeout before asking the model about plain-text replies. An unrecognized
+// model phase leaves the work state unsure. A true same means the model recognized the previously approved wait.
 func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine string, c proto.Session) (w *proto.WorkState, same bool, err error) {
 	ask, reply := s.triageRead(ctx, machine, c)
 	if reply == "" {
@@ -56,17 +53,9 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 	if reply == "" {
 		return &proto.WorkState{}, false, nil
 	}
-	co, coArtifacts, hasCloseout := closeout.Parse(reply)
-	if hasCloseout {
-		s.checkCloseout(ctx, &co, coArtifacts)
-		if closeoutDisproved(co) {
-			// It says merged or deployed and it is not: nobody can call this turn finished. No phase, with the closeout
-			// and what was found kept for whoever looks, and a line naming the claim (unfinished).
-			return unfinished(&proto.WorkState{Closeout: &co, Artifacts: workArtifacts(coArtifacts), By: "rule"}, s.lang(ctx)), false, nil
-		}
-	}
-	if hasCloseout && co.Status == proto.CloseoutDone && !closeoutAsksOwner(co) {
-		return closeoutDone(co, coArtifacts, s.lang(ctx)), false, nil // its own closeout says so: no model
+	if co, artifacts, ok := closeout.Parse(reply); ok {
+		s.checkCloseout(ctx, &co, artifacts)
+		return closeoutWork(co, artifacts, s.lang(ctx)), false, nil
 	}
 	others, byShort := triageOthers(machine, c.SessionID, v.sessions(machine))
 	name := machine
@@ -92,17 +81,10 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 		in.Answered = triageAnswered(records)
 	}
 	hello := s.hello(ctx)
-	w, same, err = judgeTriageWith(ctx, s.purposeModel("agent.triage"), triageJudgeInput{
+	return judgeTriageWith(ctx, s.purposeModel("agent.triage"), triageJudgeInput{
 		System: prompts.AgentTriage{Owner: strings.TrimSpace(hello.Owner), Language: answerLanguage(hello.Locale)},
 		Input:  in, Reply: reply, Others: byShort, Lang: i18n.Lang(hello.Locale).Or(i18n.Default),
 	})
-	if err != nil {
-		return nil, false, err
-	}
-	if hasCloseout {
-		w = unfinished(withCloseout(w, co, coArtifacts), s.lang(ctx))
-	}
-	return w, same, nil
 }
 
 // triageJudgeInput is everything the triage model's answer is judged on, read from the session and the hub
@@ -115,10 +97,8 @@ type triageJudgeInput struct {
 	Lang   i18n.Lang                  // the texts the hub fills in itself
 }
 
-// judgeTriageWith asks m where the stopped turn in stands and applies the hub's rules to what it answers: a question
-// must be an explicit request copied from the reply, and triageWork keeps only what the model may say. same: it waits
-// on the very step the user approved (#3824). It reads nothing else, so a behaviour check can run it on written-out
-// turns (#2586, agents_triage_judge_live_test.go).
+// judgeTriageWith asks the model to classify a stopped turn and select any unanswered user requests. Each question
+// must be copied from the full reply. The same result means the model recognized the wait the user approved (#3824).
 func judgeTriageWith(ctx context.Context, m jsonModel, j triageJudgeInput) (w *proto.WorkState, same bool, err error) {
 	in := j.Input
 	in.Language = j.System.Language // One captured language for both halves of this model call.
@@ -129,7 +109,7 @@ func judgeTriageWith(ctx context.Context, m jsonModel, j triageJudgeInput) (w *p
 	same = out.Wait != nil && out.Wait.Approved && j.Input.ApprovedThen != ""
 	out.Questions = slices.DeleteFunc(out.Questions, func(q proto.Question) bool {
 		text := strings.TrimSpace(q.Question)
-		return text == "" || !strings.Contains(j.Reply, text) || !explicitUserRequest(text)
+		return text == "" || !strings.Contains(j.Reply, text)
 	})
 	return triageWork(out, j.Others, time.Now(), j.Lang), same, nil
 }
@@ -158,33 +138,6 @@ func triageAnswered(records []db.InteractionRecord) []prompts.AgentAnswerItem {
 		}
 	}
 	return answered
-}
-
-// A model may select a request, never turn a statement into one. The prompt handles intent; this checks its evidence.
-var userRequest = lazyre.New(`(?i)^(?:请(?:你|您)?(?:确认|选择|提供|告诉|决定|批准|授权|登录|打开|回复|帮我|在)|麻烦|你决定|需要(?:你|您)(?:确认|选择|提供|决定|批准|授权)|(?:please\s+)?(?:confirm(?:\s+to)?|choose|select|provide|tell|approve|authorize|sign in|log in|open|visit|let me know|reply)\b|(?:確認|選択|承認|入力|ログイン)してください)`) // i18n-ignore: match literal request syntax, not UI text
-var requestAnnotation = lazyre.New(`\s*(?:\([^()\n]*\)|（[^（）\n]*）|\[[^\[\]\n]*\]|【[^【】\n]*】)$`)
-
-func explicitUserRequest(text string) bool {
-	text = strings.TrimSpace(text)
-	if userRequest.MatchString(strings.TrimLeft(text, "*_`\"'「『（(【")) { // i18n-ignore: strip literal Markdown and quotation marks
-		return true
-	}
-	for {
-		// Strip decoration first, but keep parentheses until a trailing annotation has been considered.
-		text = strings.TrimRightFunc(text, func(r rune) bool {
-			return unicode.IsSpace(r) || strings.ContainsRune("*_`\"'」』”’", r) || unicode.Is(unicode.So, r) || // i18n-ignore: literal reply punctuation
-				r == '️' || r == '︎' || r == '‍' || r >= 0x1F3FB && r <= 0x1F3FF
-		})
-		if loc := requestAnnotation.FindStringIndex(text); loc != nil && loc[0] > 0 {
-			text = text[:loc[0]]
-			continue
-		}
-		trimmed := strings.TrimRight(text, "）)】]") // i18n-ignore: literal closing brackets
-		if trimmed == text {
-			return strings.HasSuffix(text, "?") || strings.HasSuffix(text, "？") // i18n-ignore: literal question punctuation
-		}
-		text = trimmed
-	}
 }
 
 // projectsFor are the names of the knowledge base's projects whose directories hold cwd on machine (none when it

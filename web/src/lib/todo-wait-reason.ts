@@ -3,7 +3,7 @@
 import { stateOf } from "./format";
 import { serverWaitReason, waitName, type WaitReason } from "./state-labels";
 import { openMergePRs, triage, waitsOnOwner, type Triage } from "./todo-triage";
-import { agentWaits, heldDelivery, openPRLook, shownStatus, TODO_STATUS_INFO, todoRestLook, todoStatusLabel, type SessionLookup, type Todo, type TodoStatus, type TodoTone } from "./todos";
+import { agentWaits, heldDelivery, openPRLook, shownStatus, TODO_STATUS_INFO, todoRestLook, todoStatusLabel, type SessionLookup, type Todo, type TodoRepoGateLook, type TodoStatus, type TodoTone } from "./todos";
 
 export type { WaitReason, LegacyWaitReason } from "./state-labels";
 
@@ -103,17 +103,17 @@ export function waitTone(r: WaitReason): TodoTone {
 /** A to-do's state word and tone (TODO_TONE_CLASS) as the lists draw them: a waiting one's says what it waits on
  *  (`wait`, from waitOf; none reads as unknown), every other status's are todoStatusLabel's and the tone of `toneOf`'s
  *  TODO_STATUS_INFO, as each list took it before: shownStatus (the To-dos page), or the status itself (the overview). */
-export function todoLook(todo: Todo, status: TodoStatus, wait?: WaitReason, toneOf: TodoStatus = shownStatus(todo, status), now = Date.now()): { label: string; tone: TodoTone } {
+export function todoLook(todo: Todo, status: TodoStatus, wait?: WaitReason, toneOf: TodoStatus = shownStatus(todo, status), now = Date.now(), repoGateLook?: TodoRepoGateLook): { label: string; tone: TodoTone } {
   if (todo.wait != null) {
     if (!todo.done_at && todo.wait.kind === "pr_merge") {
-      return openPRLook(todo, now) ?? { label: waitName("pr_merge"), tone: "idle" };
+      return openPRLook(todo, now, repoGateLook) ?? { label: waitName("pr_merge"), tone: "idle" };
     }
     return { label: waitName(serverWaitReason(todo.wait)), tone: "idle" };
   }
   if (status === "waiting") return { label: waitName(wait ?? "unknown"), tone: waitTone(wait ?? "unknown") };
-  const rest = todoRestLook(todo, status, now);
+  const rest = todoRestLook(todo, status, now, repoGateLook);
   if (rest) return rest;
-  return { label: todoStatusLabel(todo, status, now), tone: TODO_STATUS_INFO[toneOf].tone };
+  return { label: todoStatusLabel(todo, status, now, repoGateLook), tone: TODO_STATUS_INFO[toneOf].tone };
 }
 
 /** A status's word as TODO_STATUS_INFO says it, a waiting one's naming its wait. */

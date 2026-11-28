@@ -144,7 +144,17 @@ func PackageIcon(file, name, id string) ([]byte, error) {
 	var data []byte
 	var b budget
 	read := func(path string, size int64, mode os.FileMode, r io.Reader) error {
-		clean := strings.TrimSuffix(path, "/")
+		if strings.HasPrefix(path, "/") {
+			return ErrIconUnavailable
+		}
+		clean := strings.TrimPrefix(path, "./")
+		clean = strings.TrimSuffix(clean, "/")
+		if clean == "" || clean == "." {
+			if !mode.IsDir() || size != 0 || b.take(0) != nil {
+				return ErrIconUnavailable
+			}
+			return nil
+		}
 		if !inside(clean) || size < 0 || b.take(size) != nil {
 			return ErrIconUnavailable
 		}

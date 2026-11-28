@@ -181,7 +181,7 @@ func TestExpiredQuestionRejectsStaleInvalidAndReadOnlyAnswers(t *testing.T) {
 func TestExpiredQuestionSeveralAndMultipleSelectionStayWhole(t *testing.T) {
 	database := todoTestDB(t)
 	e := newAskTodoEnv(t, database)
-	args := `{"questions":[{"question":"Which work?","options":[{"label":"Docs"},{"label":"Tests"}]},` +
+	args := `{"why_owner":"priority","questions":[{"question":"Which work?","options":[{"label":"Docs"},{"label":"Tests"}]},` +
 		`{"question":"Which clients?","multiSelect":true,"options":[{"label":"Web"},{"label":"Phone"}]}]}`
 	ix, _ := expireRecorded(e, database, args)
 	todo := e.onlyAskTodo()

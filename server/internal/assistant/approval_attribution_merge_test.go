@@ -122,7 +122,7 @@ func TestCodexScreenReplacementRecordsCleared(t *testing.T) {
 	ft.s.fleet.mu.Lock()
 	ft.s.ixMapLocked()[old.ID] = &pending{ix: old, done: make(chan proto.Resolution, 1)}
 	ft.s.fleet.mu.Unlock()
-	replacement := proto.Interaction{ID: "ix_codex_replacement", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, CreatedAt: time.Now().UTC()}
+	replacement := proto.Interaction{ID: "ix_codex_replacement", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, CreatedAt: time.Now().UTC()}
 	raw, err := json.Marshal(map[string]any{"interactions": []proto.Interaction{replacement}})
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +287,7 @@ func TestCodexSameIDReplacementRecordsCleared(t *testing.T) {
 	ft := newFleetTest(t)
 	st := &codexAttributionStore{fleetMem: ft.st}
 	ft.s.setStore(func() Store { return st })
-	first := proto.Interaction{ID: "ix_codex_same_id", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, CreatedAt: time.Now().UTC()}
+	first := proto.Interaction{ID: "ix_codex_same_id", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, CreatedAt: time.Now().UTC()}
 	raw, err := json.Marshal(map[string]any{"interactions": []proto.Interaction{first}})
 	if err != nil {
 		t.Fatal(err)

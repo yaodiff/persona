@@ -54,6 +54,28 @@ class AgentsWorkspaceCatalogTest {
         assertTrue(catalog.rows.value.isEmpty())
     }
 
+    /** Orca's rows feed only the worktree actions (#17054): never the repository rows, kept through a failed read. */
+    @Test fun orcaRowsAreKeptApartFromTheRepositoryRows() = runTest {
+        val orca = AgentWorkspace(machineId = "computer", source = "orca", sourceId = "repo::/code/app", title = "app", cwd = "/code/app")
+        val orcaOnly = orca.copy(machineId = "laptop", sourceId = "repo::/code/web", cwd = "/code/web")
+        val service = PaseoCatalogTestService().apply { rows = listOf(workspace(), orca, orcaOnly, orcaOnly.copy(source = "herdr", sourceId = "w1")) }
+        val catalog = AgentsWorkspaceCatalog()
+        catalog.refresh(service, listOf("computer" to true), orcaOnly = listOf("laptop" to false))
+        assertEquals(listOf("paseo"), catalog.rows.value.map { it.source })
+        assertEquals(listOf(orca.sourceId, orcaOnly.sourceId), catalog.orcaRows.value.map { it.sourceId })
+        // An offline computer's rows are kept but can take nothing.
+        assertEquals(false, catalog.orcaRows.value.single { it.machineId == "laptop" }.available)
+        service.failedSources = setOf("orca")
+        service.complete = false
+        service.rows = listOf(workspace())
+        catalog.refresh(service, listOf("computer" to true), orcaOnly = listOf("laptop" to true))
+        assertEquals(listOf(orca.sourceId), catalog.orcaRows.value.filter { it.machineId == "computer" }.map { it.sourceId })
+        service.failedSources = emptySet()
+        service.complete = true
+        catalog.refresh(service, listOf("computer" to true), orcaOnly = listOf("laptop" to true))
+        assertTrue(catalog.orcaRows.value.isEmpty())
+    }
+
     @Test fun partialReadsRetainOnlyTheFailingSourcesRows() = runTest {
         val paseo = workspace()
         val herdr = paseo.copy(source = "herdr")

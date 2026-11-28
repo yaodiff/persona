@@ -6,7 +6,7 @@ import { startFailure, useFeed } from "../../lib/feed";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { getState, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { dockAgents, isRemovable, mostUrgentAgent, openAsk, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, isRemovable, mostUrgentAgent, openAsk, todoSupervisorLabel, type Todo, type TodoStatus } from "../../lib/todos";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { sessionTitle } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
@@ -75,7 +75,7 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
     const limit = status === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined;
     // what its result waits on from the user (#2056), before its agent's last step
     const verdict = openAsk(todo)?.verdict;
-    const now = failure ?? ask ?? limit ?? verdict ?? progressOf(lead)?.text;
+    const now = failure ?? ask ?? limit ?? todoSupervisorLabel(todo, status, lookup) ?? verdict ?? progressOf(lead)?.text;
     return [where, now].filter(Boolean).join(" · ");
   };
   return (

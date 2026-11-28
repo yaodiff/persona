@@ -179,4 +179,93 @@ final class PhoneScreenTests: XCTestCase {
         XCTAssertTrue(a.matches(PhoneScreenRect(x: 1.5, y: 0, width: 10, height: 11)))
         XCTAssertFalse(a.matches(PhoneScreenRect(x: 3, y: 0, width: 10, height: 10)))
     }
+
+    func testExtremeWidthsNonFiniteGeometryAndScrollReaderAtomicity() throws {
+        // Non-finite viewWidth/viewHeight consistently fall back to ratio 2.
+        XCTAssertEqual(PhoneScreenFit(viewWidth: .infinity, viewHeight: 100).ratio, 2)
+        XCTAssertEqual(PhoneScreenFit(viewWidth: 100, viewHeight: .infinity).ratio, 2)
+
+        // Huge positive/negative widths clamp instead of trapping Int((Double(width) * ratio).rounded()).
+        let fit = PhoneScreenFit(ratio: 2.2)
+        XCTAssertEqual(fit.size(width: Int.max).height, Int.max)
+        XCTAssertEqual(fit.size(width: Int.min).height, Int.min)
+        XCTAssertEqual(PhoneScreenFit.clampedInt(Double(Int.max)), Int.max)
+        XCTAssertEqual(PhoneScreenFit.clampedInt(Double(Int.max).nextDown), Int(Double(Int.max).nextDown))
+        XCTAssertEqual(PhoneScreenFit.clampedInt(Double(Int.min)), Int.min)
+        XCTAssertEqual(PhoneScreenFit.clampedInt(Double(Int.min).nextUp), Int(Double(Int.min).nextUp))
+        XCTAssertEqual(PhoneScreenFit.clampedInt(.infinity), Int.max)
+        XCTAssertEqual(PhoneScreenFit.clampedInt(-.infinity), Int.min)
+        XCTAssertEqual(PhoneScreenFit.clampedInt(.nan), 0)
+
+        // Non-positive current width falls back to baseWidth; huge current clamps to maxWidth.
+        let area = PhoneScreenSize(width: 540, height: 990)
+        XCTAssertEqual(fit.width(toFit: PhoneScreenSize(width: 700, height: 990), in: area, at: 0), fit.baseWidth)
+        XCTAssertEqual(fit.width(toFit: PhoneScreenSize(width: 700, height: 990), in: area, at: Int.max), PhoneScreenFit.maxWidth)
+
+        // Non-finite, zero-area, and negative-dimension rects/tolerances are rejected cleanly.
+        let valid = PhoneScreenRect(x: 0, y: 0, width: 1920, height: 1080)
+        let nanRect = PhoneScreenRect(x: .nan, y: 0, width: 100, height: 100)
+        let overflowRect = PhoneScreenRect(x: 1e308, y: 0, width: 1e308, height: 100)
+        let zeroWidthRect = PhoneScreenRect(x: 100, y: 100, width: 0, height: 100)
+        let zeroHeightRect = PhoneScreenRect(x: 100, y: 100, width: 100, height: 0)
+        let negativeWidthRect = PhoneScreenRect(x: 100, y: 100, width: -50, height: 100)
+        let negativeHeightRect = PhoneScreenRect(x: 100, y: 100, width: 100, height: -50)
+        let ulpCollapsedRect = PhoneScreenRect(x: 1e20, y: 0, width: 1, height: 100)
+        XCTAssertFalse(valid.overlaps(nanRect))
+        XCTAssertFalse(valid.overlaps(overflowRect))
+        XCTAssertFalse(valid.overlaps(zeroWidthRect))
+        XCTAssertFalse(zeroWidthRect.overlaps(valid))
+        XCTAssertFalse(valid.overlaps(zeroHeightRect))
+        XCTAssertFalse(zeroHeightRect.overlaps(valid))
+        XCTAssertFalse(valid.overlaps(negativeWidthRect))
+        XCTAssertFalse(negativeWidthRect.overlaps(valid))
+        XCTAssertFalse(valid.overlaps(negativeHeightRect))
+        XCTAssertFalse(negativeHeightRect.overlaps(valid))
+        XCTAssertFalse(ulpCollapsedRect.overlaps(PhoneScreenRect(x: 0, y: 0, width: 2e20, height: 100)))
+        XCTAssertFalse(valid.matches(valid, tolerance: .nan))
+        XCTAssertFalse(valid.matches(valid, tolerance: -1))
+        XCTAssertFalse(nanRect.matches(nanRect, tolerance: 2))
+        XCTAssertNil(PhoneScreenPlacement.origin(for: PhoneScreenSize(width: 540, height: 950), main: nanRect, others: []))
+        XCTAssertNil(PhoneScreenPlacement.origin(for: PhoneScreenSize(width: 0, height: 950), main: valid, others: []))
+        XCTAssertNil(PhoneScreenPlacement.origin(for: PhoneScreenSize(width: 540, height: 950), main: PhoneScreenRect(x: 0, y: 0, width: 0, height: 100), others: []))
+        // Zero-area and negative-size entries in `others` must not block placement on the right side.
+        let degenerateRightOthers = [
+            PhoneScreenRect(x: 2000, y: 100, width: 0, height: 500),
+            PhoneScreenRect(x: 2000, y: 100, width: 500, height: 0),
+            PhoneScreenRect(x: 2200, y: 100, width: -100, height: 500),
+            PhoneScreenRect(x: 2000, y: 400, width: 500, height: -100),
+        ]
+        XCTAssertEqual(
+            PhoneScreenPlacement.origin(for: PhoneScreenSize(width: 540, height: 950), main: valid, others: degenerateRightOthers).map { [$0.x, $0.y] },
+            [1920, 0]
+        )
+
+        // ScrollRecordReader.push rolls back atomically on a mid-batch decode error, handles non-zero startIndex Data slices, and scales linearly.
+        var reader = ScrollRecordReader()
+        let good = ScrollRecord(kind: .scroll, phase: .changed, momentum: .none, dy: 3.25, dx: -0.5).encoded()
+        var bad = good
+        bad[0] = 0x05 // invalid message type
+        // Buffer first 4 bytes of a valid record, then push 12 valid bytes + 16 invalid bytes -> must throw and keep original 4 bytes intact.
+        XCTAssertEqual(try reader.push(Data(good).prefix(4)), [])
+        XCTAssertThrowsError(try reader.push(Array(good.dropFirst(4)) + bad)) { err in
+            XCTAssertEqual(err as? ScrollRecord.DecodeError, .type(0x05))
+        }
+        // Completing the originally buffered record using a non-zero startIndex Data slice succeeds cleanly.
+        let dataTail = Data(good).dropFirst(4)
+        XCTAssertEqual(dataTail.startIndex, 4)
+        let recovered = try reader.push(dataTail)
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertEqual(recovered[0].dy, 3.25)
+
+        // Large batch (4,000 records = 64 KB) + partial tail decodes linearly and rolls back cleanly on a large invalid push.
+        var bulk = [UInt8]()
+        bulk.reserveCapacity(4_000 * ScrollRecord.size)
+        for _ in 0 ..< 4_000 { bulk.append(contentsOf: good) }
+        XCTAssertEqual(try reader.push(bulk + good.prefix(4)).count, 4_000)
+        XCTAssertThrowsError(try reader.push(Array(good.dropFirst(4)) + bulk + bad)) { err in
+            XCTAssertEqual(err as? ScrollRecord.DecodeError, .type(0x05))
+        }
+        XCTAssertEqual(try reader.push(Data(good).dropFirst(4)).count, 1)
+        XCTAssertEqual(try reader.push(bulk).count, 4_000)
+    }
 }

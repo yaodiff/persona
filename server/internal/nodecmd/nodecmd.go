@@ -7,6 +7,9 @@ package nodecmd
 
 import (
 	_ "github.com/nwverse/persona/server/internal/modules/all/node" // the modules that run on the node (Provider seams)
+	// A command started in a folder that does not answer: `tool` goes on from "/", the rest goes back to the folder
+	// (internal/startdir moves it before Go's os package would wait for the folder; settle decides once os has started).
+	_ "github.com/nwverse/persona/server/internal/startdir/settle"
 
 	"context"
 	"encoding/json"

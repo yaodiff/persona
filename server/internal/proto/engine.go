@@ -60,4 +60,42 @@ type Engine struct {
 	Available bool   `json:"available"`
 	Version   string `json:"version,omitempty"`
 	Note      string `json:"note,omitempty"`
+	// State is what the node found, told apart where Available alone cannot: installed and not running, incompatible,
+	// not there. Only Orca's row says it (#17037); the other rows and older nodes leave it out (EngineStateUnknown).
+	State EngineState `json:"state,omitempty"`
+}
+
+// EventEnginesChanged is the node's notification that what it found of its engines changed since node.info
+// (EnginesChanged): Orca opened or quit (node/orcaengine.go, #17037). The manager takes them into the machine.
+const EventEnginesChanged = "engines.changed"
+
+// EnginesChanged is EventEnginesChanged's params: the engines as node.info would say them now.
+type EnginesChanged struct {
+	Engines []Engine `json:"engines"`
+}
+
+// EngineState is what a node found of an engine on its machine (Engine.State). The clients show Orca's "isn't
+// running" notice for EngineStopped alone; a state this client does not know reads as EngineStateUnknown.
+type EngineState string
+
+const (
+	// EngineStateUnknown: the row does not say (an older node, an engine whose row has no state).
+	EngineStateUnknown EngineState = ""
+	// EngineRunning: it answers with a protocol Persona speaks (Available).
+	EngineRunning EngineState = "running"
+	// EngineStopped: it is installed on the machine and does not answer now (Orca closed).
+	EngineStopped EngineState = "stopped"
+	// EngineIncompatible: it answers, with a protocol Persona does not speak; Version says which it is, Note what to do.
+	EngineIncompatible EngineState = "incompatible"
+	// EngineMissing: it was not found on the machine.
+	EngineMissing EngineState = "missing"
+)
+
+// Known is s, or EngineStateUnknown for a state this build does not know (one from a newer node).
+func (s EngineState) Known() EngineState {
+	switch s {
+	case EngineRunning, EngineStopped, EngineIncompatible, EngineMissing:
+		return s
+	}
+	return EngineStateUnknown
 }

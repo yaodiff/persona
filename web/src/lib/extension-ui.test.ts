@@ -52,6 +52,16 @@ describe("画一页", () => {
     expect(["positive", "caution", "danger", "neutral", "pink", undefined].map(toneOf)).toEqual(["positive", "caution", "danger", "neutral", "neutral", "neutral"]);
     expect([0.72, -1, 3, undefined, Number.NaN, 0.333].map(percent)).toEqual([72, 0, 100, 0, 0, 33.3]);
     expect(isHttps("https://example.com/a")).toBe(true);
+    expect(isHttps("https://example.com/a?email=me@example.com")).toBe(true);
+    expect(isHttps("https://example.com/@user")).toBe(true);
+    expect(isHttps("https://good.example@evil.example/a")).toBe(false);
+    expect(isHttps("https://me:pw@example.com/a")).toBe(false);
+    expect(isHttps("https://:pw@example.com/a")).toBe(false);
+    expect(isHttps("https:/admin")).toBe(false);
+    expect(isHttps("https://@evil.example/a")).toBe(false);
+    expect(isHttps("https://good.example\\@evil.example/a")).toBe(false);
+    expect(isHttps("https://example.com/\x00a")).toBe(false);
+    expect(isHttps("https://example.com/a b")).toBe(false);
     expect(isHttps("http://example.com")).toBe(false);
     expect(isHttps("javascript:alert(1)")).toBe(false);
     expect(isHttps(undefined)).toBe(false);

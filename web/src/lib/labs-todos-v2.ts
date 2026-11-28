@@ -161,7 +161,7 @@ export async function saveTodosV2AttentionPrefs(
   recordState(manager, state, true);
   if (sameManager(manager, shownManager())) {
     patchAssistant(resolved);
-    void refreshTodos();
+    void refreshTodos({ invalidate: patch.todos_v2_fold_children !== undefined });
   }
   return resolved;
 }
@@ -208,11 +208,13 @@ export function todosV2LabsSource(manager: string): ConfigurationSource {
         const state = await api<Settings>("/assistant", { method: "PUT", headers, signal,
           json: { todos_v2: value, expected_todos_v2: expected } });
         if (state.todos_v2 !== value) throw new ConfigurationError("configuration_unavailable");
+        const saved = document(manager, state, true);
         recordState(manager, state);
         if (sameManager(manager, shownManager())) {
           patchAssistant({ todos_v2: state.todos_v2 === true, ...resolveTodosV2AttentionPrefs(state) });
         }
-        return document(manager, state, true);
+        if (state.todos_v2 !== expected) void refreshTodos({ invalidate: true });
+        return saved;
       } catch (e) {
         if (e instanceof ApiError) throw ConfigurationError.fromBody(e.body, e.status);
         throw e;

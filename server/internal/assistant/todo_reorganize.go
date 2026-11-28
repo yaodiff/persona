@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 const maxReorganizeIDs = 100
@@ -45,6 +45,10 @@ func (s *Service) todoReorganizeRoute() {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
 			return
 		}
+		if !s.settings(r.Context()).todosV2On() {
+			apierr.WriteCode(w, http.StatusConflict, "todos_v2_disabled", i18n.Err("assistant-todos.reorganize_requires_v2"))
+			return
+		}
 		if err := s.ensureTodosLoaded(r.Context()); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
@@ -57,9 +61,12 @@ func (s *Service) todoReorganizeRoute() {
 		res, err := s.reorganizeTodos(r.Context(), in)
 		if err != nil {
 			var badReq reorganizeBadRequestError
+			var conflict topologyConflictError
 			switch {
 			case errors.As(err, &badReq):
 				apierr.Write(w, http.StatusBadRequest, err)
+			case errors.As(err, &conflict):
+				apierr.Write(w, http.StatusConflict, err)
 			case errors.Is(err, db.ErrTodoNotFound):
 				apierr.Write(w, http.StatusNotFound, err)
 			default:
@@ -102,95 +109,88 @@ func (s *Service) reorganizeTodos(ctx context.Context, in todoReorganizeRequest)
 		idSet[id] = true
 	}
 
-	// Phase 1: serialize graph validation and persistence under todos.writing so concurrent edits cannot
-	// introduce a part_of cycle between validation and write.
-	s.todos.writing.Lock()
-	affectedIDs, err := s.validateReorganizeLocked(ids, idSet, targetPartOf, targetDirection != nil && in.IncludeChildren)
+	lead := ""
+	if in.TransferSupervision && targetDirection != nil && *targetDirection != "" {
+		if s.isLeader(ctx, *targetDirection) && s.transferTarget(ctx, s.settings(ctx), *targetDirection) == nil {
+			lead = *targetDirection
+			// Keep the assignment and the ensuing routing changes ordered with ordinary transfers.
+			s.supervise.routingMu.Lock()
+			defer s.supervise.routingMu.Unlock()
+		}
+	}
+
+	var transferred []string
+	updated, err := s.writeTodoTopology(ctx, nil, func(w *todoTopologyWrite) error {
+		affected, err := s.validateReorganizeLocked(ids, idSet, targetPartOf, targetDirection != nil && in.IncludeChildren)
+		if err != nil {
+			return err
+		}
+		checkIDs := slices.Clone(affected)
+		if targetPartOf != nil {
+			checkIDs = append(checkIDs, s.todoTopologyAncestors(*targetPartOf)...)
+		}
+		if err := w.lockTodos(ctx, checkIDs); err != nil {
+			return err
+		}
+		w.ledgers = make(map[string]*Supervision)
+		blockers := w.blockers()
+		for _, tid := range affected {
+			cur, ok := s.todoNow(tid)
+			if !ok {
+				return db.ErrTodoNotFound
+			}
+			edit := db.TodoEdit{DirectionID: targetDirection}
+			if targetPartOf != nil && idSet[tid] {
+				edit.PartOf = targetPartOf
+				if cur.PartOf != *targetPartOf && len(cur.After) > 0 {
+					kept := s.filterValidReorganizeAfter(tid, cur.After)
+					if !slices.Equal(kept, cur.After) {
+						edit.After = &kept
+					}
+				}
+			}
+			row, err := w.edit(ctx, cur, edit)
+			if err != nil {
+				return err
+			}
+			if edit.After != nil {
+				if err := writeAfterBlockers(ctx, blockers, cur, row.After, "", nil, w.at); err != nil {
+					return err
+				}
+			}
+			if lead == "" || cur.closedForGood() || cur.Origin == "" || cur.Supervision == nil || cur.Supervision.Supervisor == lead {
+				continue
+			}
+			if w.tx != nil {
+				moved, err := db.TransferTodoSupervisionTx(ctx, w.tx, cur.Supervision.row(tid), lead, w.at)
+				if err != nil {
+					return err
+				}
+				if !moved {
+					return topologyConflictError{err: i18n.Err("assistant-todos.topology_changed")}
+				}
+			}
+			v := cur.Supervision.clone()
+			v.Supervisor, v.SupervisorSource, v.UpdatedAt = lead, "explicit", w.at
+			w.ledgers[tid] = v
+			transferred = append(transferred, tid)
+		}
+		return nil
+	})
 	if err != nil {
-		s.todos.writing.Unlock()
 		return todoReorganizeResponse{}, err
 	}
 
-	now := time.Now().UTC()
-	st := s.todoDB()
-	updated := make([]Todo, 0, len(affectedIDs))
-	updatedIdx := make(map[string]int, len(affectedIDs))
-	var afterChanged []Todo
-
-	for _, tid := range affectedIDs {
-		cur, ok := s.todoNow(tid)
-		if !ok {
-			s.todos.writing.Unlock()
-			return todoReorganizeResponse{}, db.ErrTodoNotFound
-		}
-		var edit db.TodoEdit
-		if targetPartOf != nil && idSet[tid] {
-			p := *targetPartOf
-			edit.PartOf = &p
-			if cur.PartOf != p && len(cur.After) > 0 {
-				kept := s.filterValidReorganizeAfter(tid, cur.After)
-				if !slices.Equal(kept, cur.After) {
-					edit.After = &kept
-				}
-			}
-		}
-		if targetDirection != nil {
-			d := *targetDirection
-			edit.DirectionID = &d
-		}
-
-		var row *db.TodoRow
-		if st != nil {
-			row, err = st.EditTodo(ctx, tid, edit, now)
-			if err != nil {
-				s.todos.writing.Unlock()
-				return todoReorganizeResponse{}, err
-			}
-		} else {
-			r := todoRowOf(cur)
-			edit.Apply(&r, now)
-			row = &r
-		}
-		out, _, _ := s.setTodoRow(tid, *row, nil)
-		updatedIdx[tid] = len(updated)
-		updated = append(updated, out)
-		if edit.After != nil {
-			afterChanged = append(afterChanged, out)
-		}
-	}
-	s.todos.writing.Unlock()
-
-	for _, t := range afterChanged {
-		s.syncAfterBlockers(ctx, t.ID, t.After, "", nil)
-	}
-
-	s.todosChanged(ctx)
-
-	// Phase 2: optional supervision handover. Only when explicitly requested and targeting a non-empty active
-	// direction leader that passes the existing transfer validation. Never interrupts or messages running Agents;
-	// personal or completed to-dos are silently skipped.
-	var transferredIDs []string
-	if in.TransferSupervision && targetDirection != nil && *targetDirection != "" {
-		lead := *targetDirection
-		cfg := s.settings(ctx)
-		if s.isLeader(ctx, lead) && s.transferTarget(ctx, cfg, lead) == nil {
-			for _, tid := range affectedIDs {
-				moved, ok := s.transferReorganizedTodo(ctx, tid, lead)
-				if !ok {
-					continue
-				}
-				transferredIDs = append(transferredIDs, tid)
-				if idx, exists := updatedIdx[tid]; exists {
-					updated[idx] = formatTodo(moved)
-				}
+	// The ledger is durable. These effects retarget work already in the supervision queues.
+	for _, tid := range transferred {
+		if cur, ok := s.todoNow(tid); ok && !cur.closedForGood() && cur.Supervision != nil && cur.Supervision.Supervisor == lead {
+			s.taskCard(ctx, lead, tid, wakeActive)
+			if err := s.transferPendingAsks(ctx, cur); err != nil {
+				s.logf("todo %s: reorganize supervision routing: %v", tid, err)
 			}
 		}
 	}
-
-	return todoReorganizeResponse{
-		Updated:        updated,
-		TransferredIDs: transferredIDs,
-	}, nil
+	return todoReorganizeResponse{Updated: updated, TransferredIDs: transferred}, nil
 }
 
 // validateReorganizeLocked checks that all requested ids exist, validates part_of existence and cycle-freeness
@@ -298,28 +298,4 @@ func (s *Service) filterValidReorganizeAfter(tid string, after []string) []strin
 		kept = append(kept, dep)
 	}
 	return kept
-}
-
-// transferReorganizedTodo hands over supervision of tid to active leader lead if and only if tid is an open,
-// non-personal task with an existing supervision record not already supervised by lead.
-func (s *Service) transferReorganizedTodo(ctx context.Context, tid, lead string) (Todo, bool) {
-	s.supervise.routingMu.Lock()
-	defer s.supervise.routingMu.Unlock()
-
-	cur, ok := s.todoNow(tid)
-	if !ok || cur.closedForGood() || cur.Origin == "" || cur.Supervision == nil {
-		return Todo{}, false
-	}
-	if cur.Supervision.Supervisor == lead {
-		return Todo{}, false
-	}
-	moved, _, err := s.transferTaskLocked(ctx, cur, lead, "")
-	if err != nil {
-		s.logf("todo %s: reorganize supervision transfer to %s: %v", tid, short(lead), err)
-		return Todo{}, false
-	}
-	if latest, ok := s.todoNow(tid); ok {
-		return latest, true
-	}
-	return moved, true
 }

@@ -78,6 +78,8 @@ export function briefBody(it: FeedItem): BriefBody | undefined {
     progress,
     progress_total: num(b.progress_total, progress.length),
     setup: list<BriefSetup>(b.setup).filter((x) => x && typeof x.id === "string" && typeof x.text === "string" && x.text !== ""),
+    deferred_supervision: list<BriefBody["deferred_supervision"][number]>(b.deferred_supervision).filter((x) =>
+      x && typeof x.id === "string" && typeof x.todo_id === "string" && typeof x.title === "string" && typeof x.reason === "string"),
     contributions: list<unknown>(b.contributions).map(readContribution).filter((c): c is BriefContribution => !!c),
   };
 }

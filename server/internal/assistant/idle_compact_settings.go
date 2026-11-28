@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	defaultIdleAutoCompactMinutes = 30
+	defaultIdleAutoCompactMinutes = assistantwire.DefaultAssistantIdleAutoCompactMinutes
 	minIdleAutoCompactMinutes     = 1
 	maxIdleAutoCompactMinutes     = 1440
-	defaultIdleAutoCompactTokens  = 300000
+	defaultIdleAutoCompactTokens  = assistantwire.DefaultAssistantIdleAutoCompactTokens
 	minIdleAutoCompactTokens      = 10000
 	maxIdleAutoCompactTokens      = 10000000
 
@@ -95,11 +95,18 @@ func (s *Service) agyIdleAutoCompactTokens(ctx context.Context) int {
 	return *v
 }
 
+// agyIdleCompactionPolicy is what node.configure carries (agy_idle_compaction). The agy_idle_auto_compact_* settings
+// hold the task Agents to their thresholds; Antigravity assistant conversations (the main chat and the leaders' among
+// them) follow the assistant's own idle_auto_compact_* settings, as Claude Code main chats do (#17260), and the agy
+// switch still turns all of it off.
 func (s *Service) agyIdleCompactionPolicy(ctx context.Context) assistantwire.AgyIdleCompaction {
 	return assistantwire.AgyIdleCompaction{
-		Enabled:       s.agyIdleAutoCompact(ctx),
-		IdleMinutes:   s.agyIdleAutoCompactMinutes(ctx),
-		ContextTokens: s.agyIdleAutoCompactTokens(ctx),
+		Enabled:                s.agyIdleAutoCompact(ctx),
+		IdleMinutes:            s.agyIdleAutoCompactMinutes(ctx),
+		ContextTokens:          s.agyIdleAutoCompactTokens(ctx),
+		AssistantOff:           !s.idleAutoCompact(ctx),
+		AssistantIdleMinutes:   s.idleAutoCompactMinutes(ctx),
+		AssistantContextTokens: s.idleAutoCompactTokens(ctx),
 	}
 }
 

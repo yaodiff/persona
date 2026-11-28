@@ -300,13 +300,14 @@ type journalEntry struct {
 type filters struct {
 	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, UnderMachine, Todo, Waiting, ExcludePaneSource, JustFinished string
 	// Places and Spaces are Options' as placesKey spells them, Providers as
-	// providersKey spells the set: filters stay comparable.
-	Places, Spaces, Providers                                          string
+	// providersKey spells the set, and AllowedMachines as allowedMachineKey
+	// spells the authorization allowlist: filters stay comparable.
+	Places, Spaces, Providers, AllowedMachines                         string
 	Roots, CrossMachineHierarchy, NoPrivate, IncludeHidden, AgentsOnly bool
 }
 
 type binding struct {
-	Search, AllowedMachines string
+	Search string
 	filters
 	Summary bool
 	Since   string

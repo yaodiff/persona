@@ -1,0 +1,526 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "display_row1_sure_named_speaker",
+      "kind": "display",
+      "description": "Row 1: a sure speaker the owner named shows the owner-chosen name, taking precedence over who.",
+      "source": "#17674 Display names (row 1)",
+      "input": {
+        "people": [
+          {"id": "s1", "name": "Ada"}
+        ],
+        "position": {
+          "speaker": "s1",
+          "speaker_unsure": false,
+          "who": "Grace"
+        }
+      },
+      "expected": {
+        "displays": [
+          {"kind": "name", "value": "Ada"}
+        ]
+      }
+    },
+    {
+      "name": "display_row2_sure_unnamed_speaker",
+      "kind": "display",
+      "description": "Row 2: a sure speaker without an owner-chosen name shows its number N (localized as Speaker N / 发言人 N / 話者 N).",
+      "source": "#17674 Display names (row 2)",
+      "input": {
+        "people": [
+          {"id": "s3"}
+        ],
+        "position": {
+          "speaker": "s3",
+          "speaker_unsure": false,
+          "who": "Grace"
+        }
+      },
+      "expected": {
+        "displays": [
+          {"kind": "numbered", "number": 3}
+        ]
+      }
+    },
+    {
+      "name": "display_row3_unsure_speaker_falls_back_to_who",
+      "kind": "display",
+      "description": "Row 3: an unsure speaker falls back to the model-written who.",
+      "source": "#17674 Display names (row 3)",
+      "input": {
+        "people": [
+          {"id": "s2", "name": "Ada"}
+        ],
+        "position": {
+          "speaker": "s2",
+          "speaker_unsure": true,
+          "who": "Grace"
+        }
+      },
+      "expected": {
+        "displays": [
+          {"kind": "who", "value": "Grace"}
+        ]
+      }
+    },
+    {
+      "name": "display_row3_no_speaker_shows_who",
+      "kind": "display",
+      "description": "Row 3: with no speaker attribution, who is shown.",
+      "source": "#17674 Display names (row 3)",
+      "input": {
+        "people": [],
+        "position": {
+          "who": "Grace"
+        }
+      },
+      "expected": {
+        "displays": [
+          {"kind": "who", "value": "Grace"}
+        ]
+      }
+    },
+    {
+      "name": "display_row4_unsure_without_who_shows_none",
+      "kind": "display",
+      "description": "Row 4: an unsure speaker with no who shows no name and no hint.",
+      "source": "#17674 Display names (row 4)",
+      "input": {
+        "people": [
+          {"id": "s2", "name": "Ada"}
+        ],
+        "position": {
+          "speaker": "s2",
+          "speaker_unsure": true
+        }
+      },
+      "expected": {
+        "displays": []
+      }
+    },
+    {
+      "name": "display_row4_neither_speaker_nor_who_shows_none",
+      "kind": "display",
+      "description": "Row 4: no speaker and no who shows nothing.",
+      "source": "#17674 Display names (row 4)",
+      "input": {
+        "people": [],
+        "position": {}
+      },
+      "expected": {
+        "displays": []
+      }
+    },
+    {
+      "name": "display_also_lists_multiple_sure_speakers_and_deduplicates",
+      "kind": "display",
+      "description": "A position with also lists distinct sure speakers in order, deduplicating merged ids and skipping unsure also entries.",
+      "source": "#17674 Display names and The minutes (also)",
+      "input": {
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2"},
+          {"id": "s3", "name": "Grace"},
+          {"id": "s4", "merged_into": "s1"}
+        ],
+        "position": {
+          "speaker": "s1",
+          "speaker_unsure": false,
+          "also": [
+            {"speaker": "s2", "speaker_unsure": false},
+            {"speaker": "s4", "speaker_unsure": false},
+            {"speaker": "s3", "speaker_unsure": true}
+          ]
+        }
+      },
+      "expected": {
+        "displays": [
+          {"kind": "name", "value": "Ada"},
+          {"kind": "numbered", "number": 2}
+        ]
+      }
+    },
+    {
+      "name": "display_also_with_unsure_main_and_who",
+      "kind": "display",
+      "description": "When main is unsure with who and an also entry has a sure speaker, both who and the sure also speaker appear.",
+      "source": "#17674 Display names and The minutes (also)",
+      "input": {
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s3"}
+        ],
+        "position": {
+          "speaker": "s1",
+          "speaker_unsure": true,
+          "who": "Grace",
+          "also": [
+            {"speaker": "s3", "speaker_unsure": false}
+          ]
+        }
+      },
+      "expected": {
+        "displays": [
+          {"kind": "who", "value": "Grace"},
+          {"kind": "numbered", "number": 3}
+        ]
+      }
+    },
+    {
+      "name": "edit_name_trims_and_sets_undo",
+      "kind": "edit",
+      "description": "Naming trims surrounding spaces, increments edits.name, and returns an undo op that clears the name.",
+      "source": "#17674 Field contract and Routes (edit ops)",
+      "input": {
+        "next": 3,
+        "people": [
+          {"id": "s1"},
+          {"id": "s2"}
+        ],
+        "stats": {
+          "s1": [120.0, 10],
+          "s2": [80.0, 8]
+        },
+        "ops": [
+          {"op": "name", "id": "s1", "name": "  Ada  "}
+        ]
+      },
+      "expected": {
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2"}
+        ],
+        "edits": {"name": 1},
+        "undo": [
+          {"op": "name", "id": "s1", "name": ""}
+        ],
+        "verify_undo_roundtrip": true
+      }
+    },
+    {
+      "name": "edit_clear_name_empty_string",
+      "kind": "edit",
+      "description": "An empty name clears both the speaker's name and owner mark, with undo restoring both.",
+      "source": "#17674 Routes (edit ops)",
+      "input": {
+        "next": 2,
+        "people": [
+          {"id": "s1", "name": "Ada", "me": true}
+        ],
+        "stats": {
+          "s1": [120.0, 10]
+        },
+        "ops": [
+          {"op": "name", "id": "s1", "name": ""}
+        ]
+      },
+      "expected": {
+        "people": [
+          {"id": "s1"}
+        ],
+        "edits": {"name": 1},
+        "undo": [
+          {"op": "name", "id": "s1", "name": "Ada", "me": true}
+        ],
+        "verify_undo_roundtrip": true
+      }
+    },
+    {
+      "name": "edit_same_name_auto_merges_less_into_more_and_undo",
+      "kind": "edit",
+      "description": "Giving s2 (90s) the name s1 (300s) already has automatically merges s2 into s1; undo unmerges s2 and restores its old name Grace.",
+      "source": "#17674 Field contract (automatic merge and undo)",
+      "input": {
+        "next": 3,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "name": "Grace"}
+        ],
+        "stats": {
+          "s1": [300.0, 20],
+          "s2": [90.0, 6]
+        },
+        "ops": [
+          {"op": "name", "id": "s2", "name": "Ada"}
+        ]
+      },
+      "expected": {
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "merged_into": "s1"}
+        ],
+        "edits": {"name": 1},
+        "undo": [
+          {"op": "unmerge", "id": "s2"},
+          {"op": "name", "id": "s2", "name": "Grace"}
+        ],
+        "verify_undo_roundtrip": true
+      }
+    },
+    {
+      "name": "edit_same_name_auto_merges_more_absorbs_existing_holder_and_undo",
+      "kind": "edit",
+      "description": "When the newly named speaker s2 (400s) spoke more than existing holder s1 (60s), s1 merges into s2; undo restores s2's name before unmerging and renaming s1.",
+      "source": "#17674 Field contract (automatic merge and undo)",
+      "input": {
+        "next": 3,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "name": "Grace"}
+        ],
+        "stats": {
+          "s1": [60.0, 4],
+          "s2": [400.0, 30]
+        },
+        "ops": [
+          {"op": "name", "id": "s2", "name": "Ada"}
+        ]
+      },
+      "expected": {
+        "people": [
+          {"id": "s1", "merged_into": "s2"},
+          {"id": "s2", "name": "Ada"}
+        ],
+        "edits": {"name": 1},
+        "undo": [
+          {"op": "name", "id": "s2", "name": "Grace"},
+          {"op": "unmerge", "id": "s1"},
+          {"op": "name", "id": "s1", "name": "Ada"}
+        ],
+        "verify_undo_roundtrip": true
+      }
+    },
+    {
+      "name": "edit_manual_merge_clears_minor_and_unmerge_returns_unnamed",
+      "kind": "edit",
+      "description": "Manually merging minor speaker s2 into normal speaker s1 clears minor on s2 and records unmerge as undo.",
+      "source": "#17674 Field contract (merge and minor)",
+      "input": {
+        "next": 3,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "minor": true}
+        ],
+        "stats": {
+          "s1": [120.0, 10],
+          "s2": [12.0, 2]
+        },
+        "ops": [
+          {"op": "merge", "from": "s2", "into": "s1"}
+        ]
+      },
+      "expected": {
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "merged_into": "s1"}
+        ],
+        "edits": {"merge": 1},
+        "undo": [
+          {"op": "unmerge", "id": "s2"}
+        ],
+        "verify_undo_roundtrip": true
+      }
+    },
+    {
+      "name": "edit_unmerge_returns_unnamed_and_restores_minor",
+      "kind": "edit",
+      "description": "Unmerging returns the speaker unnamed and re-evaluates its minor status from stats (12s < 20s becomes minor again).",
+      "source": "#17674 Field contract (unmerge and minor)",
+      "input": {
+        "next": 3,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "merged_into": "s1"}
+        ],
+        "stats": {
+          "s1": [120.0, 10],
+          "s2": [12.0, 2]
+        },
+        "ops": [
+          {"op": "unmerge", "id": "s2"}
+        ]
+      },
+      "expected": {
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "minor": true}
+        ],
+        "edits": {"unmerge": 1},
+        "undo": [
+          {"op": "merge", "from": "s2", "into": "s1"}
+        ],
+        "verify_undo_roundtrip": true
+      }
+    },
+    {
+      "name": "edit_merge_flattens_children_no_chains",
+      "kind": "edit",
+      "description": "Merging s2 (which already absorbed s3) into s1 reparents s3 directly to s1 so merged_into never chains; undo restores the original tree and s2's name.",
+      "source": "#17674 Field contract (no merge chains)",
+      "input": {
+        "next": 4,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "name": "Grace"},
+          {"id": "s3", "merged_into": "s2"}
+        ],
+        "stats": {
+          "s1": [200.0, 15],
+          "s2": [100.0, 8],
+          "s3": [40.0, 3]
+        },
+        "ops": [
+          {"op": "merge", "from": "s2", "into": "s1"}
+        ]
+      },
+      "expected": {
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "merged_into": "s1"},
+          {"id": "s3", "merged_into": "s1"}
+        ],
+        "edits": {"merge": 1},
+        "undo": [
+          {"op": "unmerge", "id": "s2"},
+          {"op": "unmerge", "id": "s3"},
+          {"op": "merge", "from": "s3", "into": "s2"},
+          {"op": "name", "id": "s2", "name": "Grace"}
+        ],
+        "verify_undo_roundtrip": true
+      }
+    },
+    {
+      "name": "edit_merge_into_merged_target_flattens_no_chain",
+      "kind": "edit",
+      "description": "Merging s3 into s2 (already merged into s1) resolves s2 to s1 so merged_into points directly to s1 without chaining.",
+      "source": "#17674 Field contract (no merge chains)",
+      "input": {
+        "next": 4,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "merged_into": "s1"},
+          {"id": "s3"}
+        ],
+        "stats": {
+          "s1": [200.0, 15],
+          "s2": [40.0, 3],
+          "s3": [50.0, 4]
+        },
+        "ops": [
+          {"op": "merge", "from": "s3", "into": "s2"}
+        ]
+      },
+      "expected": {
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "merged_into": "s1"},
+          {"id": "s3", "merged_into": "s1"}
+        ],
+        "edits": {"merge": 1},
+        "undo": [
+          {"op": "unmerge", "id": "s3"}
+        ],
+        "verify_undo_roundtrip": true
+      }
+    },
+    {
+      "name": "edit_clear_empties_list_with_no_undo",
+      "kind": "edit",
+      "description": "clear removes all speakers, increments edits.clear, and returns an empty undo list.",
+      "source": "#17674 Routes (edit ops: clear)",
+      "input": {
+        "next": 3,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "name": "Grace"}
+        ],
+        "stats": {
+          "s1": [100.0, 8],
+          "s2": [80.0, 6]
+        },
+        "ops": [
+          {"op": "clear"}
+        ]
+      },
+      "expected": {
+        "people": [],
+        "edits": {"clear": 1},
+        "undo": [],
+        "verify_undo_roundtrip": false
+      }
+    },
+    {
+      "name": "edit_name_over_100_runes_rejected",
+      "kind": "edit",
+      "description": "A name longer than 100 Unicode code points is rejected as invalid.",
+      "source": "#17674 Field contract (name limit)",
+      "input": {
+        "next": 2,
+        "people": [
+          {"id": "s1"}
+        ],
+        "stats": {
+          "s1": [100.0, 8]
+        },
+        "ops": [
+          {"op": "name", "id": "s1", "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+        ]
+      },
+      "expected": {
+        "error": "invalid",
+        "error_code": "recordingspeakers.name.too_long"
+      }
+    },
+    {
+      "name": "edit_name_exactly_100_runes_accepted",
+      "kind": "edit",
+      "description": "A name of exactly 100 Unicode code points is accepted.",
+      "source": "#17674 Field contract (name limit boundary)",
+      "input": {
+        "next": 2,
+        "people": [
+          {"id": "s1"}
+        ],
+        "stats": {
+          "s1": [100.0, 8]
+        },
+        "ops": [
+          {"op": "name", "id": "s1", "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+        ]
+      },
+      "expected": {
+        "people": [
+          {"id": "s1", "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+        ],
+        "edits": {"name": 1},
+        "undo": [
+          {"op": "name", "id": "s1", "name": ""}
+        ],
+        "verify_undo_roundtrip": true
+      }
+    },
+    {
+      "name": "edit_name_multiline_rejected",
+      "kind": "edit",
+      "description": "A name containing a newline is rejected as invalid.",
+      "source": "#17674 Field contract (one-line name)",
+      "input": {
+        "next": 2,
+        "people": [
+          {"id": "s1"}
+        ],
+        "stats": {
+          "s1": [100.0, 8]
+        },
+        "ops": [
+          {"op": "name", "id": "s1", "name": "Ada\nGrace"}
+        ]
+      },
+      "expected": {
+        "error": "invalid",
+        "error_code": "recordingspeakers.name.multiline"
+      }
+    }
+  ]
+}

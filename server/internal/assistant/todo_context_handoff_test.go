@@ -156,8 +156,9 @@ func TestTodoContextHandoffClaudeToCodexAndProfileSwitch(t *testing.T) {
 			ctx := context.Background()
 			setSettings(t, e.s, func(v *Settings) { enabled := true; v.AgentTasks = &enabled })
 
-			// Even with user_requested=true and readonly=false, a cross-launcher continuation must wait
-			// for explicit owner approval on the plan card rather than auto-starting.
+			e.s.mainPlansWait = false
+			// The main conversation may select another provider as part of its existing dispatch
+			// authority. user_requested records provenance; it is not an extra Start requirement.
 			args, _ := json.Marshal(map[string]any{
 				"tasks": []map[string]any{{
 					"title":          "Continue auth fix on " + tc.targetLauncher,
@@ -176,20 +177,17 @@ func TestTodoContextHandoffClaudeToCodexAndProfileSwitch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("toolTaskPlan: %v", err)
 			}
-			if !strings.Contains(planRes, "nothing has started") {
-				t.Fatalf("cross-launcher continuation auto-started without owner approval: %s", planRes)
-			}
-			if len(e.f.starts) != 0 {
-				t.Fatalf("started before owner approval: %d", len(e.f.starts))
+			if !strings.Contains(planRes, "without asking") {
+				t.Fatalf("authorized cross-launcher continuation waited for Start: %s", planRes)
 			}
 
 			planID := planIDRe.FindString(planRes)
 			if planID == "" {
 				t.Fatalf("no plan id in response: %s", planRes)
 			}
-			// Owner explicitly approves and starts the plan.
-			if _, err := e.s.startPlan(ownerStart(ctx), planID, nil, false); err != nil {
-				t.Fatalf("startPlan: %v", err)
+			// Repeating the already-started plan must not dispatch or inject the handoff twice.
+			if _, err := e.s.startPlan(ctx, planID, nil, false); !errors.Is(err, errPlanNotOpen) {
+				t.Fatalf("repeated start must reject the closed plan: %v", err)
 			}
 			waitFor(t, "replacement agent linked", func() bool {
 				return len(todoNow(e.s, todo.ID).Agents) == 2 && e.s.taskStarting.Load() == 0
@@ -966,7 +964,7 @@ func TestTodoContextHandoffPlanContinuationOrderingGuards(t *testing.T) {
 			t.Fatalf("expected permission escalation refusal when omitted launcher resolves to codex, got: %v", err)
 		}
 
-		// Omitted permission & launcher must wait for owner approval and preserve predecessor permission.
+		// The supervisor may use the resolved launcher while preserving predecessor permission.
 		okArgs, _ := json.Marshal(map[string]any{
 			"tasks": []map[string]any{{
 				"title":          "Continue via omitted launcher",
@@ -983,8 +981,8 @@ func TestTodoContextHandoffPlanContinuationOrderingGuards(t *testing.T) {
 		if err != nil {
 			t.Fatalf("toolTaskPlan: %v", err)
 		}
-		if !strings.Contains(planRes, "nothing has started") {
-			t.Fatalf("cross-provider continuation with omitted launcher auto-started without owner approval: %s", planRes)
+		if strings.Contains(planRes, "nothing has started") {
+			t.Fatalf("resolved launcher continuation waited for Start: %s", planRes)
 		}
 		plan, err := e.s.loadPlan(ctx, planIDRe.FindString(planRes))
 		if err != nil {
@@ -1047,8 +1045,8 @@ func TestTodoContextHandoffPlanContinuationOrderingGuards(t *testing.T) {
 		if err != nil {
 			t.Fatalf("toolTaskPlan: %v", err)
 		}
-		if !strings.Contains(planRes, "nothing has started") {
-			t.Fatalf("swapped-launcher continuation auto-started without owner approval: %s", planRes)
+		if strings.Contains(planRes, "nothing has started") {
+			t.Fatalf("swapped launcher continuation waited for Start: %s", planRes)
 		}
 		plan, err := e.s.loadPlan(ctx, planIDRe.FindString(planRes))
 		if err != nil {
@@ -1675,7 +1673,7 @@ func TestTodoContextHandoffSameEngineCrossMachineAutoStart(t *testing.T) {
 		}
 	})
 
-	t.Run("safety_invariants_and_cross_provider_still_enforced_on_cross_machine_continuation", func(t *testing.T) {
+	t.Run("safety_invariants_and_provider_authority_on_cross_machine_continuation", func(t *testing.T) {
 		e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "default", proto.Session{
 			SessionID: "agent01",
 			Status:    proto.StatusIdle,
@@ -1731,7 +1729,7 @@ func TestTodoContextHandoffSameEngineCrossMachineAutoStart(t *testing.T) {
 			t.Fatalf("owner_step continuation auto-started: %s", ownerRes)
 		}
 
-		// 3) Cross-machine AND cross-provider (claude -> codex) still requires explicit owner Start card.
+		// 3) Cross-machine AND cross-provider choice is also within the main supervisor's authority.
 		crossProvArgs, _ := json.Marshal(map[string]any{
 			"tasks": []map[string]any{{
 				"title":          "Switch to codex on box2",
@@ -1749,9 +1747,13 @@ func TestTodoContextHandoffSameEngineCrossMachineAutoStart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("toolTaskPlan cross-provider: %v", err)
 		}
-		if !strings.Contains(crossRes, "nothing has started") {
-			t.Fatalf("cross-provider cross-machine continuation auto-started: %s", crossRes)
+		if strings.Contains(crossRes, "nothing has started") {
+			t.Fatalf("authorized provider continuation waited for Start: %s", crossRes)
 		}
+
+		waitFor(t, "cross-provider replacement linked", func() bool {
+			return len(todoNow(e.s, todo.ID).Agents) == 2 && e.s.taskStarting.Load() == 0
+		})
 
 		// 4) Non-orchestrator (ordinary conversation) moving across machines on same launcher still waits for Start.
 		e.sessions("box",
@@ -1792,4 +1794,140 @@ func TestTodoContextHandoffSameEngineCrossMachineAutoStart(t *testing.T) {
 			t.Fatalf("ordinary conversation cross-machine continuation auto-started: %s", ordRes)
 		}
 	})
+}
+
+// Launcher selection belongs to the supervisor's existing dispatch authority. These are the three
+// observed switch shapes, including provenance-only user_requested and a read-only retry. No new
+// owner permission, duplicate to-do or unaudited handoff may result from that choice.
+func TestTodoContextHandoffAuthorizedLauncherSwitches(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		source   string
+		agent    string
+		target   string
+		readonly bool
+		mixed    bool
+	}{
+		{name: "gateway_to_agy", source: "gateway-claude", agent: "claude", target: "agy"},
+		{name: "codex_gateway_to_agy", source: "gateway-codex", agent: "codex", target: "agy"},
+		{name: "agy_to_claude", source: "agy", agent: "agy", target: "claude"},
+		{name: "readonly_plan_retry", source: "gateway-claude", agent: "claude", target: "agy", readonly: true},
+		{name: "mixed_new_and_continuations", source: "gateway-claude", agent: "claude", target: "agy", mixed: true},
+	} {
+		for _, leader := range []bool{false, true} {
+			for _, requested := range []bool{false, true} {
+				name := tc.name
+				if leader {
+					name += "/leader"
+				} else {
+					name += "/main"
+				}
+				if requested {
+					name += "/user_requested"
+				}
+				t.Run(name, func(t *testing.T) {
+					e, todo, brief := setupHandoffFixture(t, nil, tc.source, tc.agent, "bypassPermissions", proto.Session{
+						SessionID: "agent01", Status: proto.StatusIdle, State: proto.StateIdle,
+					})
+					e.s.mainPlansWait = false
+					if leader {
+						setSettings(t, e.s, func(v *Settings) { v.Main, v.Leaders = "other-main", []string{"m1"} })
+					}
+					e.f.launcherList = append(e.f.launcherList,
+						proto.Launcher{Name: "gateway-claude", Agent: "claude"},
+						proto.Launcher{Name: "gateway-codex", Agent: "codex"},
+						proto.Launcher{Name: "agy", Agent: "agy", Source: proto.HostAgy},
+					)
+					ctx := context.Background()
+					continued := map[string]any{
+						"title": "Continue the refresh fix", "prompt": "Finish the regression test.",
+						"machine": "box", "cwd": "/code/app", "launcher": tc.target,
+						"continues": todo.ID, "continues_why": "Use an available launcher",
+						"user_requested": requested, "role": "worker",
+					}
+					if tc.readonly {
+						continued["readonly"], continued["permission"] = true, "plan"
+					}
+					tasks := []map[string]any{continued}
+					wantTodos := 1
+					if tc.mixed {
+						second, err := e.s.createTaskTodo(ctx, "Check refresh diagnostics", "Inspect diagnostics.", "m1", "", "")
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, err := e.s.putTaskBrief(ctx, briefRecord{StartedBy: briefByOwner, Conversation: "m1", Goal: "Inspect diagnostics", DoneWhen: []string{"diagnosis recorded"}}, second.ID); err != nil {
+							t.Fatal(err)
+						}
+						if err := e.s.linkTodoAgent(ctx, second.ID, "box", "agent02", second.Title, "/code/diagnostics", "codex"); err != nil {
+							t.Fatal(err)
+						}
+						e.sessions("box",
+							proto.Session{SessionID: "agent01", MachineID: "box", Cwd: "/code/app", Launcher: tc.source, Agent: tc.agent, PermissionMode: "bypassPermissions", Status: proto.StatusIdle, State: proto.StateIdle},
+							proto.Session{SessionID: "agent02", MachineID: "box", Cwd: "/code/diagnostics", Launcher: "gateway-codex", Agent: "codex", PermissionMode: "default", Status: proto.StatusIdle, State: proto.StateIdle},
+						)
+						tasks = append(tasks, map[string]any{
+							"title": second.Title, "prompt": "Continue diagnostics.", "machine": "box", "cwd": "/code/diagnostics",
+							"launcher": "agy", "continues": second.ID, "continues_why": "Use an available launcher", "role": "worker",
+						}, map[string]any{
+							"title": "Independent verification", "prompt": "Verify refresh behavior.", "goal": "Verify refresh behavior",
+							"done_when": []string{"verification recorded"}, "machine": "box", "cwd": "/code/verification", "launcher": "claude", "role": "worker",
+						})
+						wantTodos = 3
+					}
+					raw, err := json.Marshal(map[string]any{"tasks": tasks})
+					if err != nil {
+						t.Fatal(err)
+					}
+					res, err := e.s.toolTaskPlan(ctx, "m1", raw)
+					if err != nil || !strings.Contains(res, "without asking") {
+						t.Fatalf("authorized switch did not auto-start: %s %v", res, err)
+					}
+					planID := planIDRe.FindString(res)
+					waitFor(t, "authorized plan dispatched", func() bool {
+						return len(todoNow(e.s, todo.ID).Agents) == 2 && e.s.taskStarting.Load() == 0
+					})
+					plan, err := e.s.loadPlan(ctx, planID)
+					if err != nil || plan.State != planStarted {
+						t.Fatalf("plan not started: %+v %v", plan, err)
+					}
+					for _, task := range plan.Tasks {
+						if task.Error != "" {
+							t.Fatalf("dispatch failed: %+v", task)
+						}
+						if task.Continues == "" {
+							continue
+						}
+						h := e.s.latestTodoContextHandoff(ctx, task.TodoID)
+						if task.TodoID != task.Continues || h == nil || h.ID != task.HandoffID || h.OperationID != task.HandoffOperationID || h.DeliveryStatus != handoffDeliveryAccepted || len(h.SourceRanges) == 0 || h.DiffRef == nil {
+							t.Fatalf("continuation audit broken: task=%+v handoff=%+v", task, h)
+						}
+					}
+					if tc.readonly && (!plan.Tasks[0].Readonly || plan.Tasks[0].Permission != "plan") {
+						t.Fatalf("read-only retry lost its constraint: %+v", plan.Tasks[0])
+					}
+					if kept, ok := e.s.briefOfTodo(todo.ID); !ok || kept.ID != brief.ID {
+						t.Fatalf("brief lost: %+v", kept)
+					}
+					// Retrying the same plan must not create another todo, replacement or audit record.
+					if _, err := e.s.startPlan(ctx, planID, nil, false); !errors.Is(err, errPlanNotOpen) {
+						t.Fatalf("repeated start must reject the closed plan: %v", err)
+					}
+					if todoCount(e.s) != wantTodos || len(taskStartMachines(e.f)) != len(tasks) || len(todoNow(e.s, todo.ID).Agents) != 2 {
+						t.Fatalf("duplicate dispatch: todos=%d starts=%v", todoCount(e.s), taskStartMachines(e.f))
+					}
+					if handoffs, err := e.s.listTodoContextHandoffs(ctx, todo.ID); err != nil || len(handoffs) != 1 {
+						t.Fatalf("duplicate audit: %+v %v", handoffs, err)
+					}
+					for _, push := range e.f.pushed() {
+						if push.CardID == planID {
+							t.Fatalf("authorized continuation produced owner push: %+v", push)
+						}
+					}
+					if c := cardsToday(t, e.s)[cardPlanWaiting]; c.N != 0 {
+						t.Fatalf("category-zero plan was emitted: %+v", c)
+					}
+				})
+			}
+		}
+	}
 }

@@ -50,7 +50,7 @@ func TestNodeCardsArePlacedInTheConversationsDirectory(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ask := func(id, session, cwd string) {
-		ix := proto.Interaction{ID: id, SessionID: session, Cwd: cwd, Kind: proto.IxPermission, ToolName: "Bash",
+		ix := proto.Interaction{ID: id, SessionID: session, Cwd: cwd, Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 			ExpiresAt: time.Now().Add(time.Hour)}
 		params, _ := json.Marshal(map[string]any{"interaction": ix})
 		go func() { _, _, _ = ft.s.NodeRequest(ctx, "mac", "interaction.create", params) }()

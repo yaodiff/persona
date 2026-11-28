@@ -193,5 +193,8 @@
   "handoff_decision_drop_leads": "什么都不发，这个问题就此放下。",
   "handoff_decision_cost": "{sender} 还在等答复。",
   "handoff_reply_header": "{sender} 问：{question}",
-  "handoff_reply_footer": "由 {owner} 的 AI 助手代答，仅供参考。"
+  "handoff_reply_footer": "由 {owner} 的 AI 助手代答，仅供参考。",
+  "guest_cot_step": "正在使用 {tool}",
+  "guest_cot_done": "完成",
+  "guest_cot_failed": "失败"
 }

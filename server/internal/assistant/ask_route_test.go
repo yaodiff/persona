@@ -975,7 +975,7 @@ func TestAskWithoutLeadersRoutesSupervisedAsksToMain(t *testing.T) {
 			e.s.fleet.mu.Unlock()
 			confirmOut := proto.Interaction{
 				ID: "ix_confirm_outbound", MachineID: "mac", SessionID: "worker-1", Kind: proto.IxPermission,
-				ToolName: "agent_send", Summary: "Hand off sensitive details", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+				ToolName: "agent_send", OwnerProposal: true, Summary: "Hand off sensitive details", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 			}
 			e.s.cardAsks.Store(confirmOut.ID, cardConfirmOutbound)
 			t.Cleanup(func() { e.s.cardAsks.Delete(confirmOut.ID) })
@@ -1044,9 +1044,9 @@ func TestAskWithoutLeadersRoutesSupervisedAsksToMain(t *testing.T) {
 					res: proto.Resolution{Action: "decline"},
 				},
 				{
-					name: "main_own_permission",
+					name: "main_owner_only_permission",
 					ix: proto.Interaction{
-						ID: "ix_main_own", MachineID: "server", SessionID: "conv1", Kind: proto.IxPermission,
+						ID: "ix_main_own", MachineID: "server", SessionID: "conv1", Kind: proto.IxPermission, OwnerProposal: true,
 						ToolName: "Bash", Summary: "go test ./...", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 					},
 					res: proto.Resolution{Allow: &allow},
@@ -1058,9 +1058,9 @@ func TestAskWithoutLeadersRoutesSupervisedAsksToMain(t *testing.T) {
 					ix   proto.Interaction
 					res  proto.Resolution
 				}{
-					name: "bg_own_permission",
+					name: "background_owner_only_permission",
 					ix: proto.Interaction{
-						ID: "ix_bg_own", MachineID: "server", SessionID: "bg1", Kind: proto.IxPermission,
+						ID: "ix_bg_own", MachineID: "server", SessionID: "bg1", Kind: proto.IxPermission, OwnerProposal: true,
 						ToolName: "Bash", Summary: "go test ./...", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 					},
 					res: proto.Resolution{Allow: &allow},

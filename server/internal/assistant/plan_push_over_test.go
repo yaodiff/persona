@@ -23,13 +23,13 @@ func TestPlanWaitingReceiptWhenOwnerIsPresent(t *testing.T) {
 	}
 }
 
-// A plan card's push stands for the card: it carries the plan as its card, and once the card is decided anywhere
+// A real owner-step plan card's push stands for the card: it carries the plan as its card, and once the card is decided anywhere
 // (Don't start here) the manager tells the hub it is over, so the push leaves the phones it went to. Start on a card
 // already decided answers with the plan as it is, as Don't start does.
 func TestPlanPushIsTakenBackOnceDecided(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
-	if _, err := s.toolTaskPlan(ctx, "side1", planArgs(false)); err != nil {
+	if _, err := s.toolTaskPlan(ctx, "side1", planArgsWithStep(t, ownerStepMoney)); err != nil {
 		t.Fatal(err)
 	}
 	pushed := f.pushed()

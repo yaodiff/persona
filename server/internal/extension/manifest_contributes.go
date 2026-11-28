@@ -241,8 +241,12 @@ func (m *Manifest) Providers() []ProviderItem {
 
 // Channels are the plugin's contributions to channel.
 func (m *Manifest) Channels() []channel.Item {
+	raw := m.Contributes["channel"]
+	if len(raw) == 0 {
+		return nil
+	}
 	var out []channel.Item
-	_ = json.Unmarshal(m.Contributes["channel"], &out)
+	_ = json.Unmarshal(raw, &out)
 	return out
 }
 

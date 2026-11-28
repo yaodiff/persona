@@ -439,3 +439,7 @@ inside JSON, including both the action and the task ID in a `manage_task` kill.
 
 A one-shot timer can report its firing through a system message whose `sender` is the task ID. Use the message
 step's creation time for completion. Cron iterations and heartbeat messages leave the schedule active.
+
+- Terminal Codex paginated history needs the database originator and CLI source to include its running turn. Keep the
+  old-schema sidebar fallback, decode compressed rollout metadata as a stream, and bump the projection cache version
+  when adding item types so existing history rebuilds instead of retaining dropped items (#17768).

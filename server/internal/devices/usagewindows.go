@@ -409,7 +409,7 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 			continue
 		}
 		acct := proto.UsageAccount{Provider: newest.Provider, Name: newest.Name, Plan: newest.Plan, SampledAt: newest.SampledAt,
-			Problem: newest.Problem, CodexAccountKey: newest.CodexAccountKey, Balance: newest.Balance}
+			Problem: newest.Problem, CodexAccountKey: newest.CodexAccountKey, Balance: newest.Balance, ReadingSource: newest.ReadingSource}
 		// A gateway's name is one somebody gave the account; the machines only know "Codex Pro".
 		naming := -1
 		for i, m := range members {

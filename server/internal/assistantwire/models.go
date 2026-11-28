@@ -179,6 +179,14 @@ var modelRoutes = []string{
 	"GET /api/v1/model-config/providers/{id}/models",
 	"PATCH /api/v1/model-config/purposes/{id}",
 	"PUT /api/v1/model-config/purposes/{id}",
+	"GET /api/v1/execution/channels", // the four dimensions' channels and matrix (execution_routes.go)
+	"PUT /api/v1/execution/channels/{name}",
+	"DELETE /api/v1/execution/channels/{name}",
+	"POST /api/v1/execution/channels/rollback",
+	"GET /api/v1/execution/catalog",
+	"POST /api/v1/execution/validate",
+	"GET /api/v1/assistant/conversations/{id}/model/last-good", // a conversation's last known good execution (execution_lastgood.go)
+	"POST /api/v1/assistant/conversations/{id}/model/restore",
 	"GET /api/v1/launchers",
 	"GET /api/v1/launchers/presets",
 	"POST /api/v1/launchers/test",
@@ -192,6 +200,7 @@ var modelRoutes = []string{
 	"PUT /api/v1/launchers/{name}",
 	"DELETE /api/v1/launchers/{name}",
 	"POST /api/v1/launchers/{name}/check",
+	"POST /api/v1/launchers/{name}/refresh-key", // ask a key's provider extension again (launcher_secrets.go)
 	"GET /api/v1/launchers/health",
 	"POST /api/v1/launchers/health/check",
 	"POST /api/v1/launchers/{name}/restore",

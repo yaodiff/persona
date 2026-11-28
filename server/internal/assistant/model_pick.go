@@ -47,11 +47,16 @@ type modelPick struct {
 	Model     string    `json:"model,omitempty"`
 	Effort    string    `json:"effort,omitempty"`
 	At        time.Time `json:"at"`
+	// Runtime and Channel are what the pick was asked for in (docs/assistant/execution-spec.md), when it was: the
+	// launcher is the alias that runs them.
+	Runtime string `json:"runtime,omitempty"`
+	// Channel: see Runtime.
+	Channel string `json:"channel,omitempty"`
 }
 
 // wire is the pick as the apps get it.
 func (p modelPick) wire() *proto.ModelPick {
-	return &proto.ModelPick{Launcher: p.Launcher, Model: p.Model, Effort: p.Effort}
+	return &proto.ModelPick{Launcher: p.Launcher, Model: p.Model, Effort: p.Effort, Runtime: p.Runtime, Channel: p.Channel}
 }
 
 // modelPickBook is the book in memory. m is replaced, never changed in place, so a reader keeps the one it took; mu
@@ -382,6 +387,13 @@ func refusePick(status int, err error) error { return &pickError{status: status,
 // lang is the app's, for the refusals that are worded here.
 func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.ModelPick, lang i18n.Lang) (modelPick, error) {
 	in.Launcher, in.Model, in.Effort = strings.TrimSpace(in.Launcher), strings.TrimSpace(in.Model), strings.TrimSpace(in.Effort)
+	in.Runtime, in.Channel = strings.TrimSpace(in.Runtime), strings.TrimSpace(in.Channel)
+	if in.Runtime != "" || in.Channel != "" {
+		var err error
+		if in, err = s.projectPick(ctx, sid, machine, in); err != nil {
+			return modelPick{}, refusePick(http.StatusBadRequest, err)
+		}
+	}
 	switch {
 	case in.Launcher == "":
 		return modelPick{}, refusePick(http.StatusBadRequest, i18n.Err("assistant-model_pick.err_launcher_required"))
@@ -428,7 +440,8 @@ func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.M
 			return modelPick{}, refusePick(http.StatusBadRequest, err)
 		}
 	}
-	p := modelPick{MachineID: machine, Launcher: in.Launcher, Model: in.Model, Effort: in.Effort, At: time.Now().UTC()}
+	p := modelPick{MachineID: machine, Launcher: in.Launcher, Model: in.Model, Effort: in.Effort, At: time.Now().UTC(),
+		Runtime: in.Runtime, Channel: in.Channel}
 	if err := s.setModelPick(ctx, sid, &p); err != nil {
 		return modelPick{}, err
 	}
@@ -556,7 +569,8 @@ func storedPickRefused(err error) bool {
 		proto.CodeLauncherMissing, assistantwire.CodeLauncherOtherKind, CodeBadRequest}, re.Code)
 }
 
-// modelPickRoutes: PUT /api/v1/assistant/conversations/{id}/model {launcher, model?, effort?, machine_id?} keeps the pick
+// modelPickRoutes: PUT /api/v1/assistant/conversations/{id}/model {launcher | runtime?+channel?, model?, effort?,
+// machine_id?} keeps the pick
 // ({ok, model_pick}); DELETE there drops it (the conversation follows the default again; {ok}).
 func (s *Service) modelPickRoutes() {
 	s.handle("PUT /api/v1/assistant/conversations/{id}/model", func(w http.ResponseWriter, r *http.Request) {

@@ -127,6 +127,7 @@ export struct SettingsPage {
     const current = (): boolean => this.mounted && this.active && this.page === 'appearance' && this.appearanceRevision === revision &&
       this.model === owner && owner.owns(generation, scope) && pairing === owner.pairingRevision();
     const context = this.getUIContext().getHostContext(); if (!context) return;
+    this.model.loadNextSuggestions().catch(() => undefined);
     try { await this.look.initialize(context as common.UIAbilityContext); }
     catch (_) { if (current()) this.look.error = 'device_look_storage_failed'; return; }
     if (!current()) return;
@@ -869,7 +870,7 @@ export struct SettingsPage {
         Row({space:10}) {
           Button({type:ButtonType.Normal}) {
             Row({space:7}) { SymbolGlyph(Symbols.plus).fontSize(16).fontColor([Colors.link]); Text(tr('create')).fontSize(15).fontWeight(FontWeight.Medium).fontColor(Colors.link) }
-          }.height(38).padding({left:13,right:13}).borderRadius(18).backgroundColor(Colors.surface).bindMenu(this.scheduleCreateMenu).id('schedules.create')
+          }.height(38).padding({left:13,right:13}).borderRadius(Tokens.radiusCapsule).backgroundColor(Colors.surface).bindMenu(this.scheduleCreateMenu).id('schedules.create')
           Blank().layoutWeight(1)
           Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.refresh).fontSize(16).fontColor([Colors.ink]) }
             .width(38).height(38).padding(0).backgroundColor(Colors.surface).accessibilityText(tr('refresh'))
@@ -881,7 +882,7 @@ export struct SettingsPage {
         ListItem() {
           Column() {
             Row({space:10}) {
-              Stack() { SymbolGlyph(Symbols.calendar).fontSize(18).fontColor([Colors.teal]) }.width(32).height(32).backgroundColor(Colors.control).borderRadius(8)
+              Stack() { SymbolGlyph(Symbols.calendar).fontSize(18).fontColor([Colors.teal]) }.width(32).height(32).backgroundColor(Colors.control).borderRadius(Tokens.radiusControl)
               Column({space:4}) {
                 Text(binding.value.title).fontSize(17).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(2)
                 if (binding.value.detail || Wire.text(binding.value.raw,'last_status'))
@@ -902,7 +903,7 @@ export struct SettingsPage {
         ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('run_started') }) })
       }.onClick(() => { const target = this.management.scheduleReceiptChat(this.model); if (target) this.onChat(target); }).id('schedule.receipt')
       if (!this.management.rows.length && !this.management.loading && !this.management.error)
-        ListItem() { Text(tr('phone_no_schedules')).fontSize(15).fontColor(Colors.secondary).padding(16).width('100%').backgroundColor(Colors.surface).borderRadius(14) }
+        ListItem() { Text(tr('phone_no_schedules')).fontSize(15).fontColor(Colors.secondary).padding(16).width('100%').backgroundColor(Colors.surface).borderRadius(Tokens.radiusCard) }
       if (this.scheduleRunBindings.length) ListItem() { PhoneSectionTitle({text:tr('phone_history')}) }
       ForEach(this.scheduleRunBindings, (binding: BoundRow<ManagementRow>) => {
         ListItem() {
@@ -912,7 +913,7 @@ export struct SettingsPage {
               Text([Wire.text(binding.value.raw,'status'),this.scheduleTime(Wire.text(binding.value.raw,'at') || Wire.text(binding.value.raw,'due'))].filter((v:string) => !!v).join(' · ')).fontSize(13).fontColor(Colors.secondary)
             }.alignItems(HorizontalAlign.Start).layoutWeight(1)
             SymbolGlyph(Symbols.expand).fontSize(13).fontColor([Colors.secondary])
-          }.padding(13).width('100%').backgroundColor(Colors.surface).borderRadius(12)
+          }.padding(13).width('100%').backgroundColor(Colors.surface).borderRadius(Tokens.radiusCard)
         }.id('schedule.run.' + binding.value.id)
           .onClick(() => { const target = this.management.scheduleRunChat(this.model, binding.value); if (target) this.onChat(target); })
       }, (binding: BoundRow<ManagementRow>) => binding.key)
@@ -1462,6 +1463,34 @@ export struct SettingsPage {
                 .onSelect(this.appearanceSelector('group', this.appearanceRevision)).id('appearance.agent-grouping')
             } else LoadingProgress().width(Tokens.touch).height(Tokens.touch).accessibilityText(tr('loading'))
           }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+          if (this.model.nextSuggestionsValue !== null) {
+            Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+            Row({ space: Tokens.inset }) {
+              Column({ space: Tokens.fine }) {
+                Text(tr('next_suggestions_title'))
+                  .fontSize(Tokens.body)
+                  .maxFontScale(Tokens.interfaceFontMaxScale)
+                  .fontColor(Colors.ink)
+                  .width('100%')
+                Text(tr('next_suggestions_note'))
+                  .fontSize(Tokens.caption)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
+                  .fontColor(Colors.secondary)
+                  .width('100%')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Toggle({ type: ToggleType.Switch, isOn: this.model.nextSuggestionsValue === true })
+                .selectedColor(Colors.action)
+                .enabled(!this.model.nextSuggestionsSaving && (this.model.connected || this.model.demo))
+                .onChange((value: boolean) => {
+                  if (this.model.nextSuggestionsValue !== null && value !== this.model.nextSuggestionsValue) {
+                    Haptics.selection();
+                    this.model.setNextSuggestions(value).catch(() => undefined);
+                  }
+                })
+                .accessibilityText(tr('next_suggestions_title'))
+                .id('appearance.next-suggestions')
+            }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine })
+          }
           if (this.model.agentsDisplaySupported) {
             Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
             Row({ space: Tokens.inset }) {

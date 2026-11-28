@@ -101,7 +101,14 @@ describe("a brief item", () => {
   });
 
   it("draws a link only when it is a web address", () => {
-    draw(item(body({ waiting: [{ id: "ix1", title: "一个问题", waited_s: 60, link: "javascript:alert(1)" }, { id: "ix2", title: "另一个", waited_s: 60, link: "https://hub.example/s/box/ag2" }] })));
+    draw(item(body({
+      waiting: [
+        { id: "ix1", title: "一个问题", waited_s: 60, link: "javascript:alert(1)" },
+        { id: "ix2", title: "另一个", waited_s: 60, link: "https://hub.example/s/box/ag2" },
+        { id: "ix3", title: "带凭据", waited_s: 60, link: "https://user:pass@hub.example/s/box/ag3" },
+        { id: "ix4", title: "反斜杠", waited_s: 60, link: "https://evil.example\\@hub.example/s/box/ag4" },
+      ],
+    })));
     expect([...host.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["https://hub.example/s/box/ag2"]);
   });
 
@@ -236,7 +243,7 @@ describe("a brief item", () => {
     drawDecision({ id: "todo_stopped", title: "Demo rollout", outcome: "decide", recommend: "Stage it", waited_s: 60, asked_at: ASKED });
     const take = [...rows("accept")[0].querySelectorAll("button")].find((b) => b.textContent === "采用推荐")!;
     await act(async () => take.click());
-    expect(host.querySelector("[data-brief-accepted=recorded]")?.textContent).toBe("已记录。Agent 已停止运行，将由督办接手处理。");
+    expect(host.querySelector("[data-brief-accepted=recorded]")?.textContent).toBe("已记录。没能送到 Agent，将由督办接手转交");
   });
 
   it("a round that is over (409) says it was handled; another failure keeps the button for a retry", async () => {

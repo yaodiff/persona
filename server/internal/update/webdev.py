@@ -666,6 +666,8 @@ def inventory(request):
     hub = json.loads((runtime / "hub.json").read_text())
     databases = [request.get("hub_database") or hub["database_url"]]
     roots = [runtime]
+    kb_roots = set()
+    assistant_configured_kb = False
     # Include every local manager, not just the built-in one. Missing/malformed
     # configuration is an error rather than silently omitting its history.
     manager_root = runtime / "managers"
@@ -686,7 +688,15 @@ def inventory(request):
             kb = manager.get("kb_dir")
             if kb:
                 kb = Path(kb).expanduser()
-                roots.append((file.parent / kb).resolve(strict=True))
+                resolved_kb = (file.parent / kb).resolve(strict=True)
+                roots.append(resolved_kb)
+                kb_roots.add(resolved_kb)
+                if file.parent.name == "assistant":
+                    assistant_configured_kb = True
+            elif file.parent.name != "assistant":
+                kb_roots.add(file.parent / "data")
+    if not assistant_configured_kb:
+        kb_roots.add(runtime / "data")
     backup = request["config"]["backup"]
     roots += [Path(p).expanduser().resolve(strict=True) for p in backup.get("extra_roots", [])]
     databases += backup.get("extra_databases", [])
@@ -701,7 +711,7 @@ def inventory(request):
     # Contained roots are already archived, and duplicate databases are dumped once.
     roots = sorted(set(roots), key=lambda p: (len(p.parts), str(p)))
     roots = [p for i, p in enumerate(roots) if not any(p.is_relative_to(q) for q in roots[:i])]
-    return runtime, roots, list(dict.fromkeys(databases)), excluded
+    return runtime, roots, list(dict.fromkeys(databases)), excluded, sorted(kb_roots)
 
 
 class ConninfoOption(ctypes.Structure):
@@ -775,9 +785,25 @@ def dump_database(target, env, progress, before):
     return size
 
 
-def history_entries(roots, excluded):
+def is_meeting_audio_path(path, kb_roots):
+    # Match server/internal/recordingwire.IsMeetingAudioPath:
+    # <kb>/recordings/<id>/attachments/audio[/...] holds ephemeral hub-mode
+    # meeting audio that is deleted after final minutes are written.
+    for kb_root in kb_roots:
+        try:
+            parts = path.relative_to(kb_root).parts
+        except ValueError:
+            continue
+        if (len(parts) >= 4 and parts[0] == "recordings" and
+                parts[1] not in ("", ".", "..") and
+                parts[2] == "attachments" and parts[3] == "audio"):
+            return True
+    return False
+
+
+def history_entries(roots, excluded, kb_roots=()):
     def walk(path, name):
-        if path in excluded:
+        if path in excluded or is_meeting_audio_path(path, kb_roots):
             return
         info = path.lstat()
         yield path, name, info
@@ -819,12 +845,12 @@ def write_history_symlinks(archive, links, by_name):
         archive.addfile(info)
 
 
-def archive_history(roots, excluded, target, progress):
+def archive_history(roots, excluded, target, progress, kb_roots=()):
     # The metadata-only pass skips the same subtrees as the archive pass.
     # Counters track regular files and uncompressed bytes entering the archive.
     size = count = 0
     linked_inodes = set()
-    for _, _, info in history_entries(roots, excluded):
+    for _, _, info in history_entries(roots, excluded, kb_roots):
         if stat.S_ISREG(info.st_mode):
             if info.st_nlink > 1:
                 inode = (info.st_dev, info.st_ino)
@@ -839,7 +865,7 @@ def archive_history(roots, excluded, target, progress):
     links = {}
     root_paths = {f"root-{i}": str(root).rstrip("/") + "/" for i, root in enumerate(roots)}
     with tarfile.open(target, "w:gz", dereference=False, copybufsize=1024 * 1024) as archive:
-        for path, name, _ in history_entries(roots, excluded):
+        for path, name, _ in history_entries(roots, excluded, kb_roots):
             info = archive.gettarinfo(str(path), name)
             if info is None:
                 continue
@@ -878,7 +904,7 @@ def archive_history(roots, excluded, target, progress):
 def backup_preflight(request):
     backup = request["config"]["backup"]
     builtin = backup.get("builtin") is True
-    runtime, roots, databases, excluded = inventory(request)
+    runtime, roots, databases, excluded, kb_roots = inventory(request)
     database_envs = [database_environment(database) for database in databases]
     # The Hub pauses its own writers and says so (builtin); otherwise the
     # configured hooks must pause every writer this snapshot includes.
@@ -914,11 +940,11 @@ def backup_preflight(request):
             if stat.S_ISDIR(stale.lstat().st_mode):
                 shutil.rmtree(stale)
                 print("development backup: removed an incomplete snapshot from an earlier attempt", flush=True)
-        yield excluded, roots, databases, database_envs, store, resolved_store, retain
+        yield excluded, roots, databases, database_envs, store, resolved_store, retain, kb_roots
 
 
 def preflight(request):
-    with backup_preflight(request) as (_, _, _, _, store, _, _):
+    with backup_preflight(request) as (_, _, _, _, store, _, _, _):
         # An existing writable lock does not prove we can create a snapshot.
         with tempfile.TemporaryDirectory(prefix=".incomplete-", dir=store):
             return {}
@@ -996,7 +1022,7 @@ def snapshot(request, progress=None):
     progress.step("preflight")
     # Recheck under the same lock held through publication. The build and idle
     # wait may have taken place since the early preflight released it.
-    with backup_preflight(request) as (excluded, roots, databases, database_envs, store, resolved_store, retain):
+    with backup_preflight(request) as (excluded, roots, databases, database_envs, store, resolved_store, retain, kb_roots):
         coordination = store / "coordination-pending.json"
         ident = "snapshot-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S%f") + "-" + request["candidate"]["commit"][:12]
         if not NAME.fullmatch(ident):
@@ -1023,7 +1049,7 @@ def snapshot(request, progress=None):
                     run(backup["quiesce"], timeout=60)
                     # A writer could have changed a configured root since preflight.
                     # Decide exclusions against the configuration we actually archive.
-                    _, paused_roots, paused_databases, excluded = inventory(request)
+                    _, paused_roots, paused_databases, excluded, kb_roots = inventory(request)
                     if paused_roots != roots or paused_databases != databases:
                         raise ValueError("backup inventory changed while pausing writers")
                 # Hooks must stop every DB/file writer in this snapshot's scope,
@@ -1046,7 +1072,7 @@ def snapshot(request, progress=None):
                     excluded.add(store)
                     excluded.add(resolved_store)
                 print("development backup: configuration and history files", flush=True)
-                archive_history(roots, excluded, temporary / "files.tar.gz", progress)
+                archive_history(roots, excluded, temporary / "files.tar.gz", progress, kb_roots)
                 # Effective environment overrides can differ from hub.json. Keep
                 # restore DSNs only in this private backup, never in its manifest/API.
                 write_json(temporary / "effective-databases.json", databases)

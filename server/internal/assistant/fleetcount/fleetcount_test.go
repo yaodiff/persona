@@ -257,6 +257,7 @@ func (r *told) VisitOwnRow()                  { r.add("own_row") }
 func (r *told) VisitUnder(under agentref.Ref) { r.add("under"); r.under = under }
 func (r *told) VisitStands()                  { r.add("stands") }
 func (r *told) VisitForm()                    { r.add("form") }
+func (r *told) VisitDisplayCopy()             { r.add("display_copy") }
 func (r *told) VisitTold()                    { r.add("told") }
 func (r *told) VisitUntold()                  { r.add("untold") }
 func (r *told) VisitForTheOwner()             { r.add("for_the_owner") }
@@ -265,6 +266,7 @@ func (r *told) VisitHeldBySupervisor()        { r.add("held_by_supervisor") }
 func (r *told) VisitBadge()                   { r.add("badge") }
 func (r *told) VisitLiveActivity()            { r.add("live_activity") }
 func (r *told) VisitLink()                    { r.add("link") }
+func (r *told) VisitPersonaCards()            { r.add("persona_cards") }
 func (r *told) VisitHeld()                    { r.add("held") }
 
 // Every closed set tells each of its values to its visitor, the one way a caller maps it; a placement under another
@@ -290,7 +292,7 @@ func TestEveryClosedSetTellsItsValues(t *testing.T) {
 	for _, x := range []fleetcount.Placement{fleetcount.PlacementOwnRow(), fleetcount.PlacementUnder(lead)} {
 		x.Accept(&got)
 	}
-	for _, x := range []fleetcount.CardStanding{fleetcount.CardStandingStands(), fleetcount.CardStandingForm()} {
+	for _, x := range []fleetcount.CardStanding{fleetcount.CardStandingStands(), fleetcount.CardStandingForm(), fleetcount.CardStandingDisplayCopy()} {
 		x.Accept(&got)
 	}
 	for _, x := range []fleetcount.Telling{fleetcount.TellingTold(), fleetcount.TellingUntold()} {
@@ -299,15 +301,15 @@ func TestEveryClosedSetTellsItsValues(t *testing.T) {
 	for _, x := range []fleetcount.Holding{fleetcount.HoldingForTheOwner(), fleetcount.HoldingHeldByPersona(), fleetcount.HoldingHeldBySupervisor()} {
 		x.Accept(&got)
 	}
-	for _, x := range []fleetcount.Surface{fleetcount.SurfaceBadge(), fleetcount.SurfaceLiveActivity(), fleetcount.SurfaceLink()} {
+	for _, x := range []fleetcount.Surface{fleetcount.SurfaceBadge(), fleetcount.SurfaceLiveActivity(), fleetcount.SurfaceLink(), fleetcount.SurfacePersonaCards()} {
 		x.Accept(&got)
 	}
 	for _, x := range []fleetcount.Why{fleetcount.WhyNeedsYou(), fleetcount.WhyHeld(), fleetcount.WhyMuted(), fleetcount.WhyQuiet()} {
 		x.Accept(&got)
 	}
 	const want = "working needs_you finished idle worker assistant root subtask heard muted listed quiet hidden_by_directory " +
-		"own_row under stands form told untold for_the_owner held_by_persona held_by_supervisor badge live_activity link " +
-		"needs_you held muted quiet"
+		"own_row under stands form display_copy told untold for_the_owner held_by_persona held_by_supervisor " +
+		"badge live_activity link persona_cards needs_you held muted quiet"
 	if line := strings.Join(got.names, " "); line != want {
 		t.Errorf("Accept told\n%s\nwant\n%s", line, want)
 	}
@@ -330,7 +332,7 @@ func TestTheCoreOwnsItsArrays(t *testing.T) {
 // A tally says which surface's rows it is, so what renders one surface's rows can refuse another's; the zero Tally is
 // on none.
 func TestATallyIsOnTheSurfaceItWasDecidedFor(t *testing.T) {
-	surfaces := []fleetcount.Surface{fleetcount.SurfaceBadge(), fleetcount.SurfaceLiveActivity(), fleetcount.SurfaceLink()}
+	surfaces := []fleetcount.Surface{fleetcount.SurfaceBadge(), fleetcount.SurfaceLiveActivity(), fleetcount.SurfaceLink(), fleetcount.SurfacePersonaCards()}
 	for _, on := range surfaces {
 		tally := fleetcount.AgentsNeedsYou(on, fleetcount.NewAgents(nil), fleetcount.NewCards(nil))
 		for _, other := range surfaces {
@@ -476,4 +478,41 @@ func TestTheAgentsListFoldsAndOrders(t *testing.T) {
 	}
 	expect(t, tally(t, fleetcount.SurfaceBadge(), agents, cards),
 		"agent 2 by card 3 held\nagent 3 muted since 09:03\ncard 2 needs_you\nagent 0 by card 0 needs_you\nunder 1\ntotal 2")
+}
+
+func TestPersonaCardsCountEachCardByItsAskingSession(t *testing.T) {
+	agents := []agent{
+		{session: "persona", i: 0, state: fleetcount.StateIdle(), role: fleetcount.RoleAssistant()},
+		{session: "quiet-child", i: 1, state: fleetcount.StateWorking(), shown: fleetcount.VisibilityQuiet(), under: "worker"},
+		{session: "worker", i: 2, state: fleetcount.StateNeedsYou(), under: "persona"},
+		{session: "muted-persona", i: 3, state: fleetcount.StateIdle(), role: fleetcount.RoleAssistant(), muting: fleetcount.MutingMuted()},
+		{session: "muted-quiet", i: 4, state: fleetcount.StateWorking(), shown: fleetcount.VisibilityQuiet(), muting: fleetcount.MutingMuted()},
+		{session: "hidden-persona", i: 5, state: fleetcount.StateIdle(), role: fleetcount.RoleAssistant(), shown: fleetcount.VisibilityHiddenByDirectory()},
+		waiting("quiet-dialog", 6, 1),
+	}
+	agents[6].shown = fleetcount.VisibilityQuiet()
+	cards := []card{
+		asked("persona", 0, 1),
+		{session: "persona", i: 1, m: 2, standing: fleetcount.CardStandingForm()},
+		asked("quiet-child", 2, 3),
+		asked("worker", 3, 4),
+		asked("muted-persona", 4, 5),
+		asked("muted-quiet", 5, 6),
+		asked("hidden-persona", 6, 7),
+		{session: "persona", i: 7, m: 8, holding: fleetcount.HoldingHeldByPersona(), telling: fleetcount.TellingTold()},
+		{session: "quiet-child", i: 8, m: 9, holding: fleetcount.HoldingHeldBySupervisor()},
+		{session: "persona", i: 9, m: 10, standing: fleetcount.CardStandingDisplayCopy()},
+		asked("", 10, 11),
+		asked("missing", 11, 12),
+	}
+	expect(t, tally(t, fleetcount.SurfacePersonaCards(), agents, cards),
+		"card 0 needs_you\ncard 1 needs_you\ncard 2 needs_you\ntotal 3")
+}
+
+func TestDisplayCopiesDoNotStandForAgents(t *testing.T) {
+	agents := []agent{waiting("worker", 0, 1)}
+	cards := []card{{session: "worker", standing: fleetcount.CardStandingDisplayCopy(), telling: fleetcount.TellingTold()}}
+	for _, on := range []fleetcount.Surface{fleetcount.SurfaceBadge(), fleetcount.SurfaceLink(), fleetcount.SurfaceLiveActivity()} {
+		expect(t, tally(t, on, agents, cards), tally(t, on, agents, nil))
+	}
 }

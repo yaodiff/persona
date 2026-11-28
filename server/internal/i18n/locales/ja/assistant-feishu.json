@@ -193,5 +193,8 @@
   "handoff_decision_drop_leads": "何も投稿せず、質問は取り下げます。",
   "handoff_decision_cost": "{sender} は返事を待っています。",
   "handoff_reply_header": "{sender} の質問: {question}",
-  "handoff_reply_footer": "{owner} の AI アシスタントが参考として回答しました。"
+  "handoff_reply_footer": "{owner} の AI アシスタントが参考として回答しました。",
+  "guest_cot_step": "{tool} を使用中",
+  "guest_cot_done": "完了",
+  "guest_cot_failed": "失敗"
 }

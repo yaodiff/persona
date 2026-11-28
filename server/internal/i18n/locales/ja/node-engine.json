@@ -3,5 +3,6 @@
   "paseo_unreachable": "Paseoは実行中ですが、Personaから接続できません：{reason}",
   "paseo_not_connected": "Paseoは実行中ですが、Personaはまだ接続できていません",
   "paseo_not_connected_why": "Paseoは実行中ですが、Personaはまだ接続できていません：{reason}",
-  "paseo_outdated": "Paseoを更新してください：このコンピューターは{version}ですが、Personaは{minimum}以降で検証されています"
+  "paseo_outdated": "Paseoを更新してください：このコンピューターは{version}ですが、Personaは{minimum}以降で検証されています",
+  "orca_incompatible": "このバージョンのOrcaはPersonaと互換性がありません。両方を最新バージョンに更新してください"
 }

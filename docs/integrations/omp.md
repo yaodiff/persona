@@ -5,7 +5,9 @@ agent (`docs/integrations/pi.md`). In a herdr pane with the Persona extension in
 chat (text, thinking, tool calls and results, images) and token-by-token output. From the phone you can send messages, interrupt,
 rename, start a new omp with a first message, answer its `ask_user` questions and approve the tools you list.
 
-Verified with omp 18.18.x and herdr 0.9.5. Everything here needs a herdr engine.
+Verified with omp 18.18.x and herdr 0.9.5. The chat, the state and the controls need a herdr engine: the extension names only the herdr
+pane it runs in (`herdrPaneOf` in `integrations/pi/lib/pi.js`). Orca lists an omp terminal too (its process scan knows omp), as a
+terminal-only row, and New Agent starts omp in an Orca tab; a stopped omp resumes only in herdr.
 
 Added in steps (issue #4148).
 
@@ -20,7 +22,7 @@ iOS and iPadOS leave the model to omp's own configuration, as described under "S
 | Works from the phone | Not supported |
 | --- | --- |
 | Start `omp` in a new herdr or Orca tab with a first message and an optional model | Setting thinking effort, permission mode or ultracode on that start |
-| List running omp sessions and their state, and the stopped ones of the last 7 days | Engines other than herdr (except starting `omp` in Orca), and Windows |
+| List running omp sessions and their state, and the stopped ones of the last 7 days | Chat, state and controls in engines other than herdr (Orca lists an omp terminal as a terminal-only row and starts one), and Windows |
 | Read the chat, including live text | A web client for omp (the equivalent of pi-web) |
 | Send messages, interrupt, rename | Sessions under an `omp --profile` directory |
 | Answer `ask_user` questions and `approve` cards | Automatic updates of the Persona extension |

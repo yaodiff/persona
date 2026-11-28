@@ -87,6 +87,9 @@
     <string name="inbox_empty_search_text">没有和「%1$s」匹配的消息或邮件。</string>
     <string name="inbox_empty_title">收件箱是空的</string>
     <string name="inbox_empty_text">hub 配好飞书（飞书网关）或在设置里加了邮箱后，需要你看的消息和邮件会出现在这里。</string>
+    <string name="inbox_empty_text_lark">hub 配好飞书（飞书网关）后，需要你看的飞书消息会出现在这里。</string>
+    <string name="inbox_empty_text_mail">在设置里添加邮箱后，需要你看的邮件会出现在这里。</string>
+    <string name="inbox_empty_text_generic">需要你看的新内容会出现在这里。</string>
     <string name="inbox_empty_filtered_title">没有符合筛选的未处理内容</string>
     <string name="inbox_empty_filtered_text">清除筛选后，可以看到整个收件箱。</string>
     <string name="inbox_empty_caught_up_title">都看完了</string>

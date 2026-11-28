@@ -13,6 +13,7 @@
   "original": "原文",
   "hide_original": "原文を隠す",
   "external_trigger_notice": "旧版 botmux：Persona からの送信はオーナーではなく外部イベントとして届きます。3.59.23 以降へ更新すると完全対応になります。",
+  "owner_unset_notice": "BotMux Owner Union ID が未設定のため、通常どおり送信しています。オーナーとして送るには設定 › Agents で入力してください。",
   "raw": "botmux · 原文",
   "show_raw": "botmux セッションを原文で表示",
   "hide": "botmux セッションを非表示にする",

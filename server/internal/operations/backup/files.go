@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"github.com/nwverse/persona/server/internal/secretkey"
 )
 
@@ -103,7 +104,10 @@ func collectPayload(home, staging string, manifest *Manifest) (notes []string, e
 		return nil, errors.New("the knowledge-base path is not a directory")
 	} else {
 		manifest.KnowledgeBase.Present = true
-		if err := copyTree(kbDir, filepath.Join(staging, "kb"), false); err != nil {
+		// Ephemeral hub-transcribed meeting audio (recordings/<id>/attachments/audio/)
+		// is deleted after final minutes are written and must not outlive that
+		// deletion in a backup bundle.
+		if err := copyTreeFiltered(kbDir, filepath.Join(staging, "kb"), false, "", recordingwire.IsMeetingAudioPath); err != nil {
 			return nil, fmt.Errorf("collect the knowledge base: %w", err)
 		}
 	}
@@ -245,6 +249,13 @@ func copyTree(source, destination string, skipRuntime bool) error {
 // copyTreeExcept is copyTree leaving out the directory except (a knowledge
 // base inside source), compared as given and with symbolic links resolved.
 func copyTreeExcept(source, destination string, skipRuntime bool, except string) error {
+	return copyTreeFiltered(source, destination, skipRuntime, except, nil)
+}
+
+// copyTreeFiltered is copyTreeExcept also skipping any path under source whose
+// slash-separated relative path satisfies skipRel (a directory skips its whole
+// subtree).
+func copyTreeFiltered(source, destination string, skipRuntime bool, except string, skipRel func(string) bool) error {
 	info, err := os.Lstat(source)
 	if err != nil {
 		return err
@@ -270,6 +281,12 @@ func copyTreeExcept(source, destination string, skipRuntime bool, except string)
 		rel, err := filepath.Rel(source, name)
 		if err != nil {
 			return err
+		}
+		if skipRel != nil && skipRel(filepath.ToSlash(rel)) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		for _, form := range excluded {
 			if form == filepath.Clean(name) || form == filepath.Join(resolvedSource, rel) {

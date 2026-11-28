@@ -1180,11 +1180,196 @@ test('the assistant\'s approvals go to the phone even with the Web GUI open; its
   ev.emit('session/event', { id: 'session-asst' }, { type: 'assistant/message', seq: 5, data: { message: { content: [
     { type: 'tool-call', id: 'w1', name: 'write', arguments: JSON.stringify({ file_path: '/m/memory/tea.md', content: 'x' }) },
     { type: 'tool-call', id: 'w2', name: 'write', arguments: JSON.stringify({ file_path: '/m/other.md', content: 'x' }) },
+    { type: 'tool-call', id: 'w3', name: 'write', arguments: JSON.stringify({ file_path: 'SOUL.md', content: 'x' }) },
+    { type: 'tool-call', id: 'w4', name: 'edit', arguments: JSON.stringify({ file_path: 'sub/evil.sh', old_string: 'a', new_string: 'b' }) },
+    { type: 'tool-call', id: 'w5', name: 'write', arguments: JSON.stringify({ file_path: '/m/memory/..notes.md', content: 'x' }) },
+    { type: 'tool-call', id: 'w6', name: 'write', arguments: JSON.stringify({ file_path: '/m/memory', content: 'x' }) },
+    { type: 'tool-call', id: 'w7', name: 'write', arguments: JSON.stringify({ file_path: '/m/memory/bad\0.md', content: 'x' }) },
   ] } } })
   assert.equal(await ask('session-asst', 'w1'), 'allowed-once')
   assert.equal(n.asked.length, 1, 'a memory write is not asked')
   assert.equal(await ask('session-asst', 'w2'), 'allowed-once')
   assert.equal(n.asked.length, 2, 'a write elsewhere is')
+  assert.equal(await ask('session-asst', 'w3'), 'allowed-once')
+  assert.equal(n.asked.length, 3, 'a relative write resolves against session cwd, not memoryDir')
+  assert.equal(await ask('session-asst', 'w4'), 'allowed-once')
+  assert.equal(n.asked.length, 4, 'a relative nested edit resolves against session cwd, not memoryDir')
+  assert.equal(await ask('session-asst', 'w5'), 'allowed-once')
+  assert.equal(n.asked.length, 4, 'a dot-prefixed file inside memoryDir (..notes.md) stays auto-approved')
+  assert.equal(await ask('session-asst', 'w6'), 'allowed-once')
+  assert.equal(n.asked.length, 5, 'targeting memoryDir itself must ask')
+  assert.equal(await ask('session-asst', 'w7'), 'allowed-once')
+  assert.equal(n.asked.length, 6, 'NUL byte path must fail closed and ask')
+})
+
+test('assistant memory write check resolves realpaths, blocks symlink and dangling-symlink escapes, and requires absolute cwd for relative paths', async (t) => {
+  const { mkdtempSync, mkdirSync, symlinkSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join, sep } = await import('node:path')
+  const root = mkdtempSync(join(tmpdir(), 'persona-dsh-mem-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const work = join(root, 'assistant')
+  const mem = join(root, 'mem')
+  const outside = join(root, 'outside')
+  const outsideDeep = join(outside, 'deep')
+  mkdirSync(work, { recursive: true })
+  mkdirSync(join(mem, 'sub'), { recursive: true })
+  mkdirSync(outsideDeep, { recursive: true })
+  symlinkSync(outside, join(mem, 'escape'))
+  symlinkSync(outsideDeep, join(mem, 'sub', 'deep-escape'))
+  symlinkSync(join(outside, 'new-target.md'), join(mem, 'dangling.md'))
+  symlinkSync(join(outside, 'missing-dir'), join(mem, 'dangling-dir'))
+  symlinkSync(join(mem, 'loop-b'), join(mem, 'loop-a'))
+  symlinkSync(join(mem, 'loop-a'), join(mem, 'loop-b'))
+  const memAlias = join(root, 'mem-alias')
+  symlinkSync(mem, memAlias)
+
+  const { n, ctl, ev, rt } = await setup(t, { assistant: true, liveClient: true })
+  ctl.add('session-sym', { cwd: work })
+  rt.start()
+  await n.ready
+  await until('listed', () => n.last('runtime.sessions')?.sessions.length === 1)
+  await n.peer.call('session.send', { session_id: 'session-sym', text: 'x', assistant: true, memory_dir: memAlias, mode: 'default' })
+  n.resolve = () => ({ allow: true })
+  const ask = (callId, agent = { session: { id: 'session-sym', header: { cwd: work } } }) =>
+    ev.waterfall('approval/request', { agent, toolName: 'write', callId }, () => 'web-gui')
+
+  ev.emit('session/event', { id: 'session-sym' }, { type: 'assistant/message', seq: 1, data: { message: { content: [
+    { type: 'tool-call', id: 'ok-abs', name: 'write', arguments: JSON.stringify({ file_path: join(mem, 'note.md') }) },
+    { type: 'tool-call', id: 'ok-rel', name: 'write', arguments: JSON.stringify({ file_path: '../mem/rel-note.md' }) },
+    { type: 'tool-call', id: 'bad-rel', name: 'write', arguments: JSON.stringify({ file_path: 'AGENTS.md' }) },
+    { type: 'tool-call', id: 'bad-dir-sym', name: 'write', arguments: JSON.stringify({ file_path: join(memAlias, 'escape', 'pwn.md') }) },
+    { type: 'tool-call', id: 'bad-sym-dotdot', name: 'write', arguments: JSON.stringify({ file_path: `${join(memAlias, 'sub', 'deep-escape')}/../pwn.md` }) },
+    { type: 'tool-call', id: 'bad-dangling-file', name: 'write', arguments: JSON.stringify({ file_path: join(memAlias, 'dangling.md') }) },
+    { type: 'tool-call', id: 'bad-dangling-dir', name: 'write', arguments: JSON.stringify({ file_path: join(memAlias, 'dangling-dir', 'sub', 'pwn.md') }) },
+    { type: 'tool-call', id: 'bad-loop', name: 'write', arguments: JSON.stringify({ file_path: join(memAlias, 'loop-a') }) },
+  ] } } })
+
+  assert.equal(await ask('ok-abs'), 'allowed-once')
+  assert.equal(n.asked.length, 0, 'write via canonical realpath matching symlinked memory_dir is auto-approved')
+  assert.equal(await ask('ok-rel'), 'allowed-once')
+  assert.equal(n.asked.length, 0, 'relative path from cwd that resolves strictly inside memory_dir is auto-approved')
+  assert.equal(await ask('bad-rel'), 'allowed-once')
+  assert.equal(n.asked.length, 1, 'relative path inside assistant cwd must ask')
+  assert.equal(await ask('bad-dir-sym'), 'allowed-once')
+  assert.equal(n.asked.length, 2, 'symlinked directory escaping memory_dir must ask')
+  assert.equal(await ask('bad-sym-dotdot'), 'allowed-once')
+  assert.equal(n.asked.length, 3, 'symlink followed by .. must resolve symlink before .. like the OS kernel and ask')
+  assert.equal(await ask('bad-dangling-file'), 'allowed-once')
+  assert.equal(n.asked.length, 4, 'dangling symlink file pointing outside memory_dir must ask')
+  assert.equal(await ask('bad-dangling-dir'), 'allowed-once')
+  assert.equal(n.asked.length, 5, 'dangling symlink directory pointing outside memory_dir must ask')
+  assert.equal(await ask('bad-loop'), 'allowed-once')
+  assert.equal(n.asked.length, 6, 'symlink loop must fail closed and ask')
+
+  // Unknown session cwd: relative path must fail closed even if ../mem/... would have matched with cwd.
+  await n.peer.call('session.send', { session_id: 'session-nocwd', text: 'x', assistant: true, memory_dir: mem, mode: 'default' })
+  ev.emit('session/event', { id: 'session-nocwd' }, { type: 'assistant/message', seq: 1, data: { message: { content: [
+    { type: 'tool-call', id: 'nocwd-rel', name: 'write', arguments: JSON.stringify({ file_path: 'note.md' }) },
+  ] } } })
+  assert.equal(await ev.waterfall('approval/request', { agent: { session: { id: 'session-nocwd' } }, toolName: 'write', callId: 'nocwd-rel' }, () => 'web-gui'), 'allowed-once')
+  assert.equal(n.asked.length, 7, 'relative write without known absolute cwd must fail closed and ask')
+
+  // Advanced security bypass coverage: clipInput truncation (>24 KiB & multi-field 256B share),
+  // POSIX backslash separator, internal symlink + .. namei-vs-resolve split, symlinked cwd,
+  // tilde expansion, relative symlink target, stored a.cwd without header.cwd, invalid explicit cwd,
+  // prefix collision, trailing slashes, plan mode, memory_dir='/', invalid JSON/non-string file_path,
+  // and first write before memoryDir exists on disk.
+  const nestedDeep = join(mem, 'a', 'b')
+  mkdirSync(nestedDeep, { recursive: true })
+  symlinkSync(nestedDeep, join(mem, 'deep-in'))
+  symlinkSync('../outside', join(mem, 'rel-escape'))
+  const mem2 = join(root, 'mem2')
+  mkdirSync(mem2, { recursive: true })
+  const nestedWork = join(root, 'nested', 'work')
+  const nestedMem = join(root, 'nested', 'mem')
+  mkdirSync(nestedWork, { recursive: true })
+  mkdirSync(nestedMem, { recursive: true })
+  const workLink = join(root, 'work-link')
+  symlinkSync(nestedWork, workLink)
+  const futureMem = join(root, 'future-mem')
+
+  const paddedEscape2Field = `${mem}/${'./'.repeat(6300)}../outside/SOUL.md`
+  const paddedEscapeMany = `${mem}/${'./'.repeat(180)}../outside/SOUL.md`
+  const manyFields = { file_path: paddedEscapeMany, content: 'x'.repeat(200) }
+  for (let i = 0; i < 120; i++) manyFields[`k${i}`] = 'v'.repeat(300)
+
+  ev.emit('session/event', { id: 'session-sym' }, { type: 'assistant/message', seq: 2, data: { message: { content: [
+    { type: 'tool-call', id: 'clip-2field', name: 'write', arguments: JSON.stringify({ file_path: paddedEscape2Field, content: 'x'.repeat(26_000) }) },
+    { type: 'tool-call', id: 'clip-manyfield', name: 'write', arguments: JSON.stringify(manyFields) },
+    { type: 'tool-call', id: 'bs-escape', name: 'write', arguments: JSON.stringify({ file_path: `${outside}/pwn\\..\\..\\mem\\x.md` }) },
+    { type: 'tool-call', id: 'internal-sym-dotdot', name: 'write', arguments: JSON.stringify({ file_path: `${join(mem, 'deep-in')}/../../SOUL.md` }) },
+    { type: 'tool-call', id: 'rel-sym-escape', name: 'write', arguments: JSON.stringify({ file_path: join(mem, 'rel-escape', 'pwn.md') }) },
+    { type: 'tool-call', id: 'tilde-escape', name: 'write', arguments: JSON.stringify({ file_path: '~/../mem/pwn.md' }) },
+    { type: 'tool-call', id: 'tilde-only', name: 'write', arguments: JSON.stringify({ file_path: '~' }) },
+    { type: 'tool-call', id: 'prefix-collision', name: 'write', arguments: JSON.stringify({ file_path: join(mem2, 'evil.md') }) },
+    { type: 'tool-call', id: 'trailing-dir', name: 'write', arguments: JSON.stringify({ file_path: `${mem}/` }) },
+    { type: 'tool-call', id: 'trailing-sub', name: 'write', arguments: JSON.stringify({ file_path: `${mem}/sub/` }) },
+    { type: 'tool-call', id: 'bad-json', name: 'write', arguments: '{not-valid-json' },
+    { type: 'tool-call', id: 'non-string-path', name: 'write', arguments: JSON.stringify({ file_path: [join(mem, 'note.md')] }) },
+    { type: 'tool-call', id: 'stored-cwd-ok', name: 'write', arguments: JSON.stringify({ file_path: '../mem/via-stored-cwd.md' }) },
+    { type: 'tool-call', id: 'stored-cwd-bad', name: 'write', arguments: JSON.stringify({ file_path: 'CLAUDE.md' }) },
+    { type: 'tool-call', id: 'symlink-cwd-split', name: 'write', arguments: JSON.stringify({ file_path: '../mem/split.md' }) },
+  ] } } })
+
+  let expectedAsked = 7
+  const mustAskCases = [
+    ['clip-2field', '>12 KiB padded file_path (>24 KiB args) must not bypass via clipInput truncation'],
+    ['clip-manyfield', 'multi-field 256B share padded file_path must not bypass via clipInput truncation'],
+    ...(sep === '/' ? [['bs-escape', 'POSIX backslash path must not split on \\ to escape into memoryDir']] : []),
+    ['internal-sym-dotdot', 'internal symlink + .. where lexical resolve escapes memoryDir must ask'],
+    ['rel-sym-escape', 'relative symlink target escaping memoryDir must ask'],
+    ['tilde-escape', '~/ path must fail closed and ask'],
+    ['tilde-only', '~ path must fail closed and ask'],
+    ['prefix-collision', 'sibling prefix dir (mem2 vs mem) must ask'],
+    ['trailing-dir', 'memoryDir with trailing slash must ask'],
+    ['bad-json', 'malformed JSON arguments must fail closed and ask'],
+    ['non-string-path', 'non-string file_path must fail closed and ask'],
+    ['stored-cwd-bad', 'relative write using stored a.cwd (no header.cwd) outside memoryDir must ask'],
+  ]
+  for (const [id, msg] of mustAskCases) {
+    const agent = id === 'stored-cwd-bad' ? { session: { id: 'session-sym' } } : undefined
+    assert.equal(await ask(id, agent), 'allowed-once')
+    assert.equal(n.asked.length, ++expectedAsked, msg)
+  }
+
+  // Trailing slash on subpath inside memoryDir & stored a.cwd resolving inside memoryDir stay auto-approved.
+  assert.equal(await ask('trailing-sub'), 'allowed-once')
+  assert.equal(n.asked.length, expectedAsked, 'subpath with trailing slash inside memoryDir is auto-approved')
+  assert.equal(await ask('stored-cwd-ok', { session: { id: 'session-sym' } }), 'allowed-once')
+  assert.equal(n.asked.length, expectedAsked, 'relative write via stored a.cwd (without header.cwd) inside memoryDir is auto-approved')
+
+  // Explicit invalid (relative) header.cwd must fail closed instead of falling back to valid a.cwd.
+  assert.equal(await ask('stored-cwd-ok', { session: { id: 'session-sym', header: { cwd: 'relative/cwd' } } }), 'allowed-once')
+  assert.equal(n.asked.length, ++expectedAsked, 'explicit non-absolute cwd must fail closed rather than falling back to a.cwd')
+
+  // Symlinked cwd where namei (nested/work -> nested/mem) and lexical resolve (work-link -> root/mem) disagree must fail closed!
+  assert.equal(await ask('symlink-cwd-split', { session: { id: 'session-sym', header: { cwd: workLink } } }), 'allowed-once')
+  assert.equal(n.asked.length, ++expectedAsked, 'symlinked cwd causing namei-vs-resolve split must fail closed and ask')
+
+  // mode: 'plan' blocks even a valid memory write.
+  await n.peer.call('session.send', { session_id: 'session-sym', text: 'plan', assistant: true, memory_dir: memAlias, mode: 'plan' })
+  assert.equal(await ask('ok-abs'), 'allowed-once')
+  assert.equal(n.asked.length, ++expectedAsked, 'plan mode must ask even for valid memoryDir writes')
+
+  // memory_dir: '/' fails closed.
+  await n.peer.call('session.send', { session_id: 'session-rootmem', text: 'x', assistant: true, memory_dir: '/', mode: 'default' })
+  ev.emit('session/event', { id: 'session-rootmem' }, { type: 'assistant/message', seq: 1, data: { message: { content: [
+    { type: 'tool-call', id: 'rootmem-w', name: 'write', arguments: JSON.stringify({ file_path: join(outside, 'x.md') }) },
+  ] } } })
+  assert.equal(await ev.waterfall('approval/request', { agent: { session: { id: 'session-rootmem' } }, toolName: 'write', callId: 'rootmem-w' }, () => 'web-gui'), 'allowed-once')
+  assert.equal(n.asked.length, ++expectedAsked, 'memory_dir=/ must fail closed and ask')
+
+  // First write before memoryDir exists on disk succeeds; escaping it still asks.
+  await n.peer.call('session.send', { session_id: 'session-future', text: 'x', assistant: true, memory_dir: futureMem, mode: 'default' })
+  ev.emit('session/event', { id: 'session-future' }, { type: 'assistant/message', seq: 1, data: { message: { content: [
+    { type: 'tool-call', id: 'future-ok', name: 'write', arguments: JSON.stringify({ file_path: join(futureMem, 'MEMORY.md') }) },
+    { type: 'tool-call', id: 'future-esc', name: 'write', arguments: JSON.stringify({ file_path: `${futureMem}/../evil.md` }) },
+  ] } } })
+  assert.equal(await ev.waterfall('approval/request', { agent: { session: { id: 'session-future' } }, toolName: 'write', callId: 'future-ok' }, () => 'web-gui'), 'allowed-once')
+  assert.equal(n.asked.length, expectedAsked, 'first write before memoryDir exists on disk is auto-approved')
+  assert.equal(await ev.waterfall('approval/request', { agent: { session: { id: 'session-future' } }, toolName: 'write', callId: 'future-esc' }, () => 'web-gui'), 'allowed-once')
+  assert.equal(n.asked.length, ++expectedAsked, 'escaping non-existent memoryDir via .. must ask')
 })
 
 test('a gated command in an assistant conversation\'s shell is stopped; elsewhere it runs as before', async (t) => {
@@ -1202,6 +1387,248 @@ test('a gated command in an assistant conversation\'s shell is stopped; elsewher
   assert.equal((await pre('session-asst', 'bash ~/.persona/skills/example/scripts/ex.sh POST /x')).kind, 'deny')
   assert.equal((await pre('session-asst', 'echo exit && ls')).kind, 'allow')
   assert.equal((await pre('session-other', 'ex GET /me')).kind, 'allow')
+})
+
+test('assistant shell gates block obfuscated shell invocations, subagents, and uncheckable commands', async (t) => {
+  const gated = { name: 'example_api', description: 'Example', input_schema: { type: 'object' }, shell: ['ex', 'example/scripts/ex.sh'] }
+  const { n, ctl, ev, rt } = await setup(t, { assistant: true, registerTool: () => () => {}, tools: [gated] })
+  ctl.add('session-asst', { cwd: '/home/u/.persona/assistant' })
+  rt.start()
+  await n.ready
+  await until('listed', () => n.last('runtime.sessions'))
+  await rt.refreshTools()
+
+  const pre = (payload) => ev.waterfall('tools/pre-execute', payload, () => ({ kind: 'allow' }))
+  const asstAgent = { session: { id: 'session-asst' } }
+
+  for (const command of [
+    '/usr/local/bin/ex GET /me',
+    './ex GET /me',
+    'ex;echo hi',
+    'ex|cat',
+    'ex&&id',
+    'echo $(ex)',
+    'echo `ex`',
+    '"ex" GET /me',
+    "'ex' GET /me",
+    '\\ex GET /me',
+    'e""x GET /me',
+    "sh -c 'ex GET /me'",
+    "bash -c 'e\"\"x GET /me'",
+    "eval 'ex GET /me'",
+  ]) {
+    const res = await pre({ name: 'bash', arguments: { command }, agent: asstAgent })
+    assert.equal(res.kind, 'deny', `must deny obfuscated gated command: ${command}`)
+    assert.match(res.reason, /example_api/)
+  }
+
+  // Tool name casing / shell alias, cmd field, JSON string arguments, and mixed command+cmd.
+  assert.equal((await pre({ name: 'shell', arguments: { command: 'ex GET /me' }, agent: asstAgent })).kind, 'deny')
+  assert.equal((await pre({ name: 'Bash', arguments: { cmd: 'ex GET /me' }, agent: asstAgent })).kind, 'deny')
+  assert.equal((await pre({ name: 'bash', arguments: JSON.stringify({ command: 'ex GET /me' }), agent: asstAgent })).kind, 'deny')
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'echo ok', cmd: 'ex GET /me' }, agent: asstAgent })).kind, 'deny')
+
+  // Uncheckable / malformed / empty shell arguments fail closed in assistant sessions.
+  for (const args of [{ command: '' }, { command: '   ' }, { command: 123 }, {}, null, 'not-json']) {
+    const res = await pre({ name: 'bash', arguments: args, agent: asstAgent })
+    assert.equal(res.kind, 'deny', `must fail closed on uncheckable args: ${JSON.stringify(args)}`)
+  }
+
+  // Assistant subagent and newly-created assistant-cwd agent (before listSessions) are also gated.
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'ex GET /me' }, agent: { session: { id: 'sub-1', header: { parentSession: 'session-asst' } } } })).kind, 'deny')
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'ex GET /me' }, agent: { session: { id: 'brand-new', header: { cwd: '/home/u/.persona/assistant' } } } })).kind, 'deny')
+
+  // Safe commands remain allowed for assistant and subagent; gated commands remain allowed for non-assistant.
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'echo ok' }, agent: asstAgent })).kind, 'allow')
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'echo ok' }, agent: { session: { id: 'sub-1', header: { parentSession: 'session-asst' } } } })).kind, 'allow')
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'ex GET /me' }, agent: { session: { id: 'session-other' } } })).kind, 'allow')
+})
+
+test('assistant shell gates load without registerTool (phoneTools=false) and fail closed on disconnect, error, or mid-flight drop', async (t) => {
+  const gated = { name: 'example_api', description: 'Example', input_schema: { type: 'object' }, shell: ['ex'] }
+  // Intentionally omit registerTool (matches config.phoneTools === false in plugin.js).
+  const { n, ctl, ev, rt } = await setup(t, { assistant: true, tools: [gated] })
+  ctl.add('session-asst', { cwd: '/home/u/.persona/assistant' })
+  rt.start()
+  await n.ready
+  await until('listed', () => n.last('runtime.sessions'))
+
+  const pre = (command) => ev.waterfall('tools/pre-execute', { name: 'bash', arguments: { command }, agent: { session: { id: 'session-asst' } } }, () => ({ kind: 'allow' }))
+
+  // Without registerTool, gates still load automatically and enforce rules.
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Hub disconnect invalidates rules and fails closed even for safe commands.
+  n.setHub(false)
+  await until('hub down', () => !rt.hubConnected)
+  assert.equal((await pre('echo ok')).kind, 'deny')
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+
+  // Hub reconnect with failing mcp.tools stays fail-closed.
+  const origReq = n.peer.onRequest
+  let failTools = true
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && failTools) throw new Error('hub tools unavailable')
+    return origReq(m, p)
+  }
+  n.setHub(true)
+  await until('hub back', () => rt.hubConnected)
+  assert.equal((await pre('echo ok')).kind, 'deny')
+
+  // Once mcp.tools recovers, on-demand refresh loads rules and restores normal allow/deny.
+  failTools = false
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Mid-flight disconnect during refresh must not mark stale empty results as ready.
+  n.setHub(false)
+  await until('hub down 2', () => !rt.hubConnected)
+  const gate = deferred()
+  let intercepted = false
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && p?.assistant && !intercepted) {
+      intercepted = true
+      await gate.promise
+      return { tools: [] }
+    }
+    return origReq(m, p)
+  }
+  n.setHub(true)
+  await until('hub back 2', () => rt.hubConnected)
+  await until('refresh in flight', () => intercepted)
+  // Disconnect while the first assistant tools request is still in flight, then resolve stale [].
+  n.setHub(false)
+  await until('hub down 3', () => !rt.hubConnected)
+  gate.resolve()
+  // Flush the ordered socket so the stale [] mcp.tools reply is guaranteed processed before assertions.
+  await n.peer.call('launchers.models', {})
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  // Reconnect again: fresh fetch runs and enforces the real gate (not stale []).
+  n.setHub(true)
+  await until('hub back 3', () => rt.hubConnected)
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Periodic refresh failure after rules were previously ready clears shellReady and fails closed.
+  failTools = true
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && p?.assistant && failTools) throw new Error('periodic refresh failed')
+    return origReq(m, p)
+  }
+  await rt.refreshTools()
+  assert.equal((await pre('echo ok')).kind, 'deny')
+  failTools = false
+  assert.equal((await pre('echo ok')).kind, 'allow')
+})
+
+test('assistant shell gates fail closed during runtime.hello and across node reconnects, honor exec.signal, and allow empty gates when hubReady', async (t) => {
+  const helloGate = deferred()
+  const gated = { name: 'example_api', description: 'Example', input_schema: { type: 'object' }, shell: ['ex'] }
+  const { n, ctl, ev, rt } = await setup(t, { assistant: true, tools: [gated] })
+  n.hub = false
+  n.holdHello = helloGate.promise
+  ctl.add('session-asst', { cwd: '/home/u/.persona/assistant' })
+  rt.start()
+  await until('hello reached node', () => n.hellos === 1)
+
+  const pre = (command, extra = {}) => ev.waterfall(
+    'tools/pre-execute',
+    { name: 'bash', arguments: { command }, agent: { session: { id: 'session-asst', header: { cwd: '/home/u/.persona/assistant' } } }, ...extra },
+    () => ({ kind: 'allow' }),
+  )
+
+  // Path A: while runtime.hello is in flight (rt.connected && !rt.ready), must fail closed without touching mcp.tools.
+  assert.equal(rt.hubConnected, false)
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'deny')
+
+  // Release hello with hub: false -> still fail closed (must not hit TDZ or latch rejected promise).
+  helloGate.resolve()
+  await n.ready
+  assert.equal(rt.hubConnected, false)
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  // Explicitly calling refreshTools() while !hubReady() must resolve cleanly (no TDZ ReferenceError).
+  await rt.refreshTools()
+
+  // Bring hub up with empty tools -> legitimate empty rule set allows safe commands (no false positives).
+  n.tools = []
+  n.setHub(true)
+  await until('hub up with empty tools', () => rt.hubConnected)
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Path B: node socket disconnects (p.done clears peer/readyPeer without onHub(false)) and reconnects with a new gate.
+  const reconnectHello = deferred()
+  n.holdHello = reconnectHello.promise
+  n.tools = [{ name: 'new_api', description: 'New', input_schema: { type: 'object' }, shell: ['newcmd'] }]
+  n.peer.close(new Error('node restarted'))
+  await until('reconnect hello in flight', () => n.hellos === 2)
+  // Stale pre-reconnect shellReady must NOT allow newcmd while runtime.hello is still in flight.
+  assert.equal(rt.hubConnected, false)
+  assert.equal((await pre('newcmd run')).kind, 'deny')
+  reconnectHello.resolve()
+  await until('hub ready after reconnect', () => rt.hubConnected)
+  assert.equal((await pre('newcmd run')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Aborting exec.signal while awaiting refreshShellGates returns fail-closed immediately.
+  n.setHub(false)
+  await until('hub down for abort test', () => !rt.hubConnected)
+  const slowTools = deferred()
+  const origReq = n.peer.onRequest
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && p?.assistant) {
+      await slowTools.promise
+      return { tools: n.tools }
+    }
+    return origReq(m, p)
+  }
+  n.setHub(true)
+  await until('hub up for abort test', () => rt.hubConnected)
+  const ac = new AbortController()
+  const pending = pre('echo ok', { signal: ac.signal })
+  ac.abort(new Error('cancelled'))
+  assert.equal((await pending).kind, 'deny')
+  slowTools.resolve()
+  await until('recovered after slow tools', async () => (await pre('echo ok')).kind === 'allow')
+})
+
+test('assistant shell gates decouple from slow registerTool fetches and cover pre-existing multi-hop assistant agents', async (t) => {
+  const gated = { name: 'example_api', description: 'Example', input_schema: { type: 'object' }, shell: ['ex'] }
+  const preExisting = { session: { id: 'asst-root', header: { cwd: '/home/u/.persona/assistant' } } }
+  const midParent = { session: { id: 'sub-mid', header: { parentSession: 'asst-root', cwd: '/tmp/work' } } }
+  const agentsMap = new Map([['asst-root', preExisting], ['sub-mid', midParent]])
+  const agents = { get: (id) => agentsMap.get(id), list: () => [...agentsMap.values()] }
+
+  const nonAssistantHang = deferred()
+  const { n, ev, rt } = await setup(t, {
+    assistant: true,
+    registerTool: () => () => {},
+    tools: [gated],
+    agents,
+  })
+  rt.start()
+  await n.ready
+  const origReq = n.peer.onRequest
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && !p?.assistant) {
+      await nonAssistantHang.promise
+      return { tools: [] }
+    }
+    return origReq(m, p)
+  }
+  // Force a fresh reconnect refresh where non-assistant mcp.tools hangs indefinitely while assistant mcp.tools succeeds.
+  n.setHub(false)
+  await until('hub down', () => !rt.hubConnected)
+  n.setHub(true)
+  await until('hub back', () => rt.hubConnected)
+
+  const pre = (agent, command) => ev.waterfall('tools/pre-execute', { name: 'bash', arguments: { command }, agent }, () => ({ kind: 'allow' }))
+  // Pre-existing assistant root (seeded in start() without listSessions) and 2-hop subagent are gated without stalling on non-assistant mcp.tools!
+  assert.equal((await pre({ session: { id: 'asst-root' } }, 'ex GET /me')).kind, 'deny')
+  assert.equal((await pre({ session: { id: 'sub-leaf', header: { parentSession: 'sub-mid', cwd: '/tmp/work' } } }, 'ex GET /me')).kind, 'deny')
+  assert.equal((await pre({ session: { id: 'sub-leaf', header: { parentSession: 'sub-mid', cwd: '/tmp/work' } } }, 'echo ok')).kind, 'allow')
+  nonAssistantHang.resolve()
 })
 
 test('the assistant\'s own tools are only for its conversations, called as the assistant\'s', async (t) => {

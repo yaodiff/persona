@@ -11,6 +11,7 @@ import type { SearchAddon as XSearch } from "@xterm/addon-search";
 import { api, errorText, isAbort, sessionPath } from "../../../lib/api";
 import { openLink } from "../../../lib/links";
 import { getSession, getState, isOpen, onHubEvent, send } from "../../../lib/store";
+import { sessionEngineName } from "../../../lib/engine-names";
 import { passesToApp } from "../../../lib/shortcuts";
 import {
   ANSWER_LIMIT_MS,
@@ -593,6 +594,12 @@ export class TerminalFeed {
     return getState().machines.find((m) => m.id === this.mid);
   }
 
+  /** The engine the session's terminal is in, by name ("herdr", "Orca"): the words for a session that isn't running say
+   *  where (#17053). A pane address names its own host. */
+  private engineName(): string {
+    return sessionEngineName(getSession(this.mid, this.sid), this.machine(), this.sid.startsWith("pane:") ? this.sid.slice(5) : undefined);
+  }
+
   /** Why the terminal hasn't come: its computer is offline, or isn't answering. */
   private notAnswering() {
     const m = this.machine();
@@ -685,7 +692,7 @@ export class TerminalFeed {
       // next try is answered ("View only" between tries read as a mirror that had given up, #6327).
       this.patch({ offline, loaded: true, control: taking ? (offline ? "off" : "starting") : c });
       // An offline computer in the page's words, whatever the hub's error says (it may name the machine by id).
-      this.failed(offline ? t("session-terminal-feed.not_in_herdr") : this.machine()?.online === false ? this.notAnswering() : error);
+      this.failed(offline ? t("session-terminal-feed.not_running_in", { engine: this.engineName() }) : this.machine()?.online === false ? this.notAnswering() : error);
     }
     this.inputMode();
   }

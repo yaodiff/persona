@@ -37,6 +37,7 @@ func (h *Hub) previewRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/machines/{mid}/preview/servers", h.withMachine(h.previewServers))
 	api.HandleFunc("POST /api/v1/machines/{mid}/preview/start", h.withMachine(h.previewStart))
 	api.HandleFunc("GET /api/v1/machines/{mid}/preview/connect", h.withMachine(h.previewConnect))
+	api.HandleFunc("POST /api/v1/machines/{mid}/preview/grant", h.withMachine(h.previewGrant))
 }
 
 // previewable refuses (and says so) a machine whose node has no previews: one from before them.

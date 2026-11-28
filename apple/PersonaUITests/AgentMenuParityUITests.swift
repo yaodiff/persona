@@ -61,14 +61,14 @@ final class AgentMenuParityUITests: XCTestCase {
     /// The entries of the menu list that shows `marker`: the top level's or, opened, More's.
     @MainActor private func menuLabels(marker: String) -> [String] {
         let wanted: [String: String] = [
-            "更多": "more", "Git": "git", "文件": "files", "子智能体（1）": "subagents", "全部子 Agent（1）": "subagents", "空间里的所有 Agent": "space",
-            "连接实时会话": "attach", "中断": "interrupt", "标为已看": "markSeen", "接管": "takeover",
-            "在新会话中继续": "continueInNewSession", "重命名 Agent…": "rename", "置顶": "pin", "取消置顶": "pin",
-            "屏蔽通知": "mute", "取消屏蔽通知": "mute", "关联到待办…": "linkTodo", "移动到其他待办…": "moveTodo",
-            "取消关联": "unlinkTodo", "停止循环": "stopLoop", "交给 Persona": "handToPersona",
+            "更多": "more", "Git": "git", "文件": "files", "子智能体1": "subagents", "空间内成员": "space",
+            "实时接入": "attach", "中断": "interrupt", "标为已看": "markSeen", "接管": "takeover",
+            "新会话继续": "continueInNewSession", "重命名 Agent": "rename", "自动命名": "autoRename", "置顶": "pin", "取消置顶": "pin",
+            "屏蔽通知": "mute", "开启通知": "mute", "关联到待办": "linkTodo", "更换关联待办": "moveTodo",
+            "解除关联": "unlinkTodo", "停止循环": "stopLoop", "交给 Persona": "handToPersona",
             "拷贝目录": "copyDirectory", "终端": "terminal", "拷贝恢复命令": "copyResume",
-            "在终端里恢复": "resume", "拆分窗格": "splitPane", "关闭标签页…": "closeTab",
-            "关闭 Agent…": "close", "删除对话…": "delete",
+            "在终端里恢复": "resume", "终端分屏": "splitPane", "关闭标签页": "closeTab",
+            "关闭 Agent": "close", "删除对话": "delete",
         ]
         let menu = app.collectionViews.containing(NSPredicate(format: "label == %@", marker)).firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5), "no system action menu:\n\(app.debugDescription)")

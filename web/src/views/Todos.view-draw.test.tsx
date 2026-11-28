@@ -6,6 +6,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Todo } from "../lib/todos";
+import type { Interaction, Session } from "../lib/types";
 import type { TodoSummary } from "../lib/todo-view-wire";
 import { resetRestoredCache, restoreTodo } from "../lib/todo-restore";
 
@@ -67,9 +68,9 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-const render = async (todos: Todo[], features = ["todo_view"]) => {
+const render = async (todos: Todo[], features = ["todo_view"], state = {}) => {
   localStorage.setItem("persona.todos.grouping", "status");
-  seed({ todos, todosLoaded: true, sessions: {}, interactions: [], answered: {}, features });
+  seed({ todos, todosLoaded: true, sessions: {}, interactions: [], answered: {}, features, ...state });
   await act(async () => root.render(<TodosView />));
   await flush();
 };
@@ -105,6 +106,22 @@ const withViews = [
 ];
 
 describe("To-dos sections from the hub's view", () => {
+  it.each([false, true])("shows supervisor processing in the Working section (slim rows: %s)", async (slim) => {
+    const at = iso(HOUR);
+    const worker: Session = { machine_id: "box", session_id: "worker", title: "Worker", cwd: "/demo", state: "needs_you", status: "blocked", updated_at: at };
+    const held: Interaction = { id: "ix-held", machine_id: "box", session_id: "worker", kind: "permission", delegating: true };
+    const todo = task("supervised", {
+      agents: [{ machine_id: "box", session_id: "worker", linked_at: at }],
+      view: view("working", "persona_working", "working"),
+    });
+    await render([todo], ["todo_view"], { sessions: { box: [worker] }, interactions: [held], assistant: { todos_v2: slim } });
+    const working = host.querySelector('[data-testid="todo-section"][data-section="working"]');
+    expect(working?.getAttribute("data-todos")).toBe("1");
+    const row = working?.querySelector('[data-todo="supervised"]');
+    expect(row?.querySelector(slim ? '[data-testid="todo-slim-cue"]' : '[data-testid="todo-status"]')?.textContent).toBe("督办处理中");
+    expect(marks()).toEqual({});
+  });
+
   it("draws from the hub's view by default when todo_view is advertised, without Developing Persona", async () => {
     const ranked = [
       task("todo_ask_second", { view: view("needs_you", "owner_decides", "needs_you", { rank: 2 }) }),

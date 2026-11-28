@@ -44,6 +44,7 @@ let host: HTMLDivElement;
 let root: Root;
 
 const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
 };
 
@@ -108,7 +109,8 @@ describe("older closed history", () => {
     expect(host.querySelector('[data-testid=todo-section][data-section="cancelled"]'), "older closed history keeps the Cancelled entry reachable")
       .not.toBeNull();
     expect(section.dataset.todos, "the server's whole-list count is not a visible row count").toBe("1");
-    expect(getState().todoBoard).not.toBeNull();
+    const board = getState().todoBoard;
+    expect(board).not.toBeNull();
     expect(host.textContent).not.toContain("Older done");
 
     await act(async () => fold.click());
@@ -118,7 +120,12 @@ describe("older closed history", () => {
     expect(host.textContent).toContain("Older done");
     expect(section.dataset.todos, "older rows are drawn from the cursor page").toBe("2");
     expect(getState().closedCursors.assistant).toEqual({ next_cursor: "", has_more: false });
-    expect(getState().todoBoard, "the bounded board yields to local triage for appended rows").toBeNull();
+    expect(getState().todoBoard).toBe(board);
+    expect(host.querySelector('[data-testid="todos-sections"]')?.getAttribute("data-todo-source")).toBe("board");
+
+    await act(async () => refreshTodos());
+    expect(getState().todoBoard).toEqual(board);
+    expect(host.textContent).toContain("Older done");
   });
 
   it("keeps older history reachable when the bounded window has no matching row", async () => {
@@ -206,12 +213,12 @@ describe("older closed history", () => {
     expect(host.textContent).toContain("Older done");
   });
 
-  it("loads the remaining closed pages when the calendar asks to show done rows", async () => {
+  it("keeps Calendar history bounded with Show done enabled", async () => {
     localStorage.setItem("persona.todos.calendar.showDone", "1");
+    const board = getState().todoBoard;
     await act(async () => root.render(<TodosView view="calendar" mode="day" date="2026-10-01" />));
     await flush();
-    expect(api).toHaveBeenCalledWith("/todos?limit=50&cursor=closed-1", expect.anything());
-    expect(getState().todos.some((todo) => todo.id === "done-older")).toBe(true);
-    expect(host.querySelector('[data-testid="todo-calendar-entry"]')?.textContent).toContain("Older done");
+    expect(api).not.toHaveBeenCalledWith("/todos?limit=50&cursor=closed-1", expect.anything());
+    expect(getState().todoBoard).toBe(board);
   });
 });

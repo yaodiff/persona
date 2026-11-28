@@ -668,6 +668,33 @@ func TestQueueOperations(t *testing.T) {
 	}
 }
 
+func TestQueueOperationPopOne(t *testing.T) {
+	var m Meta
+	for i, l := range []string{
+		`{"type":"queue-operation","operation":"enqueue","content":"first"}`,
+		`{"type":"queue-operation","operation":"enqueue","content":"second"}`,
+		`{"type":"queue-operation","operation":"enqueue","content":"third"}`,
+		`{"type":"queue-operation","operation":"popOne","content":"second"}`,
+	} {
+		ParseLine(i+1, []byte(l), &m)
+	}
+	if len(m.Queue) != 2 || m.Queue[0] != "first" || m.Queue[1] != "third" {
+		t.Fatalf("queue after matching popOne = %v", m.Queue)
+	}
+	ParseLine(5, []byte(`{"type":"queue-operation","operation":"popOne"}`), &m)
+	if len(m.Queue) != 1 || m.Queue[0] != "third" {
+		t.Fatalf("queue after empty-content popOne = %v", m.Queue)
+	}
+	ParseLine(6, []byte(`{"type":"queue-operation","operation":"popOne","content":"third"}`), &m)
+	if len(m.Queue) != 0 {
+		t.Fatalf("queue after last popOne = %v", m.Queue)
+	}
+	ParseLine(7, []byte(`{"type":"queue-operation","operation":"popOne","content":"missing"}`), &m)
+	if len(m.Queue) != 0 {
+		t.Fatalf("queue after popOne on empty queue = %v", m.Queue)
+	}
+}
+
 func TestDeveloperInfoAndQueueTags(t *testing.T) {
 	var m Meta
 	lines := []string{

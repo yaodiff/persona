@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/herdr"
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -60,8 +61,14 @@ func (n *Node) worktreeAdd(ctx context.Context, kind, cwd, branch, nameHint stri
 		return res, refusal("not_a_repository", "the folder is not in a Git repository", nil)
 	}
 	h, _ := n.hostOfKind(kind) // the host's checkouts directory; without one, herdr's
-	base := n.worktreesDir(h, repo.name)
 	branch = strings.TrimSpace(branch)
+	// On Orca, Orca makes it, under the Orca worktree the folder is (hostorca_agentworktree.go).
+	if o, ok := h.(*orcaHost); ok {
+		if res, done, err := n.orcaAgentWorktreeAdd(ctx, o, repo, branch, nameHint); done {
+			return res, err
+		}
+	}
+	base := n.worktreesDir(h, repo.name)
 	candidates := []string{branch}
 	if branch == "" {
 		own := agentBranch(nameHint)
@@ -143,10 +150,11 @@ func (n *Node) worktreeStatusOn(ctx context.Context, kind, cwd string, rt *runti
 		return st, nil
 	}
 	st.Branch = repo.branch
+	var h host.Host
 	if runtime {
 		st.Checkouts = n.runtimeCheckoutsOf(ctx, rt, st.Path) // the runtime's folder ("" when it cannot say)
 	} else {
-		h, _ := n.hostOfKind(kind)
+		h, _ = n.hostOfKind(kind)
 		st.Checkouts = n.worktreesDir(h, repo.name)
 	}
 	gitDir, err1 := absGit(ctx, st.Path, "--git-dir")
@@ -162,6 +170,10 @@ func (n *Node) worktreeStatusOn(ctx context.Context, kind, cwd string, rt *runti
 		_, st.Ours = rt.ownedWorktreeAt(st.Path)
 	} else {
 		st.Ours = within(realPath(st.Path), realPath(st.Checkouts))
+		// On Orca: any linked worktree Orca made, wherever its workspace folder is (worktreeRemove has Orca remove it).
+		if o, ok := h.(*orcaHost); ok && !st.Ours {
+			st.Ours = o.agentWorktreeAt(ctx, st.Path) != nil
+		}
 	}
 	if out, err := git(ctx, st.Path, "status", "--porcelain"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
@@ -247,6 +259,16 @@ func (n *Node) worktreeRemove(ctx context.Context, kind, path string, deleteBran
 	}
 	if runtime { // ours: a worktree workspace the runtime made
 		return n.runtimeAgentWorktreeRemove(ctx, rt, st, deleteBranch, force)
+	}
+	// One of Orca's worktrees goes through Orca, which then drops it from its sidebar (hostorca_agentworktree.go).
+	if h, _ := n.hostOfKind(kind); h != nil {
+		if o, ok := h.(*orcaHost); ok {
+			if w := o.agentWorktreeAt(ctx, st.Path); w != nil {
+				if res, done, err := n.orcaAgentWorktreeRemove(ctx, o, w, deleteBranch, force); done {
+					return res, err
+				}
+			}
+		}
 	}
 	args := []string{"worktree", "remove"}
 	if force {

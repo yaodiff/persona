@@ -107,6 +107,7 @@ func (c *client) writeWS(ctx context.Context, conn wsWriter, keepAlive func(hear
 				return err
 			}
 			c.recordSocketTraffic("websocket_frame", "written", int64(len(b)), 0)
+			c.warnOversizedFrame(b)
 		case <-ping.C:
 			if c.role == roleReadOnly && c.hub != nil && !c.hub.readOnlySessionsAllowed() {
 				if c.conn != nil {

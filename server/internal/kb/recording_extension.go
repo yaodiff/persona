@@ -161,7 +161,7 @@ func (e *Engine) checkRecordingWrite(w *RecordingWrite) ([]RecordingSegment, err
 		if sg.Start < 0 || sg.End < sg.Start {
 			return nil, badRecording("a transcript segment ends before it starts")
 		}
-		if sg.Text, sg.N, sg.Source, sg.Echo = strings.TrimSpace(sg.Text), 0, "", false; sg.Text != "" {
+		if sg.Text, sg.N, sg.Source, sg.Echo, sg.Speaker, sg.SpeakerUnsure = strings.TrimSpace(sg.Text), 0, "", false, "", false; sg.Text != "" {
 			segs = append(segs, sg)
 		}
 	}

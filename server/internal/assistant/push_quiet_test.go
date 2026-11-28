@@ -72,8 +72,8 @@ func (e *routeEnv) announced(id string) bool {
 }
 
 // With the switch on, a tool permission card of a supervised task stays off the owner's phone: it climbs leader → main
-// conversation, then goes back to the leader (the owner gets one P1 notice the hub holds for the briefing, never the
-// card's push), then stays with the leader, which is reminded again at each hold. Each step is a subtest of its own,
+// conversation, then goes back to the leader with internal reminders and no owner notification.
+// It stays with the leader, which is reminded again at each hold. Each step is a subtest of its own,
 // so a failure names the step.
 func TestQuietPermissionCardStaysWithItsSupervisor(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
@@ -110,11 +110,10 @@ func TestQuietPermissionCardStaysWithItsSupervisor(t *testing.T) {
 	}) {
 		return
 	}
-	if !step("held_notice", func(t *testing.T) {
-		waitFor(t, "the held notice", func() bool { return len(e.heldNotices(e.todo.ID)) == 1 })
-		n := e.heldNotices(e.todo.ID)[0]
-		if n.Level != assistantwire.LevelP1 || n.Kind != assistantwire.NotifyPush || !strings.Contains(n.Title, "修登录崩溃") {
-			t.Fatalf("held notice %+v", n)
+	if !step("internal_reminder", func(t *testing.T) {
+		waitFor(t, "the internal reminder event", func() bool { return len(workEventsOf(e.s, "ask_quiet_reminded")) > 0 })
+		if len(e.heldNotices(e.todo.ID)) != 0 {
+			t.Fatal("internal reminder was lost or constructed an owner notification")
 		}
 	}) {
 		return
@@ -136,9 +135,9 @@ func TestQuietPermissionCardStaysWithItsSupervisor(t *testing.T) {
 			t.Fatalf("the owner was pushed the card: %v", got)
 		}
 	})
-	step("one_held_notice", func(t *testing.T) {
-		if len(e.heldNotices(e.todo.ID)) != 1 {
-			t.Fatalf("held notice more than once: %+v", e.heldNotices(e.todo.ID))
+	step("no_owner_held_notice", func(t *testing.T) {
+		if len(e.heldNotices(e.todo.ID)) != 0 {
+			t.Fatalf("unexpected owner held notice: %+v", e.heldNotices(e.todo.ID))
 		}
 	})
 	step("still_delegating", func(t *testing.T) {
@@ -170,7 +169,7 @@ func TestQuietPermissionCardStaysWithItsSupervisor(t *testing.T) {
 }
 
 // An owner-only card parked with its leader has no deadline that hands it to the owner: it stays there at 15 minutes
-// and long after, even with its supervisor busy, and the held notice is not repeated.
+// and long after, even with its supervisor busy, without an owner notification.
 func TestQuietOwnerOnlyCardHasNoDeadline(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
 	oldHold := askHoldFor
@@ -184,7 +183,7 @@ func TestQuietOwnerOnlyCardHasNoDeadline(t *testing.T) {
 	e.s.askTick(start.Add(2 * askHoldFor)) // leader → main conversation
 	e.s.askTick(start.Add(4 * askHoldFor)) // main conversation → back to the leader, parked
 	e.s.askTick(start.Add(6 * askHoldFor)) // the hold expires again: the leader is reminded again
-	waitFor(t, "the held notice", func() bool { return len(e.heldNotices(e.todo.ID)) == 1 })
+	waitFor(t, "the internal reminder", func() bool { return len(workEventsOf(e.s, "ask_quiet_reminded")) > 0 })
 	e.supervisorState(proto.StatusIdle, proto.StatusWorking)
 	e.s.askTick(start.Add(15 * time.Minute))
 	e.supervisorState(proto.StatusIdle, proto.StatusIdle)
@@ -200,13 +199,13 @@ func TestQuietOwnerOnlyCardHasNoDeadline(t *testing.T) {
 	if !e.lastShown("ix1").Delegating {
 		t.Fatal("the card is no longer shown as the supervisor's")
 	}
-	if got := len(e.heldNotices(e.todo.ID)); got != 1 {
+	if got := len(e.heldNotices(e.todo.ID)); got != 0 {
 		t.Fatalf("the held notice was sent %d times", got)
 	}
 }
 
 // Ordinary questions have no deadline either: low-distraction mode keeps one with its supervisor after the same
-// elapsed time, with one held notice and no owner push.
+// elapsed time, with internal reminders and no owner push.
 func TestQuietQuestionHasNoAbsoluteDeadline(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
 	oldHold := askHoldFor
@@ -225,8 +224,8 @@ func TestQuietQuestionHasNoAbsoluteDeadline(t *testing.T) {
 	if got := e.cardPushes("ix1"); len(got) != 0 {
 		t.Fatalf("the ordinary question reached the owner on a timeout: %v", got)
 	}
-	if got := len(e.heldNotices(e.todo.ID)); got != 1 {
-		t.Fatalf("the question had %d quiet reminders, want one", got)
+	if got := len(e.heldNotices(e.todo.ID)); got != 0 {
+		t.Fatalf("the question constructed %d owner notifications, want none", got)
 	}
 	if !e.lastShown("ix1").Delegating {
 		t.Fatal("the ordinary question left its supervisors")
@@ -453,7 +452,7 @@ func TestQuietPleaseVerifyPostsNoCard(t *testing.T) {
 	s.ownerVerifiesAll = true
 	f.judge = `{"changed":"设置里多了开关","link":"https://hub.example.com/settings","how":"打开设置看开关"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "the ask", func() bool { a := askOf(s, todo.ID); return a != nil && !a.AskedAt.IsZero() })
 	waitFor(t, "the cardless ask", func() bool { a := askOf(s, todo.ID); return a != nil && a.NoCard && a.MessageID == "" })
 	if n := countAcceptCards(posts()); n != 0 {
@@ -570,14 +569,14 @@ func TestLeaderReportLevel(t *testing.T) {
 	}
 }
 
-// A plan waiting for the owner's Start is P1 (23:12 ruling): its push names no level, so the hub holds it for the
-// briefing with the switch on; a task that failed to start is P1 as well.
-func TestPlanWaitingForStartIsNotP0(t *testing.T) {
+// A real owner-step plan keeps the existing P1 priority. Missing ordinary dispatch authority alone
+// no longer produces a phone notification; it is covered by TestNonOwnerPlanWaitsDoNotPush.
+func TestOwnerPlanWaitingForStartIsNotP0(t *testing.T) {
 	ctx := context.Background()
 	s, f := newTaskService(t)
 	f.hello.Assistant.MachineID = "box"
 	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
-	if _, err := s.toolTaskPlan(ctx, "side1", planArgs(false)); err != nil {
+	if _, err := s.toolTaskPlan(ctx, "side1", planArgsWithStep(t, ownerStepMoney)); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the push", func() bool { return len(f.pushed()) == 1 })

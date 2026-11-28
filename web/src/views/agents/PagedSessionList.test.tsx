@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { api } from "../../lib/api";
@@ -281,5 +282,25 @@ describe("paged grouping controls", () => {
     pick.getBoundingClientRect = () => measured(96);
     await act(async () => pick.click());
     expect(menuWidth()).toBe(`${SESSION_LIST_METRICS.pickMenuMin}px`);
+  });
+
+  it("renders preloaded root counts synchronously on first render without a loading flash", async () => {
+    localStorage.setItem("persona.agentBrowseBy", "project");
+    rootCounts.mockResolvedValue({ ...counts(), project: { "/work/alpha": 2, "/work/beta": 5 } });
+    await list.load();
+    const html = renderToStaticMarkup(
+      <PagedSessionList
+        root={list}
+        path="/sessions"
+        identity={identity}
+        compare={compare}
+        event="sessions_list"
+        renderRow={(row) => <span>{row.id}</span>}
+      />,
+    );
+    expect(html).not.toContain(`role="status"`);
+    expect(html).not.toContain(t("sidebar.loading"));
+    expect(html).toContain(t("paged-agents.count", { count: 21 }));
+    expect(html).toContain("data-session-group");
   });
 });

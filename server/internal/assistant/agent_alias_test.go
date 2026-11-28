@@ -102,12 +102,12 @@ func TestAgentToolsAndSupervisionResolveAgyPlaceholderAlias(t *testing.T) {
 		t.Fatalf("taskAgentsReached = %+v (ok=%v), want [%s]", reached, ok, realID)
 	}
 	seenItemsID = ""
-	replies, _ := s.taskReplies(ctx, todo)
+	replies, _, _ := s.taskReplies(ctx, todo)
 	if seenItemsID != realID || len(replies) != 1 || !strings.Contains(replies[0].Text, "Fixed in PR #999.") {
 		t.Fatalf("taskReplies = %+v (queried %q), want reply from %s", replies, seenItemsID, realID)
 	}
 	seenItemsID = ""
-	outcomes := s.outcomeAgents(ctx, todo)
+	outcomes, _ := s.outcomeAgents(ctx, todo)
 	if seenItemsID != realID || len(outcomes) != 1 || !strings.Contains(outcomes[0].Text, "Fixed in PR #999.") {
 		t.Fatalf("outcomeAgents = %+v (queried %q), want outcome from %s", outcomes, seenItemsID, realID)
 	}

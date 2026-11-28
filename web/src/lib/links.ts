@@ -15,7 +15,7 @@ import { APP_SCHEMES, assistantPath } from "./compatibility";
 // writing in, as <persona-context> tags in the next message (docs/protocol/protocol.md "Tags in messages").
 import { t } from "../i18n";
 import { useSyncExternalStore } from "react";
-import { uuid } from "./format";
+import { safeWebURL, uuid } from "./format";
 import { openPanel } from "./panel";
 import { agentOpenMode } from "./agent-open";
 import { openLinkPage, taskRoute } from "./handoff";
@@ -148,15 +148,49 @@ function hubPage(u: URL, origin: string | string[], base: string): LinkRoute | n
   return parseRoute(path, u.search).name === "not-found" ? null : { kind: "page", path: path + u.search + u.hash };
 }
 
+const CTRL = /[\u0000-\u001f\u007f]/;
+
+function safeSystemHref(raw: string): string | undefined {
+  if (!raw || CTRL.test(raw)) return undefined;
+  const u = parse(raw);
+  if (!u) return undefined;
+  const scheme = u.protocol.toLowerCase();
+  if (scheme !== "mailto:" && scheme !== "tel:") return undefined;
+  if (u.username || u.password) return undefined;
+  const rest = raw.slice(scheme.length);
+  if (!rest || rest.startsWith("//") || !(u.pathname || u.search)) return undefined;
+  return raw;
+}
+
+function isApiPath(raw: string): boolean {
+  if (!raw.startsWith("/") || CTRL.test(raw) || raw.includes("\\") || raw.includes("#")) return false;
+  const p = raw.split("?", 1)[0];
+  if (p.includes("//") || /%(?:25)*5c/i.test(p) || /(?:^|\/|%2f)(?:\.|%(?:25)*2e){1,2}(?:$|\/|%2f)/i.test(p)) return false;
+  const u = parse(raw, "https://hub.invalid");
+  return !!u && u.origin === "https://hub.invalid" && (u.pathname.startsWith("/api/") || (!!BASE && u.pathname.startsWith(`${BASE}/api/`)));
+}
+
+// A link relative to the page it is on, as a Markdown file links its own sections and the files beside it: a
+// fragment (#heading) or a path from the page's folder (./other.md). No backslash, control character or `..` segment,
+// so it names no other site or scheme and no page above that folder. A bare relative path (api/v1/…) stays refused.
+function isRelativeLink(raw: string): boolean {
+  if (!/^(?:#|\.\/)/.test(raw) || CTRL.test(raw) || raw.includes("\\")) return false;
+  const p = raw.split(/[?#]/, 1)[0];
+  return !/%(?:25)*5c/i.test(p) && !/(?:^|\/|%2f)(?:\.|%(?:25)*2e){2}(?:$|\/|%2f)/i.test(p);
+}
+
 /**
  * Where `url` opens. `lark`: whether the hub reads Feishu (store.larkOn); without it Feishu links are web pages.
  * `origin`: this page's and the hub's advertised ones, for telling the hub's own pages from other sites.
  */
 export function linkRoute(url: string, lark = larkOn(), origin: string | string[] = pageOrigin(), base = BASE): LinkRoute {
-  const u = parse(url.trim());
+  const raw = url.trim();
+  if (!raw || CTRL.test(raw)) return { kind: "none" };
+  const u = parse(raw);
   if (!u) return { kind: "none" };
   const scheme = u.protocol.toLowerCase();
   if (APP_SCHEMES.has(scheme.slice(0, -1))) {
+    if (u.username || u.password) return { kind: "none" };
     // persona://session/<mid>/<sid>: the host is "session"
     try {
       const parts = `${u.host}${u.pathname}`.split("/").filter(Boolean).map(decodeURIComponent);
@@ -166,16 +200,19 @@ export function linkRoute(url: string, lark = larkOn(), origin: string | string[
       return { kind: "none" };
     }
     // the route table's other forms (docs/protocol/deep-links.md): read when opened, off the first screen
-    return /^(open|session|task|kb|settings|extension)$/.test(u.host) ? { kind: "app", url: url.trim() } : { kind: "none" };
+    return /^(open|session|task|kb|settings|extension)$/.test(u.host) ? { kind: "app", url: raw } : { kind: "none" };
   }
-  if (scheme === "mailto:" || scheme === "tel:") return { kind: "system" };
+  if (scheme === "mailto:" || scheme === "tel:") return safeSystemHref(raw) ? { kind: "system" } : { kind: "none" };
   if (scheme !== "http:" && scheme !== "https:") return { kind: "none" };
-  const own = hubPage(u, origin, base);
+  const safe = safeWebURL(raw);
+  if (!safe) return { kind: "none" };
+  const su = parse(safe)!;
+  const own = hubPage(su, origin, base);
   if (own) return own;
-  if (lark && isFeishuHost(u.hostname)) {
-    const first = u.pathname.split("/").filter(Boolean)[0] ?? "";
-    if (DOC_PATHS.includes(first)) return { kind: "doc", doc: docKind(url) };
-    const post = momentsPostID(u);
+  if (lark && isFeishuHost(su.hostname)) {
+    const first = su.pathname.split("/").filter(Boolean)[0] ?? "";
+    if (DOC_PATHS.includes(first)) return { kind: "doc", doc: docKind(safe) };
+    const post = momentsPostID(su);
     if (post) return { kind: "moments", id: post };
   }
   return { kind: "web" };
@@ -228,10 +265,16 @@ export function isHubPortLink(l: PortLink, hostnames: readonly string[]): boolea
   });
 }
 
-/** The href to put on an <a>: persona://session links become the in-app path, so ⌘-click opens a tab of that page. */
-export function linkHref(url: string): string {
-  const r = linkRoute(url);
-  return r.kind === "session" ? `${BASE}/s/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.sid)}` : url;
+/** The href to put on an <a>: persona://session links become the in-app path, so ⌘-click opens a tab of that page;
+ *  disallowed schemes and unsafe URLs resolve to undefined rather than leaking into <a href>. */
+export function linkHref(url: string): string | undefined {
+  const raw = url.trim();
+  const r = linkRoute(raw);
+  if (r.kind === "session") return `${BASE}/s/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.sid)}`;
+  if (r.kind === "app") return r.url;
+  if (r.kind === "system") return safeSystemHref(raw);
+  if (r.kind === "none") return isApiPath(raw) || isRelativeLink(raw) ? raw : undefined;
+  return safeWebURL(raw);
 }
 
 /** Opens a link where it belongs (see the top of this file). `title` names it in the panel until the page says;
@@ -270,19 +313,26 @@ export function openLink(url: string, title?: string, manager?: string) {
       });
       return;
     case "doc":
-    case "moments":
-      if (opensInApp(url)) {
-        openPanel({ kind: "link", url, title: title || undefined, manager: otherManager(manager) });
+    case "moments": {
+      const safe = safeWebURL(url);
+      if (!safe) return;
+      if (opensInApp(safe)) {
+        openPanel({ kind: "link", url: safe, title: title || undefined, manager: otherManager(manager) });
         return;
       }
-      window.open(url, "_blank", "noopener,noreferrer");
+      window.open(safe, "_blank", "noopener,noreferrer");
       return;
-    case "web":
-      window.open(url, "_blank", "noopener,noreferrer");
+    }
+    case "web": {
+      const safe = safeWebURL(url);
+      if (safe) window.open(safe, "_blank", "noopener,noreferrer");
       return;
-    case "system":
-      location.href = url;
+    }
+    case "system": {
+      const safe = safeSystemHref(url.trim());
+      if (safe) location.href = safe;
       return;
+    }
     case "none":
       return;
   }

@@ -35,6 +35,7 @@ const { TodosView } = await import("./Todos");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const ASKED = "2026-11-09T06:30:00.123456789Z";
+const resendAction = expect.objectContaining({ label: expect.any(String), run: expect.any(Function) });
 const now = new Date().toISOString();
 const decide: TodoAsk = { outcome: "decide", verdict: "🤔 需要你决定：两个方案各有取舍", recommend: "先发预发环境", asked_at: ASKED };
 const todo = (o: Partial<Todo> = {}): Todo => ({ id: "t1", title: "上线新登录页", created_at: now, updated_at: now, origin: "conv1", ask: decide, ...o });
@@ -66,6 +67,10 @@ afterEach(() => {
 const flush = () => act(async () => {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 });
+/** Long enough for an accept's tries (none wait under Vitest) and what follows them. */
+const settle = async () => {
+  for (let i = 0; i < 6; i++) await flush();
+};
 const drawList = async (todos: Todo[], selectedId?: string) => {
   seed({ todos, todosLoaded: true, sessions: {}, interactions: [] });
   act(() => root.render(<TodosView selectedId={selectedId} />));
@@ -136,8 +141,8 @@ describe("a to-do's row", () => {
     await drawList([todo()]);
     act(() => askButton()!.click());
     await flush();
-    expect(host.querySelector("[data-ask-done=recorded]")?.textContent).toBe("已记录。Agent 已停止运行，将由督办接手处理。");
-    expect(toast).toHaveBeenCalledWith("已记录。Agent 已停止运行，将由督办接手处理。", "ok");
+    expect(host.querySelector("[data-ask-done=recorded]")?.textContent).toBe("已记录。没能送到 Agent，将由督办接手转交");
+    expect(toast).toHaveBeenCalledWith("已记录。没能送到 Agent，将由督办接手转交", "ok");
   });
 
   it("an earlier round already answered says so and reads the to-dos again", async () => {
@@ -162,7 +167,57 @@ describe("a to-do's row", () => {
     act(() => askButton()!.click());
     await flush();
     expect(askButton()!.disabled).toBe(false);
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining("推荐的方案没送到 Agent：电脑离线"), "error");
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("推荐的方案没送到 Agent：电脑离线"), "error", resendAction);
+  });
+
+  // A restarting hub's empty 502/503 or a dropped connection is no answer (#17431): the same round is tried again a
+  // couple of times (the hub takes a round once), and only then does the owner see why, with OK and Resend still there.
+  it("tries an accept again through an empty gateway answer, and takes it", async () => {
+    let tries = 0;
+    api.mockImplementation(async (path: string) => {
+      if (!path.endsWith("/accept")) return path === "/todos" ? { todos: [] } : {};
+      if (++tries < 3) throw new ApiError(502, "HTTP 502", { error: "" }, false);
+      return { ok: true };
+    });
+    await drawList([todo()]);
+    act(() => askButton()!.click());
+    await settle();
+    expect(accepts()).toHaveLength(3);
+    expect(accepts().every(([, init]) => (init as { json: { asked_at: string } }).json.asked_at === ASKED)).toBe(true);
+    expect(toast).toHaveBeenCalledWith("已采用推荐方案", "ok");
+  });
+
+  it("keeps the choice after the tries run out, says why, and Resend sends that round once more", async () => {
+    api.mockImplementation(async (path: string) => {
+      if (path.endsWith("/accept")) throw new ApiError(503, "HTTP 503", { error: "" }, false);
+      return {};
+    });
+    await drawList([todo()]);
+    act(() => askButton()!.click());
+    await settle();
+    expect(accepts()).toHaveLength(3);
+    expect(askButton()!.disabled).toBe(false);
+    const [text, tone, action] = toast.mock.calls.at(-1)! as [string, string, { label: string; run: () => void }];
+    expect(text).toContain(t("lib-api.hub_unavailable", { detail: "HTTP 503" }));
+    expect(tone).toBe("error");
+    expect(action.label).toBe(t("todos.ask_resend"));
+    api.mockImplementation(async (path: string) => path.endsWith("/accept") ? { ok: true } : path === "/todos" ? { todos: [] } : {});
+    act(() => { action.run(); action.run(); });
+    await flush();
+    expect(accepts()).toHaveLength(4);
+    expect(toast).toHaveBeenCalledWith("已采用推荐方案", "ok");
+  });
+
+  it("never tries again an accept the hub refused with its own reason", async () => {
+    api.mockImplementation(async (path: string) => {
+      if (path.endsWith("/accept")) throw new ApiError(502, "回答没发出去：电脑离线", { code: "accept_not_taken", error: "回答没发出去：电脑离线", delivered: "none" });
+      return {};
+    });
+    await drawList([todo()]);
+    act(() => askButton()!.click());
+    await flush();
+    expect(accepts()).toHaveLength(1);
+    expect(toast).toHaveBeenCalledWith(t("todos.ask_failed", { error: "回答没发出去：电脑离线" }), "error", resendAction);
   });
 
   it("a newer round offers OK again after the last one was handled", async () => {
@@ -349,7 +404,7 @@ describe("controlled to-do ask callbacks", () => {
     act(() => askButton()!.click());
     await flush();
     expect(onAccept).toHaveBeenCalledWith("t1", ASKED);
-    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("panel offline"), "error");
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("panel offline"), "error", resendAction);
     expect(onRefresh).not.toHaveBeenCalled();
     expect(askButton()!.disabled).toBe(false);
     expect(accept).not.toHaveBeenCalled();
@@ -400,7 +455,7 @@ describe("controlled to-do ask callbacks", () => {
     await flush();
     act(() => askButton()!.click());
     await flush();
-    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("synchronous offline"), "error");
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("synchronous offline"), "error", resendAction);
     expect(askButton()!.disabled).toBe(false);
     expect(toast).not.toHaveBeenCalled();
   });

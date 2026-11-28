@@ -1,6 +1,6 @@
 {
   "name": "task_start_keys",
-  "description": "Type into the terminal tab a task's agent did not start in, while its computer keeps that tab and no agent runs there: text as is (no enter, at most 32 characters), then keys by name (\"enter\", \"esc\", \"ctrl+c\", \"y\", \"n\", \"up\", \"down\"…, at most 8). Use it to answer the question the tab's shell waits on, or to get past where the agent's screen stopped; read the tab first with task_start_screen and again after. The keys, the text and your reason are kept with the task's history. It starts nothing: start the agent again with task_retry.",
+  "description": "Answer a failed startup's shell or Agent prompt in its kept terminal tab while no Agent runs there. Only the main conversation or the task's current supervising conversation may act. Read the tab with task_start_screen before and after. Send up to 32 characters without Enter, then up to 8 named keys (enter, esc, ctrl+c, y, n, up, down). The keys, text and reason go in the task history. Use task_retry to start again.",
   "input_schema": {
     "type": "object",
     "required": [

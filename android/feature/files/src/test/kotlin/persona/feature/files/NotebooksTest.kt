@@ -140,6 +140,112 @@ class NotebooksTest {
             "<table><tr><th></th><th>地区</th><th>数量</th></tr><tr><td>0</td><td>华东</td><td>1200</td></tr><tr><td>10</td><td>华南</td><td>-80</td></tr></table>"))
     }
 
+    @Test fun htmlEntitiesDoNotDoubleDecode() {
+        assertEquals(
+            "&lt; &quot; &lt; &#60; &#60; && &foo; &amp &#; &#x; &#99999999999999999999; &#1114112; &#0; &#x0; &#xD800; &#xDFFF; \uD83D\uDE00",
+            Notebooks.htmlText("&#38;lt; &#x26;quot; &amp;lt; &#38;#60; &amp;#60; &&amp; &foo; &amp &#; &#x; &#99999999999999999999; &#1114112; &#0; &#x0; &#xD800; &#xDFFF; &#x1F600;"),
+        )
+    }
+
+    @Test fun htmlScriptAndStyleTagBoundariesAndWhitespaceEndTags() {
+        // Custom elements with script-/style- prefixes or letter suffixes must NOT be stripped.
+        assertEquals("visible", Notebooks.htmlText("<script-tag>visible</script-tag><script>hidden</script>"))
+        assertEquals("shown", Notebooks.htmlText("<style-guide>shown</style-guide><style>hidden</style>"))
+        assertEquals("keep1 keep2", Notebooks.htmlText("<scriptx>keep1</scriptx> <stylesheet>keep2</stylesheet>"))
+        // Valid HTML5 closing tags with whitespace before '>' must strip the entire block.
+        assertEquals("after", Notebooks.htmlText("<SCRIPT type=\"text/javascript\">alert(1)</ScRiPt \n>after"))
+        assertEquals("ok", Notebooks.htmlText("<style>/* </script> */</style\t>ok"))
+        assertEquals("done", Notebooks.htmlText("<script>x</script-fake>y</script >done"))
+    }
+
+    @Test fun htmlTableAlignmentBoundsMemoryAndCapsBeforeAlign() {
+        // Previously: 1 wide cell (100k chars) + 5,000 short 2-col rows allocated ~1 GB of padding spaces in alignColumns.
+        val wide = "x".repeat(100_000)
+        val rows = buildString {
+            append("<table><tr><td>").append(wide).append("</td><td>end</td></tr>")
+            repeat(5_000) { append("<tr><td>a</td><td>b</td></tr>") }
+            append("</table>")
+        }
+        val nb = Notebooks.parse(
+            """{"nbformat":4,"cells":[{"cell_type":"code","source":"","outputs":[
+                {"output_type":"display_data","data":{"text/html":"$rows"}}
+            ]}]}""",
+            more,
+        )
+        val htmlOut = nb.cells.single().outputs.single() as Output.Html
+        val outLines = htmlOut.text.split('\n')
+        assertEquals(Notebooks.MAX_OUTPUT_LINES + 1, outLines.size)
+        assertEquals("$wide  end", outLines.first())
+        assertEquals("… 还有 3001 行没有显示", outLines.last())
+        assertTrue("capped table output must remain bounded: ${htmlOut.text.length}", htmlOut.text.length < 350_000)
+
+        // Direct htmlText() without line cap also bounds total alignment padding (200k char budget).
+        val direct = Notebooks.htmlText(rows)
+        assertTrue("direct htmlText padding must remain bounded: ${direct.length}", direct.length < 400_000)
+        assertTrue(direct.startsWith("$wide  end\n"))
+
+        // Multiple HTML table outputs in one notebook share the notebook-level padding budget.
+        val mediumTable = buildString {
+            append("<table><tr><td>").append("w".repeat(80)).append("</td><td>z</td></tr>")
+            repeat(1_000) { append("<tr><td>a</td><td>b</td></tr>") }
+            append("</table>")
+        }
+        val manyOutputs = (1..20).joinToString(",") {
+            """{"output_type":"display_data","data":{"text/html":"$mediumTable"}}"""
+        }
+        val multiNb = Notebooks.parse(
+            """{"nbformat":4,"cells":[{"cell_type":"code","source":"","outputs":[$manyOutputs]}]}""",
+            more,
+        )
+        val totalChars = multiNb.cells.single().outputs.sumOf { (it as Output.Html).text.length }
+        assertTrue("shared notebook padding budget must bound multi-output total: $totalChars", totalChars < 400_000)
+
+        // Capping right on a collapsed blank line preserves the blank line and exact hidden count.
+        val blankAtCap = buildString {
+            repeat(Notebooks.MAX_OUTPUT_LINES - 1) { i -> append("<p>r$i</p>") }
+            append("<p></p><p></p><p>after</p>")
+        }
+        val blankNb = Notebooks.parse(
+            """{"nbformat":4,"cells":[{"cell_type":"code","source":"","outputs":[
+                {"output_type":"display_data","data":{"text/html":"$blankAtCap"}}
+            ]}]}""",
+            more,
+        )
+        val blankLines = (blankNb.cells.single().outputs.single() as Output.Html).text.split('\n')
+        assertEquals(Notebooks.MAX_OUTPUT_LINES + 1, blankLines.size)
+        assertEquals("", blankLines[Notebooks.MAX_OUTPUT_LINES - 1])
+        assertEquals("… 还有 1 行没有显示", blankLines.last())
+
+        // Many columns (> MAX_ALIGN_COLUMNS) preserve every cell without quadratic padding.
+        val wideCols = buildString {
+            append("<table>")
+            repeat(100) { r ->
+                append("<tr>")
+                repeat(100) { c -> append("<td>").append(if (r == 0) "col$c" else "v").append("</td>") }
+                append("</tr>")
+            }
+            append("</table>")
+        }
+        val wideColsOut = Notebooks.htmlText(wideCols)
+        assertEquals(100, wideColsOut.lines().size)
+        assertTrue(wideColsOut.lines().first().contains("col99"))
+    }
+
+    @Test fun unclosedHtmlTagsAndLargeCapLinesFinishQuickly() {
+        // Previously quadratic regex backtracking on repeated unclosed <script> or < characters.
+        val unclosedScripts = "<script>".repeat(20_000) + "<style>drop</style>ok"
+        assertEquals("ok", Notebooks.htmlText(unclosedScripts))
+        val unclosedLt = "<".repeat(50_000) + "tail"
+        assertEquals(unclosedLt, Notebooks.htmlText(unclosedLt))
+
+        // capLines counts hidden lines in O(1) extra memory and handles max = 0 and large inputs.
+        assertEquals("… 还有 2 行没有显示", Notebooks.capLines("a\nb\n", more, 0))
+        assertEquals("", Notebooks.capLines("", more, 0))
+        val many = (1..25_000).joinToString("\n")
+        val capped = Notebooks.capLines(many, more, 3)
+        assertEquals("1\n2\n3\n… 还有 24997 行没有显示", capped)
+    }
+
     companion object {
         val SAMPLE = """{
           "nbformat": 4, "nbformat_minor": 5,

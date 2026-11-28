@@ -327,6 +327,7 @@ func TestOwnerActionFeishuReplyFailuresGrantNothing(t *testing.T) {
 }
 
 func TestOwnerActionAmbiguousFeishuMappingIsConsumedWithoutForwarding(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _, book := ownerReplyTestService(t)
 	first := ownerReplyBatchIX(createOwnerTestBatch(t, book, `{"body":"first"}`))
 	second := ownerReplyBatchIX(createOwnerTestBatch(t, book, `{"body":"second"}`))

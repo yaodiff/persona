@@ -216,6 +216,11 @@ func (f *fakeTodos) StalePRFollowups(context.Context, time.Time, string) []modap
 	return f.followups
 }
 
+func (f *fakeTodos) DeferredSupervision(context.Context, time.Time) []modapi.BriefDeferredSupervision {
+	return nil
+}
+func (f *fakeTodos) SupervisionBriefed(context.Context, []string, time.Time) {}
+
 type fakeInbox struct{ signals []modapi.BriefInboxSignal }
 
 func (f *fakeInbox) FollowingSignals(context.Context) []modapi.BriefInboxSignal { return f.signals }

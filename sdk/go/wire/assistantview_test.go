@@ -596,3 +596,61 @@ func TestStripAssistantFieldsDriftGuard(t *testing.T) {
 		})
 	}
 }
+
+func TestHasImageRefAndAssistantViewRejectDiffThreadAvatarRef(t *testing.T) {
+	diffWithRef := Component{
+		Type:  "diff",
+		Path:  "a.go",
+		Hunks: []Hunk{{Header: "@@ -1 +1 @@", Lines: []string{"+x"}}},
+		Threads: []Thread{{
+			Side: "new",
+			Line: 1,
+			Comments: []Comment{{
+				ID:     "c1",
+				Author: "alice",
+				Body:   "looks good",
+				Avatar: &Avatar{Ref: "ext-pic"},
+			}},
+		}},
+	}
+	if !HasImageRef(&diffWithRef) {
+		t.Fatal("HasImageRef returned false for diff.threads[].comments[].avatar.ref")
+	}
+	diffWithHTTPS := Component{
+		Type:  "diff",
+		Path:  "a.go",
+		Hunks: []Hunk{{Header: "@@ -1 +1 @@", Lines: []string{"+x"}}},
+		Threads: []Thread{{
+			Side: "new",
+			Line: 1,
+			Comments: []Comment{{
+				ID:     "c1",
+				Author: "alice",
+				Body:   "looks good",
+				Avatar: &Avatar{URL: "https://example.com/a.png"},
+			}},
+		}},
+	}
+	if HasImageRef(&diffWithHTTPS) {
+		t.Fatal("HasImageRef returned true for diff thread comment avatar with https url")
+	}
+	validView := &View{Fallback: "diff", Sections: []Section{{Items: []Component{diffWithHTTPS}}}}
+	if err := CheckAssistantView(validView); err != nil {
+		t.Fatalf("CheckAssistantView rejected valid diff with https avatar: %v", err)
+	}
+
+	v := &View{Fallback: "diff", Sections: []Section{{Items: []Component{diffWithRef}}}}
+	if err := CheckAssistantView(v); err == nil || !strings.Contains(err.Error(), "not ref") {
+		t.Fatalf("CheckAssistantView accepted or gave wrong error for diff thread avatar ref: %v", err)
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseAssistantView(raw); err == nil || !strings.Contains(err.Error(), "not ref") {
+		t.Fatalf("ParseAssistantView accepted or gave wrong error for diff thread avatar ref: %v", err)
+	}
+	if _, err := ParseAgentPage(raw); err == nil || !strings.Contains(err.Error(), "not ref") {
+		t.Fatalf("ParseAgentPage accepted or gave wrong error for diff thread avatar ref: %v", err)
+	}
+}

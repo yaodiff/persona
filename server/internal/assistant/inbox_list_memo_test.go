@@ -69,8 +69,13 @@ func getInbox(t *testing.T, h *inboxHub, query string) (got, want []byte) {
 		t.Fatal(err)
 	}
 	items, _ := h.inboxListAt(query == "?sources=all")
+	stored, known := h.inboxStoredSources(context.Background())
+	var presence *assistantwire.InboxStoredSources
+	if known {
+		presence = &stored
+	}
 	ref := httptest.NewRecorder()
-	apierr.WriteJSON(ref, map[string]any{"items": items, "as_of": head.AsOf, "triage": h.inboxTriage()})
+	apierr.WriteJSON(ref, inboxListResponse{AsOf: head.AsOf, Items: items, StoredSources: presence, Triage: h.inboxTriage()})
 	return w.Body.Bytes(), ref.Body.Bytes()
 }
 

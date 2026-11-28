@@ -93,7 +93,9 @@ func TestNoVoiceWithoutItsModule(t *testing.T) {
 	if p := h.extensions.reg.Get("talk"); p == nil || p.Record.Source == extension.SourceBuiltin {
 		t.Fatalf("hub.json's entry: %+v", p)
 	}
-	if h.extensions.voiceID != "" || takesOverVoice(h.modules(), voiceEntry("talk")) || voiceURL(h.modules(), json.RawMessage(`{"url":"wss://x/v1/live"}`)) != "" {
+	if h.extensions.voiceID != "" || takesOverVoice(h.modules(), voiceEntry("talk")) ||
+		voiceURL(h.modules(), json.RawMessage(`{"url":"wss://x/v1/live"}`)) != "" ||
+		voiceTTSURL(h.modules(), json.RawMessage(`{"tts_url":"https://tts.example.com"}`)) != "" {
 		t.Fatal("the built-in voice extension is named without its module")
 	}
 	if _, _, ok := h.extensions.transcriptionRef(""); ok {
@@ -222,24 +224,47 @@ func TestVoiceManifest(t *testing.T) {
 	if parsed.Kind() != "voice" || parsed.Name != "实时语音" || !parsed.Permissions.FullHub() || !slices.Equal(parsed.Activation(), []string{extension.OnStartup}) {
 		t.Fatalf("%+v", parsed)
 	}
-	if len(parsed.Secrets) != 1 || parsed.Secrets[0].Name != voiceSecretKey || parsed.Secrets[0].Required {
-		t.Fatalf("the key is a secret, not required (hub.json's upstreams need none): %+v", parsed.Secrets)
+	if len(parsed.Secrets) != 2 || parsed.Secrets[0].Name != voiceSecretKey || parsed.Secrets[0].Required ||
+		parsed.Secrets[1].Name != voiceTTSSecretKey || parsed.Secrets[1].Required {
+		t.Fatalf("the keys are optional secrets: %+v", parsed.Secrets)
 	}
 	schema, err := extension.ParseSchema(parsed.Configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, ok := range []string{`{}`, `{"url":"wss://live.example.com/v1/live","dialect":"codex","models":["gpt-live-1"],"input_rate":24000,"owner":"me"}`,
-		`{"url":"ws://gateway.example.com:8080/v1/live"}`} {
+		`{"url":"ws://gateway.example.com:8080/v1/live"}`,
+		`{"tts_url":"https://tts.example.com","tts_model":"default","tts_default_voice":"af_heart","tts_sample_rate":24000}`,
+		`{"tts_url":"http://127.0.0.1:8880/prefix/v1/audio/speech","tts_model":"org/model-v1","tts_sample_rate":8000}`,
+		`{"tts_url":"http://[::1]:8880","tts_sample_rate":48000}`} {
 		if err := schema.Check(json.RawMessage(ok)); err != nil {
 			t.Errorf("%s: %v", ok, err)
 		}
 	}
 	for _, bad := range []string{`{"url":"https://live.example.com"}`, `{"url":"wss://"}`, `{"dialect":"fake"}`, `{"input_rate":8000}`,
 		`{"models":["has space"]}`, `{"key_command":"cat ~/.ssh/id_rsa"}`, `{"ssh":"elsewhere"}`, `{"key_file":"/etc/shadow"}`,
-		`{"tools":true}`, `{"providers":[]}`, `{"key":"in the config"}`} {
+		`{"tools":true}`, `{"providers":[]}`, `{"key":"in the config"}`, `{"tts_key":"in the config"}`,
+		`{"tts_url":"wss://tts.example.com"}`, `{"tts_url":"https://"}`, `{"tts_url":"https://user:pass@tts.example.com"}`,
+		`{"tts_url":"https://tts.example.com?k=1"}`, `{"tts_model":"has space"}`,
+		`{"tts_default_voice":"has space"}`, `{"tts_sample_rate":7999}`, `{"tts_sample_rate":48001}`} {
 		if err := schema.Check(json.RawMessage(bad)); err == nil {
 			t.Errorf("%s: taken", bad)
+		}
+	}
+	ts := voiceTranslations()
+	for _, l := range []i18n.Lang{i18n.ZhHans, i18n.Ja} {
+		if got := ts.Secret(l, parsed.Secrets[1]); got.Title != i18n.T(l, "hub-voice_extension.manifest_tts_key_title") {
+			t.Errorf("%s tts_key title = %q", l, got.Title)
+		}
+		loc := ts.Schema(l, schema)
+		var foundTTSURL bool
+		for _, f := range loc.Fields {
+			if f.Name == "tts_url" {
+				foundTTSURL = f.Title == i18n.T(l, "hub-voice_extension.manifest_tts_url_title")
+			}
+		}
+		if !foundTTSURL {
+			t.Errorf("%s tts_url field not translated", l)
 		}
 	}
 	if m := voiceManifest(h, v, "talk", "语音"); m.ID != "talk" || m.Name != "语音" || m.Items("voice")[0] != "talk" {
@@ -688,6 +713,12 @@ func TestSameOrigin(t *testing.T) {
 		{"wss://a.example.com/v1/live", "", false},
 		{"", "", true},
 		{"wss://[::1]:9000/v1", "wss://[::1]:9000/v2", true},
+		{"https://tts.example.com", "https://TTS.example.com:443/v1/audio/speech", true},
+		{"http://tts.example.com/prefix", "http://tts.example.com:80/v1/audio/speech", true},
+		{"https://tts.example.com", "http://tts.example.com", false},
+		{"https://tts.example.com", "https://tts.example.com:8443", false},
+		{"https://tts.example.com", "https://other.example.com", false},
+		{"https://tts.example.com", "", false},
 	} {
 		if got := sameOrigin(tc.a, tc.b); got != tc.same {
 			t.Errorf("%q %q: %v", tc.a, tc.b, got)
@@ -747,5 +778,168 @@ func TestVoiceLinksQuotaGatewayConfig(t *testing.T) {
 	}
 	if gwProv.ID != "gateway" || gwProv.Name != "Relay" || gwProv.URL != "ws://127.0.0.1:8080/v1/live" || gwProv.Dialect != "codex" || gwProv.Key != "gw-api-key-123456" {
 		t.Fatalf("gwProv: %+v", gwProv)
+	}
+}
+
+// tts_key requires tts_url first, stays sealed and reaches the extension via PERSONA_EXTENSION_SECRETS, follows
+// tts_url's origin independently of url/key, and clears when tts_url moves origin or is cleared.
+func TestVoiceTTSKeyFollowsTTSURL(t *testing.T) {
+	onVoiceStores(t, []string{voiceExtensionID}, func(t *testing.T, store voiceTestStore) {
+		h := voiceHub(t, store)
+		mux, tok := h.routes(), h.cfg.Token
+		l := i18n.Default
+		base := "/api/v1/extensions/voice/-/"
+
+		if code, out := call(t, mux, "PUT", base+"enabled", tok, `{"enabled": true}`); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+		// Setting the realtime url alone does not allow setting tts_key.
+		if code, out := call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://live.example.com/v1/live"}}`); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+		if code, out := call(t, mux, "PUT", base+"secrets/key", tok, `{"value": "sk-live-voice"}`); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+		code, out := call(t, mux, "PUT", base+"secrets/tts_key", tok, `{"value": "sk-tts-secret"}`)
+		if code != 400 || out["code"] != "needs_url" {
+			t.Fatalf("tts_key before tts_url: %d %v", code, out)
+		}
+
+		// Save tts_url + optional TTS fields, then set tts_key.
+		code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://live.example.com/v1/live", "tts_url": "https://tts.example.com", "tts_model": "kokoro", "tts_default_voice": "af_heart", "tts_sample_rate": 24000}}`)
+		if code != 200 || out["secrets_cleared"] != nil || !secretSet(out, voiceSecretKey) {
+			t.Fatalf("save tts config: %d %v", code, out)
+		}
+		code, out = call(t, mux, "PUT", base+"secrets/tts_key", tok, `{"value": "sk-tts-secret"}`)
+		raw, _ := json.Marshal(out)
+		if code != 200 || !secretSet(out, voiceTTSSecretKey) || !secretSet(out, voiceSecretKey) || strings.Contains(string(raw), "sk-tts-secret") {
+			t.Fatalf("set tts_key: %d %s", code, raw)
+		}
+		sealed, _ := store.ExtensionSecrets(context.Background(), voiceExtensionID)
+		if sealed[voiceTTSSecretKey] == "" || strings.Contains(sealed[voiceTTSSecretKey], "sk-tts-secret") {
+			t.Fatalf("tts_key not sealed: %v", sealed)
+		}
+		env := envOf(t, h, voiceExtensionID)
+		var envSecrets map[string]string
+		if err := json.Unmarshal([]byte(env["PERSONA_EXTENSION_SECRETS"]), &envSecrets); err != nil ||
+			envSecrets[voiceSecretKey] != "sk-live-voice" || envSecrets[voiceTTSSecretKey] != "sk-tts-secret" {
+			t.Fatalf("PERSONA_EXTENSION_SECRETS = %q (%v)", env["PERSONA_EXTENSION_SECRETS"], err)
+		}
+
+		// Same origin on tts_url (case, default port, full speech path): tts_key stays.
+		code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://live.example.com/v1/live", "tts_url": "https://TTS.example.com:443/v1/audio/speech"}}`)
+		if code != 200 || !secretSet(out, voiceTTSSecretKey) || !secretSet(out, voiceSecretKey) || out["secrets_cleared"] != nil {
+			t.Fatalf("same tts origin: %d %v", code, out)
+		}
+
+		// Invalid config does not clear tts_key.
+		code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://live.example.com/v1/live", "tts_url": "wss://bad.example.com"}}`)
+		if code != 400 || out["code"] != "invalid_config" || !h.extensions.reg.SecretsSet(context.Background(), h.extensions.reg.Get(voiceExtensionID))[voiceTTSSecretKey] {
+			t.Fatalf("invalid config cleared tts_key: %d %v", code, out)
+		}
+
+		// Moving realtime url origin clears only key, leaving tts_key untouched.
+		code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://live2.example.com/v1/live", "tts_url": "https://tts.example.com/v1/audio/speech"}}`)
+		if code != 200 || secretSet(out, voiceSecretKey) || !secretSet(out, voiceTTSSecretKey) || !slices.Equal(toStrings(out["secrets_cleared"]), []string{voiceSecretKey}) {
+			t.Fatalf("url origin change affected tts_key: %d %v", code, out)
+		}
+		if code, out = call(t, mux, "PUT", base+"secrets/key", tok, `{"value": "sk-live-2"}`); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+
+		// Moving tts_url origin clears only tts_key, leaving key untouched.
+		code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://live2.example.com/v1/live", "tts_url": "https://tts2.example.com"}}`)
+		if code != 200 || secretSet(out, voiceTTSSecretKey) || !secretSet(out, voiceSecretKey) ||
+			!slices.Equal(toStrings(out["secrets_cleared"]), []string{voiceTTSSecretKey}) ||
+			!slices.Contains(toStrings(out["warnings"]), i18n.T(l, "hub-voice_extension.key_cleared")) {
+			t.Fatalf("tts_url origin change: %d %v", code, out)
+		}
+		if sealed, _ := store.ExtensionSecrets(context.Background(), voiceExtensionID); sealed[voiceTTSSecretKey] != "" {
+			t.Fatal("tts_key still stored after origin change")
+		}
+
+		// Clearing tts_url also clears tts_key.
+		if code, out = call(t, mux, "PUT", base+"secrets/tts_key", tok, `{"value": "sk-tts-2"}`); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+		code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://live2.example.com/v1/live"}}`)
+		if code != 200 || secretSet(out, voiceTTSSecretKey) || !secretSet(out, voiceSecretKey) ||
+			!slices.Equal(toStrings(out["secrets_cleared"]), []string{voiceTTSSecretKey}) {
+			t.Fatalf("clearing tts_url: %d %v", code, out)
+		}
+
+		// Moving both origins at once clears both secrets.
+		if code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://live2.example.com/v1/live", "tts_url": "https://tts2.example.com"}}`); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+		if code, out = call(t, mux, "PUT", base+"secrets/tts_key", tok, `{"value": "sk-tts-3"}`); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+		code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://live3.example.com/v1/live", "tts_url": "https://tts3.example.com"}}`)
+		if code != 200 || secretSet(out, voiceSecretKey) || secretSet(out, voiceTTSSecretKey) ||
+			!slices.Equal(toStrings(out["secrets_cleared"]), []string{voiceSecretKey, voiceTTSSecretKey}) {
+			t.Fatalf("moving both origins: %d %v", code, out)
+		}
+	})
+}
+
+// tts_key origin binding fails closed and applies to direct registry callers too.
+func TestVoiceTTSKeyFollowsTTSURLFailClosed(t *testing.T) {
+	store := &flakyStore{extensionStore: newExtensionStore()}
+	h := voiceHub(t, store)
+	mux, tok, ctx := h.routes(), h.cfg.Token, context.Background()
+	base := "/api/v1/extensions/voice/-/"
+	reg := h.extensions.reg
+	ttsKeyStored := func() bool {
+		sealed, _ := store.extensionStore.ExtensionSecrets(ctx, voiceExtensionID)
+		return sealed[voiceTTSSecretKey] != ""
+	}
+	setTTSKey := func(u string) {
+		t.Helper()
+		if code, out := call(t, mux, "PUT", base+"config", tok, `{"config": {"tts_url": "`+u+`"}}`); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+		if code, out := call(t, mux, "PUT", base+"secrets/tts_key", tok, `{"value": "sk-tts-voice"}`); code != 200 || !ttsKeyStored() {
+			t.Fatalf("%d %v", code, out)
+		}
+	}
+
+	setTTSKey("https://tts-a.example.com")
+	store.failRead.Store(true)
+	code, out := call(t, mux, "PUT", base+"config", tok, `{"config": {"tts_url": "https://tts-b.example.com"}}`)
+	store.failRead.Store(false)
+	if code != 200 || ttsKeyStored() || !slices.Equal(toStrings(out["secrets_cleared"]), []string{voiceTTSSecretKey}) {
+		t.Fatalf("read failure must still clear tts_key: %d %v (stored %v)", code, out, ttsKeyStored())
+	}
+
+	setTTSKey("https://tts-a.example.com")
+	store.failDelete.Store(true)
+	code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"tts_url": "https://tts-b.example.com"}}`)
+	store.failDelete.Store(false)
+	if code != 500 || out["code"] != "secret_not_cleared" || !ttsKeyStored() ||
+		voiceTTSURL(moduleswitch.Set{}, reg.Config(reg.Get(voiceExtensionID))) != "https://tts-a.example.com" {
+		t.Fatalf("delete failure must save nothing: %d %v", code, out)
+	}
+
+	// Direct SetConfig / SetSecret follow the same rule.
+	if err := reg.SetConfig(ctx, voiceExtensionID, json.RawMessage(`{}`), "assistant"); err != nil || ttsKeyStored() {
+		t.Fatalf("direct SetConfig: err=%v stored=%v", err, ttsKeyStored())
+	}
+	if err := reg.SetSecret(ctx, voiceExtensionID, voiceTTSSecretKey, "sk-tts-voice", "assistant"); !errors.As(err, new(keyNeedsURLError)) {
+		t.Fatalf("direct SetSecret without tts_url: %v", err)
+	}
+}
+
+// Bad TTS settings in hub.json disable TTS with localized warnings while leaving the extension running.
+func TestVoiceHubJSONTTSWarnings(t *testing.T) {
+	entry := voiceEntry("talk")
+	entry.Config = json.RawMessage(`{"providers":[{"id":"rt","url":"wss://rt.example.com/v1/live","models":["m1"]}],"tts_url":"ftp://bad.example.com","tts_sample_rate":4000}`)
+	h := voiceHub(t, newExtensionStore(), entry)
+	v := waitVoiceStatus(t, h, "talk", host.StateRunning)
+	l := i18n.Default
+	for _, key := range []string{"hub-voice_extension.warn_tts_url", "hub-voice_extension.warn_tts_sample_rate"} {
+		if !slices.Contains(v.Warnings, i18n.T(l, key)) {
+			t.Errorf("view warnings missing %s: %v", key, v.Warnings)
+		}
 	}
 }

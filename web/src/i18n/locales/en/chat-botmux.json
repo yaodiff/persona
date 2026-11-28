@@ -13,6 +13,7 @@
   "original": "Original",
   "hide_original": "Hide original",
   "external_trigger_notice": "Older botmux: replies from Persona arrive as external events rather than as the owner. Upgrade to 3.59.23+ for full support.",
+  "owner_unset_notice": "No BotMux Owner Union ID is set, so messages go the usual way. Set one in Settings › Agents to send as the owner.",
   "raw": "botmux · raw",
   "show_raw": "Show raw botmux transcripts",
   "hide": "Hide botmux sessions",

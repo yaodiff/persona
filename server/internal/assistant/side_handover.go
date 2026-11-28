@@ -35,7 +35,7 @@ func (s *Service) handOverUnreviewed(ctx context.Context, now time.Time) {
 	away := map[string]bool{}       // each live side conversation is asked after once
 	for _, t := range s.todosOf(ctx, "*") {
 		v := t.Supervision
-		if v == nil || t.DoneAt != nil {
+		if v == nil || t.closedForGood() {
 			continue
 		}
 		side := v.Supervisor
@@ -51,7 +51,7 @@ func (s *Service) handOverUnreviewed(ctx context.Context, now time.Time) {
 			s.handOverSideTask(ctx, t, side, cfg.Main, status)
 			continue
 		}
-		if v.state(t) != reviewPending || now.Sub(v.UpdatedAt) < sideReviewAfter {
+		if t.DoneAt != nil || v.state(t) != reviewPending || now.Sub(v.UpdatedAt) < sideReviewAfter {
 			continue
 		}
 		if _, asked := away[side]; !asked {
@@ -70,7 +70,7 @@ func (s *Service) handOverArchivedSide(ctx context.Context, id string) {
 		return
 	}
 	for _, t := range s.todosOf(ctx, "*") {
-		if t.DoneAt != nil || t.Supervision == nil || t.Supervision.Supervisor != id {
+		if t.closedForGood() || t.Supervision == nil || t.Supervision.Supervisor != id {
 			continue
 		}
 		s.handOverSideTask(ctx, t, id, cfg.Main, "archived")
@@ -176,7 +176,7 @@ func sideRuntimeInventoryReady(id string, list []proto.Session) bool {
 func (s *Service) handOverSideTask(ctx context.Context, t Todo, side, to, reason string) {
 	s.reviewDismissals.actions.acquire(t.ID)
 	v, changed, err := s.updateSupervisionGuarded(ctx, t.ID, func(cur Todo) bool {
-		return cur.DoneAt == nil
+		return !cur.closedForGood()
 	}, func(v *Supervision) bool {
 		if v.Supervisor != side {
 			return false
@@ -204,7 +204,7 @@ func (s *Service) handOverSideTask(ctx context.Context, t Todo, side, to, reason
 		}
 	}
 	s.sideHandoverNotice(ctx, t, side, to, reason)
-	if cur, ok := s.todoNow(t.ID); ok && v.state(cur) == reviewPending {
+	if cur, ok := s.todoNow(t.ID); ok && cur.DoneAt == nil && v.state(cur) == reviewPending {
 		detail := "派出它的对话已不存在，转给你跟进验收" // i18n-ignore: the supervision message is the assistant's prompt
 		if reason == "archived" {
 			detail = "派出它的对话已归档，转给你跟进验收" // i18n-ignore: the supervision message is the assistant's prompt
@@ -282,9 +282,7 @@ func (s *Service) handOverReview(ctx context.Context, t Todo, side, to string, n
 func (s *Service) signalHandedOverReview(todoID, to, key, detail string) {
 	g := superviseSignal{Todo: todoID, Kind: sigReview, Key: key, Recipient: to, Detail: detail}
 	s.supervise.mu.Lock()
-	if s.supervise.sent[g.id()] == g.Key {
-		delete(s.supervise.sent, g.id())
-	}
+	s.supervise.forgetToldLocked(g)
 	s.supervise.mu.Unlock()
 	s.signal(g)
 }

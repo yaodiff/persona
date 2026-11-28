@@ -223,6 +223,9 @@ func TestTaskReviewDismissalNoAgentHandoffUndoesIt(t *testing.T) {
 			}
 			before := s.reviewDismissals.byTodo[todo.ID]
 			f.setSessions("box")
+			// The handoff skips the fixture's one-hour gather (#17099): hold the digest timer so it is still pending
+			// when read below, instead of already told to the main conversation.
+			s.stopSuperviseTimers()
 			w := answerAsk(s, todo.ID, map[string]string{"option": option})
 			var body map[string]any
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusOK || body["delivered"] != "none" {

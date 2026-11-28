@@ -5,7 +5,7 @@ import { EventEmitter, once } from 'node:events'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
@@ -1713,4 +1713,188 @@ test('assistant pre-prompt interrupt/close guards: ensureGateRules, mcpProxy.all
     assert.deepEqual(releases, [], 'concurrent forSession() calls sharing the same deterministic path must never release/delete the live route')
     assert.equal(s.mcpRoute?.path, sharedPath)
   }
+})
+
+test('companion assistant isMemoryWrite blocks symlink escapes, namei divergence, missing cwd fallback, conflicting keys, and clipInput truncation', async (t) => {
+  const base = mkdtempSync(join(tmpdir(), 'persona-oc-comp-mem-'))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const asstDir = join(base, 'assistant')
+  const memDir = join(asstDir, 'memory')
+  const nestedMem = join(memDir, 'nested', 'deep')
+  const outsideDir = join(base, 'outside')
+  const outsideSub = join(outsideDir, 'sub')
+  mkdirSync(nestedMem, { recursive: true })
+  mkdirSync(outsideSub, { recursive: true })
+  writeFileSync(join(outsideDir, 'secret.txt'), 'secret')
+  const escapeFileLink = join(memDir, 'escape-file.md')
+  const danglingLink = join(memDir, 'dangling.md')
+  const escapeDirLink = join(memDir, 'out-dir')
+  const deepLink = join(memDir, 'deep-link')
+  const loopA = join(memDir, 'loop-a')
+  const loopB = join(memDir, 'loop-b')
+  symlinkSync(join(outsideDir, 'secret.txt'), escapeFileLink)
+  symlinkSync(join(outsideDir, 'new-evil.txt'), danglingLink)
+  symlinkSync(outsideSub, escapeDirLink)
+  symlinkSync(nestedMem, deepLink)
+  symlinkSync(loopB, loopA)
+  symlinkSync(loopA, loopB)
+
+  const n = await startFakeNode(t, { tools: [] })
+  n.resolve = () => ({ allow: false })
+  const db = fakeV1Db()
+  const acp = new FakeAcpClient()
+  const companion = createTestCompanion({
+    socketPath: n.path,
+    retryMs: 20,
+    pushDelayMs: 5,
+    home: base,
+    openDb: db.openDb,
+    acp,
+    discoverModels: async () => [{ providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+  })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+
+  const started = await n.peer.call('session.start', { cwd: asstDir, assistant: true })
+  const sid = started.session.session_id
+  const s = companion.live.get(sid)
+  const opts = [
+    { optionId: 'once', kind: 'allow_once', name: 'Allow' },
+    { optionId: 'reject', kind: 'reject_once', name: 'Reject' },
+  ]
+  const paddedEscape = `${memDir}/${'./'.repeat(6300)}../SOUL.md`
+  const sparseLocations = [{ path: join(memDir, 'ok.md') }]
+  sparseLocations.length = 2
+  const deniedCases = [
+    { id: 'sym_file', rawInput: { filePath: escapeFileLink } },
+    { id: 'sym_dangling', rawInput: { filePath: danglingLink } },
+    { id: 'sym_dir', rawInput: { filePath: join(escapeDirLink, 'pwn.txt') } },
+    { id: 'namei_dotdot', rawInput: { filePath: `${escapeDirLink}/../secret.txt` } },
+    { id: 'lex_dotdot', rawInput: { filePath: `${deepLink}/../../SOUL.md` } },
+    { id: 'sym_loop', rawInput: { filePath: loopA } },
+    { id: 'tilde', rawInput: { filePath: '~/SOUL.md' } },
+    { id: 'nul', rawInput: { filePath: `${join(memDir, 'ok.md')}\0` } },
+    { id: 'mem_dir_self', rawInput: { filePath: memDir } },
+    { id: 'conflict_path', rawInput: { filePath: join(memDir, 'ok.md'), path: join(outsideDir, 'secret.txt') } },
+    { id: 'conflict_file_path', rawInput: { filePath: join(memDir, 'ok.md'), file_path: join(outsideDir, 'secret.txt') } },
+    { id: 'non_string_key', rawInput: { filePath: 123, path: join(memDir, 'ok.md') } },
+    { id: 'unknown_filepath_lower', rawInput: { filePath: join(memDir, 'ok.md'), filepath: join(outsideDir, 'secret.txt') } },
+    { id: 'unknown_newPath', rawInput: { filePath: join(memDir, 'ok.md'), newPath: join(outsideDir, 'secret.txt') } },
+    { id: 'unknown_diff', rawInput: { filePath: join(memDir, 'ok.md'), diff: '--- a/etc/hosts' } },
+    { id: 'edits_array_item', rawInput: { filePath: join(memDir, 'ok.md'), edits: [[]] } },
+    { id: 'edits_unknown_filepath', rawInput: { filePath: join(memDir, 'ok.md'), edits: [{ filepath: join(outsideDir, 'secret.txt') }] } },
+    { id: 'edits_unknown_patchText', rawInput: { filePath: join(memDir, 'ok.md'), edits: [{ patchText: '*** Update File: /etc/hosts' }] } },
+    { id: 'title_apply_patch', title: 'apply_patch', rawInput: { filePath: join(memDir, 'ok.md') } },
+    { id: 'title_move_file', title: 'move_file', rawInput: { filePath: join(memDir, 'ok.md') } },
+    { id: 'title_delete', title: 'delete', rawInput: { filePath: join(memDir, 'ok.md') } },
+    { id: 'patch_text', rawInput: { filePath: join(memDir, 'ok.md'), patchText: '*** Update File: /etc/hosts' } },
+    { id: 'files_array', rawInput: { filePath: join(memDir, 'ok.md'), files: [join(outsideDir, 'secret.txt')] } },
+    { id: 'locations_mismatch', rawInput: { filePath: join(memDir, 'ok.md') }, locations: [{ path: join(outsideDir, 'secret.txt') }] },
+    { id: 'locations_sparse', rawInput: { filePath: join(memDir, 'ok.md') }, locations: sparseLocations },
+    { id: 'content_diff_outside', rawInput: { filePath: join(memDir, 'ok.md') }, content: [{ type: 'diff', path: join(outsideDir, 'secret.txt'), oldText: 'a', newText: 'b' }] },
+    { id: 'content_diff_missing_path', rawInput: { filePath: join(memDir, 'ok.md') }, content: [{ type: 'diff', oldText: 'a', newText: 'b' }] },
+    { id: 'content_non_array', rawInput: { filePath: join(memDir, 'ok.md') }, content: { type: 'diff', path: join(memDir, 'ok.md') } },
+    { id: 'clip_escape', rawInput: { filePath: paddedEscape, content: 'x'.repeat(20_000) } },
+  ]
+
+  let promptRan = false
+  let promptErr = null
+  acp.onPrompt = async (sessionId, _blocks, client) => {
+    promptRan = true
+    try {
+      for (const tc of deniedCases) {
+        const before = n.asked.length
+        const res = await client.onPermissionRequest({
+          sessionId,
+          toolCall: {
+            toolCallId: tc.id,
+            kind: 'edit',
+            title: tc.title ?? 'write',
+            rawInput: tc.rawInput,
+            ...(tc.locations !== undefined ? { locations: tc.locations } : {}),
+            ...(tc.content !== undefined ? { content: tc.content } : {}),
+          },
+          options: opts,
+        })
+        assert.deepEqual(res, { outcome: { outcome: 'selected', optionId: 'reject' } }, `${tc.id} must not auto-allow`)
+        assert.equal(n.asked.length, before + 1, `${tc.id} must ask phone`)
+      }
+
+      // Empty cwd must NOT fall back to memoryDir for relative paths.
+      const savedCwd = s.cwd
+      s.cwd = ''
+      try {
+        const before = n.asked.length
+        const res = await client.onPermissionRequest({
+          sessionId,
+          toolCall: { toolCallId: 'empty_cwd', kind: 'edit', title: 'write', rawInput: { filePath: 'AGENTS.md' } },
+          options: opts,
+        })
+        assert.deepEqual(res, { outcome: { outcome: 'selected', optionId: 'reject' } }, 'empty cwd must not fall back to memoryDir')
+        assert.equal(n.asked.length, before + 1)
+      } finally {
+        s.cwd = savedCwd
+      }
+
+      // Root filesystem memoryDir must fail closed.
+      const savedMem = s.memoryDir
+      s.memoryDir = '/'
+      try {
+        const before = n.asked.length
+        const res = await client.onPermissionRequest({
+          sessionId,
+          toolCall: { toolCallId: 'root_mem', kind: 'edit', title: 'write', rawInput: { filePath: '/etc/hosts' } },
+          options: opts,
+        })
+        assert.deepEqual(res, { outcome: { outcome: 'selected', optionId: 'reject' } }, 'root memoryDir must fail closed')
+        assert.equal(n.asked.length, before + 1)
+      } finally {
+        s.memoryDir = savedMem
+      }
+
+      // Legitimate writes inside memoryDir still auto-allow without asking phone.
+      const askedBeforeAllowed = n.asked.length
+      for (const tc of [
+        { id: 'ok_abs', rawInput: { filePath: join(memDir, 'notes.md') } },
+        { id: 'ok_rel', rawInput: { filePath: 'memory/sub/new.md' } },
+        { id: 'ok_dotdot_name', rawInput: { filePath: join(memDir, '..note.md') } },
+        { id: 'ok_loc', rawInput: { filePath: join(memDir, 'notes.md') }, locations: [{ path: join(memDir, 'notes.md') }] },
+        { id: 'ok_content_diff', rawInput: { filePath: join(memDir, 'notes.md') }, content: [{ type: 'diff', path: join(memDir, 'notes.md'), oldText: 'a', newText: 'b' }] },
+      ]) {
+        const res = await client.onPermissionRequest({
+          sessionId,
+          toolCall: {
+            toolCallId: tc.id,
+            kind: 'edit',
+            title: 'write',
+            rawInput: tc.rawInput,
+            ...(tc.locations !== undefined ? { locations: tc.locations } : {}),
+            ...(tc.content !== undefined ? { content: tc.content } : {}),
+          },
+          options: opts,
+        })
+        assert.deepEqual(res, { outcome: { outcome: 'selected', optionId: 'once' } }, `${tc.id} must auto-allow`)
+      }
+      assert.equal(n.asked.length, askedBeforeAllowed, 'legitimate memory writes must not ask phone')
+    } catch (err) {
+      promptErr = err
+      throw err
+    }
+
+    return { stopReason: 'end_turn' }
+  }
+
+  await n.peer.call('session.send', {
+    session_id: sid,
+    text: 'memory security check',
+    assistant: true,
+    mode: 'default',
+    memory_dir: memDir,
+    client_msg_id: 'cm_mem_sec_1',
+  })
+  await s.tail
+  assert.equal(promptRan, true, 'acp.onPrompt must have run')
+  if (promptErr) throw promptErr
+  assert.equal(s.turnError, '')
 })

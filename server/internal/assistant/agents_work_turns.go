@@ -347,11 +347,17 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		return // Assistant participates only in mechanical model recovery and quota waits.
 	}
 	personWait := false // its closeout says it stopped on a person, background work or not
-	if w != nil && backgroundRule(c) {
-		// Background work it left running is no word that it goes on by itself when its own closeout says it stopped on
-		// a person: that closeout is read (the model's triage) and its turn settles (taskAgentSettled), so the
-		// supervisor or the owner hears of it rather than a wait that "wakes itself" (#14899). Read only with the triage
-		// on (above); triageTurnModel then takes the same read (triageRead keeps it for the turn).
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return
+	}
+	task, _ := s.openTodoOfAgent(machine, c.SessionID)
+	runtimeWork := false
+	if task.hasTaskRuntime() && (w == nil || backgroundRule(c) && task.WaitState != nil) {
+		w, by, runtimeWork = taskRuntimeWork(task, s.lang(ctx)), "rule", true
+		personWait = w.Phase == proto.WorkBlocked
+	} else if w != nil && backgroundRule(c) {
+		// A closeout that names a person takes precedence over background work and /loop (#14899). Read it with
+		// triage enabled. triageTurnModel reuses the read so the task can settle on the reported wait.
 		_, reply := s.triageRead(ctx, machine, c)
 		if reply == "" {
 			reply = turnReplyText(c.LastText, false) // as triageTurnModel reads it
@@ -388,8 +394,11 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		s.workEvent(machine, c.SessionID, "failed", map[string]any{"error": "todo state unavailable"})
 		return // leave the turn retryable when its task state is unknown
 	}
-	if !closed {
+	if !closed && !runtimeWork {
 		s.actOn(ctx, v, machine, c, &e)
+	}
+	if runtimeWork {
+		s.workWould(k, "")
 	}
 	// Validate the stored conclusion even when no action was possible, e.g.
 	// when the only source for a Codex App thread was read-only history.
@@ -400,11 +409,15 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	case answersAsk && continues(e.Work):
 		// Cut off before it answered: the turn that goes on from here is the answer.
 		e.Work.CloseoutAsk, answersAsk = closeoutAskSent, false
-	case !answersAsk && !closed:
+	case !answersAsk && !closed && !task.hasTaskRuntime():
 		s.planCloseoutAsk(ctx, machine, c, &e)
 	}
+	if runtimeWork && !closed && c.ReadOnlyReason == "" && s.triageSwitches(ctx).Wake && e.Wakes < maxWakes(s.triageCfg(ctx)) {
+		now := time.Now()
+		startRuntimeCIWatch(task, &e, now, now.Add(wakeAfter(0, e.Wakes)).UTC())
+	}
 	if e.WakeAt != nil && e.Work.On == proto.WaitExternal && e.Work.ResetsAt == nil {
-		if ciWaitIntent(&e.Work) || e.Work.On == proto.WaitTransient {
+		if !task.hasTaskRuntime() && ciWaitIntent(&e.Work) {
 			ask, reply, _ := s.lastTurnOf(ctx, machine, c.SessionID)
 			startCIWatch(c, &e, time.Now(), ask, reply)
 		}

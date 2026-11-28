@@ -273,6 +273,10 @@ type ManagedLauncher struct {
 	Withheld bool `json:"withheld,omitempty"`
 	// Rev changes whenever the provider is saved: a node drops what it pulled of an older one.
 	Rev string `json:"rev,omitempty"`
+	// Channel is the managed channel this launcher is a read-only alias of (docs/assistant/execution-spec.md): its key,
+	// Base URL, headers, proxy and scope are the channel's, shared by every runtime the channel runs. "" is a launcher
+	// of its own, as before channels.
+	Channel string `json:"channel,omitempty"`
 }
 
 // The values of ManagedLauncher.Delivery and OwnService.

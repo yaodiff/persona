@@ -503,7 +503,7 @@ func (n *Node) setAgyPaneModes(ctx context.Context, id string, a host.Agent, mod
 	}
 	before, err := n.readPane(ctx, live.PaneID, "visible", 60)
 	if err != nil {
-		return refusal(notDelivered, unreadBoxMessage, nil)
+		return unreadBoxRefusal()
 	}
 	if agyHasDraft(before) {
 		return refusal(screen.InputDraft, "Terminal input box has an unsent draft; clear it before switching model or effort", nil)

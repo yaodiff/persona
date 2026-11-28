@@ -25,8 +25,9 @@ import (
 // group in (the /topics command in it, or the bot's settings), and from then on, in that group:
 //
 //   - a message reaches the assistant when five things all hold: the bot is paired, the sender is the owner, the chat
-//     is on the list, the message is in a topic (it has a thread_id), and it is not the command below. Any other
-//     message is dropped without a word: nobody is told the bot is there, and nothing is said in the group.
+//     is on the list, the message is in a topic (it has a thread_id), and it is not the command below. A message from
+//     anyone else is judged by the group access policy instead (bots_guest.go): allowed, it runs as a guest; otherwise
+//     it is dropped without a word. A chat on the blocklist is dropped for everyone, the owner included.
 //   - the bot may send into the chat (botChatAllowed).
 //
 // A group message never changes where the owner's pushes go (BotOwner.ChatID), which stays the private chat.
@@ -394,13 +395,19 @@ func parseTopicsCmd(text string, mentions []botcard.Mention) (cmd, arg string, o
 // no note, no reaction, nothing in the chat.
 func (h *Manager) botGroupMessage(api botport.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
 	msg := ev.Message
-	if set.Owner == nil || ev.Sender.SenderID.OpenID != set.Owner.OpenID || msg.ChatID == "" {
-		return // not paired, or not the owner: in a group anyone could write to the owner's Persona
+	if set.Owner == nil || msg.ChatID == "" {
+		return
+	}
+	if set.groupChatBlocked(msg.ChatID) {
+		return // the blocklist wins, over the owner too
+	}
+	if ev.Sender.SenderID.OpenID != set.Owner.OpenID {
+		h.botGuestMessage(api, set, ev, pass) // bots_guest.go; never the owner's path
+		return
 	}
 	// Apply the group's current policy before settings commands or any topic side effect.
 	if i := slices.IndexFunc(set.TopicChats, func(c BotChat) bool { return c.ChatID == msg.ChatID }); i >= 0 && set.TopicChats[i].RequireOwnerMention {
-		botID := h.botOpenID(api)
-		if botID == "" || !slices.ContainsFunc(msg.Mentions, func(m botcard.Mention) bool { return m.ID.OpenID == botID }) {
+		if !mentionsBot(msg.Mentions, h.botOpenID(api)) {
 			return
 		}
 	}
@@ -461,7 +468,7 @@ func (h *Manager) botAIElsewhere(api botport.Client, set FeishuBotSettings, ev b
 		return // the bot cannot tell which @ is its own: nothing is taken
 	}
 	isBot := func(m botcard.Mention) bool { return m.ID.OpenID == botID }
-	if !slices.ContainsFunc(msg.Mentions, isBot) {
+	if !mentionsBot(msg.Mentions, botID) {
 		return
 	}
 	if _, ok := botcard.AICommand(content.StripLeadingMentions(msg.Mentions, isBot)); !ok {

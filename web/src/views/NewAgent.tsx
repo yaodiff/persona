@@ -58,6 +58,7 @@ import { useScopedMachines } from "../lib/current-assistant";
 import { currentHosts, engineName, startHosts } from "../lib/engines";
 import { CODEX_APP_SOURCE, projectsFolder, startsInDesktopApp } from "../lib/desktop-start";
 import { initialLauncher, launcherBlock } from "../lib/launcher-health";
+import { opensAsOrcaChat, type DefaultOpens } from "../lib/orca-chat";
 import { navigate } from "../lib/router";
 import { hasFinePointer } from "../lib/viewport";
 import { providersPath } from "../lib/readiness";
@@ -66,9 +67,12 @@ import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
 import { launcherTitle, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle, type Named } from "../lib/provider-names";
 import { WorkSessionForm } from "./WorkSessionForm";
 import { NewAgentModel, useModelList } from "./NewAgentModel";
+import { ExecutionCheck } from "./execution/ExecutionCheck";
 import { ProjectDocumentContext, ProjectDocumentSource, projectDocumentText, type ProjectDocumentSnapshot } from "./NewAgentProjectDocument";
 
-const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "tern", "rex"]);
+// The terminal engines a document's start goes to as its first message, as any first message does: Orca's terminals too
+// (#17053), which open in the chosen folder since #17036. Paseo and the other runtimes are not terminals.
+const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "orca", "tern", "rex"]);
 
 // several forwarded at once (#3838): their bar, from the group's chunk, which Forward to has loaded by then
 const ForwardGroupBar = lazyPage(() => import("./chat/ForwardGroup").then((m) => m.ForwardGroupBar));
@@ -80,6 +84,15 @@ const NewFolderNaming = lazyPage(() => import("./NewAgentDesktop").then((m) => m
 
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
 const draftImageFile = (img: DraftImage) => base64File(img.name, img.mime, img.data);
+
+/** Classifies a launcher's permission-mode controls so preset picks and rendering share one rule (#8261, #17239). */
+function launcherPermissionKinds(agent: string, entry: Launcher | undefined, nativeOmp = false) {
+  const listed = listedModes(entry);
+  const agyModes = agent === "agy" ? listed : undefined;
+  const claudeModes = effortRule(agent) === "any" && (Boolean(agyModes) || !listed);
+  const providerModes = claudeModes || nativeOmp ? undefined : listed;
+  return { agyModes, claudeModes, providerModes };
+}
 
 interface Dirs {
   path: string;
@@ -143,6 +156,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // effort as picking them by hand would; a pick by hand after it unmarks it. Never saved.
   const [tiers, setTiers] = useState<PickerTier[]>([]);
   const [tier, setTier] = useState<PickerTier | null>(null);
+  // the four dimensions' check of what this start runs (views/execution/ExecutionCheck.tsx): blocked disables Start
+  const [execBlocked, setExecBlocked] = useState(false);
   // a launcher picked on the computer chosen before that this one can't run (#5104): the form went back to the default
   const [dropped, setDropped] = useState<{ name: string; computer: string } | null>(null);
   // the lists read again in this opening (once each: a list read since stays as it is)
@@ -156,6 +171,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // the mode picked for a launcher that lists its own (Paseo's other providers, #8261): its own ("") or Full access,
   // picked on this sheet and never remembered, so a mode left from a Claude Code start never reaches such a start
   const [providerMode, setProviderMode] = useState("");
+  // where a start that keeps the default opens, as the hub says (#17650, lib/orca-chat.ts); for the computer `launchersOf` names
+  const [defaultOpens, setDefaultOpens] = useState<DefaultOpens | undefined>();
   // Pre-preset mode values so dropping or switching away from a preset restores them without leaking across launchers.
   const presetModeRestore = useRef<{ mode: string; providerMode: string } | null>(null);
   const chooseMode = (next: string) => {
@@ -323,24 +340,25 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   useLayoutEffect(() => {
     if (!open) setProjectDocument(null);
   }, [open]);
-  // a Paseo workspace picked from the list (#8856) can still start in a new worktree of its repository, which Paseo
-  // makes as a workspace of its own; an Orca one makes its worktrees through Orca's own New Worktree
-  const paseoPicked = workspacePicked && workspace?.host === "paseo";
+  // a Paseo or Orca workspace picked from the list (#8856, #17050) can still start in a new worktree of its repository,
+  // which that engine makes: Paseo as a workspace of its own, Orca as a child of the one picked
+  const enginePicked = workspacePicked && (workspace?.host === "paseo" || workspace?.host === "orca");
+  const pickedEngine = enginePicked ? workspace?.host : undefined;
   const [repo, setRepo] = useState<WorktreeStatus | null>(null);
   useEffect(() => {
     setRepo(null);
     const dir = cwd.trim();
-    if (!open || !mid || !dir || (workspace && !paseoPicked)) return;
+    if (!open || !mid || !dir || (workspace && !pickedEngine)) return;
     const c = new AbortController();
-    // the engine it opens in says where its worktree goes (Paseo makes its own)
-    const kind = paseoPicked ? "paseo" : host || undefined;
+    // the engine it opens in says where its worktree goes (Paseo and Orca make their own)
+    const kind = pickedEngine ?? (host || undefined);
     const timer = setTimeout(() => void worktreeStatus(mid, dir, c.signal, kind).then((st) => { if (!c.signal.aborted) setRepo(st); }), 400);
     return () => {
       clearTimeout(timer);
       c.abort();
     };
-  }, [open, mid, cwd, workspace, paseoPicked, manager, credential, host]);
-  const worktreeOffered = (!workspace || paseoPicked) && Boolean(repo?.path);
+  }, [open, mid, cwd, workspace, pickedEngine, manager, credential, host]);
+  const worktreeOffered = (!workspace || enginePicked) && Boolean(repo?.path);
   // Back to a folder: typed, browsed or a recent one, on the computer's default engine.
   const clearWorkspace = () => {
     retirePreparation();
@@ -492,6 +510,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           setLaunchers(ls);
           setSkipped(r.unavailable ?? []);
           setTiers(r.tiers ?? []);
+          setDefaultOpens(r.default_opens);
           setLaunchersOf(mid);
           setUnified(hasUnified);
           setConfigured(effective);
@@ -591,17 +610,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const base = presetModeRestore.current ?? { mode, providerMode };
     pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
     const targetLauncher = launchers.find((l) => l.name === x.launcher);
-    const targetListed = listedModes(targetLauncher);
     const targetAgent = launcherAgent(x.launcher, launchers, undefined);
-    const targetClaudeModes = effortRule(targetAgent) === "any" && !targetListed;
-    if (targetListed) {
+    const { agyModes: targetAgyModes, claudeModes: targetClaudeModes, providerModes: targetProviderModes } = launcherPermissionKinds(targetAgent, targetLauncher);
+    if (targetProviderModes) {
       setMode(base.mode);
-      setProviderMode(x.permission_mode && targetListed.includes(x.permission_mode) ? x.permission_mode : "");
+      setProviderMode(x.permission_mode && targetProviderModes.includes(x.permission_mode) ? x.permission_mode : "");
       presetModeRestore.current = base;
     } else if (targetClaudeModes) {
       setProviderMode(base.providerMode);
       if (x.permission_mode) {
-        setMode(x.permission_mode);
+        setMode(!targetAgyModes || targetAgyModes.includes(x.permission_mode) ? x.permission_mode : "");
         presetModeRestore.current = base;
       } else {
         setMode(base.mode);
@@ -632,10 +650,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setTier(null);
     }
   }, [open, opensIn, nativeOmp, listLauncher, agent]);
-  // what a start on it takes besides the model (#8261): Claude Code's modes and efforts, or the permission modes a
-  // launcher lists (Paseo's other providers) and the efforts its model lists, or Codex's reported efforts alone
-  const claudeModes = effortRule(agent) === "any" && !listedModes(listEntry);
-  const providerModes = claudeModes || nativeOmp ? undefined : listedModes(listEntry);
+  // what a start on it takes besides the model (#8261): Claude Code's modes and efforts (or Antigravity's subset when
+  // its runtime narrows permission_modes), or the permission modes a launcher lists (Paseo's other providers) and the
+  // efforts its model lists, or Codex's reported efforts alone
+  const { agyModes, claudeModes, providerModes } = launcherPermissionKinds(agent, listEntry, nativeOmp);
+  const claudeModeOptions = agyModes ? PERMISSION_MODES.filter((m) => agyModes.includes(m.id)) : PERMISSION_MODES;
+  const effectiveClaudeMode = agyModes && mode && !agyModes.includes(mode) ? "" : mode;
   // Codex CLI can omit the first message when prompt_optional is advertised. The App needs one to expose its new chat.
   const codex = agent === "codex";
   const needsFirst = codex && (desktopStart || listEntry?.prompt_optional !== true);
@@ -773,6 +793,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
   const followDetail = formatFollowDetail(unified ? configured : null, defaultRuns, defaultList, names) || modelDefault;
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
+  // with the computer's switch on, a start that keeps the default opens as its Orca chat (#17650): the hub says which, the
+  // form only checks that this start still keeps the default
+  const orcaChat = launchersOf === mid && !desktopStart && !projectDocument ? opensAsOrcaChat(defaultOpens, {
+    launcher, tier: Boolean(tier), model, host: opensIn, mode: claudeModes ? effectiveClaudeMode : "",
+    ultracode: ultracodeShown && !ultracodeBlocked && ultracode, serviceTier: startSpeedTier(speedModel, speed),
+  }) : null;
 
   // The recent setups' cards (#2134): not when another page opened the sheet on a folder of its own (a space's or a
   // knowledge entry's New agent), which a card would replace.
@@ -842,10 +868,11 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     if (launcher && !unified) localStorage.setItem(`new.launcher.${mid}`, launcher);
     // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
     // takes one of those alone, never the remembered one (its own goes as no mode).
-    const permissionMode = claudeModes ? mode
+    const permissionMode = claudeModes ? effectiveClaudeMode
       : providerModes ? (providerMode && providerModes.includes(providerMode) ? providerMode : "")
       : tier && listLauncher === tier.launcher && tier.permission_mode ? tier.permission_mode : "";
-    if (claudeModes) {
+    const presetFilteredMode = Boolean(agyModes && tier && listLauncher === tier.launcher && tier.permission_mode && !agyModes.includes(tier.permission_mode) && presetModeRestore.current);
+    if (claudeModes && !presetFilteredMode && (!agyModes || !mode || agyModes.includes(mode))) {
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
       else localStorage.removeItem(`new.mode.${mid}`);
     }
@@ -887,14 +914,15 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       dismiss();
     };
     // in a worktree of its own (#6115): made first, by the engine it opens in; a failure says why here, and nothing starts.
-    // From a picked Paseo workspace (#8856) the start goes into the workspace Paseo made for the worktree, not the one picked.
-    if ((!workspace || paseoPicked) && inWorktree && worktreeOffered && !desktopScratch) {
+    // From a picked Paseo or Orca workspace (#8856, #17050) the start goes into the workspace that engine made for the
+    // worktree, not the one picked.
+    if ((!workspace || enginePicked) && inWorktree && worktreeOffered && !desktopScratch) {
       // Compare runs (#8916): the sheet closes at once on the runs' page, which shows each worktree and start as it goes
       // (lib/compare-runner.ts); the task stays in this tab for a run's retry, so the draft goes now
       if (runCount > 1) {
         const hint = agentNameHint(prompt, cwd);
         const id = startCompare({ mid, cwd: cwd.trim(), nameHint: hint, branch: wtBranch.trim() || agentBranch(hint), count: runCount, spec: target,
-          paseo: paseoPicked, text: snapshot.text, attachments: snapshot.attachments });
+          intoWorkspace: enginePicked, text: snapshot.text, attachments: snapshot.attachments });
         rememberSetup({ ...setup, at: setupTime() });
         releaseAttachments(attachmentsRef.current);
         attachmentsRef.current = [];
@@ -909,7 +937,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setWtError("");
       void addAgentWorktree(mid, cwd.trim(), agentNameHint(prompt, cwd), wtBranch, { signal: controller.signal, token, tokenOwner: owner }, opensIn)
         .then(
-          (wt) => launch(wt.path, paseoPicked ? wt.workspace_id || undefined : undefined),
+          (wt) => launch(wt.path, enginePicked ? wt.workspace_id || undefined : undefined),
           (e) => {
             if (!current()) return;
             submitted.current = false;
@@ -992,7 +1020,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
             <Button tone="quiet" onClick={dismiss}>
               {t("common.cancel")}
             </Button>
-            <Button tone="primary" busy={wtBusy} disabled={loadingModels || presetUnavailable || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
+            <Button tone="primary" busy={wtBusy} disabled={loadingModels || presetUnavailable || execBlocked || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
               {runCount > 1 ? t("newagent.start_runs", { count: runCount }) : t("newagent.start")}
             </Button>
           </>
@@ -1251,15 +1279,15 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           {claudeModes && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} className="flex flex-wrap gap-1.5">
-                <Choice radio selected={mode === ""} onClick={() => chooseMode("")}>{t("newagent.follow_launcher")}</Choice>
-                {PERMISSION_MODES.map((m) => (
-                  <Choice key={m.id} radio selected={mode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
+                <Choice radio selected={effectiveClaudeMode === ""} onClick={() => chooseMode("")}>{t("newagent.follow_launcher")}</Choice>
+                {claudeModeOptions.map((m) => (
+                  <Choice key={m.id} radio selected={effectiveClaudeMode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
                     {m.title}
                   </Choice>
                 ))}
               </div>
-              <p className={cx("mt-1.5 text-[11.5px]", mode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
-                {mode === BYPASS_MODE ? BYPASS_WARNING : PERMISSION_MODES.find((m) => m.id === mode)?.detail ?? t("newagent.permission_mode_hint")}
+              <p className={cx("mt-1.5 text-[11.5px]", effectiveClaudeMode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
+                {effectiveClaudeMode === BYPASS_MODE ? BYPASS_WARNING : claudeModeOptions.find((m) => m.id === effectiveClaudeMode)?.detail ?? t("newagent.permission_mode_hint")}
               </p>
             </Field>
           )}
@@ -1353,6 +1381,11 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               </div>
             </div>
             <ModelNotes>
+              {orcaChat && (
+                <Note data-testid="new-agent-orca-chat" icon="info">
+                  {t(orcaChat.dropped ? "newagent.opens_orca_chat_own" : "newagent.opens_orca_chat", { name: orcaChat.display_name || orcaChat.launcher })}
+                </Note>
+              )}
               {dropped && (
                 <Note data-testid="new-agent-dropped" icon="info">{t("newagent.carry_dropped", { name: dropped.name, computer: dropped.computer })}</Note>
               )}
@@ -1393,6 +1426,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                 </Note>
               )}
             </ModelNotes>
+            <div data-testid="new-agent-execution" className="mt-1.5 empty:hidden">
+              <ExecutionCheck
+                machine={mid}
+                launcher={runs}
+                model={model}
+                effort={effort}
+                onBlocked={setExecBlocked}
+                onPick={(p) => pickModel({ launcher: p.launcher, model: p.model ?? "", effort: p.effort ?? "" })}
+              />
+            </div>
             {helpLauncher && helpBlock && (
               <LauncherBlockedHelp
                 launcher={helpLauncher}

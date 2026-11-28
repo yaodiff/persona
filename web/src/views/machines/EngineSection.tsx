@@ -21,6 +21,7 @@ import type { Machine } from "../../lib/types";
 import { Button, cx, EASE, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { EngineHostsSection } from "./EngineHostsSection";
+import { OrcaChatStarts } from "./OrcaChatStarts";
 import { ENGINE_SECTION_ID } from "./engine-anchor";
 import { beginEngineSave, finishEngineSave, isLatestEngineSave } from "./engine-save";
 import { t } from "../../i18n";
@@ -175,6 +176,7 @@ function SingleEngineSection({ machine, heading }: { machine: Machine; heading: 
         )}
       </div>
       <p className="mt-2 px-1 text-[11.5px] leading-relaxed text-ink-3">{engineFooter(selected, machine.online)}</p>
+      <OrcaChatStarts machine={machine} />
     </section>
   );
 }

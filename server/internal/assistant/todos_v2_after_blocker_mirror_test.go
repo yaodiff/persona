@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -219,7 +220,7 @@ func TestTodosV2AfterBlockerMirrorStageGateStructuredAndLegacyNotes(t *testing.T
 		t.Fatal("expected structured stage gate child to be ready once dep reaches pr_open + contracts")
 	}
 
-	// Reconciling blockers resolves both structured and legacy stage_gate blockers and emits sigTodoReady with PR URL.
+	// Reconciling blockers resolves both stage gates and emits an unblock with the upstream PR URL.
 	sumAfter, err := s.ReconcileTodoBlockers(ctx, dep.ID)
 	if err != nil {
 		t.Fatalf("ReconcileTodoBlockers after ready: %v", err)
@@ -229,13 +230,13 @@ func TestTodosV2AfterBlockerMirrorStageGateStructuredAndLegacyNotes(t *testing.T
 	}
 
 	s.supervise.mu.Lock()
-	sig, ok := s.supervise.pending[child.ID+"|"+sigTodoReady]
+	sig, ok := s.supervise.pending[child.ID+"|"+sigBlockersUnblocked]
 	s.supervise.mu.Unlock()
 	if !ok {
-		t.Fatalf("expected sigTodoReady pending for %s", child.ID)
+		t.Fatalf("expected blockers_unblocked pending for %s", child.ID)
 	}
-	if !strings.Contains(sig.Detail, prURL) {
-		t.Fatalf("expected sigTodoReady Detail to include upstream PR URL %q, got %q", prURL, sig.Detail)
+	if !slices.Contains(sig.BlockerPRs, prURL) {
+		t.Fatalf("expected blockers_unblocked to carry upstream PR URL %q, got %q", prURL, sig.BlockerPRs)
 	}
 }
 

@@ -46,6 +46,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
     var offersTakeover: Bool
     var offersContinuation: Bool
     var terminalResume: TerminalResume
+    var autoRename: Bool
     var phone: Bool
     var paneActions: Bool
     /// Move To…'s choices (#11516, `DirectionFilings.offers`): none, no Move To… (no `direction_sessions`, another
@@ -70,6 +71,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
                   hosted: hosted, showsSpace: showsSpace,
                   terminalResume: session.status == .offline || session.status == .unknown
                     ? session.terminalResume(on: model.machine(session.key.machineRef)) : .hidden,
+                  autoRename: model.features(session.group).contains(APIClient.agentAutonameFeature),
                   phone: AgentMenuFacts.supportsTakeover, moveChoices: moveChoices)
     }
 
@@ -78,7 +80,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
          paneBadges: [SessionPane: String] = [:], currentPane: SessionPane = .chat, review: Bool = false,
          preview: Bool = false, screen: Bool = false, todoHub: Bool = false, sideCount: Int = 0,
          hosted: Bool = false, showsSpace: Bool = true, terminalResume: TerminalResume = .hidden,
-         phone: Bool = false, git: GitStatus? = nil, moveChoices: [DirectionFilings.Choice] = []) {
+         autoRename: Bool = false, phone: Bool = false, git: GitStatus? = nil, moveChoices: [DirectionFilings.Choice] = []) {
         key = session.key
         self.session = session
         self.pinned = pinned
@@ -96,6 +98,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
         offersTakeover = session.isCodex && !session.canSend && session.capabilities?.takeover?.canResume == true
         offersContinuation = session.isCodex && !session.canSend && session.capabilities?.takeover != nil
         self.terminalResume = terminalResume
+        self.autoRename = autoRename && !session.assistant
         self.phone = phone
         paneActions = NodeMenu.offersPaneActions(session)
         self.moveChoices = moveChoices
@@ -106,7 +109,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
             && a.paneBadges == b.paneBadges && a.currentPane == b.currentPane && a.review == b.review
             && a.preview == b.preview && a.screen == b.screen && a.todoHub == b.todoHub && a.sideCount == b.sideCount
             && a.hosted == b.hosted && a.showsSpace == b.showsSpace && a.offersTakeover == b.offersTakeover
-            && a.offersContinuation == b.offersContinuation && a.terminalResume == b.terminalResume && a.phone == b.phone
+            && a.offersContinuation == b.offersContinuation && a.terminalResume == b.terminalResume && a.phone == b.phone && a.autoRename == b.autoRename
             && a.session.state == b.session.state && a.session.status == b.session.status
             && a.session.capabilities == b.session.capabilities
             && a.session.state == b.session.state && a.session.status == b.session.status
@@ -148,6 +151,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
             if offersContinuation { add(.continueInNewSession) }
         }
         if session.canRename { add(.rename) }
+        if autoRename { add(.autoRename) }
         add(.pin, .session)
         add(.mute, .session)
         if todoHub {
@@ -209,14 +213,15 @@ enum AgentMenuFacts {
 }
 
 nonisolated struct AgentActionItem: Equatable, Identifiable, Sendable {
-    enum ID: String, Sendable {
+    enum ID: String, CaseIterable, Sendable {
         case backToChat, files, git, review, preview, subagents, sideSessions, space
-        case attach, interrupt, markSeen, takeover, continueInNewSession, rename, pin, mute
+        case attach, interrupt, markSeen, takeover, continueInNewSession, rename, autoRename, pin, mute
         case todo, moveTodo, unlinkTodo, linkTodo, moveTo, stopLoop, handToPersona, screen
         case copyDirectory, terminal, copyResume, resume
         case splitPane, splitRight, splitDown, nodeGit, gitPull, gitPush, gitFetch, closeTab, close, delete
     }
     enum Group: String, CaseIterable, Sendable { case navigation, session, utilities, node, destructive }
+    static let screenTitle: LocalizedStringResource = "Live Screen"
     let id: ID
     let group: Group
 }
@@ -236,8 +241,12 @@ nonisolated struct AgentActionLayout: Equatable, Sendable {
 
     init(_ items: [AgentActionItem]) {
         let last = items.first { $0.id == .close } ?? items.first { $0.id == .delete }
-        top = items.filter { Self.topIDs.contains($0.id) }
-        more = items.filter { !Self.topIDs.contains($0.id) && $0.id != last?.id }
+        var frequent = Self.topIDs
+        // Keep both rename actions together when there is room, preserving all existing top-level actions.
+        let reserved = 1 + (last == nil ? 0 : 1) // More and the destructive action
+        if items.filter({ frequent.contains($0.id) }).count + reserved < Self.topLimit { frequent.insert(.autoRename) }
+        top = items.filter { frequent.contains($0.id) }
+        more = items.filter { !frequent.contains($0.id) && $0.id != last?.id }
         self.last = last
     }
 
@@ -292,12 +301,13 @@ struct AgentActionMenuReader: View {
     var hosted = false
     var showsSpace = true
     var sides: SideSessions?
+    var fromWorktreeSubmenu = false
     let handlers: AgentMenuHandlers
 
     var body: some View {
         AgentActionMenu(facts: AgentActionFacts(session: session, model: model, currentPane: currentPane, hosted: hosted,
                                                 showsSpace: showsSpace, sides: sides),
-                        handlers: handlers)
+                        fromWorktreeSubmenu: fromWorktreeSubmenu, handlers: handlers)
             .equatable()
     }
 
@@ -314,10 +324,11 @@ struct AgentActionMenu: View, Equatable {
     @Environment(AppModel.self) private var model
     nonisolated var facts: AgentActionFacts
     nonisolated var key: SessionKey { facts.key }
+    nonisolated var fromWorktreeSubmenu = false
     nonisolated let handlers: AgentMenuHandlers
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.facts == b.facts && a.handlers === b.handlers
+        a.facts == b.facts && a.handlers === b.handlers && a.fromWorktreeSubmenu == b.fromWorktreeSubmenu
     }
 
     var body: some View {
@@ -346,7 +357,7 @@ struct AgentActionMenu: View, Equatable {
         if !items.isEmpty {
             Menu {
                 ForEach(AgentActionItem.Group.allCases, id: \.self) { group in AnyView(section(group, in: items, now: now)) }
-            } label: { Label("More", systemImage: Theme.Icon.more) }
+            } label: { Label(String(localized: Self.moreTitle), systemImage: Theme.Icon.more) }
             .id(facts.moreIdentity)
             .accessibilityIdentifier("agent-menu-more")
         }
@@ -360,63 +371,76 @@ struct AgentActionMenu: View, Equatable {
         }
     }
 
+    static let moreTitle: LocalizedStringResource = "More"
+
+    private func label(_ id: AgentActionItem.ID, _ symbol: String) -> some View {
+        Label { Text(id.menuTitle(in: facts)) } icon: { Image(systemName: symbol) }
+            .lineLimit(1)
+    }
+
     @ViewBuilder private func row(_ item: AgentActionItem, now: @escaping () -> Session?) -> some View {
         let s = facts.session
         switch item.id {
         case .backToChat:
-            Button { handlers.navigate(s, .pane(.chat)) } label: { Label("Back to Chat", systemImage: SessionPane.chat.symbol) }
+            Button { handlers.navigate(s, .pane(.chat)) } label: { label(item.id, SessionPane.chat.symbol) }
         case .files, .git:
             let pane: SessionPane = item.id == .files ? .files : .git
             Button { handlers.navigate(s, .pane(pane)) } label: {
-                Label(facts.paneBadges[pane].map { String(localized: "\(pane.title) (\($0))") } ?? pane.title, systemImage: pane.symbol)
+                label(item.id, pane.symbol)
             }
         case .review:
-            Button { handlers.navigate(s, .review) } label: { Label("Review Changes", systemImage: Theme.Icon.reviewChanges).lineLimit(1) }
+            Button { handlers.navigate(s, .review) } label: { label(item.id, Theme.Icon.reviewChanges) }
         case .preview:
-            Button { handlers.navigate(s, .preview) } label: { Label("Preview", systemImage: Theme.Icon.servedPage).lineLimit(1) }
+            Button { handlers.navigate(s, .preview) } label: { label(item.id, Theme.Icon.servedPage) }
                 .accessibilityIdentifier("chat-preview")
         case .subagents:
             Button { handlers.navigate(s, .subagents) } label: {
-                Label(String(localized: "Subagents (\(facts.subagentCount)) [Session Overview]"), systemImage: Theme.Icon.subagent).lineLimit(1)
+                label(item.id, Theme.Icon.subagent)
             }
+            .accessibilityValue(Text(facts.subagentCount, format: .number))
         case .sideSessions:
             Button { handlers.navigate(s, .sideSessions) } label: {
-                Label(SideSessionsSheet.menuTitle(facts.sideCount), systemImage: Theme.Icon.sideSessions).lineLimit(1)
+                label(item.id, Theme.Icon.sideSessions)
             }
+            .accessibilityValue(Text(facts.sideCount, format: .number))
             .accessibilityIdentifier("side-sessions-menu")
         case .space:
-            Button { handlers.navigate(s, .space) } label: { Label("All Agents in Space", systemImage: Theme.Icon.space) }
+            Button { handlers.navigate(s, .space) } label: { label(item.id, Theme.Icon.space) }
         case .attach:
-            Button { Task { await model.attach(facts.key) } } label: { Label("Attach Live", systemImage: Theme.Icon.link).lineLimit(1) }
+            Button { Task { await model.attach(facts.key) } } label: { label(item.id, Theme.Icon.link) }
         case .interrupt:
-            Button { Task { await model.interrupt(facts.key) } } label: { Label("Interrupt [Composer Buttons f9d193]", systemImage: Theme.Icon.interrupt) }
+            Button { Task { await model.interrupt(facts.key) } } label: { label(item.id, Theme.Icon.interrupt) }
         case .markSeen:
-            Button { model.markSeen(facts.key) } label: { Label("Mark as Seen", systemImage: Theme.Icon.view) }
+            Button { model.markSeen(facts.key) } label: { label(item.id, Theme.Icon.view) }
         case .takeover:
-            Button { if let s = now() { handlers.takeover(s) } } label: { Label("Take over", systemImage: Theme.Icon.terminal) }
+            Button { if let s = now() { handlers.takeover(s) } } label: { label(item.id, Theme.Icon.terminal) }
         case .continueInNewSession:
             Button { if let s = now() { handlers.continueInNewSession(s) } } label: {
-                Label("Continue in a new session", systemImage: Theme.Icon.compose)
+                label(item.id, Theme.Icon.compose)
             }
         case .rename:
             Button { if let s = now() { handlers.rename(s) } } label: {
-                Label(String(localized: "agent.rename", defaultValue: "Rename Agent…"), systemImage: Theme.Icon.edit)
+                label(item.id, Theme.Icon.edit)
             }
+        case .autoRename:
+            Button { model.autoRenameAgent(now() ?? s, fromWorktreeSubmenu: fromWorktreeSubmenu) } label: {
+                label(item.id, Theme.Icon.ai)
+            }
+            .disabled(model[naming: facts.key])
+            .accessibilityIdentifier("agent-auto-rename")
         case .pin:
             Button { model.togglePin(facts.key) } label: {
-                Label(facts.pinned ? String(localized: "Unpin [Personal Agent List View c92179]") : String(localized: "Pin [Personal Agent List View 173f88]"),
-                      systemImage: facts.pinned ? Theme.Icon.unpin : Theme.Icon.pin)
+                label(item.id, facts.pinned ? Theme.Icon.unpin : Theme.Icon.pin)
             }
         case .mute:
             Button { model.toggleMute(facts.key) } label: {
-                Label(facts.muted ? String(localized: "Unmute [Chat View 3834f9]") : String(localized: "Mute"),
-                      systemImage: facts.muted ? Theme.Icon.unmute : Theme.Icon.mute)
+                label(item.id, facts.muted ? Theme.Icon.unmute : Theme.Icon.mute)
             }
         case .todo:
-            Button { if let s = now() { handlers.openTodo(s) } } label: { Label(s.todo?.title ?? "", systemImage: Theme.Icon.todo) }
+            Button { if let s = now() { handlers.openTodo(s) } } label: { label(item.id, Theme.Icon.todo) }
         case .moveTodo, .linkTodo:
             Button { if let s = now() { handlers.linkTodo(s) } } label: {
-                Label(item.id == .moveTodo ? "Move to Another To-do…" : "Link to To-do…", systemImage: Theme.Icon.todo)
+                label(item.id, Theme.Icon.todo)
             }
         case .unlinkTodo:
             Button {
@@ -425,47 +449,47 @@ struct AgentActionMenu: View, Equatable {
                     do { try await TodoStore.shared.unlinkAgent(todoID: todo.id, machineID: s.machineID, sessionID: s.sessionID) }
                     catch { model.show(error) }
                 }
-            } label: { Label("Unlink", systemImage: Theme.Icon.link) }
+            } label: { label(item.id, Theme.Icon.link) }
         case .moveTo:
-            MoveToChoices(choices: facts.moveChoices) { choice in
+            MoveToChoices(choices: facts.moveChoices, title: MoveToChoices.agentTitle) { choice in
                 guard let s = now() else { return }
                 DirectionFilings.shared.move(s.key, title: s.displayTitle, state: s.state, to: choice,
                                              from: DirectionFilings.shared.placed(s.key))
             }
         case .stopLoop:
-            Button(role: .destructive) { model.stopLoop(facts.key) } label: { Label("Stop Loop", systemImage: Theme.Icon.stopLoop) }
+            Button(role: .destructive) { model.stopLoop(facts.key) } label: { label(item.id, Theme.Icon.stopLoop) }
         case .handToPersona:
             Button {
                 guard let s = now() else { return }
                 Task { await model.askPersona(AgentHandoff.prompt(s, machine: model.machine(s.machineRef)?.name)) }
-            } label: { Label("Hand to Persona", systemImage: Theme.Icon.ai) }
+            } label: { label(item.id, Theme.Icon.ai) }
         case .screen:
             ModuleViews(place: .chatMenu, context: .init(machine: facts.key.machineRef, from: facts.key))
         case .copyDirectory:
-            Button { UIPasteboard.general.string = now()?.cwd } label: { Label("Copy Directory", systemImage: Theme.Icon.folder) }
+            Button { UIPasteboard.general.string = now()?.cwd } label: { label(item.id, Theme.Icon.folder) }
         case .terminal:
-            Button { handlers.navigate(s, .terminal(resume: false)) } label: { Label("Terminal", systemImage: Theme.Icon.terminal).lineLimit(1) }
+            Button { handlers.navigate(s, .terminal(resume: false)) } label: { label(item.id, Theme.Icon.terminal) }
         case .copyResume:
             Button {
                 guard let s = now(), s.canTerminal else { return }
                 UIPasteboard.general.string = "\(s.resumeCommand) \(s.sourceThreadID ?? s.sessionID)"
-            } label: { Label("Copy Resume Command", systemImage: Theme.Icon.copy).lineLimit(1) }
+            } label: { label(item.id, Theme.Icon.copy) }
         case .resume:
             switch facts.terminalResume {
             case .available:
                 Button { handlers.navigate(s, .terminal(resume: true)) } label: {
-                    Label("Resume in Terminal", systemImage: Theme.Icon.resume).lineLimit(1)
+                    label(item.id, Theme.Icon.resume)
                 }
                 .accessibilityIdentifier("chat-resume-terminal")
             case .noEngine:
-                Button {} label: {
-                    Text("Resume in Terminal")
-                    Text("No terminal engine on \(model.machine(facts.key.machineRef)?.name ?? facts.key.machineID)",
-                         comment: "Why Resume in Terminal is off: the computer enables no terminal engine")
-                    Theme.Icon.image(Theme.Icon.resume)
-                }
-                .disabled(true)
-                .accessibilityIdentifier("chat-resume-terminal")
+                let machine = model.machine(facts.key.machineRef)?.name ?? facts.key.machineID
+                let reason = Text("No terminal engine on \(machine)", comment: "Why Resume in Terminal is off: the computer enables no terminal engine")
+                Section {
+                    Button {} label: { label(item.id, Theme.Icon.resume) }
+                        .disabled(true)
+                        .accessibilityHint(reason)
+                        .accessibilityIdentifier("chat-resume-terminal")
+                } header: { reason }
             case .hidden:
                 EmptyView()
             }
@@ -476,7 +500,7 @@ struct AgentActionMenu: View, Equatable {
                         Label(direction.title, systemImage: direction.symbol)
                     }
                 }
-            } label: { Label("Split Pane", systemImage: Theme.Icon.splitRight).lineLimit(1) }
+            } label: { label(item.id, Theme.Icon.splitRight) }
         case .splitRight, .splitDown, .gitPull, .gitPush, .gitFetch:
             // These entries describe the nested inventory; their parent submenu renders them above/below.
             EmptyView()
@@ -487,19 +511,70 @@ struct AgentActionMenu: View, Equatable {
                         Label(operation.title, systemImage: operation.symbol)
                     }
                 }
-            } label: { Label("Git", systemImage: Theme.Icon.gitBranch) }
+            } label: { label(item.id, Theme.Icon.gitBranch) }
         case .closeTab:
             Button(role: .destructive) { if let s = now() { NodeActions.shared.askCloseTab(s) } } label: {
-                Label("Close Tab…", systemImage: Theme.Icon.closeTab).lineLimit(1)
+                label(item.id, Theme.Icon.closeTab)
             }
         case .close:
             Button(role: .destructive) { if let s = now() { handlers.close(s) } } label: {
-                Label("Close Agent…", systemImage: Theme.Icon.end)
+                label(item.id, Theme.Icon.end)
             }
         case .delete:
             Button(role: .destructive) { if let s = now(), s.canDelete { handlers.delete(s) } } label: {
-                Label("Delete Chat…", systemImage: Theme.Icon.delete).lineLimit(1)
+                label(item.id, Theme.Icon.delete)
             }
+        }
+    }
+}
+
+extension AgentActionItem.ID {
+    /// A command title stays bounded even when its linked to-do or computer has a long name.
+    @MainActor func menuTitle(in facts: AgentActionFacts) -> LocalizedStringResource {
+        switch self {
+        case .backToChat: "Back to Chat [Agent Menu]"
+        case .files, .git:
+            if let badge = facts.paneBadges[self == .files ? .files : .git] {
+                "\(self == .files ? SessionPane.files.title : SessionPane.git.title) (\(badge))"
+            } else {
+                self == .files ? "Files" : "Git"
+            }
+        case .review: "Review [Agent Menu]"
+        case .preview: "Preview"
+        case .subagents: "Children \(CountBadge.text(facts.subagentCount) ?? "0") [Agent Menu]"
+        case .sideSessions: "Threads \(CountBadge.text(facts.sideCount) ?? "0") [Agent Menu]"
+        case .space: "Space Agents"
+        case .attach: "Attach Live"
+        case .interrupt: "Interrupt [Composer Buttons f9d193]"
+        case .markSeen: "Mark as Seen [Agent Menu]"
+        case .takeover: "Take over"
+        case .continueInNewSession: "Continue in New Chat"
+        case .rename: "Rename Agent"
+        case .autoRename: "Auto Rename"
+        case .pin: facts.pinned ? "Unpin [Personal Agent List View c92179]" : "Pin [Personal Agent List View 173f88]"
+        case .mute: facts.muted ? "Unmute [Chat View 3834f9]" : "Mute"
+        case .todo: "Open Linked To-do"
+        case .screen: AgentActionItem.screenTitle
+        case .moveTodo: "Change Linked To-do"
+        case .linkTodo: "Link To-do [Agent Menu]"
+        case .unlinkTodo: "Unlink [Agent Menu]"
+        case .moveTo: MoveToChoices.agentTitle
+        case .stopLoop: "Stop Loop"
+        case .handToPersona: "To Persona [Agent Menu]"
+        case .copyDirectory: "Copy Path [Agent Menu]"
+        case .terminal: "Terminal"
+        case .copyResume: "Copy Resume Cmd"
+        case .resume: "Resume [Agent Menu]"
+        case .splitPane: "Split Pane [Agent Menu]"
+        case .splitRight: NodeMenu.Direction.right.titleResource
+        case .splitDown: NodeMenu.Direction.down.titleResource
+        case .nodeGit: "Git"
+        case .gitPull: NodeMenu.GitOp.pull.titleResource
+        case .gitPush: NodeMenu.GitOp.push.titleResource
+        case .gitFetch: NodeMenu.GitOp.fetch.titleResource
+        case .closeTab: "Close Tab"
+        case .close: "Close Agent"
+        case .delete: "Delete Chat"
         }
     }
 }

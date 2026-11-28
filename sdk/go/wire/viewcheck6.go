@@ -236,6 +236,11 @@ func checkPictures(t *Thumbnail, a *Avatar) error {
 		if a.URL == "" && a.Text == "" && a.Ref == "" {
 			return errors.New("an avatar has a url, a ref or a text")
 		}
+		if a.URL != "" {
+			if err := checkHTTPS(a.URL, "avatar"); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -558,7 +563,8 @@ func checkChartV6(e Component) error {
 }
 
 // HasImageRef says whether a component shows a picture the extension serves (a ref): an image's src, a scene's
-// poster, a row's thumbnail or avatar, a header's avatar, a tile's image, a comment's avatar.
+// poster, a row's thumbnail or avatar, a header's avatar, a tile's image, a comment's avatar, or a diff thread
+// comment's avatar.
 func HasImageRef(e *Component) bool {
 	if e.Src != nil && e.Src.Ref != "" || e.Poster != nil && e.Poster.Ref != "" || e.Thumbnail != nil && e.Thumbnail.Ref != "" ||
 		e.Avatar != nil && e.Avatar.Ref != "" {
@@ -572,6 +578,13 @@ func HasImageRef(e *Component) bool {
 	for _, c := range e.Comments {
 		if c.Avatar != nil && c.Avatar.Ref != "" {
 			return true
+		}
+	}
+	for _, th := range e.Threads {
+		for _, c := range th.Comments {
+			if c.Avatar != nil && c.Avatar.Ref != "" {
+				return true
+			}
 		}
 	}
 	return false

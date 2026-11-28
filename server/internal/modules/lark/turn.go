@@ -38,7 +38,7 @@ func (f feishuSink) nativeWorker(r *channel.Run) *cotWorker {
 
 // cotWorked: r's agent message is a worker's. Topics always; a private run with dm_cot on, or one that already
 // has a worker (the route does not change mid-turn: the legacy path has a different cursor and would append twice).
-func (f feishuSink) cotWorked(ctx context.Context, r *channel.Run, scope cotScope) bool {
+func (f feishuSink) cotWorked(ctx context.Context, r *channel.Run, scope int) bool {
 	switch scope {
 	case cotScopeTopic:
 		return true
@@ -140,7 +140,7 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 		}
 		return
 	}
-	to := s.runTo(s.runExts(r, "chat", "thread"))
+	to := runTo(s.runExts(r, "chat", "thread"))
 	mid, err, kit := f.kitPost(ctx, r, prog, c, to)
 	if !kit {
 		// A card sent as a message has no entity, even one an earlier card of the run had (forgetProgressCard).
@@ -300,7 +300,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		f.markDone(ctx, r, final, end)
 		return nil
 	}
-	to := s.runTo(r.Ext)
+	to := runTo(r.Ext)
 	var missing []int // the pieces that did not get out (1-based): said at the end, not sent again
 	defer func() {
 		if len(missing) > 0 {

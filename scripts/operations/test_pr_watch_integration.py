@@ -170,6 +170,7 @@ class WatcherIntegrationTests(unittest.TestCase):
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.pr = {"number": 7, "title": "fix: increment", "body": "Fixes #6", "state": "OPEN", "isDraft": False,
                    "headRefOid": self.head, "headRefName": "fix", "baseRefName": "main", "baseRefOid": self.base,
+                   "author": {"login": "pr-author"},
                    "isCrossRepository": False, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
                    "reviewDecision": "", "url": "https://example.com/pr/7",
                    "createdAt": now, "updatedAt": now}
@@ -276,11 +277,14 @@ class WatcherIntegrationTests(unittest.TestCase):
         config["repositories"][0]["respect_human_reviews"] = True
         self.config_path.write_text(json.dumps(config))
 
-    def put_review(self, state_name, login="maintainer", user_type="User"):
+    def put_review(self, state_name, login="maintainer", user_type="User", author_association="MEMBER"):
         state = json.loads(self.state_path.read_text())
-        state["reviews"] = [{"id": 9, "state": state_name, "commit_id": self.head,
-                            "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "user": {"login": login, "type": user_type}}]
+        rec = {"id": 9, "state": state_name, "commit_id": self.head,
+               "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "user": {"login": login, "type": user_type}}
+        if author_association is not None:
+            rec["author_association"] = author_association
+        state["reviews"] = [rec]
         self.state_path.write_text(json.dumps(state))
 
     def test_human_approval_merges_without_invoking_the_reviewer_or_posting(self):
@@ -291,6 +295,20 @@ class WatcherIntegrationTests(unittest.TestCase):
         self.assertFalse(any("reviewer" in call for call in calls))
         self.assertFalse(any(call.get("argv", [])[:2] in (["pr", "review"], ["pr", "comment"])
                              for call in calls))
+
+    def test_untrusted_human_approval_is_ignored_and_the_normal_review_runs(self):
+        self.enable_human_reviews()
+        self.put_review("APPROVED", login="external-user", author_association="NONE")
+        calls = self.run_watch()
+        self.assertTrue(any("reviewer" in call for call in calls))
+        self.assertEqual(json.loads(self.state_path.read_text())["pr"]["state"], "MERGED")
+
+    def test_pr_author_comment_reply_does_not_park_their_own_pr(self):
+        self.enable_human_reviews()
+        self.put_review("COMMENTED", login="pr-author", author_association="MEMBER")
+        calls = self.run_watch()
+        self.assertTrue(any("reviewer" in call for call in calls))
+        self.assertEqual(json.loads(self.state_path.read_text())["pr"]["state"], "MERGED")
 
     def test_human_change_request_does_not_review_or_merge(self):
         self.enable_human_reviews()

@@ -43,6 +43,9 @@ func TestSessionItemsFoldWork(t *testing.T) {
 		Items   []proto.Item `json:"items"`
 		More    bool         `json:"more"`
 		HasMore bool         `json:"has_more"`
+		History string       `json:"history"`
+		FromSeq *int         `json:"from_seq"`
+		ToSeq   *int         `json:"to_seq"`
 	}) {
 		t.Helper()
 		out, err := n.handle(context.Background(), "session.items", json.RawMessage(params))
@@ -67,9 +70,21 @@ func TestSessionItemsFoldWork(t *testing.T) {
 		t.Fatalf("folded page: %v %+v", kinds, page.Items[1].Fold)
 	}
 	fo := page.Items[1]
+	if page.History == "" {
+		t.Fatal("folded page omitted history generation")
+	}
 	var opened []proto.Item
 	for from := fo.Seq; ; {
 		r := call(fmt.Sprintf(`{"session_id":"s1","from_seq":%d,"through_seq":%d}`, from, fo.Fold.ThroughSeq))
+		if r.History != page.History {
+			t.Fatalf("fold range history = %q, want %q", r.History, page.History)
+		}
+		if r.FromSeq == nil || *r.FromSeq != from-1 {
+			t.Fatalf("fold range from_seq = %v, want %d", r.FromSeq, from-1)
+		}
+		if r.ToSeq == nil || (r.More && *r.ToSeq != r.Items[len(r.Items)-1].Seq) || (!r.More && *r.ToSeq != fo.Fold.ThroughSeq) {
+			t.Fatalf("fold range to_seq = %v (more=%v, through=%d)", r.ToSeq, r.More, fo.Fold.ThroughSeq)
+		}
 		opened = append(opened, r.Items...)
 		if !r.More {
 			break

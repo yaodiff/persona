@@ -40,11 +40,41 @@ func (m *memBlockerQueueStore) TaskPlansQueued(_ context.Context, _ time.Time) (
 	return out, nil
 }
 
+func (m *memBlockerQueueStore) TaskPlansQueuedForTodo(_ context.Context, todoID string) ([]db.TaskPlanRow, error) {
+	m.planMu.Lock()
+	defer m.planMu.Unlock()
+	var rows []db.TaskPlanRow
+	for _, row := range m.plans {
+		if row.State != planStarted {
+			continue
+		}
+		for _, task := range planFromRow(row).Tasks {
+			if task.TodoID == todoID && task.Queue != nil {
+				rows = append(rows, row)
+				break
+			}
+		}
+	}
+	return rows, nil
+}
+
 func (m *memBlockerQueueStore) UpsertTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
 	return m.b.UpsertTodoBlocker(ctx, r)
 }
+func (m *memBlockerQueueStore) EnsureTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
+	return m.b.EnsureTodoBlocker(ctx, r)
+}
 func (m *memBlockerQueueStore) ListActiveTodoBlockers(ctx context.Context) ([]db.TodoBlockerRow, error) {
 	return m.b.ListActiveTodoBlockers(ctx)
+}
+func (m *memBlockerQueueStore) ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]db.TodoBlockerRow, error) {
+	return m.b.ListTodoReadinessBlockers(ctx, todoIDs)
+}
+func (m *memBlockerQueueStore) ListMergeTrainPRBlockers(ctx context.Context, prURL, repoKey string) ([]db.TodoBlockerRow, error) {
+	return m.b.ListMergeTrainPRBlockers(ctx, prURL, repoKey)
+}
+func (m *memBlockerQueueStore) UpdateActiveTodoBlockerCondition(ctx context.Context, id, condition string, at time.Time) (*db.TodoBlockerRow, error) {
+	return m.b.UpdateActiveTodoBlockerCondition(ctx, id, condition, at)
 }
 func (m *memBlockerQueueStore) ListTodoBlockersByTodo(ctx context.Context, todoID string) ([]db.TodoBlockerRow, error) {
 	return m.b.ListTodoBlockersByTodo(ctx, todoID)
@@ -166,9 +196,6 @@ func TestTodosV2BlockerQueueDefersStartAndAutoStartsOnPRMerge(t *testing.T) {
 	}
 
 	// While the external PR is still open, sweepAdmissionQueue must NOT launch the agent.
-	s.setTodoBlockerPRFetcher(func(_ context.Context, targetRef string) (todoBlockerPRFact, bool) {
-		return todoBlockerPRFact{URL: targetRef, State: "open", Merged: false}, true
-	})
 	s.sweepAdmissionQueue(ctx)
 	if got := len(f.started()); got != 0 {
 		t.Fatalf("agent started prematurely while blocker active: started=%d", got)
@@ -182,10 +209,7 @@ func TestTodosV2BlockerQueueDefersStartAndAutoStartsOnPRMerge(t *testing.T) {
 
 	// Once the external PR merges, ReconcileTodoBlockers resolves the blocker and triggers sweepAdmissionQueue
 	// which automatically launches the deferred agent.
-	s.setTodoBlockerPRFetcher(func(_ context.Context, targetRef string) (todoBlockerPRFact, bool) {
-		return todoBlockerPRFact{URL: targetRef, State: "merged", Merged: true}, true
-	})
-	summary, err := s.ReconcileTodoBlockers(ctx, "")
+	summary, err := s.reconcileTodoBlockersForPR(ctx, TodoPRStatus{URL: prURL, State: "merged"})
 	if err != nil {
 		t.Fatalf("ReconcileTodoBlockers: %v", err)
 	}

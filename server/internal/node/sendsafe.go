@@ -136,7 +136,7 @@ type sendOpts struct {
 	// CompactIfFull: the assistant's agent_send (#11137): a Claude Code or Codex Agent whose context is nearly full when
 	// the message would go in is compacted with its own /compact first (compact_before_send.go).
 	CompactIfFull bool `json:"compact_if_full"`
-	// readBox: a screen that cannot be read refuses (unreadBoxMessage) instead of passing for an empty box. After a
+	// readBox: a screen that cannot be read refuses (unreadBoxRefusal) instead of passing for an empty box. After a
 	// command that may still sit in the box (ultracode.go), not knowing is not enough to type after it.
 	readBox bool
 }
@@ -175,6 +175,29 @@ func refusal(code, message string, data map[string]any) error {
 	return &rpc.Error{Code: code, Message: message, Data: b}
 }
 
+// failure is a coded failure of something other than a message (a tab, a pane, a start's new tab): code and data for
+// the hub to word in the reader's language (apierr), message the default language's words. Unlike refusal it says
+// nothing about delivery.
+func failure(code, message string, data map[string]any) error {
+	e := &rpc.Error{Code: code, Message: message}
+	if len(data) > 0 {
+		e.Data, _ = json.Marshal(data)
+	}
+	return e
+}
+
+// hostFailure is the failure code (terminal_open_failed, tab_close_failed…) of something the engine would not do, err
+// its words, which the hub's words name (data detail, #17057). It still matches what err matches (errors.Is, As), and
+// a coded refusal err already is stays as it is: it says more.
+func hostFailure(ctx context.Context, code string, err error) error {
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Code != "" {
+		return err
+	}
+	return host.Mark(failure(code, i18n.T(i18n.From(ctx), "rpc-errors."+code, i18n.Args{"detail": err.Error()}),
+		map[string]any{"detail": err.Error()}), err)
+}
+
 // checkPane refuses a send into a pane that is not ready for typed text, after clearing the draft the user agreed
 // to clear. kind is the agent ("claude", "codex", a compatible CLI).
 func (n *Node) checkPane(ctx context.Context, pane, kind, clearDraft string) error {
@@ -200,7 +223,7 @@ func (n *Node) checkPaneFor(ctx context.Context, pane, kind string, opts sendOpt
 	if kind != "claude" || n.plainScreen(pane) {
 		text, err := n.readPane(ctx, pane, "visible", 60)
 		if err != nil && opts.readBox {
-			return refusal(notDelivered, unreadBoxMessage, nil)
+			return unreadBoxRefusal()
 		}
 		if err == nil && opts.DismissNotice {
 			if text, err = n.closeNotices(ctx, pane, text, false); err != nil {
@@ -234,7 +257,7 @@ func (n *Node) checkPaneFor(ctx context.Context, pane, kind string, opts sendOpt
 	}
 	shown := read()
 	if unread && (opts.readBox || cut) {
-		return refusal(notDelivered, unreadBoxMessage, nil)
+		return unreadBoxRefusal()
 	}
 	// Only a whole screen tells a notice from a dialog whose head is above the bottom rows: Enter there would answer it.
 	if opts.DismissNotice && !partial {
@@ -260,7 +283,7 @@ func (n *Node) checkPaneFor(ctx context.Context, pane, kind string, opts sendOpt
 		code, in = screen.CheckClaude(shown)
 	}
 	if unread && (opts.readBox || cut) {
-		return refusal(notDelivered, unreadBoxMessage, nil)
+		return unreadBoxRefusal()
 	}
 	switch code {
 	case screen.DialogOpen:
@@ -289,10 +312,28 @@ var errTerminalFinished = errors.New("terminal finished")
 const (
 	notDelivered      = "not_delivered"
 	botmuxDownMessage = "这个会话在 botmux 里的机器人（%s）这次没有应答（%s），这条消息没有发出去：稍后再发。"
-	shellOnlyMessage  = "这个会话的 Agent 已经退出，终端回到了命令行，这条消息没有发出去（什么都没输入）：在电脑上重新打开它再发。"
 	cannotType        = "cannot_type"
 	cannotTypeMessage = "电脑上的这个终端只能整条发送（粘贴后回车），不能只输入文字，这次什么都没按：在电脑上回答，或者直接发消息。"
-	unreadBoxMessage  = "读不到电脑上终端的画面，不知道刚才输入的命令是不是还停在输入框里，这条消息没有发出去（什么都没输入）：稍后再发。"
+)
+
+// unreadBoxRefusal refuses a send whose screen could not be read, so a command typed a moment ago may still be in the
+// box: nothing typed. The hub words it by its reason (apierr's notDeliveredKeys, #17057).
+func unreadBoxRefusal() error {
+	return refusal(notDelivered, i18n.T(i18n.Default, "rpc-errors.not_delivered_screen_unreadable"), map[string]any{"reason": "screen_unreadable"})
+}
+
+// shellOnlyRefusal refuses a send into a pane whose agent exited, its terminal back at the shell: nothing typed. The
+// hub words it by its reason (apierr's reasonKeys, #17057).
+func shellOnlyRefusal() error {
+	return refusal(notRunning, i18n.T(i18n.Default, "rpc-errors.not_running_agent_exited"), map[string]any{"reason": notRunningAgentExited})
+}
+
+// The reasons of a not_delivered refusal for botmux's 403 on a send as the owner (botmuxOwnerRefusedError), each worded
+// by rpc-errors.not_delivered_<reason>.
+const (
+	botmuxOwnerUnresolvedReason = "botmux_owner_unresolved"
+	botmuxOwnerMismatchReason   = "botmux_owner_mismatch"
+	botmuxOwnerRefusedReason    = "botmux_owner_refused"
 )
 
 // deliveryRefusal is the refusal for a host's error that typed nothing (host.ErrNotDelivered, host.ErrAgentBlocked),
@@ -308,7 +349,7 @@ func deliveryRefusal(err error) error {
 		return refusal(screen.DialogOpen, dialogMessage, nil)
 	}
 	if errors.Is(err, errShellOnly) {
-		return refusal(notRunning, shellOnlyMessage, nil)
+		return shellOnlyRefusal()
 	}
 	if errors.Is(err, errTerminalFinished) {
 		return refusal(notDelivered, i18n.T(i18n.Default, "rpc-errors.not_delivered_finished"), map[string]any{"reason": "terminal_finished"})
@@ -316,6 +357,18 @@ func deliveryRefusal(err error) error {
 	var down *botmuxDownError
 	if errors.As(err, &down) {
 		return refusal(notDelivered, fmt.Sprintf(botmuxDownMessage, down.App, down.Why), nil)
+	}
+	var owner *botmuxOwnerRefusedError
+	if errors.As(err, &owner) {
+		// botmux's 403 for the owner: say which, so the hub words it (apierr notDeliveredKeys), not "try again shortly".
+		reason := botmuxOwnerRefusedReason
+		switch owner.Code {
+		case botmuxOwnerUnresolved:
+			reason = botmuxOwnerUnresolvedReason
+		case botmuxOwnerMismatch:
+			reason = botmuxOwnerMismatchReason
+		}
+		return refusal(notDelivered, i18n.T(i18n.Default, "rpc-errors.not_delivered_"+reason), map[string]any{"reason": reason})
 	}
 	return refusal(notDelivered, i18n.T(i18n.Default, "rpc-errors.not_delivered"), map[string]any{"reason": "terminal_refused"})
 }
@@ -549,6 +602,14 @@ func deliveredOf(e *rpc.Error) string {
 const (
 	notRunning = "not_running"
 	notInFront = "agent_not_in_front"
+)
+
+// Why a session is not running, beside proto.NotRunningEngine (not_running's data reason, apierr's reasonKeys, #17057):
+// its folder is gone, its resume in a new tab never came up, its agent exited back to the shell.
+const (
+	notRunningDirectoryGone = "directory_gone"
+	notRunningResumeTimeout = "resume_timeout"
+	notRunningAgentExited   = "agent_exited"
 )
 
 // notRunningRefusal refuses, with nothing typed, a send to a session that is not live when the machine's engine

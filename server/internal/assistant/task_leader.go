@@ -274,24 +274,26 @@ type leaderScope struct {
 // leaderTaskIn is a worker task as a task leader may plan it: nothing else (no todo_id, attachments, project,
 // user_requested…) is read, an unknown field is refused. Every new worker declares role "worker".
 type leaderTaskIn struct {
-	Title            string   `json:"title"`
-	Prompt           string   `json:"prompt"`
-	Role             string   `json:"role"`
-	Machine          string   `json:"machine"`
-	MachinePolicy    string   `json:"machine_policy"`
-	Cwd              string   `json:"cwd"`
-	Launcher         string   `json:"launcher"`
-	Model            string   `json:"model"`
-	Tier             string   `json:"tier"`
-	Effort           string   `json:"effort"`
-	Speed            string   `json:"speed"`
-	Permission       string   `json:"permission"`
-	Readonly         bool     `json:"readonly"`
-	MultiIssueReport bool     `json:"multi_issue_report"`
-	DoneWhen         []string `json:"done_when"`
-	Goal             string   `json:"goal"`
-	ExpectMinutes    int      `json:"expect_minutes"`
-	Why              string   `json:"why"`
+	Title            string             `json:"title"`
+	Prompt           string             `json:"prompt"`
+	Role             string             `json:"role"`
+	Machine          string             `json:"machine"`
+	MachinePolicy    string             `json:"machine_policy"`
+	Cwd              string             `json:"cwd"`
+	Launcher         string             `json:"launcher"`
+	Host             string             `json:"host"`
+	Model            string             `json:"model"`
+	Tier             string             `json:"tier"`
+	Effort           string             `json:"effort"`
+	Speed            string             `json:"speed"`
+	Permission       string             `json:"permission"`
+	Readonly         bool               `json:"readonly"`
+	MultiIssueReport bool               `json:"multi_issue_report"`
+	DoneWhen         []string           `json:"done_when"`
+	Goal             string             `json:"goal"`
+	ExpectMinutes    int                `json:"expect_minutes"`
+	Why              string             `json:"why"`
+	DistinctFrom     []TaskDistinctFrom `json:"distinct_from"`
 }
 
 // workerTasks reads a leader's task_plan arguments as worker tasks beneath its task.
@@ -308,8 +310,9 @@ func (l *leaderScope) workerTasks(args json.RawMessage) ([]PlanTask, error) {
 	out := make([]PlanTask, 0, len(in.Tasks))
 	for _, t := range in.Tasks {
 		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Role: t.Role, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
-			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly, MultiIssueReport: t.MultiIssueReport,
-			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project}
+			Launcher: t.Launcher, Host: strings.TrimSpace(t.Host), Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly, MultiIssueReport: t.MultiIssueReport,
+			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project,
+			DistinctFrom: t.DistinctFrom}
 		if strings.TrimSpace(pt.Machine) == "" {
 			pt.Machine = l.agent.MachineID
 			if strings.TrimSpace(pt.Cwd) == "" {
@@ -494,6 +497,12 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either
 	if len(entries) == 0 {
 		s.ackSupervisePending(batch)
+		return false
+	}
+	entries, kept = s.screenModelSupervision(ctx, leaderRef(lead.MachineID, lead.SessionID), entries, kept, now, prev)
+	batch = append(moot, kept...)
+	if len(entries) == 0 {
+		s.ackSupervisePending(moot)
 		return false
 	}
 	holds := kept

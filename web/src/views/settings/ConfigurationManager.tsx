@@ -12,7 +12,7 @@ import { Group, Row } from "./SettingsParts";
  * pick counts before). `pick`: an editor outside those pages (the hub's download mirrors) with its own picker,
  * starting on the current assistant and kept in the address (`?manager=`).
  */
-export function ConfigurationManager({ children, title, rowLabel, hint, hideSingle = false, pick = false }: {
+export function ConfigurationManager({ children, title, rowLabel, hint, hideSingle = false, pick = false, manager }: {
   children: (manager: string) => ReactNode;
   title?: string;
   /** A shorter label beside the picker, when the group title already names it. */
@@ -20,7 +20,9 @@ export function ConfigurationManager({ children, title, rowLabel, hint, hideSing
   hint?: string;
   hideSingle?: boolean;
   pick?: boolean;
+  manager?: string;
 }) {
+  if (manager) return <div key={manager}>{children(manager)}</div>;
   return pick ? <PickedManager title={title} rowLabel={rowLabel} hint={hint} hideSingle={hideSingle}>{children}</PickedManager> : <CurrentManager>{children}</CurrentManager>;
 }
 

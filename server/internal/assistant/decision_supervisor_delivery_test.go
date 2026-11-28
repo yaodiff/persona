@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -506,7 +507,7 @@ func TestSupervisorChoiceWaitsForADefaultUnderWay(t *testing.T) {
 	want := a.Options[1].Label
 	pastDeadline(t, s, todo.ID)
 	actions := &s.reviewDismissals.actions
-	actions.acquire(todo.ID) // the default, as acceptDefault takes it
+	actions.acquire(todo.ID) // the default, as handleTaskDeadline takes it
 	spoke := make(chan struct{})
 	go func() {
 		defer close(spoke)
@@ -852,7 +853,7 @@ func TestSupervisorChoiceBeingSettledIsNotDroppedOrSettledTwice(t *testing.T) {
 // The entry ends with its settlement whatever the outcome, so it never keeps holding a default it can no longer
 // settle. Answered on the card while the settlement waited: the card's answer stands and nothing more is relayed. Not
 // taken by the Agent: the card keeps waiting, and the owner's own option has already marked the deadline answered, so
-// no default follows.
+// no default follows. An Agent that cannot take it now (#17431): the choice is recorded and the round ends.
 func TestSupervisorChoiceBeingSettledEndsWhateverTheOutcome(t *testing.T) {
 	t.Run("answered on the card meanwhile", func(t *testing.T) {
 		s, f, todo := decisionAgentReplyService(t)
@@ -884,7 +885,7 @@ func TestSupervisorChoiceBeingSettledEndsWhateverTheOutcome(t *testing.T) {
 		s, f, todo := decisionAgentReplyService(t)
 		want := askOf(s, todo.ID).Options[1].Label
 		spokeOnBus(t, s, supervisorRef(), want, "msg-refused")
-		failSends(f, &rpc.Error{Code: "internal", Message: "the node is restarting"})
+		failSends(f, errors.New("the link dropped"))
 		sent := len(workerSends(f))
 		sentNotice(s, supervisorRef(), "msg-refused", assistantwire.ConversationDelivered)
 		failSends(f, nil)
@@ -898,6 +899,34 @@ func TestSupervisorChoiceBeingSettledEndsWhateverTheOutcome(t *testing.T) {
 		pastDeadline(t, s, todo.ID)
 		s.sweepDecisionDeadlines(time.Now())
 		stillWaiting(t, s, f, todo.ID, sent, "the deadline after the owner's own answer failed to reach the Agent")
+	})
+	// A send that failed before anything was typed (the node restarting, #17431): the owner's choice is recorded and
+	// handed to the supervisor to pass on, the round ends, and nothing follows at the deadline.
+	t.Run("the Agent cannot take it now", func(t *testing.T) {
+		s, f, todo := decisionAgentReplyService(t)
+		want := askOf(s, todo.ID).Options[1].Label
+		spokeOnBus(t, s, supervisorRef(), want, "msg-restarting")
+		failSends(f, &rpc.Error{Code: "internal", Message: "the node is restarting"})
+		sent := len(workerSends(f))
+		sentNotice(s, supervisorRef(), "msg-restarting", assistantwire.ConversationDelivered)
+		failSends(f, nil)
+		if n := bookSize(s); n != 0 || s.supervisorSettlePending(todo.ID, time.Now()) {
+			t.Fatalf("%d entries left in the book after a recorded settlement", n)
+		}
+		if got := askOf(s, todo.ID); got != nil && got.AcceptedAt.IsZero() {
+			t.Fatalf("the owner's choice was not recorded: %+v", got)
+		}
+		if listedAsk(t, s, todo.ID) != nil {
+			t.Fatal("the recorded choice still waits")
+		}
+		if askOf(s, todo.ID) != nil {
+			pastDeadline(t, s, todo.ID)
+		}
+		s.sweepDecisionDeadlines(time.Now())
+		if got := workerSends(f)[sent:]; len(got) != 0 {
+			t.Fatalf("the hub sent it after all: %q", got)
+		}
+		s.waitWorkEvents()
 	})
 }
 

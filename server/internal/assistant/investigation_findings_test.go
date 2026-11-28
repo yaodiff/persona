@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devices"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -259,6 +261,8 @@ func TestInvestigationFindingsFreshReportAndOwnerDrop(t *testing.T) {
 	}
 	request := httptest.NewRequest("POST", "/api/v1/todos/"+todo.ID+"/decisions",
 		strings.NewReader(`{"question":"Drop investigation finding logs?","choice":"Drop","reason":"This sample is no longer used."}`))
+	request.Header.Set(RoleHeader, roleFull)
+	request.Header.Set(assistantwire.PersonHeader, "1")
 	response := httptest.NewRecorder()
 	s.ServeHTTP(response, request)
 	var owner struct {
@@ -441,4 +445,334 @@ func staleFindingsWithLiveWorker(t *testing.T) (*Service, Todo, *investigationFi
 		t.Fatal("test requires a worker that is still live")
 	}
 	return s, todo, report
+}
+
+func TestInvestigationFindingsResumedOwnerPassStillChecksFindings(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name  string
+		state string
+	}{
+		{name: "resumed_pass_while_user_check_and_done", state: reviewUserCheck},
+		{name: "resumed_pass_while_accepted_unverified_and_done", state: reviewAccepted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, todo := acceptedForUserCheck(t)
+			r := reportFindings(t, s, todo, []investigationFinding{investigateLogs})
+			ask := askOf(s, todo.ID)
+			if ask == nil {
+				t.Fatal("no verification request")
+			}
+			now := time.Now().UTC()
+			s.accept.mu.Lock()
+			s.accept.asks[todo.ID].AcceptedAt = now
+			s.accept.mu.Unlock()
+			s.todos.mu.Lock()
+			s.todos.todos[todo.ID].DoneAt = &now
+			s.todos.todos[todo.ID].Supervision.State = tc.state
+			s.todos.todos[todo.ID].stageVerified = false
+			s.todos.mu.Unlock()
+
+			result, err := s.acceptTry(ctx, todo.ID, "")
+			if err == nil || !isInvestigationGuardError(err) || result.taken {
+				t.Fatalf("resumed Pass bypassed investigation check: result=%+v err=%v", result, err)
+			}
+			afterBlocked := todoNow(s, todo.ID)
+			if afterBlocked.Supervision.State != tc.state || afterBlocked.stageVerified {
+				t.Fatalf("blocked resumed Pass mutated task state: state=%q stageVerified=%v", afterBlocked.Supervision.State, afterBlocked.stageVerified)
+			}
+
+			completeTestFinding(t, s, todo.ID, r.Version, investigateLogs, "Verified request log exists.")
+			result, err = s.acceptTry(ctx, todo.ID, "")
+			if err != nil || !result.taken {
+				t.Fatalf("resumed Pass failed after findings disposition: result=%+v err=%v", result, err)
+			}
+			afterOK := todoNow(s, todo.ID)
+			if afterOK.Supervision.State != reviewAccepted || !afterOK.stageVerified {
+				t.Fatalf("resumed Pass did not finish verification: state=%q stageVerified=%v", afterOK.Supervision.State, afterOK.stageVerified)
+			}
+			// Already fully processed Pass stays idempotent.
+			again, err := s.acceptTry(ctx, todo.ID, "")
+			if err != nil || again.taken {
+				t.Fatalf("completed Pass was not idempotent: result=%+v err=%v", again, err)
+			}
+		})
+	}
+}
+
+func TestInvestigationFindingsParentDeleteBlockedUntilFollowUpResolved(t *testing.T) {
+	ctx := context.Background()
+	s, todo := findingTask(t, todoTestDB(t))
+	r := reportFindings(t, s, todo, []investigationFinding{investigateLogs})
+	follow, err := s.newTodo(ctx, "Follow up missing log", "", "conv1", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.superviseTodo(ctx, follow.ID, "conv1", []string{investigateLogs.Next}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := confirmTestFindings(s, todo.ID, r.Version, findingDisposition{ID: "logs", FollowUp: follow.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reviewErr(s, todo.ID, map[string]any{"verdict": reviewAccepted, "note": "Handed off"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.deleteTodo(ctx, todo.ID); err == nil || !isInvestigationGuardError(err) {
+		t.Fatalf("deleting parent with unresolved follow-up succeeded or wrong error: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/todos/"+todo.ID, nil)
+	req.Header.Set(RoleHeader, roleFull)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("DELETE parent with unresolved follow-up = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	if _, ok := s.todoNow(todo.ID); !ok {
+		t.Fatal("parent todo was deleted while follow-up remained unresolved")
+	}
+	if _, err := reviewErr(s, follow.ID, map[string]any{"verdict": reviewCancelled, "note": "Drop follow-up"}); err == nil {
+		t.Fatal("cancelling unresolved follow-up unexpectedly succeeded")
+	}
+
+	if _, err := reviewErr(s, follow.ID, map[string]any{"verdict": reviewAccepted, "checks": completeReviewChecks(todoNow(s, follow.ID))}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.deleteTodo(ctx, todo.ID); err != nil {
+		t.Fatalf("deleting parent after follow-up resolved failed: %v", err)
+	}
+}
+
+type investigationConnectedDevices struct {
+	*fakeDevices
+	conn map[string]time.Time
+}
+
+func (d *investigationConnectedDevices) ConnectedAt(id string) time.Time { return d.conn[id] }
+func (d *investigationConnectedDevices) List() []devices.Summary {
+	out := make([]devices.Summary, 0, len(d.conn))
+	for id := range d.conn {
+		out = append(out, devices.Summary{ID: id, Name: id, Online: true, Reachable: true})
+	}
+	return out
+}
+func (d *investigationConnectedDevices) Summary(id string) (devices.Summary, bool) {
+	if _, ok := d.conn[id]; !ok {
+		return devices.Summary{}, false
+	}
+	return devices.Summary{ID: id, Name: id, Online: true, Reachable: true}, true
+}
+
+func TestInvestigationFindingsWorkerGoneFailClosedOnUnknownAndReconnect(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("unknown_machine_stays_fail_closed", func(t *testing.T) {
+		s, f, todo := findingTaskWithHub(t, nil)
+		worker := todo.Agents[0]
+		f.mu.Lock()
+		delete(f.sessions, worker.MachineID)
+		f.mu.Unlock()
+
+		if !s.todoAgentLiveListed(ctx, worker) {
+			t.Fatal("todoAgentLiveListed treated ErrNoDevice as dead")
+		}
+		if _, gone := s.investigationWorkerGone(ctx, todo); gone {
+			t.Fatal("investigationWorkerGone treated ErrNoDevice as dead")
+		}
+	})
+
+	t.Run("unlisted_session_without_orphan_stays_fail_closed", func(t *testing.T) {
+		s, f, todo := findingTaskWithHub(t, nil)
+		worker := todo.Agents[0]
+		f.mu.Lock()
+		f.sessions[worker.MachineID] = []proto.Session{}
+		f.mu.Unlock()
+
+		if !s.todoAgentLiveListed(ctx, worker) {
+			t.Fatal("todoAgentLiveListed treated unlisted session without orphan/confirmation as dead")
+		}
+		if _, gone := s.investigationWorkerGone(ctx, todo); gone {
+			t.Fatal("investigationWorkerGone marked worker gone without orphan or confirmation")
+		}
+	})
+
+	t.Run("recent_reconnect_grace_blocks_stale_orphan_recovery", func(t *testing.T) {
+		s, f, todo := findingTaskWithHub(t, nil)
+		worker := todo.Agents[0]
+		now := time.Now().UTC()
+		f.mu.Lock()
+		f.sessions[worker.MachineID] = []proto.Session{}
+		f.mu.Unlock()
+		s.devs = &investigationConnectedDevices{fakeDevices: &fakeDevices{}, conn: map[string]time.Time{worker.MachineID: now.Add(-30 * time.Second)}}
+		s.orphans.mu.Lock()
+		s.orphans.now = map[string]TodoOrphan{
+			todo.ID: {Reason: orphanClosed, Since: now.Add(-10 * time.Minute), key: "orphaned:" + worker.MachineID + "/" + worker.SessionID + "@2026-11-28T00:00:00Z"},
+		}
+		s.orphans.mu.Unlock()
+
+		if !s.todoAgentLiveListed(ctx, worker) {
+			t.Fatal("todoAgentLiveListed ignored reconnect grace")
+		}
+		if _, gone := s.investigationWorkerGone(ctx, todo); gone {
+			t.Fatal("investigationWorkerGone ignored reconnect grace after node restart")
+		}
+	})
+
+	t.Run("cached_orphan_predating_reconnect_blocks_recovery", func(t *testing.T) {
+		s, f, todo := findingTaskWithHub(t, nil)
+		worker := todo.Agents[0]
+		now := time.Now().UTC()
+		f.mu.Lock()
+		f.sessions[worker.MachineID] = []proto.Session{}
+		f.mu.Unlock()
+		s.devs = &investigationConnectedDevices{fakeDevices: &fakeDevices{}, conn: map[string]time.Time{worker.MachineID: now.Add(-5 * time.Minute)}}
+		s.orphans.mu.Lock()
+		s.orphans.now = map[string]TodoOrphan{
+			todo.ID: {Reason: orphanClosed, Since: now.Add(-10 * time.Minute), key: "orphaned:" + worker.MachineID + "/" + worker.SessionID + "@2026-11-28T00:00:00Z"},
+		}
+		s.orphans.mu.Unlock()
+
+		if _, gone := s.investigationWorkerGone(ctx, todo); gone {
+			t.Fatal("investigationWorkerGone trusted cached orphan predating node reconnect")
+		}
+	})
+
+	t.Run("stopped_alias_row_does_not_hide_live_row", func(t *testing.T) {
+		s, f, todo := findingTaskWithHub(t, nil)
+		worker := todo.Agents[0]
+		now := time.Now().UTC()
+		archivedAlias := proto.Session{SessionID: "old-alias", Archived: true}
+		archivedAlias.SetAliases([]string{worker.SessionID})
+		f.mu.Lock()
+		f.sessions[worker.MachineID] = []proto.Session{
+			archivedAlias,
+			{SessionID: worker.SessionID, Status: proto.StatusWorking},
+		}
+		f.mu.Unlock()
+		s.orphans.mu.Lock()
+		s.orphans.now = map[string]TodoOrphan{
+			todo.ID: {Reason: orphanClosed, Since: now.Add(-10 * time.Minute), key: "orphaned:" + worker.MachineID + "/" + worker.SessionID + "@2026-11-28T00:00:00Z"},
+		}
+		s.orphans.mu.Unlock()
+
+		if !s.todoAgentLiveListed(ctx, worker) {
+			t.Fatal("stopped alias row hid live session row")
+		}
+		if _, gone := s.investigationWorkerGone(ctx, todo); gone {
+			t.Fatal("investigationWorkerGone marked live session with stopped alias as gone")
+		}
+	})
+
+	t.Run("fresh_post_connect_orphan_allows_recovery", func(t *testing.T) {
+		s, f, todo := findingTaskWithHub(t, nil)
+		worker := todo.Agents[0]
+		now := time.Now().UTC()
+		f.mu.Lock()
+		f.sessions[worker.MachineID] = []proto.Session{}
+		f.mu.Unlock()
+		s.devs = &investigationConnectedDevices{fakeDevices: &fakeDevices{}, conn: map[string]time.Time{worker.MachineID: now.Add(-10 * time.Minute)}}
+		s.orphanWatch(ctx, now.Add(orphanReconnectWait+time.Minute))
+		if o, ok := s.orphanOf(todo.ID); !ok || o.Reason != orphanClosed {
+			t.Fatalf("expected fresh orphanClosed, got %+v ok=%v", o, ok)
+		}
+		if _, gone := s.investigationWorkerGone(ctx, todo); !gone {
+			t.Fatal("fresh post-connect orphanClosed should allow stale recovery")
+		}
+	})
+}
+
+func TestInvestigationFindingsOwnerDropRequiresOwnerAppIdentity(t *testing.T) {
+	s, todo := findingTask(t, todoTestDB(t))
+	r := reportFindings(t, s, todo, []investigationFinding{investigateLogs})
+	body := `{"question":"Drop investigation finding logs?","choice":"Drop","reason":"No longer needed."}`
+	manualBody := `{"question":"Drop investigation finding logs?","choice":"Drop","reason":"No longer needed.","source":"manual"}`
+
+	postDecision := func(payload string, headers map[string]string) (*httptest.ResponseRecorder, db.TodoDecisionRow) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/todos/"+todo.ID+"/decisions", strings.NewReader(payload))
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		var out struct {
+			Decision db.TodoDecisionRow `json:"decision"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec, out.Decision
+	}
+
+	for _, tc := range []struct {
+		name       string
+		payload    string
+		headers    map[string]string
+		wantReject bool
+	}{
+		{
+			name:       "full_role_with_extension_header",
+			payload:    body,
+			headers:    map[string]string{RoleHeader: roleFull, ExtensionHeader: "ext-attacker"},
+			wantReject: true,
+		},
+		{
+			name:       "full_role_person_with_extension_header",
+			payload:    body,
+			headers:    map[string]string{RoleHeader: roleFull, assistantwire.PersonHeader: "1", ExtensionHeader: "ext-attacker"},
+			wantReject: true,
+		},
+		{
+			name:       "empty_role_with_extension_header",
+			payload:    body,
+			headers:    map[string]string{ExtensionHeader: "ext-attacker"},
+			wantReject: true,
+		},
+		{
+			name:       "extension_role_manual_drop",
+			payload:    manualBody,
+			headers:    map[string]string{RoleHeader: roleExtension, ExtensionHeader: "ext-attacker"},
+			wantReject: true,
+		},
+		{
+			name:    "extension_role_default_outcome",
+			payload: body,
+			headers: map[string]string{RoleHeader: roleExtension, ExtensionHeader: "ext-attacker"},
+		},
+		{
+			name:    "full_role_without_person_header",
+			payload: body,
+			headers: map[string]string{RoleHeader: roleFull},
+		},
+		{
+			name:    "no_headers_direct_call",
+			payload: body,
+			headers: map[string]string{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, dec := postDecision(tc.payload, tc.headers)
+			if tc.wantReject {
+				if rec.Code == http.StatusOK {
+					t.Fatalf("expected non-200 rejection, got 200 decision=%+v", dec)
+				}
+				return
+			}
+			if rec.Code == http.StatusOK && dec.ID != "" {
+				if strings.HasPrefix(dec.SourceMessage, findingOwnerDecisionPrefix) {
+					t.Fatalf("non-owner-app request minted owner-drop provenance: %+v", dec)
+				}
+				if _, err := confirmTestFindings(s, todo.ID, r.Version, findingDisposition{ID: "logs", Drop: dec.ID}); err == nil {
+					t.Fatalf("non-owner-app decision %s dropped the finding", dec.ID)
+				}
+			}
+		})
+	}
+
+	// Legitimate owner app request (full role + PersonHeader + no extension header) succeeds.
+	rec, dec := postDecision(body, map[string]string{RoleHeader: roleFull, assistantwire.PersonHeader: "1"})
+	if rec.Code != http.StatusOK || dec.ID == "" {
+		t.Fatalf("owner app manual drop failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := confirmTestFindings(s, todo.ID, r.Version, findingDisposition{ID: "logs", Drop: dec.ID}); err != nil {
+		t.Fatalf("owner app drop decision rejected: %v", err)
+	}
 }

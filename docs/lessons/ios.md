@@ -3354,3 +3354,12 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
 - Members a deletion leaves constant (a `Bool { false }`, a modifier that returns `self`, a parameter only ever passed
   its default) go with it, or the next reader keeps working around a Mac that is not there (#13399's last PR removed
   `MacHover`, `MacSelectingList`, `DeferredDefaults`, `StyleSpec.MacChrome` and `kbOpenEntry`, which nothing set).
+
+## An App Shortcut inside `#if` is never registered (#17789, 2026-11-28)
+
+The App Intents metadata extractor reads `AppShortcutsProvider.appShortcuts` from the compiler's constant values and
+drops every `AppShortcut` wrapped in `#if` inside the builder, whichever branch is active, with no warning. The Swift
+list still had ten entries (`appShortcuts.count == 10` passed), but `Persona.app/Metadata.appintents/extract.actionsdata`
+held seven: Call Persona and Start Meeting had never reached the iPhone's Spotlight, Siri or Settings › Action Button.
+Put the `#if` around the whole provider (one list per platform) and check the built metadata, not the Swift list:
+`MessagePersonaIntentTests.theBuiltMetadataListsEveryAppShortcut` reads the hosting app's own `extract.actionsdata`.

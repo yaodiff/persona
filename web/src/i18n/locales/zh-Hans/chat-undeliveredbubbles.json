@@ -5,5 +5,18 @@
   "action_failed": "操作失败：{error}",
   "held_waiting": "待 {computer} 上线后自动发送",
   "held_failed": "未发送",
-  "held_placeholder": "{computer} 当前离线，重新上线后将自动发送。"
+  "held_placeholder": "{computer} 当前离线，重新上线后将自动发送。",
+  "time_left": "剩余 {seconds} 秒",
+  "resend": "重新发送",
+  "ignore": "忽略",
+  "banner_awaiting": "有消息未确认送达，正在等待回执（剩余 {seconds} 秒），不会重复发送。",
+  "banner_awaiting_now": "有消息超时未收到确认，正在移出发送队列，后面的消息会照常发送。",
+  "banner_behind_one": "后面还有 {count} 条排队，会自动发送。",
+  "banner_behind_other": "后面还有 {count} 条排队，会自动发送。",
+  "banner_queued_one": "{count} 条消息排队中，会自动发送。",
+  "banner_queued_other": "{count} 条消息排队中，会自动发送。",
+  "banner_expired_one": "{count} 条消息超时未收到确认，已自动移出发送队列，后续消息正常发送。它可能已经送达，请先看一下对话，再选择重新发送或忽略。",
+  "banner_expired_other": "{count} 条消息超时未收到确认，已自动移出发送队列，后续消息正常发送。它们可能已经送达，请先看一下对话，再逐条选择重新发送或忽略。",
+  "banner_expired_more_one": "另有 {count} 条，见上方消息。",
+  "banner_expired_more_other": "另有 {count} 条，见上方消息。"
 }

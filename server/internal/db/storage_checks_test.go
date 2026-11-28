@@ -57,6 +57,9 @@ func assertCheck(t *testing.T, set, name string, want ...string) {
 // assistant.TestStorageChecksMatchTheCode.
 func TestStorageChecksMatchTheCode(t *testing.T) {
 	assertCheck(t, "hub", "bus_identities_role_check", bus.RoleManager)
+	for _, set := range []string{"hub", "manager"} {
+		assertCheck(t, set, "sent_messages_state_check", SendStateSending, SendStateDelivered, SendStateUnknown, SendStateLater)
+	}
 	assertCheck(t, "manager", "todos_kind_check", "", KindConcern)
 	assertCheck(t, "manager", "project_review_deliveries_outcome_check", "", "self_source",
 		"review_receipt_triage_only", "review_receipt_facts_recorded", "review_receipt_no_change",

@@ -259,15 +259,20 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string, row startRow
 // taskWorks is what follows a turn's start on open task t: the stretch of work begins now, and what was judged or
 // waited for before is moot. s.tasks.completionMu is held (taskWorking, or taskStartMissed for a start nobody heard).
 func (s *Service) taskWorks(ctx context.Context, t Todo) {
+	now := time.Now()
 	s.tasks.mu.Lock()
-	s.tasks.working[t.ID] = time.Now()
+	s.tasks.working[t.ID] = now
 	s.tasks.mu.Unlock()
 	if err := s.recordTodoCloseDecline(ctx, t.ID, time.Time{}); err != nil {
 		s.logf("task %s: clearing close decline: %v", t.ID, err)
 	}
 	s.interruptsSoon()          // an interrupted receipt of it reads resumed now (interruptions.go)
 	s.clearTaskCheck(ctx, t.ID) // it judged the work before this turn (task_check.go)
-	s.setTaskStage(ctx, t.ID, "develop", "")
+	if t.hasTaskRuntime() {
+		s.taskRuntimeWorking(ctx, t, now)
+	} else {
+		s.setTaskStage(ctx, t.ID, "develop", "")
+	}
 	s.taskPlanApproval()
 	if t.Supervision != nil {
 		s.supervisedWorking(ctx, t)
@@ -469,7 +474,7 @@ func sameTurnRow(now, last proto.Session) bool {
 // Not kept in a package variable: that would read the catalogs whenever personad starts, a hook too (#1308).
 func silentTurnErrorIn(l i18n.Lang) string { return i18n.T(l, "assistant-tasks.silent_turn") }
 
-var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https://[^/\s<>"()]+/(?:[^/\s<>"()]+/)+merge_requests/\d+\b`)
+var prLink = lazyre.New(`https?://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https?://[^/\s<>"()]+/(?:[^/\s<>"()]+/)+merge_requests/\d+\b`)
 
 // taskTurnEnded: one of the task's agents (sid on machine) ended a turn. Once none of them works or waits for the
 // user any more, the conversation gets a receipt (once per stretch of work), and the judge records delivery for review.
@@ -807,9 +812,11 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		s.taskInboxTurnEnded(cctx, t, last, items, false)
 	}
 	// The whole last reply, as Markdown: the session list's last_text is one line cut at 200 characters.
-	text := strings.TrimSpace(last.LastText)
 	_, answer := turnExchange(items)
-	text = cmp.Or(answer, text)
+	text := answer
+	if text == "" && !isUnlinkedAgyPane(last, items) {
+		text = strings.TrimSpace(last.LastText)
+	}
 	// A paged reply may have lost its tail (the file lines and the closeout are there): read the whole item.
 	text = s.taskAnswer(cctx, last.MachineID, last.SessionID, items, text)
 	if current, ok := s.todoNow(t.ID); !ok || current.Cancelled() || current.AgentAborted(machine, sid) {
@@ -838,12 +845,10 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		} else {
 			body.Criteria = list
 		}
+		body.PR = s.ownedReplyPR(cctx, current, last.MachineID, last.SessionID, text, taskReplyItem(items).TS)
 	}
 	if body.Summary == "" {
 		body.Summary = i18n.T(s.lang(cctx), "assistant-tasks.done")
-	}
-	if pr := prLink.FindAllString(text, -1); len(pr) > 0 {
-		body.PR = pr[len(pr)-1]
 	}
 	// One receipt, one judgment and one supervision signal for each turn the runtime closed, whatever tells of its end
 	// and however often. The ledger says whether this turn was taken up before; its receipt has one id, so the feed
@@ -885,7 +890,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		return settleTaken
 	}
 	s.taskNoticeOf(cctx, t, name, "done", "", clipMarkdown(text, 1500), 0, files)
-	if s.advanceTaskReply(cctx, t, last.MachineID, last.SessionID, text) {
+	if s.advanceTaskReplyAt(cctx, t, last.MachineID, last.SessionID, text, last.UpdatedAt) {
 		go s.askAcceptance(t, last.MachineID, last.SessionID, text) // verified, by the supervising assistant or the user (acceptance.go)
 	}
 	s.taskReport(t, reportDone, name, [2]string{last.MachineID, last.SessionID}, text, nil)

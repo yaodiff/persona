@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -249,8 +250,10 @@ func t3codeItem(it t3codeTimelineItem) (proto.Item, bool) {
 		out.Role, out.Kind, out.Text = "assistant", proto.KindText, text
 	case "reasoning":
 		out.Role, out.Kind, out.Text = "assistant", proto.KindThinking, text
-	case "approval_request", "user_input_request":
+	case "approval_request":
 		out.Role, out.Kind, out.Text = "assistant", proto.KindNotice, firstOf(text, title)
+	case "user_input_request":
+		out.Role, out.Kind, out.Text = "assistant", proto.KindNotice, firstOf(t3codeQuestionsText(text), text, title)
 	case "error":
 		out.Role, out.Kind, out.Text, out.IsError = "assistant", proto.KindText, firstOf(text, title), true
 	default:
@@ -261,11 +264,126 @@ func t3codeItem(it t3codeTimelineItem) (proto.Item, bool) {
 		out.Role, out.Kind, out.ToolName, out.ToolUseID = "assistant", proto.KindToolUse, firstOf(title, name), it.ItemID
 		out.Text = text
 		out.IsError = it.Status == "failed"
+		if it.Type == "dynamic_tool" {
+			if call, ok := t3codeDynamicTool(text); ok {
+				out.ToolName, out.ToolInput, out.Text = firstOf(call.name, out.ToolName), call.input, call.output
+			}
+		}
 	}
 	if strings.TrimSpace(out.Text) == "" && out.Kind != proto.KindToolUse {
 		return proto.Item{}, false
 	}
 	return out, true
+}
+
+// t3codeDynamicCall is a dynamic_tool item's call: T3 Code reads it out as JSON of its tool's name, input and output.
+type t3codeDynamicCall struct {
+	name   string
+	input  json.RawMessage
+	output string
+}
+
+// t3codeDynamicTool reads a dynamic_tool item's text, so the call shows under its own tool's name with its input (an
+// AskUserQuestion as the questions it asked) rather than as raw JSON under "Tool". ok is false for text that is not
+// that JSON, a page cut short by maxCharsPerItem among it.
+func t3codeDynamicTool(text string) (t3codeDynamicCall, bool) {
+	var raw struct {
+		ToolName string          `json:"toolName"`
+		Input    json.RawMessage `json:"input"`
+		Output   json.RawMessage `json:"output"`
+	}
+	if json.Unmarshal([]byte(text), &raw) != nil || strings.TrimSpace(raw.ToolName) == "" {
+		return t3codeDynamicCall{}, false
+	}
+	call := t3codeDynamicCall{name: strings.TrimSpace(raw.ToolName)}
+	if in := bytes.TrimSpace(raw.Input); len(in) > 0 && in[0] == '{' {
+		call.input = json.RawMessage(in)
+	}
+	if out := bytes.TrimSpace(raw.Output); len(out) > 0 && string(out) != "null" {
+		var s string
+		if json.Unmarshal(out, &s) == nil {
+			call.output = s
+		} else {
+			var pretty bytes.Buffer
+			if json.Indent(&pretty, out, "", "  ") == nil {
+				call.output = pretty.String()
+			} else {
+				call.output = string(out)
+			}
+		}
+	}
+	return call, true
+}
+
+// t3codeQuestion is a question of a user-input request as T3 Code gives it (in a timeline item's text and from
+// t3_pending_request).
+type t3codeQuestion struct {
+	ID       string `json:"id"`
+	Header   string `json:"header"`
+	Question string `json:"question"`
+	Options  []struct {
+		Label       string `json:"label"`
+		Description string `json:"description"`
+		Value       string `json:"value"`
+	} `json:"options"`
+	MultiSelect       bool  `json:"multiSelect"`
+	AllowCustomAnswer *bool `json:"allowCustomAnswer"`
+}
+
+// t3codeQuestionsText is a user_input_request item's text made readable: each question, its options and, once it is
+// answered, its answer, instead of the JSON T3 Code reads out (the questions; or the answers and the questions). ""
+// for text that is neither, a page cut short by maxCharsPerItem among it.
+func t3codeQuestionsText(text string) string {
+	var questions []t3codeQuestion
+	var answers map[string]json.RawMessage
+	if json.Unmarshal([]byte(text), &questions) != nil {
+		var answered struct {
+			Answers   map[string]json.RawMessage `json:"answers"`
+			Questions []t3codeQuestion           `json:"questions"`
+		}
+		if json.Unmarshal([]byte(text), &answered) != nil {
+			return ""
+		}
+		questions, answers = answered.Questions, answered.Answers
+	}
+	var blocks []string
+	for _, q := range questions {
+		var lines []string
+		if h := strings.TrimSpace(q.Header); h != "" && h != strings.TrimSpace(q.Question) {
+			lines = append(lines, h)
+		}
+		if s := strings.TrimSpace(q.Question); s != "" {
+			lines = append(lines, s)
+		}
+		if raw, ok := answers[q.ID]; ok {
+			lines = append(lines, "→ "+t3codeAnswerText(raw))
+		} else {
+			for _, o := range q.Options {
+				line := "· " + strings.TrimSpace(o.Label)
+				if d := strings.TrimSpace(o.Description); d != "" {
+					line += " — " + d
+				}
+				lines = append(lines, line)
+			}
+		}
+		if len(lines) > 0 {
+			blocks = append(blocks, strings.Join(lines, "\n"))
+		}
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+// t3codeAnswerText is an answer as T3 Code keeps it (text, or the options a multi-select chose) as one line.
+func t3codeAnswerText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var many []string
+	if json.Unmarshal(raw, &many) == nil {
+		return strings.Join(many, ", ")
+	}
+	return string(raw)
 }
 
 // sessionItems reads a page of a thread's timeline. Seq is a timeline position plus one, so to_seq is the thread's item

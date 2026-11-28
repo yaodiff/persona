@@ -1,4 +1,5 @@
 import { ApiError, errorText } from "../../lib/api";
+import { safeWebURL } from "../../lib/format";
 import { larkMessagePreview } from "../../lib/lark-inbox-card";
 import type { ThreadPage } from "../../lib/connectors";
 import type { InboxItem } from "../../lib/inbox";
@@ -34,7 +35,7 @@ export function ConnectorReplyTarget({ item, page }: { item: InboxItem; page?: T
   if (item.source !== "larkcli") return null;
   const message = page?.messages.find((m) => m.id === target);
   const preview = message?.text ? larkMessagePreview(message.text) : "";
-  const source = item.connector?.open_url ? undefined : message?.url;
+  const source = item.connector?.open_url ? undefined : safeWebURL(message?.url);
   const reply = target && item.connector?.can_reply;
   if (!reply && !source) return null;
   return <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2 text-xs text-ink-3">

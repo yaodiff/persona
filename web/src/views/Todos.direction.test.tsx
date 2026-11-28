@@ -148,7 +148,7 @@ describe("To-dos grouped by 常驻", () => {
   it("opens a row's menu on a right click, as the other groupings do", async () => {
     localStorage.setItem("persona.todos.grouping", "direction");
     await render();
-    const row = [...sections()[1].querySelectorAll<HTMLElement>("[role=button]")].find((r) => r.textContent?.includes("Card"));
+    const row = [...sections()[1].querySelectorAll<HTMLElement>("[data-todo]")].find((r) => r.textContent?.includes("Card"));
     expect(row).toBeTruthy();
     const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 120 });
     await act(async () => void row!.dispatchEvent(ev));
@@ -441,6 +441,7 @@ describe("To-dos grouped by 常驻", () => {
     const scrollIntoView = vi.fn();
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     const flush = async () => {
+      await act(async () => { await vi.dynamicImportSettled(); });
       for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
     };
 
@@ -458,26 +459,20 @@ describe("To-dos grouped by 常驻", () => {
       effective_direction_name: "Infrastructure",
     });
 
-    tree.current = {
-      directions: [
-        { id: "lead-b", name: "Infrastructure", counts: counts(1, 0), running: true, tasks: [{ id: "t-infra-open", title: "Infra Open", state: "working" }] },
-        { id: "lead-a", name: "Product", counts: counts(1, 0), running: false, tasks: [{ id: "t-prod-open", title: "Prod Open", state: "working" }] },
-        { id: "main", name: "", secretary: true, counts: counts(1, 0), running: false, tasks: [{ id: "t-loose-open", title: "Loose Open", state: "working" }] },
-      ],
-    };
+    tree.current = null;
 
     const board: TodoBoardProjection = {
       status_groups: [
         { key: "in_progress", total_count: 3, visible_count: 3, entries: [{ todo_id: "t-infra-open" }, { todo_id: "t-prod-open" }, { todo_id: "t-loose-open" }] },
-        { key: "done", total_count: 3, visible_count: 3, entries: [{ todo_id: "t-prod-done-1" }, { todo_id: "t-prod-done-2" }, { todo_id: "t-loose-done" }] },
+        { key: "done", total_count: 4, visible_count: 4, entries: [{ todo_id: "t-prod-done-1" }, { todo_id: "t-prod-done-2" }, { todo_id: "t-loose-done" }, { todo_id: olderDone.id }] },
       ],
       direction_groups: [
-        { direction_id: "lead-b", label: "Infrastructure", counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 0, total: 1 }, todo_ids: ["t-infra-open"] },
+        { direction_id: "lead-b", label: "Infrastructure", counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 1, total: 2 }, todo_ids: ["t-infra-open", olderDone.id] },
         { direction_id: "lead-a", label: "Product", counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 2, total: 3 }, todo_ids: ["t-prod-open", "t-prod-done-1", "t-prod-done-2"] },
         { direction_id: "", counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 1, total: 2 }, todo_ids: ["t-loose-open", "t-loose-done"] },
       ],
       sidebar_tree: [],
-      counts: { needs_you: 0, in_progress: 3, pending_review: 0, waiting: 0, someday: 0, done: 3, open_total: 3 },
+      counts: { needs_you: 0, in_progress: 3, pending_review: 0, waiting: 0, someday: 0, done: 4, open_total: 3 },
     };
 
     apiMock.mockImplementation(async (path: string) => {
@@ -515,9 +510,10 @@ describe("To-dos grouped by 常驻", () => {
     expect(sections().some((s) => s.textContent?.includes("Prod Done 1"))).toBe(false);
     expect(sections().some((s) => s.textContent?.includes("Loose Done"))).toBe(false);
 
-    // Header review button appears only on directions that have completed items (Product=2, Uncategorized=1; Infrastructure=0 omitted).
+    // The hub count makes a direction reviewable before its first completed row has been loaded.
     const [infraSec, prodSec, uncatSec] = sections();
-    expect(infraSec.querySelector("[data-testid=todo-direction-review-done]")).toBeNull();
+    const infraJump = infraSec.querySelector<HTMLButtonElement>("[data-testid=todo-direction-review-done]")!;
+    expect(infraJump.textContent).toContain(t("todos.direction_done_count", { count: 1 }));
     const prodJump = prodSec.querySelector<HTMLButtonElement>("[data-testid=todo-direction-review-done]")!;
     const uncatJump = uncatSec.querySelector<HTMLButtonElement>("[data-testid=todo-direction-review-done]")!;
     expect(prodJump).toBeTruthy();
@@ -525,10 +521,10 @@ describe("To-dos grouped by 常驻", () => {
     expect(uncatJump).toBeTruthy();
     expect(uncatJump.textContent).toContain(t("todos.direction_done_count", { count: 1 }));
 
-    // Clicking Product header review jump expands Completed, filters to Product, loads older closed history, scrolls into view, and does NOT collapse Product!
+    // The review stays selected after the cursor page even without a legacy direction tree.
     const prodFoldToggle = prodSec.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
     expect(prodFoldToggle.getAttribute("aria-expanded")).toBe("true");
-    await act(async () => prodJump.click());
+    await act(async () => infraJump.click());
     await flush();
 
     expect(prodFoldToggle.getAttribute("aria-expanded")).toBe("true");
@@ -538,7 +534,12 @@ describe("To-dos grouped by 常驻", () => {
     // Filter chips include All + Infrastructure (merged from paginated older closed history!) + Product + trailing Uncategorized.
     const chips = () => [...host.querySelectorAll<HTMLButtonElement>("[data-testid=todos-done-direction-chip]")];
     expect(chips().map((c) => c.dataset.directionId)).toEqual(["all", "lead-b", "lead-a", "__uncategorized__"]);
-    expect(chips().find((c) => c.dataset.directionId === "lead-a")?.getAttribute("aria-pressed")).toBe("true");
+    expect(chips().find((c) => c.dataset.directionId === "lead-b")?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('[data-testid="todos-done-direction-group"][data-direction-id="lead-b"]')?.textContent).toContain("Infra Done Older");
+    expect(getState().todoBoard).toEqual(board);
+    expect(sections().map((s) => s.dataset.group)).toEqual(["direction:lead-b", "direction:lead-a", "direction:secretary"]);
+
+    await act(async () => prodJump.click());
 
     // Only Product completed items are visible while filtered to Product.
     const filteredGroups = [...host.querySelectorAll<HTMLElement>("[data-testid=todos-done-direction-group]")];
@@ -575,6 +576,7 @@ describe("To-dos grouped by 常驻", () => {
 
   it("orders open subtasks first and collapses completed subtasks cleanly in TodoDetail under todos_v2=true (#17181)", async () => {
     const flush = async () => {
+      await act(async () => { await vi.dynamicImportSettled(); });
       for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
     };
 

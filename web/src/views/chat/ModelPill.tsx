@@ -290,6 +290,13 @@ export function useAssistantTurnFix(session: Session | undefined, on: boolean): 
   if (!fix || !session || fix.action !== "pick_model") return fix;
   const { machine_id: mid, session_id: sid } = session;
   fix.onPickModel = () => requestModelPicker(assistantPickerKey(mid, sid));
+  if (kept) {
+    // the four dimensions' last working setup (#17368); the hub says when it keeps none
+    fix.restore = {
+      label: t("chat-modelpill.restore_last_good"),
+      run: () => void import("../../lib/execution-restore").then((m) => m.restoreLastGood(getSession(mid, sid) ?? session)),
+    };
+  }
   if (kept && session.model_pick) {
     fix.back = {
       label: t(followsDefaultOf(assistant, session) ? "chat-modelpill.follow_default" : "chat-modelpill.undo_pick"),

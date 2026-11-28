@@ -114,7 +114,7 @@ data class DirectionAgent(
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
 
-    /** A running sub-agent inside its parent's session (`<parent>@<id>`): it opens as its parent. */
+    /** A sub-agent inside its parent's session (`<parent>@<id>`): it opens as its parent. */
     val isSubagent: Boolean get() = '@' in sessionId
 
     /** The session a tap opens: the parent's for an in-session sub-agent. */

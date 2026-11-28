@@ -1,5 +1,4 @@
-// The sidebar's By-to-do tree from the server-owned `board.sidebar_tree` under todos_v2 (#15800). Split from
-// board-consumer.ts: the sidebar is on the first screen, while the Todos page that reads the rest is a chunk of its own.
+// Lazy By-to-do tree for todos_v2 (#15800), with goal folding for hubs without a board projection.
 
 import { t } from "../../i18n";
 import { splitAgentSessions, type AgentMutes } from "../../lib/agent-groups";
@@ -7,8 +6,11 @@ import { activityOf, stateOf } from "../../lib/format";
 import {
   agentGroupLabel,
   agentTreeState,
+  buildTodoTree,
+  latestTreeActivity,
   nestAgents,
   STALE_MS,
+  staleTodoTreeBranch,
   worstTreeState,
   type LooseGroup,
   type TodoTree,
@@ -18,6 +20,7 @@ import {
 import { todoLook, waitOf } from "../../lib/todo-wait-reason";
 import {
   makeSessionLookup,
+  openAsk,
   todoStatus,
   type Todo,
   type TodoBoardProjection,
@@ -25,6 +28,7 @@ import {
   type TodoStatus,
 } from "../../lib/todos";
 import type { Machine, Session } from "../../lib/types";
+import { repoGatePRLook } from "./repo-gate";
 
 function defaultSessionCompare(mutes: AgentMutes) {
   const rank = (s: Session): number => {
@@ -56,20 +60,13 @@ function defaultSessionCompare(mutes: AgentMutes) {
   };
 }
 
-function latestSessionActivity(sessions: readonly Session[]): number {
-  let at = 0;
-  for (const s of sessions) {
-    at = Math.max(at, Date.parse(s.updated_at ?? "") || 0, Date.parse(s.state_since ?? "") || 0);
-  }
-  return at;
-}
-
 function sidebarNodeState(
   section: TodoBoardSectionKey,
   needsYouCount: number,
   sessions: readonly Session[],
 ): TreeState {
   if (section === "needs_you" || needsYouCount > 0) return "needs_you";
+  if (section === "can_wait") return "bg_waiting";
   if (section === "in_progress") {
     const states = sessions.map(agentTreeState);
     if (states.includes("needs_you")) return "needs_you";
@@ -159,7 +156,7 @@ export function consumeBoardSidebarTree(
     const status: TodoStatus = todoStatus(todo, lookup);
     const wait = waitOf(todo, status, lookup);
     const state = sidebarNodeState(node.section, node.needs_you_count, nodeSessions);
-    const statusLabel = todoLook(todo, status, wait).label;
+    const statusLabel = todoLook(todo, status, wait, undefined, now, repoGatePRLook).label;
 
     const allChildIds = [...(node.child_ids ?? []), ...(node.surfaced_child_ids ?? [])];
     const totalChildren = Math.max(allChildIds.length, node.folded_count + (node.surfaced_child_ids?.length ?? 0));
@@ -175,7 +172,7 @@ export function consumeBoardSidebarTree(
     const folded =
       node.section !== "needs_you" &&
       node.needs_you_count === 0 &&
-      (status === "done" || (state === "done" && now - latestSessionActivity(nodeSessions) > STALE_MS));
+      (status === "done" || (state === "done" && now - latestTreeActivity(nodeSessions) > STALE_MS));
 
     treeTodos.push({
       key: `todo-tree:todo:${todo.id}`,
@@ -213,4 +210,149 @@ export function consumeBoardSidebarTree(
   }
 
   return { projects: [], todos: treeTodos, loose };
+}
+
+/** Resolves the highest ancestor goal id present in `byId` via `part_of`.
+ *  Returns undefined for top-level items, orphan children whose parent is missing, self-references, or cycles. */
+function resolveRootGoalId(id: string, byId: ReadonlyMap<string, Todo>): string | undefined {
+  const start = byId.get(id);
+  if (!start?.part_of || start.part_of === id || !byId.has(start.part_of)) return undefined;
+  const visited = new Set<string>([id]);
+  let current = start.part_of;
+  while (current) {
+    if (visited.has(current)) return undefined;
+    visited.add(current);
+    const node = byId.get(current);
+    if (!node) return undefined;
+    const next = node.part_of;
+    if (!next || next === current || !byId.has(next)) return current;
+    current = next;
+  }
+  return undefined;
+}
+
+/** Whether a `part_of` child branch is urgent (`needs_you` or active owner ask) and must stay surfaced at the top level. */
+function isUrgentTreeChild(node: TreeTodo, todo: Todo | undefined): boolean {
+  if (node.state === "needs_you" || node.wait === "owner") return true;
+  if (todo?.view?.section === "needs_you" || todo?.view?.phase === "needs_you") return true;
+  if (todo && !todo.done_at && Boolean(openAsk(todo))) return true;
+  return false;
+}
+
+/**
+ * Under `todos_v2` (#14831): folds non-urgent `part_of` child branches under their top-level open parent goal
+ * with compact `done/total` progress, while surfacing `needs_you` / active-ask child blockers at the top.
+ */
+export function foldTreeGoals(tree: TodoTree, todos: readonly Todo[], now: number): TodoTree {
+  const byId = new Map(todos.map((td) => [td.id, td]));
+  const progressByParent = new Map<string, { done: number; total: number }>();
+  for (const td of todos) {
+    const rootId = resolveRootGoalId(td.id, byId);
+    if (!rootId) continue;
+    const root = byId.get(rootId);
+    if (!root || root.done_at) continue;
+    const p = progressByParent.get(rootId) ?? { done: 0, total: 0 };
+    p.total += 1;
+    if (td.done_at || td.view?.section === "done") p.done += 1;
+    progressByParent.set(rootId, p);
+  }
+  if (progressByParent.size === 0) return tree;
+
+  const existingParentIds = new Set(tree.todos.map((n) => n.todoId).filter((id): id is string => Boolean(id)));
+  const foldedByParent = new Map<string, TreeTodo[]>();
+  const surfaced: TreeTodo[] = [];
+  const slots: Array<{ kind: "node"; node: TreeTodo } | { kind: "synth"; parentId: string }> = [];
+  const synthAdded = new Set<string>();
+
+  for (const node of tree.todos) {
+    const id = node.todoId;
+    const rootId = id ? resolveRootGoalId(id, byId) : undefined;
+    const root = rootId ? byId.get(rootId) : undefined;
+    if (!rootId || !root || root.done_at) {
+      slots.push({ kind: "node", node });
+      continue;
+    }
+    if (isUrgentTreeChild(node, byId.get(id!))) {
+      surfaced.push(node.folded ? { ...node, folded: false } : node);
+      continue;
+    }
+    const list = foldedByParent.get(rootId);
+    if (list) list.push(node);
+    else foldedByParent.set(rootId, [node]);
+    if (!existingParentIds.has(rootId) && !synthAdded.has(rootId)) {
+      synthAdded.add(rootId);
+      slots.push({ kind: "synth", parentId: rootId });
+    }
+  }
+
+  const out: TreeTodo[] = [...surfaced];
+  for (const slot of slots) {
+    if (slot.kind === "synth") {
+      const parent = byId.get(slot.parentId)!;
+      const children = foldedByParent.get(slot.parentId)!;
+      const sessions = children.flatMap((c) => c.sessions);
+      const agents = children.flatMap((c) => c.agents);
+      const state = worstTreeState(children.map((c) => c.state));
+      const progress = progressByParent.get(slot.parentId);
+      out.push({
+        key: `todo-tree:todo:${parent.id}`,
+        todoId: parent.id,
+        name: parent.title,
+        state,
+        ...(progress && { goalProgress: progress }),
+        agents,
+        sessions,
+        folded: staleTodoTreeBranch(state, sessions, now),
+      });
+      continue;
+    }
+    const node = slot.node;
+    const children = node.todoId ? foldedByParent.get(node.todoId) : undefined;
+    if (!children?.length) {
+      out.push(node);
+      continue;
+    }
+    const sessions = [...node.sessions, ...children.flatMap((c) => c.sessions)];
+    const agents = [...node.agents, ...children.flatMap((c) => c.agents)];
+    const state = worstTreeState([node.state, ...children.map((c) => c.state)]);
+    const progress = progressByParent.get(node.todoId!);
+    const keepStatusLabel = state === node.state;
+    out.push({
+      key: node.key,
+      todoId: node.todoId,
+      name: node.name,
+      status: node.status,
+      ...(keepStatusLabel && node.statusLabel ? { statusLabel: node.statusLabel } : {}),
+      ...(keepStatusLabel && node.wait ? { wait: node.wait } : {}),
+      state,
+      ...(node.taskState ? { taskState: node.taskState } : {}),
+      ...(progress ? { goalProgress: progress } : {}),
+      agents,
+      sessions,
+      folded: (node.status === "done" && children.every((c) => c.status === "done")) || staleTodoTreeBranch(state, sessions, now),
+    });
+  }
+  return { ...tree, todos: out };
+}
+
+export function buildV2SidebarTree(
+  all: Session[],
+  machines: Machine[],
+  todos: Todo[],
+  mutes: AgentMutes,
+  now: number,
+  options: {
+    board: TodoBoardProjection | null;
+    foldChildren: boolean;
+    olderClosed?: readonly Todo[];
+    keepEmpty?: boolean;
+    compareSessions?: (a: Session, b: Session) => number;
+  },
+): TodoTree {
+  const { board, foldChildren, olderClosed, ...treeOptions } = options;
+  const historyIds = new Set(olderClosed?.map((td) => td.id));
+  const window = historyIds.size ? todos.filter((td) => !historyIds.has(td.id)) : todos;
+  if (board) return consumeBoardSidebarTree(all, machines, window, board, mutes, now, treeOptions);
+  const tree = buildTodoTree(all, machines, window, mutes, now, { ...treeOptions, repoGateLook: repoGatePRLook });
+  return foldChildren ? foldTreeGoals(tree, window, now) : tree;
 }

@@ -316,11 +316,11 @@ func TestSupervisorPassedPleaseVerifyRetried(t *testing.T) {
 		s.ownerVerifiesAll = true
 		f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置看开关"}`
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		waitFor(t, "the ask", func() bool { a := askOf(s, todo.ID); return a != nil && !a.AskedAt.IsZero() })
 		f.judge = `{"verdict":"done","reason":"已部署"}`
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 		res := reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "上线了", "checks": completeReviewChecks(todoNow(s, todo.ID))})
 		if !strings.Contains(res, "marked verified by you") {

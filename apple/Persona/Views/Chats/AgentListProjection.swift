@@ -228,6 +228,8 @@ nonisolated struct AgentListProjection: Sendable {
         var grouping = "repo"
         var sort = "state"
         var filter = AgentFilter.all
+        /// The native Agent console's Running segment (#17129): terminal agents that still have a live pane, by machine.
+        var runningTerminalOnly = false
         var query = ""
         var searchScope = AgentSearchScope.all
         var searchAsCode = false
@@ -346,7 +348,13 @@ nonisolated struct AgentListProjection: Sendable {
     var hasSearchResults: Bool { !base.isEmpty || !tree.isEmpty }
 
     static func preparedSessions(_ input: Input) -> [Session] {
-        let visible = input.sessions.filter { input.settings.listQuery.includeHidden || $0.hiddenByDirectory != true }
+        let online = Set(input.machines.filter(\.online).map(\.ref))
+        let visible = input.sessions.filter { session in
+            guard input.settings.listQuery.includeHidden || session.hiddenByDirectory != true else { return false }
+            guard input.settings.runningTerminalOnly else { return true }
+            return session.source == .terminal && session.state != .offline && session.state != .unknown &&
+                session.status != .offline && online.contains(session.machineRef)
+        }
         return ChildSessions.fold(SideFold.fold(visible, groups: input.settings.sideFold).listed, asks: input.asks)
     }
 

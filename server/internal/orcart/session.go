@@ -17,7 +17,7 @@ import (
 // Structured agent sessions: Orca's own chats around Claude Code / Codex (no terminal), driven with agentSession.*
 // on the same socket. Only the unary methods work here (subscribe* need Orca's paired WebSocket). Writes carry an
 // envelope Orca checks: an operation id (replaying the same id with the same payload answers as the first time) and
-// a fingerprint of the payload. Learned from Orca 1.4.243 / 1.4.246 (docs/plans/plan-orca-support.md "Structured sessions").
+// a fingerprint of the payload. Learned from Orca 1.4.243 / 1.4.246 (docs/integrations/orca.md "Structured sessions").
 
 // SessionPanePrefix starts the pane key of a structured session's row in worktree.ps:
 // "structured-agent-session-<session id>:<uuid>".
@@ -150,13 +150,18 @@ type Write struct {
 // mutate sends a write: fields (hashed under hashMethod, Orca's name for it) next to the envelope. A refusal in the
 // result comes back as an *Error with Orca's refusal code.
 func (c *Client) mutate(ctx context.Context, method, hashMethod string, w Write, fields map[string]any, out any) error {
-	fp, err := Fingerprint(hashMethod, w.SessionID, fields)
-	if err != nil {
-		return err
-	}
 	fence := w.Fence
 	if fence <= 0 {
 		fence = 1 // hosts since 1.4.246 ignore it; a positive number passes the older ones' schema
+	}
+	return c.write(ctx, method, hashMethod, w, fence, fields, out)
+}
+
+// write is mutate with the envelope's expectedRuntimeFence as given (nil for a session not created yet).
+func (c *Client) write(ctx context.Context, method, hashMethod string, w Write, fence any, fields map[string]any, out any) error {
+	fp, err := Fingerprint(hashMethod, w.SessionID, fields)
+	if err != nil {
+		return err
 	}
 	params := map[string]any{"envelope": map[string]any{"sessionId": w.SessionID, "clientOperationId": w.OperationID,
 		"expectedRuntimeFence": fence, "payloadFingerprint": fp}}
@@ -330,26 +335,68 @@ func (c *Client) Prompts(ctx context.Context, sessionID string) ([]Prompt, error
 	return nil, fmt.Errorf("orca agentSession.currentRequests: the requests kept changing")
 }
 
-// Options is the part of agentSession.options Persona shows: the session's permission mode and effort, Orca's words.
+// Options is the part of agentSession.options Persona shows: the session's permission mode, interaction mode ("plan"
+// or "default"; "" from hosts without one), effort and model, Orca's words; the models it lists (their ids in Orca's
+// order, their names, the one it runs when none is picked), the efforts each takes (by model id, weakest first; none
+// when Orca does not know them), and whether the chat can be rewound.
 type Options struct {
-	PermissionMode string
-	Effort         string
-	Model          string
+	PermissionMode  string
+	InteractionMode string
+	Effort          string
+	Model           string
+	Models          []string
+	ModelNames      map[string]string
+	DefaultModel    string
+	Efforts         map[string][]string
+	Rewind          bool
 }
 
 // Options reads a session's current options.
 func (c *Client) Options(ctx context.Context, sessionID string) (*Options, error) {
 	var res struct {
 		Current struct {
-			PermissionMode string `json:"permissionMode"`
-			Effort         string `json:"effort"`
-			Model          string `json:"model"`
+			PermissionMode  string `json:"permissionMode"`
+			InteractionMode string `json:"interactionMode"`
+			Effort          string `json:"effort"`
+			Model           string `json:"model"`
 		} `json:"current"`
+		Models []struct {
+			ID        string            `json:"id"`
+			Label     string            `json:"label"`
+			IsDefault bool              `json:"isDefault"`
+			Efforts   []json.RawMessage `json:"efforts"`
+		} `json:"models"`
+		Rewind *struct {
+			Supported bool `json:"supported"`
+		} `json:"rewind"`
 	}
 	if err := c.Call(ctx, CallTimeout, "agentSession.options", map[string]any{"sessionId": sessionID}, &res); err != nil {
 		return nil, err
 	}
-	return &Options{PermissionMode: res.Current.PermissionMode, Effort: res.Current.Effort, Model: res.Current.Model}, nil
+	o := &Options{PermissionMode: res.Current.PermissionMode, InteractionMode: res.Current.InteractionMode,
+		Effort: res.Current.Effort, Model: res.Current.Model, Rewind: res.Rewind != nil && res.Rewind.Supported}
+	for _, m := range res.Models {
+		if m.ID == "" { // Orca's stand-in for a model it was not told
+			continue
+		}
+		o.Models = append(o.Models, m.ID)
+		if m.Label != "" {
+			if o.ModelNames == nil {
+				o.ModelNames = map[string]string{}
+			}
+			o.ModelNames[m.ID] = m.Label
+		}
+		if m.IsDefault {
+			o.DefaultModel = m.ID
+		}
+		if efforts := effortsOf(m.Efforts); len(efforts) > 0 {
+			if o.Efforts == nil {
+				o.Efforts = map[string][]string{}
+			}
+			o.Efforts[m.ID] = efforts
+		}
+	}
+	return o, nil
 }
 
 // SendSession is agentSession.send: text and images (files on this machine) as the user's next message; queued

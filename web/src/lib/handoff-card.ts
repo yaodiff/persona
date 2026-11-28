@@ -4,7 +4,7 @@
 
 import { isDone, type InboxItem } from "./inbox";
 import type { FeedItem } from "./feed";
-import type { InboxSuggestionAttempt } from "./inbox-events";
+import type { InboxMention, InboxSuggestionAttempt } from "./inbox-events";
 
 /** The card's body (assistant/inbox_handoff_card.go handoffCard). */
 export interface HandoffCardBody {
@@ -13,6 +13,7 @@ export interface HandoffCardBody {
   /** A conclusion's: "fyi" (worth knowing; OK files it) or "done" (filed at once). */
   outcome?: string;
   text: string;
+  mentions?: InboxMention[];
   note?: string;
   recap?: string;
   title: string;

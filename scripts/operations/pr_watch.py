@@ -1104,14 +1104,14 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         self.notify(config, number, pr["headRefOid"], "stale_closed")
         return True
 
-    def human_review_decision(self, repo, number, head):
+    def human_review_decision(self, repo, number, head, pr_author=None):
         """Fetch and classify real-user reviews bound to this exact head."""
         if self.gh_login is None:
             with self.gh_login_lock:
                 if self.gh_login is None:
                     self.gh_login = pr_watch_human.authenticated_login()
         reviews = pr_watch_human.fetch_reviews(repo, number)
-        return pr_watch_human.classify_human_reviews(reviews, head, self.gh_login)
+        return pr_watch_human.classify_human_reviews(reviews, head, self.gh_login, pr_author=pr_author)
 
     def apply_human_review_policy(self, repo, number, pr, evidence_key):
         """Apply the opt-in human-review policy before any reviewer call.
@@ -1131,7 +1131,10 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
             # Valid exact-head watcher evidence already exists; never override it.
             # Human evidence instead tracks later reviews on the same head.
             return False
-        decision = self.human_review_decision(repo, number, head)
+        author = pr.get("author")
+        pr_author = author.get("login") if isinstance(author, dict) and isinstance(author.get("login"), str) else None
+        decision = (self.human_review_decision(repo, number, head, pr_author=pr_author)
+                    if pr_author else self.human_review_decision(repo, number, head))
         kind = decision["decision"]
         if kind == pr_watch_human.DECISION_NONE:
             if (current.get("head") == head and current.get("evidence_key") == evidence_key

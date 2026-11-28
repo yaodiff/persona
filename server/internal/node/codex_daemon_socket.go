@@ -35,11 +35,7 @@ func codexDaemonSocketGone(home string) error {
 	if err != nil || st.Mode()&os.ModeSymlink == 0 {
 		return nil // no alias: no 0.163 daemon here, or a plain socket whose absence codex reports itself
 	}
-	target, err := codexSocketPath(alias)
-	if err != nil {
-		return nil // not the alias codex makes: not ours to judge
-	}
-	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+	if _, err := codexSocketPath(alias); !errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	b, err := os.ReadFile(filepath.Join(home, "app-server-daemon", "daemon.pid"))

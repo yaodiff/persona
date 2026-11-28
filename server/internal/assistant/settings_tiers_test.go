@@ -53,6 +53,24 @@ func tierOf(ps modelProfiles, profile, tier string) (ModelTier, bool) {
 	return ModelTier{}, false
 }
 
+func TestPresetHostSettingsApproval(t *testing.T) {
+	f := newFakeHub().withMachine()
+	f.launcherList = companionLaunchers()
+	s := newTestService(t, f)
+	putTierProfiles(t, s, "economy", map[string]ModelTier{"agy-work": {Launcher: "agy"}}, nil)
+	call := ToolCall{Name: "persona_settings", MachineID: "server", SessionID: "c1",
+		Arguments: json.RawMessage(`{"action":"set","key":"model_profiles.tiers","value":{"tier":"agy-work","host":"herdr","profiles":["economy"]}}`)}
+	out := runSpeedTool11141(t, s, f, call, true)
+	if out.result.IsError || out.card == nil || !strings.Contains(out.card.Summary, "agy · herdr") {
+		t.Fatalf("host edit approval: %+v, card %+v", out.result, out.card)
+	}
+	ps, _ := storedTiers(t, s)
+	tier, ok := tierOf(ps, "economy", "agy-work")
+	if !ok || tier.startHost() != "herdr" {
+		t.Fatalf("saved tier = %+v, want host herdr", tier)
+	}
+}
+
 // A tier's model goes to the agent as --model and its description is in every snapshot: both are checked on save.
 func TestCheckModelTiers(t *testing.T) {
 	if checkTierModel("review", ModelTier{Launcher: "claude", Model: "x;rm"}, nil) == nil || checkTierModel("review", ModelTier{Launcher: "claude", Model: "gw/model-x[1m]"}, nil) != nil {

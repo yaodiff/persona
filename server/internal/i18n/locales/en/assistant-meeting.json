@@ -47,5 +47,10 @@
   "bad_audio": "The audio isn’t valid. Send PCM16 mono audio at 16 kHz with a valid start time.",
   "bad_transcription_mode": "meeting_transcription_default must be device or hub.",
   "bad_glossary": "meeting_glossary must be a list of up to 200 terms, each at most 40 characters.",
-  "bad_transcription_extension": "Choose an installed transcription contribution as extension-id/contribution-id, or leave it empty for the built-in service."
+  "bad_transcription_extension": "Choose an installed transcription contribution as extension-id/contribution-id, or leave it empty for the built-in service.",
+  "speakers_stale": "The speaker list changed. Reload and try again.",
+  "speakers_cleared": "Speakers were cleared for this meeting.",
+  "bad_speakers": "The speaker request isn’t valid.",
+  "speaker_run_reused": "This speaker timeline run id was already used for a different timeline.",
+  "too_many_speaker_turns": "At most {max} speaker turns per import."
 }

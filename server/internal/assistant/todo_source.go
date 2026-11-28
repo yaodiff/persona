@@ -598,13 +598,6 @@ func noReplyCommand(text string) bool {
 	return ok && strings.EqualFold(rest, "noreply")
 }
 
-// threadNoReply answers "/noreply" said in the topic of open todo t: its outcome is not told where the request came
-// from. Decided by the text alone (noReplyCommand), recorded as a decision of the todo (the user's, from the topic) so
-// that its history shows it, and not passed to any Agent. A todo that has told its source already cannot take it back.
-func (s *Service) threadNoReply(ctx context.Context, ev botcard.MessageEvent, t Todo, topic *feishuTopic) {
-	s.stopReportOf(ctx, ev.Message.MessageID, t, topic.target(), "thread_question", db.DecisionThread)
-}
-
 // chatNoReply answers "/noreply" said in the owner's private chat as a reply to the first message of a to-do that has no
 // topic (TodoSource.Anchor), or to anything the bot said under it: the run's answer, the notice before the report. It
 // says whether it took the message; one that is no reply to such a message is nothing of its business and goes on as it

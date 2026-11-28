@@ -65,25 +65,33 @@ struct QuestionSendingTests {
 
     @Test func aFinishedCardLeavesNothing() throws {
         var a = AnswerAttempts()
-        let op = try #require(a.begin("ix", answer))
-        #expect(a.finish("ix", op: op))
+        let started = a.begin("ix", answer)
+        let op = try #require(started)
+        let finished = a.finish("ix", op: op)
+        #expect(finished)
         #expect(a.progress("ix") == nil && a.retryable("ix") == nil)
     }
 
     @Test func anOldNilOccurrenceCompletionDoesNotFinishAReplacement() throws {
         var a = AnswerAttempts()
-        let old = try #require(a.begin("ix", answer))
+        let started = a.begin("ix", answer)
+        let old = try #require(started)
         _ = a.begin("ix", answer, occurrence: "2026-11-21T12:00:01Z")
-        #expect(!a.finish("ix", op: old))
+        let finished = a.finish("ix", op: old)
+        #expect(!finished)
         #expect(a.progress("ix") == .sending)
     }
 
     @Test func aReplacementCompletionRetiresTheOldOperation() throws {
         var a = AnswerAttempts()
-        let old = try #require(a.begin("ix", answer))
-        let replacement = try #require(a.begin("ix", answer, occurrence: "2026-11-21T12:00:01Z"))
-        #expect(a.finish("ix", op: replacement))
-        #expect(!a.owns("ix", op: old) && !a.finish("ix", op: old))
+        let started = a.begin("ix", answer)
+        let old = try #require(started)
+        let replaced = a.begin("ix", answer, occurrence: "2026-11-21T12:00:01Z")
+        let replacement = try #require(replaced)
+        let finished = a.finish("ix", op: replacement)
+        #expect(finished)
+        let oldFinished = !a.owns("ix", op: old) && !a.finish("ix", op: old)
+        #expect(oldFinished)
     }
 
     @Test func anOldNilOccurrenceFailureDoesNotFailAReplacement() {
@@ -96,9 +104,11 @@ struct QuestionSendingTests {
 
     @Test func equivalentOccurrenceTextStillIdentifiesTheSameAttempt() throws {
         var a = AnswerAttempts()
-        let op = try #require(a.begin("ix", answer, occurrence: "2026-11-21T20:00:00.123456789+08:00"))
+        let started = a.begin("ix", answer, occurrence: "2026-11-21T20:00:00.123456789+08:00")
+        let op = try #require(started)
         a.fail("ix", "offline", occurrence: "2026-11-21T12:00:00.123456789Z")
-        #expect(a.begin("ix", answer, occurrence: "2026-11-21T12:00:00.123456789Z") == op)
+        let repeated = a.begin("ix", answer, occurrence: "2026-11-21T12:00:00.123456789Z")
+        #expect(repeated == op)
     }
 
     // MARK: The model
@@ -296,8 +306,8 @@ struct QuestionSendingTests {
     }
 
     @Test func aSameIDReplacementIsANewArrivalButItsReplayIsNot() throws {
-        let first = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","kind":"permission","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8))
-        let replacement = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","kind":"permission","created_at":"2026-11-21T01:02:03.000000002Z"}"#.utf8))
+        let first = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8))
+        let replacement = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000002Z"}"#.utf8))
         #expect(AppModel.announcesInteraction(replacement, replacing: first))
         #expect(!AppModel.announcesInteraction(replacement, replacing: replacement))
     }

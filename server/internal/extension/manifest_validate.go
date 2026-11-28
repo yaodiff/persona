@@ -118,7 +118,12 @@ func (m *Manifest) Validate() error {
 			bad("contributes.quota needs permissions.launcher_keys (the user agrees that it reads quota with launchers' keys)")
 		}
 		if name == "usage" && !m.Permissions.LauncherKeys {
-			bad("contributes.usage needs permissions.launcher_keys (the user agrees that it reads usage with launchers' keys)")
+			for _, u := range m.Usages() {
+				if !u.Direct {
+					bad("launcher-backed contributes.usage needs permissions.launcher_keys")
+					break
+				}
+			}
 		}
 		if name == "api" && !slices.Contains(m.Activation(), OnStartup) {
 			bad("contributes.api: the app's API is there all the time: activation_events on_startup")
@@ -271,6 +276,21 @@ func (m *Manifest) Validate() error {
 			bad("secrets: %q is declared by both a fixed secret and an entry list (or by two lists)", name)
 		}
 		seen[name] = true
+	}
+	if schema, err := ParseSchema(m.Configuration); err == nil {
+		for _, u := range m.Usages() {
+			if u.RemoteKey == "" {
+				continue
+			}
+			if schema == nil || !slices.ContainsFunc(schema.Fields, func(f Field) bool {
+				return f.Name == u.RemoteAddress && f.Type == "string" && f.Format == "uri"
+			}) {
+				bad("direct usage %q: remote_address must name a URI setting", u.ID)
+			}
+			if !slices.ContainsFunc(m.Secrets, func(s SecretSpec) bool { return s.Name == u.RemoteKey }) {
+				bad("direct usage %q: remote_key must name a fixed secret", u.ID)
+			}
+		}
 	}
 	errs = append(errs, m.checkConfigured()...)
 	if err := m.Permissions.validate(); err != nil {

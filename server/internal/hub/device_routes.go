@@ -27,6 +27,10 @@ func (h *Hub) deviceRoutes(api *http.ServeMux) {
 		d.CredentialID = principalOf(r.Context()).ID
 		d.Credential = d.CredentialID
 		if err := h.push.registerContext(r.Context(), d); err != nil {
+			if errors.Is(err, errCredentialRevoked) {
+				writeErr(w, http.StatusUnauthorized, err)
+				return
+			}
 			if errors.Is(err, db.ErrPushRegistrationConflict) {
 				writeErr(w, http.StatusConflict, i18n.Err("http-status.conflict"))
 				return
@@ -69,6 +73,10 @@ func (h *Hub) deviceRoutes(api *http.ServeMux) {
 		})
 		if bad != nil {
 			writeErr(w, http.StatusBadRequest, bad)
+			return
+		}
+		if errors.Is(err, errCredentialRevoked) {
+			writeErr(w, http.StatusUnauthorized, err)
 			return
 		}
 		if errors.Is(err, db.ErrPushRegistrationConflict) {

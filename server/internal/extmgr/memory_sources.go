@@ -11,8 +11,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -144,8 +146,8 @@ func readMemoryPages(ctx context.Context, proc memoryCaller, contribution string
 func memoryPage(ctx context.Context, proc memoryCaller, params wire.MemoryEntriesParams, b MemoryReadBounds) (wire.MemoryEntriesResult, int, error) {
 	cctx, cancel := context.WithTimeout(ctx, b.CallTimeout)
 	defer cancel()
-	var raw json.RawMessage
-	if err := proc.Call(cctx, "memory.entries", params, &raw); err != nil {
+	raw, err := buswire.Call(cctx, proc, extwire.MemoryEntriesMethod, params)
+	if err != nil {
 		var re *rpc.Error
 		switch {
 		case ctx.Err() != nil:

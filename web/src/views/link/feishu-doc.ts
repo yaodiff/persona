@@ -4,6 +4,8 @@
 // (a pointer resting on the link), so the panel usually opens on a finished page.
 import { ApiError, api, enc, getToken } from "../../lib/api";
 import { BASE } from "../../lib/base";
+import { safeWebURL } from "../../lib/format";
+import { safeApiPath } from "../../lib/safe-media-url";
 import { docKind, DOC_LABEL, setLinkPrefetcher, type DocKind } from "../../lib/links";
 import { itemHeaders, otherManager, withManager } from "../../lib/manager-choice";
 import { t } from "../../i18n";
@@ -176,8 +178,16 @@ export const BR = "\u2028";
  *   an <img> cannot send as a header,
  * - turns `<br>` (table cells, mostly) into breaks; code is left alone.
  */
+const GATEWAY_API_RE = /^https?:\/\/[A-Za-z0-9.-]+(:\d+)?\/api\/(?!v1\/)/i;
+const GATEWAY_API_URL_RE = /https?:\/\/[A-Za-z0-9.-]+(:\d+)?\/api\/(?!v1\/)[^)\s>]+/gi;
+
 export function prepareMarkdown(md: string, title?: string, token = "", base = BASE, manager?: string): string {
-  let lines = md.replace(/https?:\/\/[A-Za-z0-9.-]+(:\d+)?\/api\/(?!v1\/)/g, "/api/v1/lark/raw/").split("\n");
+  let lines = md
+    .replace(GATEWAY_API_URL_RE, (match) => {
+      const candidate = match.replace(GATEWAY_API_RE, "/api/v1/lark/raw/");
+      return safeApiPath(candidate, "/api/v1/lark/raw/", base) ?? "";
+    })
+    .split("\n");
   const blank = (s?: string) => s !== undefined && !s.trim();
   while (blank(lines[0])) lines.shift();
   const first = lines[0] ?? "";
@@ -203,8 +213,14 @@ export function prepareMarkdown(md: string, title?: string, token = "", base = B
   // both name the manager that read the document
   return lines
     .join("\n")
-    .replace(/(!\[[^\]]*\]\(<?)(\/api\/v1\/[^)>\s]+)/g, (_, pre: string, u: string) => pre + base + withToken(withManager(u, manager)))
-    .replace(/((?<!!)\[[^\]]*\]\(<?)(\/api\/v1\/[^)>\s]+)/g, (_, pre: string, u: string) => pre + base + withManager(u, manager));
+    .replace(/(!\[[^\]]*\]\(<?)(\/api\/v1\/[^)>\s]+)/g, (_, pre: string, u: string) => {
+      const safe = safeApiPath(u, "/api/v1/", base);
+      return safe ? pre + base + withToken(withManager(safe, manager)) : pre;
+    })
+    .replace(/((?<!!)\[[^\]]*\]\(<?)(\/api\/v1\/[^)>\s]+)/g, (_, pre: string, u: string) => {
+      const safe = safeApiPath(u, "/api/v1/", base);
+      return safe ? pre + base + withManager(safe, manager) : pre;
+    });
 }
 
 /** Removes Markdown backslash escapes (`\-`, `\.`…) for plain display. */
@@ -257,12 +273,19 @@ export function plainText(n: DocNode): string {
 }
 
 /** Media under the hub (`/api/v1/…`) needs the token on the URL, and the manager that read the document; a Lark gateway
- *  path is moved under the hub first. */
+ *  path is moved under the hub first. Unsafe schemes and traversing paths return "". */
 export function mediaURL(src: string, manager?: string, token = getToken()): string {
-  const moved = src.replace(/^https?:\/\/[A-Za-z0-9.-]+(:\d+)?\/api\/(?!v1\/)/, "/api/v1/lark/raw/");
-  if (!moved.startsWith("/api/v1/")) return moved;
-  const u = withManager(moved, manager);
-  return `${BASE}${u}${u.includes("?") ? "&" : "?"}token=${enc(token)}`;
+  const trimmed = src.trim();
+  if (!trimmed) return "";
+  const rewritten = GATEWAY_API_RE.test(trimmed);
+  const moved = rewritten ? trimmed.replace(GATEWAY_API_RE, "/api/v1/lark/raw/") : trimmed;
+  if (moved.startsWith("/api/v1/")) {
+    const safe = safeApiPath(moved, rewritten ? "/api/v1/lark/raw/" : "/api/v1/");
+    if (!safe) return "";
+    const u = withManager(safe, manager);
+    return `${BASE}${u}${u.includes("?") ? "&" : "?"}token=${enc(token)}`;
+  }
+  return safeWebURL(moved) ?? "";
 }
 
 // ── cache ──

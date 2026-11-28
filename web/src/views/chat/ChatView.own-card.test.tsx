@@ -390,3 +390,55 @@ describe("cards the chat's own turn waits on", () => {
     expect(host.querySelector(`[data-own-ask="${bash.id}"]`)).toBeNull();
   });
 });
+
+describe("background supervisor interactions in main chat", () => {
+  const bgBash = {
+    id: "ix_bg_bash",
+    machine_id: "m1",
+    session_id: "bg1",
+    session_title: "assistant",
+    kind: "permission",
+    tool_name: "ATS",
+    tool_input: { command: "ats GET /tasks/task_75", description: "Read ATS task" },
+    created_at: "2020-01-01T00:00:00Z",
+  } as Interaction;
+
+  it("surfaces a background supervisor permission card above the main chat composer and resolves Allow", async () => {
+    upsertSession({ machine_id: "hub", session_id: "c1", title: "Persona", status: "idle", state: "idle", assistant: true, agent: "claude" } as Session);
+    upsertSession({ machine_id: "m1", session_id: "bg1", title: "assistant", status: "working", state: "needs_you", assistant: true, agent: "claude" } as Session);
+    Object.assign(getState(), {
+      assistant: { machine_id: "hub", main: "c1", background_supervisor: "bg1", conversations: [] },
+      interactions: [bgBash],
+      answered: {},
+    });
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    const bgCard = card(bgBash.id);
+    expect(bgCard).not.toBeNull();
+    expect(bgCard!.textContent).toContain(t("assistant-conversations.background_supervisor"));
+    expect(button(t("chat-interactions.allow"))).toBeDefined();
+    act(() => button(t("chat-interactions.allow"))!.click());
+    await flush();
+    const resolveCalls = fetcher.mock.calls.filter(([url]) => String(url).endsWith(`/interactions/${bgBash.id}/resolve`));
+    expect(resolveCalls).toHaveLength(1);
+    expect(JSON.parse(String((resolveCalls[0][1] as RequestInit).body))).toMatchObject({ allow: true });
+  });
+
+  it("does not surface supervisor-held delegating permission cards or leak cards into non-main chats", async () => {
+    const heldBgBash = { ...bgBash, id: "ix_bg_held", delegating: true } as Interaction;
+    upsertSession({ machine_id: "hub", session_id: "other", title: "Other", status: "idle", state: "idle", assistant: true, agent: "claude" } as Session);
+    Object.assign(getState(), {
+      assistant: { machine_id: "hub", main: "c1", background_supervisor: "bg1", conversations: [] },
+      interactions: [heldBgBash],
+      answered: {},
+    });
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(card(heldBgBash.id)).toBeNull();
+
+    Object.assign(getState(), { interactions: [bgBash], answered: {} });
+    act(() => root.render(<ChatView mid="hub" sid="other" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(card(bgBash.id)).toBeNull();
+  });
+});

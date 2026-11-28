@@ -8,6 +8,7 @@ import { PhoneOutlineIcon } from '../design/PhoneOutlineIcon';
 import { QuestionDraft } from '../models/QuestionWorkspace';
 import { Symbols } from '../design/Symbols';
 import { MarkdownText } from './MarkdownText';
+import { RuleSuggestionBar } from './RuleSuggestionBar';
 import { ClientModel } from '../models/ClientModel';
 import { Decision, DecisionField, ResourceRow, Wire } from '../models/Wire';
 import { AgentDecisionQueue, AgentDecisionCard } from '../models/AgentDecisionQueue';
@@ -1184,6 +1185,15 @@ export struct InteractionDecisionForm {
           .onAreaChange((_before:Area,after:Area) => {
             const h=Number(after.height); if (h>0 && Math.abs(this.inlineFooterHeight-h)>0.5) this.inlineFooterHeight=h;
           })
+        if (Object.keys(this.ruleSuggestionObject()).length > 0) {
+          RuleSuggestionBar({
+            model: this.model,
+            rawSuggestion: this.ruleSuggestionObject(),
+            cardKey: 'card|' + this.request.id,
+            manager: this.ruleSuggestionManager(),
+            onSettled: () => { this.model.refresh().catch(() => undefined); }
+          })
+        }
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({left:16,right:16,top:12,bottom:16})
       .backgroundColor(this.panelSurface())
@@ -1314,6 +1324,18 @@ export struct InteractionDecisionForm {
         .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
     }
   }
+  private ruleSuggestionObject(): Record<string, Object> {
+    const envelope = Wire.parse(this.request.raw);
+    const top = Wire.object(envelope, 'suggestion');
+    if (Object.keys(top).length > 0) return top;
+    return Wire.object(Wire.object(envelope, 'interaction'), 'suggestion');
+  }
+
+  private ruleSuggestionManager(): string {
+    const envelope = Wire.parse(this.request.raw);
+    return Wire.text(envelope, 'manager') || this.model.profile.manager;
+  }
+
   @Builder dockPanel() {
     Column() {
       if (this.resizeDock && !this.cardFolded) this.dockGrip()
@@ -1344,6 +1366,15 @@ export struct InteractionDecisionForm {
           if (this.taskQueue && this.request.kind==='plan' && this.model.style==='beautiful') this.beautifulPlanSubmit()
           else if (this.taskQueue && this.request.kind==='plan') this.taskPlanActions()
           else this.responseFooter()
+          if (Object.keys(this.ruleSuggestionObject()).length > 0) {
+            RuleSuggestionBar({
+              model: this.model,
+              rawSuggestion: this.ruleSuggestionObject(),
+              cardKey: 'card|' + this.request.id,
+              manager: this.ruleSuggestionManager(),
+              onSettled: () => { this.model.refresh().catch(() => undefined); }
+            })
+          }
         }.width('100%').onAreaChange((_before:Area,area:Area):void => {
           const h=Number(area.height);if (h>=0 && Math.abs(h-this.inlineFooterHeight)>0.5) this.inlineFooterHeight=h;
         })
@@ -1397,6 +1428,15 @@ export struct InteractionDecisionForm {
       if (!this.cardFolded) Column() {
         if (this.taskQueue && this.request.kind==='plan') this.taskPlanActions()
         else this.responseFooter()
+        if (Object.keys(this.ruleSuggestionObject()).length > 0) {
+          RuleSuggestionBar({
+            model: this.model,
+            rawSuggestion: this.ruleSuggestionObject(),
+            cardKey: 'card|' + this.request.id,
+            manager: this.ruleSuggestionManager(),
+            onSettled: () => { this.model.refresh().catch(() => undefined); }
+          })
+        }
       }.width('100%').onAreaChange((_before: Area, area: Area) => {
         const h = Number(area.height);
         if (Number.isFinite(h) && h > 0 && Math.abs(this.inlineFooterHeight - h) > 0.5) this.inlineFooterHeight = h;

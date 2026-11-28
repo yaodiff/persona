@@ -283,6 +283,32 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 		t.Fatalf("unbound todo should omit repo_gate even when todos_v2=true, got: %v", enabled[unboundID]["repo_gate"])
 	}
 
+	// After the ordinary PR freshness window, the bound gate still holds both a list read and a view recheck.
+	later := now.Add(2 * time.Hour)
+	list, err := s.listedTodos(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := s.todoProjectionOf(t.Context(), list, later)
+	recheck, err := s.todoViewsOf(t.Context(), map[string]bool{blockedID: true}, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, row := range list {
+		if row.ID != blockedID {
+			continue
+		}
+		wait := full.waits[i]
+		if wait == nil || wait.URL != wantBlocked.BlockingPR ||
+			!reflect.DeepEqual(wait.PrBlockers, []assistantwire.TodoWaitPRBlocker{assistantwire.TodoWaitPRBlockerChecksFailing}) {
+			t.Fatalf("bound gate did not keep its structured waiting evidence: %+v", wait)
+		}
+		if len(recheck.waits) != 1 || !reflect.DeepEqual(recheck.waits[0], wait) ||
+			todoClassOf(recheck.views[0]) != todoClassOf(full.views[i]) {
+			t.Fatalf("recheck diverged from the bound gate in the list: %+v", recheck)
+		}
+	}
+
 	assertPRHistory := func(row map[string]any) {
 		t.Helper()
 		for _, key := range []string{"pr_url", "pr_status", "other_prs"} {

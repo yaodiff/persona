@@ -46,6 +46,7 @@ type engine struct {
 	// module's, OnLive); TranscriptionReady whether the hub can transcribe a meeting now and EarlierMeetingsInAnswers
 	// the owner's setting, as the port has them (recordingwire.Reader).
 	LiveChanged              func(id string)
+	SpeakersChanged          func(id string)
 	TranscriptionReady       func() bool
 	EarlierMeetingsInAnswers bool
 
@@ -106,39 +107,66 @@ func newStore(core recordingwire.Core, state *storeState) *store {
 
 // The types the writers name, under the names they had.
 type (
-	Model                 = recordingwire.Model
-	Tagging               = kbwire.Tagging
-	RecordingSegment      = kbwire.RecordingSegment
-	Recording             = recordingwire.Recording
-	RecapTarget           = recordingwire.RecapTarget
-	RecapSpan             = recordingwire.RecapSpan
-	RecapTodo             = recordingwire.RecapTodo
-	DayRecap              = recordingwire.DayRecap
-	DayRecapEntry         = recordingwire.DayRecapEntry
-	Minutes               = recordingwire.Minutes
-	MinutesItem           = recordingwire.MinutesItem
-	MinutesPoint          = recordingwire.MinutesPoint
-	MinutesAction         = recordingwire.MinutesAction
-	Meeting               = recordingwire.Meeting
-	MeetingTranscription  = recordingwire.MeetingTranscription
-	MeetingRoom           = recordingwire.MeetingRoom
-	Timeline              = recordingwire.Timeline
-	HubTranscript         = recordingwire.HubTranscript
-	Photo                 = recordingwire.Photo
-	PhotoRef              = recordingwire.PhotoRef
-	PhotoText             = recordingwire.PhotoText
-	PhotoUpload           = recordingwire.PhotoUpload
-	MinutesOverview       = recordingwire.MinutesOverview
-	MinutesConclusion     = recordingwire.MinutesConclusion
-	MinutesGroup          = recordingwire.MinutesGroup
-	MinutesTopic          = recordingwire.MinutesTopic
-	MinutesBullet         = recordingwire.MinutesBullet
-	DebateStatus          = recordingwire.DebateStatus
-	MinutesDebate         = recordingwire.MinutesDebate
-	MinutesDebatePosition = recordingwire.MinutesDebatePosition
-	MinutesDebateOutcome  = recordingwire.MinutesDebateOutcome
-	photoBook             = recordingwire.PhotoBook
-	storedPhoto           = recordingwire.StoredPhoto
+	Model                      = recordingwire.Model
+	Tagging                    = kbwire.Tagging
+	RecordingSegment           = kbwire.RecordingSegment
+	Recording                  = recordingwire.Recording
+	RecapTarget                = recordingwire.RecapTarget
+	RecapSpan                  = recordingwire.RecapSpan
+	RecapTodo                  = recordingwire.RecapTodo
+	DayRecap                   = recordingwire.DayRecap
+	DayRecapEntry              = recordingwire.DayRecapEntry
+	Minutes                    = recordingwire.Minutes
+	MinutesItem                = recordingwire.MinutesItem
+	MinutesPoint               = recordingwire.MinutesPoint
+	MinutesAction              = recordingwire.MinutesAction
+	Meeting                    = recordingwire.Meeting
+	MeetingTranscription       = recordingwire.MeetingTranscription
+	MeetingRoom                = recordingwire.MeetingRoom
+	Timeline                   = recordingwire.Timeline
+	HubTranscript              = recordingwire.HubTranscript
+	Photo                      = recordingwire.Photo
+	PhotoRef                   = recordingwire.PhotoRef
+	PhotoText                  = recordingwire.PhotoText
+	PhotoUpload                = recordingwire.PhotoUpload
+	MinutesOverview            = recordingwire.MinutesOverview
+	MinutesConclusion          = recordingwire.MinutesConclusion
+	MinutesGroup               = recordingwire.MinutesGroup
+	MinutesTopic               = recordingwire.MinutesTopic
+	MinutesBullet              = recordingwire.MinutesBullet
+	DebateStatus               = recordingwire.DebateStatus
+	MinutesDebate              = recordingwire.MinutesDebate
+	MinutesDebatePosition      = recordingwire.MinutesDebatePosition
+	MinutesDebateAlso          = recordingwire.MinutesDebateAlso
+	MinutesDebateOutcome       = recordingwire.MinutesDebateOutcome
+	SpeakerID                  = recordingwire.SpeakerID
+	SpeakerState               = recordingwire.SpeakerState
+	SpeakerFailReason          = recordingwire.SpeakerFailReason
+	SpeakerQuality             = recordingwire.SpeakerQuality
+	SpeakerQualityReason       = recordingwire.SpeakerQualityReason
+	SpeakerSource              = recordingwire.SpeakerSource
+	SpeakerRunID               = recordingwire.SpeakerRunID
+	SpeakerClusterID           = recordingwire.SpeakerClusterID
+	TranscriptTiming           = recordingwire.TranscriptTiming
+	SpeakerSpan                = recordingwire.SpeakerSpan
+	SpeakerTurn                = recordingwire.SpeakerTurn
+	RawSpeakerTurn             = recordingwire.RawSpeakerTurn
+	SpeakerStat                = recordingwire.SpeakerStat
+	SpeakerPerson              = recordingwire.SpeakerPerson
+	SpeakerEdits               = recordingwire.SpeakerEdits
+	MeetingSpeakers            = recordingwire.MeetingSpeakers
+	SpeakerSignal              = recordingwire.SpeakerSignal
+	SpeakerTurnsFile           = recordingwire.SpeakerTurnsFile
+	SpeakerEditOpKind          = recordingwire.SpeakerEditOpKind
+	SpeakerEditOp              = recordingwire.SpeakerEditOp
+	SpeakerEditRequest         = recordingwire.SpeakerEditRequest
+	SpeakerEditResponse        = recordingwire.SpeakerEditResponse
+	SpeakerTurnsImportRequest  = recordingwire.SpeakerTurnsImportRequest
+	SpeakerTurnsImportResponse = recordingwire.SpeakerTurnsImportResponse
+	DetailSpeakers             = recordingwire.DetailSpeakers
+	DetailSpeakerPerson        = recordingwire.DetailSpeakerPerson
+	photoBook                  = recordingwire.PhotoBook
+	storedPhoto                = recordingwire.StoredPhoto
 )
 
 // calendarEntry is a calendar entry as the writers read it (recordingwire.CalendarItem, its kind and id as the text
@@ -168,8 +196,26 @@ const (
 	PartAsks         = recordingwire.PartAsks
 	PartTopics       = recordingwire.PartTopics
 	PartHighlights   = recordingwire.PartHighlights
+	PartSpeakers     = recordingwire.PartSpeakers
 	RecordingNote    = recordingwire.RecordingNote
 	RoomNone         = recordingwire.RoomNone
+
+	SpeakerStateWaiting = recordingwire.SpeakerStateWaiting
+	SpeakerStateReady   = recordingwire.SpeakerStateReady
+	SpeakerStateFailed  = recordingwire.SpeakerStateFailed
+	SpeakerStateCleared = recordingwire.SpeakerStateCleared
+	SpeakerFailTimeout  = recordingwire.SpeakerFailTimeout
+	SpeakerQualityOk    = recordingwire.SpeakerQualityOk
+	SpeakerQualityLow   = recordingwire.SpeakerQualityLow
+	SpeakerSourceHub    = recordingwire.SpeakerSourceHub
+	TimingExact         = recordingwire.TimingExact
+	TimingTurn          = recordingwire.TimingTurn
+	TimingSpread        = recordingwire.TimingSpread
+	SpeakerOpName       = recordingwire.SpeakerOpName
+	SpeakerOpMerge      = recordingwire.SpeakerOpMerge
+	SpeakerOpUnmerge    = recordingwire.SpeakerOpUnmerge
+	SpeakerOpClear      = recordingwire.SpeakerOpClear
+	MaxSpeakerTurns     = recordingwire.MaxSpeakerTurns
 
 	RecapDueEvening  = recordingwire.RecapDueEvening
 	RecapDueComplete = recordingwire.RecapDueComplete
@@ -185,10 +231,12 @@ const (
 	recapMarkdown  = recordingwire.RecapMarkdown
 	recapNotesFile = recordingwire.RecapNotesFile
 
-	photosDir       = string(recordingwire.DirAttachments)
-	hubSegmentsFile = string(recordingwire.FileHubSegments)
-	meetingFile     = string(recordingwire.FileMeeting)
-	liveFile        = string(recordingwire.FileLive)
+	photosDir        = string(recordingwire.DirAttachments)
+	audioDir         = recordingwire.DirAudio
+	hubSegmentsFile  = string(recordingwire.FileHubSegments)
+	speakerTurnsFile = string(recordingwire.FileSpeakerTurns)
+	meetingFile      = string(recordingwire.FileMeeting)
+	liveFile         = string(recordingwire.FileLive)
 
 	MaxPhotos       = recordingwire.MaxPhotos
 	MaxPhotoText    = recordingwire.MaxPhotoText
@@ -229,6 +277,10 @@ var (
 	ErrPhotosFull         = recordingwire.ErrPhotosFull
 	ErrOpIDReused         = recordingwire.ErrOpIDReused
 	ErrBadPhoto           = recordingwire.ErrBadPhoto
+	ErrSpeakersStale      = recordingwire.ErrSpeakersStale
+	ErrSpeakersCleared    = recordingwire.ErrSpeakersCleared
+	ErrBadSpeakers        = recordingwire.ErrBadSpeakers
+	ErrSpeakersTooLarge   = recordingwire.ErrSpeakersTooLarge
 )
 
 // The rules of a recording's stored state, which the knowledge base applies too (recordingwire/rules.go).
@@ -249,6 +301,7 @@ var (
 	recordingEnd        = recordingwire.RecordingEnd
 	transcriptionDone   = recordingwire.TranscriptionDone
 	transcriptionHolds  = recordingwire.TranscriptionHolds
+	speakersHolds       = recordingwire.SpeakersHolds
 	hubTranscription    = recordingwire.HubTranscription
 	settleTranscription = recordingwire.SettleTranscription
 	meetingSame         = recordingwire.MeetingSame
@@ -460,6 +513,14 @@ func (s *store) writeRecordingFile(p string, data []byte) error {
 }
 func (s *store) readHubLocked(id string) (HubTranscript, error) {
 	return s.core.HubTranscriptLocked(recordingwire.ID(id))
+}
+func (s *store) readSpeakerTurnsLocked(id string) (*SpeakerTurnsFile, error) {
+	return s.core.SpeakerTurnsLocked(recordingwire.ID(id))
+}
+func (s *store) speakerTurns(id string) (*SpeakerTurnsFile, error) {
+	s.recFilesMu.RLock()
+	defer s.recFilesMu.RUnlock()
+	return s.readSpeakerTurnsLocked(id)
 }
 func (s *store) renderTranscript(r *Recording, segs []RecordingSegment) string {
 	return s.core.RenderTranscript(r, segs)

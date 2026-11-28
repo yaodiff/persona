@@ -16,8 +16,12 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extension/host"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -65,6 +69,15 @@ type authStatus struct {
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 }
 
+func authStatusFromWire(status wire.AuthStatus) authStatus {
+	st := authStatus{State: status.State, Account: status.Account, Message: status.Message}
+	if !status.ExpiresAt.IsZero() {
+		expiresAt := status.ExpiresAt
+		st.ExpiresAt = &expiresAt
+	}
+	return st
+}
+
 // authPrompt is a sign-in step: the connectors' Prompt, and when its code or link stops working.
 type authPrompt struct {
 	connector.Prompt
@@ -76,7 +89,9 @@ type authCache struct {
 	mu         sync.Mutex
 	byID       map[string]authStatus
 	at         map[string]time.Time
+	epoch      map[string]uint64
 	refreshing map[string]bool
+	again      map[string]bool
 }
 
 func (c *authCache) get(id string) (authStatus, time.Time, bool) {
@@ -86,10 +101,38 @@ func (c *authCache) get(id string) (authStatus, time.Time, bool) {
 	return st, c.at[id], ok
 }
 
+func (c *authCache) epochOf(id string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.epoch[id]
+}
+
 // put keeps st for id and says whether it changed.
 func (c *authCache) put(id string, st authStatus) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.putLocked(id, st)
+}
+
+// putIfEpoch keeps st for id only if no drop or superseding write occurred since epoch was observed.
+// When bump is true (e.g. after an explicit logout), the epoch advances so older in-flight probes
+// cannot overwrite the newer state.
+func (c *authCache) putIfEpoch(id string, epoch uint64, st authStatus, bump bool) (stored, changed bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.epoch[id] != epoch {
+		return false, false
+	}
+	if bump {
+		if c.epoch == nil {
+			c.epoch = map[string]uint64{}
+		}
+		c.epoch[id]++
+	}
+	return true, c.putLocked(id, st)
+}
+
+func (c *authCache) putLocked(id string, st authStatus) bool {
 	if c.byID == nil {
 		c.byID, c.at = map[string]authStatus{}, map[string]time.Time{}
 	}
@@ -98,25 +141,59 @@ func (c *authCache) put(id string, st authStatus) bool {
 	return !had || old.State != st.State || old.Account != st.Account || old.Message != st.Message || old.hubMessage != st.hubMessage || !sameTime(old.ExpiresAt, st.ExpiresAt)
 }
 
-func (c *authCache) drop(id string) {
+// drop invalidates id's cached status, advances its epoch to fence in-flight probes,
+// and reports whether a cached status was present. Queued follow-up refreshes (again)
+// are preserved so an auth.changed emitted by a newly started replacement process is not lost.
+func (c *authCache) drop(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.epoch == nil {
+		c.epoch = map[string]uint64{}
+	}
+	c.epoch[id]++
+	_, had := c.byID[id]
 	delete(c.byID, id)
 	delete(c.at, id)
+	return had
 }
 
-// claim marks a background refresh of id as running; false when one already is.
-func (c *authCache) claim(id string, on bool) bool {
+// beginRefresh claims the single background refresh slot for id. If one is already running,
+// it marks a follow-up refresh due so auth.changed events are never lost.
+func (c *authCache) beginRefresh(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.refreshing == nil {
 		c.refreshing = map[string]bool{}
 	}
-	if on && c.refreshing[id] {
+	if c.refreshing[id] {
+		if c.again == nil {
+			c.again = map[string]bool{}
+		}
+		c.again[id] = true
 		return false
 	}
-	c.refreshing[id] = on
+	c.refreshing[id] = true
 	return true
+}
+
+// continueRefresh consumes a pending follow-up refresh if requested while the active pass ran,
+// or releases the refresh slot atomically when none is pending.
+func (c *authCache) continueRefresh(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.again[id] {
+		delete(c.again, id)
+		return true
+	}
+	delete(c.refreshing, id)
+	return false
+}
+
+func (c *authCache) endRefresh(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.refreshing, id)
+	delete(c.again, id)
 }
 
 func sameTime(a, b *time.Time) bool {
@@ -135,90 +212,139 @@ func validAuthState(s string) bool {
 	return false
 }
 
-// authView is p's sign-in from the cache (nil when it does not sign in): unknown while its program does not run or
-// was not asked yet. It asks in the background when it was not.
-func (ps *extensions) authView(p *extension.Extension, langs ...i18n.Lang) *ExtensionAuth {
-	spec := p.Full.Auth
-	if spec == nil {
-		return nil
+// cachedAuthView reads p's sign-in status from the cache without spawning background refreshes.
+// ready is false only when p is running and its auth status has not been cached yet.
+func (ps *extensions) cachedAuthView(p *extension.Extension, langs ...i18n.Lang) (v *ExtensionAuth, ready bool) {
+	if p == nil || p.Full == nil || p.Full.Auth == nil {
+		return nil, false
 	}
-	v := &ExtensionAuth{Title: spec.Title, Description: spec.Description, Page: spec.Page, State: authUnknown}
+	spec := p.Full.Auth
+	v = &ExtensionAuth{Title: spec.Title, Description: spec.Description, Page: spec.Page, State: authUnknown}
 	if !ps.authRuns(p) {
-		return v
+		return v, true
 	}
 	st, at, ok := ps.auth.get(p.Record.ID)
 	if !ok {
-		go ps.refreshAuth(context.Background(), p.Record.ID)
-		return v
+		return v, false
 	}
 	v.State, v.Account, v.Message, v.ExpiresAt, v.CheckedAt = st.State, st.Account, st.Message, st.ExpiresAt, &at
 	if st.hubMessage && len(langs) > 0 {
 		v.Message, v.MessageDetail = i18n.ExtensionFailureText(langs[0], v.Message, "extension-status.auth_failed")
 	}
+	return v, true
+}
+
+// authView is p's sign-in from the cache (nil when it does not sign in): unknown while its program does not run or
+// was not asked yet. It asks in the background when it was not.
+func (ps *extensions) authView(p *extension.Extension, langs ...i18n.Lang) *ExtensionAuth {
+	v, ready := ps.cachedAuthView(p, langs...)
+	if v != nil && !ready {
+		go ps.refreshAuth(context.Background(), p.Record.ID)
+	}
 	return v
+}
+
+// authProc returns p's runnable host process when p is enabled, healthy, and attached to a Proc.
+func (ps *extensions) authProc(p *extension.Extension) *host.Proc {
+	if p == nil || !p.Record.Enabled || p.Problem != "" {
+		return nil
+	}
+	hp := ps.get(p.Record.ID)
+	if hp == nil || hp.proc == nil {
+		return nil
+	}
+	return hp.proc
 }
 
 // authRuns says whether p's program can be asked about its sign-in now: on, set up, and started (or started by
 // being called).
 func (ps *extensions) authRuns(p *extension.Extension) bool {
-	if !p.Record.Enabled || p.Problem != "" {
-		return false
-	}
-	hp := ps.get(p.Record.ID)
-	return hp != nil && hp.proc != nil
+	return ps.authProc(p) != nil
 }
 
 // refreshAuth asks extension id for its status, keeps it and tells the apps when it changed. Background callers
-// (an auth.changed event, a view that had none) run one at a time per extension.
+// (an auth.changed event, a view that had none) run one at a time per extension; notifications arriving while
+// a refresh is in flight trigger one coalesced follow-up pass.
 func (ps *extensions) refreshAuth(ctx context.Context, id string) {
-	if !ps.auth.claim(id, true) {
+	if !ps.auth.beginRefresh(id) {
 		return
 	}
-	defer ps.auth.claim(id, false)
-	_, _ = ps.askAuth(ctx, id)
+	released := false
+	defer func() {
+		if !released {
+			ps.auth.endRefresh(id)
+		}
+	}()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		_, _ = ps.askAuth(ctx, id)
+		if !ps.auth.continueRefresh(id) {
+			released = true
+			return
+		}
+	}
 }
 
 // askAuth asks extension id's program for its sign-in status now.
 func (ps *extensions) askAuth(ctx context.Context, id string) (*ExtensionAuth, error) {
-	p := ps.reg.Get(id)
-	if p == nil || p.Full.Auth == nil {
+	p := ps.reg.Snapshot(id)
+	if p == nil || p.Full == nil || p.Full.Auth == nil {
 		return nil, errNoAuth
 	}
-	if !ps.authRuns(p) {
-		return ps.authView(p), nil
+	id = p.Record.ID
+	epoch := ps.auth.epochOf(id)
+	proc := ps.authProc(p)
+	if proc == nil {
+		v, _ := ps.cachedAuthView(p)
+		return v, nil
 	}
-	hp := ps.get(id)
 	ctx, cancel := context.WithTimeout(ctx, authStatusWait)
 	defer cancel()
-	var st authStatus
-	if err := hp.proc.Call(ctx, "auth.status", map[string]any{}, &st); err != nil {
+	status, err := buswire.Call(ctx, proc, extwire.AuthStatusMethod, buswire.None{})
+	st := authStatusFromWire(status)
+	if err != nil {
 		var remote *rpc.Error
 		st = authStatus{State: authError, Message: err.Error(), hubMessage: !errors.As(err, &remote) || errors.As(err, new(*i18n.Message))}
 	} else if !validAuthState(st.State) {
 		st = authStatus{State: authError, Message: i18n.T(i18n.En, "extension-status.auth_unknown_state", i18n.Args{"state": st.State}), hubMessage: true}
 	}
-	ps.keepAuth(p, st)
-	return ps.authView(p, ps.h.contextLang(ctx)), nil
+	cur := ps.reg.Snapshot(id)
+	if cur == nil || cur.Full == nil || cur.Full.Auth == nil {
+		return nil, errNoAuth
+	}
+	var langs []i18n.Lang
+	if ps.h != nil {
+		langs = []i18n.Lang{ps.h.contextLang(ctx)}
+	}
+	if ps.authProc(cur) != proc {
+		v, _ := ps.cachedAuthView(cur, langs...)
+		return v, nil
+	}
+	ps.keepAuthAt(cur, epoch, st, false)
+	v, _ := ps.cachedAuthView(cur, langs...)
+	return v, nil
 }
 
-// keepAuth keeps st as p's status and tells the apps when it changed.
-func (ps *extensions) keepAuth(p *extension.Extension, st authStatus) {
-	if !ps.auth.put(p.Record.ID, st) || ps.h == nil {
+func (ps *extensions) keepAuthAt(p *extension.Extension, epoch uint64, st authStatus, bump bool) {
+	stored, changed := ps.auth.putIfEpoch(p.Record.ID, epoch, st, bump)
+	if !stored || !changed || ps.h == nil {
 		return
 	}
-	ps.h.broadcast(map[string]any{"type": "extension_auth", "extension": p.Record.ID, "auth": ps.authView(p), "hub_auth_message": st.hubMessage})
+	v, _ := ps.cachedAuthView(p)
+	ps.h.broadcast(map[string]any{"type": "extension_auth", "extension": p.Record.ID, "auth": v, "hub_auth_message": st.hubMessage})
 }
 
 // forgetAuth drops what is known of id's sign-in (its program stopped, it was removed) and tells the apps.
 func (ps *extensions) forgetAuth(id string) {
-	if _, _, had := ps.auth.get(id); !had {
+	if !ps.auth.drop(id) {
 		return
 	}
-	ps.auth.drop(id)
 	if ps.h == nil {
 		return
 	}
-	if p := ps.reg.Get(id); p != nil && p.Full.Auth != nil {
+	if p := ps.reg.Snapshot(id); p != nil && p.Full != nil && p.Full.Auth != nil {
 		ps.h.broadcast(map[string]any{"type": "extension_auth", "extension": id, "auth": ps.authView(p)})
 	}
 }
@@ -272,26 +398,31 @@ func authQR(p *connector.Prompt) error {
 func (h *Manager) authRoutes(api *http.ServeMux, full func(f func(w http.ResponseWriter, r *http.Request, p *extension.Extension)) http.HandlerFunc) {
 	ps := func() *extensions { return h.extensions }
 	noAuth := func(w http.ResponseWriter, r *http.Request, p *extension.Extension) bool {
-		if p.Full.Auth != nil {
+		if p != nil && p.Full != nil && p.Full.Auth != nil {
 			return false
 		}
 		writeExtensionResponseError(w, r, http.StatusNotFound, "no_auth", i18n.Err("hub-extension_auth.no_auth"))
 		return true
 	}
-	// running is p's program to talk to about signing in, or writes why there is none.
-	running := func(w http.ResponseWriter, r *http.Request, p *extension.Extension) bool {
+	// running returns p's program to talk to about signing in, or writes why there is none.
+	running := func(w http.ResponseWriter, r *http.Request, p *extension.Extension) *host.Proc {
 		if noAuth(w, r, p) {
-			return false
+			return nil
 		}
-		if !p.Record.Enabled {
+		snap := ps().reg.Snapshot(p.Record.ID)
+		if noAuth(w, r, snap) {
+			return nil
+		}
+		if !snap.Record.Enabled {
 			writeExtensionResponseError(w, r, http.StatusConflict, "disabled", i18n.Err("hub-extension_auth.disabled"))
-			return false
+			return nil
 		}
-		if !ps().authRuns(p) {
+		proc := ps().authProc(snap)
+		if proc == nil {
 			writeExtensionResponseError(w, r, http.StatusConflict, "not_running", i18n.Err("hub-extension_auth.not_running"))
-			return false
+			return nil
 		}
-		return true
+		return proc
 	}
 	api.HandleFunc("GET /api/v1/extensions/{id}/-/auth", full(func(w http.ResponseWriter, r *http.Request, p *extension.Extension) {
 		if noAuth(w, r, p) {
@@ -305,7 +436,7 @@ func (h *Manager) authRoutes(api *http.ServeMux, full func(f func(w http.Respons
 		writeExtensionJSON(w, r, v)
 	}))
 	api.HandleFunc("POST /api/v1/extensions/{id}/-/auth/step", full(func(w http.ResponseWriter, r *http.Request, p *extension.Extension) {
-		if !running(w, r, p) {
+		if running(w, r, p) == nil {
 			return
 		}
 		var in struct {
@@ -319,10 +450,19 @@ func (h *Manager) authRoutes(api *http.ServeMux, full func(f func(w http.Respons
 		if in.Values == nil {
 			in.Values = map[string]string{}
 		}
+		cur := ps().reg.Snapshot(p.Record.ID)
+		if noAuth(w, r, cur) {
+			return
+		}
+		proc := ps().authProc(cur)
+		if proc == nil {
+			writeExtensionResponseError(w, r, http.StatusConflict, "not_running", i18n.Err("hub-extension_auth.not_running"))
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), authStepWait)
 		defer cancel()
 		var pr authPrompt
-		if err := ps().get(p.Record.ID).proc.Call(ctx, "auth.step", map[string]any{"step": in.Step, "values": in.Values}, &pr); err != nil {
+		if err := proc.Call(ctx, "auth.step", map[string]any{"step": in.Step, "values": in.Values}, &pr); err != nil {
 			writeExtensionResponseErr(w, r, http.StatusBadGateway, err)
 			return
 		}
@@ -342,23 +482,35 @@ func (h *Manager) authRoutes(api *http.ServeMux, full func(f func(w http.Respons
 		writeExtensionJSON(w, r, pr)
 	}))
 	api.HandleFunc("POST /api/v1/extensions/{id}/-/auth/logout", full(func(w http.ResponseWriter, r *http.Request, p *extension.Extension) {
-		if !running(w, r, p) {
+		proc := running(w, r, p)
+		if proc == nil {
 			return
 		}
+		epoch := ps().auth.epochOf(p.Record.ID)
 		ctx, cancel := context.WithTimeout(r.Context(), authStepWait)
 		defer cancel()
-		var st authStatus
-		if err := ps().get(p.Record.ID).proc.Call(ctx, "auth.logout", map[string]any{}, &st); err != nil {
+		status, err := buswire.Call(ctx, proc, extwire.AuthLogoutMethod, buswire.None{})
+		if err != nil {
 			writeExtensionResponseErr(w, r, http.StatusBadGateway, err)
 			return
 		}
+		st := authStatusFromWire(status)
 		ps().reg.Audit(r.Context(), p.Record.ID, "auth_logout", actor(r), nil)
-		if validAuthState(st.State) {
-			ps().keepAuth(p, st)
-		} else {
-			_, _ = ps().askAuth(context.WithoutCancel(r.Context()), p.Record.ID)
+		cur := ps().reg.Snapshot(p.Record.ID)
+		if cur != nil && cur.Full != nil && cur.Full.Auth != nil {
+			if validAuthState(st.State) {
+				if ps().authProc(cur) == proc {
+					ps().keepAuthAt(cur, epoch, st, true)
+				}
+			} else {
+				_, _ = ps().askAuth(context.WithoutCancel(r.Context()), p.Record.ID)
+			}
+			v, _ := ps().cachedAuthView(cur, h.requestLang(r))
+			writeExtensionJSON(w, r, v)
+			return
 		}
-		writeExtensionJSON(w, r, ps().authView(ps().reg.Get(p.Record.ID), h.requestLang(r)))
+		v, _ := ps().cachedAuthView(p, h.requestLang(r))
+		writeExtensionJSON(w, r, v)
 	}))
 }
 

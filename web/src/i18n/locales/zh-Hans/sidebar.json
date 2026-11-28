@@ -178,5 +178,9 @@
   "subagents_need_you": "{count} 个待你确认",
   "sort_activity": "按最近更新排序",
   "show_list_filter": "显示筛选",
-  "show_empty_workspaces": "显示空工作区"
+  "show_empty_workspaces": "显示空工作区",
+  "undelivered_waiting_one": "{count} 条消息等待送达",
+  "undelivered_waiting_other": "{count} 条消息等待送达",
+  "undelivered_expired_one": "{count} 条消息未送达，需要你处理",
+  "undelivered_expired_other": "{count} 条消息未送达，需要你处理"
 }

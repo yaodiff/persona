@@ -3,7 +3,7 @@ import { conversationDeletionScope, deletedConversationID, onConversationDeleted
 // each conversation's feed (what the hub inserted into it), where those go among the chat's lines, the day lines and
 // the quick results. A task is a todo whose `origin` is the conversation; its state is the todo's (lib/todos.ts).
 import { useSyncExternalStore } from "react";
-import { api, ApiError, enc } from "./api";
+import { api, ApiError, enc, isNetworkFailure } from "./api";
 import { formatDate, t } from "../i18n";
 import { parseAPIError } from "./api-errors";
 import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./store";
@@ -219,6 +219,7 @@ export interface BriefBody {
    *  each line; nothing is turned on from here. A hub that does not know it leaves the list out. */
   setup: BriefSetup[];
   contributions: BriefContribution[];
+  deferred_supervision: { id: string; todo_id: string; title: string; reason: string }[];
 }
 
 /** One mechanism of a `brief` item's `setup`: `text` is the whole line (count, cost, where it is turned on). */
@@ -742,12 +743,39 @@ export type AskAnswer = { option: string } | { response: string } | { answers: R
  *  `answer`: a decision's option or fixed response instead of its recommendation. */
 export async function acceptBrief(todoId: string, askedAt: string, answer?: AskAnswer): Promise<"accepted" | "recorded" | "handled"> {
   try {
-    const res = await api<{ delivered?: string }>(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt, ...answer } });
+    const res = await postAccept(todoId, askedAt, answer);
     void refreshTodos();
     return res.delivered === "none" ? "recorded" : "accepted";
   } catch (e) {
     if (e instanceof ApiError && e.status === 409 && (!e.code || e.code === "conflict")) return "handled";
     throw e;
+  }
+}
+
+/** The waits before an accept's second and third try (#17431): a restarting hub drops the connection or answers an
+ *  empty 502/503 for a moment. None under Vitest. */
+const ACCEPT_RETRY_MS = import.meta.env.MODE === "test" ? [0, 0] : [400, 1_200];
+
+/** A failed accept that is no answer from the hub: the connection failed, or something in front of it answered an
+ *  empty or non-JSON 502/503/504. A body with the hub's own error is an answer, never tried again. */
+function acceptGap(e: unknown): boolean {
+  if (isNetworkFailure(e)) return true;
+  return e instanceof ApiError && [502, 503, 504].includes(e.status)
+    && (!e.isJson || typeof e.body.error !== "string" || e.body.error.trim() === "");
+}
+
+/** One accept, tried again only through a gap that is no answer (acceptGap), at most ACCEPT_RETRY_MS.length times. The round (asked_at) makes a repeat safe: the hub takes a round
+ *  once, and a repeat of one it took is 409 (handled). The hub's own refusal (accept_not_taken, dialog_open, the store's
+ *  503) is an answer and is never repeated. */
+async function postAccept(todoId: string, askedAt: string, answer?: AskAnswer): Promise<{ delivered?: string }> {
+  for (let tries = 0; ; tries++) {
+    try {
+      return await api<{ delivered?: string }>(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt, ...answer } });
+    } catch (e) {
+      const wait = ACCEPT_RETRY_MS[tries];
+      if (wait === undefined || !acceptGap(e)) throw e;
+      if (wait > 0) await new Promise((done) => setTimeout(done, wait));
+    }
   }
 }
 

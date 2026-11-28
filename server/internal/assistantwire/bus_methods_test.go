@@ -30,6 +30,23 @@ func TestCoreAssistantBusMethodsWire(t *testing.T) {
 		`{"ok":true,"seq":9}`)
 }
 
+func TestCoreAssistantRelayBusMethodsWire(t *testing.T) {
+	checkMethodWire[assistantwire.DeviceCall, json.RawMessage](t, assistantwire.DeviceMethod, "device.call",
+		`{"device":"box","method":"session.items","params":{"session_id":"conversation","turns":1}}`,
+		`{"items":[],"future_field":true}`)
+	checkMethodWire[assistantwire.DeviceCall, json.RawMessage](t, assistantwire.DeviceRetireMethod, "device.retire",
+		`{"device":"box","method":"session.stop_if_idle","params":{"session_id":"conversation","retire":true}}`,
+		`{"ok":true}`)
+	checkMethodWire[assistantwire.AppCall, json.RawMessage](t, assistantwire.AppMethod, "app.call",
+		`{"app_id":"notify","method":"notify.quiet","params":{},"timeout_ms":1500}`,
+		`{"quiet":false}`)
+	const reply = `{"status":201,"header":{"Content-Type":["text/plain"]},"body":"b2s="}`
+	checkMethodWire[assistantwire.HTTPRequest, assistantwire.HTTPResponse](t, assistantwire.HTTPMethod, "http.request",
+		`{"method":"POST","path":"/example","query":"x=1","header":{"Content-Type":["text/plain"]},"body":"eA=="}`, reply)
+	checkMethodWire[assistantwire.HTTPRequest, assistantwire.HTTPResponse](t, assistantwire.HTTPStreamedMethod, "http.request_streamed",
+		`{"method":"POST","path":"/example","query":"x=1","header":{"Content-Type":["text/plain"]},"body_stream":{"id":"relay","size":1}}`, reply)
+}
+
 func TestExtensionBusMethodsWire(t *testing.T) {
 	checkMethodWire(t, assistantwire.ExtensionIdentityMethod, "extensions.identity", `{}`, `{"supported":true}`)
 	checkMethodWire(t, assistantwire.ModelsExtensionCompleteMethod, "models.extension_complete",

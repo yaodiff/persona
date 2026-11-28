@@ -38,7 +38,7 @@ const (
 	// relayFailedSetup: the owner must fix the setup first (relaySetupCodes). Queued until it goes in; conversation_send
 	// returns it.
 	relayFailedSetup
-	// relayFailedGone: the conversation is gone. Dropped; conversation_send returns it.
+	// relayFailedGone: the conversation is gone (or the runtime reports not_found). Dropped; conversation_send returns it.
 	relayFailedGone
 	// relayFailedLocal: the manager's own refusal, with no code (a pick, model or connection that is gone or cannot be
 	// read). Queued, as before; conversation_send returns it.
@@ -91,6 +91,8 @@ func relayFailureOf(err error) relayFailure {
 	switch {
 	case !coded:
 		return relayFailedLocal
+	case code == "not_found":
+		return relayFailedGone
 	case code == "" || code == "internal" || code == CodeMachineOffline || code == CodeNodeClosed:
 		return relayFailedNotNow
 	case slices.Contains(relayBusyCodes, code):
@@ -182,6 +184,7 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 	push := func(ctx context.Context) { s.reportRelayRefused(ctx, machine, to, msg.Tool, code) }
 	switch {
 	case msg.standalonePermission():
+		s.workEvent(machine, to, "ask_internal_delivery_failed", map[string]any{"id": msg.Card, "to": to, "code": code})
 		what = "the card can return to the app when its hold ends"
 		return false, nil
 	case msg.Tool == superviseTool:

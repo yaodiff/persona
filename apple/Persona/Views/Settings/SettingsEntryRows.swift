@@ -151,7 +151,7 @@ struct SettingsAdvancedPage: View {
         }
         .accessibilityIdentifier("settings-advanced-list")
         .themedPage()
-        .detailTitle(String(localized: "Advanced"))
+        .detailTitle(NativeTemplateStore.shared.shortSettings ? String(localized: "More Settings") : String(localized: "Advanced"))
     }
 
     private func heading(_ group: SettingsEntry.Group) -> String {

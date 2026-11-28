@@ -26,5 +26,9 @@
   "handoff_chat_blocked": "This chat is blocked from proxy replies",
   "handoff_conflict": "This reference was already used for a different handoff",
   "handoff_rate_limited": "Too many proxy replies right now. Try again later.",
-  "handoff_assistant_away": "The assistant could not take this handoff. Try again shortly."
+  "handoff_assistant_away": "The assistant could not take this handoff. Try again shortly.",
+  "group_access_invalid": "The group access setting's {field} is missing or not valid",
+  "group_access_tool_bad": "{tool} is not a read-only connector tool",
+  "group_access_needs_owner": "Pair the bot first: group access is the owner's",
+  "group_access_conflict": "Group access was changed elsewhere. Reload and try again."
 }

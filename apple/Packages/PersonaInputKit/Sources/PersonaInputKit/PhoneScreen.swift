@@ -32,7 +32,7 @@ public struct PhoneScreenFit: Equatable, Sendable {
 
     /// The shape of a phone's picture area, in points.
     public init(viewWidth: Double, viewHeight: Double) {
-        let ratio = viewWidth > 0 && viewHeight > 0 ? viewHeight / viewWidth : 2
+        let ratio = viewWidth.isFinite && viewHeight.isFinite && viewWidth > 0 && viewHeight > 0 ? viewHeight / viewWidth : 2
         self.init(ratio: ratio)
     }
 
@@ -48,7 +48,7 @@ public struct PhoneScreenFit: Equatable, Sendable {
 
     /// The display's size in points at `width`.
     public func size(width: Int) -> PhoneScreenSize {
-        PhoneScreenSize(width: width, height: Int((Double(width) * ratio).rounded()))
+        PhoneScreenSize(width: width, height: Self.clampedInt((Double(width) * ratio).rounded()))
     }
 
     /// The width to show a window at, given the size it really took when fitted to `area` at width `current` (an app
@@ -59,9 +59,18 @@ public struct PhoneScreenFit: Equatable, Sendable {
         guard area.width > 0, area.height > 0,
               Double(window.width) > Double(area.width) + slack || Double(window.height) > Double(area.height) + slack
         else { return current }
+        guard current > 0 else { return baseWidth }
         let needed = max(Double(current) * Double(window.width) / Double(area.width),
                          Double(current) * Double(window.height) / Double(area.height))
+        guard needed.isFinite else { return Self.maxWidth }
         return widths.first { Double($0) >= needed.rounded(.up) } ?? Self.maxWidth
+    }
+
+    static func clampedInt(_ value: Double) -> Int {
+        guard !value.isNaN else { return 0 }
+        if value >= Double(Int.max) { return Int.max }
+        if value <= Double(Int.min) { return Int.min }
+        return Int(value)
     }
 }
 
@@ -85,14 +94,21 @@ public struct PhoneScreenRect: Codable, Equatable, Sendable {
     public var maxX: Double { x + width }
     public var maxY: Double { y + height }
 
+    var isFinite: Bool {
+        x.isFinite && y.isFinite && width.isFinite && height.isFinite && maxX.isFinite && maxY.isFinite
+    }
+
     /// Overlap with an area, not just a shared edge.
     public func overlaps(_ o: PhoneScreenRect) -> Bool {
-        x < o.maxX && o.x < maxX && y < o.maxY && o.y < maxY
+        guard isFinite, o.isFinite, width > 0, height > 0, o.width > 0, o.height > 0,
+              x < maxX, y < maxY, o.x < o.maxX, o.y < o.maxY else { return false }
+        return x < o.maxX && o.x < maxX && y < o.maxY && o.y < maxY
     }
 
     /// Within `tolerance` points of `o` on every edge.
     public func matches(_ o: PhoneScreenRect, tolerance: Double = 2) -> Bool {
-        abs(x - o.x) <= tolerance && abs(y - o.y) <= tolerance
+        guard isFinite, o.isFinite, tolerance.isFinite, tolerance >= 0 else { return false }
+        return abs(x - o.x) <= tolerance && abs(y - o.y) <= tolerance
             && abs(width - o.width) <= tolerance && abs(height - o.height) <= tolerance
     }
 }
@@ -106,6 +122,7 @@ public enum PhoneScreenPlacement {
 
     /// The origin for a display of `size` points next to `main`, clear of `others`; nil when every side is taken.
     public static func origin(for size: PhoneScreenSize, main: PhoneScreenRect, others: [PhoneScreenRect]) -> (x: Double, y: Double)? {
+        guard size.width > 0, size.height > 0, main.isFinite, main.width > 0, main.height > 0 else { return nil }
         let w = Double(size.width), h = Double(size.height)
         for side in Side.allCases {
             let r: PhoneScreenRect
@@ -115,6 +132,7 @@ public enum PhoneScreenPlacement {
             case .below: r = PhoneScreenRect(x: main.x, y: main.maxY, width: w, height: h)
             case .above: r = PhoneScreenRect(x: main.x, y: main.y - h, width: w, height: h)
             }
+            guard r.isFinite else { continue }
             if !others.contains(where: { $0.overlaps(r) }) { return (r.x, r.y) }
         }
         return nil

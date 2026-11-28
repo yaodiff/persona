@@ -59,6 +59,7 @@
 | `thread_mode`, `thread_idle_hours` | The web offers editing on installed extension channels reporting a supported mode. Older clients preserve both values on partial writes. Switching off uses legacy message threads and 30 days of inactivity. Switching back on reuses saved preferences. In split modes older plugins can still supply the opaque `thread` key. |
 | `target_override` | Optional detail metadata. Clients can display the reported `topics`, `groups_and_topics`, or `threads` precedence hint. An absent hint needs no placeholder. Older clients ignore it and can still edit the default target. |
 | `configuration.*.section` | A manifest property can group a field under `connection`, `channel`, `inbox`, or `advanced`. Omitted or empty keeps the existing form valid. Older clients ignore the returned form hint. Extensions declaring the hint need a matching minimum hub version in `engines.persona` for install-time validation. |
+| `integrations_projection_v1` | A connected assistant names it in `manager.hello`. A hub that serves the projection publishes `integrations_projection_v1: true` on that assistant's entry in `GET /api/v1/managers`. With the field absent, use the existing settings reads for the same assistant. Older clients keep their existing read and write routes. |
 
 ### Agent tab naming (#15387)
 
@@ -342,6 +343,20 @@ Both old and new nodes can return an empty model list for `omp`. New clients req
 selected host. They offer typed model IDs for native `omp` only when that response includes
 `"supports_start_model": true`. An older node can start `omp` with its own default. Older clients ignore the
 optional field. A registered runtime called `omp` still supplies its own list of supported models.
+
+### Orca refusals in the reader's language (#17057)
+
+A node since #17057 adds a code and data to the refusals and errors on its Orca paths (the codes and reasons are in
+`docs/integrations/engines.md`, "Refusals in the reader's language"), and a hub since then words them in each request's
+language. The node's own words are unchanged: what was Chinese is the catalog's zh-Hans text, what was English
+(`unsupported: <engine> cannot do this`, `tab <id> is not running`, Orca's Codex launch settings) stays English.
+
+| Pair | What happens |
+| --- | --- |
+| New hub, new node | The summary is in the request's language; the engine's or Orca's own words are the detail. |
+| New hub, older node | Codes the older node already sent (`orca_not_registered`, `runtime_session`, `codex_launch_preferences` without a reason…) are worded by their code; a refusal without the new data reason keeps its words. |
+| Older hub, new node | The node's words reach the client as before. Errors that had no code (a tab, pane or terminal the engine would not open, close or split; a tab name; Run Agent Here's checks; `unsupported`) now carry one, so an older hub answers them 409 with the node's words instead of 502 with its generic summary. |
+| Older clients | Fields are additive. iOS's rename alert, which looks for an English `unsupported` or `is not running` in the message, shows the hub's sentence after "Couldn't rename:" instead; the web's worktree dialog also reads the code (`unsupported`, reason `engine_unsupported`). |
 
 ## Start-defaults field convergence (#11719)
 

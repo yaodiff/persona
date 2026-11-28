@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -27,6 +28,7 @@ type orcaTerminalOwner struct {
 	Incarnation string `json:"incarnation"`
 	RootPID     int    `json:"root_pid"`
 	RootStart   string `json:"root_start"`
+	TaskID      string `json:"task_id,omitempty"` // Set only when this task created the terminal.
 	TaskToken   string `json:"task_token,omitempty"`
 }
 
@@ -55,6 +57,9 @@ func (h *orcaHost) markOrcaTerminal(ctx context.Context, pane host.PaneRef, id s
 	}
 	owner := orcaTerminalOwner{Pane: pane.String(), Workspace: t.WorktreeID, Handle: t.Handle,
 		Incarnation: t.IncarnationID, RootPID: t.ProcessID, RootStart: start}
+	if ts := taskSpaceIn(ctx, h); ts != nil {
+		owner.TaskID = ts.task
+	}
 	if task, _ := ctx.Value(taskTerminalStartKey{}).(*taskTerminalStart); task != nil {
 		owner.TaskToken = task.token
 		task.pane = pane.String()
@@ -102,8 +107,13 @@ func (n *Node) orcaFinishedOwnerLocked(p host.Agent, id, fallback string) string
 	return id
 }
 
-func orcaTerminalRefusal() error {
-	return refusal("agent_busy", "the stopped terminal changed or is in use; check it before closing", nil)
+func orcaTerminalRefusal() error { return terminalChangedRefusal() }
+
+// terminalChangedRefusal refuses a close of a stopped Agent whose terminal changed or is in use (Orca's or herdr's,
+// close_after_exit.go): agent_busy, which the hub words by its reason (apierr's reasonKeys, #17057); the words here stay
+// English, as they were for a hub that does not.
+func terminalChangedRefusal() error {
+	return refusal("agent_busy", i18n.T(i18n.En, "rpc-errors.agent_busy_terminal_changed"), map[string]any{"reason": "terminal_changed"})
 }
 
 // orcaCloseTarget uses a direct inventory. A missing key is idempotent only
@@ -427,4 +437,79 @@ func orcaCloseEnvMatches(env, pane string) bool {
 		}
 	}
 	return agent == "1" && key == pane
+}
+
+// closeOrcaTaskSpace retires the task's stopped terminals individually. The
+// worktree itself can belong to the user or contain several tasks' terminals.
+func (n *Node) closeOrcaTaskSpace(ctx context.Context, task, workspace string) (map[string]any, error) {
+	if task == "" || workspace == "" {
+		return nil, errors.New("task_id and workspace_id are required")
+	}
+	h, ok := n.hosts.Get(host.Orca).(*orcaHost)
+	if !ok {
+		return nil, errors.New("Orca is unavailable")
+	}
+	n.state.mu.Lock()
+	members := map[string]bool{}
+	targets := map[string]sessionState{}
+	for id, st := range n.state.Sessions {
+		if st.WorkspaceHost != host.Orca || st.TaskID != task || st.WorkspaceID != workspace {
+			continue
+		}
+		members[st.Pane] = true
+		if o := st.OrcaTerminal; o != nil && o.TaskID == task && o.Workspace == workspace && o.Pane == st.Pane {
+			targets[id] = st
+		}
+	}
+	n.state.mu.Unlock()
+	if len(members) == 0 {
+		return nil, refusal(notTaskSpace, "the node has no record of this task in the Orca workspace", nil)
+	}
+	// The manager's list and the last display scan can lag a resume.
+	if _, err := h.agentProcs(0); err != nil {
+		return nil, err
+	}
+	if err := n.refreshHosts(ctx, h); err != nil {
+		return nil, err
+	}
+	n.mu.Lock()
+	for _, a := range n.agents {
+		if a.PaneID != "" && members[a.PaneID] {
+			n.mu.Unlock()
+			return nil, refusal(taskSpaceBusyCode, "an Agent in this Orca task is still running", nil)
+		}
+	}
+	n.mu.Unlock()
+	var closed bool
+	var pending error
+	for id, st := range targets {
+		ok, err := n.closeStoppedOrcaTaskTab(ctx, h, id, st)
+		closed = closed || ok
+		pending = errors.Join(pending, err)
+	}
+	if closed {
+		n.notifySessions()
+	}
+	return map[string]any{"closed": closed}, pending
+}
+
+func (n *Node) closeStoppedOrcaTaskTab(ctx context.Context, h *orcaHost, id string, st sessionState) (bool, error) {
+	unlock, ok := n.recovery.tryLock(id)
+	if !ok {
+		return false, orcaTerminalRefusal()
+	}
+	defer unlock()
+	unlockTyping, ok := n.typing.tryLock(id)
+	if !ok {
+		return false, orcaTerminalRefusal()
+	}
+	defer unlockTyping()
+	check := func() error {
+		current, ok := n.state.get(id)
+		if !ok || current.TaskID != st.TaskID || current.WorkspaceHost != host.Orca || current.WorkspaceID != st.WorkspaceID {
+			return orcaTerminalRefusal()
+		}
+		return nil
+	}
+	return n.closeStoppedOrca(ctx, h, id, st.Pane, st, check)
 }

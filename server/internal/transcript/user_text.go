@@ -48,7 +48,7 @@ func (m *Meta) applyQueue(op, content string) {
 		if len(m.queued) > 0 {
 			m.queued = m.queued[1:]
 		}
-	case "remove", "popAll":
+	case "remove", "popOne", "popAll":
 		if content == "" || !removeOne() {
 			if op == "popAll" {
 				m.queued = nil

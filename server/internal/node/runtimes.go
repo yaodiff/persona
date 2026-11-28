@@ -72,6 +72,7 @@ type runtimeHello struct {
 		Close        bool `json:"close"`
 		Rewind       bool `json:"rewind"`
 		Fork         bool `json:"fork"`
+		Input        bool `json:"input"` // session.input types one line into a particular waiting command
 		QueueEdit    bool `json:"queue_edit"`
 		QueueSendNow bool `json:"queue_send_now"`
 		// Assistant: its launcher may run the Persona assistant (assistant_runtime.go; docs/integrations/runtimes.md "Assistant").
@@ -169,6 +170,8 @@ type runtimeConn struct {
 	// agyPaneBackground holds running tasks projected for a live terminal when the ACP row hides them.
 	agyPaneBackground map[string][]proto.BackgroundTask
 	agyPreviews       map[string]agyPreview
+	// inputWaits is bound to this connection, guarded by runtimeRegistry.mu.
+	inputWaits map[runtimeInputKey]*runtimeInputWait
 	// workspaces are its own workspaces, as its last runtime.workspaces said (caps.workspaces, runtimeworkspaces.go);
 	// workspacesSaid: it said them on this connection (a workspace missing from them is gone).
 	workspaces     []runtimeWorkspace
@@ -185,6 +188,19 @@ type runtimeConn struct {
 	// superseded is true once a newer runtime.hello of the same runtime replaced this connection as stale (guarded by
 	// runtimeRegistry.mu).
 	superseded bool
+	// Per-connection ordered runtime.hub delivery state (guarded by h.mu).
+	// hubHolders counts in-flight runtime.hello calls gating notifications between registerRuntime
+	// and completion of the runtime.hello reply write (rpc.AfterReply), ensuring runtime.hub events
+	// never precede the hello reply on the wire even across duplicate or concurrent hellos.
+	hubHolders       int
+	hubNotifying     bool   // true while this connection's drainHubNotifications goroutine is active
+	hubStateInit     bool   // true once hello reply or a runtime.hub push recorded hubLastConnected/hubLastEpoch
+	hubLastConnected bool   // last connected state delivered to this runtime (hello reply or runtime.hub)
+	hubLastEpoch     uint64 // RuntimeHost.hubEpoch of that last delivered state
+	hubTargetSeq     uint64 // highest RuntimeHost.hubSeq applied to this connection
+	hubTargetEpoch   uint64 // RuntimeHost.hubEpoch of hubTargetSeq
+	hubTargetConn    bool   // RuntimeHost connected state of hubTargetSeq
+	hubClosed        bool   // connection closed/removed; stop delivering runtime.hub
 }
 
 // isDaemon: the node dialed it (a daemon in daemons.json), it did not connect to the socket.

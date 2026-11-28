@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { t } from "../i18n";
 import {
   modelPurpose, modelProviderTitle, modelSummary, providerName, runtimeFallbackText, runtimeLabel,
   type ModelProvider, type ModelPurpose,
@@ -79,6 +80,12 @@ describe("用途配置", () => {
     expect(permissionModesForProvider(withPerm, { id: "launcher.claude", name: "Claude", kind: "launcher", agent: "claude" }, "claude").length).toBeGreaterThan(0);
     expect(permissionModesForProvider(withPerm, { id: "launcher.omp", name: "OMP", kind: "launcher", agent: "omp" }, "omp")).toEqual([]);
     expect(permissionModesForProvider({ ...withPerm, kind: "api" }, { id: "api", name: "API", kind: "api" }, "")).toEqual([]);
+    const restrictedAgy = permissionModesForProvider(withPerm, {
+      id: "launcher.agy", name: "Antigravity", kind: "launcher", agent: "agy",
+      permission_modes: ["default", "acceptEdits", "plan", "bypassPermissions"],
+    }, "agy");
+    expect(restrictedAgy.map((m) => m.id)).toEqual(["default", "acceptEdits", "plan", "bypassPermissions"]);
+    expect(restrictedAgy[0].title).toBe(t("lib-session-actions.mode_default"));
   });
   it("uses server capability candidates and keeps a referenced hidden provider", () => {
     expect(providersFor(purpose, providers).map((p) => p.id)).toEqual(["strong", "other"]);

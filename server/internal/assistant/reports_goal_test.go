@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -27,8 +28,10 @@ func waitReportQueue(t *testing.T, s *Service) {
 // By default a task's turns are not pushed: a finished turn (whatever the agent said, a merged PR, "收工"), an
 // interruption and a closing by the judge are execution steps.
 func TestGoalReportsSkipExecutionSteps(t *testing.T) {
-	s, f, posts := reportServiceWith(t, goalFeatures)
+	s, f, posts := reportServiceWith(t, goalFeatures, repositorystore.New(todoTestDB(t)))
 	todo := startedTask(t, s, f)
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor",
+		"fix/login", "fix/login", "abc", "abc")
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "好的，收工。https://github.com/o/r/pull/901 已合并，临时 worktree 清掉了", 0)
 	waitReportQueue(t, s)

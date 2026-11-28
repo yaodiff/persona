@@ -128,7 +128,15 @@ func (s *Service) nameTodoLater(ctx context.Context, id, from, prompt string) {
 		defer s.todos.titling.Done()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
-		to := s.todoTitleFromModel(ctx, prompt)
+		to := s.todoTitleWithin(ctx, prompt, func(ctx context.Context) (*ai.Client, time.Time, error) {
+			// The budget runs from the start of resolution. Resolution keeps the API budget (15 s) as before; only
+			// a title that resolved to a launcher gets the longer deadline, counted from the same start.
+			start := time.Now()
+			rctx, cancel := context.WithTimeout(ctx, todoTitleTimeout)
+			defer cancel()
+			model, timeout, err := s.laterTodoTitleModel(rctx)
+			return model, start.Add(timeout), err
+		})
 		if to == "" || to == from {
 			return
 		}
@@ -140,9 +148,46 @@ func (s *Service) nameTodoLater(ctx context.Context, id, from, prompt string) {
 	}()
 }
 
-// todoTitleFromModel is the small-task model's title for a task with this prompt; "" when there is no model, it
-// fails or says nothing usable (the todo keeps the title it has).
+// How long the model may take for a to-do's title: todoTitleTimeout where a caller waits (the retitle route) and on
+// an API connection; todoTitleLauncherTimeout in the background (nameTodoLater) on a launcher, where a request can
+// start the CLI first (agy runs that answered took 12 to 48 s in #13443's logs). It stays inside nameTodoLater's
+// minute.
+const (
+	todoTitleTimeout         = 15 * time.Second
+	todoTitleLauncherTimeout = 50 * time.Second
+)
+
+// laterTodoTitleModel is the to-do title's model and budget in the background, from one resolution of todo.title: the
+// budget is chosen by the configuration the call then runs on (longer on a launcher), so a settings change in between
+// cannot give a launcher the API budget. A resolution error is returned as is (the todo keeps its title); it is not
+// retried through a second lookup.
+func (s *Service) laterTodoTitleModel(ctx context.Context) (*ai.Client, time.Duration, error) {
+	b, err := s.resolveModel(ctx, "todo.title")
+	if err != nil {
+		return nil, 0, err
+	}
+	c, err := s.apiConfig(ctx, b)
+	if err != nil {
+		return nil, 0, err
+	}
+	timeout := todoTitleTimeout
+	if c.RunLauncher != "" {
+		timeout = todoTitleLauncherTimeout
+	}
+	return s.countedClient("todo.title", "", b.Provider, c), timeout, nil
+}
+
+// todoTitleFromModel is todoTitleWithin with the budget of a caller that waits (resolution happens inside it).
 func (s *Service) todoTitleFromModel(ctx context.Context, prompt string) string {
+	return s.todoTitleWithin(ctx, prompt, func(context.Context) (*ai.Client, time.Time, error) {
+		return s.purposeModel("todo.title"), time.Now().Add(todoTitleTimeout), nil
+	})
+}
+
+// todoTitleWithin is the small-task model's title for a task with this prompt; "" when there is no model, it fails or
+// says nothing usable (the todo keeps the title it has). pick gives the model and the call's deadline; it runs after
+// the prompt and locale are ready, so the model's budget starts there on both paths.
+func (s *Service) todoTitleWithin(ctx context.Context, prompt string, pick func(context.Context) (*ai.Client, time.Time, error)) string {
 	prompt = strings.TrimSpace(contextBlock.ReplaceAllString(prompt, ""))
 	if prompt == "" {
 		return ""
@@ -150,12 +195,19 @@ func (s *Service) todoTitleFromModel(ctx context.Context, prompt string) string 
 	locale := s.hello(ctx).Locale
 	max := todoTitleMax(locale)
 	language := answerLanguage(locale)
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	model, deadline, err := pick(ctx)
+	if err != nil {
+		if !ai.IsPaused(err) {
+			s.logf("todo title: %v", err)
+		}
+		return ""
+	}
+	cctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	// Reasoning models think first: a small max_tokens comes back empty (agents_start.go's tab names). Thinking is
 	// switched off for this short naming call, and a cut-off chain-of-thought line is dropped before it can replace
 	// the title (title_guard.go).
-	r, err := s.purposeModel("todo.title").Chat(cctx, ai.Request{
+	r, err := model.Chat(cctx, ai.Request{
 		System:          prompts.RenderTodoTitle(prompts.TodoTitle{Language: language, Max: max}),
 		Messages:        []ai.Message{{Role: ai.RoleUser, Content: prompts.RenderTodoTitleInput(cutRunes(prompt, 1500), language)}},
 		MaxTokens:       200,

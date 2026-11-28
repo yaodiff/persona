@@ -147,6 +147,13 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
     val spaces = page.spaces
     val space = spaces.firstOrNull { it.id == route.spaceId }
     val workspace = space?.members?.first()?.session?.operationWorkspaceId
+    // An Orca space is its worktree: New worktree… from it (#17054), resolved against the catalog's Orca rows.
+    val creationService = LocalAgentCreationService.current
+    LaunchedEffect(lifecycle, model, creationService) {
+        lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { model.watchWorkspaceCatalog(creationService, repositoryRows = false) }
+    }
+    val orcaRows by model.orcaWorkspaces.collectAsStateWithLifecycle()
+    val worktrees = rememberOrcaWorktreeActions(creationService, page.machines, orcaRows, model::refreshWorkspaceCatalog)
     fun openRow(row: AgentSession) {
         model.opened(row)
         navigator.navigate(ChatRoute(row.session.machineId, row.session.sessionId))
@@ -202,10 +209,12 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             spaceMenu = { shown ->
                 val session = shown.members.first().session
                 val markAll = markAllSeenBatch(shown.members)
+                val worktreeAction = worktrees?.let { w -> w.targetOf(shown.members.map { it.session })?.let { w.newWorktreeAction(it) } }
                 AgentSpaceMenu(session, shown.preferenceKey in page.preferences.pins.spaces, shown.preferenceKey in page.preferences.mutes.spaces,
                     operations.busy, onPin = { model.spacePin(session) }, onMute = { model.spaceMute(session) },
                     onRename = { operationDialog = AgentOperationDialog.RenameSpace(session) },
-                    onMarkRead = markAll.takeIf { it.unread.isNotEmpty() }?.let { batch -> { confirmRead = batch } })
+                    onMarkRead = markAll.takeIf { it.unread.isNotEmpty() }?.let { batch -> { confirmRead = batch } },
+                    extra = listOfNotNull(worktreeAction))
             },
             sessionMenu = rowMenu, title = route.title,
             onMachine = { navigator.navigate(MachineSpacesRoute(it)) },
@@ -229,6 +238,7 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             preferHerdrTabName = page.preferences.prefersHerdrTabName(dialog.session)) { operationDialog = null }
     }
     if (takeoverClient != null) CodexTakeoverDialogs(takeoverCoordinator)
+    OrcaWorktreeDialogs(worktrees)
     confirmRead?.let { markAll ->
         MarkAllReadDialog(markAll.unread.size, onDismiss = { confirmRead = null }) {
             model.markRead(markAll.unread, clear = true, release = markAll.release)

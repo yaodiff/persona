@@ -32,7 +32,7 @@ func TestResolveRequiresDecisionForInteractionKind(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ft := newFleetTest(t)
-			ix := proto.Interaction{ID: "ix_decision", MachineID: "mac", SessionID: "s1", Kind: tc.kind}
+			ix := proto.Interaction{ID: "ix_decision", MachineID: "mac", SessionID: "s1", Kind: tc.kind, OutwardWrite: tc.kind == proto.IxPermission}
 			announced := make(chan struct{})
 			done := make(chan proto.Resolution, 1)
 			go func() {
@@ -78,7 +78,7 @@ func TestResolveRequiresDecisionForInteractionKind(t *testing.T) {
 func TestWaitInteractionResolved(t *testing.T) {
 	ft := newFleetTestNoStore(t)
 	s := ft.s
-	ix := proto.Interaction{ID: "ix_1", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, Summary: "send mail"}
+	ix := proto.Interaction{ID: "ix_1", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, Summary: "send mail"}
 	announced := make(chan struct{})
 	done := make(chan proto.Resolution, 1)
 	go func() {
@@ -156,7 +156,7 @@ func TestWaitInteractionCancelledDismisses(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan proto.Resolution, 1)
 	go func() {
-		r, _ := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_ctx", MachineID: "mac", Kind: proto.IxPermission,
+		r, _ := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_ctx", MachineID: "mac", Kind: proto.IxPermission, OutwardWrite: true,
 			ExpiresAt: time.Now().Add(time.Hour)})
 		done <- r
 	}()
@@ -183,7 +183,7 @@ func TestWaitInteractionReplacesScreenGuess(t *testing.T) {
 	s.fleet.mu.Lock()
 	s.ixMapLocked()[scr.ID] = &pending{ix: scr, done: make(chan proto.Resolution, 1)}
 	s.fleet.mu.Unlock()
-	ix := proto.Interaction{ID: "ix_hook", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ExpiresAt: time.Now().Add(time.Hour)}
+	ix := proto.Interaction{ID: "ix_hook", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ExpiresAt: time.Now().Add(time.Hour)}
 	announced := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -287,7 +287,7 @@ func TestAskHub(t *testing.T) {
 	b := &BusHub{svc: ft.s, helloed: make(chan struct{})}
 	close(b.helloed)
 	ask := assistantwire.FleetAskParams{Interaction: proto.Interaction{
-		MachineID: "mac", Kind: proto.IxPermission, ToolName: "mail_send", Summary: "send it", ExpiresAt: time.Now().Add(time.Minute),
+		MachineID: "mac", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "mail_send", Summary: "send it", ExpiresAt: time.Now().Add(time.Minute),
 	}}
 	done := make(chan any, 1)
 	go func() {
@@ -327,7 +327,7 @@ func TestTrimScreen(t *testing.T) {
 // ---- resumable cards ----
 
 func resumable(id string) proto.Interaction {
-	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 		ExpiresAt: time.Now().Add(time.Hour), Resumable: true}
 }
 
@@ -912,7 +912,7 @@ func TestRestartResolvesTheCardsTheLastManagerLeft(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel) // the first manager's call: it is gone with its process, nobody ends it
 	go func() {
-		_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"questions":[{"header":"Merge","question":"Merge it?",
+		_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"why_owner":"priority","questions":[{"header":"Merge","question":"Merge it?",
 			"options":[{"label":"Merge"},{"label":"Not yet"}]}]}`))
 	}()
 	asked := ft.waitPending(1)[0]
@@ -1131,7 +1131,7 @@ func (ft *fleetTest) hubCards() map[string]bool {
 func TestCardCancelledWhileToldLeavesNoCardOnTheHub(t *testing.T) {
 	ft := newFleetTest(t)
 	ft.st.insertGate = make(chan struct{}) // the card is registered; its history row and the apps wait
-	ix := proto.Interaction{ID: "opencode-1", MachineID: "mac", SessionID: "ses_1", Kind: proto.IxPermission,
+	ix := proto.Interaction{ID: "opencode-1", MachineID: "mac", SessionID: "ses_1", Kind: proto.IxPermission, OutwardWrite: true,
 		ToolName: "external_directory", Resumable: true, ExpiresAt: time.Now().Add(time.Hour)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1205,7 +1205,7 @@ func TestEscalatedCardCancelledAsItIsToldLeavesNoCardOnTheHub(t *testing.T) {
 // A card a supervisor passes up (ringAsks) and its node withdraws as it is told leaves no card on the hub.
 func TestRungCardCancelledAsItIsToldLeavesNoCardOnTheHub(t *testing.T) {
 	ft, h := newHookedFleet(t)
-	ix := proto.Interaction{ID: "ix_up", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash",
+	ix := proto.Interaction{ID: "ix_up", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
 	ft.hold(ix)
 	cancelBeforeTold(ft, h, ix.ID)
@@ -1224,7 +1224,7 @@ func TestRungCardCancelledAsItIsToldLeavesNoCardOnTheHub(t *testing.T) {
 // card shown while that end is being told reaches the hub after it.
 func TestEndToldAgainLeavesANewerCardUnderTheSameID(t *testing.T) {
 	ft, h := newHookedFleet(t)
-	old := proto.Interaction{ID: "ix_same", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash",
+	old := proto.Interaction{ID: "ix_same", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
 	newer := old
 	newer.CreatedAt = old.CreatedAt.Add(time.Second)

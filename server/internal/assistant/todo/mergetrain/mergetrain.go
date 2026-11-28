@@ -31,7 +31,9 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -92,8 +94,8 @@ const (
 )
 
 var (
-	// ErrInvalidEntry is returned when required Entry fields (TodoID or RepoKey) are missing.
-	ErrInvalidEntry = errors.New("mergetrain: todo_id and repo_key are required")
+	// ErrInvalidEntry is returned when a to-do or a valid PR URL is missing.
+	ErrInvalidEntry = errors.New("mergetrain: todo_id and a pull or merge request URL are required")
 	// ErrInvalidPolicy is returned when an Entry specifies an unrecognized MergePolicy.
 	ErrInvalidPolicy = errors.New("mergetrain: invalid merge policy")
 	// ErrEntryNotFound is returned when an operation targets a non-existent entry.
@@ -171,20 +173,18 @@ type queuedItem struct {
 }
 
 type repoQueue struct {
-	head           *queuedItem
-	queue          []*queuedItem
-	escalated      []*queuedItem
-	terminal       []*queuedItem
-	byTodo         map[string]*queuedItem
-	conflictPeers  map[string]map[string]struct{}
-	conflictReason map[string]map[string]struct{}
+	head          *queuedItem
+	queue         []*queuedItem
+	escalated     []*queuedItem
+	terminal      []*queuedItem
+	byPR          map[string]*queuedItem
+	conflictPeers map[string]map[string]struct{}
 }
 
 func newRepoQueue() *repoQueue {
 	return &repoQueue{
-		byTodo:         make(map[string]*queuedItem),
-		conflictPeers:  make(map[string]map[string]struct{}),
-		conflictReason: make(map[string]map[string]struct{}),
+		byPR:          make(map[string]*queuedItem),
+		conflictPeers: make(map[string]map[string]struct{}),
 	}
 }
 
@@ -212,12 +212,44 @@ func New(opts ...Option) *Train {
 	return t
 }
 
-// NormalizeRepoKey canonicalizes a repository identifier by trimming surrounding whitespace
-// and trailing slashes.
+// NormalizeRepoKey canonicalizes a repository identifier using the same casing as its PRs.
 func NormalizeRepoKey(raw string) string {
 	s := strings.TrimSpace(raw)
 	s = strings.TrimRight(s, "/")
-	return s
+	return strings.ToLower(s)
+}
+
+// ParsePRURL returns the repository, number and canonical URL for a pull or merge request.
+func ParsePRURL(raw string) (repoKey string, number int, canonical string, ok bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return "", 0, "", false
+	}
+	host := strings.ToLower(u.Host)
+	if u.Port() == "443" && u.Scheme == "https" || u.Port() == "80" && u.Scheme == "http" {
+		host = strings.TrimSuffix(host, ":"+u.Port())
+	}
+	if host == "github.com" {
+		u.Scheme = "https"
+	}
+	path := strings.ToLower(strings.Trim(u.Path, "/"))
+	for _, delimiter := range []string{"/-/merge_requests/", "/merge_requests/", "/pull/"} {
+		repo, tail, found := strings.Cut(path, delimiter)
+		if !found {
+			continue
+		}
+		rawNumber, _, _ := strings.Cut(tail, "/")
+		n, err := strconv.Atoi(rawNumber)
+		if err != nil || n <= 0 || repo == "" {
+			return "", 0, "", false
+		}
+		if delimiter == "/merge_requests/" {
+			delimiter = "/-/merge_requests/"
+		}
+		link := url.URL{Scheme: u.Scheme, Host: host, Path: "/" + repo + delimiter + strconv.Itoa(n)}
+		return host + "/" + repo, n, link.String(), true
+	}
+	return "", 0, "", false
 }
 
 func validatePolicy(p MergePolicy) (MergePolicy, error) {
@@ -256,8 +288,8 @@ func (t *Train) getOrCreateRepoLocked(repoKey string) *repoQueue {
 
 func (t *Train) enqueueLocked(entry Entry) (Entry, error) {
 	todoID := strings.TrimSpace(entry.TodoID)
-	repoKey := NormalizeRepoKey(entry.RepoKey)
-	if todoID == "" || repoKey == "" {
+	repoKey, number, prURL, ok := ParsePRURL(entry.PRURL)
+	if todoID == "" || !ok {
 		return Entry{}, ErrInvalidEntry
 	}
 	policy, err := validatePolicy(entry.Policy)
@@ -270,18 +302,16 @@ func (t *Train) enqueueLocked(entry Entry) (Entry, error) {
 	}
 
 	rq := t.getOrCreateRepoLocked(repoKey)
-	if existing, ok := rq.byTodo[todoID]; ok {
-		// Idempotent: never duplicate an existing entry or disturb queue order / failure streak.
-		if existing.entry.PRNumber == 0 && entry.PRNumber > 0 {
-			existing.entry.PRNumber = entry.PRNumber
+	if existing := rq.byPR[prURL]; existing != nil {
+		if existing.entry.State != StateCancelled {
+			// A second to-do reporting the same PR cannot duplicate it or change its owning to-do.
+			for _, reason := range entry.ConflictReasons {
+				addConflictReasonLocked(existing, reason)
+			}
+			return cloneEntry(existing.entry), nil
 		}
-		if existing.entry.PRURL == "" && strings.TrimSpace(entry.PRURL) != "" {
-			existing.entry.PRURL = strings.TrimSpace(entry.PRURL)
-		}
-		for _, r := range entry.ConflictReasons {
-			addConflictReasonLocked(rq, existing, r)
-		}
-		return cloneEntry(existing.entry), nil
+		// A closed PR can reopen. Keep the existing head and give this PR a new queue position.
+		removeFromSliceLocked(&rq.terminal, existing)
 	}
 
 	t.nextSeq++
@@ -290,8 +320,8 @@ func (t *Train) enqueueLocked(entry Entry) (Entry, error) {
 		entry: Entry{
 			TodoID:            todoID,
 			RepoKey:           repoKey,
-			PRNumber:          entry.PRNumber,
-			PRURL:             strings.TrimSpace(entry.PRURL),
+			PRNumber:          number,
+			PRURL:             prURL,
 			Priority:          entry.Priority,
 			Policy:            policy,
 			Approved:          entry.Approved,
@@ -301,9 +331,9 @@ func (t *Train) enqueueLocked(entry Entry) (Entry, error) {
 		},
 	}
 	for _, r := range entry.ConflictReasons {
-		addConflictReasonLocked(rq, item, r)
+		addConflictReasonLocked(item, r)
 	}
-	rq.byTodo[todoID] = item
+	rq.byPR[prURL] = item
 
 	if rq.head == nil && !t.conflictsWithEscalatedLocked(rq, todoID) {
 		item.entry.State = StateActive
@@ -326,20 +356,11 @@ func insertQueuedLocked(rq *repoQueue, item *queuedItem) {
 	})
 }
 
-func addConflictReasonLocked(rq *repoQueue, item *queuedItem, rawReason string) {
+func addConflictReasonLocked(item *queuedItem, rawReason string) {
 	reason := strings.TrimSpace(rawReason)
-	if reason == "" {
+	if reason == "" || slices.Contains(item.entry.ConflictReasons, reason) {
 		return
 	}
-	set, ok := rq.conflictReason[item.entry.TodoID]
-	if !ok {
-		set = make(map[string]struct{})
-		rq.conflictReason[item.entry.TodoID] = set
-	}
-	if _, dup := set[reason]; dup {
-		return
-	}
-	set[reason] = struct{}{}
 	item.entry.ConflictReasons = append(item.entry.ConflictReasons, reason)
 	slices.Sort(item.entry.ConflictReasons)
 }
@@ -393,7 +414,7 @@ func (t *Train) promoteNextHeadLocked(rq *repoQueue) *queuedItem {
 // If the repository currently has no head, the entry is immediately activated as StateActive.
 // Otherwise it is placed in StateQueued ordered by Priority descending (FIFO on ties) without
 // preempting the active head.
-// Re-enqueuing an existing (RepoKey, TodoID) is idempotent and returns the current entry state.
+// Re-enqueuing a PR by its canonical URL preserves its current position and state.
 func (t *Train) Enqueue(entry Entry) (Entry, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -402,9 +423,7 @@ func (t *Train) Enqueue(entry Entry) (Entry, error) {
 
 // ApplyConflicts consumes write-scope conflicts produced by conflict.Detect.
 // Only pairs with Action == conflict.ActionSerialize are applied; ActionWarnOverridden pairs
-// are ignored. For each serializable conflict pair in a repository, both tasks are ensured to
-// be tracked in that repository's serial queue (deterministic TodoA then TodoB order when newly
-// added, never preempting an existing head) and annotated with deterministic conflict reasons.
+// are ignored. Conflict pairs annotate the observed PRs of the two to-dos.
 //
 // Returns deterministic Decisions for affected repositories' heads (sorted by RepoKey ascending).
 func (t *Train) ApplyConflicts(conflicts []conflict.PairConflict) []Decision {
@@ -449,35 +468,25 @@ func (t *Train) ApplyConflicts(conflicts []conflict.PairConflict) []Decision {
 
 	affectedRepos := make(map[string]struct{})
 	for _, c := range normalized {
-		rq := t.getOrCreateRepoLocked(c.RepoKey)
+		rq := t.repos[c.RepoKey]
+		if rq == nil {
+			continue
+		}
 		recordConflictPeerLocked(rq, c.TodoA, c.TodoB)
-
-		itemA := rq.byTodo[c.TodoA]
-		if itemA == nil {
-			_, _ = t.enqueueLocked(Entry{
-				TodoID:  c.TodoA,
-				RepoKey: c.RepoKey,
-				Policy:  PolicyAutoMerge,
-			})
-			itemA = rq.byTodo[c.TodoA]
+		for _, item := range rq.byPR {
+			if isTerminal(item.entry.State) {
+				continue
+			}
+			switch item.entry.TodoID {
+			case c.TodoA:
+				addConflictReasonLocked(item, formatConflictReason(c, c.TodoB))
+			case c.TodoB:
+				addConflictReasonLocked(item, formatConflictReason(c, c.TodoA))
+			default:
+				continue
+			}
+			affectedRepos[c.RepoKey] = struct{}{}
 		}
-		itemB := rq.byTodo[c.TodoB]
-		if itemB == nil {
-			_, _ = t.enqueueLocked(Entry{
-				TodoID:  c.TodoB,
-				RepoKey: c.RepoKey,
-				Policy:  PolicyAutoMerge,
-			})
-			itemB = rq.byTodo[c.TodoB]
-		}
-
-		if itemA != nil && !isTerminal(itemA.entry.State) {
-			addConflictReasonLocked(rq, itemA, formatConflictReason(c, c.TodoB))
-		}
-		if itemB != nil && !isTerminal(itemB.entry.State) {
-			addConflictReasonLocked(rq, itemB, formatConflictReason(c, c.TodoA))
-		}
-		affectedRepos[c.RepoKey] = struct{}{}
 	}
 
 	repoKeys := make([]string, 0, len(affectedRepos))
@@ -607,14 +616,13 @@ func (t *Train) EvaluateHead(repoKey string, checksGreen bool) Decision {
 	}
 }
 
-// Approve records explicit human approval for a PR in repoKey.
+// Approve records explicit human approval for a PR.
 // If the entry is currently paused at StateAwaitingApproval, it transitions back to StateActive
 // and returns ActionRebaseAndMerge. Escalated or terminal entries cannot be approved.
-func (t *Train) Approve(repoKey, todoID string) (Decision, error) {
-	rk := NormalizeRepoKey(repoKey)
-	tid := strings.TrimSpace(todoID)
-	if rk == "" || tid == "" {
-		return Decision{RepoKey: rk, TodoID: tid, Action: ActionNoop}, ErrInvalidEntry
+func (t *Train) Approve(rawPRURL string) (Decision, error) {
+	rk, _, prURL, ok := ParsePRURL(rawPRURL)
+	if !ok {
+		return Decision{Action: ActionNoop}, ErrInvalidEntry
 	}
 
 	t.mu.Lock()
@@ -622,12 +630,13 @@ func (t *Train) Approve(repoKey, todoID string) (Decision, error) {
 
 	rq := t.repos[rk]
 	if rq == nil {
-		return Decision{RepoKey: rk, TodoID: tid, Action: ActionNoop}, ErrEntryNotFound
+		return Decision{RepoKey: rk, Action: ActionNoop}, ErrEntryNotFound
 	}
-	item := rq.byTodo[tid]
+	item := rq.byPR[prURL]
 	if item == nil {
-		return Decision{RepoKey: rk, TodoID: tid, Action: ActionNoop}, ErrEntryNotFound
+		return Decision{RepoKey: rk, Action: ActionNoop}, ErrEntryNotFound
 	}
+	tid := item.entry.TodoID
 	if isTerminal(item.entry.State) {
 		return Decision{
 			RepoKey: rk,
@@ -668,14 +677,13 @@ func (t *Train) Approve(repoKey, todoID string) (Decision, error) {
 	}, nil
 }
 
-// RecordRebaseFailure increments the consecutive rebase failure count for (repoKey, todoID).
+// RecordRebaseFailure increments the consecutive rebase failure count for the PR.
 // When RebaseFailures reaches MaxRebaseFailures (default 2), the entry transitions to
 // StateEscalated and returns ActionEscalateNeedsUser.
-func (t *Train) RecordRebaseFailure(repoKey, todoID, errMsg string) (Decision, error) {
-	rk := NormalizeRepoKey(repoKey)
-	tid := strings.TrimSpace(todoID)
-	if rk == "" || tid == "" {
-		return Decision{RepoKey: rk, TodoID: tid, Action: ActionNoop}, ErrInvalidEntry
+func (t *Train) RecordRebaseFailure(rawPRURL, errMsg string) (Decision, error) {
+	rk, _, prURL, ok := ParsePRURL(rawPRURL)
+	if !ok {
+		return Decision{Action: ActionNoop}, ErrInvalidEntry
 	}
 
 	t.mu.Lock()
@@ -683,12 +691,13 @@ func (t *Train) RecordRebaseFailure(repoKey, todoID, errMsg string) (Decision, e
 
 	rq := t.repos[rk]
 	if rq == nil {
-		return Decision{RepoKey: rk, TodoID: tid, Action: ActionNoop}, ErrEntryNotFound
+		return Decision{RepoKey: rk, Action: ActionNoop}, ErrEntryNotFound
 	}
-	item := rq.byTodo[tid]
+	item := rq.byPR[prURL]
 	if item == nil {
-		return Decision{RepoKey: rk, TodoID: tid, Action: ActionNoop}, ErrEntryNotFound
+		return Decision{RepoKey: rk, Action: ActionNoop}, ErrEntryNotFound
 	}
+	tid := item.entry.TodoID
 	if isTerminal(item.entry.State) {
 		return Decision{
 			RepoKey: rk,
@@ -726,7 +735,7 @@ func (t *Train) RecordRebaseFailure(repoKey, todoID, errMsg string) (Decision, e
 			}
 			rq.escalated = append(rq.escalated, item)
 			slices.SortFunc(rq.escalated, func(a, b *queuedItem) int {
-				return strings.Compare(a.entry.TodoID, b.entry.TodoID)
+				return strings.Compare(a.entry.PRURL, b.entry.PRURL)
 			})
 			t.promoteNextHeadLocked(rq)
 		}
@@ -752,11 +761,10 @@ func (t *Train) RecordRebaseFailure(repoKey, todoID, errMsg string) (Decision, e
 	}, nil
 }
 
-// RecordRebaseSuccess clears the consecutive rebase failure count and last error for (repoKey, todoID).
-func (t *Train) RecordRebaseSuccess(repoKey, todoID string) error {
-	rk := NormalizeRepoKey(repoKey)
-	tid := strings.TrimSpace(todoID)
-	if rk == "" || tid == "" {
+// RecordRebaseSuccess clears the consecutive rebase failure count and last error for the PR.
+func (t *Train) RecordRebaseSuccess(rawPRURL string) error {
+	rk, _, prURL, ok := ParsePRURL(rawPRURL)
+	if !ok {
 		return ErrInvalidEntry
 	}
 
@@ -767,7 +775,7 @@ func (t *Train) RecordRebaseSuccess(repoKey, todoID string) error {
 	if rq == nil {
 		return ErrEntryNotFound
 	}
-	item := rq.byTodo[tid]
+	item := rq.byPR[prURL]
 	if item == nil {
 		return ErrEntryNotFound
 	}
@@ -782,23 +790,22 @@ func (t *Train) RecordRebaseSuccess(repoKey, todoID string) error {
 	return nil
 }
 
-// RecordMerged marks (repoKey, todoID) as StateMerged, removes it from active/queued/escalated slots,
+// RecordMerged marks the PR as StateMerged, removes it from active/queued/escalated slots,
 // and deterministically promotes the next eligible queued entry to StateActive if the head was freed.
-func (t *Train) RecordMerged(repoKey, todoID string) (Decision, error) {
-	return t.finalize(repoKey, todoID, StateMerged, "merged")
+func (t *Train) RecordMerged(prURL string) (Decision, error) {
+	return t.finalize(prURL, StateMerged, "merged")
 }
 
-// Cancel marks (repoKey, todoID) as StateCancelled, removes it from active/queued/escalated slots,
+// Cancel marks the PR as StateCancelled, removes it from active/queued/escalated slots,
 // and deterministically promotes the next eligible queued entry to StateActive if the head was freed.
-func (t *Train) Cancel(repoKey, todoID string) (Decision, error) {
-	return t.finalize(repoKey, todoID, StateCancelled, "cancelled")
+func (t *Train) Cancel(prURL string) (Decision, error) {
+	return t.finalize(prURL, StateCancelled, "cancelled")
 }
 
-func (t *Train) finalize(repoKey, todoID string, targetState EntryState, verb string) (Decision, error) {
-	rk := NormalizeRepoKey(repoKey)
-	tid := strings.TrimSpace(todoID)
-	if rk == "" || tid == "" {
-		return Decision{RepoKey: rk, TodoID: tid, Action: ActionNoop}, ErrInvalidEntry
+func (t *Train) finalize(rawPRURL string, targetState EntryState, verb string) (Decision, error) {
+	rk, _, prURL, ok := ParsePRURL(rawPRURL)
+	if !ok {
+		return Decision{Action: ActionNoop}, ErrInvalidEntry
 	}
 
 	t.mu.Lock()
@@ -806,12 +813,13 @@ func (t *Train) finalize(repoKey, todoID string, targetState EntryState, verb st
 
 	rq := t.repos[rk]
 	if rq == nil {
-		return Decision{RepoKey: rk, TodoID: tid, Action: ActionNoop}, ErrEntryNotFound
+		return Decision{RepoKey: rk, Action: ActionNoop}, ErrEntryNotFound
 	}
-	item := rq.byTodo[tid]
+	item := rq.byPR[prURL]
 	if item == nil {
-		return Decision{RepoKey: rk, TodoID: tid, Action: ActionNoop}, ErrEntryNotFound
+		return Decision{RepoKey: rk, Action: ActionNoop}, ErrEntryNotFound
 	}
+	tid := item.entry.TodoID
 	if isTerminal(item.entry.State) {
 		if item.entry.State == targetState {
 			return Decision{
@@ -885,11 +893,10 @@ func removeFromSliceLocked(slice *[]*queuedItem, target *queuedItem) {
 	}
 }
 
-// Entry returns a copy of the current Entry for (repoKey, todoID), if tracked.
-func (t *Train) Entry(repoKey, todoID string) (Entry, bool) {
-	rk := NormalizeRepoKey(repoKey)
-	tid := strings.TrimSpace(todoID)
-	if rk == "" || tid == "" {
+// Entry returns a copy of the current Entry for a PR, if tracked.
+func (t *Train) Entry(rawPRURL string) (Entry, bool) {
+	rk, _, prURL, ok := ParsePRURL(rawPRURL)
+	if !ok {
 		return Entry{}, false
 	}
 
@@ -900,11 +907,51 @@ func (t *Train) Entry(repoKey, todoID string) (Entry, bool) {
 	if rq == nil {
 		return Entry{}, false
 	}
-	item := rq.byTodo[tid]
+	item := rq.byPR[prURL]
 	if item == nil {
 		return Entry{}, false
 	}
 	return cloneEntry(item.entry), true
+}
+
+// Head returns the current entry at the front of a repository queue.
+func (t *Train) Head(repoKey string) (Entry, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	rq := t.repos[NormalizeRepoKey(repoKey)]
+	if rq == nil || rq.head == nil {
+		return Entry{}, false
+	}
+	return cloneEntry(rq.head.entry), true
+}
+
+// Forget drops one PR and promotes the next repository head if its turn was active.
+func (t *Train) Forget(rawPRURL string) {
+	rk, _, prURL, ok := ParsePRURL(rawPRURL)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rq := t.repos[rk]
+	if rq == nil {
+		return
+	}
+	item := rq.byPR[prURL]
+	if item == nil {
+		return
+	}
+	if rq.head == item {
+		rq.head = nil
+	}
+	removeFromSliceLocked(&rq.queue, item)
+	removeFromSliceLocked(&rq.escalated, item)
+	removeFromSliceLocked(&rq.terminal, item)
+	delete(rq.byPR, prURL)
+	t.promoteNextHeadLocked(rq)
+	if len(rq.byPR) == 0 {
+		delete(t.repos, rk)
+	}
 }
 
 // Snapshot returns a deterministic deep copy of all repository queues sorted by RepoKey ascending,

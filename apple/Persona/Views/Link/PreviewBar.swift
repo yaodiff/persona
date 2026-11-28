@@ -242,6 +242,10 @@ struct PreviewPage: View {
     var url: URL
     var key: SessionKey
     @Binding var title: String
+    var forwardedLabel: String? = nil
+    var onRetry: (() -> Void)? = nil
+    var onOpenExternal: ((URL) -> Void)? = nil
+    var onReprobePort: ((PortForwarder.Key) async -> PortPresence.ReprobeOutcome)? = nil
     var onSelect: (String, String) -> Void
     @State private var nav = WebNav()
     @State private var picker = ElementPicker()
@@ -268,7 +272,16 @@ struct PreviewPage: View {
 
     var body: some View {
         VStack(spacing: Theme.Space.flush) {
-            PooledWebView(url: url, title: $title, nav: nav, onPick: onSelect)
+            WebPageView(
+                url: url,
+                forwardedLabel: forwardedLabel,
+                title: $title,
+                nav: nav,
+                onRetry: onRetry ?? { WebViewPool.shared.reload(url) },
+                onOpenExternal: onOpenExternal ?? { _ in },
+                onReprobePort: onReprobePort,
+                onPick: onSelect
+            )
                 .overlay(alignment: .top) {
                     if picking && picked == nil { banner.transition(reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .top).combined(with: .opacity)) }
                 }

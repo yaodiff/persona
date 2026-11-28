@@ -273,7 +273,9 @@ func newTestHubWithDeployCtx(t *testing.T, deployCtx context.Context) *Hub {
 	h.live = newLiveActivities(h)
 	playManagerAsks(h) // its own cards wait for h.resolve (fleet_helpers_test.go)
 	h.push.quiesce = &h.quiesce
+	h.push.revoked = h.isDeviceRevoked
 	h.push.web.quiesce = &h.quiesce
+	h.push.web.revoked = h.isDeviceRevoked
 	h.push.hubID = h.hubID
 	h.upd = newUpdater(h)
 	h.upd.dir = filepath.Join(cfg.dir, "update")

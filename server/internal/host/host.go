@@ -1,7 +1,7 @@
 // Package host is what the node needs from a terminal host — where the terminals run (herdr, later Orca): its panes,
 // reading their screens, typing into them, opening and closing them. What runs inside a pane (Claude Code, Codex,
 // a compatible CLI) is the agent; telling agents apart, finding their sessions and judging their state stay in the node, on top
-// of any host (docs/plans/plan-orca-support.md).
+// of any host (docs/integrations/engines.md "The host layer").
 //
 // A host implements Host; everything else is an optional capability the node finds with a type assertion.
 package host

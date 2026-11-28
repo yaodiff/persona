@@ -239,6 +239,16 @@ function DefaultNarrowBridge({ render }: { render: (narrow: boolean) => ReactNod
 }
 
 /** Pure presentational view for the right-hand side panel. */
+const NON_TEXT_INPUT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "file", "image", "color"]);
+
+function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target instanceof HTMLInputElement) return !NON_TEXT_INPUT.has(target.type);
+  if (target.closest("textarea, select")) return true;
+  const ce = target.closest("[contenteditable]");
+  return ce ? ce.getAttribute("contenteditable") !== "false" : Boolean((target as HTMLElement).isContentEditable);
+}
+
 export function SidePanelView({
   panel,
   maximized = false,
@@ -263,8 +273,19 @@ export function SidePanelView({
   const back = canGoBack ? onBack : undefined;
   const handleKeyDown: KeyboardEventHandler<HTMLElement> = onKeyDown ?? ((e) => {
     // Esc closes the panel from inside it, unless something in it (a field, a menu) or a dialog over it took the key
-    if (e.key !== "Escape" || e.defaultPrevented || e.nativeEvent.isComposing) return;
-    if (document.querySelector("[role=menu],[role=dialog]")) return;
+    if (e.key !== "Escape" || e.defaultPrevented || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    if ([...document.querySelectorAll("[role=menu],[role=dialog],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]"))) return;
+    if (isTextField(e.target)) {
+      // Keep the panel open while editing a text field, and stop propagation so ChatView's window Esc never interrupts a working agent.
+      e.stopPropagation();
+      return;
+    }
+    const unsaved = e.currentTarget.querySelector("[data-unsaved-edit]");
+    if (unsaved && !unsaved.dispatchEvent(new CustomEvent("persona:escape-unsaved", { cancelable: true }))) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     e.preventDefault();
     // not also the conversation's Esc (it stops a running agent, ChatView)
     e.stopPropagation();

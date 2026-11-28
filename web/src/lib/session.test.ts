@@ -58,6 +58,8 @@ describe("session capability contract", () => {
     expect(sessionCan(runtime, "terminal")).toBe(false);
     expect(sessionCan(runtime, "close")).toBe(true);
     expect(sessionMenuActions(runtime)).toEqual(["stop", "close"]);
+    expect(sessionMenuActions({ ...runtime, background_working: true })).toEqual(["close"]);
+    expect(sessionMenuActions({ ...runtime, view: { phase: "working", reason: { kind: "background" }, rank: 0 } })).toEqual(["close"]);
     expect(sessionMenuActions({ ...runtime, status: "offline" })).toEqual([]);
     expect(sessionMenuActions({ ...legacy, capabilities: { terminal: true, interrupt: true, close: false } })).toEqual(["stop", "resume"]);
     expect(sessionCan({ ...runtime, capabilities: { terminal: true } }, "close")).toBe(true);

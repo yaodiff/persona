@@ -54,10 +54,11 @@ func TestAgyRootForAnotherAccountsDirectory(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	other := filepath.Join(t.TempDir(), "account-2", ".gemini", "antigravity-cli")
 	agyTestFile(t, other, agyTestID, agyRootsUser)
-	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyTestID))
+	// The stubs go in before the agent is seeded: listing the sessions already binds the pane, which scans.
 	asked := stubAgyPaneRoots(t, map[string][]string{agyTestPane: {other}})
 	at := time.Date(2026, 11, 27, 18, 0, 0, 0, time.UTC)
 	stubAgyRootsClock(t, &at)
+	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyTestID))
 
 	if got := n.agyRootFor(agyTestID); got != other {
 		t.Fatalf("agyRootFor = %q, want the account's directory %q", got, other)
@@ -88,11 +89,12 @@ func TestAgyRootForAnotherAccountsDirectory(t *testing.T) {
 func TestAgyRootsRescanLimit(t *testing.T) {
 	n, herdr, home := herdrNode(t)
 	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
-	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyTestID))
 	notAgy := t.TempDir()
+	// The stubs go in before the agent is seeded: listing the sessions already binds the pane, which scans.
 	asked := stubAgyPaneRoots(t, map[string][]string{agyTestPane: {notAgy, "relative/path"}})
 	at := time.Date(2026, 11, 27, 18, 0, 0, 0, time.UTC)
 	stubAgyRootsClock(t, &at)
+	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyTestID))
 
 	if got := n.agyRootFor(agyTestID); got != n.agyDataRoot() {
 		t.Fatalf("a conversation found nowhere: %q, want the default", got)

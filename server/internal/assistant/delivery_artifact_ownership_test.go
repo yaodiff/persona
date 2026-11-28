@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -196,22 +198,29 @@ func TestReportedPRFromActiveAgentsRequiresUnambiguousOwnership(t *testing.T) {
 		{"all agents have no PR", []string{researchNoPRCloseout, researchNoPRCloseout}, "", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, f, todo := newSupervisedService(t)
+			s, f, todo := newSupervisedServiceOn(t, repositorystore.New(todoTestDB(t)))
 			s.deploy.forge = &fakeForge{}
 			other := todo.Agents[0]
 			other.SessionID = "s2"
-			todo.Agents = append(todo.Agents, other)
-			f.mu.Lock()
-			f.itemReads = 0
-			f.readHooks.before = func(read int) {
-				f.setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: tc.replies[min(read-1, 1)]})
+			if err := s.linkTodoAgent(t.Context(), todo.ID, other.MachineID, other.SessionID, other.Title, other.Cwd, other.Agent); err != nil {
+				t.Fatal(err)
 			}
-			f.mu.Unlock()
-			defer func() {
-				f.mu.Lock()
-				f.readHooks = receiptHooks{}
-				f.mu.Unlock()
-			}()
+			todo = todoNow(s, todo.ID)
+			f.answerNode(DeviceSessionItems, func(_ string, raw json.RawMessage) (any, error) {
+				var args struct {
+					SessionID string `json:"session_id"`
+				}
+				if err := json.Unmarshal(raw, &args); err != nil {
+					return nil, err
+				}
+				index := 1
+				if args.SessionID == other.SessionID {
+					index = 0
+				}
+				items := append(artifactCreationItems(todo, "https://github.com/o/r/pull/5", "https://github.com/o/r/pull/6"),
+					proto.Item{Role: "assistant", Kind: proto.KindText, Text: tc.replies[index], TS: artifactTurnAt(todo)})
+				return map[string]any{"items": items}, nil
+			})
 			got, noPR, err := s.reportedTaskPR(context.Background(), todo, "")
 			if got != tc.want || noPR != tc.noPR || (err != nil) != tc.err {
 				t.Fatalf("multi-agent delivery = %q, noPR=%v, %v; want %q, noPR=%v, error=%v",
@@ -303,9 +312,14 @@ func TestReportedPRRequiresTaskOwnedCloseout(t *testing.T) {
 			strings.ReplaceAll(explicit, "/pull/5", "/pull/9") + "\n````\nOur result:\n" + explicit}}, pr},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, f, todo := newSupervisedService(t)
+			s, f, todo := newSupervisedServiceOn(t, repositorystore.New(todoTestDB(t)))
 			s.deploy.forge = &fakeForge{}
-			f.setItems(tc.items...)
+			for i := range tc.items {
+				if tc.items[i].TS.IsZero() {
+					tc.items[i].TS = artifactTurnAt(todo)
+				}
+			}
+			f.setItems(append(artifactCreationItems(todo, pr), tc.items...)...)
 			got, noPR, err := s.reportedTaskPR(context.Background(), todo, "https://github.com/o/r/pull/4")
 			if got != tc.want || noPR || tc.want != "" && err != nil {
 				t.Fatalf("delivery recovery = %q, %v; want %q", got, err, tc.want)
@@ -315,17 +329,32 @@ func TestReportedPRRequiresTaskOwnedCloseout(t *testing.T) {
 }
 
 func TestExplicitUnmergedDeliveryStillBlocksWithRelatedReferences(t *testing.T) {
-	for _, recorded := range []string{"", "4", "9"} {
-		t.Run("recorded_"+recorded, func(t *testing.T) {
-			s, f, todo := newSupervisedService(t)
+	for _, tc := range []struct {
+		recorded string
+		mirrored bool
+	}{{"", false}, {"4", false}, {"9", false}, {"4", true}, {"9", true}} {
+		name := "recorded_" + tc.recorded
+		if tc.mirrored {
+			name += "_mirrored"
+		}
+		recorded := tc.recorded
+		t.Run(name, func(t *testing.T) {
+			s, f, todo := newSupervisedServiceOn(t, repositorystore.New(todoTestDB(t)))
 			ctx := context.Background()
 			deliveryOn(t, s)
 			if recorded != "" {
-				s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/"+recorded)
+				ref := "https://github.com/o/r/pull/" + recorded
+				s.setTaskStage(ctx, todo.ID, "review", ref)
+				// The legacy stage still points to an incidental reference. Only the reported PR is delivery. Mirrored
+				// keeps the default-role link setTaskStage saved for it, which is still only the stage's own record.
+				if !tc.mirrored {
+					setTestTodoLinkRole(t, s, todo.ID, ref, repository.LinkRoleReference)
+				}
 			}
-			f.setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Related merged PR: https://github.com/o/r/pull/9\n" +
-				"<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\n" +
-				"artifact: pr https://github.com/o/r/pull/5\n</closeout>"})
+			f.setItems(append(artifactCreationItems(todo, "https://github.com/o/r/pull/5"),
+				proto.Item{Role: "assistant", Kind: proto.KindText, TS: artifactTurnAt(todo), Text: "Related merged PR: https://github.com/o/r/pull/9\n" +
+					"<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\n" +
+					"artifact: pr https://github.com/o/r/pull/5\n</closeout>"})...)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/repos/o/r/issues/4":

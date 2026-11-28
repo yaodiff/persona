@@ -87,6 +87,14 @@ describe("extension sign-in steps", () => {
 
   it("opens https links only", () => {
     expect(safeLink("https://example.com/x")).toBe("https://example.com/x");
+    expect(safeLink("https://example.com/x?hint=me@example.com")).toBe("https://example.com/x?hint=me@example.com");
+    expect(safeLink("https://good.example@evil.example/x")).toBe("");
+    expect(safeLink("https://me:pw@example.com/x")).toBe("");
+    expect(safeLink("https:/admin")).toBe("");
+    expect(safeLink("https://@evil.example/x")).toBe("");
+    expect(safeLink("https://good.example\\@evil.example/x")).toBe("");
+    expect(safeLink("https://example.com/\x00x")).toBe("");
+    expect(safeLink("  https://example.com/x  ")).toBe("https://example.com/x");
     expect(safeLink("http://example.com/x")).toBe("");
     expect(safeLink("not a url")).toBe("");
     expect(safeLink(undefined)).toBe("");

@@ -29,6 +29,7 @@ func reorganizeRequest(s *Service, role, body string) *httptest.ResponseRecorder
 func TestTodoReorganizeAllStatesAndValidation(t *testing.T) {
 	ctx := context.Background()
 	s, f := transferEnv(t)
+	setBlockersTodosV2Flag(t, s, true, false)
 
 	// Active leader directions: lead0001, lead0002 (from transferEnv).
 	// Create to-dos across all states:
@@ -208,6 +209,7 @@ func TestTodoReorganizeAllStatesAndValidation(t *testing.T) {
 func TestTodoReorganizeIncludeChildrenSubtreeAndTransferSupervision(t *testing.T) {
 	ctx := context.Background()
 	s, f := transferEnv(t)
+	setBlockersTodosV2Flag(t, s, true, false)
 
 	// Build a 3-level subtree: root -> childRunning (active supervised) -> grandPersonal (personal)
 	// plus root -> childCompleted (completed supervised)
@@ -428,6 +430,9 @@ func TestTodoReorganizeTodosV2LosslessRollback(t *testing.T) {
 
 	// Roll back todos_v2 -> false.
 	setTodosV2(false, true)
+	if off := reorganizeRequest(s, "full", fmt.Sprintf(`{"ids":[%q],"direction_id":"dir_other"}`, child.ID)); off.Code != http.StatusConflict {
+		t.Fatalf("reorganize with todos_v2 off: %d %s", off.Code, off.Body.String())
+	}
 	offRows, offCounts := getTodos()
 	if len(offRows) != len(onRows) {
 		t.Fatalf("rollback changed count: off=%d on=%d", len(offRows), len(onRows))

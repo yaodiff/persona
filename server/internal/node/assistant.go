@@ -957,7 +957,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if guest != nil || !hasInput || execution.Public {
 		snapc <- contextAnswer{} // guests and public mentions get no owner state; empty starts leave it for the first real message
 	} else {
-		go func(id, query string) { snapc <- n.assistantContextFor(id, query) }(id, text)
+		go func(id, cwd, query string) { snapc <- n.assistantContextForCwd(id, cwd, query) }(id, cwd, text)
 	}
 	if id == "" { // a new app-server conversation: the server picks the thread ID
 		if p, err = n.spawnAssistantAppServer(agent, "", cwd, launcher, false, false, mode, execution); err != nil {

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -405,8 +404,8 @@ func (s *Service) directionTreeAt(at time.Time) {
 	b.wakeTimer = time.AfterFunc(time.Until(at), fire)
 }
 
-// directionTreeParts is the tree's build. The single-direction read builds only the part taskOwner needs
-// (directionOwners); the tree limits those raw owners to current leaders in directionOf.
+// directionTreeParts builds the open tree. To-do attribution includes historical directions. directionOf restricts
+// the tree's groups to current leaders.
 func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeBuild, Settings, map[string]string) {
 	cfg := s.settings(ctx)
 	leads, names := s.currentLeaders(ctx, cfg)
@@ -445,6 +444,9 @@ func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeB
 	cards := s.todoRunCards(wantCards)
 	heldOnly := s.heldOnlySessions()
 	tb := newTreeBuild(s, cfg.Main, leads, all, lists, cards, heldOnly, reached, now, s.location(ctx), cfg)
+	if cfg.todosV2On() {
+		tb.effectiveDirs = tb.resolveEffectiveDirections(all, s.todoDirectionLabels(ctx, cfg))
+	}
 	return tb, cfg, names
 }
 
@@ -465,11 +467,10 @@ func (s *Service) treeTodos() []listedTodo {
 	return all
 }
 
-// directionOwners is the part of a tree build taskOwner needs, for the single-direction read's ended tasks: every
-// to-do and the task leaders' Agents. It places no task and asks no computer.
-func (s *Service) directionOwners() *treeBuild {
+// directionOwners indexes the to-dos and their task-leader Agents for attribution. It asks no computer.
+func (s *Service) directionOwners(all []listedTodo) *treeBuild {
 	tb := &treeBuild{s: s, todos: map[string]listedTodo{}, leaderAgent: map[[2]string][]string{}}
-	for _, t := range s.treeTodos() {
+	for _, t := range all {
 		tb.index(t)
 	}
 	return tb
@@ -561,7 +562,6 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 	}
 	projViews := projection.Views(facts, now)
 	if cfg.todosV2On() {
-		applyActiveBlockersToViews(all, projViews, nil)
 		tb.placed = make(map[string]todoTriage, len(all))
 		for i := range all {
 			tb.views[all[i].ID] = projViews[i]
@@ -572,29 +572,6 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 			if projectionViewCountsAsOpen(projViews[i]) {
 				tb.open = append(tb.open, t.ID)
 			}
-		}
-		if len(tb.leads) > 0 {
-			leadDirs := make(map[string]string, len(tb.leads))
-			for _, id := range tb.leads {
-				leadDirs[id] = id
-			}
-			effectiveInput := make([]listedTodo, len(all))
-			copy(effectiveInput, all)
-			for i := range effectiveInput {
-				t := effectiveInput[i].Todo
-				if strings.TrimSpace(t.DirectionID) != "" || t.Supervision == nil {
-					continue
-				}
-				if _, _, ok := parseLeaderRef(t.Supervision.Supervisor); !ok {
-					continue
-				}
-				if owner := tb.taskOwner(t); owner != "" {
-					sup := *t.Supervision
-					sup.Supervisor = owner
-					effectiveInput[i].Supervision = &sup
-				}
-			}
-			tb.effectiveDirs = resolveEffectiveDirections(effectiveInput, leadDirs)
 		}
 	} else {
 		tb.placed = triagePlace(all, look, now, loc)
@@ -645,7 +622,7 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 	}
 	for _, id := range tb.open {
 		t := tb.todos[id]
-		if t.PartOf != "" && t.PartOf != t.ID && topOpen[t.PartOf] && !strings.HasPrefix(t.ID, "todo_od_") {
+		if todoCarriedByParent(t.Todo, topOpen[t.PartOf]) {
 			tb.carried[t.ID] = true
 		}
 	}
@@ -704,8 +681,7 @@ func treeActiveLeader(t Todo, k [2]string) bool {
 	})
 }
 
-// taskOwner is the conversation that owns t, before the tree's current-leader filter: its supervisor, or the leader's
-// own supervisor for a worker listed on its own (supervisorAboveTask). The direction read uses this for ended tasks too.
+// taskOwner is t's supervisor, or its task leader's own supervisor for a worker listed on its own.
 func (tb *treeBuild) taskOwner(t Todo) string {
 	if t.Supervision == nil {
 		return ""
@@ -713,11 +689,12 @@ func (tb *treeBuild) taskOwner(t Todo) string {
 	sup := t.Supervision.Supervisor
 	if machine, sid, ok := parseLeaderRef(sup); ok {
 		sup = ""
+		// Todo reads use different row orders. The lowest ID gives the same owner in each read.
+		best := ""
 		for _, id := range tb.leaderAgent[[2]string{tb.s.canonical(machine), sid}] {
-			if l := tb.todos[id].Todo; l.Supervision != nil {
+			if l := tb.todos[id].Todo; l.Supervision != nil && (best == "" || id < best) {
 				if _, _, ref := parseLeaderRef(l.Supervision.Supervisor); !ref {
-					sup = l.Supervision.Supervisor
-					break
+					best, sup = id, l.Supervision.Supervisor
 				}
 			}
 		}
@@ -725,35 +702,18 @@ func (tb *treeBuild) taskOwner(t Todo) string {
 	return sup
 }
 
-// directionOf is the group a listed task is in: under todos_v2=true, it aligns with resolveEffectiveDirections
-// (explicit direction_id precedence, supervisor/taskOwner, origin, cycle-safe part_of ancestor inheritance, and
-// unanimous subtree child fallback for undirected umbrella parents), limited to current leaders (tb.leads). An
-// explicit direction_id that is not a current leader stays in the secretary group ("") rather than falling back to
-// supervisor, origin, or part_of inheritance. Under todos_v2=false, it uses only the legacy taskOwner rule.
-func (tb *treeBuild) directionOf(t Todo) string {
+// attributedDirection is shared by the board, open tree and ended-task reads in v2. Legacy reads use the supervisor.
+func (tb *treeBuild) attributedDirection(t Todo) string {
 	if tb.todosV2 {
-		if dirID := strings.TrimSpace(t.DirectionID); dirID != "" {
-			if slices.Contains(tb.leads, dirID) {
-				return dirID
-			}
-			return ""
-		}
-		if dirID := tb.effectiveDirs[t.ID]; dirID != "" {
-			if slices.Contains(tb.leads, dirID) {
-				return dirID
-			}
-			return ""
-		}
-		if sup := tb.taskOwner(t); sup != "" && slices.Contains(tb.leads, sup) {
-			return sup
-		}
-		if origin := strings.TrimSpace(t.Origin); origin != "" && slices.Contains(tb.leads, origin) {
-			return origin
-		}
-		return ""
+		return tb.effectiveDirs[t.ID]
 	}
-	if sup := tb.taskOwner(t); sup != "" && slices.Contains(tb.leads, sup) {
-		return sup
+	return tb.taskOwner(t)
+}
+
+// directionOf places open work under a current leader or under the secretary.
+func (tb *treeBuild) directionOf(t Todo) string {
+	if id := tb.attributedDirection(t); id != "" && slices.Contains(tb.leads, id) {
+		return id
 	}
 	return ""
 }
@@ -773,7 +733,7 @@ func (tb *treeBuild) state(t listedTodo) string {
 	v, hasView := tb.views[t.ID]
 	needsYou := tr.Section == triageWaiting
 	if hasView {
-		needsYou = v.Section == assistantwire.TodoListSectionNeedsYou && !t.Quiet && !tb.carried[t.ID]
+		needsYou = projectionViewNeedsYou(v, t.Quiet) && !tb.carried[t.ID]
 	}
 	ask := triageOpenAsk(t.Ask)
 	verifyAsk := ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone)
@@ -908,36 +868,40 @@ func (tb *treeBuild) sessionNode(machine, id, title, agent string) treeAgent {
 	return n
 }
 
-// sessionKids are the Agents under session machine/id that are not to-do Agents: its running in-session sub-agents
+// sessionKids are the Agents under session machine/id that are not to-do Agents: its reported in-session sub-agents
 // (nested by the sub-agent that launched each) and its Codex sub-agent sessions still going.
 func (tb *treeBuild) sessionKids(machine, id, agent string, seen map[[2]string]bool) []treeAgent {
 	var out []treeAgent
 	if c, ok := tb.sessions[[2]string{machine, id}]; ok {
-		running := map[string]bool{}
+		reported := map[string]bool{}
+		byParent := map[string][]int{}
+		for i, a := range c.Subagents {
+			reported[a.ID] = true
+			byParent[a.ParentID] = append(byParent[a.ParentID], i)
+		}
+		var appendNode func([]treeAgent, proto.Subagent) []treeAgent
+		appendNode = func(nodes []treeAgent, a proto.Subagent) []treeAgent {
+			sid := cmp.Or(a.SessionID, id+"@"+a.ID)
+			key := [2]string{machine, sid}
+			if seen[key] {
+				return nodes
+			}
+			seen[key] = true
+			n := treeAgent{MachineID: machine, SessionID: sid, Title: cmp.Or(a.Description, a.Type),
+				Agent: cmp.Or(agent, c.Agent), State: cond(a.Running, proto.StateWorking, proto.StateIdle)}
+			for _, i := range byParent[a.ID] {
+				n.Children = appendNode(n.Children, c.Subagents[i])
+			}
+			return append(nodes, n)
+		}
 		for _, a := range c.Subagents {
-			if a.Running {
-				running[a.ID] = true
+			if a.ParentID == "" || a.ParentID == a.ID || !reported[a.ParentID] {
+				out = appendNode(out, a)
 			}
 		}
-		launcher := func(a proto.Subagent) string { // "": the session itself
-			return cond(a.ParentID != a.ID && running[a.ParentID], a.ParentID, "")
+		for _, a := range c.Subagents { // launched by one another in a loop: at the top, so none is lost
+			out = appendNode(out, a)
 		}
-		var under func(parent string, all bool) []treeAgent
-		under = func(parent string, all bool) []treeAgent {
-			var kids []treeAgent
-			for _, a := range c.Subagents {
-				sid := cmp.Or(a.SessionID, id+"@"+a.ID)
-				if !a.Running || seen[[2]string{machine, sid}] || !all && launcher(a) != parent {
-					continue
-				}
-				seen[[2]string{machine, sid}] = true
-				kids = append(kids, treeAgent{MachineID: machine, SessionID: sid, Title: cmp.Or(a.Description, a.Type),
-					Agent: cmp.Or(agent, c.Agent), State: proto.StateWorking, Children: under(a.ID, false)})
-			}
-			return kids
-		}
-		out = append(out, under("", false)...)
-		out = append(out, under("", true)...) // launched by one another in a loop: at the top, so none is lost
 	}
 	for _, kid := range tb.codexKid[[2]string{machine, id}] {
 		k := [2]string{machine, kid.SessionID}

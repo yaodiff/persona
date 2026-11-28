@@ -106,21 +106,22 @@ export function useInboxSourcesGraphShown(): boolean {
 }
 
 /** The summary, read when subscriptions are shown and again whenever one changes (at most once a second); null before. */
-export function useSubscriptionSummary(): SubscriptionSummaryLine[] | null {
+export function useSubscriptionSummary(manager?: string): SubscriptionSummaryLine[] | null {
   const shown = useSubscriptionsShown();
-  const [lines, setLines] = useState<SubscriptionSummaryLine[] | null>(null);
+  const [summary, setSummary] = useState<{ manager?: string; lines: SubscriptionSummaryLine[] } | null>(null);
   useEffect(() => {
-    if (!shown) {
-      setLines(null);
-      return;
-    }
+    setSummary(null);
+    if (!shown) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = () =>
-      api<{ connectors?: SubscriptionSummaryLine[] }>("/subscriptions/summary").then(
-        (r) => alive && setLines(Array.isArray(r.connectors) ? r.connectors : []),
+    let sequence = 0;
+    const load = () => {
+      const read = ++sequence;
+      return api<{ connectors?: SubscriptionSummaryLine[] }>("/subscriptions/summary", { headers: itemHeaders(manager) }).then(
+        (r) => alive && read === sequence && setSummary({ manager, lines: Array.isArray(r.connectors) ? r.connectors : [] }),
         () => {}, // an entry row is a convenience: on a failure it keeps what it had (or stays hidden)
       );
+    };
     load();
     const off = onHubEvent("subscription", () => {
       clearTimeout(timer);
@@ -131,8 +132,8 @@ export function useSubscriptionSummary(): SubscriptionSummaryLine[] | null {
       clearTimeout(timer);
       off();
     };
-  }, [shown]);
-  return lines;
+  }, [shown, manager]);
+  return shown && summary && summary.manager === manager ? summary.lines : null;
 }
 
 /** The counts for the lines one entry row stands for; null when none of them can be subscribed (the row is hidden). */

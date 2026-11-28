@@ -299,6 +299,7 @@ describe("DecisionQueuePanel (#15757)", () => {
           key: "standalone:t3",
           cause_kind: "standalone",
           label: "Update docs",
+          url: "https://user:pw@evil.example/pr/3",
           todo_ids: ["t3"],
           count: 1,
         },
@@ -331,6 +332,7 @@ describe("DecisionQueuePanel (#15757)", () => {
     expect(groups[0].querySelector('[data-testid="decision-queue-group-link"]')?.getAttribute("href")).toBe(
       "https://github.com/org/repo/pull/99",
     );
+    expect(groups[1].querySelector('[data-testid="decision-queue-group-link"]')).toBeNull();
     expect(groups[0].querySelector('[data-testid="decision-queue-group-count"]')?.textContent).toBe("2");
 
     // Select the shared_blocker group via its group checkbox (Mode B) and pick an explicit option on t3 (Mode A).

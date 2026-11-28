@@ -197,8 +197,23 @@ class SurfacesRuntime internal constructor(
                     )
                     if (liveSettled && activePairing != null) {
                         MainChatWidgetStore.save(context, activePairing, widgetSnapshot)
+                        ConversationWidgetPrefs.allBindings(context, activePairing).values
+                            .filterNot { it.isMain }
+                            .distinctBy { it.conversationKey }
+                            .forEach { binding ->
+                                val boundSnapshot = MainChatWidgetState.build(
+                                    paired = true,
+                                    assistant = obs.assistant,
+                                    sessions = obs.sessions,
+                                    interactions = obs.interactions,
+                                    resources = context.resources,
+                                    targetBinding = binding,
+                                )
+                                MainChatWidgetStore.save(context, activePairing, boundSnapshot, binding.conversationKey)
+                            }
                     }
                     MainChatWidget.refresh(context)
+                    AskPersonaWidget.refresh(context)
                 }
         }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {

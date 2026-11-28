@@ -66,13 +66,13 @@
     <string name="chat_chrome_delete_chat">チャットを削除</string>
     <string name="chat_chrome_notice_verify">確認</string>
     <string name="chat_chrome_notice_dismiss">閉じる</string>
-    <string name="chat_chrome_rename_text">タブ名はherdrに同期されます。セッション名はClaudeの/renameを使うので、Macのclaude --resumeでも表示されます。</string>
+    <string name="chat_chrome_rename_text">タブ名は%1$sに同期されます。セッション名はClaudeの/renameを使うので、Macのclaude --resumeでも表示されます。</string>
     <string name="chat_chrome_rename_text_tern">タブ名はTernに同期されます。セッション名はClaudeの/renameを使うので、Macのclaude --resumeでも表示されます。</string>
     <string name="chat_chrome_rename_text_rex">タブ名はRexに同期されます。セッション名はClaudeの/renameを使うので、Macのclaude --resumeでも表示されます。</string>
-    <string name="chat_chrome_rename_text_unified">herdr のタブ名を変更します。CLI がセッション名の変更に対応している場合は、そちらも変更します。</string>
+    <string name="chat_chrome_rename_text_unified">%1$s のタブ名を変更します。CLI がセッション名の変更に対応している場合は、そちらも変更します。</string>
     <string name="chat_chrome_save">保存</string>
     <string name="chat_chrome_name">名前</string>
-    <string name="chat_chrome_tab_name">タブ名（herdr tab）</string>
+    <string name="chat_chrome_tab_name">タブ名（%1$s tab）</string>
     <string name="chat_chrome_tab_name_tern">タブ名（Tern tab）</string>
     <string name="chat_chrome_tab_name_rex">タブ名（Rex tab）</string>
     <string name="chat_chrome_session_name">セッション名</string>

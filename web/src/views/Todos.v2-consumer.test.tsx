@@ -26,8 +26,8 @@ vi.mock("../lib/api", async (orig) => ({
   api: (path: string, init?: unknown) => apiMock(path, init),
 }));
 
-const { initI18n } = await import("../i18n");
-const { getState, reset } = await import("../lib/store");
+const { initI18n, t } = await import("../i18n");
+const { getState, patchAssistant, putTodo, reset } = await import("../lib/store");
 const { TodosView } = await import("./Todos");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -94,6 +94,73 @@ afterEach(async () => {
 });
 
 describe("TodosView todos_v2 thin-consumer wiring (#16433)", () => {
+  it("hides the PR status from a cached target repo gate when the Lab is off", async () => {
+    const gatedTodo = {
+      id: "gated", title: "Release work", created_at: NOW, updated_at: NOW,
+      repo_gate: { state: "blocked_conflict", target_count: 1, ready_count: 0, reference_count: 0 },
+    };
+    seed({ assistant: { machine_id: "hub", conversations: [], todos_v2: false }, todos: [gatedTodo] });
+    await act(async () => root.render(<TodosView selectedId={gatedTodo.id} />));
+    await flush();
+    const conflict = t("todos.status_pr_conflicts");
+    expect(host.textContent).not.toContain(conflict);
+    await act(async () => patchAssistant({ todos_v2: true }));
+    expect(host.textContent).toContain(conflict);
+    await act(async () => patchAssistant({ todos_v2: false }));
+    expect(host.textContent).not.toContain(conflict);
+  });
+
+  it("skips merge-train reads without an open PR to-do", async () => {
+    seed({
+      assistant: { machine_id: "hub", todos_v2: true },
+      todos: [sampleTodos[0], { ...sampleTodos[1], done_at: NOW }],
+    });
+    await act(async () => root.render(<TodosView />));
+    await flush();
+    expect(apiMock.mock.calls.filter(([path]) => path === "/todos/mergetrain")).toHaveLength(0);
+  });
+
+  it("refreshes merge-train badges only when PR inputs change and keeps the last response on error", async () => {
+    const [goal, todo] = sampleTodos;
+    const pr = {
+      ...todo,
+      pr_status: {
+        url: todo.pr_url!, state: "open" as const, draft: false, review: "approved" as const,
+        checks: "pending" as const, conflicts: false, checked_at: NOW,
+      },
+    };
+    const badge = () => host.querySelector('[data-todo="pr_task"] [data-testid="todo-mergetrain-badge"]');
+    const reads = () => apiMock.mock.calls.filter(([path]) => path === "/todos/mergetrain");
+    let fail = false;
+    apiMock.mockImplementation(async (path) => {
+      if (path !== "/todos/mergetrain") return {};
+      if (fail) throw new Error("Temporary read failure");
+      return { by_todo: { pr_task: { repo_key: "org/repo", position: 2, state: "queued" } } };
+    });
+    seed({ assistant: { machine_id: "hub", todos_v2: true }, todos: [goal, pr] });
+    await act(async () => root.render(<TodosView />));
+    await flush();
+    expect(reads()).toHaveLength(1);
+    expect(badge()?.textContent).toContain("#2");
+
+    await act(async () => {
+      putTodo({ ...goal, title: "Edited goal", updated_at: "2026-11-26T13:00:00Z" });
+      putTodo({
+        ...pr,
+        notes: "Updated description",
+        updated_at: "2026-11-26T13:00:00Z",
+        pr_status: { ...pr.pr_status, checked_at: "2026-11-26T13:00:00Z" },
+      });
+    });
+    expect(reads()).toHaveLength(1);
+
+    fail = true;
+    await act(async () => putTodo({ ...pr, pr_status: { ...pr.pr_status, checks: "success" } }));
+    await flush();
+    expect(reads()).toHaveLength(2);
+    expect(badge()?.textContent).toContain("#2");
+  });
+
   it("renders nothing new and fires ZERO requests to v2 endpoints when todos_v2 is false", async () => {
     seed({
       connected: true,

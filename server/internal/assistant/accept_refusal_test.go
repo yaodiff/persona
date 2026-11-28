@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -44,6 +46,48 @@ func TestAcceptRouteSaysTheTerminalDialogBlocksIt(t *testing.T) {
 			t.Fatalf("%s: taken after all: %+v", lang, got)
 		}
 	}
+}
+
+// The owner's OK on a decision whose Agent's node answers "Authentication required" (no code) is made anyway (#17431):
+// it used to be 502 accept_not_taken, which the web app showed as "the service could not complete this request (HTTP
+// 502)" on every one of seven presses, and nothing was kept. Now the decision is recorded, the round ends, the
+// supervisor is handed it with the reason, and the reply says it did not reach the Agent. Nothing is sent again.
+func TestAcceptRouteRecordsADecisionWhoseAgentCannotTakeIt(t *testing.T) {
+	database := todoTestDB(t)
+	s, f, todo, _, _ := conclusionServiceOn(t, database, false)
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")                                                            // i18n-ignore
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"}) // i18n-ignore
+	a := askOf(s, todo.ID)
+	f.mu.Lock()
+	f.failSend = &rpc.Error{Message: "Authentication required"}
+	f.mu.Unlock()
+	asked, _ := json.Marshal(a.AskedAt)
+	status, body := serveJSON(t, s, "POST", "/api/v1/todos/"+todo.ID+"/accept", "en", `{"asked_at":`+string(asked)+`}`)
+	if status != http.StatusOK || body["ok"] != true || body["delivered"] != "none" || body["reason"] != "Authentication required" {
+		t.Fatalf("%d %v, want ok, delivered none, the reason", status, body)
+	}
+	list, err := database.ListTodoDecisions(t.Context(), todo.ID, true)
+	if err != nil || len(list) != 1 || list[0].Choice != "先灰度 10%" { // i18n-ignore
+		t.Fatalf("decision not recorded: %+v %v", list, err)
+	}
+	if got := askOf(s, todo.ID); got != nil && got.AcceptedAt.IsZero() {
+		t.Fatalf("the round still waits: %+v", got)
+	}
+	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+	s.supervise.dedupMu.Lock()
+	s.supervise.mu.Lock()
+	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	s.supervise.mu.Unlock()
+	s.supervise.dedupMu.Unlock()
+	if (!pending || g.Key != key || !strings.Contains(g.Detail, "Authentication required")) && !told {
+		t.Fatalf("supervisor not handed it: %+v (told %v)", g, told)
+	}
+	sent := len(sentToAgent(f))
+	if status, _ := serveJSON(t, s, "POST", "/api/v1/todos/"+todo.ID+"/accept", "en", `{"asked_at":`+string(asked)+`}`); status != http.StatusConflict || len(sentToAgent(f)) != sent {
+		t.Fatalf("a second press: %d, %d sends", status, len(sentToAgent(f))-sent)
+	}
+	s.waitWorkEvents()
 }
 
 // rateLimitScreen is Codex 0.169's "Approaching rate limits" picker as session.screen reads it.

@@ -34,6 +34,11 @@ export struct PhoneAppearanceSettings {
     this.owner = this.model;
     this.ownerScope = this.model.scope();
     this.ownerGeneration = this.model.connectionGeneration();
+    this.model.loadNextSuggestions().catch(() => undefined);
+  }
+  @Monitor('model.profile', 'model.connected')
+  nextSuggestionsOwnerChanged(): void {
+    this.model.loadNextSuggestions().catch(() => undefined);
   }
   aboutToDisappear(): void { this.owner = undefined; }
   @Local textSize: PhoneTextSizePreference = phoneTextSize;
@@ -184,6 +189,52 @@ export struct PhoneAppearanceSettings {
       .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .margin({ top: 16 })
+  }
+  @Builder nextSuggestionsSwitch() {
+    if (this.model.nextSuggestionsValue !== null) {
+      Column({ space: Tokens.spaceXs }) {
+        Row({ space: Tokens.spaceM }) {
+          SymbolGlyph($r('sys.symbol.wand_and_stars'))
+            .fontSize('22vp')
+            .fontColor([Colors.ai])
+            .width(32)
+            .accessibilityLevel('no')
+          Column({ space: Tokens.spaceXxs }) {
+            Text(tr('next_suggestions_title'))
+              .fontSize(Tokens.typeBody)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeBody))
+              .fontColor(Colors.ink)
+            Text(tr('next_suggestions_note'))
+              .fontSize(Tokens.typeCaption)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+              .fontColor(Colors.secondary)
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+          Toggle({ type: ToggleType.Switch, isOn: this.model.nextSuggestionsValue === true })
+            .selectedColor(Colors.positive)
+            .enabled(this.active && !this.model.nextSuggestionsSaving && (this.model.connected || this.model.demo))
+            .accessibilityText(tr('next_suggestions_title'))
+            .accessibilityDescription(tr('next_suggestions_note'))
+            .onChange((value: boolean) => {
+              if (this.active && this.model.nextSuggestionsValue !== null && value !== this.model.nextSuggestionsValue) {
+                Haptics.selection();
+                this.model.setNextSuggestions(value).catch(() => undefined);
+              }
+            })
+            .id('settings.appearance.next_suggestions')
+        }
+        .width('100%')
+        .constraintSize({ minHeight: Tokens.controlTouch })
+        .padding({ left: 14, right: 16, top: 12, bottom: 12 })
+        .backgroundColor(Colors.card(true))
+        .borderRadius(PhoneStyle.cardRadius)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+        .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      }
+      .width('100%')
+      .margin({ top: 16 })
+    }
   }
   @Builder caption(value: string) {
     Text(tr(value)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
@@ -409,6 +460,7 @@ export struct PhoneAppearanceSettings {
             Text(tr('phone_look_section')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary)
               .width('100%').height(PhoneStyle.formSize(40.3,47.5,this.environment.fontScale)).padding({left:20}).id('settings.appearance.section')
             this.overview()
+            this.nextSuggestionsSwitch()
             if (this.model.agentsDisplaySupported) this.herdrTabSwitch()
           }
           else if (page==='phone_look_color') { this.colors(); this.caption('phone_look_color_footer'); }

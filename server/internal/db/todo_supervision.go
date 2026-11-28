@@ -114,6 +114,13 @@ func (d *DB) PutTodoSupervision(ctx context.Context, r TodoSupervisionRow) error
 	return putTodoSupervision(ctx, d.pool, r)
 }
 
+// TransferTodoSupervisionTx changes only assignment columns and checks the ledger read by the caller.
+func TransferTodoSupervisionTx(ctx context.Context, tx pgx.Tx, prior TodoSupervisionRow, to string, at time.Time) (bool, error) {
+	tag, err := tx.Exec(ctx, `UPDATE todo_supervision SET supervisor = $2, supervisor_source = 'explicit', updated_at = $3
+		WHERE todo_id = $1 AND supervisor = $4 AND updated_at = $5`, prior.TodoID, to, at, prior.Supervisor, prior.UpdatedAt)
+	return tag.RowsAffected() != 0, err
+}
+
 func putTodoSupervision(ctx context.Context, q execer, r TodoSupervisionRow) error {
 	when, _ := json.Marshal(r.DoneWhen)
 	if r.DoneWhen == nil {
@@ -162,6 +169,11 @@ func (d *DB) ReviewDoneTodo(ctx context.Context, id, reason string, accepted boo
 	return reviewDoneTodo(ctx, d.pool, id, reason, accepted, at)
 }
 
+// ReviewDoneTodoTx stages the same closure in a caller's transaction.
+func ReviewDoneTodoTx(ctx context.Context, tx pgx.Tx, id, reason string, accepted bool, at time.Time) (*TodoRow, bool, error) {
+	return reviewDoneTodo(ctx, tx, id, reason, accepted, at)
+}
+
 // ReviewTodo commits a review's ledger and closure together. The final guard runs after the tentative writes;
 // a refusal rolls them both back, including activity that arrived while the database was busy.
 func (d *DB) ReviewTodo(ctx context.Context, id, reason string, accepted bool, at time.Time, ledger *TodoSupervisionRow, guard func() error) (*TodoRow, bool, error) {
@@ -170,14 +182,14 @@ func (d *DB) ReviewTodo(ctx context.Context, id, reason string, accepted bool, a
 		return nil, false, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
+	row, closed, err := reviewDoneTodo(ctx, tx, id, reason, accepted, at)
+	if err != nil {
+		return nil, false, err
+	}
 	if ledger != nil {
 		if err := putTodoSupervision(ctx, tx, *ledger); err != nil {
 			return nil, false, err
 		}
-	}
-	row, closed, err := reviewDoneTodo(ctx, tx, id, reason, accepted, at)
-	if err != nil {
-		return nil, false, err
 	}
 	if err := guard(); err != nil {
 		return nil, false, err

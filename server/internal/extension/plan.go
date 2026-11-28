@@ -348,6 +348,7 @@ func (r *Registry) commitPlan(ctx context.Context, id, previewID, digest string,
 			delete(r.extensions, plan.old.Record.ID)
 		}
 		r.extensions[plan.row.ID] = plan.next
+		delete(r.dormant, plan.row.ID)
 		delete(r.previews, plan.preview.ID)
 		if plan.preview.ID == previewID {
 			main = plan.next
@@ -513,6 +514,11 @@ func (r *Registry) validatePlan(ctx context.Context, id, previewID, digest strin
 			}
 			row.DisabledContributions = m.StartsOff(nil, nil)
 			row.NewInstallation = !r.yielding(old)
+			if held, ok := r.dormant[m.ID]; ok { // a row Load set aside: adopted in place, or refused (dormant.go)
+				if err := r.adoptDormant(ctx, held, pv, m, requested, &row); err != nil {
+					return nil, err
+				}
+			}
 		}
 		// Overwrite on every install/upgrade, including a return to unsigned code.
 		row.MarketKey = pv.verifiedMarketKey

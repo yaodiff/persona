@@ -245,6 +245,9 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.EngineFound -> R.string.designsystem_core_engine_found
     CoreText.Key.EngineFoundVersion -> R.string.designsystem_core_engine_found_version
     CoreText.Key.EngineMissing -> R.string.designsystem_core_engine_missing
+    CoreText.Key.EngineStopped -> R.string.designsystem_core_engine_stopped
+    CoreText.Key.EngineStoppedVersion -> R.string.designsystem_core_engine_stopped_version
+    CoreText.Key.EngineIncompatibleVersion -> R.string.designsystem_core_engine_incompatible_version
     CoreText.Key.EngineFooter -> R.string.designsystem_core_engine_footer
     CoreText.Key.EngineFooterOffline -> R.string.designsystem_core_engine_footer_offline
     CoreText.Key.EngineFooterNone -> R.string.designsystem_core_engine_footer_none

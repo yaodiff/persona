@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -89,6 +90,10 @@ func (s *Service) channelRoutes() {
 			ThreadIdleHours: in.ThreadIdleHours,
 			Features:        in.Features,
 		}); err != nil {
+			if errors.Is(err, errChannelSettingsWrite) {
+				apierr.Write(w, http.StatusServiceUnavailable, errors.New(http.StatusText(http.StatusServiceUnavailable)))
+				return
+			}
 			if errors.Is(err, errChannelsUnread) {
 				apierr.Write(w, http.StatusServiceUnavailable, err)
 				return
@@ -205,7 +210,10 @@ func (s *Service) updateChannelFields(ctx context.Context, v channel.View, in ch
 		c.mu.Lock()
 	}
 	defer c.mu.Unlock()
-	p := s.channelPrefLocked(v.ID)
+	if target == nil && threadMode == nil && threadIdleHours == nil && len(features) == 0 {
+		return nil
+	}
+	p := c.prefsForUpdate(v.ID)
 	if target != nil {
 		t := *target
 		t.Title = ""
@@ -217,14 +225,18 @@ func (s *Service) updateChannelFields(ctx context.Context, v channel.View, in ch
 	if threadIdleHours != nil {
 		p.ThreadIdleHours = *threadIdleHours
 	}
-	for id, on := range features {
-		p.Features[id] = on
-		if id == channel.FeatureAllAsks && on {
+	if len(features) > 0 {
+		if p.Features == nil {
+			p.Features = maps.Clone(channel.DefaultFeatures)
+		} else {
+			p.Features = maps.Clone(p.Features)
+		}
+		maps.Copy(p.Features, features)
+		if features[channel.FeatureAllAsks] {
 			p.Features[channel.FeatureAsks] = true
 		}
 	}
-	s.saveChannelsLocked()
-	return nil
+	return s.saveChannelsLocked(v.ID, p)
 }
 
 type channelTestResult struct {

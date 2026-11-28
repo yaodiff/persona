@@ -1,8 +1,9 @@
 // Pane operations belong to the open terminal, while session menus describe the conversation (#10239).
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../../i18n";
 import { errorText } from "../../../lib/api";
 import { paneHost } from "../../../lib/agent-groups";
+import { hostAbilitiesVersion, subscribeHostAbilities } from "../../../lib/host-abilities";
 import { defaultNodeDeps, nodeActions, sessionNode, type MenuNode } from "../../../lib/node-actions";
 import { getSession, refresh, useStore } from "../../../lib/store";
 import { isPaneAddress } from "../../../lib/terminals";
@@ -30,6 +31,8 @@ export function PaneActions({
 }) {
   const session = useStore((s) => getSession(mid, sid) ?? (isPaneAddress(sid) ? s.sessions[mid]?.find((row) => row.pane_id === sid.slice(5)) : undefined));
   const online = useStore((s) => s.machines.find((m) => m.id === mid)?.online !== false);
+  // the items follow what the host can do (#17053): drawn again when the computer reports new abilities
+  useSyncExternalStore(subscribeHostAbilities, hostAbilitiesVersion);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);

@@ -100,7 +100,8 @@ func listKeySized(list []proto.Session, size int) string {
 			w.str(s.Topic, '/')
 			w.quotes(s.Dispatched)
 			if s.BotmuxExternalTrigger() {
-				w.b.WriteString("/ext")
+				w.b.WriteString("/ext:")
+				w.b.WriteString(string(s.BotmuxExternalTriggerReason()))
 			}
 			w.b.WriteByte('\n')
 		}

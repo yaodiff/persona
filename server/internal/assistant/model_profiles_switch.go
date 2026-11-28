@@ -140,6 +140,9 @@ func (s *Service) modelProfileSwitchLocked(ctx context.Context, id string, by Pr
 		if li < 0 {
 			return sw, false, i18n.Err("assistant-model_profiles.err_launcher_missing", i18n.Args{"launcher": name})
 		}
+		if stored[li].channelAlias != "" {
+			return sw, false, errChannelAlias(stored[li])
+		}
 		set := p.Launchers[name]
 		var before LauncherModels
 		was := before.fields(&stored[li].ManagedLauncher)
@@ -173,7 +176,7 @@ func (s *Service) modelProfileSwitchLocked(ctx context.Context, id string, by Pr
 		return sw, false, nil
 	}
 	if changedLaunchers {
-		writes[launchersManagedKey] = stored
+		writes[launchersManagedKey] = persistedLaunchers(stored)
 	}
 	state.Active, state.At, state.By = id, now, by
 	state.pushRollback(*image)
@@ -290,6 +293,9 @@ func (s *Service) modelProfileRollbackLocked(ctx context.Context, targetID strin
 	changedLaunchers := false
 	for _, name := range slices.Sorted(maps.Keys(prev.Launchers)) {
 		li := slices.IndexFunc(stored, func(l storedLauncher) bool { return l.Name == name })
+		if li < 0 || stored[li].channelAlias != "" {
+			continue // gone, or now a channel's alias: its channel keeps its models
+		}
 		set := prev.Launchers[name]
 		var before LauncherModels
 		was := before.fields(&stored[li].ManagedLauncher)
@@ -308,7 +314,7 @@ func (s *Service) modelProfileRollbackLocked(ctx context.Context, targetID strin
 		}
 	}
 	if changedLaunchers {
-		writes[launchersManagedKey] = stored
+		writes[launchersManagedKey] = persistedLaunchers(stored)
 	}
 	if preview != nil {
 		preview.display = modelProfileApprovalDisplay("rollback", rollbackEntryID(stack[idx]), sw, undo, prev.Purposes, stored)

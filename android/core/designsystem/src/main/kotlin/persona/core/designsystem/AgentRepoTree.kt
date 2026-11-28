@@ -159,7 +159,7 @@ fun AgentRepoHeader(
  * and no mark for the others so the name and indentation carry the meaning like the web sidebar, its [name], small after
  * it what the name does not say ([branch], or [detached] HEAD in the caution color), at the end [tally] ("N agents",
  * Idle), the source's [pinned] mark and the chevron. [quiet] or [offline] put the name in the secondary color.
- * A tap folds it.
+ * A tap folds it; a long press is its actions ([onLongClick], read as [actionsLabel]), as the repository header's.
  */
 @Composable
 fun AgentWorktreeLine(
@@ -175,6 +175,8 @@ fun AgentWorktreeLine(
     quiet: Boolean = false,
     offline: Boolean = false,
     pinned: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
+    actionsLabel: String? = null,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
@@ -186,7 +188,7 @@ fun AgentWorktreeLine(
     val foldState = stringResource(if (folded) R.string.designsystem_folded else R.string.designsystem_expanded)
     val separator = stringResource(R.string.designsystem_separator)
     RepoTreeLine(
-        level = level, onClick = onToggle, modifier = modifier,
+        level = level, onClick = onToggle, onLongClick = onLongClick, onLongClickLabel = actionsLabel, modifier = modifier,
         spoken = {
             contentDescription = listOfNotNull(kind, name, primary.takeIf { main }, branch ?: detachedText.takeIf { detached },
                 offlineText.takeIf { offline }, pinnedText.takeIf { pinned }, tally).joinToString(separator)

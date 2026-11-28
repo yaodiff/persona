@@ -1,5 +1,8 @@
 {
   "title": "サブスクリプションの利用上限",
+  "edit_alias": "「{name}」の別名を編集",
+  "alias_prompt": "「{name}」の別名（{limit} 文字以内）。空欄にすると元の名前に戻ります。",
+  "alias_too_long": "別名は {limit} 文字以内で入力してください。",
   "stale_title": "データが古くなっています",
   "stale_age": "古いデータ · {age}",
   "left_short": "残り {percent}",
@@ -14,6 +17,8 @@
   "days": "{d}日",
   "reset_in": "{countdown}後にリセット",
   "reset_at": "{time}にリセット",
+  "codex_local_reading": "Codex の前回のローカル記録",
+  "codex_local_explanation": "新しい使用量を取得できていないため、ローカルセッションに保存された値を表示しています。",
   "source_local": "コンピューター",
   "sources_title": "取得元：{sources}",
   "problem_unreachable": "ゲートウェイに接続できません。前回の数値を表示しています",

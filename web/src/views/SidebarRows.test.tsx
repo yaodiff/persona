@@ -92,6 +92,9 @@ describe("where an agent was opened, as a mark at its row's end (#2526)", () => 
     const linked = mark(render({ pane_id: "botmux:oc_1/t1", external_url: "https://example.com/topic" }));
     expect(linked).toMatch(/^<span data-source="feishu" role="link" tabindex="0"[^>]*aria-label="飞书群 · 在飞书中打开该话题"/);
     expect(linked).toContain("<img");
+    for (const bad of ["javascript:alert(1)", "http://example.com/topic", "https:/admin", "https://user:pw@evil.example/topic"]) {
+      expect(mark(render({ pane_id: "botmux:oc_1/t1", external_url: bad })), bad).toMatch(/^<span data-source="feishu" role="img"/);
+    }
   });
   it("keeps the source mark and pending count without trailing age", () => {
     const timed = render({ pane_id: "botmux:oc_1/t1", external_url: "https://example.com/topic",
@@ -305,5 +308,27 @@ describe("a session's associated tab name (#7595)", () => {
     const html = render({ ...named, slot_id: undefined, tab_id: undefined, slot_name: "Workspace name", updated_at: undefined }, { tab: true, hint: undefined });
     expect(html).toContain("Workspace name");
     expect(html).not.toContain(tabName("Workspace name"));
+  });
+});
+
+describe("a logical conversation's undelivered input on its row (#17431)", () => {
+  const at = "2026-11-27T12:00:00Z";
+  it("says how many wait, or that an expired one needs the owner, and leaves other rows alone", () => {
+    const waiting: Session = { ...session, assistant: true, state: "working", undelivered: [
+      { id: "head", text: "a", at, state: "waiting", reason: "awaiting_receipt", deadline: at },
+      { id: "q", text: "b", at, state: "waiting", reason: "behind_unconfirmed", blocked_by: "head" },
+    ] };
+    const html = renderToStaticMarkup(<SessionRow {...rowProps} s={waiting} active={false} />);
+    expect(html).toContain('data-undelivered-line="waiting"');
+    expect(html).toContain(t("sidebar.undelivered_waiting", { count: 2 }));
+    const expired: Session = { ...waiting, state: "needs_you", undelivered: [...waiting.undelivered!, { id: "old", text: "c", at, state: "failed", reason: "receipt_expired" }] };
+    const alert = renderToStaticMarkup(<SessionRow {...rowProps} s={expired} active={false} />);
+    expect(alert).toContain('data-undelivered-line="expired"');
+    expect(alert).toContain('role="alert"');
+    expect(alert).toContain(t("sidebar.undelivered_expired", { count: 1 }));
+    // #10194's kept messages say it in their bubbles alone; a row without any draws nothing new
+    const kept: Session = { ...session, undelivered: [{ id: "k", text: "d", at, state: "failed" }] };
+    expect(renderToStaticMarkup(<SessionRow {...rowProps} s={kept} active={false} />)).not.toContain("data-undelivered-line");
+    expect(renderToStaticMarkup(<SessionRow {...rowProps} active={false} />)).not.toContain("data-undelivered-line");
   });
 });

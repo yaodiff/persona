@@ -9671,6 +9671,578 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "Knowledge Page"
+    },
+    {
+      "name": "todo_stage_plan",
+      "value": "Plan"
+    },
+    {
+      "name": "todo_stage_develop",
+      "value": "Develop"
+    },
+    {
+      "name": "todo_stage_review",
+      "value": "Review"
+    },
+    {
+      "name": "todo_stage_merge",
+      "value": "Merge"
+    },
+    {
+      "name": "todo_stage_deploy",
+      "value": "Deploy"
+    },
+    {
+      "name": "todo_stage_verify",
+      "value": "Verified"
+    },
+    {
+      "name": "todo_stage_done",
+      "value": "Done"
+    },
+    {
+      "name": "todo_stage_state_done",
+      "value": "done"
+    },
+    {
+      "name": "todo_stage_state_current",
+      "value": "current step"
+    },
+    {
+      "name": "todo_stage_state_ahead",
+      "value": "still ahead"
+    },
+    {
+      "name": "todo_stage_step_of",
+      "value": "step {current} of {total}"
+    },
+    {
+      "name": "todo_stage_step_summary",
+      "value": "Step {current} of {total} · {stage}"
+    },
+    {
+      "name": "todo_decisions_title",
+      "value": "Decisions"
+    },
+    {
+      "name": "todo_decisions_loading",
+      "value": "Loading decisions…"
+    },
+    {
+      "name": "todo_decisions_load_failed",
+      "value": "Couldn't load decisions."
+    },
+    {
+      "name": "todo_decisions_empty",
+      "value": "Decisions made on this to-do go here. Your answers to an agent's questions and finished task outcomes are recorded automatically; you can also add your own."
+    },
+    {
+      "name": "todo_decisions_show_all",
+      "value": "Show All {count} Decisions"
+    },
+    {
+      "name": "todo_decisions_show_first",
+      "value": "Show First {count}"
+    },
+    {
+      "name": "todo_decisions_full_history",
+      "value": "Full History ({count} Revised)"
+    },
+    {
+      "name": "todo_decisions_current_only",
+      "value": "Current Only"
+    },
+    {
+      "name": "todo_decision_chose",
+      "value": "Chose:"
+    },
+    {
+      "name": "todo_decision_reason_prefix",
+      "value": "Reason:"
+    },
+    {
+      "name": "todo_decision_revise",
+      "value": "Revise"
+    },
+    {
+      "name": "todo_decision_revised_badge",
+      "value": "Revised"
+    },
+    {
+      "name": "todo_decision_revises",
+      "value": "Revises “{choice}”"
+    },
+    {
+      "name": "todo_decision_revises_item",
+      "value": "Revises “{question} → {choice}”"
+    },
+    {
+      "name": "todo_decision_undo_revision",
+      "value": "Undo Revision"
+    },
+    {
+      "name": "todo_decision_record_title",
+      "value": "Record a Decision"
+    },
+    {
+      "name": "todo_decision_save",
+      "value": "Record"
+    },
+    {
+      "name": "todo_decision_revise_note",
+      "value": "The earlier choice “{choice}” stays struck through in history; only the new choice goes to agents."
+    },
+    {
+      "name": "todo_decision_question_label",
+      "value": "Question"
+    },
+    {
+      "name": "todo_decision_question_placeholder",
+      "value": "What needs deciding…"
+    },
+    {
+      "name": "todo_decision_choice_label",
+      "value": "Choice"
+    },
+    {
+      "name": "todo_decision_choice_placeholder",
+      "value": "What was decided…"
+    },
+    {
+      "name": "todo_decision_reason_label",
+      "value": "Reason (Optional)"
+    },
+    {
+      "name": "todo_decision_reason_placeholder",
+      "value": "Why, and what was ruled out…"
+    },
+    {
+      "name": "todo_decision_source_manual",
+      "value": "Added by hand"
+    },
+    {
+      "name": "todo_decision_source_outcome",
+      "value": "Recorded when the agent finished"
+    },
+    {
+      "name": "todo_decision_source_agent",
+      "value": "Noted by an agent while working"
+    },
+    {
+      "name": "todo_decision_source_thread",
+      "value": "Said in the Lark topic"
+    },
+    {
+      "name": "todo_decision_source_card",
+      "value": "Answered in an agent's question"
+    },
+    {
+      "name": "todo_decision_recorded_toast",
+      "value": "Decision recorded"
+    },
+    {
+      "name": "todo_decision_revised_toast",
+      "value": "Decision revised"
+    },
+    {
+      "name": "todo_decision_marked_revised",
+      "value": "Marked as revised"
+    },
+    {
+      "name": "todo_decision_revision_undone",
+      "value": "Revision undone"
+    },
+    {
+      "name": "expand_all",
+      "value": "Expand All"
+    },
+    {
+      "name": "collapse_all",
+      "value": "Collapse All"
+    },
+    {
+      "name": "saving",
+      "value": "Saving…"
+    },
+    {
+      "name": "token_usage_recent_hourly",
+      "value": "Recent Hourly Activity"
+    },
+    {
+      "name": "token_usage_by_machine_7d",
+      "value": "By Computer · Last 7 Days"
+    },
+    {
+      "name": "token_usage_by_agent_7d",
+      "value": "By Agent · Last 7 Days"
+    },
+    {
+      "name": "token_usage_by_agent",
+      "value": "By Agent"
+    },
+    {
+      "name": "token_usage_by_launcher",
+      "value": "By Launcher"
+    },
+    {
+      "name": "token_usage_by_place",
+      "value": "Folders and Worktrees"
+    },
+    {
+      "name": "token_usage_requests",
+      "value": "Requests"
+    },
+    {
+      "name": "token_usage_worktree",
+      "value": "Linked Worktree"
+    },
+    {
+      "name": "token_usage_removed_computer",
+      "value": "Removed Computer"
+    },
+    {
+      "name": "token_usage_not_split",
+      "value": "Not Split (Before the Update)"
+    },
+    {
+      "name": "token_usage_launcher_terminal",
+      "value": "Opened in a Terminal"
+    },
+    {
+      "name": "token_usage_project_by_hour",
+      "value": "By Hour"
+    },
+    {
+      "name": "token_usage_project_each_day",
+      "value": "Each Day"
+    },
+    {
+      "name": "next_suggestions_title",
+      "value": "Suggest the Next Message"
+    },
+    {
+      "name": "next_suggestions_note",
+      "value": "After a reply in an open chat, suggest what you might send next above the empty message box."
+    },
+    {
+      "name": "suggestion_use",
+      "value": "Use"
+    },
+    {
+      "name": "suggestion_fill_in",
+      "value": "Fill In"
+    },
+    {
+      "name": "suggestion_send_now",
+      "value": "Send Now"
+    },
+    {
+      "name": "suggestion_hint_safe",
+      "value": "Tap to fill input. Touch and hold to send right away."
+    },
+    {
+      "name": "suggestion_hint_risky",
+      "value": "Tap to fill input for review."
+    },
+    {
+      "name": "rule_suggestion_always",
+      "value": "Always"
+    },
+    {
+      "name": "rule_suggestion_not_now",
+      "value": "Not Now"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust",
+      "value": "Always adds this kind of task to Auto-Start Tasks so it starts without asking first."
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust_scoped",
+      "value": "Always adds a rule to Auto-Start Tasks: tasks changing files in {directory} on {machine} start without asking first."
+    },
+    {
+      "name": "rule_suggestion_creates_standing",
+      "value": "Always creates a standing authorization for “{action}” in {directory} on {machine}."
+    },
+    {
+      "name": "rule_suggestion_creates_setting",
+      "value": "Always puts this suggestion away for 30 days without storing a rule."
+    },
+    {
+      "name": "rule_suggestion_made_task_trust",
+      "value": "Rule added: these tasks start without asking first."
+    },
+    {
+      "name": "rule_suggestion_made_standing",
+      "value": "Standing authorization added."
+    },
+    {
+      "name": "rule_suggestion_made_setting",
+      "value": "This suggestion stays quiet for {setting}."
+    },
+    {
+      "name": "rule_suggestion_made_none",
+      "value": "Done. Nothing was stored."
+    },
+    {
+      "name": "rule_suggestion_conflict",
+      "value": "Standing authorizations changed meanwhile. Try again."
+    },
+    {
+      "name": "rule_suggestion_failed",
+      "value": "Couldn't save your answer."
+    },
+    {
+      "name": "recording_bookmark",
+      "value": "Bookmark"
+    },
+    {
+      "name": "recording_transcript_review",
+      "value": "Review Transcript"
+    },
+    {
+      "name": "recording_transcript_find",
+      "value": "Find in transcript…"
+    },
+    {
+      "name": "recording_transcript_previous",
+      "value": "Previous match"
+    },
+    {
+      "name": "recording_transcript_next",
+      "value": "Next match"
+    },
+    {
+      "name": "recording_transcript_bookmarks",
+      "value": "Bookmarks"
+    },
+    {
+      "name": "recording_transcript_copy",
+      "value": "Copy Text"
+    },
+    {
+      "name": "recording_transcript_copied",
+      "value": "Transcript copied"
+    },
+    {
+      "name": "recording_transcript_no_matches",
+      "value": "No matches"
+    },
+    {
+      "name": "recording_transcript_matches",
+      "value": "matches"
+    },
+    {
+      "name": "recording_transcript_expired",
+      "value": "Speech has expired and only retained bookmarks remain."
+    },
+    {
+      "name": "recording_transcript_empty",
+      "value": "No retained transcript passages."
+    },
+    {
+      "name": "standing_auth_title",
+      "value": "Standing Authorizations"
+    },
+    {
+      "name": "standing_tab_standing",
+      "value": "Standing"
+    },
+    {
+      "name": "standing_tab_session",
+      "value": "Session Grants"
+    },
+    {
+      "name": "standing_action_merge",
+      "value": "Merge changes"
+    },
+    {
+      "name": "standing_action_push",
+      "value": "Push changes"
+    },
+    {
+      "name": "standing_action_deploy_test",
+      "value": "Deploy to a test environment"
+    },
+    {
+      "name": "standing_action_deploy_production",
+      "value": "Deploy to production"
+    },
+    {
+      "name": "standing_action_send",
+      "value": "Send messages"
+    },
+    {
+      "name": "standing_action_delete",
+      "value": "Delete data"
+    },
+    {
+      "name": "standing_action_spend",
+      "value": "Spend money"
+    },
+    {
+      "name": "standing_no_actions",
+      "value": "No actions recorded"
+    },
+    {
+      "name": "standing_condition_ci_green",
+      "value": "All checks pass"
+    },
+    {
+      "name": "standing_condition_no_conflicts",
+      "value": "No merge conflicts"
+    },
+    {
+      "name": "standing_only_when",
+      "value": "Only when"
+    },
+    {
+      "name": "standing_place_format",
+      "value": "In {folder} on {machine}"
+    },
+    {
+      "name": "standing_reversible_yes",
+      "value": "Reversible"
+    },
+    {
+      "name": "standing_reversible_no",
+      "value": "Irreversible"
+    },
+    {
+      "name": "standing_since",
+      "value": "Since {date}"
+    },
+    {
+      "name": "standing_source_chat",
+      "value": "A chat"
+    },
+    {
+      "name": "standing_source_suggested_rule",
+      "value": "Suggested rule: the same answer {count} times in 14 days, confirmed with Always."
+    },
+    {
+      "name": "standing_show_details",
+      "value": "Details"
+    },
+    {
+      "name": "standing_hide_details",
+      "value": "Hide Details"
+    },
+    {
+      "name": "standing_revoke",
+      "value": "Revoke"
+    },
+    {
+      "name": "standing_revoke_action",
+      "value": "Revoke Authorization"
+    },
+    {
+      "name": "standing_revoke_confirm_title",
+      "value": "Revoke this authorization?"
+    },
+    {
+      "name": "standing_revoke_confirm_message",
+      "value": "Persona will ask you again before it does this in {folder} on {machine}: {actions}. Work already done isn't affected. To grant it again, ask Persona in the main chat."
+    },
+    {
+      "name": "standing_revoked_toast",
+      "value": "Authorization revoked"
+    },
+    {
+      "name": "standing_revoke_failed_toast",
+      "value": "Couldn't revoke this authorization. It's still in effect. Check the connection and try again."
+    },
+    {
+      "name": "standing_empty_title",
+      "value": "None yet"
+    },
+    {
+      "name": "standing_empty_message",
+      "value": "Persona asks you before it merges, pushes, deploys, sends messages, deletes data or spends money. When you tell it in a chat to always go ahead somewhere, that go-ahead is listed here."
+    },
+    {
+      "name": "standing_forbidden_title",
+      "value": "Needs full access"
+    },
+    {
+      "name": "standing_forbidden_message",
+      "value": "Only a device with full access can see and revoke standing authorizations."
+    },
+    {
+      "name": "standing_failed_title",
+      "value": "Couldn't load standing authorizations"
+    },
+    {
+      "name": "standing_footer_note",
+      "value": "Persona does these without asking you first, until you revoke them."
+    },
+    {
+      "name": "standing_select_conversation",
+      "value": "Conversation"
+    },
+    {
+      "name": "phone_search_alias_standing_authorizations",
+      "value": "standing authorizations always allow grants permissions revoke"
+    },
+    {
+      "name": "always_grants_heading",
+      "value": "Always allowed in this conversation"
+    },
+    {
+      "name": "always_grants_empty",
+      "value": "No saved permissions."
+    },
+    {
+      "name": "always_grants_restart_needed",
+      "value": "The saved permission was revoked, but the running conversation could not be reset. Restart this conversation before relying on the revocation."
+    },
+    {
+      "name": "always_grants_scope_footer",
+      "value": "These saved permissions apply only to this conversation. Records store the tool name, but not detailed directory or command scope."
+    },
+    {
+      "name": "always_grant_unnamed",
+      "value": "Unnamed permission"
+    },
+    {
+      "name": "always_grant_revoke_title",
+      "value": "Revoke this permission?"
+    },
+    {
+      "name": "always_grant_revoke_message",
+      "value": "Revoking stops the current response to clear its permissions. Send another message to continue."
+    },
+    {
+      "name": "always_grant_revoked_toast",
+      "value": "Permission revoked"
+    },
+    {
+      "name": "assistant_full_search_title",
+      "value": "Search Chats & Agents"
+    },
+    {
+      "name": "assistant_search_scope_chats",
+      "value": "Chats"
+    },
+    {
+      "name": "archived_agents_empty_title",
+      "value": "No archived agents"
+    },
+    {
+      "name": "archived_agents_empty_message",
+      "value": "Archived agent sessions appear here until you restore them."
+    },
+    {
+      "name": "agent_auto_rename",
+      "value": "Auto Rename"
+    },
+    {
+      "name": "agent_renaming",
+      "value": "Renaming…"
+    },
+    {
+      "name": "assistant_session",
+      "value": "Assistant chats cannot be auto-renamed here"
     }
   ]
 }

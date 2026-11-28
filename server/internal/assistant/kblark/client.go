@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/cliwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -74,15 +75,32 @@ func NewClient(runner Runner, zone *time.Location) *Client {
 	return &Client{runner: runner, zone: zone}
 }
 
+func validCLIToken(s string) bool {
+	if s == "" || strings.HasPrefix(s, "-") {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // SearchMinutes lists the minutes the owner took part in between start and end, newest pages until the last.
 func (c *Client) SearchMinutes(ctx context.Context, start, end time.Time) ([]Minute, error) {
 	var out []Minute
+	seenTokens := map[string]bool{}
+	seenMinutes := map[string]bool{}
 	token := ""
 	for page := 0; page < maxSearchPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		args := []string{"minutes", "+search", "--participant-ids", "me",
 			"--start", start.Format("2006-01-02"), "--end", end.Format("2006-01-02"), "--page-size", strconv.Itoa(pageSize)}
 		if token != "" {
-			args = append(args, "--page-token", token)
+			args = append(args, "--page-token="+token)
 		}
 		raw, err := c.runner.Run(ctx, args...)
 		if err != nil {
@@ -106,27 +124,37 @@ func (c *Client) SearchMinutes(ctx context.Context, start, end time.Time) ([]Min
 			return nil, fmt.Errorf("minutes search: %w", err)
 		}
 		for _, it := range env.Data.Items {
-			if it.Token == "" {
+			tok := strings.TrimSpace(it.Token)
+			if tok == "" || seenMinutes[tok] {
 				continue
 			}
+			seenMinutes[tok] = true
 			out = append(out, Minute{
-				Token: it.Token,
+				Token: tok,
 				Title: minuteTitle(it.DisplayInfo),
 				URL:   it.Meta.AppLink,
 				Start: c.parseStart(it.Meta.Description, it.DisplayInfo),
 			})
 		}
-		if !env.Data.HasMore || env.Data.PageToken == "" {
+		next := env.Data.PageToken
+		if !env.Data.HasMore || !validCLIToken(next) || seenTokens[next] {
 			break
 		}
-		token = env.Data.PageToken
+		seenTokens[next] = true
+		token = next
 	}
 	return out, nil
 }
 
 // MinuteDetail reads one minute's title, summary, to-dos and chapters (never its transcript).
 func (c *Client) MinuteDetail(ctx context.Context, token string) (Minute, error) {
-	raw, err := c.runner.Run(ctx, "minutes", "+detail", "--minute-tokens", token, "--summary", "--todo", "--chapter")
+	if err := ctx.Err(); err != nil {
+		return Minute{}, err
+	}
+	if !validCLIToken(token) || strings.Contains(token, ",") {
+		return Minute{}, fmt.Errorf("minute detail: invalid token")
+	}
+	raw, err := c.runner.Run(ctx, "minutes", "+detail", "--minute-tokens="+token, "--summary", "--todo", "--chapter")
 	if err != nil {
 		return Minute{}, err
 	}
@@ -169,6 +197,9 @@ func (c *Client) MinuteDetail(ctx context.Context, token string) (Minute, error)
 
 // InspectDoc is a document's title ("" when lark-cli cannot tell).
 func (c *Client) InspectDoc(ctx context.Context, url string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	d, err := c.runner.InspectDocument(ctx, url)
 	if err != nil {
 		return "", err
@@ -178,7 +209,10 @@ func (c *Client) InspectDoc(ctx context.Context, url string) (string, error) {
 
 // SearchDocs finds documents by a keyword: the first page only, one per result.
 func (c *Client) SearchDocs(ctx context.Context, query string) ([]Doc, error) {
-	raw, err := c.runner.Run(ctx, "docs", "+search", "--query", query, "--page-size", "20")
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	raw, err := c.runner.Run(ctx, "docs", "+search", "--query="+query, "--page-size", "20")
 	if err != nil {
 		return nil, err
 	}
@@ -200,14 +234,15 @@ func (c *Client) SearchDocs(ctx context.Context, query string) ([]Doc, error) {
 	}
 	var out []Doc
 	for _, r := range env.Data.Results {
-		if r.Meta.Token == "" || r.Meta.URL == "" {
+		tok := strings.TrimSpace(r.Meta.Token)
+		if tok == "" || strings.TrimSpace(r.Meta.URL) == "" {
 			continue
 		}
-		at := parseISO(r.Meta.UpdateTimeISO)
+		at := c.parseISO(r.Meta.UpdateTimeISO)
 		if at.IsZero() && r.Meta.UpdateTime > 0 {
 			at = time.UnixMilli(r.Meta.UpdateTime)
 		}
-		out = append(out, Doc{Token: r.Meta.Token, Title: cleanText(r.Title), URL: r.Meta.URL, At: at})
+		out = append(out, Doc{Token: tok, Title: cleanText(r.Title), URL: r.Meta.URL, At: at})
 	}
 	return out, nil
 }
@@ -231,33 +266,43 @@ func minuteTitle(display string) string {
 	return strings.TrimSpace(s)
 }
 
+func (c *Client) loc() *time.Location {
+	if c != nil && c.zone != nil {
+		return c.zone
+	}
+	return time.UTC
+}
+
 // parseStart reads the start time out of the description ("… 开始时间: 2026.11.17 20:01:31 …") or the display info;
 // zero when neither has one.
 func (c *Client) parseStart(texts ...string) time.Time {
+	zone := c.loc()
 	for _, s := range texts {
-		m := startTime.FindStringSubmatch(s)
-		if m == nil {
-			continue
+		for _, m := range startTime.FindAllStringSubmatch(s, -1) {
+			atoi := func(v string) int { n, _ := strconv.Atoi(v); return n }
+			year, month, day := atoi(m[1]), atoi(m[2]), atoi(m[3])
+			hour, minute, sec := atoi(m[4]), atoi(m[5]), atoi(m[6])
+			if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || sec > 59 {
+				continue
+			}
+			utc := time.Date(year, time.Month(month), day, hour, minute, sec, 0, time.UTC)
+			if utc.Year() != year || int(utc.Month()) != month || utc.Day() != day {
+				continue
+			}
+			return time.Date(year, time.Month(month), day, hour, minute, sec, 0, zone)
 		}
-		atoi := func(v string) int { n, _ := strconv.Atoi(v); return n }
-		year, month, day := atoi(m[1]), atoi(m[2]), atoi(m[3])
-		hour, minute, sec := atoi(m[4]), atoi(m[5]), atoi(m[6])
-		if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || sec > 59 {
-			continue
-		}
-		return time.Date(year, time.Month(month), day, hour, minute, sec, 0, c.zone)
 	}
 	return time.Time{}
 }
 
-func parseISO(s string) time.Time {
+func (c *Client) parseISO(s string) time.Time {
 	if s == "" {
 		return time.Time{}
 	}
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t
 	}
-	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+	if t, err := time.ParseInLocation("2006-01-02 15:04:05", s, c.loc()); err == nil {
 		return t
 	}
 	return time.Time{}

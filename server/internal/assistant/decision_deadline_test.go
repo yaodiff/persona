@@ -270,7 +270,7 @@ func TestParseDeadline(t *testing.T) {
 
 // ---- ask_user ----
 
-const askDeadlineArgsJSON = `{"deadline":"%s","reversible":%s,"questions":[{"question":"Merge the release PR now?","header":"Merge",` +
+const askDeadlineArgsJSON = `{"why_owner":"priority","deadline":"%s","reversible":%s,"questions":[{"question":"Merge the release PR now?","header":"Merge",` +
 	`"recommend":"Merge","options":[{"label":"Merge","description":"CI is green"},{"label":"Wait"}]}]}`
 
 // askWith is askTodoEnv.ask with args, the card expiring unanswered.

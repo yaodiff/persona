@@ -338,6 +338,77 @@ func TestTodosCompleteListKeepsAllRowsAndItsETag(t *testing.T) {
 	}
 }
 
+func TestTodosV2BoardMergedAcrossManagers(t *testing.T) {
+	h, srv, _, _, ra, rb := todoViewHub(t)
+	const a = `{
+		"status_groups":[{"key":"needs_you","total_count":0,"visible_count":0,"entries":[]},
+			{"key":"todo","total_count":2,"visible_count":1,"entries":[{"todo_id":"a","folded_child_ids":["a-step"],"folded_count":1}]}],
+		"direction_groups":[{"direction_id":"shared","label":"Shared work","counts":{"total":2},"todo_ids":["a","a-step"]},
+			{"direction_id":"","counts":{"total":1},"todo_ids":["a-other"]}],
+		"sidebar_tree":[{"todo_id":"a","section":"todo","child_ids":["a-step"]}],
+		"counts":{"open_total":1,"needs_you":0},"future_member":"keep"
+	}`
+	const b = `{
+		"status_groups":[{"key":"needs_you","total_count":2,"visible_count":2,"entries":[{"todo_id":"b"},{"todo_id":"b-child"}]},
+			{"key":"todo","total_count":1,"visible_count":1,"entries":[{"todo_id":"b-other"}]},
+			{"key":"cancelled","total_count":1,"visible_count":1,"entries":[{"todo_id":"b-ended"}]}],
+		"direction_groups":[{"direction_id":"shared","counts":{"total":2,"needs_you":1},"todo_ids":["b","b-child"]},
+			{"direction_id":"another","label":"Another direction","counts":{"total":1},"todo_ids":["b-ended"]},
+			{"direction_id":"","counts":{"total":1},"todo_ids":["b-other"]}],
+		"sidebar_tree":[{"todo_id":"b","section":"needs_you","surfaced_child_ids":["b-child"]},
+			{"todo_id":"b-other","section":"todo"}],
+		"counts":{"open_total":2,"needs_you":1,"cancelled":1}
+	}`
+	const expected = `{
+		"status_groups":[{"key":"needs_you","total_count":2,"visible_count":2,"entries":[{"todo_id":"b"},{"todo_id":"b-child"}]},
+			{"key":"todo","total_count":3,"visible_count":2,"entries":[{"todo_id":"a","folded_child_ids":["a-step"],"folded_count":1},{"todo_id":"b-other"}]},
+			{"key":"cancelled","total_count":1,"visible_count":1,"entries":[{"todo_id":"b-ended"}]}],
+		"direction_groups":[{"direction_id":"shared","label":"Shared work","counts":{"total":4,"needs_you":1},"todo_ids":["a","a-step","b","b-child"]},
+			{"direction_id":"another","label":"Another direction","counts":{"total":1},"todo_ids":["b-ended"]},
+			{"direction_id":"","counts":{"total":2},"todo_ids":["a-other","b-other"]}],
+		"sidebar_tree":[{"todo_id":"a","section":"todo","child_ids":["a-step"]},
+			{"todo_id":"b","section":"needs_you","surfaced_child_ids":["b-child"]},{"todo_id":"b-other","section":"todo"}],
+		"counts":{"open_total":3,"needs_you":1,"cancelled":1},"future_member":"keep"
+	}`
+	const aList = `{"todos":[{"id":"a"},{"id":"a-step"},{"id":"a-other"}]`
+	const bList = `{"todos":[{"id":"b"},{"id":"b-child"},{"id":"b-other"},{"id":"b-ended"}]`
+	ra.set(aList+`,"board":`+a+`}`, "", 0)
+	rb.set(bList+`,"board":`+b+`}`, "", 0)
+
+	read := func(want string) string {
+		t.Helper()
+		resp, body := todoViewGet(t, h, srv, "/api/v1/todos", nil)
+		var list struct {
+			Board json.RawMessage `json:"board"`
+		}
+		if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &list) != nil {
+			t.Fatalf("list: %d %s", resp.StatusCode, body)
+		}
+		if want == "" && list.Board != nil || want != "" && !sameJSONValue(string(list.Board), want) {
+			t.Fatalf("board = %s, want %s", list.Board, want)
+		}
+		return resp.Header.Get("ETag")
+	}
+	tag := read(expected)
+	if again := read(expected); tag == "" || again != tag {
+		t.Fatalf("identical board merges gave different ETags: %q and %q", tag, again)
+	}
+	ra.set(aList+`}`, "", 0)
+	read(b) // An older default manager has no board.
+	rb.set(bList+`}`, "", 0)
+	read("") // No manager publishes a board.
+
+	answers := []listAnswer{listOf("assistant", 200, aList+`,"board":`+a+`}`)}
+	sums := todoListSums(answers)
+	if raw := string(sums["board"]); raw != a {
+		t.Fatalf("a single manager's board must pass through as sent, got %s", raw)
+	}
+	withBoardMerge, withoutBoardMerge := httptest.NewRecorder(), httptest.NewRecorder()
+	writeMergedSet(withBoardMerge, "todos", answers, sums)
+	writeMerged(withoutBoardMerge, "todos", answers)
+	sameResponse(t, "single-manager board", withBoardMerge, withoutBoardMerge)
+}
+
 // The merge writes the added-up counts byte for byte as decoding every answer and encoding the merge again does, on
 // every shape the scan meets.
 func TestTodoCountsMergeMatchesDecoding(t *testing.T) {

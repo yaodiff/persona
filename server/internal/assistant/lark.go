@@ -207,8 +207,6 @@ func (h larkHost) SetLiveRunExt(r *channel.Run, key, value string) {
 	h.s.setRunExt(r, key, value)
 }
 
-func (h larkHost) RunTo(ext map[string]string) larkhost.Target { return runTo(ext) }
-
 func (h larkHost) RunState(id string, kept bool, make func() any) (any, <-chan struct{}, bool) {
 	c := &h.s.chans
 	c.mu.Lock()

@@ -83,11 +83,15 @@ DOMAINS = [
     "hub_modules_mock",  # a hub that publishes module flags: `modules` and `module.<id>` (#13849), MOCK_HUB_MODULES
     "usage_map_mock",  # the disk usage map: scan, trash, cleanup and an offload provider (#14576), MOCK_USAGE_MAP
     "machine_load_mock",  # moderate CPU with work queued on some cores: MOCK_LOAD_QUEUE (#12519)
+    "orca_stopped_mock",  # Orca installed and not running, or incompatible, in the engine rows (#17037), MOCK_ORCA_STOPPED
     "todo_wait_reasons_mock",  # to-dos waiting for different reasons with the hub's typed `wait` (#16168), MOCK_TODO_WAIT_REASONS
     "dashboards_mock",  # Dashboards: the -pages places and pages, the `dashboards` switch (#15017), MOCK_DASHBOARDS
     "kb_chat_inbox_mock",  # a chat's Inbox items on its knowledge page and its items' kb_chat (#15356), MOCK_KB_CHAT_INBOX
     "command_input_mock",  # an Antigravity command waiting at a prompt (#14527), MOCK_COMMAND_INPUT
     "recording_minutes_debates_mock",  # disagreements in meeting minutes (#16728), POST /mock/recording_minutes_debates
+    "recording_speakers_mock",  # meeting speakers samples and edit route (#17674), POST /api/v1/recordings/{id}/speakers
+    "orca_chat_launchers_mock",  # the server's Orca chat launchers in New Agent (#17047), MOCK_ORCA_CHAT_LAUNCHERS
+    "orca_chat_starts_mock",  # the server's "Start new Agents as Orca chats" switch (#17650), MOCK_ORCA_CHAT_STARTS
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")

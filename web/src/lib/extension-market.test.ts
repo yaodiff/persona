@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  addMarket, agreeLabel, extensionSignatureLabel, parseKeyList, canUninstall, catalogOf, catalogQuery, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, marketView, marketKind, marketLine, marketOf,
+  addMarket, agreeLabel, extensionSignatureLabel, parseKeyList, canUninstall, catalogOf, catalogQuery, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, marketView, marketKind, marketLine, marketOf, newerIncompatibleHint,
   extensionsRoute, previewFromMarket, previewVersion, renameConsent, refreshMarket, removeMarket, routeSub, setMarketToken, specLabel, uninstallExtension, upgradePreview, upgradingFrom, wantsGitHubToken,
   type CatalogItem, type Market, type MarketPreview, type ExtensionsRoute,
 } from "./extension-market";
@@ -45,6 +45,13 @@ describe("市场的规矩", () => {
     expect(itemState(item({ installed: "1.0.0", installed_source: "builtin" }))).toMatchObject({ kind: "elsewhere", label: "hub 内置" });
     expect(itemState(item({ installed: "1.0.0", installed_source: "hub.json" }))).toMatchObject({ kind: "elsewhere" });
     expect(itemState(item({ installed: "1.0.0", installed_source: "installed", upgradable: true, problem: "要更新的 hub" }))).toMatchObject({ kind: "problem" });
+    expect(newerIncompatibleHint(item())).toBeNull();
+    expect(newerIncompatibleHint(item({ latest_incompatible_version: "3.0.0", latest_incompatible_reason: "需要更新版本的 hub" }))).toEqual({
+      version: "3.0.0",
+      reason: "需要更新版本的 hub",
+    });
+    expect(newerIncompatibleHint(item({ latest_incompatible_version: "3.0.0" }))).toEqual({ version: "3.0.0", reason: "" });
+    expect(newerIncompatibleHint(item({ problem: "需要更新版本的 hub", latest_incompatible_version: "3.0.0", latest_incompatible_reason: "需要更新版本的 hub" }))).toBeNull();
   });
   it("uninstalls only what this market installed", () => {
     expect(canUninstall(item({ installed: "1.0.0", from_this_market: true }))).toBe(true);

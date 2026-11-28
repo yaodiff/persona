@@ -410,7 +410,7 @@ func TestReadonlyPlanExitDoesNotSuppressOtherApprovals(t *testing.T) {
 					t.Fatalf("task not dispatched: %+v", todo)
 				}
 				ix := proto.Interaction{ID: "approval", MachineID: tc.machine, SessionID: todo.Agents[0].SessionID,
-					Kind: tc.kind, ToolName: tc.tool}
+					Kind: tc.kind, OutwardWrite: tc.kind == proto.IxPermission, ToolName: tc.tool}
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				done := make(chan proto.Resolution, 1)
@@ -576,6 +576,9 @@ func testReusedWritableTaskKeepsApproval(t *testing.T, report bool) {
 				}
 				if backend == "restart" {
 					s, _ = newTaskServiceOn(t, store)
+					// newTaskServiceOn installs fresh fixture settings; restore the
+					// reviewer that was configured before this simulated restart.
+					setSettings(t, s, func(v *Settings) { v.Main = "reuse-chat" })
 				}
 				callCtx, cancel := context.WithCancel(ctx)
 				defer cancel()
@@ -636,6 +639,9 @@ func testReusedWritableTaskKeepsApproval(t *testing.T, report bool) {
 				})
 				if backend == "restart" {
 					s, _ = newTaskServiceOn(t, store)
+					// newTaskServiceOn installs fresh fixture settings; restore the
+					// reviewer that was configured before this simulated restart.
+					setSettings(t, s, func(v *Settings) { v.Main = "reuse-chat" })
 				}
 				denyCtx, stop := context.WithTimeout(ctx, time.Second)
 				defer stop()

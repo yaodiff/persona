@@ -178,5 +178,9 @@
   "subagents_need_you": "{count} 件が確認待ち",
   "sort_activity": "最近の更新順に並べる",
   "show_list_filter": "フィルターを表示",
-  "show_empty_workspaces": "空のワークスペースを表示"
+  "show_empty_workspaces": "空のワークスペースを表示",
+  "undelivered_waiting_one": "{count} 件のメッセージが未配信",
+  "undelivered_waiting_other": "{count} 件のメッセージが未配信",
+  "undelivered_expired_one": "{count} 件のメッセージが届いていません。確認が必要です",
+  "undelivered_expired_other": "{count} 件のメッセージが届いていません。確認が必要です"
 }

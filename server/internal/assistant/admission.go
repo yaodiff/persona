@@ -521,6 +521,13 @@ func (s *Service) rerouteTarget(ctx context.Context, t *PlanTask) (Device, bool)
 			placementOf(ctx).hit(alt.ID, "launcher_missing", nil)
 			return false
 		}
+		if t.scratchWorkspace() {
+			if !alt.ScratchWorkspace {
+				placementOf(ctx).hit(alt.ID, "scratch_unsupported", nil)
+				return false
+			}
+			return true
+		}
 		return s.taskDirectoryExists(ctx, alt.ID, rehome(t.Cwd, from, alt))
 	})
 }
@@ -539,7 +546,11 @@ func (s *Service) reroutePlanTask(ctx context.Context, t *PlanTask, from, alt De
 	t.Reroute = &reroute
 	t.Reroute.ToMachine = firstNonEmpty(alt.Name, alt.ID)
 	t.Reroute.Reason = note
-	t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, from, alt)
+	if t.scratchWorkspace() {
+		t.Machine, t.Cwd, t.WorkspaceResolved = alt.ID, "", nil
+	} else {
+		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, from, alt)
+	}
 	t.noteWhy(note)
 }
 

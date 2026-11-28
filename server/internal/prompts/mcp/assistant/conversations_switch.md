@@ -1,4 +1,4 @@
-Switch Assistant conversations to another launcher/model; preview first unless confirmed. Busy items queue until turn end without interruption or synthetic messages. Execution saves original settings and returns a batch ID. `restore_batch_id` restores completed items exactly; `batch_id` reads status. Independent changes are refused.{{template "shared/mcp_language" .}}
+Switch Assistant chats to another launcher/model; preview first unless confirmed. Busy chats queue at turn end without interruption. Execution saves originals and returns a batch ID; `restore_batch_id` restores completed items; `batch_id` reads status.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -9,41 +9,16 @@ Switch Assistant conversations to another launcher/model; preview first unless c
       "items": {"type": "string"},
       "minItems": 1,
       "maxItems": 50,
-      "uniqueItems": true,
-      "description": "IDs from conversations_list"
+      "uniqueItems": true
     },
-    "machine_id": {
-      "type": "string",
-      "description": "Assistant machine; defaults to current"
-    },
-    "launcher": {
-      "type": "string",
-      "description": "target launcher"
-    },
-    "model": {
-      "type": "string",
-      "description": "target model; empty uses launcher default"
-    },
-    "effort": {
-      "type": "string",
-      "description": "target effort; empty uses launcher default"
-    },
-    "permission_mode": {
-      "type": "string",
-      "description": "target mode; empty preserves each conversation's mode"
-    },
-    "preview": {
-      "type": "boolean",
-      "description": "read-only; no batch, queue, or confirmation"
-    },
-    "restore_batch_id": {
-      "type": "string",
-      "description": "batch to restore; excludes forward fields"
-    },
-    "batch_id": {
-      "type": "string",
-      "description": "batch status; use alone"
-    }
+    "machine_id": {"type": "string"},
+    "launcher": {"type": "string"},
+    "model": {"type": "string"},
+    "effort": {"type": "string"},
+    "permission_mode": {"type": "string"},
+    "preview": {"type": "boolean"},
+    "restore_batch_id": {"type": "string"},
+    "batch_id": {"type": "string"}
   }
 }
 ```

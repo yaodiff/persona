@@ -184,6 +184,8 @@ type Device struct {
 	ExternalInventory bool `json:"external_inventory,omitempty"`
 	// TaskInstructions: this node preserves delegated instructions separately, including fallback/resume.
 	TaskInstructions bool `json:"task_instructions,omitempty"`
+	// ScratchWorkspace: this node supports managed isolated scratch directories (workspace.scratch.prepare).
+	ScratchWorkspace bool `json:"scratch_workspace,omitempty"`
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`

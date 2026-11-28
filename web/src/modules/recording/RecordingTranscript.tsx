@@ -1,8 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { Button, cx, IconButton } from "../../ui/atoms";
 import { Card, Marked, SectionTitle } from "../../views/knowledge/KBParts";
 import type { RecordingView } from "./recording-view";
+import { RecordingSpeakersBar, SpeakerAvatar } from "./RecordingSpeakersDialog";
+import { groupLinesBySpeaker, hasVisibleSpeakers, speakerLabel, type DetailSpeakers } from "./speakers";
 import { exportTranscriptText, stepTranscriptMatch, transcriptMatchParts, transcriptMatches, transcriptRows, transcriptRowText, type TranscriptRow } from "./transcript-review";
 
 function download(rows: TranscriptRow[], recordingId: string) {
@@ -17,12 +19,16 @@ function download(rows: TranscriptRow[], recordingId: string) {
   }
 }
 
-export function RecordingTranscript({ rec, recordingId, query, highlighted, onJump }: {
+export function RecordingTranscript({ rec, recordingId, query, highlighted, onJump, speakers, speakersBusy, onOpenSpeakers, onDeleteSpeakers }: {
   rec: RecordingView;
   recordingId: string;
   query?: string;
   highlighted: string;
   onJump: (id: string) => void;
+  speakers?: DetailSpeakers | null;
+  speakersBusy?: boolean;
+  onOpenSpeakers?: () => void;
+  onDeleteSpeakers?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -37,6 +43,13 @@ export function RecordingTranscript({ rec, recordingId, query, highlighted, onJu
   const matchIds = useMemo(() => new Set(matches.map(row => row.id)), [matches]);
   const position = selected ? matches.findIndex(row => row.id === selected) : -1;
   const hasQuery = open && !!search.trim();
+  const visibleSpeakers = !rec.partial && hasVisibleSpeakers(speakers ?? null) ? speakers! : null;
+  const speakerGroups = useMemo(() => {
+    if (!visibleSpeakers || rec.trimmedAt || visibleSpeakers.state !== "ready" || !rows.length) return null;
+    const groups = groupLinesBySpeaker(rows, visibleSpeakers);
+    return groups.some((g) => g.kind === "speaker") ? groups : null;
+  }, [visibleSpeakers, rec.trimmedAt, rows]);
+  const formatNum = useCallback((n: number) => t("recording.speaker_n", { n }), []);
 
   useEffect(() => { if (open) input.current?.focus({ preventScroll: true }); }, [open]);
   function close() {
@@ -52,6 +65,20 @@ export function RecordingTranscript({ rec, recordingId, query, highlighted, onJu
     setSelected(id);
     onJump(id);
   }
+  function renderRow(row: TranscriptRow) {
+    const match = hasQuery && matchIds.has(row.id);
+    return <li key={row.id} id={row.id} tabIndex={-1}
+      className={cx("flex gap-3 rounded-control py-1.5 text-[13px] leading-relaxed transition-colors",
+        (highlighted === row.id || (match && selected === row.id)) && "bg-accent-tint")}>
+      <span className={cx("w-[60px] shrink-0 pt-px text-[11.5px] tabular-nums", row.bookmark ? "font-semibold text-accent-ink" : "text-ink-3")}>{row.clock}</span>
+      <span className={cx("min-w-0 flex-1 select-text [overflow-wrap:anywhere]", row.bookmark ? "font-medium text-accent-ink" : "text-ink")}>
+        {match ? transcriptMatchParts(transcriptRowText(row), search).map((part, i) => part.hit
+          ? <mark key={i} className="rounded bg-accent-tint font-semibold text-ink">{part.text}</mark>
+          : part.text)
+          : query && !row.bookmark ? <Marked text={row.text} query={query} /> : transcriptRowText(row)}
+      </span>
+    </li>;
+  }
 
   return <section onKeyDown={event => {
     if (open && event.key === "Escape") {
@@ -64,6 +91,14 @@ export function RecordingTranscript({ rec, recordingId, query, highlighted, onJu
       right={rows.length > 0 && <Button ref={toggle} tone="quiet" size="sm" className="touch-hit" icon="search" expanded={open}
         aria-controls={panel} onClick={() => open ? close() : setOpen(true)}>{t("recording.transcript_review")}</Button>} />
     <Card>
+      {visibleSpeakers && onOpenSpeakers && onDeleteSpeakers && (
+        <RecordingSpeakersBar
+          speakers={visibleSpeakers}
+          busy={speakersBusy}
+          onOpenNaming={onOpenSpeakers}
+          onDelete={onDeleteSpeakers}
+        />
+      )}
       {open && rows.length > 0 && <div id={panel} className="flex flex-col gap-2 px-3 py-2">
         <div className="flex items-center gap-1">
           <input ref={input} type="search" aria-label={t("recording.transcript_find")} placeholder={t("recording.transcript_find")}
@@ -99,22 +134,43 @@ export function RecordingTranscript({ rec, recordingId, query, highlighted, onJu
       {(rec.trimmedAt || !rows.length) && <p className="px-4 py-2.5 text-[12.5px] text-ink-3">
         {t(rec.trimmedAt ? "recording.transcript_expired" : "recording.transcript_empty")}
       </p>}
-      <ol className="px-4 py-1.5">
-        {rows.map(row => {
-          const match = hasQuery && matchIds.has(row.id);
-          return <li key={row.id} id={row.id} tabIndex={-1}
-            className={cx("flex gap-3 rounded-control py-1.5 text-[13px] leading-relaxed transition-colors",
-              (highlighted === row.id || (match && selected === row.id)) && "bg-accent-tint")}>
-            <span className={cx("w-[60px] shrink-0 pt-px text-[11.5px] tabular-nums", row.bookmark ? "font-semibold text-accent-ink" : "text-ink-3")}>{row.clock}</span>
-            <span className={cx("min-w-0 flex-1 select-text [overflow-wrap:anywhere]", row.bookmark ? "font-medium text-accent-ink" : "text-ink")}>
-              {match ? transcriptMatchParts(transcriptRowText(row), search).map((part, i) => part.hit
-                ? <mark key={i} className="rounded bg-accent-tint font-semibold text-ink">{part.text}</mark>
-                : part.text)
-                : query && !row.bookmark ? <Marked text={row.text} query={query} /> : transcriptRowText(row)}
-            </span>
-          </li>;
-        })}
-      </ol>
+      {speakerGroups ? (
+        <div data-transcript-speakers className="space-y-2 px-4 py-2">
+          {speakerGroups.map((group, gi) =>
+            group.kind === "speaker" ? (
+              <div
+                key={`${group.speakerId}-${gi}`}
+                data-speaker-group={group.speakerId}
+                data-speaker-unsure={group.unsure ? "true" : undefined}
+                className="pt-1 first:pt-0"
+              >
+                <div className="mb-0.5 flex items-center gap-2 text-label font-medium text-ink-2">
+                  <SpeakerAvatar person={group.person ?? { id: group.speakerId }} />
+                  <span className="min-w-0 truncate text-ink">
+                    {speakerLabel(group.person ?? { id: group.speakerId }, formatNum)}
+                  </span>
+                  {group.unsure && (
+                    <span
+                      data-speaker-unsure-mark
+                      role="img"
+                      aria-label={t("recording.speaker_possibly")}
+                      title={t("recording.speaker_possibly")}
+                      className="shrink-0 font-normal text-ink-3"
+                    >
+                      ?
+                    </span>
+                  )}
+                </div>
+                <ol>{group.rows.map(renderRow)}</ol>
+              </div>
+            ) : (
+              <ol key={`plain-${gi}`}>{group.rows.map(renderRow)}</ol>
+            ),
+          )}
+        </div>
+      ) : (
+        <ol className="px-4 py-1.5">{rows.map(renderRow)}</ol>
+      )}
     </Card>
   </section>;
 }

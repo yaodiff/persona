@@ -86,13 +86,23 @@ describe("readable hub errors", () => {
     expect(isOfflineError(text)).toBe(false);
   });
 
-  it("shows a decision accept failure's reason without exposing its diagnostic detail", async () => {
+  // The hub's own sentence, not "the service couldn't complete this request (HTTP 502)" (#17431): that line is for what
+  // stands in front of the hub.
+  it.each([502, 503])("shows the hub's own reason for a coded HTTP %s, without its diagnostic detail", async (status) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      code: "accept_not_taken", error: "every agent on this task has stopped", detail: "private diagnostic",
-    }), { status: 502 })));
+      code: "accept_not_taken", error: "The answer did not go: the computer is offline", detail: "private diagnostic", delivered: "none",
+    }), { status })));
     const error = await api("/todos/todo_v1/accept", { method: "POST", token: "test-token" }).catch((e: unknown) => e);
-    expect(errorText(error)).toBe(t("lib-api.hub_unavailable", { detail: "HTTP 502: every agent on this task has stopped" }));
+    expect(errorText(error)).toBe("The answer did not go: the computer is offline");
     expect(errorText(error)).not.toContain("private diagnostic");
+    expect(isTransient(error)).toBe(false);
+  });
+
+  it.each([["", "HTTP 502"], ["Bad Gateway", "HTTP 502: Bad Gateway"]])("keeps the generic line for an empty or non-JSON gateway answer: %j", async (body, detail) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 502 })));
+    const error = await api("/todos/todo_v1/accept", { method: "POST", token: "test-token" }).catch((e: unknown) => e);
+    expect(errorText(error)).toBe(t("lib-api.hub_unavailable", { detail }));
+    expect(isTransient(error)).toBe(true);
   });
 
   it.each(["", "HTTP 500"])("keeps a bare status only once: %s", (message) => {

@@ -277,7 +277,7 @@ func (s core) openTodoIn(ctx context.Context, ev botcard.MessageEvent, st Feishu
 		// words to name it by.
 		return "", i18n.T(l, "assistant-feishu.thread_open_needs_text")
 	}
-	target, origin, why := s.h.OpenTarget(ctx, st)
+	target, origin, why := s.openTarget(ctx, st)
 	if why != "" {
 		return "", why
 	}

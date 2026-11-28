@@ -434,6 +434,7 @@ export class AdminWorkspace {
   private async refreshAssistant(snapshot: AdminSnapshot): Promise<void> {
     const result = await this.read(snapshot, '/api/v1/assistant'); if (!result || !this.admits(snapshot)) return;
     this.assistantData = result;
+    this.root?.syncNextSuggestions?.(result);
     if (this.page === 'conversation_options') return;
     this.setRemoteForm(Wire.payload(['machine_id', 'launcher', 'timezone', 'notes', 'main_tasks_quiet', 'agent_tasks', 'inbox_signals',
       'interject_background', 'kb_topics', 'idle_close_hours', 'archive_closed_days', 'recording_days', 'minutes_days'], [
@@ -577,6 +578,27 @@ export class AdminWorkspace {
     // Closing the menu's sheet while the Hub acknowledges the write still updates this assistant's drawer.
     if (accepted && result && owner.owns(snapshot.generation,snapshot.scope) && owner.profile.id === snapshot.profile) {
       owner.acceptSidebarConfig(result,true);
+    }
+    return accepted;
+  }
+
+  async setNextSuggestions(snapshot: AdminSnapshot, enabled: boolean): Promise<boolean> {
+    const path = '/api/v1/assistant', owner = this.root, previous = this.assistantData;
+    if (!owner || (!owner.connected && !owner.demo) || this.page !== 'assistant' ||
+      this.saving || !this.admits(snapshot, path) || typeof previous['next_suggestions'] !== 'boolean') return false;
+    if (Wire.bool(previous, 'next_suggestions') === enabled) return true;
+    const pending = Wire.parse(JSON.stringify(previous));
+    pending['next_suggestions'] = enabled;
+    this.assistantData = pending;
+    const result = await this.write(snapshot, path, 'PUT', Wire.payload(['next_suggestions'], [enabled]));
+    const acknowledged = !!result && (typeof result['next_suggestions'] === 'boolean' ? result['next_suggestions'] === true : enabled);
+    const accepted = !!result && acknowledged === enabled;
+    if (this.admits(snapshot, path)) {
+      this.assistantData = accepted && result ? result : previous;
+      if (result && !accepted) { this.error = 'request_updated'; this.writeState = 'failed'; }
+    }
+    if (accepted && result && owner.owns(snapshot.generation, snapshot.scope) && owner.profile.id === snapshot.profile) {
+      owner.syncNextSuggestions?.(result);
     }
     return accepted;
   }

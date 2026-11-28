@@ -18,6 +18,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import persona.core.contracts.api.SessionFileContent
 import persona.core.designsystem.PersonaTheme
 import java.io.ByteArrayInputStream
+import java.util.Locale
 
 /**
  * An HTML file previewed in the file viewer (docs/android/android.md "Files and Git in chat"; web `lib/html-preview.ts`, iOS #1297): the
@@ -39,7 +40,7 @@ internal object HtmlPreview {
         return "default-src 'none'; img-src data: blob:; media-src data: blob:; font-src data:; style-src 'unsafe-inline' data:; script-src $script; form-action 'none'"
     }
 
-    private val lead = Regex("^\\s*(?:<\\?xml[^>]*>\\s*)?(<!doctype[^>]*>)?", RegexOption.IGNORE_CASE)
+    private val lead = Regex("^\\uFEFF?\\s*(?:<\\?xml[^>]*>\\s*)?(<!doctype[^>]*>)?", RegexOption.IGNORE_CASE)
 
     /**
      * The page with the policy put first, after the doctype (before it would put the page in quirks mode; the parser
@@ -47,27 +48,88 @@ internal object HtmlPreview {
      */
     fun document(html: String, p: Policy): String {
         val csp = csp(p)
-        val inject = if (csp.isEmpty()) "" else "<meta http-equiv=\"Content-Security-Policy\" content=\"$csp\">"
+        if (csp.isEmpty()) return html
+        val inject = "<meta http-equiv=\"Content-Security-Policy\" content=\"$csp\">"
         val end = lead.find(html)?.range?.last?.plus(1) ?: 0
         return html.substring(0, end) + inject + html.substring(end)
     }
 
-    // What the page loads: any src, and a <link>'s href (an <a>'s is a link to follow, not something loaded).
-    private val reference = Regex("(?:\\ssrc|<link\\b[^>]*\\shref)\\s*=\\s*[\"']?([^\"'\\s>]+)", RegexOption.IGNORE_CASE)
     private val absolute = Regex("^(?:[a-z][a-z0-9+.-]*:|#|//)", RegexOption.IGNORE_CASE)
 
-    /** How many references the page makes to files beside it (they can't load: the page has no address). */
-    fun relativeRefs(html: String): Int = reference.findAll(html).count { !absolute.containsMatchIn(it.groupValues[1]) }
+    /**
+     * How many references the page makes to files beside it (they can't load: the page has no address).
+     * Counts relative `src` attributes on any tag and `href` attributes on `<link>` tags in strictly O(N) time.
+     */
+    fun relativeRefs(html: String): Int {
+        val len = html.length
+        var count = 0
+        var i = html.indexOf('<')
+        while (i >= 0) {
+            if (i + 1 >= len || !html[i + 1].isAsciiLetter()) {
+                i = html.indexOf('<', i + 1)
+                continue
+            }
+            var p = i + 1
+            val nameStart = p
+            while (p < len && html[p].isTagNameChar()) p++
+            val isLinkTag = p - nameStart == 4 && html.regionMatches(nameStart, "link", 0, 4, ignoreCase = true)
+            while (p < len && html[p] != '>' && html[p] != '<') {
+                while (p < len && (html[p].isWhitespace() || html[p] == '/')) p++
+                if (p >= len || html[p] == '>' || html[p] == '<') break
+                val attrStart = p
+                while (p < len && !html[p].isWhitespace() && html[p] != '=' && html[p] != '>' && html[p] != '<' && html[p] != '/') p++
+                val attrEnd = p
+                while (p < len && html[p].isWhitespace()) p++
+                if (p >= len || html[p] != '=') continue
+                p++ // skip '='
+                while (p < len && html[p].isWhitespace()) p++
+                if (p >= len || html[p] == '>' || html[p] == '<') break
+                val q = html[p]
+                val valStart: Int
+                val valEnd: Int
+                if (q == '"' || q == '\'') {
+                    valStart = p + 1
+                    val close = html.indexOf(q, valStart)
+                    if (close < 0) {
+                        p = len
+                        break
+                    }
+                    valEnd = close
+                    p = close + 1
+                } else {
+                    valStart = p
+                    while (p < len && !html[p].isWhitespace() && html[p] != '>' && html[p] != '<') p++
+                    valEnd = p
+                }
+                val attrLen = attrEnd - attrStart
+                val checkAttr = (attrLen == 3 && html.regionMatches(attrStart, "src", 0, 3, ignoreCase = true)) ||
+                    (isLinkTag && attrLen == 4 && html.regionMatches(attrStart, "href", 0, 4, ignoreCase = true))
+                if (checkAttr) {
+                    val value = html.substring(valStart, valEnd).trim()
+                    if (value.isNotEmpty() && !absolute.containsMatchIn(value)) count++
+                }
+            }
+            i = when {
+                p >= len -> -1
+                html[p] == '<' -> p
+                else -> html.indexOf('<', p + 1)
+            }
+        }
+        return count
+    }
+
+    private fun Char.isAsciiLetter(): Boolean = this in 'a'..'z' || this in 'A'..'Z'
+    private fun Char.isTagNameChar(): Boolean = !isWhitespace() && this != '>' && this != '/' && this != '<'
 
     /** Whether a request from the page may load: inline data always, the web only when the network is on. */
-    fun allows(scheme: String, p: Policy): Boolean = when (scheme.lowercase()) {
+    fun allows(scheme: String, p: Policy): Boolean = when (scheme.lowercase(Locale.ROOT)) {
         "data", "blob", "about" -> true
         "http", "https" -> p.network
         else -> false
     }
 
     /** A link the user tapped in the page that the app opens (in its link sheet): web and mail links only. */
-    fun opens(scheme: String) = scheme.lowercase() in openable
+    fun opens(scheme: String) = scheme.lowercase(Locale.ROOT) in openable
 
     /** The line above the page: what is off, and what can't load. */
     fun notice(resources: Resources, p: Policy, refs: Int): String = buildList {

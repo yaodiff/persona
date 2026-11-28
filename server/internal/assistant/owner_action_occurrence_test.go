@@ -177,6 +177,7 @@ func TestOwnerActionReplyEnvelopeRejectsStaleOccurrence(t *testing.T) {
 }
 
 func TestOwnerActionFeishuRejectsStaleCardOccurrence(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _, book := ownerReplyTestService(t)
 	batch := createOwnerTestBatch(t, book, `{"body":"feishu occurrence"}`)
 	ix := ownerReplyBatchIX(batch)

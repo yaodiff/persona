@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// herdrCoreHost is herdr-core (hc), the runtime behind the Herdr desktop app (docs/plans/plan-orca-support.md "herdr-core
+// herdrCoreHost is herdr-core (hc), the runtime behind the Herdr desktop app (docs/integrations/herdr-core.md "herdr-core
 // host"). A pane is a terminal, its id the terminal's address ("t7"), which a core never gives to another terminal.
 // Listing, state, plain-text reads, prompts and keys, process → session, events, closing; starting and renaming through
 // the app's layout document (hostherdrcore_launch.go). No colors, no typing without submitting, no live stream.

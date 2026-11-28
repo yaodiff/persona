@@ -52,6 +52,13 @@ func (r *Registry) prune(id string, keep ...string) {
 	r.pruneTools(id, keep...)
 }
 
+// hasYielded: a built-in of id is put aside for the installed plugin that took its place.
+func (r *Registry) hasYielded(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.yielded[id] != nil
+}
+
 // Rollback goes back to the version installed before the last upgrade.
 func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, error) {
 	unlock, err := r.beginOperation()
@@ -70,7 +77,9 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 	if old.Record.AttachedPackage() {
 		return nil, i18n.Err("extension-status.attached_detach_first", i18n.Args{"id": id})
 	}
-	if old.Record.BuiltinPredecessor && old.Record.PreviousOrigin == builtinOrigin(id) {
+	if old.Record.BuiltinPredecessor && (old.Record.PreviousOrigin == builtinOrigin(id) || old.Record.PreviousVersion == "" && r.hasYielded(id)) {
+		// The second case: a build without the built-in rolled the package back to its first version, which dropped
+		// the anchor (no built-in to name); a build with it put the built-in aside again at Load (#16263).
 		return r.rollbackBuiltin(ctx, old, actor, unlock)
 	}
 	prev := old.Record.PreviousVersion

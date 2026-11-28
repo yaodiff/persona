@@ -7,6 +7,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/identity"
 )
 
 func TestTodosV2DirectionVisibilityPrecedenceAndInheritance(t *testing.T) {
@@ -233,12 +235,49 @@ func TestTodosV2DirectionVisibilityPrecedenceAndInheritance(t *testing.T) {
 		}
 	}
 
-	assertResolved("resolveEffectiveDirections", resolveEffectiveDirections(items, directions))
+	s := &Service{}
+	assertResolved("resolveEffectiveDirections", s.directionOwners(items).resolveEffectiveDirections(items, directions))
 
 	// Verify order-independence by reversing the input slice.
 	rev := slices.Clone(items)
 	slices.Reverse(rev)
-	assertResolved("resolveEffectiveDirections(reversed)", resolveEffectiveDirections(rev, directions))
+	assertResolved("resolveEffectiveDirections(reversed)", s.directionOwners(rev).resolveEffectiveDirections(rev, directions))
+}
+
+func TestTodosV2DetailInheritsDirectionOnlyFromVisibleAncestors(t *testing.T) {
+	e := treeEnv(t)
+	setBlockersTodosV2Flag(t, e.s, true, false)
+	parent := e.task("Parent from a private space", func(todo *Todo) {
+		todo.DirectionID = "conv_lead_a"
+		todo.Agents = append(todo.Agents, TodoAgent{
+			MachineID: "server", SessionID: "private", Cwd: identity.HealthDir("/home/owner"),
+		})
+	})
+	child := e.task("Child outside the private space", func(todo *Todo) { todo.PartOf = parent })
+	public := e.task("Visible parent", func(todo *Todo) { todo.DirectionID = "conv_lead_b" })
+	publicChild := e.task("Visible child", func(todo *Todo) { todo.PartOf = public })
+
+	read := func(role, id string) (int, listedTodo) {
+		t.Helper()
+		w := doTopologyHTTP(e.s, role, http.MethodGet, "/api/v1/todos/"+id, "")
+		var payload struct{ Todo listedTodo }
+		if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return w.Code, payload.Todo
+	}
+	if code, _ := read(roleExtension, parent); code != http.StatusNotFound {
+		t.Fatalf("private parent status = %d", code)
+	}
+	if code, row := read("", child); code != http.StatusOK || row.EffectiveDirectionName != "Android parity" {
+		t.Fatalf("owner detail: status=%d direction=%q", code, row.EffectiveDirectionName)
+	}
+	if code, row := read(roleExtension, child); code != http.StatusOK || row.EffectiveDirectionID != "" || row.EffectiveDirectionName != "" {
+		t.Fatalf("extension detail: status=%d direction=%q (%q)", code, row.EffectiveDirectionID, row.EffectiveDirectionName)
+	}
+	if code, row := read(roleExtension, publicChild); code != http.StatusOK || row.EffectiveDirectionName != "Push relay" {
+		t.Fatalf("extension detail with visible parent: status=%d direction=%q", code, row.EffectiveDirectionName)
+	}
 }
 
 func TestTodosV2DirectionVisibilityHTTPListPaginatedAndSingle(t *testing.T) {

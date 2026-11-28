@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -293,19 +294,20 @@ func TestOrcaCodexLaunchPreferencesRefuseUnsafeOrUnavailableLaunches(t *testing.
 	const safeArgs = "--sandbox workspace-write --ask-for-approval on-request"
 	for _, tc := range []struct {
 		name        string
+		reason      string // the refusal's data reason, the hub's words (#17057); "" is shell
 		args        string
 		answer      any
 		command     string
 		environment []string
 	}{
-		{name: "preferences method unavailable", answer: orcarttest.Fail{Code: "method_not_found"}},
-		{name: "preferences runtime unavailable", answer: orcarttest.Fail{Code: "runtime_unavailable"}},
-		{name: "preferences missing from response", answer: map[string]any{}},
-		{name: "custom command", args: safeArgs, command: "/opt/custom/codex --remote unix:///tmp/codex.sock"},
-		{name: "custom environment", args: safeArgs, environment: []string{"OPENAI_BASE_URL"}},
-		{name: "unfinished single quote", args: "--sandbox 'workspace-write"},
-		{name: "unfinished double quote", args: `--model "orca-model`},
-		{name: "trailing backslash", args: `--model orca-model\`},
+		{name: "preferences method unavailable", reason: "unreadable", answer: orcarttest.Fail{Code: "method_not_found"}},
+		{name: "preferences runtime unavailable", reason: "unreadable", answer: orcarttest.Fail{Code: "runtime_unavailable"}},
+		{name: "preferences missing from response", reason: "unreadable", answer: map[string]any{}},
+		{name: "custom command", reason: "custom", args: safeArgs, command: "/opt/custom/codex --remote unix:///tmp/codex.sock"},
+		{name: "custom environment", reason: "custom", args: safeArgs, environment: []string{"OPENAI_BASE_URL"}},
+		{name: "unfinished single quote", reason: "quoting", args: "--sandbox 'workspace-write"},
+		{name: "unfinished double quote", reason: "quoting", args: `--model "orca-model`},
+		{name: "trailing backslash", reason: "quoting", args: `--model orca-model\`},
 		{name: "newline", args: "--model orca-model\n--sandbox read-only"},
 		{name: "carriage return", args: "--model orca-model\r--sandbox read-only"},
 		{name: "variable substitution", args: "--model $CODEX_MODEL"},
@@ -343,6 +345,10 @@ func TestOrcaCodexLaunchPreferencesRefuseUnsafeOrUnavailableLaunches(t *testing.
 			err := f.start(t, nil)
 			if got := rpcCode(err); got != "codex_launch_preferences" {
 				t.Errorf("session.start error code = %q, want codex_launch_preferences (error: %v)", got, err)
+			}
+			want := cmp.Or(tc.reason, "shell")
+			if _, data := refusalOf(t, err); data["reason"] != want || data["delivered"] != "none" {
+				t.Errorf("refusal data = %v, want reason %s", data, want)
 			}
 			if got := f.o.Count("settings.getAgentLaunch"); got != 1 {
 				t.Errorf("settings.getAgentLaunch calls = %d, want one", got)

@@ -603,15 +603,10 @@ func isMissingTranscriptErr(err error) bool {
 	return coded && code == codeSessionNotFound
 }
 
-// isZeroTurnPreparedSegment reports whether seg is an active pre-created segment
-// (Ordinal > 1) with no observed generation, no file growth revision, no durable
-// history row, and no dispatched or accepted input since activation. Any segment
-// with real history evidence fails closed and keeps data-loss protection.
+// Empty runtime generations are not model turns. Recovery needs explicit
+// first-message/preparation evidence, zero durable coverage and no dispatch.
 func (s *Service) isZeroTurnPreparedSegment(ctx context.Context, c *db.LogicalConversation, seg conversationlog.Segment) bool {
 	if c == nil || seg.Ordinal <= 1 || seg.State != "active" || seg.FrozenEnd != nil {
-		return false
-	}
-	if seg.SourceHistory != "" || seg.SourceRevision != 0 {
 		return false
 	}
 	hs, ok := s.store().(conversationHistoryStore)
@@ -619,9 +614,33 @@ func (s *Service) isZeroTurnPreparedSegment(ctx context.Context, c *db.LogicalCo
 		return false
 	}
 	h, err := hs.ConversationHistory(ctx, seg.MachineID, seg.SessionID)
-	if err != nil || h != nil {
+	if err != nil {
 		return false
 	}
+	var state struct {
+		Awaiting *bool    `json:"awaiting_first_message"`
+		Inputs   []string `json:"segment_inputs"`
+	}
+	_, err = s.store().Setting(ctx, "node_model."+seg.MachineID+"."+seg.SessionID, &state)
+	if err != nil || len(state.Inputs) != 0 || state.Awaiting != nil && !*state.Awaiting {
+		return false
+	}
+	if h != nil {
+		// A read of agy items creates revision 1/history even before a turn.
+		// Revision alone is never sufficient evidence for rebuilding a segment.
+		if state.Awaiting == nil || !*state.Awaiting || h.TailSeq == nil || *h.TailSeq != 0 || h.Summary != "" || seg.SourceRevision > h.Revision || seg.SourceHistory != "" && seg.SourceHistory != h.History {
+			return false
+		}
+		for _, r := range h.Coverage {
+			if r.From != 0 || r.Through != 0 {
+				return false
+			}
+		}
+	} else if seg.SourceHistory != "" || seg.SourceRevision != 0 {
+		return false
+	}
+	// A pristine segment with no observed generation is also proven prepared
+	// by its durable activation switch (the DB predicate fails closed otherwise).
 	inputs, ok := s.store().(logicalSegmentInputStore)
 	if !ok {
 		return false

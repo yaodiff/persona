@@ -144,6 +144,9 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 			return i18n.Err("assistant-model_profiles.err_tier_candidates", i18n.Args{"tier": name, "max": maxTierCandidates})
 		}
 		t.normalize()
+		if checkStartHostName(t.startHost()) != nil {
+			return i18n.Err("assistant-model_profiles.err_value", i18n.Args{"where": name, "field": "host"})
+		}
 		for i, c := range t.list() {
 			if err := checkTierCandidate(candidateWhere(name, i), c); err != nil {
 				return err
@@ -285,6 +288,9 @@ func (s *Service) checkModelProfileForSave(ctx context.Context, p *ModelProfile,
 		return err
 	}
 	ctx = withManagedSnapshot(ctx, stored)
+	if err := s.projectTiers(ctx, p.Tiers); err != nil {
+		return err
+	}
 	if p.Purposes, err = s.normalizeProfilePurposes(ctx, p.Purposes, map[string]modelRecord{}, stored); err != nil {
 		return err
 	}

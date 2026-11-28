@@ -66,13 +66,13 @@
     <string name="chat_chrome_delete_chat">删除对话</string>
     <string name="chat_chrome_notice_verify">核对</string>
     <string name="chat_chrome_notice_dismiss">关闭</string>
-    <string name="chat_chrome_rename_text">标签名同步到 herdr；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
+    <string name="chat_chrome_rename_text">标签名同步到 %1$s；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
     <string name="chat_chrome_rename_text_tern">标签名同步到 Tern；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
     <string name="chat_chrome_rename_text_rex">标签名同步到 Rex；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
-    <string name="chat_chrome_rename_text_unified">更新 herdr 标签名。如果 CLI 支持改名，也会更新 CLI 会话名。</string>
+    <string name="chat_chrome_rename_text_unified">更新 %1$s 标签名。如果 CLI 支持改名，也会更新 CLI 会话名。</string>
     <string name="chat_chrome_save">保存</string>
     <string name="chat_chrome_name">名称</string>
-    <string name="chat_chrome_tab_name">标签名（herdr tab）</string>
+    <string name="chat_chrome_tab_name">标签名（%1$s tab）</string>
     <string name="chat_chrome_tab_name_tern">标签名（Tern tab）</string>
     <string name="chat_chrome_tab_name_rex">标签名（Rex tab）</string>
     <string name="chat_chrome_session_name">会话名</string>

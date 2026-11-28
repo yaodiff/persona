@@ -16,6 +16,13 @@ final class AppModel {
         return model
     }()
 
+    #if os(iOS)
+    /// Only the enabled, visible iPhone Main Chat installs a receiver for live reply items.
+    @ObservationIgnored weak var replySpeech: ReplySpeechTurns?
+    /// A watch may resend old items as ordinary live pushes before its subscription page arrives.
+    @ObservationIgnored private var pendingSpeechBacklog: Set<SessionKey> = []
+    #endif
+
     /// Every hub paired and the groups they form (HubStore, docs/protocol/multi-hub.md). Changed only through the group
     /// functions (HubLinks.swift), which save it (`saveRegistry`).
     var registry: HubRegistry
@@ -177,6 +184,9 @@ final class AppModel {
             }
         }
         sessionIndex = index
+        #if os(iOS)
+        if let replySpeech { replySpeech.sessionChanged(index[replySpeech.key]) }
+        #endif
         // A row the Agents list showed unseen and seen since, here or elsewhere, keeps its place (#12514).
         if !shownThisVisit.isEmpty { holdNotedSeen(Array(shownThisVisit.keys)) }
         for (key, cell) in sideCells {
@@ -1383,6 +1393,7 @@ final class AppModel {
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
         PortForwarder.shared.closeAll() // no hub left for a forwarded port to reach
+        LoopbackCertificateTrustStore.shared.reset()
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
         // No key may open a push any more: the notification extension tries every key left (PushCrypto.allKeys).
         for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
@@ -2241,6 +2252,9 @@ final class AppModel {
         chats[key] = nil
         chatUse[key] = nil
         subscribers[key] = nil
+        #if os(iOS)
+        pendingSpeechBacklog.remove(key)
+        #endif
         detailAt[key] = nil
         shown.removeAll { $0.key == key }
         if visibleSession == key { visibleSession = shown.last?.key }
@@ -2561,6 +2575,9 @@ final class AppModel {
         subscribers[key, default: []].insert(owner)
         guard first else { return }
         let store = chat(key)
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone { pendingSpeechBacklog.insert(key) }
+        #endif
         forgetAgentLive(key) // a delta that crossed the last unsubscribe
         Task { await refreshSessionDetail(key) }
         socket(key.group)?.send(subscribeMessage(key))
@@ -2571,6 +2588,9 @@ final class AppModel {
         guard var owners = subscribers[key], owners.remove(owner) != nil else { return }
         guard owners.isEmpty else { subscribers[key] = owners; return }
         subscribers[key] = nil
+        #if os(iOS)
+        pendingSpeechBacklog.remove(key)
+        #endif
         detailAt[key] = nil
         forgetAgentLive(key)
         liveRetryCells[key] = nil
@@ -2820,11 +2840,15 @@ final class AppModel {
     private func applyBatch(_ store: ChatStore, kind: NativeContinuityInput.Kind, items: [Item], span: ItemSpan,
                             backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> ChatStore.Gap {
         #if DEBUG
-        return store.apply(.batch(kind, items: items, span: span, backlog: backlog,
-                                  hasMore: hasMore, moreAfter: moreAfter)) ?? .none
+        let gap = store.apply(.batch(kind, items: items, span: span, backlog: backlog,
+                                     hasMore: hasMore, moreAfter: moreAfter)) ?? .none
         #else
-        return store.apply(items, span: span, backlog: backlog, hasMore: hasMore, moreAfter: moreAfter)
+        let gap = store.apply(items, span: span, backlog: backlog, hasMore: hasMore, moreAfter: moreAfter)
         #endif
+        #if os(iOS)
+        if kind == .after, !moreAfter, case .none = gap { pendingSpeechBacklog.remove(store.key) }
+        #endif
+        return gap
     }
 
     private func replaceBatch(_ store: ChatStore, items: [Item], hasMore: Bool, span: ItemSpan) {
@@ -2928,6 +2952,9 @@ final class AppModel {
             let page = try await api.items(key, beforeSeq: nil)
             guard shouldApply?() ?? true else { return }
             replaceBatch(chat(key), items: page.items, hasMore: page.hasMore, span: page.span)
+            #if os(iOS)
+            pendingSpeechBacklog.remove(key)
+            #endif
             #if DEBUG && os(iOS)
             completed = true
             #endif
@@ -3004,6 +3031,9 @@ final class AppModel {
         #if DEBUG || PERF_SIGNPOST
         PerfTrace.event("Connected")
         #endif
+        #if os(iOS)
+        if replySpeech?.key.group == group { replySpeech?.reconnecting() }
+        #endif
         registerPhone(link)
         // Phone tool results answered while the socket was down: the hub matches them to their calls by call_id (#4456).
         toolResults.flush(group: group, on: link.live)
@@ -3041,6 +3071,9 @@ final class AppModel {
         // resumed (an empty catch-up only lets the outbox go).
         connection.startCatchUp(group, plan.refetch ? [Self.interactionsPart(group)] + mine.map(Self.catchUpPart) : [])
         for key in mine {
+            #if os(iOS)
+            if UIDevice.current.userInterfaceIdiom == .phone { pendingSpeechBacklog.insert(key) }
+            #endif
             updateLiveRetry(key, nil, working: false, subscribed: false)
             #if DEBUG
             _ = chat(key).apply(.event(.reconnected))
@@ -3164,10 +3197,12 @@ final class AppModel {
     func replaceInteractions(_ group: String, _ list: [Interaction], askedAt: Date? = nil) {
         var all = interactions.filter { $0.value.group != group }
         for ix in list where !endedInteraction(ix) {
-            if let current = all[ix.uid] {
+            // The current group was filtered out of `all`: compare with the displayed value too, or an older
+            // snapshot would look like a new card and replace the newer occurrence already installed.
+            if let current = all[ix.uid] ?? interactions[ix.uid] {
                 // A reconnect snapshot may carry a newer same-ID occurrence than
                 // the last live card; an older snapshot never replaces a newer one.
-                if laterOccurrence(occurrence(ix), than: occurrence(current)) { all[ix.uid] = ix }
+                all[ix.uid] = laterOccurrence(occurrence(ix), than: occurrence(current)) ? ix : current
             } else {
                 all[ix.uid] = ix
             }
@@ -3708,6 +3743,15 @@ final class AppModel {
                     .receiveSendReceipt(id, state: state)
             }
         case .items(let key, let items, let backlog, let hasMore, let span, let moreAfter):
+            #if os(iOS)
+            if backlog {
+                if moreAfter, isSubscribed(key), UIDevice.current.userInterfaceIdiom == .phone { pendingSpeechBacklog.insert(key) }
+                else { pendingSpeechBacklog.remove(key) }
+            }
+            if let replySpeech, replySpeech.key == key {
+                replySpeech.received(items, backlog: backlog || pendingSpeechBacklog.contains(key))
+            }
+            #endif
             if backlog { connection.caughtUp(Self.catchUpPart(key)) }
             let store = chat(key)
             let gap = applyBatch(store, kind: backlog && span.from == nil ? .latest : .pushed, items: items, span: span,
@@ -5204,6 +5248,14 @@ final class AppModel {
     /// The shell's Settings sheet is up. Here and not in the shell's state: picking a style in it rebuilds the whole tree
     /// (`look`), and the rebuilt shell puts the sheet back on the same page (`settingsPath`).
     var shellSettings = false
+    /// A shared template link waiting for Settings › Templates' native preview (#17129).
+    var pendingNativeTemplate: String?
+    /// A shared template link's own presentation, independent of the current conversation and shell (#17129).
+    var templateLink: String?
+    func openNativeTemplate(_ template: String) {
+        templateLink = template
+        pendingNativeTemplate = template
+    }
 
     /// Add Computer / Confirm Computer over the whole app (AddComputerView.swift): set it from anywhere without a sheet of its own
     /// (`openAddComputer()`, `openConfirmComputer(_:)`, the main conversation's readiness card); nil closes it.
@@ -5764,6 +5816,49 @@ final class AppModel {
             toast = Toast(String(localized: "Renamed to \(shown)"), style: .success)
         } catch { show(error) }
         await refresh()
+    }
+
+    @ObservationIgnored private var namingAgents: Set<SessionKey> = []
+
+    // Each row observes only its own pending request, including before its first rename.
+    private(set) subscript(naming key: SessionKey) -> Bool {
+        get {
+            access(keyPath: \.[naming: key])
+            return namingAgents.contains(key)
+        }
+        set {
+            withMutation(keyPath: \.[naming: key]) {
+                if newValue { namingAgents.insert(key) } else { namingAgents.remove(key) }
+            }
+        }
+    }
+
+    func pendingAgentTitle(_ key: SessionKey) -> String? {
+        self[naming: key] ? String(localized: "Renaming…") : nil
+    }
+
+    @discardableResult
+    func autoRenameAgent(_ session: Session, fromWorktreeSubmenu: Bool = false) -> Task<Void, Never>? {
+        let key = session.key
+        guard !session.assistant, features(key.group).contains(APIClient.agentAutonameFeature),
+              let api = api(key.group), !self[naming: key] else { return nil }
+        self[naming: key] = true
+        if fromWorktreeSubmenu {
+            // The selected Agent’s row can be hidden inside a collapsed worktree.
+            let progress = String(localized: "Renaming…")
+            toast = Toast(String(localized: "\(progress) · \(session.displayTitle)"))
+        }
+        return Task {
+            defer { self[naming: key] = false }
+            do {
+                try await api.autoRenameSession(key)
+                if fromWorktreeSubmenu { toast = Toast(String(localized: "Renamed"), style: .success) }
+            } catch {
+                // This action was requested explicitly, so even a timeout needs an explanation.
+                let reason = (error as? APIError)?.message ?? error.localizedDescription
+                toast = Toast(String(localized: "\(reason) · \(session.displayTitle)"), style: .error)
+            }
+        }
     }
 
     /// Renames an agent's herdr tab and / or its Claude session name (nil leaves that one alone); a session without a

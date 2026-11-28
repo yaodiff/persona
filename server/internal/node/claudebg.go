@@ -282,7 +282,14 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		}
 		s.ModelFallback = m.modelFallback
 		s.Activity, s.ActivityAt = m.activityOf()
-		s.PermissionMode, s.Effort = n.currentModes(id, m)
+		var level string
+		var observedAt time.Time
+		if source == proto.SourceClaudeDesktop {
+			if observed, pid := n.ccPlugins.observedEffort(id); pid != 0 && pid == c.pid {
+				level, observedAt = observed.Level, time.UnixMilli(observed.AtMS)
+			}
+		}
+		s.PermissionMode, s.Effort = n.currentModesWithEffort(id, m, level, observedAt)
 		m.turnErr.set(&s)
 		if status == proto.StatusWorking || status == proto.StatusBlocked {
 			s.Queued = m.queue

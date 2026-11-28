@@ -472,6 +472,25 @@ func (s *inboxMemStore) InboxItems(_ context.Context, doneSince time.Time, each 
 	return nil
 }
 
+func (s *inboxMemStore) StoredInboxSources(ctx context.Context) ([]string, error) {
+	seen := map[string]bool{}
+	err := s.InboxItems(ctx, time.Time{}, func(raw []byte) error {
+		var it struct {
+			Source string `json:"source"`
+		}
+		if json.Unmarshal(raw, &it) == nil && it.Source != "" {
+			seen[it.Source] = true
+		}
+		return nil
+	})
+	out := make([]string, 0, len(seen))
+	for source := range seen {
+		out = append(out, source)
+	}
+	slices.Sort(out)
+	return out, err
+}
+
 func (s *inboxMemStore) DeleteInboxSource(_ context.Context, source string, ids []string) ([]string, error) {
 	s.imu.Lock()
 	defer s.imu.Unlock()

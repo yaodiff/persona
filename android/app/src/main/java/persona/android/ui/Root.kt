@@ -954,6 +954,11 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         val sharedSidebar: @Composable (String, (() -> Unit)?) -> Unit = { stateKey, onFoldColumn ->
             sidebarState.SaveableStateProvider(stateKey) {
                 val sidebarContent: @Composable () -> Unit = {
+                    // The shell draws this sidebar outside AssistantAppHost, so LocalAssistantHost is null here:
+                    // hand the selected group's management down for the conversation menu's Pin/Rename/Archive/End
+                    // actions (#17123).
+                    val chatWiring by chatWiringSource().current.collectAsStateWithLifecycle()
+                    val sidebarManagement = chatWiring?.takeIf { it.scope.path == session.identity }?.assistantManagement
                     AssistantSidebarContent(assistant, session.assistant, sidebar.active, sidebarOperations, session.demo != null,
                         onOpen = { key ->
                             dismissSidebar()
@@ -1069,7 +1074,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         ),
                         onFoldColumn = onFoldColumn,
                         merged = mergedContent,
-                        onSchedule = if (merged) ({ sidebarDestination(SidebarScheduleRoute) }) else null)
+                        onSchedule = if (merged) ({ sidebarDestination(SidebarScheduleRoute) }) else null,
+                        management = sidebarManagement)
                 }
                 if (merged) AssistantAppHost(navigator, sidebarContent) else sidebarContent()
             }

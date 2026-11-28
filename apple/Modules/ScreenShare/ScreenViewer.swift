@@ -187,7 +187,11 @@ struct ScreenMenu: View {
 
     var body: some View {
         if let machine {
-            if model.canShowScreen(machine), let m = model.machine(machine) { item(m) }
+            if model.canShowScreen(machine) {
+                Button { model.openVNC(machine, from: from) } label: {
+                    Label(AgentActionItem.screenTitle, systemImage: Theme.Icon.screen)
+                }
+            }
         } else if let recent, model.canShowScreen(recent), let m = model.machine(recent) {
             item(m)
         } else {

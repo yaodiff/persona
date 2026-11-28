@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -194,7 +195,11 @@ func TestAgentStartAsksTheManager(t *testing.T) {
 	h := newTestHub(t)
 	h.store = &newAgentStore{memStore: newMemStore(), b: assistantwire.ModelBinding{Provider: "launcher.work", Model: "m-1"}}
 	useModel(t, h, workModel(t, "fix-login"))
-	_, n := workMachine(t, h)
+	m, n := workMachine(t, h)
+	m.mu.Lock()
+	m.info.Protocol = nodeproto.Version
+	m.info.Capabilities = []string{nodeproto.SessionStartModelAliases}
+	m.mu.Unlock()
 	mux := h.routes()
 	start := func(body string) func(string) string {
 		t.Helper()

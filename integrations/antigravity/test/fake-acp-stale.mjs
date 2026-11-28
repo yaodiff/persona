@@ -7,6 +7,8 @@
 //   <directory>/native.json   the steps the native service returns; native-hold holds its answers, native.jsonl logs them
 //   <directory>/overlaps      an acp process that starts while an earlier one is still running says so here
 // With slowExit in the account it started with, an acp process takes 500 ms to exit once told to.
+// With an id in the account it started with, an acp process replies "OK (<id>)"; with quota "exhausted" it answers every
+// prompt with agy's streamed quota error line instead, as agy acp does for an account out of quota (#17860).
 // `agy models` reads the account each time. An acp process reads it once when it starts, refuses models it did not
 // have then (and the IDs in `rejects`) as unknown, and stays signed out from the first request that finds the CLI so.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -102,8 +104,11 @@ input.on('line', (line) => {
     case 'session/set_config_option':
       return answer(id, {})
     case 'session/prompt': {
+      const text = started.quota === 'exhausted'
+        ? '⚠ RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 118h.'
+        : started.id ? `OK (${started.id})` : 'OK'
       const end = () => {
-        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'OK' } } } })
+        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } })
         answer(id, { stopReason: 'end_turn' })
       }
       if (!existsSync(join(directory, 'hold'))) return end()

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { isUntouchedStart } from "../../lib/agent-archives";
 import { api, enc, errorText, sessionPath } from "../../lib/api";
 import { herdrTabName, sessionCan, sessionTitle } from "../../lib/format";
+import { sessionEngineName } from "../../lib/engine-names";
 import { useHerdrTabName } from "../../lib/agents-display";
 import { renameBody } from "../../lib/session-actions";
 import { href, navigate } from "../../lib/router";
@@ -14,7 +15,7 @@ import { Button, Dialog, toast } from "../../ui/atoms";
 import { t } from "../../i18n";
 import { cleanupReady, KEEP, runCleanup, useAgentWorktree, WorktreeCleanup, type Cleanup } from "./SessionWorktreeCleanup";
 
-// "Rename": the herdr tab and the session's name (Claude's /rename), each only when changed (iOS RenameSessionAlert).
+// "Rename": the terminal tab and the session's name (Claude's /rename), each only when changed (iOS RenameSessionAlert).
 export function RenameDialog({ session, open, onClose }: { session: Session; open: boolean; onClose: () => void }) {
   const [tab, setTab] = useState("");
   const [title, setTitle] = useState("");
@@ -29,6 +30,8 @@ export function RenameDialog({ session, open, onClose }: { session: Session; ope
   }, [open]);
   const hasTab = !session.assistant && Boolean(session.slot_id);
   const unified = preferTab && Boolean(herdrTabName(session));
+  // the tab is in the session's own engine: Orca's, Tern's, herdr's (#17053)
+  const engine = sessionEngineName(session);
   const body = renameBody(session, tab, title, unified);
   const save = async () => {
     // the form submits on Enter while the field stays editable: a second Enter would rename (type /rename) twice
@@ -73,18 +76,19 @@ export function RenameDialog({ session, open, onClose }: { session: Session; ope
         }}
       >
         {unified ? <Field label={t("chat-sessiondialogs.name")} value={tab} onChange={setTab} autoFocus /> : <>
-          {hasTab && <Field label={t("chat-sessiondialogs.tab_name")} value={tab} onChange={setTab} autoFocus />}
+          {hasTab && <Field label={t("chat-sessiondialogs.tab_name", { engine })} value={tab} onChange={setTab} autoFocus />}
           <Field label={t("chat-sessiondialogs.session_name")} value={title} onChange={setTitle} autoFocus={!hasTab} />
         </>}
         {/* the agent's hint is about herdr's tab and Claude's /rename: a session without a terminal (a runtime's) has neither */}
-        {(session.assistant || sessionCan(session, "terminal")) && <p className="text-label leading-relaxed text-ink-3">{unified ? t("chat-sessiondialogs.rename_hint_unified") : session.assistant ? t("chat-sessiondialogs.rename_hint_assistant") : t("chat-sessiondialogs.rename_hint_agent")}</p>}
+        {(session.assistant || sessionCan(session, "terminal")) && <p className="text-label leading-relaxed text-ink-3">{unified ? t("chat-sessiondialogs.rename_hint_unified", { engine }) : session.assistant ? t("chat-sessiondialogs.rename_hint_assistant") : t("chat-sessiondialogs.rename_hint_agent", { engine })}</p>}
         <button type="submit" hidden />
       </form>
     </Dialog>
   );
 }
 
-// "Rename space": herdr's workspace, or Paseo's project (and the pins / mutes that name it). The hint is herdr's.
+// "Rename space": the terminal engine's workspace (herdr's, an Orca worktree), or Paseo's project (and the pins / mutes
+// that name it). The hint names the engine (#17053).
 export function RenameSpaceDialog({ session, open, onClose }: { session: Session; open: boolean; onClose: () => void }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -132,7 +136,7 @@ export function RenameSpaceDialog({ session, open, onClose }: { session: Session
         }}
       >
         <Field label={t("chat-sessiondialogs.space_name")} value={name} onChange={setName} autoFocus />
-        {session.space_kind !== "paseo" && <p className="text-label leading-relaxed text-ink-3">{t("chat-sessiondialogs.rename_space_hint")}</p>}
+        {session.space_kind !== "paseo" && <p className="text-label leading-relaxed text-ink-3">{t("chat-sessiondialogs.rename_space_hint", { engine: sessionEngineName(session) })}</p>}
         <button type="submit" hidden />
       </form>
     </Dialog>

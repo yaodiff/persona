@@ -31,8 +31,10 @@ export struct AgentDirectoryRowContent {
   @Param tint: ResourceColor = Colors.secondary;
   @Param activityList: boolean = false;
   @Param useHerdrTabName: boolean = false;
+  @Param renaming: boolean = false;
 
   private displayTitle(): string {
+    if (this.renaming) return tr('agent_renaming');
     return ((this.useHerdrTabName && this.agent.herdrTabName) ? this.agent.herdrTabName : this.agent.row.title) || tr('agent_untitled');
   }
 

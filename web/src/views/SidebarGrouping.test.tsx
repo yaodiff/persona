@@ -6,6 +6,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedAgentsDisplay } from "../lib/agents-display";
+const v2TreeLoaded = vi.hoisted(() => vi.fn());
+vi.mock("../features/todos/board-sidebar-tree", async (load) => {
+  v2TreeLoaded();
+  return load();
+});
 // jsdom has no matchMedia (the sidebar's modules read it when they load) and no ResizeObserver (its highlight)
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -13,7 +18,7 @@ vi.hoisted(() => {
 });
 import { t } from "../i18n";
 import { filterAgentList, resetAgentListFilters } from "../lib/agent-list-filters";
-import { connect, refresh, reset, upsertSession } from "../lib/store";
+import { connect, getState, patchAssistant, refresh, reset, upsertSession } from "../lib/store";
 import type { Todo } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { Icon, type IconName } from "../ui/icons";
@@ -99,6 +104,26 @@ afterEach(() => {
 });
 
 describe("按待办 before the todos have loaded", () => {
+  it("loads the v2 sidebar chunk only when the Lab and By to-do are both active", async () => {
+    vi.stubGlobal("fetch", hub(() => json({ todos: [todo] })));
+    await refresh();
+    Object.assign(getState(), { assistant: { machine_id: "mac", conversations: [], todos_v2: false } });
+    await render();
+    const choose = (label: string) => segments().find((b) => b.getAttribute("aria-label") === label)!.click();
+    expect(checked()).toBe("按待办");
+    expect(v2TreeLoaded).not.toHaveBeenCalled();
+
+    await act(async () => choose("按机器"));
+    await act(async () => patchAssistant({ todos_v2: true }));
+    await flush();
+    expect(v2TreeLoaded).not.toHaveBeenCalled();
+
+    await act(async () => choose("按待办"));
+    await flush();
+    expect(v2TreeLoaded).toHaveBeenCalledTimes(1);
+    expect(agentsBlock().querySelector('[data-tree-branch="todo:td1"]')).not.toBeNull();
+  });
+
   it("says 加载中… until GET /todos answers, then draws the agent under its todo, never under 没挂待办的 first", async () => {
     let answer!: (r: Response) => void;
     const todos = new Promise<Response>((r) => (answer = r));

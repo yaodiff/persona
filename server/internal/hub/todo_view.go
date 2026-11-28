@@ -120,17 +120,20 @@ func (h *Hub) todoImageFeatures() []string {
 }
 
 // todoListSums are the members of a merged to-dos list the hub adds up over its answers (mergeList, before the list's
-// validator is taken): counts, those of every answer the merge takes that has them (sumTodoCounts), and optional
-// todos_v2 shared_blockers merged deterministically across managers when present.
+// validator is taken): counts, closed cursors and the optional todos_v2 board and shared blockers.
 func todoListSums(answers []listAnswer) map[string]json.RawMessage {
 	var all []json.RawMessage
 	var blockers []json.RawMessage
+	var boards []json.RawMessage
 	for i := range answers {
 		if raw, ok := mergedMember(&answers[i], "todos", "counts"); ok {
 			all = append(all, raw)
 		}
 		if raw, ok := mergedMember(&answers[i], "todos", "shared_blockers"); ok {
 			blockers = append(blockers, raw)
+		}
+		if raw, ok := mergedMember(&answers[i], "todos", "board"); ok && bytes.HasPrefix(bytes.TrimSpace(raw), []byte("{")) {
+			boards = append(boards, raw)
 		}
 	}
 	var out map[string]json.RawMessage
@@ -143,6 +146,12 @@ func todoListSums(answers []listAnswer) map[string]json.RawMessage {
 		}
 		out["shared_blockers"] = merged
 	}
+	if merged, ok := mergeTodoBoards(boards); ok {
+		if out == nil {
+			out = map[string]json.RawMessage{}
+		}
+		out["board"] = merged
+	}
 	if cursors := todoClosedCursors(answers); len(cursors) > 0 {
 		if out == nil {
 			out = map[string]json.RawMessage{}
@@ -151,6 +160,107 @@ func todoListSums(answers []listAnswer) map[string]json.RawMessage {
 		out["closed_cursors"] = raw
 	}
 	return out
+}
+
+// mergeTodoBoards joins board objects in the list's manager order (default first, then by manager ID).
+// The managers supply the membership, counts and order within their own boards.
+func mergeTodoBoards(all []json.RawMessage) (json.RawMessage, bool) {
+	switch len(all) {
+	case 0:
+		return nil, false
+	case 1:
+		return all[0], true
+	}
+	boards := make([]map[string]json.RawMessage, 0, len(all))
+	out := map[string]json.RawMessage{}
+	var counts []json.RawMessage
+	sidebar := []json.RawMessage{}
+	for _, raw := range all {
+		var board map[string]json.RawMessage
+		if json.Unmarshal(raw, &board) != nil {
+			continue
+		}
+		boards = append(boards, board)
+		for key, value := range board {
+			if _, has := out[key]; !has {
+				out[key] = value
+			}
+		}
+		counts = append(counts, board["counts"])
+		var nodes []json.RawMessage
+		if json.Unmarshal(board["sidebar_tree"], &nodes) == nil {
+			sidebar = append(sidebar, nodes...)
+		}
+	}
+	out["sidebar_tree"], _ = json.Marshal(sidebar)
+	out["status_groups"] = mergeTodoBoardGroups(boards, "status_groups", "key", "entries", "total_count", "visible_count")
+	out["direction_groups"] = mergeTodoBoardGroups(boards, "direction_groups", "direction_id", "todo_ids", "counts")
+	if sum, ok := sumTodoCounts(counts); ok {
+		out["counts"] = sum
+	}
+	raw, err := json.Marshal(out)
+	return raw, err == nil
+}
+
+// mergeTodoBoardGroups joins records with the same group key. Their first appearance sets the order, with the
+// ungrouped direction last. Members stay in manager order and counts are added as sent.
+func mergeTodoBoardGroups(boards []map[string]json.RawMessage, boardKey, groupKey, listKey string, countKeys ...string) json.RawMessage {
+	type group struct {
+		fields map[string]json.RawMessage
+		items  []json.RawMessage
+		counts []map[string]json.RawMessage
+	}
+	groups := map[string]*group{}
+	var order []string
+	for _, board := range boards {
+		var rows []map[string]json.RawMessage
+		if json.Unmarshal(board[boardKey], &rows) != nil {
+			continue
+		}
+		for _, row := range rows {
+			var key *string
+			if json.Unmarshal(row[groupKey], &key) != nil || key == nil {
+				continue
+			}
+			g := groups[*key]
+			if g == nil {
+				g = &group{fields: map[string]json.RawMessage{}, items: []json.RawMessage{}}
+				groups[*key] = g
+				order = append(order, *key)
+			}
+			for field, value := range row {
+				if _, has := g.fields[field]; !has {
+					g.fields[field] = value
+				}
+			}
+			var items []json.RawMessage
+			if json.Unmarshal(row[listKey], &items) == nil {
+				g.items = append(g.items, items...)
+			}
+			counts := make(map[string]json.RawMessage, len(countKeys))
+			for _, field := range countKeys {
+				if value, has := row[field]; has {
+					counts[field] = value
+				}
+			}
+			g.counts = append(g.counts, counts)
+		}
+	}
+	if i := slices.Index(order, ""); i >= 0 {
+		copy(order[i:], order[i+1:])
+		order[len(order)-1] = ""
+	}
+	out := make([]map[string]json.RawMessage, 0, len(order))
+	for _, key := range order {
+		g := groups[key]
+		g.fields[listKey], _ = json.Marshal(g.items)
+		for field, sum := range sumMembers(g.counts) {
+			g.fields[field] = sum
+		}
+		out = append(out, g.fields)
+	}
+	raw, _ := json.Marshal(out)
+	return raw
 }
 
 type todoClosedCursor struct {

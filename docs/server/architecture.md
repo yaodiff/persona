@@ -612,7 +612,13 @@ Contexts meet in the application.
 
 Where application modules meet, the seam is an `application seam` package: it exports no field or variable and takes
 no `any`, `interface{}` or map of them, so a wrong port is a compile error, never a nil branch at run time. Hooks
-receive domain values. The registration rules for the central lists are in "Registering a domain's entries" below.
+receive domain values. An exported method on an exported seam struct keeps its receiver's fields private.
+For example, a loop name can answer whether it matches a name, and a registry can run its loops. Returning
+the name's text or the registry's loop list lets another module read that state directly.
+The check follows local type definitions and receiver aliases. When build variants declare the same type,
+it uses the declaration in the method's file if present. Otherwise it reports a field only when the declarations
+agree that the selector names a field.
+The registration rules for the central lists are in "Registering a domain's entries" below.
 
 ```go
 // TurnSettled calls fn whenever an agent's turn settles: hooks receive the session as a domain value.
@@ -735,11 +741,11 @@ stated above; #15088 lists the ones known.
 | `core-alias` | no exported alias | the package |
 | `core-field-name` | a one-field struct's field is named for its type | the package |
 | `core-distinct-shape` | no two exported structs of a package share a field list | the package |
-| `core-primitive-field` | a struct with more than one field holds no primitive, a kit type's argument and a name of the package's own included | the package |
-| `core-primitive-signature` | primitives, a kit type's argument and a name of the package's own included, only as `ParseX` parameters, `bool` results and `Wire`'s result | the package |
-| `core-collection` | slices and maps in exported signatures, a kit type's argument and a name of the package's own included, only as `NewX` and `RestoreX` parameters | the package |
+| `core-primitive-field` | a struct with more than one field holds no primitive, a kit type's argument, a name of the package's own and a computing standard-library named primitive type (`sort.StringSlice`, `strings.Builder`, `bytes.Buffer`, …) included | the package |
+| `core-primitive-signature` | primitives, a kit type's argument, a name of the package's own and a computing standard-library named primitive type included, only as `ParseX` parameters, `bool` results and `Wire`'s result | the package |
+| `core-collection` | slices and maps in exported signatures, a kit type's argument, a name of the package's own and a computing standard-library named slice type (`sort.StringSlice`, `bytes.Buffer`, …) included, only as `NewX` and `RestoreX` parameters | the package |
 | `core-interface-param` | no func or interface parameter, a func type of the package's own included, but the package's own visitors and sealed interfaces | the package |
-| `core-accessor` | every exported method returns nothing, a bool, its receiver's type or an outcome of it, and no exported function or method but `ID` and `Wire` has a body that is one `return` of its inputs' fields | the package |
+| `core-accessor` | in a core, every exported method returns nothing, a bool, its receiver's type or an outcome of it, and no exported function or method but `ID` and `Wire` has a body that is one `return` of its inputs' fields. On an exported seam struct, an exported method whose body is one `return` cannot return a field declared on its receiver directly | the package |
 | `core-pointer-receiver` | no pointer receivers | the package |
 | `core-receiver-write` | no write through a receiver's slice or map | the package |
 | `core-codec-method` | no codec method | the package |
@@ -765,7 +771,7 @@ stated above; #15088 lists the ones known.
 | `out-conversion` | no conversion to a core's or the kit's type outside it | the core |
 | `out-wire-ref` | no `.Wire` outside adapters and testkit, called or not | the package it is in |
 | `out-parse-call` | a core's `Parse` and `Restore` only from it, its tests, adapters and testkit | the core |
-| `out-visitor-impl` | a `Visit` method that takes a core's or the kit's type, or any `Visit` method of a generic type in a package that imports a core or the kit, only in adapters, testkit and the core's own tests | the core |
+| `out-visitor-impl` | a `Visit` method that takes a core's or the kit's type, a parameterless `Visit` method matching an imported core's or the kit's visitor interface, or any `Visit` method of a generic type in a package that imports a core or the kit, only in adapters, testkit and the core's own tests | the core |
 | `out-clock-read` | `instant.ReadClock` only in `domainkit/clock` and its testkit | `domainkit/instant` |
 | `out-slot-mint` | `slot.NewSlot` only in adapters and testkit | `domainkit/slot` |
 | `out-code-mint` | `fail.NewCode` and `fail.NewPart` only in cores, the kit and testkit | `domainkit/fail` |

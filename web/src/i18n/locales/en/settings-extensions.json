@@ -38,6 +38,8 @@
   "contribution_off": "Turned off",
   "change_failed": "Not changed: {error}",
   "unsaved": "Unsaved changes",
+  "fields_to_save_one": "{count} field to save",
+  "fields_to_save_other": "{count} fields to save",
   "reload": "Reload",
   "loading": "Loading…",
   "unavailable": "Unavailable",

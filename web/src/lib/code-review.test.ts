@@ -196,7 +196,18 @@ describe("picking lines and links", () => {
 
   it("fills a line link, https only", () => {
     expect(lineLink("https://example.com/a.go#L{start}-L{end}", 3, 7)).toBe("https://example.com/a.go#L3-L7");
-    expect(lineLink("javascript:alert({start})", 1)).toBeUndefined();
+    for (const bad of [
+      "javascript:alert({start})",
+      "http://example.com/a.go#L{start}",
+      "https:/admin#L{start}",
+      "https:admin#L{start}",
+      "https://user:pw@evil.example/a.go#L{start}",
+      "https://@evil.example/a.go#L{start}",
+      "https://good.example\\@evil.example/a.go#L{start}",
+      "https://example.com/a.go\t#L{start}",
+    ]) {
+      expect(lineLink(bad, 1), bad).toBeUndefined();
+    }
     expect(lineLink(undefined, 1)).toBeUndefined();
   });
 });

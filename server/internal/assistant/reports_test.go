@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -18,15 +19,19 @@ const testReportDelay = 50 * time.Millisecond
 
 // reportService is a task service whose Feishu bot is paired, with reports on (or off) and the execution steps on (the
 // card as it was before #3218), recording the posts.
-func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) {
+func reportService(t *testing.T, on bool, stores ...Store) (*Service, *fakeHub, func() []string) {
 	t.Helper()
-	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true})
+	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true}, stores...)
 }
 
 // reportServiceWith is reportService with the bot's switches as given.
-func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, func() []string) {
+func reportServiceWith(t *testing.T, feats FeishuFeatures, stores ...Store) (*Service, *fakeHub, func() []string) {
 	t.Helper()
-	s, f := newTaskService(t)
+	var st Store
+	if len(stores) > 0 {
+		st = stores[0]
+	}
+	s, f := newTaskServiceOn(t, st)
 	s.reports.mu.Lock()
 	s.reports.delay = testReportDelay
 	s.reports.mu.Unlock()
@@ -57,8 +62,10 @@ func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, 
 // task's page, the PR and the agent; never a bare id. The todo carries the stage and the PR for the apps.
 func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 	needsLarkLayer(t)
-	s, f, posts := reportService(t, true)
+	s, f, posts := reportService(t, true, repositorystore.New(todoTestDB(t)))
 	todo := startedTask(t, s, f)
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor",
+		"fix/login", "fix/login", "abc", "abc")
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "修好了，https://github.com/o/r/pull/901 已合并", 0)
 	waitFor(t, "the report", func() bool { return len(posts()) == 1 })
@@ -206,7 +213,11 @@ func TestAdvanceTaskReplyPreservesDeliveryBinding(t *testing.T) {
 	}
 	// A structured closeout can explicitly set the primary PR. The following reports use a stale
 	// snapshot so the stored PR must win even if the caller has not seen it.
-	s.advanceTaskReply(ctx, todo, "", "", "<closeout status=\"done\">\nartifact: pr "+delivery+"\n</closeout>")
+	a := todo.Agents[0]
+	f := s.hub.(*fakeHub)
+	deliveryText := "<closeout status=\"done\">\nartifact: pr " + delivery + "\n</closeout>"
+	deliveryReply := artifactReportProof(f, todo, deliveryText, delivery)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, deliveryText, deliveryReply.TS)
 	for _, enabled := range []bool{true, false} {
 		setSettings(t, s, func(v *Settings) { v.TodosV2 = &enabled })
 		s.advanceTaskReply(ctx, todo, "", "", "Checked for overlap with "+english+"\n与 "+chinese+" 无重叠。") // i18n-ignore: task report fixture
@@ -216,7 +227,9 @@ func TestAdvanceTaskReplyPreservesDeliveryBinding(t *testing.T) {
 			t.Fatalf("todos_v2=%v: stored PR = %q, earlier PRs = %v", enabled, got.PRURL, got.PRs)
 		}
 	}
-	s.advanceTaskReply(ctx, todo, "", "", "Checked "+english+"\n<closeout status=\"done\">\nartifact: pr "+replacement+"\nartifact: url "+chinese+"\n</closeout>")
+	replacementText := "Checked " + english + "\n<closeout status=\"done\">\nartifact: pr " + replacement + "\nartifact: url " + chinese + "\n</closeout>"
+	replacementReply := artifactReportProof(f, todo, replacementText, replacement)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, replacementText, replacementReply.TS)
 	if got := todoNow(s, todo.ID).PRURL; got != replacement {
 		t.Fatalf("explicit replacement PR = %q, want %q", got, replacement)
 	}
@@ -242,7 +255,10 @@ func TestAdvanceTaskReplyLegacyDeliveryAfterReferences(t *testing.T) {
 	if got := todoNow(s, todo.ID).PRURL; got != "" {
 		t.Fatalf("prose selected a saved reference as the PR: %q", got)
 	}
-	s.advanceTaskReply(ctx, todo, "", "", "Opened "+delivery)
+	a := todo.Agents[0]
+	openText := "Opened " + delivery
+	openReply := artifactReportProof(s.hub.(*fakeHub), todo, openText, delivery)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, openText, openReply.TS)
 	if got := todoNow(s, todo.ID).PRURL; got != delivery {
 		t.Fatalf("legacy single PR = %q, want %q", got, delivery)
 	}

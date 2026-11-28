@@ -320,6 +320,24 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 		ids = append(ids, t.ID)
 	}
 	s.todos.mu.RUnlock()
+	if _, ok := s.store().(todoRepositoryStore); ok {
+		for _, todo := range tasks {
+			if todo.DoneAt != nil {
+				continue
+			}
+			for _, agent := range todo.Agents {
+				if agent.ReleasedAt != nil || agent.DismissedAt != nil {
+					continue
+				}
+				if e, found := s.workEntry([2]string{agent.MachineID, agent.SessionID}); found {
+					// A failed report import remains retryable on the next Inbox pass.
+					if err := s.importTaskRepositoryArtifacts(ctx, e); err != nil {
+						s.logf("task %s: artifact repository links not saved: %v", todo.ID, err)
+					}
+				}
+			}
+		}
+	}
 	var repositories map[string][]repository.TaskRepository
 	if st, ok := s.store().(todoRepositoryBatchStore); ok {
 		repositories, err = st.ListTodoRepositories(ctx, ids)

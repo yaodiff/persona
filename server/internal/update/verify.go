@@ -154,6 +154,7 @@ func verifyDownload(dir string, f File, build int64, run string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", f.Name, err)
 	}
+	defer zr.Close()
 	inner := sha256.New()
 	stamp := newStampScan(build)
 	sinks := []io.Writer{inner, stamp}
@@ -165,7 +166,15 @@ func verifyDownload(dir string, f File, build int64, run string) error {
 		defer out.Close()
 		sinks = append(sinks, out)
 	}
-	if _, err := io.Copy(io.MultiWriter(sinks...), zr); err != nil {
+	limit := unpackedBinaryLimit()
+	unpacked, err := io.Copy(io.MultiWriter(sinks...), io.LimitReader(zr, limit+1))
+	if err != nil {
+		return fmt.Errorf("%s: %w", f.Name, err)
+	}
+	if unpacked > limit {
+		return fmt.Errorf("%s: unpacked binary exceeds %d bytes", f.Name, limit)
+	}
+	if err := zr.Close(); err != nil {
 		return fmt.Errorf("%s: %w", f.Name, err)
 	}
 	if out != nil {

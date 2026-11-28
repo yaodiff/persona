@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, enc, errorText } from "./api";
 import { onShownHint } from "./shown-hints";
 import { onHubEvent } from "./store";
+import { rememberHostAbilities } from "./host-abilities";
 import type { PanesResponse } from "./terminals";
 import type { Machine } from "./types";
 
@@ -45,7 +46,12 @@ export function usePanes(machines: Machine[], enabled = true) {
         // A reply that repeats what is shown keeps the object (and so the trees built from it and every row): the
         // layout rarely changes between two reads, and each machine's reply would re-render the page or the sidebar.
         return api<PanesResponse>(`/machines/${enc(mid)}/panes`).then(
-          (data) => fresh() && setListing((l) => (l[mid] && l[mid].error === undefined && sameLayout(l[mid].data, data) ? l : { ...l, [mid]: { data } })),
+          (data) => {
+            if (!fresh()) return;
+            // what each host can do, for the menus of sessions that never read this list (#17053)
+            rememberHostAbilities(mid, data);
+            setListing((l) => (l[mid] && l[mid].error === undefined && sameLayout(l[mid].data, data) ? l : { ...l, [mid]: { data } }));
+          },
           // a failed read keeps what was seen: the list does not blink out
           (e) => {
             if (!fresh()) return;

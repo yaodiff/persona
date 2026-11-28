@@ -285,7 +285,21 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--reserved", text)
         self.assertLess(text.index('refs/heads/release/*'), text.index('schedule-version'))
         self.assertIn('releases/latest', text)
-        self.assertIn(r'select(.head.ref == \$branch)', text)
+        self.assertIn('pulls?state=open&base=main&per_page=100" --paginate > release-open-prs.json', text)
+        self.assertIn('pulls?state=open&base=main&per_page=100" --paginate > release-open-prs-current.json', text)
+        self.assertIn('cp scripts/operations/release_candidate.py scripts/operations/release_pr.py "$RUNNER_TEMP/release-ops/"', text)
+        self.assertLess(
+            select.index('git switch --detach FETCH_HEAD'),
+            select.index('cp scripts/operations/release_candidate.py scripts/operations/release_pr.py "$RUNNER_TEMP/release-ops/"'),
+        )
+        self.assertLess(
+            select.index('cp scripts/operations/release_candidate.py scripts/operations/release_pr.py "$RUNNER_TEMP/release-ops/"'),
+            select.index('git switch --detach "$green_commit"'),
+        )
+        self.assertIn('"$RUNNER_TEMP/release-ops/release_candidate.py" --repository "$REPOSITORY" --channel "$CHANNEL" --pulls release-open-prs-current.json', text)
+        self.assertIn('"$RUNNER_TEMP/release-ops/release_candidate.py" --repository "$REPOSITORY" --branch "$branch" --pulls release-open-prs-current.json', text)
+        self.assertNotIn('scripts/operations/release_candidate.py --repository "$REPOSITORY" --branch', text)
+        self.assertNotIn("--jq --arg", text)
         self.assertNotIn("--force", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)

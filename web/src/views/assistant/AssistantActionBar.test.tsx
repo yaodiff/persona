@@ -569,9 +569,21 @@ describe("Assistant Needs you / In progress trays", () => {
     getFeedState().plans[many.id] = many;
     try {
       act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} /><FeedLineView item={{ id: "many-event", conversation, at, kind: "plan", ref: many.id }} simplified /></StrictMode>));
-      // one card per Agent in plan order, no heading over them (cindy stacks cards)
+      await act(async () => {
+        await vi.dynamicImportSettled();
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      // 3+ cards default to a compact summary group (#17766) while surfacing up to 2 urgent attention cards (failed + needs_you)
       const group = host.querySelector("[data-handoff-cards]")!;
       expect(group.getAttribute("data-handoff-cards")).toBe("4");
+      expect(group.getAttribute("data-handoff-group")).toBe("collapsed");
+      const toggle = group.querySelector<HTMLButtonElement>("[data-handoff-group-toggle]")!;
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      const surfaced = [...group.querySelectorAll<HTMLElement>("[data-handoff-card]")];
+      expect(surfaced.map((el) => el.getAttribute("data-handoff-card"))).toEqual(["tray-plan-many/2", "demo/second"]);
+      // expanding reveals all 4 cards in original plan order with no duplicates
+      act(() => toggle.click());
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
       const cards = [...group.querySelectorAll<HTMLElement>("[data-handoff-card]")];
       expect(cards.map((el) => [el.tagName, el.getAttribute("data-handoff-card")])).toEqual([["BUTTON", "demo/worker"], ["BUTTON", "demo/second"], ["BUTTON", "demo/third"], ["DIV", "tray-plan-many/2"]]);
       // an Agent that needs you says so on its card; one without a title of its own takes its task's
@@ -1458,6 +1470,28 @@ describe("Assistant Needs you / In progress trays", () => {
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="task:tray-task"]')).toBeNull();
     act(() => entry("needs").click());
+    expect(entry("running").textContent).toBe(`${label.running}1`);
+    await act(async () => entry("running").click());
+    const heldStatus = host.querySelector('[data-task-slot] [data-task-status="working"]');
+    expect(heldStatus?.textContent).toBe("督办处理中");
+    await act(async () => entry("running").click());
+
+    // A separate owner question takes priority while the supervisor still holds the screen card.
+    todo = { ...todo, quiet: false, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0 } };
+    moreInteractions = [{ ...baseScreen, delegating: true }, {
+      id: "ix-owner-question", machine_id: "demo", session_id: "worker", kind: "question", created_at: at,
+      questions: [{ question: "Which report should we use?" }],
+    }];
+    await act(async () => {
+      await refresh();
+      await refreshTodos();
+    });
+    expect(entry("needs").textContent).toBe(`${label.needs}1`);
+    await act(async () => entry("needs").click());
+    const mixed = host.querySelector('[data-needs-row="task:tray-task"]');
+    expect(mixed?.textContent).toContain("Which report should we use?");
+    expect(mixed?.textContent).not.toContain("Do you want to proceed?");
+    await act(async () => entry("needs").click());
 
     // Plain unescalated screen card on a quiet task (even with view needs_you / agent_asks): stays out of main chat
     // Needs you per D19 until explicitly escalated via ask_escalate.
@@ -1477,6 +1511,7 @@ describe("Assistant Needs you / In progress trays", () => {
       await refreshTodos();
     });
     expect(entry("needs").textContent).toBe(`${label.needs}1`);
+    expect(entry("running").textContent).toBe(label.running);
     act(() => entry("needs").click());
     const folded = host.querySelector<HTMLButtonElement>('button[data-needs-row="task:tray-task"]')!;
     expect(folded).not.toBeNull();

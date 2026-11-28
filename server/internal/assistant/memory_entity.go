@@ -35,18 +35,18 @@ var genericEntityStopwords = map[string]bool{
 	"profile": true, "general": true, "global": true, "default": true, "main": true, "core": true,
 	"update": true, "change": true, "list": true, "read": true, "write": true, "run": true, "start": true, "stop": true,
 	// Generic Chinese terms & scene labels
-	"任务": true, "测试": true, "文档": true, "系统": true, "模型": true, "配置": true, "工具": true,
-	"方案": true, "实验": true, "报告": true, "笔记": true, "项目": true, "助手": true, "对话": true,
-	"记忆": true, "平台": true, "代码": true, "开发": true, "部署": true, "发布": true, "问题": true,
-	"修复": true, "需求": true, "计划": true, "日志": true, "数据": true, "文件": true, "目录": true,
-	"脚本": true, "接口": true, "服务": true, "版本": true, "用户": true, "工作": true, "沟通": true,
-	"协作": true, "汇报": true, "提问": true, "派活": true, "评审": true, "验收": true, "开工": true,
-	"回复": true, "排期": true, "门禁": true, "待办": true, "设置": true, "消息": true, "通知": true,
-	"提醒": true, "摘要": true, "总结": true, "规则": true, "规矩": true, "原则": true, "策略": true,
-	"状态": true, "进展": true, "结果": true, "决定": true, "决策": true, "背景": true, "信息": true,
-	"内容": true, "方式": true, "流程": true, "时间": true, "今天": true, "明天": true, "昨天": true,
-	"最近": true, "现在": true, "所有": true, "全部": true, "通用": true, "全局": true, "默认": true,
-	"其他": true, "个人": true, "主要": true, "基础": true, "核心": true, "用户侧写": true,
+	"任务": true, "测试": true, "文档": true, "系统": true, "模型": true, "配置": true, "工具": true, // i18n-ignore: matched against memory subjects, not display copy
+	"方案": true, "实验": true, "报告": true, "笔记": true, "项目": true, "助手": true, "对话": true, // i18n-ignore: matched against memory subjects, not display copy
+	"记忆": true, "平台": true, "代码": true, "开发": true, "部署": true, "发布": true, "问题": true, // i18n-ignore: matched against memory subjects, not display copy
+	"修复": true, "需求": true, "计划": true, "日志": true, "数据": true, "文件": true, "目录": true, // i18n-ignore: matched against memory subjects, not display copy
+	"脚本": true, "接口": true, "服务": true, "版本": true, "用户": true, "工作": true, "沟通": true, // i18n-ignore: matched against memory subjects, not display copy
+	"协作": true, "汇报": true, "提问": true, "派活": true, "评审": true, "验收": true, "开工": true, // i18n-ignore: matched against memory subjects, not display copy
+	"回复": true, "排期": true, "门禁": true, "待办": true, "设置": true, "消息": true, "通知": true, // i18n-ignore: matched against memory subjects, not display copy
+	"提醒": true, "摘要": true, "总结": true, "规则": true, "规矩": true, "原则": true, "策略": true, // i18n-ignore: matched against memory subjects, not display copy
+	"状态": true, "进展": true, "结果": true, "决定": true, "决策": true, "背景": true, "信息": true, // i18n-ignore: matched against memory subjects, not display copy
+	"内容": true, "方式": true, "流程": true, "时间": true, "今天": true, "明天": true, "昨天": true, // i18n-ignore: matched against memory subjects, not display copy
+	"最近": true, "现在": true, "所有": true, "全部": true, "通用": true, "全局": true, "默认": true, // i18n-ignore: matched against memory subjects, not display copy
+	"其他": true, "个人": true, "主要": true, "基础": true, "核心": true, "用户侧写": true, // i18n-ignore: matched against memory subjects, not display copy
 }
 
 func isASCIIString(s string) bool {

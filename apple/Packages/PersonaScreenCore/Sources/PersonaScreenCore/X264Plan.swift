@@ -111,12 +111,15 @@ public struct X264Watch {
     /// A frame's own encode time: from when it was given, or when the frame before it came out if that was later (it
     /// waited behind it), to `now`.
     public static func ownMicros(given: UInt64, lastOut: UInt64, now: UInt64) -> Int64 {
-        Int64(bitPattern: now &- max(given, lastOut))
+        let start = max(given, lastOut)
+        guard now > start else { return 0 }
+        let elapsed = now - start
+        return elapsed > UInt64(Int64.max) ? .max : Int64(elapsed)
     }
 
     /// The `index`th frame of its process (from 0) came back after `micros` of its own. True: too slow, fall back.
     public mutating func encoded(micros: Int64, at now: UInt64, index: Int) -> Bool {
-        window.removeAll { now &- $0.at > Self.windowMicros }
+        window.removeAll { now > $0.at && now - $0.at > Self.windowMicros }
         guard index > 0 else { return false }
         if micros > Self.stallMicros {
             why = String(format: "%.1f ms on its own", Double(micros) / 1000)
@@ -135,8 +138,8 @@ public struct X264Watch {
 
     /// The oldest frame still with ffmpeg was given to it at `oldest`: true when that is overdue.
     public static func overdue(oldest: UInt64?, now: UInt64) -> Bool {
-        guard let oldest else { return false }
-        return now &- oldest > overdueMicros
+        guard let oldest, now > oldest else { return false }
+        return now - oldest > overdueMicros
     }
 }
 

@@ -61,7 +61,6 @@ type Host interface {
 	SetRunExt(r *channel.Run, key, value string)
 	// SetLiveRunExt sets a value on the live run as well when r is a copy of it (an answer works on a copy).
 	SetLiveRunExt(r *channel.Run, key, value string)
-	RunTo(ext map[string]string) assistantwire.ChannelTarget
 	// RunState is the module's own state of live run id (made with make the first time); done closes when the run
 	// ends. False when the run is not live or, with kept, no longer among the channels' runs.
 	RunState(id string, kept bool, make func() any) (state any, done <-chan struct{}, ok bool)
@@ -108,6 +107,7 @@ type Host interface {
 	// whether the bot's switches allow it, and the run that answers a message sent to it (StartRun: rt, t and the
 	// owner's message; ext the run's channel values besides the reaction).
 	ResolveTarget(ctx context.Context, t assistantwire.ChatTarget) (assistantwire.ChatResolved, error)
+	SessionExists(ctx context.Context, machine, session string) bool
 	TargetLabel(ctx context.Context, t assistantwire.ChatTarget) string
 	Allowed(l i18n.Lang, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) error
 	StartRun(ctx context.Context, rt assistantwire.ChatResolved, t assistantwire.ChatTarget, messageID, text string, images []proto.Image, probe, reaction string, ext map[string]string) error
@@ -135,7 +135,8 @@ type Host interface {
 	// model.
 	InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (kind, message string)
 	TurnPending(machine, session string) bool
-	StopProgressCard(ctx context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget, messageID string) (kind, message string)
+	// FindInterruptibleRun rechecks match under the channel state lock and calls interrupt under the progress lock alone.
+	FindInterruptibleRun(match func(*channel.Run) bool) (guard func(session proto.Session, interrupt func(lastStop string) string))
 	Conversations(ctx context.Context) (list []proto.Session, main string)
 	ConversationName(sess proto.Session, main string) string
 	Devices(ctx context.Context) []assistantwire.Device
@@ -200,9 +201,8 @@ type Host interface {
 	SourceChannels() []string
 	EnsureTodosLoaded(ctx context.Context) error
 	TodoOfThread(chatID, threadID string) (assistantwire.ChatTodo, bool)
-	ThreadNoReply(ctx context.Context, ev botcard.MessageEvent, todoID, chatID, threadID string)
-	// ThreadRoutes are who can get what was said in an open to-do's topic, best first; the error says why none.
-	ThreadRoutes(ctx context.Context, todoID string, f assistantwire.FeishuFeatures) ([]assistantwire.ChatTarget, error)
+	ThreadNoReply(ctx context.Context, messageID, todoID string, to assistantwire.ChannelTarget)
+	ThreadRouteCandidates(ctx context.Context, todoID string) []assistantwire.ChatTarget
 	// TopicDecision notes a topic message as the to-do's decision (assistantwire.Decision*).
 	TopicDecision(ctx context.Context, todoID, question, text, messageID string) string
 	// TopicWake tells the to-do's supervisor what the owner said in its topic, when it waits for that.
@@ -210,8 +210,6 @@ type Host interface {
 	AskTodoTopicAnswer(ctx context.Context, todoID, text string) (answer string, ok bool)
 	SettleAskClaim(ctx context.Context, todoID string, ok bool)
 	CloseAskTodo(ctx context.Context, todoID string)
-	// OpenTarget is who takes a to-do opened from the chat: the main conversation, origin its id; fail says why not.
-	OpenTarget(ctx context.Context, st assistantwire.FeishuStatus) (target assistantwire.ChatTarget, origin, fail string)
 	// TodoTitle is an opened to-do's title from the words (linkLabel: they are a link's label, kept as they are);
 	// retitle: it is named again later.
 	TodoTitle(ctx context.Context, words string, l i18n.Lang, linkLabel bool) (title string, retitle bool)
@@ -223,6 +221,10 @@ type Host interface {
 	StartHandoffGuest(ctx context.Context, handoff, text, launcher string) (machine, session string, err error)
 	RaiseHandoffDecision(ctx context.Context, handoff string, req assistantwire.OutsideDecisionRequest) (id string, err error)
 	WithdrawHandoffDecision(ctx context.Context, id string)
+	// What a group guest asks of the core (guest.go): start its conversation, and send a later question into the one
+	// it already has. A conversation the node no longer has returns an error whose text is guestGone (guest.go).
+	StartGroupGuest(ctx context.Context, group, text, launcher string, tools []string) (machine, session string, err error)
+	SendGroupGuest(ctx context.Context, machine, session, turn, text string) error
 }
 
 // Layer is the module's assistant layer, what the core asks of it (internal/larkhost.Layer): the outbound channel port

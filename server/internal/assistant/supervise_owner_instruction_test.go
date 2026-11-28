@@ -221,7 +221,7 @@ func TestOwnerInstructionScopeUpdateUsesCriteriaGuard(t *testing.T) {
 	s.noteOwnerInstruction(context.Background(), SessionRef{MachineID: "box", SessionID: "s1"}, "Please add the migration safety check.", assistantwire.OwnerInputApp, "", at)
 	f.setItems(ownerReportItem(at.Add(-time.Minute), ownerReport("done", "", "")))
 
-	if _, err := s.toolTaskScope(context.Background(), "conv1", json.RawMessage(`{"todo_id":"`+todo.ID+`","change":"Add the migration safety check to acceptance","why":"The owner asked for it in the Agent session","done_when":["PR 合并到 master","浅色 / 深色截图贴进 PR","The migration is safe"]}`)); err != nil {
+	if _, err := s.toolTaskScope(context.Background(), "", "conv1", json.RawMessage(`{"todo_id":"`+todo.ID+`","change":"Add the migration safety check to acceptance","why":"The owner asked for it in the Agent session","done_when":["PR 合并到 master","浅色 / 深色截图贴进 PR","The migration is safe"]}`)); err != nil {
 		t.Fatalf("scope update: %v", err)
 	}
 	cur := todoNow(s, todo.ID)

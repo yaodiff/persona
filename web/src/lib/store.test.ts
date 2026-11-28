@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { managerHeaderFor } from "./manager-choice";
-import { applyMachine, dropAnswered, endInteraction, getState, hubHas, larkOn, loadAllOlderClosed, loadOlderClosed, putTodo, refresh, refreshAssistant, refreshTodos, reset, setSpacesSupported } from "./store";
+import { loadOlderClosed } from "../features/todos/closed-history";
+import { applyMachine, dropAnswered, endInteraction, getState, hubHas, larkOn, putTodo, refresh, refreshAssistant, refreshTodos, reset, setSpacesSupported } from "./store";
+
+const emptyBoard = {
+  status_groups: [],
+  direction_groups: [],
+  sidebar_tree: [],
+  counts: { needs_you: 0, in_progress: 0, pending_review: 0, waiting: 0, someday: 0, done: 0, open_total: 0 },
+};
 
 describe("待办 store 与 404 兼容 (C2)", () => {
   beforeEach(() => {
@@ -127,6 +135,23 @@ describe("待办 store 与 404 兼容 (C2)", () => {
     expect(getState().todos.map((t) => t.id)).toContain("todo-older");
     expect(getState().todos.map((t) => t.id)).toContain("todo-cancelled");
     expect(getState().closedCursors.assistant).toEqual({ next_cursor: "", has_more: false });
+  });
+
+  it.each([
+    { counts: { open_total: 0 } },
+    { direction_groups: [{ direction_id: "plan", todo_ids: [], counts: null }] },
+    { status_groups: [{ key: "done", total_count: 0, visible_count: 0 }] },
+    { status_groups: [{ key: "done", total_count: 1, visible_count: 1, entries: [{ todo_id: "valid", folded_child_ids: "invalid" }] }] },
+    { sidebar_tree: [null] },
+  ])("falls back safely when a board has incomplete nested fields (%j)", async (patch) => {
+    const todos = [{ id: "valid", title: "Valid to-do", created_at: "", updated_at: "" }];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ todos, board: { ...emptyBoard, ...patch } }))));
+
+    await refreshTodos();
+
+    expect(getState().todoBoard).toBeNull();
+    expect(getState().todos).toEqual(todos);
+    expect(getState().todosError).toBeNull();
   });
 
   it("keeps loaded older closed history and its advanced cursor across a refresh, and drops a reopened row", async () => {
@@ -265,7 +290,7 @@ describe("待办 store 与 404 兼容 (C2)", () => {
     expect(getState().closedError).toBeNull();
   });
 
-  it("loads every remaining closed page for the calendar's explicit full-history path", async () => {
+  it("advances one closed history page at a time when each page contains rows", async () => {
     let cursorCalls = 0;
     const fetch = vi.fn().mockImplementation((url: string) => {
       const u = new URL(url, "http://hub");
@@ -286,7 +311,10 @@ describe("待办 store 与 404 兼容 (C2)", () => {
     vi.stubGlobal("fetch", fetch);
 
     await refreshTodos();
-    await loadAllOlderClosed();
+    await loadOlderClosed();
+    expect(cursorCalls).toBe(1);
+    expect(getState().todos.map((todo) => todo.id)).toEqual(["older-1"]);
+    await loadOlderClosed();
     expect(cursorCalls).toBe(2);
     expect(getState().todos.map((todo) => todo.id)).toEqual(["older-1", "older-2"]);
     expect(getState().closedCursors.assistant).toEqual({ next_cursor: "", has_more: false });

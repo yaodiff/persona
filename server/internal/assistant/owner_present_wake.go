@@ -221,7 +221,7 @@ func (s *Service) ownerAppeared(ctx context.Context, source, excludeConv string)
 			continue
 		}
 		key, detail, ok := ownerPresentTodoWait(t)
-		if !ok {
+		if !ok || recentOwnerInput(t, now) {
 			continue
 		}
 		if s.hasPendingOwnerOnlyCard(&t, t.Supervision.Supervisor) {

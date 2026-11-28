@@ -235,6 +235,7 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingNotesFeatures()...)
 	out = append(out, h.meetingEchoFeatures()...)
 	out = append(out, h.meetingTranscriptionFeatures()...)
+	out = append(out, h.meetingSpeakersFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
 	out = append(out, h.assistantSearchFeatures()...)
 	out = append(out, h.assistantPagesFeatures()...)
@@ -270,6 +271,7 @@ func (h *Hub) features() []string {
 	out = append(out, h.todoAsksFeatures()...)
 	out = append(out, h.todoTimelineFeatures()...)
 	out = append(out, h.todoImageFeatures()...)
+	out = append(out, h.previewOriginFeatures()...)
 	// The assistant's card interfaces, always on (docs/assistant/assistant-views.md, #5509): assistant_views is declarative
 	// actions (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions. Neither says
 	// a client may run HTML: that is each platform's own security sign-off, else fallback.
@@ -280,8 +282,8 @@ func (h *Hub) features() []string {
 		}
 		switch f {
 		case assistantwire.CapabilityHealthTell, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentSessionIdleArchive, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
-			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
-			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureAssistantPages, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
+			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureMeetingSpeakers, featureRecordingDay,
+			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureAssistantPages, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline, featurePreviewOrigin:
 			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, dashboards, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history
 		}
 		if !slices.Contains(out, f) {
@@ -801,29 +803,30 @@ func (h *Hub) authorizeExtension(ctx context.Context, tok string, r *http.Reques
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	// The token is one manager's extension's: each is asked, the default first, until one knows it.
-	var a extwire.Authorized
-	manager := ""
 	sure = true
 	asked := time.Now()
+	query := extwire.Authorize{Hash: hashToken(tok), Pattern: pattern, Method: method, Path: path}
 	for _, id := range h.listManagers(ctx) {
-		var err error
-		a, err = buswire.Call(ctx, h.managerCaller(id), extwire.AuthorizeMethod, extwire.Authorize{
-			Hash: hashToken(tok), Pattern: pattern, Method: method, Path: path,
-		})
-		if err == nil && a.Extension != "" {
-			manager = id
-			break
+		c := h.busConnOf(id)
+		if c == nil { // the default manager, listed first, may be off the bus
+			continue
 		}
-		if err != nil && !errors.Is(err, errBusOffline) { // (the default manager, listed first, may be off the bus)
-			sure = false
+		a, err := buswire.Call(ctx, c, extwire.AuthorizeMethod, query)
+		if err != nil {
+			sure = sure && errors.Is(err, errBusOffline)
+			continue
 		}
+		if a.Extension == "" {
+			continue
+		}
+		p = principal{ID: "extension:" + a.Extension, Name: a.Name, Role: roleExtension, Extension: a.Extension, Scopes: a.Scopes,
+			Manager: id, extHash: query.Hash, extAt: asked}
+		if a.OK {
+			p.extAuthConn, p.extOwner = c, a.Owner
+		}
+		return p, true, a.OK, a.Scope, true
 	}
-	if a.Extension == "" {
-		return principal{}, false, false, "", sure
-	}
-	p = principal{ID: "extension:" + a.Extension, Name: a.Name, Role: roleExtension, Extension: a.Extension, Scopes: a.Scopes,
-		Manager: manager, extHash: hashToken(tok), extAt: asked}
-	return p, true, a.OK, a.Scope, true
+	return principal{}, false, false, "", sure
 }
 
 // tokenHash says whether s is a hash as hashToken makes one.

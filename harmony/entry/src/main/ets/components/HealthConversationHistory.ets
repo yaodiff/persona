@@ -70,9 +70,9 @@ export struct HealthConversationHistory {
     return Colors.systemControls && Colors.styleID === 'glass' ? (this.env.dark ? Color.White : Color.Black) : Colors.ink;
   }
   private get secondaryInk(): ResourceColor {
-    return Colors.systemControls && Colors.styleID === 'glass' ? (this.env.dark ? '#80FFFFFF' : '#80000000') : Colors.secondary;
+    return Colors.systemControls && Colors.styleID === 'glass' ? Colors.secondaryGlassInk : Colors.secondary;
   }
-  private get tint(): string { return this.env.dark ? '#FF6B8B' : '#D62E5C'; }
+  private get tint(): ResourceColor { return Colors.healthRose; }
   private archiveAllowed(binding: BoundRow<ResourceRow>): boolean {
     return this.model.connected && !this.model.demo && !this.archivingBinding && !this.workspace.busy &&
       this.rows.includes(binding) && this.workspace.canArchiveConversation(binding.value);
@@ -100,7 +100,7 @@ export struct HealthConversationHistory {
       Stack() {
         SymbolGlyph($r('sys.symbol.heart_fill')).fontSize(String(this.scaledLength(17,23))+'vp').fontColor([this.tint])
       }.width(this.scaledLength(32,42)).height(this.scaledLength(32,42)).borderRadius(this.scaledLength(16,21))
-        .backgroundColor('#24'+this.tint.slice(1)).accessibilityLevel('no')
+        .backgroundColor(Colors.healthRoseWash).accessibilityLevel('no')
       Column({space:2}) {
         Text(this.title(row)).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).lineHeight(String(this.scaledLength(20.3,27.7))+'vp')
           .fontColor(this.titleInk).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).id('health.history.title.'+row.id)

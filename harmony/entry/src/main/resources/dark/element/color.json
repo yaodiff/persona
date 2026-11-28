@@ -339,6 +339,70 @@
     {
       "name": "persona_hero_shadow",
       "value": "#4D000000"
+    },
+    {
+      "name": "persona_health_rose",
+      "value": "#FF6B8B"
+    },
+    {
+      "name": "persona_health_rose_wash",
+      "value": "#26FF6B8B"
+    },
+    {
+      "name": "persona_health_water",
+      "value": "#719BFF"
+    },
+    {
+      "name": "persona_health_water_wash",
+      "value": "#24719BFF"
+    },
+    {
+      "name": "persona_health_protein",
+      "value": "#F6B650"
+    },
+    {
+      "name": "persona_health_protein_wash",
+      "value": "#24F6B650"
+    },
+    {
+      "name": "persona_health_action_surface",
+      "value": "#38383A"
+    },
+    {
+      "name": "persona_chart_blue",
+      "value": "#5B9BFF"
+    },
+    {
+      "name": "persona_indigo",
+      "value": "#5E5CE6"
+    },
+    {
+      "name": "persona_on_action_wash",
+      "value": "#28FFFFFF"
+    },
+    {
+      "name": "persona_muted_ink",
+      "value": "#6696969C"
+    },
+    {
+      "name": "persona_secondary_glass_ink",
+      "value": "#80FFFFFF"
+    },
+    {
+      "name": "persona_surface_transparent",
+      "value": "#001C1C1E"
+    },
+    {
+      "name": "persona_grouped_transparent",
+      "value": "#00000000"
+    },
+    {
+      "name": "persona_canvas_fog_start",
+      "value": "#00000000"
+    },
+    {
+      "name": "persona_canvas_fog_end",
+      "value": "#E6000000"
     }
   ]
 }

@@ -126,6 +126,10 @@ func browserArgs(profile string) []string {
 		"--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update",
 		"--disable-default-apps", "--disable-sync", "--disable-extensions", "--metrics-recording-only", "--mute-audio",
 		"--password-store=basic", "--use-mock-keychain", "--force-color-profile=srgb",
+		// Headless Chromium's Page.startScreencast ignores Emulation.setDeviceMetricsOverride's
+		// deviceScaleFactor on a 1x virtual display; force 2x so dpr=2 streams at 2w x 2h while
+		// dpr=1 still downsamples to w x h through maxWidth/maxHeight.
+		"--force-device-scale-factor=2",
 		"--disable-features=Translate,MediaRouter,OptimizationHints,DialMediaRouteProvider",
 		"--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
 	}

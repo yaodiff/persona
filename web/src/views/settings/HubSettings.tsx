@@ -7,8 +7,9 @@ import { ago } from "../../lib/format";
 import { formatDate, formatNumber, t } from "../../i18n";
 import { hubUpdate, setHubUpdateSettings, startHubUpdate, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus } from "../../lib/hub-update";
 import {
-  applyHubUpdateBackup, cancelHubUpdate, channelTitle, checkHubUpdate, dockerSteps, hubUpdateBackups, hubUpdateHistory, latestWarning,
-  recordTitle, recordTone, startLatestHubUpdate, updateFinished, updateView, updateWorking,
+  applyHubUpdateBackup, canCheckHubUpdate, cancelHubUpdate, channelTitle, checkHubUpdate, dockerSteps, hubUpdateBackups, hubUpdateHistory,
+  latestWarning, recordTitle, recordTone, runningChannelOf, shouldAutoCheckAfterSourceSwitch, startLatestHubUpdate, updateFinished,
+  updateGuidance, updateView, updateWorking, type UpdateGuidance,
 } from "../../lib/hub-update-settings";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { managerOf, multiManager, useRoster } from "../../lib/managers";
@@ -63,11 +64,14 @@ function HubUpdates() {
   const [selectedVersion, setSelectedVersion] = useState("");
   const [confirmBackup, setConfirmBackup] = useState(false);
   const last = useRef<string | undefined>(undefined);
+  const activeSource = useRef<string>("release");
   const revision = useRef(0);
+  const checkSeq = useRef(0);
   const opened = useRef(false);
 
   const apply = useCallback((s: HubUpdateStatus) => {
     revision.current++;
+    activeSource.current = s.source ?? "release";
     const finished = updateFinished(last.current, s.state);
     last.current = s.state;
     const now = Date.now();
@@ -118,23 +122,36 @@ function HubUpdates() {
     // meanwhile (confirming, updated, rolled back) are not replayed (#4954)
     const offHello = onHubEvent("hello", (m) => !isResumed(m) && void load());
     return () => {
+      checkSeq.current++;
       off();
       offHello();
     };
   }, [apply, load]);
 
+  const runCheck = useCallback(async (preview: boolean, expectedSource?: string) => {
+    const seq = ++checkSeq.current;
+    setChecking(true);
+    try {
+      const next = await checkHubUpdate(preview);
+      if (checkSeq.current !== seq) return;
+      if (expectedSource && (activeSource.current !== expectedSource || (next.source ?? "release") !== expectedSource)) return;
+      if (last.current && updateWorking({ state: last.current }) && !updateWorking(next)) return;
+      apply(next);
+    } catch (e) {
+      if (checkSeq.current === seq && (!expectedSource || activeSource.current === expectedSource)) {
+        toast(t("settings-hubsettings.check_failed", { error: errorText(e) }), "error");
+      }
+    } finally {
+      if (checkSeq.current === seq) setChecking(false);
+    }
+  }, [apply]);
+
   useEffect(() => {
     if (!status || opened.current) return;
     opened.current = true;
     if (status.source !== "web-dev" || !status.supports_preview || status.state === "checking" || updateWorking(status)) return;
-    const before = revision.current;
-    setChecking(true);
-    checkHubUpdate(true).then(next => {
-      if (revision.current === before) apply(next);
-    }, e => {
-      if (revision.current === before) toast(t("settings-hubsettings.check_failed", { error: errorText(e) }), "error");
-    }).finally(() => setChecking(false));
-  }, [apply, status]);
+    void runCheck(true, "web-dev");
+  }, [runCheck, status]);
 
   const phase = status?.state;
   const streaming = phase === "resolving" || phase === "building" || phase === "backing_up" || phase === "applying_backup";
@@ -162,17 +179,13 @@ function HubUpdates() {
   }, [apply, streaming]);
 
   const check = async () => {
-    setChecking(true);
-    try {
-      apply(await checkHubUpdate());
-    } catch (e) {
-      toast(t("settings-hubsettings.check_failed", { error: errorText(e) }), "error");
-    } finally {
-      setChecking(false);
-    }
+    if (!status || !canCheckHubUpdate(status)) return;
+    await runCheck(false, status.source ?? "release");
   };
 
   const update = async (now: boolean) => {
+    checkSeq.current++;
+    setChecking(false);
     setStarting(true);
     try {
       const before = revision.current;
@@ -199,6 +212,8 @@ function HubUpdates() {
   };
 
   const restore = async () => {
+    checkSeq.current++;
+    setChecking(false);
     setStarting(true);
     try {
       apply(await applyHubUpdateBackup(selectedVersion));
@@ -215,11 +230,24 @@ function HubUpdates() {
       toast(t("settings-hubsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setSavingAuto(false); }
   };
-  const setSource = async (source: "release" | "beta" | "web-dev") => {
+  const setSource = async (nextSource: "release" | "beta" | "web-dev") => {
+    const seq = ++checkSeq.current;
+    setChecking(false);
     setSavingSource(true);
-    try { apply(await setHubUpdateSettings({ source })); }
-    catch (e) { toast(t("settings-hubsettings.save_failed", { error: errorText(e) }), "error"); }
-    finally { setSavingSource(false); }
+    let updated: HubUpdateStatus | undefined;
+    try {
+      updated = await setHubUpdateSettings({ source: nextSource });
+      if (checkSeq.current !== seq) return;
+      apply(updated);
+    } catch (e) {
+      if (checkSeq.current === seq) toast(t("settings-hubsettings.save_failed", { error: errorText(e) }), "error");
+      return;
+    } finally {
+      if (checkSeq.current === seq) setSavingSource(false);
+    }
+    if (updated && shouldAutoCheckAfterSourceSwitch(updated)) {
+      await runCheck(true, updated.source ?? "release");
+    }
   };
 
   if (unsupported) {
@@ -242,8 +270,9 @@ function HubUpdates() {
 
   const working = updateWorking(status);
   const view = updateView(status);
+  const canCheck = canCheckHubUpdate(status);
   const source = status.source ?? "release";
-  const runningChannel = status.version.startsWith("web-dev-") ? "web-dev" : status.channel;
+  const runningChannel = runningChannelOf(status);
   const showChannel = !status.development || runningChannel !== source;
   const showUpdateVersion = source === "web-dev" && status.can_update;
   const run = snapshot?.pipeline;
@@ -255,7 +284,7 @@ function HubUpdates() {
   const releaseTime = released && released !== "0001-01-01T00:00:00Z" ? formatDate(released, { dateStyle: "medium", timeStyle: "short" }) : "";
   const candidate = (!selectedBackup || activeBackup) && (view.kind === "newer" || showUpdateVersion) ? status.latest : undefined;
   const warning = candidate && latestWarning(status);
-  const sourceWarning = view.kind === "source_behind" ? view.warning : view.kind === "ahead" ? t("settings-hubsettings.ahead_of_source") : null;
+  const guidance = updateGuidance(status, view);
 
   return (
     <>
@@ -278,7 +307,7 @@ function HubUpdates() {
         {status.development && <>
           <Row label={t("settings-hubsettings.source")} anchor={showChannel ? undefined : "hub-channel"} stackOnNarrow>
             <select aria-label={t("settings-hubsettings.source")} className={settingsInputClass}
-              value={source} disabled={working || checking || starting || savingSource || savingAuto}
+              value={source} disabled={working || starting || savingSource || savingAuto}
               onChange={(e) => void setSource(e.target.value as "release" | "beta" | "web-dev")}>
               <option value="release">{t("lib-hub-update.channel_release")}</option>
               <option value="beta">{t("settings-hubsettings.beta_channel")}</option>
@@ -299,8 +328,15 @@ function HubUpdates() {
           </Row>
         </>}
         {status.last_check && <Row label={t("settings-hubsettings.last_check")}>{ago(status.last_check)}</Row>}
-        <div className="flex justify-end px-4 py-2.5">
-          <Button icon="retry" busy={checking} disabled={checking || working || savingSource} onClick={() => void check()}>
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 px-4 py-2.5">
+          {!canCheck && (
+            <span className="mr-auto min-w-0 text-submeta leading-snug text-ink-3">
+              {t("settings-hubsettings.check_unavailable")}
+            </span>
+          )}
+          <Button icon="retry" busy={checking} disabled={!canCheck || checking || working || savingSource}
+            title={!canCheck ? t("settings-hubsettings.check_unavailable") : undefined}
+            onClick={() => void check()}>
             {checking ? t("settings-hubsettings.checking") : t("settings-hubsettings.check")}
           </Button>
         </div>
@@ -328,7 +364,6 @@ function HubUpdates() {
           </>}
         </>}
         {view.kind === "docker" && <DockerRows s={status} />}
-        {view.kind === "cannot" && <p className="px-4 py-3 text-[12.5px] leading-relaxed text-ink-3">{view.why}</p>}
         {(release || candidate?.notes || warning) && (
           <div className="space-y-1 px-4 py-3">
             {release && (
@@ -359,14 +394,9 @@ function HubUpdates() {
         {run && view.kind !== "docker" && (
           <HubUpdatePipeline s={status} run={run} onCancel={cancel} onNow={() => setConfirmNow(true)} />
         )}
-        {sourceWarning && (
-          <p role="status" className="flex items-start gap-1.5 px-4 py-3 text-meta leading-snug break-words text-orange">
-            <Icon name="info" className="mt-0.5 shrink-0" />
-            <span className="min-w-0">{sourceWarning}</span>
-          </p>
-        )}
+        {guidance && <UpdateGuidanceCallout guidance={guidance} />}
         {view.kind === "unchecked" && source !== "web-dev" && !status.error && (
-          <SettingsHint>{t(checking || status.state === "checking" ? "settings-hubsettings.checking" : "settings-hubsettings.unchecked")}</SettingsHint>
+          <div role="status"><SettingsHint>{t(checking || status.state === "checking" ? "settings-hubsettings.checking" : "settings-hubsettings.unchecked")}</SettingsHint></div>
         )}
         {!selectedBackup && view.kind === "current" && (source !== "web-dev" || status.last_check) && !status.error && (
           <div role="status" className="flex items-center gap-2 px-4 py-3 text-meta text-green">
@@ -374,7 +404,7 @@ function HubUpdates() {
             {t("settings-hubsettings.up_to_date")}
           </div>
         )}
-        {status.error && !working && <p className={cx("px-4 py-2.5 text-[12px] break-words", status.state === "rolled_back" ? "text-orange" : "text-red")}>{status.error}</p>}
+        {status.error && !working && <p role={status.state === "rolled_back" ? "status" : "alert"} className={cx("px-4 py-2.5 text-label break-words", status.state === "rolled_back" ? "text-orange" : "text-red")}>{status.error}</p>}
       </Group>
 
       {status.source === "web-dev" && status.development && <DevelopmentBackup s={status} onSaved={apply} />}
@@ -422,6 +452,29 @@ function HubUpdates() {
         </p>
       </Dialog>
     </>
+  );
+}
+
+function UpdateGuidanceCallout({ guidance }: { guidance: UpdateGuidance }) {
+  const caution = guidance.tone === "caution";
+  return (
+    <div className="px-4 py-3">
+      <div
+        role="status"
+        data-update-guidance={guidance.tone}
+        className={cx(
+          "flex items-start gap-2.5 rounded-control px-3 py-2.5",
+          caution ? "bg-orange-tint text-ink" : "bg-inset text-ink shadow-hairline",
+        )}
+      >
+        <Icon name="info" size={14} className={cx("mt-0.5 shrink-0", caution ? "text-orange" : "text-ink-3")} />
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className={cx("text-meta font-medium leading-snug break-words", caution ? "text-orange" : "text-ink")}>{guidance.title}</p>
+          <p className="text-label leading-relaxed break-words text-ink-2">{guidance.body}</p>
+          {guidance.nextStep && <p className="text-label leading-relaxed break-words text-ink-3">{guidance.nextStep}</p>}
+        </div>
+      </div>
+    </div>
   );
 }
 

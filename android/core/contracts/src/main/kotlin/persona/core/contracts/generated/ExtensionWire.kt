@@ -1187,6 +1187,9 @@ data class ExtensionUsageItem(
     val id: String = "",
     val name: String = "",
     val hosts: List<String>? = null,
+    val direct: Boolean? = null,
+    @SerialName("remote_address") val remoteAddress: String? = null,
+    @SerialName("remote_key") val remoteKey: String? = null,
 )
 
 @Serializable
@@ -2285,6 +2288,11 @@ data class ExtensionSecretsResolveParams(
     val contribution: String = "",
     val reference: String = "",
     val purpose: ExtensionSecretPurpose = ExtensionSecretPurpose(),
+    /**
+     * The manager still holds an earlier value of the reference and uses it if this fails: the provider must not ask
+     * the user (no authorization prompt), and answers not_signed_in at once when it cannot answer without them.
+     */
+    val quiet: Boolean? = null,
 )
 
 /**

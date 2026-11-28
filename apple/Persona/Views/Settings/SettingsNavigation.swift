@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaModuleAPI
 
 extension SettingsPage {
     @MainActor func belongsToCurrentAssistant(in model: AppModel) -> Bool {
@@ -38,11 +39,13 @@ struct SettingsEntry: Identifiable {
     /// Where Settings draws the entry: on its home, on Settings › Advanced, or only inside another page. Search finds
     /// every entry, whatever its tier.
     enum Tier { case core, advanced, nested }
-    /// When its row shows. Search lists the entry either way and opens the page, which says what it needs.
+    /// When its row shows. Settings search applies the same rule when it has the current model.
     enum Shown {
         case always
         /// While the hub reports the feature.
         case hubFeature(String)
+        /// A module allowed by the shared HubModules rule: an older or unanswered hub leaves it on.
+        case hubModule(String)
         /// While the hub has the extension manager.
         case extensionManager
         /// With a hub paired: not in demo mode.
@@ -68,6 +71,8 @@ struct SettingsEntry: Identifiable {
         switch shown {
         case .always: true
         case .hubFeature(let feature): model.hubFeatures.contains(feature)
+        case .hubModule(let id):
+            HubModules(hello: model.hubFeatures).allows(ModuleDescriptor(id: ModuleID(rawValue: id), hubGated: true, slots: []))
         case .extensionManager: model.hubFeatures.hasExtensionFeature("manager")
         case .pairedHub: !model.isDemo
         }
@@ -87,7 +92,9 @@ enum SettingsCatalog {
     /// The core's own entries.
     private static let coreEntries: [SettingsEntry] = {
         var rows: [SettingsEntry] = [
-            .init(id: "models", title: String(localized: "Models"), symbol: Theme.Icon.model, group: .assistant, page: .models,
+            .init(id: "templates", title: String(localized: "Templates"), symbol: Theme.Icon.style, group: .device, page: .templates,
+                  aliases: String(localized: "Agent console")),
+                        .init(id: "models", title: String(localized: "Models"), symbol: Theme.Icon.model, group: .assistant, page: .models,
                   aliases: String(localized: "settings.search.models")),
             .init(id: "assistant", title: String(localized: "Assistant Profile"), symbol: Theme.Icon.ai, group: .assistant, page: .assistant,
                   aliases: String(localized: "settings.search.assistant")),
@@ -148,11 +155,11 @@ enum SettingsCatalog {
             .init(id: "knowledgeSelection", title: String(localized: "Knowledge Selection"), symbol: Theme.Icon.knowledge, group: .assistant, page: .knowledgeSelection,
                   aliases: String(localized: "settings.search.knowledge"), row: "settings-knowledge-selection"),
             .init(id: "meetings", title: String(localized: "Meetings"), symbol: Theme.Icon.meeting, group: .assistant, page: .meetings,
-                  aliases: String(localized: "settings.search.meetings")),
+                  aliases: String(localized: "settings.search.meetings"), shown: .hubModule("recording")),
             .init(id: "layout", title: String(localized: "Agents List Layout"), symbol: Theme.Icon.listView, group: .device, page: .layout,
                   aliases: String(localized: "settings.search.layout")),
             .init(id: "health", title: String(localized: "Health"), symbol: Theme.Icon.health, group: .device, page: .health,
-                  aliases: String(localized: "settings.search.health")),
+                  aliases: String(localized: "settings.search.health"), shown: .hubModule("health")),
             .init(id: "phoneData", title: ConnectorText.device, symbol: Theme.Icon.thisDevice, group: .device, page: .phoneData,
                   aliases: String(localized: "settings.search.phoneData"), row: "settings-phone-data")
         ]
@@ -181,13 +188,19 @@ enum SettingsCatalog {
     /// the iPhone) or whose condition is not met (`SettingsEntry.Shown`) is left out.
     @MainActor static func rows(_ tier: SettingsEntry.Tier, in group: SettingsEntry.Group, _ model: AppModel) -> [SettingsEntry] {
         let all = entries
+        if NativeTemplateStore.shared.shortSettings, tier == .advanced {
+            // The console's More Settings is the complete native Settings home's categories, not a second dead end.
+            return all.filter { $0.shows(in: model) && ($0.group == group || group == .hub) }
+        }
         return (tier == .core ? core : tier == .advanced ? advanced : []).compactMap { id in all.first { $0.id == id } }
             .filter { $0.group == group && $0.shows(in: model) }
     }
 
-    @MainActor static func search(_ query: String) -> [SettingsEntry] {
+    @MainActor static func search(_ query: String, for model: AppModel? = nil) -> [SettingsEntry] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        return entries.filter { $0.matches(query) }
+        return entries.filter { entry in
+            entry.matches(query) && (model.map { entry.shows(in: $0) } ?? true)
+        }
     }
 }
 

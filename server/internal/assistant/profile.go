@@ -278,6 +278,8 @@ type Settings struct {
 	// AutoSupervisionMessages. The task ledger, the owner's own questions and acceptance, permission cards and approval
 	// answers do not depend on it.
 	AutoSupervisionMode string `json:"auto_supervision_mode,omitempty"`
+	// SupervisionTriage is opt-in: eligible routine signals use the Sorting model before waking a supervisor.
+	SupervisionTriage *bool `json:"supervision_triage,omitempty"`
 	// SupervisionBatchMinutes independently batches routine supervision per final recipient, anchored at its first
 	// routine signal. Nil or 0 preserves the legacy shared gather and spacing. Immediate signals bypass the batch.
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
@@ -1036,6 +1038,7 @@ type assistantView struct {
 	AutoSupervisionMessages bool `json:"auto_supervision_messages"`
 	// AutoSupervisionMode is in effect: all, outcomes or off.
 	AutoSupervisionMode string `json:"auto_supervision_mode"`
+	SupervisionTriage   bool   `json:"supervision_triage"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -1102,6 +1105,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		SupervisionBatchMinutes:      supervisionBatchMinutesOf(v),
 		AutoSupervisionMessages:      autoSupervisionOf(v),
 		AutoSupervisionMode:          supervisionModeOf(v),
+		SupervisionTriage:            v.supervisionTriageOn(),
 		NextSuggestions:              v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(ctx, d, sp)

@@ -165,7 +165,10 @@ class ShrinkGuardTests(unittest.TestCase):
         for rule in ("-dontobfuscate", "-keepattributes SourceFile,LineNumberTable",
                      "-keepattributes InnerClasses,EnclosingMethod",
                      "-keepnames class * extends java.lang.Throwable",
-                     "-keepnames class persona.core.hub.HttpChatComposerService"):
+                     "-keepnames class persona.core.hub.HttpChatComposerService",
+                     # DocumentText and Xlsx hold the SAX stop signals of the document readers (#17474, #17454).
+                     "-keepnames class persona.feature.files.DocumentText",
+                     "-keepnames class persona.feature.files.Xlsx"):
             self.assertIn(rule, rules)
         # Optimizing saves 13.7 MB: with -dontoptimize the APK is 33.2 MB again (#2840).
         self.assertNotIn("-dontoptimize", rules)

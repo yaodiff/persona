@@ -86,8 +86,22 @@ describe("externalLink", () => {
   it("takes an https link", () => {
     expect(externalLink(session({ external_url: "https://applink.example.com/thread?x=1" }))).toBe("https://applink.example.com/thread?x=1");
   });
-  it("drops anything else", () => {
-    for (const url of ["http://applink.example.com/t", "javascript:alert(1)", "lark://open", "not a url", ""]) {
+  it("drops anything else, including single-slash relative URLs, userinfo, backslashes, and control chars", () => {
+    for (const url of [
+      "http://applink.example.com/t",
+      "javascript:alert(1)",
+      "lark://open",
+      "https:/admin",
+      "https:admin",
+      "https://user:pw@evil.example/t",
+      "https://@evil.example/t",
+      "https://good.example\\@evil.example/t",
+      "https://applink.example.com/t\t1",
+      "https://applink.example.com/t\n1",
+      "https://",
+      "not a url",
+      "",
+    ]) {
       expect(externalLink(session({ external_url: url })), url).toBeUndefined();
     }
     expect(externalLink(undefined)).toBeUndefined();

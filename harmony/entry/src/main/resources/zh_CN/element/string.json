@@ -9671,6 +9671,578 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "知识库页面"
+    },
+    {
+      "name": "todo_stage_plan",
+      "value": "方案"
+    },
+    {
+      "name": "todo_stage_develop",
+      "value": "开发"
+    },
+    {
+      "name": "todo_stage_review",
+      "value": "审查"
+    },
+    {
+      "name": "todo_stage_merge",
+      "value": "合入"
+    },
+    {
+      "name": "todo_stage_deploy",
+      "value": "部署"
+    },
+    {
+      "name": "todo_stage_verify",
+      "value": "已验证"
+    },
+    {
+      "name": "todo_stage_done",
+      "value": "已完成"
+    },
+    {
+      "name": "todo_stage_state_done",
+      "value": "已完成"
+    },
+    {
+      "name": "todo_stage_state_current",
+      "value": "当前步骤"
+    },
+    {
+      "name": "todo_stage_state_ahead",
+      "value": "还没到"
+    },
+    {
+      "name": "todo_stage_step_of",
+      "value": "第 {current} 步，共 {total} 步"
+    },
+    {
+      "name": "todo_stage_step_summary",
+      "value": "第 {current} 步，共 {total} 步 · {stage}"
+    },
+    {
+      "name": "todo_decisions_title",
+      "value": "决策记录"
+    },
+    {
+      "name": "todo_decisions_loading",
+      "value": "正在加载决策记录…"
+    },
+    {
+      "name": "todo_decisions_load_failed",
+      "value": "无法加载决策记录。"
+    },
+    {
+      "name": "todo_decisions_empty",
+      "value": "此待办的决策会记录在这里。你对智能体问题的回答和任务完成结论会自动记下，也可以手动添加。"
+    },
+    {
+      "name": "todo_decisions_show_all",
+      "value": "显示全部 {count} 条决策"
+    },
+    {
+      "name": "todo_decisions_show_first",
+      "value": "仅显示前 {count} 条"
+    },
+    {
+      "name": "todo_decisions_full_history",
+      "value": "完整历史（含 {count} 条已修订）"
+    },
+    {
+      "name": "todo_decisions_current_only",
+      "value": "仅看当前生效"
+    },
+    {
+      "name": "todo_decision_chose",
+      "value": "选择："
+    },
+    {
+      "name": "todo_decision_reason_prefix",
+      "value": "原因："
+    },
+    {
+      "name": "todo_decision_revise",
+      "value": "修订"
+    },
+    {
+      "name": "todo_decision_revised_badge",
+      "value": "已修订"
+    },
+    {
+      "name": "todo_decision_revises",
+      "value": "修订了“{choice}”"
+    },
+    {
+      "name": "todo_decision_revises_item",
+      "value": "设为修订“{question} → {choice}”"
+    },
+    {
+      "name": "todo_decision_undo_revision",
+      "value": "撤销修订关联"
+    },
+    {
+      "name": "todo_decision_record_title",
+      "value": "记录决策"
+    },
+    {
+      "name": "todo_decision_save",
+      "value": "记录"
+    },
+    {
+      "name": "todo_decision_revise_note",
+      "value": "先前的选择“{choice}”会保留在历史记录中并加删除线；只有新决定会传给智能体。"
+    },
+    {
+      "name": "todo_decision_question_label",
+      "value": "问题"
+    },
+    {
+      "name": "todo_decision_question_placeholder",
+      "value": "需要决定什么…"
+    },
+    {
+      "name": "todo_decision_choice_label",
+      "value": "选择"
+    },
+    {
+      "name": "todo_decision_choice_placeholder",
+      "value": "最终选择了什么…"
+    },
+    {
+      "name": "todo_decision_reason_label",
+      "value": "原因（可选）"
+    },
+    {
+      "name": "todo_decision_reason_placeholder",
+      "value": "为什么这样选，以及排除了什么…"
+    },
+    {
+      "name": "todo_decision_source_manual",
+      "value": "手动添加"
+    },
+    {
+      "name": "todo_decision_source_outcome",
+      "value": "智能体完成时记下"
+    },
+    {
+      "name": "todo_decision_source_agent",
+      "value": "智能体执行中记下"
+    },
+    {
+      "name": "todo_decision_source_thread",
+      "value": "来自飞书话题"
+    },
+    {
+      "name": "todo_decision_source_card",
+      "value": "在智能体提问中回答"
+    },
+    {
+      "name": "todo_decision_recorded_toast",
+      "value": "已记录决策"
+    },
+    {
+      "name": "todo_decision_revised_toast",
+      "value": "已修订决策"
+    },
+    {
+      "name": "todo_decision_marked_revised",
+      "value": "已标记为修订"
+    },
+    {
+      "name": "todo_decision_revision_undone",
+      "value": "已撤销修订标记"
+    },
+    {
+      "name": "expand_all",
+      "value": "全部展开"
+    },
+    {
+      "name": "collapse_all",
+      "value": "全部收起"
+    },
+    {
+      "name": "saving",
+      "value": "保存中…"
+    },
+    {
+      "name": "token_usage_recent_hourly",
+      "value": "最近每小时用量"
+    },
+    {
+      "name": "token_usage_by_machine_7d",
+      "value": "按电脑 · 最近 7 天"
+    },
+    {
+      "name": "token_usage_by_agent_7d",
+      "value": "按智能体 · 最近 7 天"
+    },
+    {
+      "name": "token_usage_by_agent",
+      "value": "按智能体"
+    },
+    {
+      "name": "token_usage_by_launcher",
+      "value": "按启动器"
+    },
+    {
+      "name": "token_usage_by_place",
+      "value": "目录与工作树"
+    },
+    {
+      "name": "token_usage_requests",
+      "value": "请求数"
+    },
+    {
+      "name": "token_usage_worktree",
+      "value": "关联工作树"
+    },
+    {
+      "name": "token_usage_removed_computer",
+      "value": "已移除的电脑"
+    },
+    {
+      "name": "token_usage_not_split",
+      "value": "未拆分（更新前）"
+    },
+    {
+      "name": "token_usage_launcher_terminal",
+      "value": "在终端中打开"
+    },
+    {
+      "name": "token_usage_project_by_hour",
+      "value": "按小时"
+    },
+    {
+      "name": "token_usage_project_each_day",
+      "value": "按天"
+    },
+    {
+      "name": "next_suggestions_title",
+      "value": "建议下一条消息"
+    },
+    {
+      "name": "next_suggestions_note",
+      "value": "在打开的对话回复后，在空输入框上方建议你接下来可能发送的消息。"
+    },
+    {
+      "name": "suggestion_use",
+      "value": "填入"
+    },
+    {
+      "name": "suggestion_fill_in",
+      "value": "填入输入框"
+    },
+    {
+      "name": "suggestion_send_now",
+      "value": "立即发送"
+    },
+    {
+      "name": "suggestion_hint_safe",
+      "value": "点按填入输入框，长按可立即发送。"
+    },
+    {
+      "name": "suggestion_hint_risky",
+      "value": "点按填入输入框以便确认。"
+    },
+    {
+      "name": "rule_suggestion_always",
+      "value": "总是这样"
+    },
+    {
+      "name": "rule_suggestion_not_now",
+      "value": "暂不"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust",
+      "value": "“总是这样”会将此类任务加入直接启动列表，以后不再先询问。"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust_scoped",
+      "value": "“总是这样”会添加一条规则：在 {machine} 的 {directory} 中修改文件的任务将直接启动，不再先询问。"
+    },
+    {
+      "name": "rule_suggestion_creates_standing",
+      "value": "“总是这样”会创建一条长期授权：允许在 {machine} 的 {directory} 中执行“{action}”。"
+    },
+    {
+      "name": "rule_suggestion_creates_setting",
+      "value": "“总是这样”不会保存规则，仅将此建议收起 30 天。"
+    },
+    {
+      "name": "rule_suggestion_made_task_trust",
+      "value": "已添加规则：这类任务以后会直接启动。"
+    },
+    {
+      "name": "rule_suggestion_made_standing",
+      "value": "已添加长期授权。"
+    },
+    {
+      "name": "rule_suggestion_made_setting",
+      "value": "已收起此项建议（{setting}）。"
+    },
+    {
+      "name": "rule_suggestion_made_none",
+      "value": "已完成，未保存任何规则。"
+    },
+    {
+      "name": "rule_suggestion_conflict",
+      "value": "长期授权刚发生变动，请重试。"
+    },
+    {
+      "name": "rule_suggestion_failed",
+      "value": "无法保存你的选择。"
+    },
+    {
+      "name": "recording_bookmark",
+      "value": "书签"
+    },
+    {
+      "name": "recording_transcript_review",
+      "value": "检索转写"
+    },
+    {
+      "name": "recording_transcript_find",
+      "value": "在转写中查找…"
+    },
+    {
+      "name": "recording_transcript_previous",
+      "value": "上一个匹配"
+    },
+    {
+      "name": "recording_transcript_next",
+      "value": "下一个匹配"
+    },
+    {
+      "name": "recording_transcript_bookmarks",
+      "value": "只看书签"
+    },
+    {
+      "name": "recording_transcript_copy",
+      "value": "复制全文"
+    },
+    {
+      "name": "recording_transcript_copied",
+      "value": "已复制转写内容"
+    },
+    {
+      "name": "recording_transcript_no_matches",
+      "value": "无匹配结果"
+    },
+    {
+      "name": "recording_transcript_matches",
+      "value": "处匹配"
+    },
+    {
+      "name": "recording_transcript_expired",
+      "value": "语音转写已过期清理，仅保留书签。"
+    },
+    {
+      "name": "recording_transcript_empty",
+      "value": "暂无保留的转写内容。"
+    },
+    {
+      "name": "standing_auth_title",
+      "value": "长期授权"
+    },
+    {
+      "name": "standing_tab_standing",
+      "value": "长期授权"
+    },
+    {
+      "name": "standing_tab_session",
+      "value": "会话始终允许"
+    },
+    {
+      "name": "standing_action_merge",
+      "value": "合并变更"
+    },
+    {
+      "name": "standing_action_push",
+      "value": "推送变更"
+    },
+    {
+      "name": "standing_action_deploy_test",
+      "value": "部署到测试环境"
+    },
+    {
+      "name": "standing_action_deploy_production",
+      "value": "部署到生产环境"
+    },
+    {
+      "name": "standing_action_send",
+      "value": "发送消息"
+    },
+    {
+      "name": "standing_action_delete",
+      "value": "删除数据"
+    },
+    {
+      "name": "standing_action_spend",
+      "value": "消费资金"
+    },
+    {
+      "name": "standing_no_actions",
+      "value": "未记录操作"
+    },
+    {
+      "name": "standing_condition_ci_green",
+      "value": "所有检查通过"
+    },
+    {
+      "name": "standing_condition_no_conflicts",
+      "value": "无合并冲突"
+    },
+    {
+      "name": "standing_only_when",
+      "value": "仅当满足"
+    },
+    {
+      "name": "standing_place_format",
+      "value": "位于 {machine} 的 {folder}"
+    },
+    {
+      "name": "standing_reversible_yes",
+      "value": "可撤销"
+    },
+    {
+      "name": "standing_reversible_no",
+      "value": "不可撤销"
+    },
+    {
+      "name": "standing_since",
+      "value": "自 {date}"
+    },
+    {
+      "name": "standing_source_chat",
+      "value": "某次对话"
+    },
+    {
+      "name": "standing_source_suggested_rule",
+      "value": "建议的规则：14 天内 {count} 次相同的回答，点「总是」确认。"
+    },
+    {
+      "name": "standing_show_details",
+      "value": "详情"
+    },
+    {
+      "name": "standing_hide_details",
+      "value": "收起详情"
+    },
+    {
+      "name": "standing_revoke",
+      "value": "撤销"
+    },
+    {
+      "name": "standing_revoke_action",
+      "value": "撤销授权"
+    },
+    {
+      "name": "standing_revoke_confirm_title",
+      "value": "撤销此授权？"
+    },
+    {
+      "name": "standing_revoke_confirm_message",
+      "value": "此后在 {machine} 的 {folder} 执行以下操作前，Persona 会再次询问你：{actions}。已完成的工作不受影响。若要重新授权，请在主对话中告诉 Persona。"
+    },
+    {
+      "name": "standing_revoked_toast",
+      "value": "授权已撤销"
+    },
+    {
+      "name": "standing_revoke_failed_toast",
+      "value": "无法撤销此授权，当前仍然有效。请检查连接后重试。"
+    },
+    {
+      "name": "standing_empty_title",
+      "value": "暂无授权"
+    },
+    {
+      "name": "standing_empty_message",
+      "value": "合并、推送、部署、发送消息、删除数据或消费资金前，Persona 会先向你确认。当你在对话中允许某处始终继续执行时，该授权会显示在这里。"
+    },
+    {
+      "name": "standing_forbidden_title",
+      "value": "需要完整访问权限"
+    },
+    {
+      "name": "standing_forbidden_message",
+      "value": "只有具备完整访问权限的设备才能查看和撤销长期授权。"
+    },
+    {
+      "name": "standing_failed_title",
+      "value": "无法加载长期授权"
+    },
+    {
+      "name": "standing_footer_note",
+      "value": "在撤销之前，Persona 会直接执行这些操作而不再询问。"
+    },
+    {
+      "name": "standing_select_conversation",
+      "value": "对话"
+    },
+    {
+      "name": "phone_search_alias_standing_authorizations",
+      "value": "长期授权 始终允许 权限 撤销 standing authorizations always allow"
+    },
+    {
+      "name": "always_grants_heading",
+      "value": "此对话中始终允许"
+    },
+    {
+      "name": "always_grants_empty",
+      "value": "没有已保存的权限。"
+    },
+    {
+      "name": "always_grants_restart_needed",
+      "value": "已保存的权限已撤销，但运行中的对话未能重置。请在重启该对话后再依赖此次撤销。"
+    },
+    {
+      "name": "always_grants_scope_footer",
+      "value": "这些已保存的权限仅适用于当前对话。记录仅保存工具名称，不包含具体目录或命令范围。"
+    },
+    {
+      "name": "always_grant_unnamed",
+      "value": "未命名权限"
+    },
+    {
+      "name": "always_grant_revoke_title",
+      "value": "撤销此权限？"
+    },
+    {
+      "name": "always_grant_revoke_message",
+      "value": "撤销会停止当前回复以清除权限。发送下一条消息即可继续。"
+    },
+    {
+      "name": "always_grant_revoked_toast",
+      "value": "权限已撤销"
+    },
+    {
+      "name": "assistant_full_search_title",
+      "value": "搜索对话与智能体"
+    },
+    {
+      "name": "assistant_search_scope_chats",
+      "value": "对话"
+    },
+    {
+      "name": "archived_agents_empty_title",
+      "value": "没有已归档的智能体"
+    },
+    {
+      "name": "archived_agents_empty_message",
+      "value": "已归档的智能体会话会显示在这里，随时可恢复。"
+    },
+    {
+      "name": "agent_auto_rename",
+      "value": "自动重命名"
+    },
+    {
+      "name": "agent_renaming",
+      "value": "正在重命名…"
+    },
+    {
+      "name": "assistant_session",
+      "value": "不能在此自动重命名助手对话"
     }
   ]
 }

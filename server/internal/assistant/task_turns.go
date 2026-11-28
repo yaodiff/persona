@@ -154,7 +154,9 @@ type taskTurn struct {
 	JudgeFailures int         `json:"judge_failures,omitempty"`
 	JudgeError    string      `json:"judge_error,omitempty"`
 	Judged        *turnJudged `json:"judged,omitempty"`
-	Signal        *turnSignal `json:"signal,omitempty"`
+	// Set only when loading a judgment interrupted before its supervisor signal was recorded.
+	restoreUnlinked bool
+	Signal          *turnSignal `json:"signal,omitempty"`
 	// Silent: the turn, taken up as interrupted, had no output at all (proto.TurnErrorNoOutput, or
 	// proto.TurnErrorStopped when Persona's Stop interrupted it): what the Agent's row says of it (silent_turns.go).
 	Silent string `json:"silent,omitempty"`
@@ -163,11 +165,12 @@ type taskTurn struct {
 // turnJudged is the judgment written for a turn: the judge's check, the error when it could not say (the supervisor
 // was told unjudged), or why the hub does not judge the task at all (Skip, autoDoneSkip).
 type turnJudged struct {
-	Check     taskDoneCheck `json:"check"`
-	ReasonKey string        `json:"reason_key,omitempty"`
-	Err       string        `json:"err,omitempty"`
-	Skip      string        `json:"skip,omitempty"`
-	At        time.Time     `json:"at"`
+	Check     taskDoneCheck  `json:"check"`
+	ReasonKey string         `json:"reason_key,omitempty"`
+	Unlinked  []unlinkedPane `json:"agy_unlinked,omitempty"`
+	Err       string         `json:"err,omitempty"`
+	Skip      string         `json:"skip,omitempty"`
+	At        time.Time      `json:"at"`
 }
 
 // turnSignal is the supervision signal a turn's outcome raised, and when a supervision message carried it (nil: not yet).
@@ -181,6 +184,7 @@ type turnSignal struct {
 	Told      *time.Time `json:"told,omitempty"`
 	// JudgeDown: superviseSignal.JudgeDown, so a replay after a restart is batched as the first telling was.
 	JudgeDown bool `json:"judge_down,omitempty"`
+	Unlinked  bool `json:"agy_unlinked,omitempty"`
 }
 
 func (sig *turnSignal) matches(g superviseSignal) bool {
@@ -227,8 +231,12 @@ func (s *Service) replayTurnSignal(todo string, expected taskTurn) {
 	}
 	// Keep the ledger lock until queued, so an obsolete replay cannot replace a newer pending signal.
 	// The digest releases its mutex before consulting or marking the turn ledger.
-	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Recipient: sig.Recipient, Detail: sig.Detail, Handoff: sig.Handoff,
-		JudgeDown: sig.JudgeDown})
+	g := superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Recipient: sig.Recipient, Detail: sig.Detail, Handoff: sig.Handoff,
+		JudgeDown: sig.JudgeDown}
+	if sig.Unlinked && current.Judged != nil {
+		g.Unlinked = current.Judged.Unlinked
+	}
+	s.queueSignal(g)
 }
 
 // settled: nothing is left to do for the turn: it is judged (or has nothing to judge) and what it raised was told.
@@ -506,6 +514,12 @@ func (s *Service) turnsLoadLocked(ctx context.Context, persistFresh bool) bool {
 	if doc.Since.IsZero() {
 		doc.Since = time.Now().UTC()
 	}
+	for id, e := range doc.Turns {
+		if e.State == turnDone && e.Signal == nil && e.Judged != nil && len(e.Judged.Unlinked) > 0 && e.Judged.Err == "" && e.Judged.Skip == "" {
+			e.restoreUnlinked = true
+			doc.Turns[id] = e
+		}
+	}
 	b.doc, b.loaded = doc, true
 	s.restoreQuietTurns(doc.Turns)
 	if fresh && persistFresh && st != nil { // since when it is kept must outlive this manager
@@ -722,11 +736,11 @@ func (s *Service) turnJudged(ctx context.Context, todo string, c taskDoneCheck, 
 	if !ok || e.State != turnDone {
 		return
 	}
-	j := &turnJudged{Check: c, ReasonKey: c.reasonKey, Skip: skip, At: time.Now().UTC()}
+	j := &turnJudged{Check: c, ReasonKey: c.reasonKey, Unlinked: c.unlinked, Skip: skip, At: time.Now().UTC()}
 	if err != nil {
 		j.Err = clip(oneLine(err.Error()), 300) // only that it failed is used again; a model service's error can be a page
 	}
-	e.Judged = j
+	e.Judged, e.restoreUnlinked = j, false
 	b.doc.Turns[todo] = e
 	s.saveTurnsLocked(ctx)
 }
@@ -788,8 +802,8 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 		}
 		return true
 	}
-	if !sameHandover && (!match || sig.Handoff != g.Handoff) {
-		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Recipient: g.Recipient, Detail: g.Detail, Handoff: g.Handoff, JudgeDown: g.JudgeDown}
+	if !sameHandover && (!match || sig.Handoff != g.Handoff || sig.Unlinked != (len(g.Unlinked) > 0)) {
+		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Recipient: g.Recipient, Detail: g.Detail, Handoff: g.Handoff, JudgeDown: g.JudgeDown, Unlinked: len(g.Unlinked) > 0}
 		b.doc.Turns[g.Todo] = e
 		s.saveTurnsLocked(ctx)
 	}
@@ -969,13 +983,14 @@ func (s *Service) turnAgain(ctx context.Context, t Todo, e taskTurn, last proto.
 		return // no start since: the todo and the ledger are as the judgment left them
 	}
 	s.logf("task %s: its agent's turn %s was handled already: its judgment stands", t.ID, clip(e.Key, 40))
-	s.advanceTaskReply(ctx, t, last.MachineID, last.SessionID, text) // its stage, as its reply left it
+	s.advanceTaskReplyAt(ctx, t, last.MachineID, last.SessionID, text, last.UpdatedAt) // its stage, as its reply left it
 	current, ok := s.todoNow(t.ID)
 	if !ok {
 		return
 	}
 	c := j.Check
 	c.reasonKey = j.ReasonKey
+	c.unlinked = j.Unlinked
 	var err error
 	if j.Err != "" {
 		err = errors.New(j.Err)
@@ -1157,6 +1172,12 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 			b.mu.Unlock()
 		}()
 		recoveryCtx := context.WithoutCancel(ctx)
+		if e.restoreUnlinked && slices.ContainsFunc(agents, func(row proto.Session) bool {
+			return row.MachineID == e.Machine && row.SessionID == e.Session && row.Rev == e.Rev &&
+				(row.Rev != 0 || row.UpdatedAt.Equal(e.Seen))
+		}) {
+			s.restoreUnlinkedJudgment(recoveryCtx, t, e)
+		}
 		for _, row := range candidates {
 			key := turnRecoveryKey{Todo: t.ID, Machine: row.MachineID, Session: row.SessionID}
 			look := lookOf(row)
@@ -1202,6 +1223,41 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 			b.mu.Unlock()
 		}
 	}()
+}
+
+// A placeholder has no native turn end to rediscover. If the previous manager saved the
+// judgment but stopped before registering its signal, reapply only that notification.
+func (s *Service) restoreUnlinkedJudgment(ctx context.Context, t Todo, e taskTurn) {
+	// Check the nodes outside the completion lock, then exclude a new start while registering the signal.
+	if !s.taskCompletionCurrent(ctx, t, e.Work) {
+		return
+	}
+	s.tasks.completionMu.Lock()
+	defer s.tasks.completionMu.Unlock()
+	current, ok := s.todoNow(t.ID)
+	if !ok || current.Supervision == nil || current.Check == nil || current.Check.Verdict != verdictUnsure ||
+		!current.Check.WorkSince.Equal(e.Work) || current.Check.At.After(e.Judged.At) ||
+		autoDoneSkip(current, e.Work, true) != "" || !s.taskWorkCurrent(t.ID, e.Work) {
+		return
+	}
+	for _, review := range current.Supervision.Reviews {
+		if review.At.After(e.Judged.At) {
+			return
+		}
+	}
+	b := &s.tasks.turns
+	b.mu.Lock()
+	entry := b.doc.Turns[t.ID]
+	if !entry.restoreUnlinked || entry.Signal != nil || entry.Judged != e.Judged || !entry.Work.Equal(e.Work) {
+		b.mu.Unlock()
+		return
+	}
+	entry.restoreUnlinked = false
+	b.doc.Turns[t.ID] = entry
+	b.mu.Unlock()
+	check := e.Judged.Check
+	check.reasonKey, check.unlinked = e.Judged.ReasonKey, e.Judged.Unlinked
+	s.superviseJudged(ctx, current, e.Work, check, nil)
 }
 
 func (s *Service) missingPendingTurnAgent(ctx context.Context, t Todo, agents []proto.Session) (proto.Session, bool) {

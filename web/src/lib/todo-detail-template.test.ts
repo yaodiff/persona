@@ -27,6 +27,20 @@ const makeSession = (patch: Partial<Session> & { machine_id: string; session_id:
 });
 
 describe("classifyTodoDetailTemplate", () => {
+  it.each(["personal", "quick", "concern"])("keeps explicit %s items personal even with execution signals", (item_type) => {
+    const todo = baseTodo({ item_type, origin: "conv-1", plan_id: "plan-1", audience: "autonomous" });
+    expect(classifyTodoDetailTemplate(todo, 2, { repositoryCount: 1 })).toBe("personal");
+  });
+
+  it.each(["task", "goal"])("uses the work template for an explicit %s without execution signals", (item_type) => {
+    expect(classifyTodoDetailTemplate(baseTodo({ item_type, audience: "human" }))).toBe("work_goal");
+  });
+
+  it("uses structural signals for an unfamiliar item type", () => {
+    expect(classifyTodoDetailTemplate(baseTodo({ item_type: "future" }))).toBe("personal");
+    expect(classifyTodoDetailTemplate(baseTodo({ item_type: "future", origin: "conv-1" }))).toBe("work_goal");
+  });
+
   it("classifies plain personal notes and reminders as personal", () => {
     expect(classifyTodoDetailTemplate(baseTodo(), 0)).toBe("personal");
     expect(
@@ -62,13 +76,17 @@ describe("classifyTodoDetailTemplate", () => {
 });
 
 describe("safeDetailHttpUrl & firstSafePrUrl", () => {
-  it("accepts http(s) URLs and rejects unsafe schemes", () => {
+  it("accepts http(s) URLs and rejects unsafe schemes, credentials, and backslash confusion", () => {
     expect(safeDetailHttpUrl("https://github.com/org/repo/pull/42")).toBe("https://github.com/org/repo/pull/42");
     expect(safeDetailHttpUrl("http://example.com/pr/1")).toBe("http://example.com/pr/1");
     expect(safeDetailHttpUrl("javascript:alert(1)")).toBeUndefined();
     expect(safeDetailHttpUrl("data:text/html,hi")).toBeUndefined();
     expect(safeDetailHttpUrl("ftp://example.com/file")).toBeUndefined();
     expect(safeDetailHttpUrl("not a url")).toBeUndefined();
+    expect(safeDetailHttpUrl("https://user:pass@example.com/org/repo/pull/42")).toBeUndefined();
+    expect(safeDetailHttpUrl("https://evil.example\\@example.com/org/repo/pull/42")).toBeUndefined();
+    expect(safeDetailHttpUrl("https:/org/repo/pull/42")).toBeUndefined();
+    expect(safeDetailHttpUrl("https://example.com/a b")).toBeUndefined();
   });
 
   it("extracts the first safe PR URL across pr_status, pr_url, other_prs, and prs", () => {

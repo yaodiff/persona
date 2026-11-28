@@ -1596,3 +1596,138 @@ func TestRemoteAgentConfirmWritesPersistsAcrossDisconnectOwnershipChangeAndResta
 	cwd = cwd2
 	assertPosture("after node restart", n2, hub2, proxyBase2)
 }
+
+func TestAgyAssistantDegradedAutoModePersistsAndReturnsSettledMode(t *testing.T) {
+	t.Run("runtime degrades auto on start and session.modes", func(t *testing.T) {
+		n, hub := runtimeNode(t)
+		assistantHub(hub)
+		hello := assistantRuntimeHello()
+		hello["runtime"], hello["name"], hello["launcher"], hello["agent"] = "agy", "Antigravity", "agy", "agy"
+		hello["caps"].(map[string]any)["modes"] = true
+		host := dialRuntime(t, n, hello)
+		cwd := identity.AssistantDir(n.home)
+		host.answer = func(method string, _ json.RawMessage) (any, error) {
+			switch method {
+			case "session.start":
+				return map[string]any{"session": map[string]any{
+					"session_id": "agy-degraded-1", "cwd": cwd, "status": "idle", "agent": "agy",
+					"permission_mode": proto.ModeBypass,
+					"capabilities": map[string]any{
+						"rewind":           false,
+						"permission_modes": []string{proto.ModeDefault, "acceptEdits", proto.ModePlan, proto.ModeBypass},
+					},
+				}}, nil
+			case "session.modes":
+				return map[string]any{"permission_mode": proto.ModeBypass}, nil
+			default:
+				return map[string]any{"ok": true}, nil
+			}
+		}
+
+		raw, err := nodeCall(t, n, "assistant.send", map[string]any{
+			"cwd": cwd, "launcher": "agy", "text": "hello",
+			"permission_mode": "auto", "permission_mode_explicit": true,
+		})
+		if err != nil {
+			t.Fatalf("assistant.send: %v", err)
+		}
+		var res struct {
+			SessionID      string `json:"session_id"`
+			PermissionMode string `json:"permission_mode"`
+		}
+		if err := json.Unmarshal(raw, &res); err != nil {
+			t.Fatal(err)
+		}
+		if res.SessionID != "agy-degraded-1" || res.PermissionMode != proto.ModeBypass {
+			t.Fatalf("assistant.send response = %s, want permission_mode=%q", raw, proto.ModeBypass)
+		}
+		sends := host.got("session.send")
+		if len(sends) != 1 {
+			t.Fatalf("session.send calls = %d, want 1", len(sends))
+		}
+		var sent struct {
+			Mode string `json:"mode"`
+		}
+		_ = json.Unmarshal(sends[0], &sent)
+		if sent.Mode != proto.ModeBypass {
+			t.Fatalf("session.send mode = %q, want %q; raw=%s", sent.Mode, proto.ModeBypass, sends[0])
+		}
+		if got := n.assistantModeOf("agy-degraded-1"); got != proto.ModeBypass {
+			t.Fatalf("assistantModeOf = %q, want %q", got, proto.ModeBypass)
+		}
+		if st, _ := n.state.get("agy-degraded-1"); st.AppMode != proto.ModeBypass {
+			t.Fatalf("persisted AppMode = %q, want %q", st.AppMode, proto.ModeBypass)
+		}
+
+		if _, err := nodeCall(t, n, "session.modes", map[string]any{
+			"session_id": "agy-degraded-1", "permission_mode": "auto",
+		}); err != nil {
+			t.Fatalf("session.modes: %v", err)
+		}
+		if got := n.assistantModeOf("agy-degraded-1"); got != proto.ModeBypass {
+			t.Fatalf("after session.modes assistantModeOf = %q, want %q", got, proto.ModeBypass)
+		}
+		if st, _ := n.state.get("agy-degraded-1"); st.AppMode != proto.ModeBypass {
+			t.Fatalf("after session.modes persisted AppMode = %q, want %q", st.AppMode, proto.ModeBypass)
+		}
+	})
+
+	t.Run("rolling upgrade fallback when older agy runtime rejects auto on start", func(t *testing.T) {
+		n, hub := runtimeNode(t)
+		assistantHub(hub)
+		hello := assistantRuntimeHello()
+		hello["runtime"], hello["name"], hello["launcher"], hello["agent"] = "agy", "Antigravity", "agy", "agy"
+		hello["caps"].(map[string]any)["modes"] = true
+		host := dialRuntime(t, n, hello)
+		cwd := identity.AssistantDir(n.home)
+		host.answer = func(method string, params json.RawMessage) (any, error) {
+			if method == "session.start" {
+				var p struct {
+					PermissionMode string `json:"permission_mode"`
+				}
+				_ = json.Unmarshal(params, &p)
+				if p.PermissionMode == "auto" {
+					return nil, fmt.Errorf("Auto mode is not available: it needs the OS terminal sandbox and may not be rolled out to you yet")
+				}
+				return map[string]any{"session": map[string]any{
+					"session_id": "agy-legacy-1", "cwd": cwd, "status": "idle", "agent": "agy",
+					"permission_mode": p.PermissionMode,
+				}}, nil
+			}
+			return map[string]any{"ok": true}, nil
+		}
+
+		raw, err := nodeCall(t, n, "assistant.send", map[string]any{
+			"cwd": cwd, "launcher": "agy", "text": "hello",
+			"permission_mode": "auto", "permission_mode_explicit": true,
+		})
+		if err != nil {
+			t.Fatalf("assistant.send legacy fallback failed: %v", err)
+		}
+		var res struct {
+			SessionID      string `json:"session_id"`
+			PermissionMode string `json:"permission_mode"`
+		}
+		_ = json.Unmarshal(raw, &res)
+		if res.SessionID != "agy-legacy-1" || res.PermissionMode != proto.ModeBypass {
+			t.Fatalf("legacy fallback response = %s, want permission_mode=%q", raw, proto.ModeBypass)
+		}
+	})
+
+	t.Run("agyAutoModeUnavailable tracks runtime launcher permission_modes", func(t *testing.T) {
+		n, _ := runtimeNode(t)
+		hello := assistantRuntimeHello()
+		hello["runtime"], hello["name"], hello["launcher"], hello["agent"] = "agy", "Antigravity", "agy", "agy"
+		hello["launchers"] = []map[string]any{{"name": "agy", "agent": "agy"}}
+		h := dialRuntime(t, n, hello)
+		if n.agyAutoModeUnavailable("agy") {
+			t.Fatal("unrestricted agy launcher reported auto unavailable")
+		}
+		if err := h.peer.Notify("runtime.launchers", map[string]any{"launchers": []map[string]any{
+			{"name": "agy", "agent": "agy", "permission_modes": []string{proto.ModeDefault, "acceptEdits", proto.ModePlan, proto.ModeBypass}},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "restricted agy launcher recorded", func() bool { return n.agyAutoModeUnavailable("agy") })
+	})
+}

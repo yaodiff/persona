@@ -34,14 +34,37 @@ final class LinkChannelTests: XCTestCase {
         XCTAssertEqual(s.oldestAge(at: 2), 2, "the oldest byte left came at 0")
         s.acknowledged(through: 6)
         XCTAssertEqual(s.oldestAge(at: 2), 1)
+        XCTAssertEqual(s.oldestAge(at: 0), 0, "backward clock never produces negative oldestAge")
         // A move: the node has 7, so the rest goes again from there.
         s.resume(from: 7)
-        XCTAssertEqual(s.next(max: 100)?.bytes, Data("rld".utf8))
+        XCTAssertNil(s.next(max: 0))
+        XCTAssertNil(s.next(max: -5))
+        // Consume 1 byte first so `from > 0` before passing `Int.max` (exercises `from + max` overflow guard).
+        XCTAssertEqual(s.next(max: 1)?.bytes, Data("r".utf8))
+        XCTAssertEqual(s.next(max: Int.max)?.bytes, Data("ld".utf8))
         s.acknowledged(through: 99)
         XCTAssertEqual(s.unacknowledged, 3, "an offset past what was sent is ignored")
         s.acknowledged(through: 10)
         XCTAssertNil(s.oldestAge(at: 5))
         XCTAssertTrue(s.hasRoom)
+    }
+
+    func testReceiverNearMaxOffsetAndMeterNonFiniteInputsDoNotTrapOrPoison() throws {
+        var r = LinkReceiver(offset: UInt64.max - 2)
+        // Non-zero startIndex Data slice exercises safe slicing when capping at UInt64.max.
+        let slice = Data("xxabcde".utf8).dropFirst(2)
+        XCTAssertEqual(try r.accept(slice, at: UInt64.max - 2), Data("ab".utf8))
+        XCTAssertEqual(r.offset, UInt64.max)
+        XCTAssertEqual(try r.accept(Data("z".utf8), at: UInt64.max), Data())
+
+        var m = LinkMeter()
+        for i in 0 ..< 3 { m.pong(rttMs: 10, retransmitted: 0, sent: 0, counts: false, at: Double(i)) }
+        m.pong(rttMs: .nan, retransmitted: 0, sent: 0, counts: false, at: 3)
+        m.pong(rttMs: .infinity, retransmitted: 0, sent: 0, counts: false, at: 3)
+        m.pong(rttMs: -5, retransmitted: 0, sent: 0, counts: false, at: 3)
+        let s = m.stats(kind: .lan, via: .wifi, at: 3)
+        XCTAssertTrue(s.healthy, "non-finite/negative RTT samples must not poison EWMA or health")
+        XCTAssertEqual(s.srttMs, 10)
     }
 
     func testTheAssemblerHandsOnWholeMessagesAndDropsAPartialOneOnReset() throws {
@@ -197,5 +220,187 @@ final class PathPolicyTests: XCTestCase {
         _ = p.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0)
         XCTAssertEqual(p.directOff(now: 3), .move(to: "relay", reason: .directOff))
         XCTAssertEqual(p.directOff(now: 4), .stay)
+    }
+
+    func testThreeWayTieBandRankingIsDeterministicAndNeverSelectsLostRelay() {
+        // Classic 3-cycle for pairwise tieMs (5 ms): relay=10, ts=14, lan=18.
+        // Fastest measured route is 10 ms; only routes within 10+5=15 ms (relay, ts) are in the top tie band,
+        // and ts beats relay deterministically regardless of dictionary ordering or extra NaN entries.
+        for _ in 0 ..< 16 {
+            var p = PathPolicy(relay: "relay")
+            let routes: [String: LinkStats] = [
+                "relay": stats(.relay, 10),
+                "ts": stats(.tailscale, 14),
+                "lan": stats(.lan, 18),
+                "bad": stats(.lan, .nan),
+            ]
+            XCTAssertEqual(p.decide(routes, now: 0), .move(to: "ts", reason: .faster))
+        }
+
+        // Same-kind, same-RTT routes break ties deterministically by route id; negative RTT is ignored.
+        var tieId = PathPolicy(relay: "relay")
+        XCTAssertEqual(
+            tieId.decide([
+                "relay": stats(.relay, 40),
+                "lan-b": stats(.lan, 10),
+                "lan-a": stats(.lan, 10),
+                "lan-neg": stats(.lan, -1)
+            ], now: 0),
+            .move(to: "lan-a", reason: .faster)
+        )
+
+        // If both the current direct route and the relay are reported in `lost` while still present in `routes`,
+        // `best` must NOT select the lost relay.
+        var lostRelay = PathPolicy(relay: "relay")
+        _ = lostRelay.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0)
+        XCTAssertEqual(lostRelay.current, "lan")
+        XCTAssertEqual(
+            lostRelay.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], lost: ["lan", "relay"], now: 10),
+            .stay
+        )
+    }
+
+    func testUnhealthyFastRelayNeverMasksHealthyFallbackOrWinsUpgrade() {
+        // Degraded failover: unhealthy fast relay (10 ms) must not mask healthy Tailscale (20 ms).
+        var degraded = PathPolicy(relay: "relay")
+        _ = degraded.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0)
+        XCTAssertEqual(degraded.current, "lan")
+        var moved: PathPolicy.Decision = .stay
+        for t in stride(from: 10.0, through: 16, by: 1) {
+            moved = degraded.decide([
+                "relay": stats(.relay, 10, healthy: false),
+                "ts": stats(.tailscale, 20, healthy: true),
+                "lan": stats(.lan, 5, healthy: false, loss: 0.08)
+            ], now: t)
+            if moved != .stay { break }
+        }
+        XCTAssertEqual(moved, .move(to: "ts", reason: .degraded))
+
+        // Lost failover: prefer healthy Tailscale (20 ms) over unhealthy fast relay (10 ms).
+        var lostPreferHealthy = PathPolicy(relay: "relay")
+        _ = lostPreferHealthy.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0)
+        XCTAssertEqual(
+            lostPreferHealthy.decide([
+                "relay": stats(.relay, 10, healthy: false),
+                "ts": stats(.tailscale, 20, healthy: true)
+            ], lost: ["lan"], now: 10),
+            .move(to: "ts", reason: .lost)
+        )
+
+        // Faster upgrade: unhealthy fast relay must neither be selected as an upgrade target nor mask healthy LAN.
+        var noBadUpgrade = PathPolicy(relay: "relay")
+        _ = noBadUpgrade.decide(["relay": stats(.relay, 40), "ts": stats(.tailscale, 30)], now: 0)
+        XCTAssertEqual(noBadUpgrade.current, "ts")
+        XCTAssertEqual(
+            noBadUpgrade.decide([
+                "relay": stats(.relay, 5, healthy: false),
+                "ts": stats(.tailscale, 30, healthy: true)
+            ], now: 30),
+            .stay,
+            "never upgrade from a healthy route onto an unhealthy relay"
+        )
+        // Healthy LAN appears at t=30 and becomes stable by t=40 despite unhealthy 5 ms relay.
+        _ = noBadUpgrade.decide([
+            "relay": stats(.relay, 5, healthy: false),
+            "ts": stats(.tailscale, 30, healthy: true),
+            "lan": stats(.lan, 15, healthy: true)
+        ], now: 30)
+        XCTAssertEqual(
+            noBadUpgrade.decide([
+                "relay": stats(.relay, 5, healthy: false),
+                "ts": stats(.tailscale, 30, healthy: true),
+                "lan": stats(.lan, 15, healthy: true)
+            ], now: 40),
+            .move(to: "lan", reason: .faster)
+        )
+
+        // Non-finite timestamps in decide() do not poison state; directOff() with non-finite now preserves finite lastMove.
+        var clock = PathPolicy(relay: "relay")
+        XCTAssertEqual(clock.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: .nan), .stay)
+        XCTAssertEqual(clock.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: .infinity), .stay)
+        XCTAssertEqual(clock.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: -.infinity), .stay)
+        XCTAssertEqual(clock.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0), .move(to: "lan", reason: .faster))
+        XCTAssertEqual(clock.directOff(now: .nan), .move(to: "relay", reason: .directOff))
+        XCTAssertEqual(clock.current, "relay")
+        // Verify dwell (20 s from lastMove == 0) is strictly enforced (if lastMove were NaN, 10 - NaN < 20 would be false!).
+        XCTAssertEqual(clock.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 10), .stay)
+        XCTAssertEqual(clock.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 20), .move(to: "lan", reason: .faster))
+        // Verify directOff(now: .infinity) does not wedge dwell with +Inf.
+        XCTAssertEqual(clock.directOff(now: .infinity), .move(to: "relay", reason: .directOff))
+        XCTAssertEqual(clock.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 30), .stay)
+        XCTAssertEqual(clock.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 40), .move(to: "lan", reason: .faster))
+
+        // Degraded failover still succeeds after directOff(now: .nan) (degradedDwell not wedged by NaN).
+        var degradedAfterNan = PathPolicy(relay: "relay")
+        _ = degradedAfterNan.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0)
+        XCTAssertEqual(degradedAfterNan.directOff(now: .nan), .move(to: "relay", reason: .directOff))
+        // Use a slower healthy LAN (50 ms) so only degraded failover (not .faster) can move off relay.
+        var movedAfterNan: PathPolicy.Decision = .stay
+        for t in stride(from: 10.0, through: 16, by: 1) {
+            movedAfterNan = degradedAfterNan.decide([
+                "relay": stats(.relay, 40, healthy: false, loss: 0.08),
+                "lan": stats(.lan, 50, healthy: true)
+            ], now: t)
+            if movedAfterNan != .stay { break }
+        }
+        XCTAssertEqual(movedAfterNan, .move(to: "lan", reason: .degraded))
+
+        // Degraded failover works for both newly-healthy non-leftBad relay AND newly-healthy leftBad relay.
+        var newlyHealthyRelay = PathPolicy(relay: "relay")
+        _ = newlyHealthyRelay.decide(["relay": stats(.relay, nil, healthy: false), "lan": stats(.lan, 5)], now: 0)
+        for t in stride(from: 10.0, through: 14, by: 1) {
+            XCTAssertEqual(newlyHealthyRelay.decide(["relay": stats(.relay, nil, healthy: false), "lan": stats(.lan, 5, loss: 0.08)], now: t), .stay)
+        }
+        XCTAssertEqual(newlyHealthyRelay.decide(["relay": stats(.relay, 40, healthy: true), "lan": stats(.lan, 5, loss: 0.08)], now: 15),
+                       .move(to: "relay", reason: .degraded))
+
+        var leftBadRelay = PathPolicy(relay: "relay")
+        _ = leftBadRelay.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0)
+        _ = leftBadRelay.decide(["lan": stats(.lan, 5)], lost: ["relay"], now: 1) // puts relay in leftBad
+        for t in stride(from: 10.0, through: 14, by: 1) {
+            XCTAssertEqual(leftBadRelay.decide(["relay": stats(.relay, 40, healthy: false), "lan": stats(.lan, 5, loss: 0.08)], now: t), .stay)
+        }
+        XCTAssertEqual(leftBadRelay.decide(["relay": stats(.relay, 40, healthy: true), "lan": stats(.lan, 5, loss: 0.08)], now: 15),
+                       .move(to: "relay", reason: .degraded), "must not strand degraded direct route when relay is healthy")
+
+        // leftBad auto-clears after stableWindow so a much later brief blip does not re-impose a 10 s penalty.
+        var autoClear = PathPolicy(relay: "relay")
+        _ = autoClear.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0)
+        _ = autoClear.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], lost: ["ts"], now: 1)
+        _ = autoClear.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5), "ts": stats(.tailscale, 20)], now: 2)
+        _ = autoClear.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5), "ts": stats(.tailscale, 20)], now: 12) // leftBad cleared
+        _ = autoClear.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5), "ts": stats(.tailscale, 20, healthy: false)], now: 13)
+        for t in stride(from: 14.0, through: 18, by: 1) {
+            _ = autoClear.decide(["relay": stats(.relay, 40, healthy: false), "lan": stats(.lan, 5, loss: 0.08)], now: t)
+        }
+        XCTAssertEqual(
+            autoClear.decide([
+                "relay": stats(.relay, 40, healthy: false),
+                "lan": stats(.lan, 5, loss: 0.08),
+                "ts": stats(.tailscale, 20, healthy: true)
+            ], now: 19),
+            .move(to: "ts", reason: .degraded)
+        )
+
+        // Healthy relay waits stableWindow for .faster upgrade, and disappearing from routes resets its healthySince.
+        var fastRelay = PathPolicy(relay: "relay")
+        _ = fastRelay.decide(["relay": stats(.relay, 40), "ts": stats(.tailscale, 30)], now: 0)
+        XCTAssertEqual(fastRelay.current, "ts")
+        // Relay disappears from routes without appearing in `lost` (e.g., ScreenLinkSession relay drop).
+        XCTAssertEqual(fastRelay.decide(["ts": stats(.tailscale, 30)], now: 20), .stay)
+        // Relay reappears healthy and much faster at t=25; must wait stableWindow (until t=35).
+        XCTAssertEqual(fastRelay.decide(["relay": stats(.relay, 5), "ts": stats(.tailscale, 30)], now: 25), .stay)
+        XCTAssertEqual(fastRelay.decide(["relay": stats(.relay, 5), "ts": stats(.tailscale, 30)], now: 34), .stay)
+        XCTAssertEqual(fastRelay.decide(["relay": stats(.relay, 5), "ts": stats(.tailscale, 30)], now: 35),
+                       .move(to: "relay", reason: .faster))
+
+        // Pathological floorWindow (< 0, NaN, +Inf) stays bounded and does not break decide().
+        for badWindow in [-5.0, .nan, .infinity] {
+            var cfg = PathPolicy.Config()
+            cfg.floorWindow = badWindow
+            var p = PathPolicy(relay: "relay", config: cfg)
+            XCTAssertEqual(p.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0), .move(to: "lan", reason: .faster))
+            XCTAssertEqual(p.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 10), .stay)
+        }
     }
 }

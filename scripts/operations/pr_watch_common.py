@@ -249,6 +249,7 @@ query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       number title body state isDraft headRefOid headRefName baseRefName
+      author { login }
       baseRef { target { oid } }
       isCrossRepository mergeable mergeStateStatus reviewDecision url createdAt updatedAt
     }
@@ -281,6 +282,9 @@ query($owner: String!, $name: String!, $number: Int!) {
     github_time(data["updatedAt"])
     if not isinstance(data.get("isDraft"), bool) or not isinstance(data.get("isCrossRepository"), bool):
         raise WatchError("PR snapshot has invalid flags")
+    author = data.get("author")
+    if author is not None and (not isinstance(author, dict) or not isinstance(author.get("login"), str)):
+        raise WatchError("PR snapshot has invalid author")
     return data
 
 

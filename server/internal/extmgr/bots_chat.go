@@ -338,9 +338,10 @@ func (h *Manager) botMessage(ev botcard.MessageEvent, raw json.RawMessage, since
 		return
 	}
 	if msg.ChatType != "p2p" {
-		// A group chat: only the owner's messages in a topic of a chat the owner opted in, and the command that opts
-		// one in (bots_topics.go). Everything else is dropped without a word: in a group anyone could reach the
-		// owner's Persona, and the owner's private chat (Owner.ChatID) is never rewritten from here.
+		// A group chat: the owner's messages in a topic of a chat the owner opted in, and the command that opts one in
+		// (bots_topics.go). A message from anyone else is judged by the group access policy (bots_guest.go) and never
+		// reaches the owner's conversations. Everything else is dropped without a word, and the owner's private chat
+		// (Owner.ChatID) is never rewritten from here.
 		h.botGroupMessage(api, set, ev, raw, since, pass)
 		return
 	}

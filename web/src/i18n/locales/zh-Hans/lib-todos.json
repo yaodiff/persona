@@ -1,5 +1,6 @@
 {
   "auto_done": "自动完成",
+  "supervisor_processing": "督办处理中",
   "model_request_failed": "模型请求失败",
   "unassigned": "未关联待办",
   "unassigned_hint": "未关联到任何待办，例如由你在终端自行打开，或从飞书、手机等其他入口启动的会话。右键任意一行（或点击行尾的 ⋯）›「关联到待办…」即可归类。",

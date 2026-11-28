@@ -225,3 +225,137 @@ func TestBrowserClampsTTL(t *testing.T) {
 		t.Errorf("got %+v", found)
 	}
 }
+
+// A TXT-only response for an unseen instance must keep a non-zero temporary expiry so the
+// same loop turn's sweep does not immediately delete the cached TXT and break follow-up throttling.
+// Once SRV arrives with a shorter authoritative TTL, it replaces the temporary TXT lifetime.
+func TestBrowserTXTOnlySurvivesSweepAndDefersLifetimeToSRV(t *testing.T) {
+	f := newFixture(t)
+	b := newBrowser(f.typ, "")
+	t0 := time.Unix(1_000_000, 0)
+
+	txt := f.txt
+	txt.ttl = 4500
+	found, follow := b.apply(resp(txt), "eth0", t0)
+	if len(found) != 0 {
+		t.Fatalf("TXT alone reported %+v", found)
+	}
+	if !slices.Equal(qtypes(follow), []uint16{typeSRV, typeTXT}) || !follow[0].name.equal(f.inst) {
+		t.Fatalf("follow-up after TXT = %+v", follow)
+	}
+
+	// runner.loop calls sweep(now) right after handle(p, now) on the same tick.
+	if gone := b.sweep(t0); len(gone) != 0 {
+		t.Fatalf("same-turn sweep reported %+v", gone)
+	}
+	if len(b.insts) != 1 {
+		t.Fatalf("same-turn sweep dropped TXT-only instance; len(insts) = %d", len(b.insts))
+	}
+	if next := b.next(); !next.Equal(t0.Add(4500 * time.Second)) {
+		t.Fatalf("next after TXT = +%v, want +4500s", next.Sub(t0))
+	}
+
+	// A repeated TXT within followEvery must remain throttled.
+	if _, follow = b.apply(resp(txt), "eth0", t0.Add(time.Second)); len(follow) != 0 {
+		t.Fatalf("follow-up repeated within %v after TXT: %+v", followEvery, follow)
+	}
+
+	// SRV arrives 2s later with a 120s TTL: TXT is preserved and SRV sets the authoritative expiry.
+	t1 := t0.Add(2 * time.Second)
+	found, _ = b.apply(resp(f.srv), "eth0", t1)
+	if len(found) != 1 {
+		t.Fatalf("SRV after TXT: found %+v, want 1", found)
+	}
+	if !maps.Equal(found[0].TXT, map[string]string{"hub_id": "a"}) || found[0].TTL != 120*time.Second {
+		t.Fatalf("SRV after TXT: got %+v", found[0])
+	}
+	if next := b.next(); !next.Equal(t1.Add(120 * time.Second)) {
+		t.Fatalf("next after SRV = +%v from t1, want +120s (not 4500s TXT TTL)", next.Sub(t1))
+	}
+
+	// A subsequent long-TTL TXT on an already-live instance must not extend its authoritative expiry.
+	txtUpdate := f.txt
+	txtUpdate.ttl = 4500
+	txtUpdate.txt = []string{"hub_id=a", "v=2"}
+	found, _ = b.apply(resp(txtUpdate), "eth0", t1.Add(time.Second))
+	if len(found) != 1 || found[0].TXT["v"] != "2" {
+		t.Fatalf("live TXT update: got %+v", found)
+	}
+	if next := b.next(); !next.Equal(t1.Add(120 * time.Second)) {
+		t.Fatalf("long-TTL TXT extended live expiry to +%v from t1, want +120s", next.Sub(t1))
+	}
+
+	// Instance expires on SRV's TTL, not TXT's 4500s TTL.
+	gone := b.sweep(t1.Add(120 * time.Second))
+	if len(gone) != 1 || gone[0].TTL != 0 {
+		t.Fatalf("expiry after SRV TTL: got %+v", gone)
+	}
+	if len(b.insts) != 0 || !b.next().IsZero() {
+		t.Fatalf("instance remained cached after SRV expiry")
+	}
+
+	// TXT(4500s) -> PTR(120s) also hands liveness to PTR while preserving the cached TXT until SRV arrives.
+	t2 := t0.Add(200 * time.Second)
+	b.apply(resp(txt), "eth0", t2)
+	t3 := t2.Add(2 * time.Second)
+	b.apply(resp(f.ptr), "eth0", t3)
+	if next := b.next(); !next.Equal(t3.Add(120 * time.Second)) {
+		t.Fatalf("next after TXT->PTR = +%v from t3, want +120s", next.Sub(t3))
+	}
+	found, _ = b.apply(resp(f.srv), "eth0", t3.Add(time.Second))
+	if len(found) != 1 || !maps.Equal(found[0].TXT, map[string]string{"hub_id": "a"}) {
+		t.Fatalf("SRV after TXT->PTR lost TXT: %+v", found)
+	}
+}
+
+func TestBrowserTXTOnlyExpiresQuietly(t *testing.T) {
+	f := newFixture(t)
+	b := newBrowser(f.typ, "")
+	t0 := time.Unix(1_000_000, 0)
+
+	txt := f.txt
+	txt.ttl = 30
+	b.apply(resp(txt), "", t0)
+	if gone := b.sweep(t0.Add(29 * time.Second)); len(gone) != 0 || len(b.insts) != 1 {
+		t.Fatalf("before TXT expiry: gone=%+v len=%d", gone, len(b.insts))
+	}
+	if gone := b.sweep(t0.Add(30 * time.Second)); len(gone) != 0 || len(b.insts) != 0 || !b.next().IsZero() {
+		t.Fatalf("at TXT expiry: gone=%+v len=%d next=%v", gone, len(b.insts), b.next())
+	}
+}
+
+func TestBrowserTXTGoodbyeHandling(t *testing.T) {
+	f := newFixture(t)
+	b := newBrowser(f.typ, "")
+	t0 := time.Unix(1_000_000, 0)
+
+	txtBye := f.txt
+	txtBye.ttl = 0
+
+	// Unknown instance TXT goodbye must neither cache a stub nor emit follow-up queries.
+	found, follow := b.apply(resp(txtBye), "", t0)
+	if len(found) != 0 || len(follow) != 0 || len(b.insts) != 0 {
+		t.Fatalf("unknown TXT goodbye: found=%+v follow=%+v len=%d", found, follow, len(b.insts))
+	}
+
+	// Pending TXT-only instance receiving TXT goodbye is dropped cleanly without follow-ups.
+	b.apply(resp(f.txt), "", t0)
+	found, follow = b.apply(resp(txtBye), "", t0.Add(time.Second))
+	if len(found) != 0 || len(follow) != 0 || len(b.insts) != 0 {
+		t.Fatalf("pending TXT goodbye: found=%+v follow=%+v len=%d", found, follow, len(b.insts))
+	}
+
+	// Live instance (with PTR+SRV) receiving TXT goodbye clears TXT but stays alive.
+	t1 := t0.Add(10 * time.Second)
+	found, _ = b.apply(resp(f.ptr, f.srv, f.txt), "", t1)
+	if len(found) != 1 || len(found[0].TXT) != 1 {
+		t.Fatalf("live seed: %+v", found)
+	}
+	found, _ = b.apply(resp(txtBye), "", t1.Add(time.Second))
+	if len(found) != 1 || len(found[0].TXT) != 0 || found[0].TTL == 0 {
+		t.Fatalf("live TXT goodbye: got %+v", found)
+	}
+	if len(b.insts) != 1 {
+		t.Fatalf("live instance dropped on TXT goodbye")
+	}
+}

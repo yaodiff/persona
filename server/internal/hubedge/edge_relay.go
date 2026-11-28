@@ -231,17 +231,23 @@ func (e *edge) dialActive(port string, header []byte) (*proc, net.Conn) {
 	defer deadline.Stop()
 	for {
 		e.mu.Lock()
-		gate, p := e.gate, e.active
+		held, gate, p := e.held, e.gate, e.active
 		e.mu.Unlock()
-		select {
-		case <-gate:
-		case <-deadline.C:
-			return nil, nil
-		case <-e.ctx.Done():
-			return nil, nil
+		if held || p == nil {
+			if e.onGateWait != nil {
+				e.onGateWait()
+			}
+			select {
+			case <-gate:
+				continue
+			case <-deadline.C:
+				return nil, nil
+			case <-e.ctx.Done():
+				return nil, nil
+			}
 		}
-		if p == nil {
-			continue
+		if e.ctx.Err() != nil {
+			return nil, nil
 		}
 		path, ok := p.sockets[port]
 		if !ok {
@@ -255,11 +261,14 @@ func (e *edge) dialActive(port string, header []byte) (*proc, net.Conn) {
 			_ = uc.Close()
 		}
 		// The slot is going away (a switch has not held connections back yet) or died: wait for the next one.
+		retry := time.NewTimer(50 * time.Millisecond)
 		select {
-		case <-time.After(50 * time.Millisecond):
+		case <-retry.C:
 		case <-deadline.C:
+			retry.Stop()
 			return nil, nil
 		case <-e.ctx.Done():
+			retry.Stop()
 			return nil, nil
 		}
 	}
@@ -272,34 +281,36 @@ func addrPort(a net.Addr) netip.AddrPort {
 	return netip.AddrPort{}
 }
 
-// hold makes new connections wait (a switch, a slot that died); unhold lets them through to the active slot.
-func (e *edge) hold() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *edge) holdLocked() {
 	if !e.held {
 		e.gate, e.held = make(chan struct{}), true
 	}
 }
 
-func (e *edge) unhold() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *edge) unholdLocked() {
 	if e.held && e.active != nil {
 		close(e.gate)
 		e.held = false
 	}
 }
 
+// hold makes new connections wait (a switch, a slot that died).
+func (e *edge) hold() {
+	e.mu.Lock()
+	e.holdLocked()
+	e.mu.Unlock()
+}
+
 func (e *edge) setActive(p *proc) {
 	e.mu.Lock()
 	e.active = p
-	if p != nil {
+	if p == nil {
+		e.holdLocked()
+	} else {
 		e.served = p.name
+		e.unholdLocked()
 	}
 	e.mu.Unlock()
-	if p != nil {
-		e.unhold()
-	}
 }
 
 func (e *edge) current() *proc {

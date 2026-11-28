@@ -47,7 +47,7 @@ func TestTaskDonePreservesTurnSourceBeforeClipping(t *testing.T) {
 	ask := strings.Repeat("a", 1200) + `<persona-context kind="side-conversation">Another task's question</persona-context>` + strings.Repeat("b", 1200)
 	f.setItems(proto.Item{Kind: proto.KindText, Role: "user", From: "peer-agent", Text: ask},
 		proto.Item{Kind: proto.KindText, Role: "assistant", Text: "Another session was informed; the task was not handled here."})
-	replies, blocked := s.taskReplies(context.Background(), todo)
+	replies, blocked, _ := s.taskReplies(context.Background(), todo)
 	if !blocked || len(replies) != 1 || replies[0].From != "peer-agent" || replies[0].Source != "peer" {
 		t.Fatalf("source lost: blocked=%v replies=%+v", blocked, replies)
 	}
@@ -139,7 +139,9 @@ func TestDoneSignals(t *testing.T) {
 		{"发了 TestFlight，构建号 1234", false, true},
 		{"没有全改完", false, false},
 	} {
-		got := doneSignals([]prompts.TaskDoneReply{{Text: tc.text}})
+		reply := doneReply(tc.text)
+		reply.pr = "https://github.com/o/r/pull/12"
+		got := doneSignals([]taskDoneReply{reply})
 		if got.MergedPR != tc.pr || got.Build != tc.build {
 			t.Errorf("doneSignals(%q) = %+v", tc.text, got)
 		}

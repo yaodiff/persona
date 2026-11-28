@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -19,7 +20,7 @@ func (s *Service) waitOneShotPreparedCard(ctx context.Context, ix proto.Interact
 		return approvalops.Outcome{}, fmt.Errorf("%w: %w", approvalops.ErrNotApplied, err)
 	}
 	switch {
-	case r.UserAllowed():
+	case r.UserAllowed() && (!proto.InternalMaintenanceApproval(ix) || !r.Remembered && time.Now().Before(ix.ExpiresAt)) || proto.MaintenanceAllowed(ix, r, time.Now()):
 		if err := ctx.Err(); err != nil {
 			return approvalops.Outcome{Text: fmt.Sprintf("The change was approved after its caller stopped waiting: nothing changed (%v).", err)}, nil
 		}

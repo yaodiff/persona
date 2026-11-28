@@ -42,6 +42,18 @@ func TestProjectReviewOwnerInputBusAcknowledgesWithEmptyObject(t *testing.T) {
 	}
 }
 
+func TestHTTPBusInvalidParams(t *testing.T) {
+	b := &BusHub{helloed: make(chan struct{})}
+	close(b.helloed)
+	for _, method := range []string{assistantwire.MethodHTTP, assistantwire.MethodHTTPStreamed} {
+		out, err := b.answer(t.Context(), method, json.RawMessage(`[]`))
+		var coded *rpc.Error
+		if out != nil || !errors.As(err, &coded) || coded.Code != bus.CodeInvalidParams || !strings.HasPrefix(coded.Message, method+": ") {
+			t.Errorf("%s = %v, %v, want invalid_params with the method prefix", method, out, err)
+		}
+	}
+}
+
 // The hub's http.request is served by one handler per service, built on the first request, not by a new pair of
 // ServeMuxes per request; a service put in place since (Serve) gets one of its own and answers from then on.
 func TestRelayedRequestsShareTheHandler(t *testing.T) {

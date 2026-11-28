@@ -552,7 +552,10 @@ struct MoveToMenu: View {
 
 /// The submenu itself, for a menu that already holds its choices (the Agent menus' facts).
 struct MoveToChoices: View {
+    static let agentTitle: LocalizedStringResource = "Move To"
+    static let onItsOwn: LocalizedStringResource = "On Its Own [Move To]"
     let choices: [DirectionFilings.Choice]
+    var title: LocalizedStringResource = "Move To… [Move To]"
     let pick: (DirectionFilings.Choice?) -> Void
 
     var body: some View {
@@ -561,10 +564,10 @@ struct MoveToChoices: View {
                 Button { pick(c) } label: { Text(c.name).lineLimit(1) }
             }
             Divider()
-            Button { pick(nil) } label: { Text("On Its Own [Move To]").lineLimit(1) }
+            Button { pick(nil) } label: { Text(Self.onItsOwn).lineLimit(1) }
                 .accessibilityIdentifier("move-to-own")
         } label: {
-            Label(String(localized: "Move To… [Move To]"), systemImage: Theme.Icon.moveTo).lineLimit(1)
+            Label(String(localized: title), systemImage: Theme.Icon.moveTo).lineLimit(1)
         }
         .accessibilityIdentifier("move-to")
     }

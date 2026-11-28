@@ -7,8 +7,9 @@ import { BOTMUX_MODE_KEY, LEGACY_BOTMUX_HIDDEN_KEY } from "./botmux-mode";
 const PATH = "/agents/display-settings";
 /** `sort_by_activity` and `show_filter` are the effective values (saved choice, else the hub's initial default, else off);
  *  absent from a hub that has not got them, where the Settings switches stay hidden and the list keeps its stable order. */
-export interface AgentsDisplay { show_botmux: boolean; configured: boolean; use_herdr_tab_name?: boolean; sort_by_activity?: boolean; show_filter?: boolean }
-export type DisplayChange = { show_botmux: boolean } | { use_herdr_tab_name: boolean } | { sort_by_activity: boolean } | { show_filter: boolean };
+/** `botmux_owner_union_id` is the BotMux Owner Union ID ("" for none), absent from a hub without it. */
+export interface AgentsDisplay { show_botmux: boolean; configured: boolean; use_herdr_tab_name?: boolean; sort_by_activity?: boolean; show_filter?: boolean; botmux_owner_union_id?: string }
+export type DisplayChange = { show_botmux: boolean } | { use_herdr_tab_name: boolean } | { sort_by_activity: boolean } | { show_filter: boolean } | { botmux_owner_union_id: string };
 interface State { value: AgentsDisplay | null; saving: boolean; error?: unknown; change?: DisplayChange }
 let state: State = { value: null, saving: false };
 let revision = 0;
@@ -21,7 +22,8 @@ function checked(value: AgentsDisplay): AgentsDisplay {
   if (typeof value.show_botmux !== "boolean" || typeof value.configured !== "boolean" ||
     (value.use_herdr_tab_name !== undefined && typeof value.use_herdr_tab_name !== "boolean") ||
     (value.sort_by_activity !== undefined && typeof value.sort_by_activity !== "boolean") ||
-    (value.show_filter !== undefined && typeof value.show_filter !== "boolean")) throw new Error("Invalid Agents display settings");
+    (value.show_filter !== undefined && typeof value.show_filter !== "boolean") ||
+    (value.botmux_owner_union_id !== undefined && typeof value.botmux_owner_union_id !== "string")) throw new Error("Invalid Agents display settings");
   return value;
 }
 function legacyHidden() {

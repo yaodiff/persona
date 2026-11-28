@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import { ApiError, api, enc } from "./api";
 import { BASE, stripBase } from "./base";
 import type { ConnectorPrompt } from "./connectors";
+import { safeWebURL } from "./format";
 import { MANAGER_HEADER, managerHeaderFor } from "./manager-choice";
 
 /** What a bot's app may read as the owner (larksyncwire TierDocs / TierFull). */
@@ -276,5 +277,7 @@ export function forgetReturn() {
 
 /** Leaves the page for the open platform's authorization (a function of its own so tests can catch it). */
 export function leaveFor(url: string) {
-  location.assign(url);
+  const safe = safeWebURL(url, true);
+  if (!safe) return;
+  location.assign(safe);
 }

@@ -373,7 +373,7 @@ func TestFeishuStaleCallbackCannotActOnReplacement(t *testing.T) {
 				ft := newFleetTestNoStore(t)
 				preparedTestConversation(ft)
 				first := proto.Interaction{ID: "ix_feishu_stale_callback", MachineID: "mac", SessionID: "s1",
-					Kind: proto.IxPermission, CanClarify: true, CreatedAt: time.Now().UTC()}
+					Kind: proto.IxPermission, OutwardWrite: true, CanClarify: true, CreatedAt: time.Now().UTC()}
 				firstDone := startPreparedInteraction(t, ft, first, approvalops.Operation{})
 				ft.s.fleet.mu.Lock()
 				p := ft.s.fleet.interactions[first.ID]

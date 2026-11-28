@@ -663,6 +663,14 @@ func (s *Service) isProviderSwitchContinuation(ctx context.Context, todo Todo, t
 	return s.continuationSwitchKind(ctx, todo, targetMachine, targetLauncher, "").any()
 }
 
+// continuationNeedsOwner keeps implicit health detours and non-supervisory continuations behind
+// Start. An authorized supervisor may choose another launcher/provider as well as another owned
+// machine: handoffLauncherSwitch records that choice, not a new owner-only decision. This predicate
+// never grants execution permission; both planning and dispatch enforce checkContinuationBlockers.
+func (task PlanTask) continuationNeedsOwner(orchestrates bool) bool {
+	return task.HandoffOperationID != "" && (task.Reroute != nil || !orchestrates)
+}
+
 // handoffBlockerError carries a machine-readable refusal code for HTTP callers.
 type handoffBlockerError struct {
 	code string

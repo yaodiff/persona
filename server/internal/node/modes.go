@@ -214,10 +214,10 @@ func (n *Node) persistModes(id, mode, effort string, explicit ...bool) {
 
 // currentModes is the session's mode and effort: from its transcript, or what the app set since.
 func (n *Node) currentModes(id string, m quickMeta) (mode, effort string) {
-	return n.currentModesWithEffort(id, m, terminalEffort{})
+	return n.currentModesWithEffort(id, m, "", time.Time{})
 }
 
-func (n *Node) currentModesWithEffort(id string, m quickMeta, confirmed terminalEffort) (mode, effort string) {
+func (n *Node) currentModesWithEffort(id string, m quickMeta, confirmed string, observedAt time.Time) (mode, effort string) {
 	mode, effort = m.mode, m.effort
 	if mode != "" && !slices.Contains(permissionModes, mode) && n.isAssistantSession(id) {
 		mode = modeFromCodex(mode, m.sandbox) // a Codex rollout records its approval policy and sandbox
@@ -245,8 +245,8 @@ func (n *Node) currentModesWithEffort(id string, m quickMeta, confirmed terminal
 			effort, m.effortAt = set.Effort, set.EffortAt
 		}
 	}
-	if confirmed.at.After(m.effortAt) {
-		effort = confirmed.value
+	if observedAt.After(m.effortAt) {
+		effort = confirmed
 	}
 	return mode, effort
 }
@@ -280,7 +280,13 @@ func (n *Node) modesOf(id string) (mode, effort string) {
 	if a.Agent == "claude" && a.PaneID != "" {
 		_, confirmed := n.switches().terminalEfforts(id)
 		if confirmed.pane == a.PaneID {
-			return n.currentModesWithEffort(id, m, confirmed)
+			return n.currentModesWithEffort(id, m, confirmed.value, confirmed.at)
+		}
+		return n.currentModes(id, m)
+	}
+	if observed, pid := n.ccPlugins.observedEffort(id); pid != 0 {
+		if c, ok := n.outsideClaude(id); ok && c.pid == pid && n.outsideSource(c) == proto.SourceClaudeDesktop {
+			return n.currentModesWithEffort(id, m, observed.Level, time.UnixMilli(observed.AtMS))
 		}
 	}
 	return n.currentModes(id, m)
@@ -389,9 +395,25 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 				if env := n.assistantEnvForRuntime(h, n.runtimeAssistantCwd(id, "", st), id); env != nil {
 					params["env"] = env
 				}
+				var res struct {
+					PermissionMode string `json:"permission_mode"`
+				}
 				cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
-				_ = h.peer.Call(cctx, "session.modes", params, nil)
+				err := h.peer.Call(cctx, "session.modes", params, &res)
 				cancel()
+				if err != nil && mode == "auto" && h.agent() == agyAgent && isAgyAutoModeUnavailableErr(err) {
+					params["permission_mode"] = proto.ModeBypass
+					rctx, rcancel := context.WithTimeout(ctx, runtimeCallTimeout)
+					if rerr := h.peer.Call(rctx, "session.modes", params, &res); rerr == nil && res.PermissionMode == "" {
+						res.PermissionMode = proto.ModeBypass
+					}
+					rcancel()
+				}
+				if res.PermissionMode != "" && res.PermissionMode != mode && slices.Contains(permissionModes, res.PermissionMode) {
+					mode = res.PermissionMode
+					n.noteModes(id, mode, effort)
+					n.persistModes(id, mode, effort, true)
+				}
 			}
 		}
 		if p != nil && p.alive() {

@@ -17,6 +17,7 @@ import { Icon } from "../../../ui/icons";
 import { BindSteps } from "../Channels";
 import { FEATURES, LarkReadSection, SOURCE_REPORT_DELAYS, STEPS, TopicGroups, useBot } from "../FeishuBot";
 import { LarkSyncSection } from "../LarkSyncSection";
+import { FeishuGroupAccess } from "./FeishuGroupAccess";
 import { Disclosure } from "../ProviderFields";
 import { Group, Row, settingsInputClass, Switch } from "../SettingsParts";
 
@@ -349,6 +350,7 @@ export function FeishuBotDeliveryPanel({ ctl }: { ctl: FeishuBotController }) {
           save={(topic_chats) => run(t("settings-feishubot.save_failed"), () => updateBot({ topic_chats }))}
         />
       )}
+      {status.owner && <FeishuGroupAccess status={status} saving={saving} />}
 
       <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
         {FEATURES.filter((f) => (f.key !== "report_steps" && f.key !== "answer_new_card" && f.key !== "topic_cot" && f.key !== "dm_cot" && f.key !== "cot_answer" && f.key !== "read_group") || features[f.key] !== undefined).map((f) => {

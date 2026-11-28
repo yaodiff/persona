@@ -228,7 +228,6 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 				facts[i] = f
 			}
 			views := projection.Views(facts, now)
-			applyActiveBlockersToViews(listed, views, nil)
 			projByID = make(map[string]todoTriage, len(listed))
 			for i := range listed {
 				projByID[listed[i].ID] = todoTriageFromProjectionView(listed[i], views[i], look)

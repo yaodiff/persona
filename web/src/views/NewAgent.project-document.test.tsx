@@ -248,6 +248,23 @@ it("starts with only the user's draft when a loaded preview was not attached", a
   expect(JSON.stringify(posts)).not.toContain(sha256);
 });
 
+// #17053: Orca's terminals take the document as the first message, as herdr's do.
+it("starts with the document in an Orca terminal", async () => {
+  Object.assign(getState(), { machines: [
+    { id: "computer", name: "Synthetic computer", manager: "assistant", online: true, engine_hosts: ["herdr", "orca"], engine_default: "herdr" },
+  ] });
+  await show();
+  await attach();
+  await type(textarea(), "Plain task");
+  await click("Orca");
+  expect(document.body.textContent).not.toContain(label("unsupported"));
+  expect(start().disabled).toBe(false);
+  await click(t("newagent.start"));
+  await tick();
+  expect(posts.find((item) => item.path.endsWith("/sessions"))?.body).toMatchObject({ launcher: "claude", host: "orca", name_hint: "project-one/plan r7" });
+  expect(posts.find((item) => item.path.endsWith("/messages"))?.body.text).toBe(`Plain task\n\n${renderExpectedSource()}`);
+});
+
 it("keeps the source visible and blocks an unsupported start until it is removed", async () => {
   await show();
   await attach();

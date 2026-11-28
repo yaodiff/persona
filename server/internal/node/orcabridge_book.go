@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// The Orca bridge's book of chats (docs/plans/plan-orca-support.md "Structured sessions"): each chat it listed, under
+// The Orca bridge's book of chats (docs/integrations/orca.md "Structured sessions"): each chat it listed, under
 // the Persona session id it gave it, with what a row of it needs once Orca no longer lists it. Kept in the node's
 // private cache folder, so a node that restarts gives every chat the id it had (a chat listed under Orca's own id
 // before its Claude session existed keeps that id) and keeps listing the chats closed in Orca, not running, rather

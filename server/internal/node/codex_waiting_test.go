@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -319,6 +320,73 @@ func TestCodexWaitingRowsInOneDirectory(t *testing.T) {
 	}
 	if byPane["w1:p2"] != threadA || byPane["w1:p3"] != threadB {
 		t.Errorf("listed %v", byPane)
+	}
+}
+
+// A no-daemon Codex's rollout belongs to its engine's pane, even without a host-reported thread or screen match.
+func TestCodexWaitingRowHerdrCoreAndOtherEngines(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		proc codexProcess
+		pane string
+	}{
+		{"herdr without hosts", codexProcess{pane: "w1:p2"}, "w1:p2"},
+		{"herdr-core", codexProcess{herdrCore: "hc-7"}, host.PaneRef{Kind: host.HerdrCore, ID: "hc-7"}.String()},
+		{"tern", codexProcess{ternPane: "42"}, host.PaneRef{Kind: host.Tern, ID: "42"}.String()},
+		{"orca", codexProcess{orcaPane: "orca-7"}, host.PaneRef{Kind: host.Orca, ID: "orca-7"}.String()},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			n, home := testNode(t)
+			n.codices = newCodexRegistry()
+			codexHome := filepath.Join(home, ".codex")
+			n.configureCodex(proto.CodexConfig{Homes: []string{codexHome}})
+			cwd := mkdir(t, filepath.Join(home, "proj"))
+			const thread = "01a19a00-0000-7000-8000-00000000000a"
+			began := time.Now().Add(-time.Minute)
+			path := writeWaitRollout(t, home, cwd, thread, began.Add(time.Second), "make the tests pass")
+			path, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			codexHome = canonicalCodexHome(codexHome, home)
+			proc := tt.proc
+			proc.pid, proc.home = holdOpenPID(t, path), codexHome
+			n.codices.checked = nil
+			n.codices.scan = func() []codexProcess { return []codexProcess{proc} }
+
+			held := n.codexHeldThreads()
+			id := n.codexPublicID(codexHome, thread)
+			if !held.ok {
+				t.Fatal("could not read the rollout holder")
+			}
+			if owner, ok := held.owner[id]; !ok || owner != tt.pane {
+				t.Errorf("rollout owner = %q (present %v), want %q", owner, ok, tt.pane)
+			}
+			if got := held.byPane[tt.pane]; len(got) != 1 || got[0].id != id || got[0].home != codexHome || got[0].path != path {
+				t.Errorf("pane rollouts = %+v, want %s at %s", got, id, path)
+			}
+			w := &codexWait{pane: tt.pane, cwd: cwd, began: began}
+			if got, why := n.codexWaitThread(w, held); got != id {
+				t.Errorf("waiting thread = %q (%s), want %q", got, why, id)
+			}
+			if got := n.newCodexThreads(w, held); len(got) != 1 || got[0].id != id {
+				t.Errorf("new threads = %+v, want %q", got, id)
+			}
+
+			// With no direct rollout entry, a host-named thread still belongs to its own pane.
+			named := codexHeld{owner: held.owner, ok: held.ok}
+			w.herdr = id
+			if got, why := n.codexWaitThread(w, named); got != id {
+				t.Errorf("named thread = %q (%s), want %q", got, why, id)
+			}
+			w.pane = "another-pane"
+			if got, _ := n.codexWaitThread(w, held); got != "" {
+				t.Errorf("another pane took thread %q", got)
+			}
+			if got := n.newCodexThreads(w, held); len(got) != 0 {
+				t.Errorf("another pane's new threads = %+v, want none", got)
+			}
+		})
 	}
 }
 

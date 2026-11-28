@@ -275,8 +275,8 @@ func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal)
 		return s.effectiveSupervisor(ctx, cfg, t)
 	}
 	own := s.ownSupervisor(cfg)
-	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
-		// Dependent readiness and parent closeout wakes go to the owning supervisor conversation (Leader or Main chat),
+	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.todoV2Wake() {
+		// These task wakes go to the owning supervisor conversation (Leader or Main chat),
 		// never to the background supervisor.
 		if g.To != "" && g.To != cfg.BackgroundSupervisor {
 			return g.To
@@ -358,8 +358,8 @@ func (s *Service) digestConversation(ctx context.Context, cfg Settings, g superv
 	if to != cfg.Main && !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, to) {
 		return to
 	}
-	if g.Kind == sigFailed || g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
-		return cfg.Main // the background supervisor has no start remedies and never receives todo_ready or parent_closeout wakes
+	if g.Kind == sigFailed || g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.todoV2Wake() {
+		return cfg.Main // the background supervisor has no start remedies and does not receive these task wakes
 	}
 	own := s.runtimeSupervisorFallback(ctx, cfg)
 	s.logf("supervise: %s runs on a runtime that cannot take supervision policy: its signal goes to %s", short(to), short(own))

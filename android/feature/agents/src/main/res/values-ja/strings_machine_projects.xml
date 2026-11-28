@@ -10,5 +10,5 @@
     <string name="agents_projects_summary">%1$s · %2$s</string>
     <string name="agents_projects_empty_title">実行中のエージェントはありません</string>
     <string name="agents_projects_empty_offline">このマシンは現在オフラインです。</string>
-    <string name="agents_projects_empty_hint">このマシンのherdrでClaude、Codex、TRAE CLIを起動すると、ここに表示されます。</string>
+    <string name="agents_projects_empty_hint">このマシンの%1$sでClaude、Codex、TRAE CLIを起動すると、ここに表示されます。</string>
 </resources>

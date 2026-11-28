@@ -172,7 +172,10 @@ const NO_PERMISSION_MODE_AGENTS = new Set(["omp", "traex", "pi", "cursor"]);
 /** Permission mode options supported by a launcher (`chosen` / `agent`); empty for agents without permission modes. */
 export function permissionModesForLauncher(chosen: ModelProvider | undefined, agent: string): ModeOption[] {
   if (chosen?.permission_modes?.length) {
-    return chosen.permission_modes.length >= 2 ? chosen.permission_modes.map(listedModeOption) : [];
+    if (chosen.permission_modes.length < 2) return [];
+    return agent === "agy"
+      ? PERMISSION_MODES.filter((m) => chosen.permission_modes!.includes(m.id))
+      : chosen.permission_modes.map(listedModeOption);
   }
   if (NO_PERMISSION_MODE_AGENTS.has(agent)) return [];
   return PERMISSION_MODES;

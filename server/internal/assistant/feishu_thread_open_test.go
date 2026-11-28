@@ -35,7 +35,10 @@ func TestDefaultTopicAnswersWithoutATodo(t *testing.T) {
 		t.Fatalf("handoffs %+v", sends)
 	}
 	run, _ := e.s.channelRunByID("fb_om_followup")
-	if run == nil || runTo(e.s.runExts(run, "chat", "thread")) != (feishuTarget{ChatID: testChat, InThread: true}) {
+	if run == nil {
+		t.Fatal("topic reply has no channel run")
+	}
+	if ext := e.s.runExts(run, "chat", "thread"); ext["chat"] != testChat || ext["thread"] != testThread {
 		t.Fatalf("reply destination %+v", run)
 	}
 	if _, err := e.s.toolTodoCreate(t.Context(), "server", "m1", json.RawMessage(`{"title":"Retry","topic_message_id":"om_followup"}`)); err == nil {

@@ -50,8 +50,6 @@ func TestRetryOnAnotherLauncherOfATaskWhoseLauncherWasChosenForIt(t *testing.T) 
 		t.Run(c.name, func(t *testing.T) {
 			s, f := launcherRetryDBHub(t)
 			ctx := context.Background()
-			// task_plans and assistant_feed are not truncated between tests, and the history reads a conversation's
-			// first page (feedPage items): a shared name such as conv1 can fill it with earlier tests' items.
 			conv := "retry_" + randomHex(6)
 			setSettings(t, s, func(v *Settings) { v.Main = conv; v.MachineID = "server" })
 			saveTier(t, s, "fast", ModelTier{Launcher: "work"})

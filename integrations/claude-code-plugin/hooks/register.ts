@@ -42,15 +42,11 @@ import {
   type SettingsUpdate,
 } from './bridge'
 
-// Persona's plugin (README.md): while this session lives it asks the local Persona node for the owner's own messages,
-// owner turn interrupts, session-scoped model / effort picks, and interactive permission / plan / question approvals
-// from the Persona apps. Messages go in as the person's words (`asUser`, immediately when idle or queued natively
-// while a turn runs), interrupts cancel the active main-loop turn (`$.turn.abort`), model / effort overrides apply to
-// main-loop `turn.step` requests without touching global settings files, and permission requests bridge over the local
-// node socket only when explicitly authorized on `/poll`. The plugin runs no command, reads no file but its own
-// manifest, and keeps quiet (the debug log only) when no node answers.
+// The plugin README documents the process-bound poll, owner delivery and permission authorization.
 
 type Engine = EngineInterface
+
+type StepEffort = { at_ms: number; level?: string; reset?: boolean }
 
 type PermissionAuth = { sock: string; session: string }
 
@@ -76,6 +72,7 @@ export const register: Register = on => {
   // its environment. A /clear keeps the loop: each poll names the session open now.
   let loop = 0
   let activeTurn: ActiveTurn | undefined
+  let observed: { session: string; effort: StepEffort } | undefined
   let override: SessionOverride | undefined
   let permissionAuth: PermissionAuth | undefined
   let classicHooks = createClassicHookObservation()
@@ -118,18 +115,20 @@ export const register: Register = on => {
   })
 
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId === undefined && activeTurn?.turnId !== e.turnId) {
-      const session = await $.session.id().catch(() => '')
-      activeTurn = { session, turnId: e.turnId }
-    }
     let step = e
     const observingTurn = classicTurn
-    if (e.agentId === undefined && override !== undefined) {
-      const session = await $.session.id().catch(() => '')
-      const sessionModel = override.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
-      const applied = applyStepOverride(e, override, session, sessionModel)
-      override = applied.nextOverride
-      step = applied.step
+    if (e.agentId === undefined) {
+      const session = activeTurn?.turnId === e.turnId ? activeTurn.session : await $.session.id().catch(() => '')
+      if (session !== '') activeTurn = { session, turnId: e.turnId }
+      if (override !== undefined) {
+        const sessionModel = override.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
+        const applied = applyStepOverride(e, override, session, sessionModel)
+        override = applied.nextOverride
+        step = applied.step
+      }
+      const at = await $.clock.now().catch(() => 0)
+      const level = override?.effort === 'auto' ? 'auto' : step.effort
+      if (at > 0 && session !== '') observed = { session, effort: { at_ms: at, ...(typeof level === 'string' ? { level } : {}) } }
     }
     const output = yield* next(step)
     try {
@@ -381,6 +380,7 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    observed = undefined
     const mine = ++loop
     void run(
       $,
@@ -389,6 +389,7 @@ export const register: Register = on => {
       turnId => {
         if (activeTurn?.turnId === turnId) activeTurn = undefined
       },
+      session => observed?.session === session ? observed.effort : undefined,
       () => classicHooks.passedOver,
       wake => {
         wakePoll = wake
@@ -499,6 +500,7 @@ async function run(
   current: () => boolean,
   getActiveTurn: () => ActiveTurn | undefined,
   clearActiveTurn: (turnId: string) => void,
+  observedEffort: (session: string) => StepEffort | undefined,
   classicPassedOver: () => boolean,
   setWakePoll: (wake: (() => void) | undefined) => void,
   onSettings: (session: string, update: SettingsUpdate) => Promise<void>,
@@ -514,8 +516,15 @@ async function run(
     .catch(() => '')
   let backoff = 0
   let reachable: boolean | undefined
+  let previousSession: string | undefined
+  let reset: StepEffort | undefined
   while (current()) {
     const session = await $.session.id()
+    if (previousSession !== session) {
+      previousSession = session
+      const at = await $.clock.now().catch(() => 0)
+      reset = at > 0 ? { at_ms: at, reset: true } : undefined
+    }
     setWakePoll(() => {
       void $.http
         .fetch(`${BASE}/poll`, post(sock, {
@@ -537,6 +546,7 @@ async function run(
         plugin_version: pluginVersion,
         engine_version: engineVersion,
         capabilities: CAPABILITIES,
+        observed_effort: observedEffort(session) ?? reset,
         ...(classicPassedOver() ? { classic_passed_over: true } : {}),
         wait_ms: POLL_WAIT_MS,
       }))

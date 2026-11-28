@@ -267,17 +267,57 @@ func TestMeetingEchoFollowsTheDefaultManager(t *testing.T) {
 	}
 }
 
+// meeting_speakers is listed only beside meeting_transcription (and so meeting_live_view, meeting_conversation and
+// meeting_attendance), while the default manager names it too: not for another manager's hello, not once the default
+// manager is gone (#17674).
+func TestMeetingSpeakersFollowsTheDefaultManager(t *testing.T) {
+	h, srv, _ := newBusHub(t)
+	a := connectStateManager(t, h, srv, assistantwire.AssistantID)
+	b := connectStateManager(t, h, srv, "m-0d0d0d")
+	hello := func(m *stateManager, caps ...string) {
+		t.Helper()
+		if err := m.call(t, busHello, map[string]any{"id": m.id, "capabilities": append([]string{assistantwire.CapabilityConfigOwn}, caps...)}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all := []string{assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation,
+		assistantwire.CapabilityMeetingLiveView, assistantwire.CapabilityMeetingTranscription, assistantwire.CapabilityMeetingSpeakers}
+	listed := func() bool { return slices.Contains(h.features(), featureMeetingSpeakers) }
+	hello(b, all...)
+	hello(a, assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation,
+		assistantwire.CapabilityMeetingLiveView, assistantwire.CapabilityMeetingSpeakers)
+	if listed() {
+		t.Fatal("listed without meeting_transcription, or for a manager that is not the default")
+	}
+	hello(a, all...)
+	if !listed() || !slices.Contains(h.features(), featureMeetingTranscription) {
+		t.Fatalf("features %v", h.features())
+	}
+	hello(a, all[:4]...)
+	if listed() {
+		t.Fatal("listed for a manager that does not name it")
+	}
+	hello(a, all...)
+	if err := a.ws.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, "the default manager offline", func() bool { return h.busConnOf(a.id) == nil })
+	if listed() {
+		t.Fatal("listed while the default manager is offline")
+	}
+}
+
 // An extension's report cannot add a meeting feature: the hub lists them only from the default manager's hello.
 func TestMeetingFeaturesNotFromAReport(t *testing.T) {
 	h := newTestHub(t)
 	h.keepExtReport(assistantwire.AssistantID, &extwire.Report{Features: []string{featureMeetingAttendance, featureMeetingConversation,
-		featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, "fa"}})
+		featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureMeetingSpeakers, "fa"}})
 	features := h.features()
 	if !slices.Contains(features, "fa") {
 		t.Fatalf("the report's own feature is missing: %v", features)
 	}
 	for _, f := range []string{featureMeetingAttendance, featureMeetingConversation, featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights,
-		featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription} {
+		featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureMeetingSpeakers} {
 		if slices.Contains(features, f) {
 			t.Errorf("a report added %s", f)
 		}

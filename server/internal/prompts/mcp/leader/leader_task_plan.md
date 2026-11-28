@@ -52,6 +52,10 @@ Hand part of your own task to workers: each task you give this starts a new codi
             "type": "string",
             "description": "launcher name, one that machine has; empty: the default"
           },
+          "host": {
+            "type": "string",
+            "description": "agy (companion) or an enabled engine such as herdr. Overrides the preset host."
+          },
           "model": {
             "type": "string",
             "description": "model id; empty: the launcher's default"
@@ -93,6 +97,19 @@ Hand part of your own task to workers: each task you give this starts a new codi
           "goal": {
             "type": "string",
             "description": "a read-only worker's goal: what you get from it, in one sentence (a writable worker needs done_when instead); estimates are automatic for both"
+          },
+          "distinct_from": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["todo_id", "reason"],
+              "additionalProperties": false,
+              "properties": {
+                "todo_id": {"type": "string"},
+                "reason": {"type": "string", "minLength": 1}
+              }
+            },
+            "description": "required for each open todo whose saved repository issue/PR link this worker references: its todo_id and why this is separate work, kept in the brief"
           },
           "expect_minutes": {
             "type": "integer",

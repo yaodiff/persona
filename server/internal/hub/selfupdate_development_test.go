@@ -165,6 +165,42 @@ func TestDevelopmentBuildManifestKeepsEditionAndLocalNames(t *testing.T) {
 	}
 }
 
+func TestDevelopmentBuildForwardsReleaseURL(t *testing.T) {
+	for _, tc := range []struct {
+		name, version, embedded, configured, wantURL string
+		privateOnly                                  bool
+	}{
+		{name: "first Web development build", version: "v0.7.0", wantURL: "https://github.com/nwverse/persona/releases/latest/download"},
+		{name: "existing Web development build", version: "web-dev-fixture", wantURL: "https://github.com/nwverse/persona/releases/latest/download"},
+		{name: "embedded source", version: "web-dev-fixture", embedded: "https://mirror.example.com/dl", wantURL: "https://mirror.example.com/dl"},
+		{name: "configured source", version: "web-dev-fixture", embedded: "https://mirror.example.com/dl", configured: "file:///opt/persona-mirror", wantURL: "file:///opt/persona-mirror"},
+		{name: "invalid source", version: "web-dev-fixture", configured: "https://mirror.example.com/dl/latest.json"},
+		{name: "private network", version: "web-dev-fixture", privateOnly: true},
+		{name: "private network with a mirror", version: "web-dev-fixture", configured: "file:///opt/persona-mirror", wantURL: "file:///opt/persona-mirror", privateOnly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHub(t)
+			h.version = tc.version
+			h.build = update.Make(h.version, update.Release, "202611171200", tc.embedded)
+			h.cfg.Update.URL = tc.configured
+			h.cfg.Security.PrivateNetworkOnly = tc.privateOnly
+			h.upd.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, operation string, input map[string]any, _ any, _ func(), _ func(update.DevelopmentProgress)) error {
+				if operation != "build" || input["release_url"] != tc.wantURL {
+					t.Errorf("helper operation %q and release_url %q, want build and %q", operation, input["release_url"], tc.wantURL)
+				}
+				return context.Canceled
+			}
+			candidate := &update.Published{
+				Manifest:    &update.Manifest{Version: "web-dev-next", Build: 202611181200},
+				Development: &update.DevelopmentCandidate{Branch: "main", Commit: strings.Repeat("b", 40)},
+			}
+			if err := h.upd.buildDevelopment(context.Background(), candidate); !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected the build fixture to stop after inspecting the request, got %v", err)
+			}
+		})
+	}
+}
+
 func TestDevelopmentProgressStatusAndCleanup(t *testing.T) {
 	for _, c := range []struct{ operation, first, step, next string }{
 		{"build", "fetch", "go_build", "downloading"},

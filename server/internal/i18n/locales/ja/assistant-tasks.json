@@ -1,6 +1,7 @@
 {
   "workers_accepted": "子タスク {count} 件はすべて受け入れ済みで、リーダーは停止しています。親タスクと記録された決定を確認し、残りの作業を進めてください。",
   "investigation_handoff_open": "このフォローアップを終了する前に、調査項目を完了するか引き継ぎ先を変更してください。{finding}",
+  "investigation_parent_handoff_open": "この調査タスクを削除する前に、引き継いだフォローアップを完了してください。{finding}",
   "investigation_review_required": "この作業を保留または終了する前に、今回の調査結果を確認してください。",
   "investigation_findings_open": "次の調査項目には、フォローアップ、確認できる利用者の判断、または完了の証拠が必要です。{findings}",
   "handoff_wait": "「{task}」から「{check}」の確認結果を待っています",
@@ -27,6 +28,7 @@
   "launcher_swapped": "{machine} に {launcher} がないため、{to}（既定のモデル）で実行します",
   "launcher_desktop_default": "{launcher} はあなたが新規エージェントで始める会話にだけ使うため、{to}（既定のモデル）で実行します",
   "launcher_desktop_default_model": "{launcher} はあなたが新規エージェントで始める会話にだけ使うため、{to}で、選択したモデル{model}をそのまま使って実行します",
+  "orca_chat_option_dropped": "{to} として開きます。{option} は使えないため、Orca の設定で実行します",
   "launcher_swapped_model": "{machine}に{launcher}がないため、{to}で、選択したモデル{model}をそのまま使って実行します",
   "speed_type": "speed は文字列で指定してください：standard、fast、ultrafast。",
   "speed_invalid": "Agent speed {speed} が無効です。standard、fast、ultrafast のいずれかを指定してください。",
@@ -47,7 +49,6 @@
   "ultracode_skipped": "ultracode なしで開始しました：{reason}",
   "task_failed_title": "「{name}」を開始できませんでした",
   "task_failed_title_health": "タスクを開始できませんでした",
-  "ask_held_title": "「{name}」のカードが監督の対応を待っています",
   "task_failed_body": "{reason}。会話を開いて「再試行」をタップするか、別のパソコンに割り当ててください",
   "task_failed_body_no_reason": "会話を開いて「再試行」をタップするか、別のパソコンに割り当ててください",
   "not_retryable": "再試行できるのは、開始できなかったタスクか、モデルサービスのエラーで中断されたタスクだけです",
@@ -57,6 +58,7 @@
   "interrupted": "モデルサービスのエラーで中断されました",
   "stopped": "会話と一緒に停止しました",
   "stopped_turn": "会話と一緒に停止しました。このターンにはまだ出力がありません",
+  "check_agy_unlinked": "agy の端末と会話が紐付いていません。",
   "check_no_reply": "エージェントの返信を読めませんでした",
   "check_side_turn": "最後の返信はこのタスクの報告ではありません",
   "done": "完了しました",
@@ -101,6 +103,9 @@
   "request_new_plan": "この To-do で新しい計画を作成し、カードで開始を承認してください。この依頼は直接の続行や起動の再試行に対応していません。",
   "request_waiting": "開始は承認済みです。次の前提タスクの検収を待っています：{pieces}。",
   "request_ready": "開始は承認済みです。起動を待っています。",
+  "checking_prerequisites": "開始前の前提条件を確認中",
+  "waiting_for_prerequisites": "前提条件を待機中：{blockers}",
+  "waiting_for_linked_task": "関連するタスクを待機中",
   "request_unconfirmed": "起動を確認できません。エージェントが表示されない場合は、別の場所で作業を始める前に対象のコンピューターを確認してください。Persona は自動で再起動しません。",
   "admission_queue_timeout": "{limit} 待っても開始できなかったため、開始を中止します。最後の理由：{reason}",
   "start_link_lost": "「{machine}」との接続が切れ、再接続後もタスクは起動していませんでした：{reason}",
@@ -128,5 +133,6 @@
   "placement_hit_launcher_unhealthy": "ランチャー {launcher} が利用不可（{kind}）",
   "placement_hit_no_resources": "リソース指標が未報告",
   "inbox_link_removed": "受信トレイの話題が変わったため、自動リンクを解除しました。タスクは開始できます。",
-  "inbox_candidates": "関連する可能性のある受信トレイの項目：{items}。自動リンクは行っていません。リンクする前に送信元を確認してください。"
+  "inbox_candidates": "関連する可能性のある受信トレイの項目：{items}。自動リンクは行っていません。リンクする前に送信元を確認してください。",
+  "placement_hit_scratch_unsupported": "管理対象の scratch ワークスペース非対応（Persona Node の更新が必要）"
 }

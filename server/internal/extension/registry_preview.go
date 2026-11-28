@@ -216,6 +216,25 @@ func (r *Registry) Discard(previewID string) {
 	}
 }
 
+// DetachPreview removes previewID from the registry immediately under r.mu and returns a cleanup
+// function that removes its staging files from disk (nil if absent). Callers that hold another
+// lock can detach atomically before releasing their lock and invoke the cleanup afterward.
+func (r *Registry) DetachPreview(previewID string) func() {
+	if previewID == "" {
+		return nil
+	}
+	r.mu.Lock()
+	pv := r.previews[previewID]
+	if pv != nil {
+		delete(r.previews, previewID)
+	}
+	r.mu.Unlock()
+	if pv == nil {
+		return nil
+	}
+	return func() { r.dropStaging(pv) }
+}
+
 // PreviewMarketOf is the market a preview's package comes from ("" when it does not, or the preview is gone).
 func (r *Registry) PreviewMarketOf(previewID string) string {
 	r.mu.Lock()

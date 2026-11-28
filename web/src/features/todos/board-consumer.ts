@@ -1,31 +1,24 @@
 // Thin client consumer for the server-owned `board` projection tree under todos_v2 (#15800).
-// Consumes `board.status_groups`, `board.direction_groups`, `board.sidebar_tree`, and `board.counts`
+// Consumes `board.status_groups`, `board.direction_groups`, and `board.counts`
 // directly without re-running client-side triage, goal folding, or direction derivation rules.
 
 import type { Direction } from "../../lib/direction-tree";
 import type { GoalChildEntry, GoalFoldResult, GoalSummary } from "../../lib/todo-goal-fold";
 import type { ResolvedDirectionSection } from "../../lib/todo-reorganize";
-import type { Triage, TriageGroup, TriageResult, TriageRule, TriageSection } from "../../lib/todo-triage";
+import { ALL_TRIAGE_SECTIONS, viewWaitsOnOwner, type OwnerNeed, type TriageGroup, type TriageResult, type TriageRule, type TriageSection } from "../../lib/todo-triage";
 import {
+  isCancelled, isClosedForHistory,
   type Todo,
   type TodoBoardProjection,
   type TodoBoardSectionKey,
 } from "../../lib/todos";
 
-const ALL_TRIAGE_SECTIONS: readonly TriageSection[] = [
-  "waiting",
-  "working",
-  "parked",
-  "other",
-  "just_done",
-  "shelved",
-  "done",
-  "cancelled",
-];
-
 /** Maps a server `board.status_groups[*].key` to the Web To-dos section identifier. */
 export function boardSectionToTriageSection(key: TodoBoardSectionKey): TriageSection {
   switch (key) {
+    case "can_wait": return "can_wait";
+    case "todo": return "todo";
+    case "cancelled": return "cancelled";
     case "needs_you":
       return "waiting";
     case "in_progress":
@@ -57,22 +50,11 @@ function boardSectionDefaultRule(key: TodoBoardSectionKey): TriageRule {
       return "stale";
     case "done":
       return "closed";
+    case "cancelled":
+      return "cancelled";
     default:
       return "rest";
   }
-}
-
-function emptySections(): Record<TriageSection, TriageGroup[]> {
-  return {
-    waiting: [],
-    working: [],
-    parked: [],
-    other: [],
-    just_done: [],
-    shelved: [],
-    done: [],
-    cancelled: [],
-  };
 }
 
 function todoTimestamp(todo: Todo): number {
@@ -80,21 +62,43 @@ function todoTimestamp(todo: Todo): number {
   return Number.isNaN(ts) ? 0 : ts;
 }
 
-function isChildDoneFromBoard(todo: Todo, boardSections: ReadonlyMap<string, TriageSection>): boolean {
-  const sec = boardSections.get(todo.id);
-  if (sec !== undefined) return sec === "done" || sec === "cancelled";
-  return Boolean(todo.done_at) || todo.view?.section === "done";
+function statusRow(todo: Todo, section: TriageSection, rule: TriageRule): TriageGroup {
+  const last = todoTimestamp(todo);
+  return {
+    key: todo.id, section, lead: todo, members: [todo],
+    triage: new Map([[todo.id, { section, rule, last }]]), last,
+  };
+}
+
+function closedSection(todo: Todo): "done" | "cancelled" {
+  return isCancelled(todo) || todo.view?.reason === "canceled" ? "cancelled" : "done";
+}
+
+function foldedSection(todo: Todo | undefined, parent: TriageSection): TriageSection {
+  if (!todo) return parent;
+  if (isClosedForHistory(todo) || todo.view?.phase === "done" || todo.view?.section === "done" || closedSection(todo) === "cancelled") return closedSection(todo);
+  switch (todo.view?.section) {
+    case "working": return "working";
+    case "just_finished": return "just_done";
+    case "can_wait": return "can_wait";
+    case "waiting": return "parked";
+    case "todo": return "todo";
+    case "someday": return "shelved";
+    default: return parent;
+  }
+}
+
+export function isBoardOpen(section: TriageSection): boolean {
+  return section !== "done" && section !== "cancelled" && section !== "shelved";
 }
 
 /** Builds a lookup map of `todo_id -> TriageSection` directly from `board.status_groups`. */
-export function boardSectionMap(board: TodoBoardProjection, byId?: ReadonlyMap<string, Todo>): Map<string, TriageSection> {
+export function boardSectionMap(board: TodoBoardProjection, byId: ReadonlyMap<string, Todo>, olderClosed: readonly Todo[] = []): Map<string, TriageSection> {
   const map = new Map<string, TriageSection>();
   // First pass: every top-level entry (including surfaced blocked children) gets its exact server section.
   for (const group of board.status_groups) {
     const sec = boardSectionToTriageSection(group.key);
-    for (const entry of group.entries) {
-      if (!map.has(entry.todo_id)) map.set(entry.todo_id, sec);
-    }
+    for (const entry of group.entries) if (!map.has(entry.todo_id)) map.set(entry.todo_id, sec);
   }
   // Second pass: folded children not listed at top level inherit done if closed, else their parent's section.
   for (const group of board.status_groups) {
@@ -102,12 +106,26 @@ export function boardSectionMap(board: TodoBoardProjection, byId?: ReadonlyMap<s
     for (const entry of group.entries) {
       for (const cid of entry.folded_child_ids ?? []) {
         if (map.has(cid)) continue;
-        const child = byId?.get(cid);
-        map.set(cid, child?.done_at || child?.view?.section === "done" ? "done" : parentSec);
+        map.set(cid, foldedSection(byId.get(cid), parentSec));
       }
     }
   }
+  for (const todo of olderClosed) if (!map.has(todo.id)) map.set(todo.id, closedSection(todo));
   return map;
+}
+
+/** Row affordances for immediate attention, in hub order. The aggregate count comes from board.counts. */
+export function boardAttention(board: TodoBoardProjection, byId: ReadonlyMap<string, Todo>): ReadonlyMap<string, OwnerNeed> {
+  const attention = new Map<string, OwnerNeed>();
+  for (const group of board.status_groups) {
+    if (group.key !== "needs_you") continue;
+    for (const { todo_id } of group.entries) {
+      const todo = byId.get(todo_id);
+      if (!todo || todo.quiet || (todo.view && todo.view.section !== "needs_you")) continue;
+      attention.set(todo_id, viewWaitsOnOwner(todo) || "owner_decides");
+    }
+  }
+  return attention;
 }
 
 export interface BoardStatusConsumption {
@@ -117,8 +135,6 @@ export interface BoardStatusConsumption {
   sectionOrder: TriageSection[];
   /** Displayed count per section (server `visible_count` when unfiltered, filtered row count otherwise). */
   sectionCounts: Record<TriageSection, number>;
-  /** Header "Needs you" count (server `board.counts.needs_you` when unfiltered, filtered count otherwise). */
-  needsYouCount: number;
 }
 
 /**
@@ -130,33 +146,27 @@ export function consumeBoardStatusGroups(
   todos: readonly Todo[],
   board: TodoBoardProjection,
   matchesFilter?: (todo: Todo) => boolean,
+  olderClosed: readonly Todo[] = [],
+  sectionByTodo?: ReadonlyMap<string, TriageSection>,
 ): BoardStatusConsumption {
-  const byId = new Map<string, Todo>();
-  for (const td of todos) byId.set(td.id, td);
-
-  const sectionByTodo = boardSectionMap(board, byId);
-  const sections = emptySections();
+  const byId = new Map(todos.map((td) => [td.id, td]));
+  const placement = sectionByTodo ?? boardSectionMap(board, byId, olderClosed);
+  const sections = Object.fromEntries(ALL_TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
   const sectionOrder: TriageSection[] = [];
   const goals = new Map<string, GoalSummary>();
   const surfacedParent = new Map<string, Todo>();
   const sectionCounts = Object.fromEntries(ALL_TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
-
-  let allNeedsYouResolved = true;
+  const seen = new Set<string>();
 
   for (const group of board.status_groups) {
     const sec = boardSectionToTriageSection(group.key);
     const rule = boardSectionDefaultRule(group.key);
     if (!sectionOrder.includes(sec)) sectionOrder.push(sec);
 
-    let allEntriesResolved = true;
-
     for (const entry of group.entries) {
       const todo = byId.get(entry.todo_id);
-      if (!todo) {
-        allEntriesResolved = false;
-        if (group.key === "needs_you") allNeedsYouResolved = false;
-        continue;
-      }
+      if (!todo || seen.has(todo.id)) continue;
+      seen.add(todo.id);
 
       const rawFolded = (entry.folded_child_ids ?? [])
         .map((cid) => byId.get(cid))
@@ -172,29 +182,13 @@ export function consumeBoardStatusGroups(
       if (!parentMatches) {
         // When a local UI filter (e.g. search) matches a folded child but not its parent, keep the child visible.
         for (const child of folded) {
-          const childSec = sectionByTodo.get(child.id) ?? sec;
-          const tr: Triage = { section: childSec, rule, last: todoTimestamp(child) };
-          sections[childSec].push({
-            key: child.id,
-            section: childSec,
-            lead: child,
-            members: [child],
-            triage: new Map([[child.id, tr]]),
-            last: tr.last,
-          });
+          const childSec = placement.get(child.id) ?? sec;
+          sections[childSec].push(statusRow(child, childSec, rule));
         }
         continue;
       }
 
-      const tr: Triage = { section: sec, rule, last: todoTimestamp(todo) };
-      sections[sec].push({
-        key: todo.id,
-        section: sec,
-        lead: todo,
-        members: [todo],
-        triage: new Map([[todo.id, tr]]),
-        last: tr.last,
-      });
+      sections[sec].push(statusRow(todo, sec, rule));
 
       for (const sc of surfaced) {
         surfacedParent.set(sc.id, todo);
@@ -202,20 +196,11 @@ export function consumeBoardStatusGroups(
 
       const serverFoldedCount = entry.folded_count ?? 0;
       if (folded.length > 0 || surfaced.length > 0 || (!matchesFilter && serverFoldedCount > 0)) {
-        const children: GoalChildEntry[] = [
-          ...surfaced.map((c) => ({
-            todo: c,
-            section: sectionByTodo.get(c.id) ?? "waiting",
-            done: isChildDoneFromBoard(c, sectionByTodo),
-            blocker: true,
-          })),
-          ...folded.map((c) => ({
-            todo: c,
-            section: sectionByTodo.get(c.id) ?? sec,
-            done: isChildDoneFromBoard(c, sectionByTodo),
-            blocker: false,
-          })),
-        ];
+        const child = (todo: Todo, blocker: boolean): GoalChildEntry => {
+          const section = placement.get(todo.id) ?? (blocker ? "waiting" : sec);
+          return { todo, section, done: section === "done" || section === "cancelled", blocker };
+        };
+        const children = [...surfaced.map((c) => child(c, true)), ...folded.map((c) => child(c, false))];
         const done = children.reduce((n, c) => n + (c.done ? 1 : 0), 0);
         const total = matchesFilter
           ? children.length
@@ -231,37 +216,29 @@ export function consumeBoardStatusGroups(
       }
     }
 
-    sectionCounts[sec] = !matchesFilter
-      ? allEntriesResolved
-        ? typeof group.visible_count === "number" ? group.visible_count : sections[sec].length
-        : typeof group.total_count === "number" ? group.total_count : sections[sec].length
-      : sections[sec].length;
+    sectionCounts[sec] += group.visible_count;
   }
 
+  // Cursor pages extend the closed sections even when their rows are absent from the current board snapshot.
+  for (const todo of olderClosed) {
+    if (seen.has(todo.id) || byId.has(todo.id) || (matchesFilter && !matchesFilter(todo))) continue;
+    seen.add(todo.id);
+    const section = closedSection(todo);
+    sections[section].push(statusRow(todo, section, section === "cancelled" ? "cancelled" : "closed"));
+  }
   for (const sec of ALL_TRIAGE_SECTIONS) {
+    if (matchesFilter) sectionCounts[sec] = sections[sec].length;
+    else if (sec === "done" || sec === "cancelled") sectionCounts[sec] = Math.max(sectionCounts[sec], sections[sec].length);
     if (!sectionOrder.includes(sec)) sectionOrder.push(sec);
   }
 
-  const todoCounts = Object.fromEntries(
-    ALL_TRIAGE_SECTIONS.map((sec) => [sec, sections[sec].length]),
-  ) as Record<TriageSection, number>;
-
-  const open = !matchesFilter
-    ? board.counts.open_total
-    : todoCounts.waiting + todoCounts.working + todoCounts.just_done + todoCounts.parked + todoCounts.other;
-
-  const needsYouCount =
-    !matchesFilter && allNeedsYouResolved
-      ? board.counts.needs_you
-      : sections.waiting.length;
-
   const triaged: TriageResult = {
     sections,
-    open,
-    shelved: !matchesFilter ? board.counts.someday : todoCounts.shelved,
-    finished: !matchesFilter ? board.counts.done : todoCounts.done,
-    cancelled: todoCounts.cancelled,
-    todoCounts,
+    open: matchesFilter ? sectionOrder.reduce((count, sec) => count + (isBoardOpen(sec) ? sectionCounts[sec] : 0), 0) : board.counts.open_total,
+    shelved: matchesFilter ? sectionCounts.shelved : board.counts.someday,
+    finished: matchesFilter ? sectionCounts.done : board.counts.done,
+    cancelled: matchesFilter ? sectionCounts.cancelled : board.counts.cancelled ?? sectionCounts.cancelled,
+    todoCounts: sectionCounts,
   };
 
   return {
@@ -272,7 +249,6 @@ export function consumeBoardStatusGroups(
     },
     sectionOrder,
     sectionCounts,
-    needsYouCount,
   };
 }
 
@@ -306,7 +282,8 @@ export function consumeBoardDirectionGroups({
     for (const id of group.todo_ids) {
       const td = byId.get(id);
       if (!td) continue;
-      if (!includeDone && sectionByTodo.get(id) === "done") continue;
+      const section = sectionByTodo.get(id);
+      if (!includeDone && (section === "done" || section === "cancelled")) continue;
       if (matchesFilter && !matchesFilter(td)) continue;
       members.push(td);
     }
@@ -335,5 +312,3 @@ export function consumeBoardDirectionGroups({
 
   return out;
 }
-
-export { consumeBoardSidebarTree } from "./board-sidebar-tree";

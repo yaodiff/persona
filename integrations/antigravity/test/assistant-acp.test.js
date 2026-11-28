@@ -194,17 +194,15 @@ test('an unexpected Assistant worker exit clears just its PID; the next send res
   assert.throws(() => process.kill(restarted, 0), { code: 'ESRCH' })
 })
 
-// An Assistant that supervises Agents in this companion hears from them when their turns end: its worker stays warm
-// while one runs, and the idle timeout counts from the end of the last (#13471).
-test('an Agent turn running in this companion keeps idle Assistant workers warm', async (t) => {
+// Idle Assistant workers are reaped on their own idle timer even while a coding Agent runs on the shared worker,
+// so unrelated coding work cannot pin every idle Assistant ACP process in memory indefinitely.
+test('an Agent turn running in this companion does not pin idle Assistant workers', async (t) => {
   const { pids, start, call, assistantDir } = await fixture(t, { assistantAcpIdleMs: 350, promptInactivityMs: 0 })
   const agent = await start({ prompt: 'hold' })
   const assistant = await start({ cwd: assistantDir })
-  const worker = await until('assistant worker reported', () => pids()[assistant])
-  await delay(1500)
-  assert.equal(pids()[assistant], worker, 'the idle Assistant worker was retired while an Agent turn ran')
+  await until('assistant worker reported', () => pids()[assistant])
+  await until('idle Assistant worker retired while an Agent turn runs', () => !pids()[assistant], 5000)
   assert.equal((await call('interrupt', agent)).settled, true)
-  await until('assistant worker retired after the Agent turn', () => !pids()[assistant], 5000)
 })
 
 test('a send during idle retirement waits for the old worker to exit before starting a replacement', async (t) => {

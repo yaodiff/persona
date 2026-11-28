@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
@@ -27,6 +28,7 @@ const (
 	workspaceNew       = "new"
 	workspaceExisting  = "existing"
 	workspaceNone      = "none"
+	workspaceScratch   = "scratch"
 	preferExisting     = "prefer-existing"
 	preferNew          = "prefer-new"
 )
@@ -61,8 +63,8 @@ func (w *TaskWorkspace) UnmarshalJSON(raw []byte) error {
 	*w = TaskWorkspace{}
 	var mode string
 	if json.Unmarshal(raw, &mode) == nil {
-		if mode != workspaceNew && mode != workspaceNone {
-			return fmt.Errorf("workspace must be new, {existing: cwd or workspace_id}, {new: {branch: name}}, or none")
+		if mode != workspaceNew && mode != workspaceNone && mode != workspaceScratch {
+			return fmt.Errorf("workspace must be new, scratch, {existing: cwd or workspace_id}, {new: {branch: name}}, or none")
 		}
 		w.Mode = mode
 		return nil
@@ -132,7 +134,7 @@ func (w *TaskWorkspace) UnmarshalJSON(raw []byte) error {
 		w.Mode, w.Branch = workspaceNew, strings.TrimSpace(in.New.Branch)
 		return nil
 	}
-	return fmt.Errorf("workspace must select exactly one of new, existing, or none")
+	return fmt.Errorf("workspace must select exactly one of new, existing, scratch, or none")
 }
 
 func (w TaskWorkspace) MarshalJSON() ([]byte, error) {
@@ -174,6 +176,64 @@ type TaskWorkspaceResolved struct {
 	// Shared: the engine could not prepare a checkout for an inferred new workspace, so the task runs in a cwd
 	// another active task also writes in, as every task did before workspaces existed.
 	Shared bool `json:"shared,omitempty"`
+}
+
+func (t *PlanTask) scratchWorkspace() bool {
+	return t.Workspace != nil && t.Workspace.Mode == workspaceScratch
+}
+
+func scratchUnsupportedError(ctx context.Context, lang i18n.Lang, machine string) error {
+	return &rpc.Error{
+		Code:    "scratch_unsupported",
+		Message: i18n.T(lang, "assistant-tasks_workspace.scratch_unsupported", i18n.Args{"machine": machine}),
+	}
+}
+
+func isUnknownScratchMethodErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unknown method "+nodeproto.MethodWorkspaceScratchPrepare) ||
+		strings.Contains(msg, "method not found")
+}
+
+func (s *Service) prepareScratchWorkspace(ctx context.Context, t *PlanTask, dryRun bool) (nodeproto.ScratchWorkspaceResult, error) {
+	id := firstNonEmpty(t.TodoID, t.ReuseTodo, t.ReservedTodoID)
+	if !nodeproto.ValidScratchID(id) {
+		return nodeproto.ScratchWorkspaceResult{}, &rpc.Error{
+			Code:    "invalid_scratch_id",
+			Message: fmt.Sprintf("invalid scratch workspace identifier %q", id),
+		}
+	}
+	m, hasMachine := s.machineByName(ctx, t.Machine)
+	label := t.Machine
+	if hasMachine {
+		label = firstNonEmpty(m.Name, m.ID)
+		if !m.ScratchWorkspace {
+			return nodeproto.ScratchWorkspaceResult{}, scratchUnsupportedError(ctx, s.lang(ctx), label)
+		}
+	}
+	var res nodeproto.ScratchWorkspaceResult
+	callCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	err := s.call(callCtx, t.Machine, nodeproto.MethodWorkspaceScratchPrepare, nodeproto.ScratchWorkspaceRequest{
+		TodoID: nodeproto.ScratchID(id),
+		DryRun: dryRun,
+	}, &res)
+	if err != nil {
+		if isUnknownScratchMethodErr(err) {
+			return nodeproto.ScratchWorkspaceResult{}, scratchUnsupportedError(ctx, s.lang(ctx), label)
+		}
+		return nodeproto.ScratchWorkspaceResult{}, err
+	}
+	if !proto.NodeAbs(res.Path) {
+		return nodeproto.ScratchWorkspaceResult{}, i18n.ErrEnglish("assistant-tasks_workspace.scratch_path")
+	}
+	if hasMachine && assistantWorkspace(m, res.Path) {
+		return nodeproto.ScratchWorkspaceResult{}, i18n.Err("rpc-errors.agent_assistant_workspace")
+	}
+	return res, nil
 }
 
 func validWorkspacePreference(v string) bool {
@@ -232,7 +292,7 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 		return s.resolveBackendTask(ctx, t)
 	}
 	t.dispatchedWorkspace = nil
-	if w := t.WorkspaceResolved; t.Workspace != nil && t.Workspace.Mode == workspaceNew && w != nil &&
+	if w := t.WorkspaceResolved; t.Workspace != nil && (t.Workspace.Mode == workspaceNew || t.Workspace.Mode == workspaceScratch) && w != nil &&
 		(w.Created || w.Reused || t.nodeDispatchedWorkspace()) {
 		if w.Machine != t.Machine {
 			return i18n.ErrEnglish("assistant-tasks_workspace.machine_local", i18n.Args{"from": w.Machine, "to": t.Machine})
@@ -271,14 +331,20 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 				var sourceErr error
 				if eagerPrepare {
 					// With prefer-new and no shared-branch repository overrides, mode is guaranteed workspaceNew;
-					// overlap workspace.resolve and worktree.prepare to save a serial round-trip.
+					// overlap workspace.resolve and worktree.prepare to save a serial round-trip. A node that prepares
+					// the workspace itself never gets the engine call (previewDispatchedWorkspace's rule, asked first).
 					prepared = true
+					var engineSkipped bool
 					prepCtx, cancelPrep := context.WithCancel(ctx)
 					var wg sync.WaitGroup
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
-						prepErr = s.call(prepCtx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd}, &prep)
+						if prepareOnNode && !s.enginePathAllowed(prepCtx, t) {
+							engineSkipped = true
+							return
+						}
+						prepErr = s.prepareTaskWorktree(prepCtx, t, map[string]any{"cwd": t.Cwd}, &prep)
 					}()
 					source, sourceErr = s.taskWorkspaceResolve(ctx, t.Machine, t.Cwd)
 					if sourceErr != nil || !source.Available || !proto.NodeAbs(source.Cwd) {
@@ -286,6 +352,7 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 					}
 					wg.Wait()
 					cancelPrep()
+					prepared = !engineSkipped // skipped: the engine is asked later only if the node turns out to need it
 				} else {
 					source, sourceErr = s.taskWorkspaceResolve(ctx, t.Machine, t.Cwd)
 				}
@@ -317,6 +384,12 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 	res := &TaskWorkspaceResolved{Machine: t.Machine, Path: proto.NodeClean(t.Cwd)}
 	switch t.Workspace.Mode {
 	case workspaceNone:
+	case workspaceScratch:
+		scratchRes, err := s.prepareScratchWorkspace(ctx, t, true)
+		if err != nil {
+			return err
+		}
+		res.Path = proto.NodeClean(scratchRes.Path)
 	case workspaceExisting:
 		selected := t.Workspace.Existing
 		if selected == "" {
@@ -373,7 +446,7 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 		}
 		res.Branch = firstNonEmpty(t.Workspace.Branch, "task/"+firstNonEmpty(t.TodoID, t.ReservedTodoID))
 		if !prepared {
-			prepErr = s.call(ctx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd}, &prep)
+			prepErr = s.prepareTaskWorktree(ctx, t, map[string]any{"cwd": t.Cwd}, &prep)
 		}
 		if prepErr == nil {
 			if !proto.NodeAbs(prep.Path) {
@@ -548,7 +621,29 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	if prepared && t.WorkspaceResolved.Machine != t.Machine {
 		return i18n.ErrEnglish("assistant-tasks_workspace.machine_local", i18n.Args{"from": t.WorkspaceResolved.Machine, "to": t.Machine})
 	}
-	if !prepared {
+	if t.scratchWorkspace() {
+		if t.ReservedTodoID == "" {
+			t.ReservedTodoID = firstNonEmpty(t.ReuseTodo, t.TodoID, "todo_"+randomHex(8))
+		}
+		scratchRes, err := s.prepareScratchWorkspace(ctx, t, false)
+		if err != nil {
+			var re *rpc.Error
+			var line *i18n.Message
+			if (errors.As(err, &re) && (re.Code == "scratch_unsupported" || re.Code == "agent_assistant_workspace")) ||
+				(errors.As(err, &line) && line.Key == "rpc-errors.agent_assistant_workspace") {
+				return err
+			}
+			return fmt.Errorf("%s: %w", i18n.T(s.lang(ctx), "assistant-tasks_workspace.scratch_create"), err)
+		}
+		t.WorkspaceResolved = &TaskWorkspaceResolved{
+			Machine: t.Machine,
+			Path:    proto.NodeClean(scratchRes.Path),
+			Created: scratchRes.Created,
+			Reused:  scratchRes.Reused,
+		}
+		// Once allocated on disk it is machine-local, including automatic and explicit retries.
+		t.MachinePolicy = machineFixed
+	} else if !prepared {
 		if err := s.resolveTaskWorkspaceForDispatch(ctx, t, t.planID != "" && t.inPane == ""); err != nil {
 			return err
 		}
@@ -629,7 +724,14 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	return nil
 }
 
-// newTaskWorktree makes a checkout or reuses the idle checkout of its branch. Explicit branches must be clean
+func (s *Service) prepareTaskWorktree(ctx context.Context, t *PlanTask, params map[string]any, out *proto.WorktreePrepare) error {
+	if kind := s.taskWorktreeKind(ctx, t); kind != "" {
+		params["kind"] = kind
+	}
+	return s.call(ctx, t.Machine, DeviceWorktreePrepare, params, out)
+}
+
+// findTaskWorktree reuses the idle checkout of its branch. Explicit branches must be clean
 // (#8357). The to-do's generated branch can retain untracked files in the checkouts folder. A node that cannot
 // look up the branch still falls back to normal creation.
 func (s *Service) findTaskWorktree(ctx context.Context, t *PlanTask) (proto.WorktreeCreateResult, bool, error) {
@@ -639,7 +741,7 @@ func (s *Service) findTaskWorktree(ctx context.Context, t *PlanTask) (proto.Work
 	}
 	if branch != "" {
 		var prep proto.WorktreePrepare
-		err := s.call(ctx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd, "branch": branch, "allow_untracked": own}, &prep)
+		err := s.prepareTaskWorktree(ctx, t, map[string]any{"cwd": t.Cwd, "branch": branch, "allow_untracked": own}, &prep)
 		switch at := prep.Existing; {
 		case err != nil && !own:
 			return proto.WorktreeCreateResult{}, false, err
@@ -670,7 +772,8 @@ func (s *Service) newTaskWorktree(ctx context.Context, t *PlanTask) (proto.Workt
 	if wt, reused, err := s.findTaskWorktree(ctx, t); reused || err != nil {
 		return wt, reused, err
 	}
-	wt, err := s.newWorktreeForTask(ctx, t.Machine, t.Cwd, t.WorkspaceResolved.Branch, s.taskCheckoutOnly(ctx, *t))
+	kind := s.taskWorktreeKind(ctx, t)
+	wt, err := s.newWorktreeOn(ctx, t.Machine, t.Cwd, t.WorkspaceResolved.Branch, kind, s.taskCheckoutOnly(ctx, t, kind))
 	if t.Workspace.Branch == "" && err != nil {
 		if path, taken := pathTaken(err); taken {
 			return wt, false, taskCheckoutRefusal{i18n.ErrEnglish("assistant-tasks_workspace.own_path_taken",

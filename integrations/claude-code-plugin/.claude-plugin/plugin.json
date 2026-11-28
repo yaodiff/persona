@@ -1,6 +1,6 @@
 {
   "name": "persona",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Delivers your own messages, turn interrupts, permission and question approvals, and session model choices from the Persona apps into this session.",
   "author": { "name": "Persona", "url": "https://github.com/nwverse/persona" },
   "homepage": "https://github.com/nwverse/persona/tree/main/integrations/claude-code-plugin",

@@ -23,6 +23,32 @@ struct OpenPersonaAssistantIntent: AppIntent {
     }
 }
 
+/// Message Persona (#17789): opens the main conversation with the keyboard up, for the Action button (an App Shortcut,
+/// so it is listed there with nothing to set up), its control and Shortcuts.
+struct OpenPersonaTypingIntent: AppIntent {
+    nonisolated static let title: LocalizedStringResource = "Message Persona"
+    // App Intent metadata says "this device", never "iPhone": App Store Connect rejects it (90626, #6471).
+    nonisolated static let description = IntentDescription(
+        "Opens your main chat with Persona with the keyboard up, ready to type.",
+        categoryName: "Chat",
+        searchKeywords: ["Persona", "message", "type", "chat", "keyboard"]
+    )
+    @available(iOS 26.0, *)
+    nonisolated static var supportedModes: IntentModes { .foreground(.immediate) }
+    // iOS 18 has no supportedModes: it opens the app this way.
+    nonisolated static var openAppWhenRun: Bool { true }
+
+    nonisolated init() {}
+
+    nonisolated func perform() async throws -> some IntentResult {
+        #if !WIDGET_EXTENSION
+        // Not awaited: a cold launch may wait for the hub's main conversation longer than the system waits.
+        await MainActor.run { Task { await AppModel.shared.openMainAssistantForTyping() } }
+        #endif
+        return .result()
+    }
+}
+
 /// Opens a new assistant conversation and asks its composer to start dictating once it is visible.
 struct OpenPersonaDictationIntent: AppIntent {
     nonisolated static let title: LocalizedStringResource = "Dictate to Persona"

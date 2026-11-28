@@ -6,6 +6,10 @@ import Foundation
 /// or it went quiet); a message known only from a later one is asked for by its place (`want`); and a frame that has
 /// held the picture back too long is given up (`skip`), after which the node says where the stream goes on (`reset`).
 public struct ScreenUDPReceiver: Sendable {
+    /// Maximum framed message size accepted on the UDP video channel (4-byte length prefix + `ScreenVideoWire.maxMessageBytes`).
+    /// Prevents a forged `UInt32` header length from triggering multi-GB reservations or millions of NACK entries.
+    public static let maxMessageLength = 4 + ScreenVideoWire.maxMessageBytes
+
     public struct Config: Sendable {
         /// A message gone this long without a fragment is taken as fully sent (the node paces its packets); at least
         /// twice the flow's jitter, so a link that delivers in bursts doesn't read as loss.
@@ -72,10 +76,17 @@ public struct ScreenUDPReceiver: Sendable {
     public mutating func fragment(_ h: ScreenUDPFragmentHead, _ fragment: Data, at now: Double) -> Delivery {
         guard h.channel == channel else { return Delivery() }
         if h.offset < expected { return Delivery(ack: true) }
-        let layout = ScreenUDPLayout.blocks(length: Int(h.length))
-        guard Int(h.block) < layout.count, layout[Int(h.block)].data == Int(h.data) else { return Delivery() }
-        var m = messages[h.offset] ?? Message(length: Int(h.length), droppable: h.droppable, lastAt: now)
-        guard m.length == Int(h.length) else { return Delivery() }
+        guard h.length > 0, h.length <= UInt32(Self.maxMessageLength) else { return Delivery() }
+        let length = Int(h.length)
+        guard h.offset <= UInt64.max - UInt64(length),
+              h.data > 0, Int(h.data) + Int(h.parity) <= 256,
+              Int(h.index) < Int(h.data) + Int(h.parity) else { return Delivery() }
+        let layout = ScreenUDPLayout.blocks(length: length)
+        guard Int(h.block) < layout.count,
+              layout[Int(h.block)].data == Int(h.data),
+              fragment.count <= layout[Int(h.block)].shardLength else { return Delivery() }
+        var m = messages[h.offset] ?? Message(length: length, droppable: h.droppable, lastAt: now)
+        guard m.length == length else { return Delivery() }
         m.lastAt = now
         var b = m.blocks[Int(h.block)] ?? Block(data: Int(h.data))
         b.parity = max(b.parity, Int(h.parity))
@@ -103,6 +114,7 @@ public struct ScreenUDPReceiver: Sendable {
     /// Rebuilds a block that has enough shards.
     private mutating func complete(_ b: inout Block, _ layout: ScreenUDPLayout.Block) {
         let count = max(b.data + b.parity, (b.shards.keys.max() ?? 0) + 1)
+        guard count <= 256 else { return }
         var shards = [[UInt8]?](repeating: nil, count: count)
         var missing = 0
         for i in 0 ..< count {
@@ -119,9 +131,13 @@ public struct ScreenUDPReceiver: Sendable {
     }
 
     private func bytes(_ m: Message) -> Data? {
+        let blockCount = ScreenUDPLayout.blocks(length: m.length).count
+        for i in 0 ..< blockCount {
+            guard m.blocks[i]?.whole != nil else { return nil }
+        }
         var out = [UInt8]()
         out.reserveCapacity(m.length)
-        for i in 0 ..< ScreenUDPLayout.blocks(length: m.length).count {
+        for i in 0 ..< blockCount {
             guard let whole = m.blocks[i]?.whole else { return nil }
             for s in whole { out += s }
         }
@@ -133,7 +149,8 @@ public struct ScreenUDPReceiver: Sendable {
         while let m = messages[expected], let b = bytes(m) {
             d.messages.append((expected, b))
             messages[expected] = nil
-            expected += UInt64(m.length)
+            let (nextExpected, overflow) = expected.addingReportingOverflow(UInt64(m.length))
+            expected = overflow ? .max : nextExpected
             blockedSince = messages.keys.contains { $0 > expected } ? now : nil
         }
         if !d.messages.isEmpty {
@@ -228,12 +245,33 @@ public enum ScreenUDPParity {
     public static let lowest = 500
 
     public static func ratio(loss: Double?, cap: Int, recentBlocks: [Int]) -> Int {
-        guard let loss, loss >= lossFloor, cap > 0 else { return 0 }
-        var r = min(max(Int((loss * 3 * 10000).rounded()), lowest), cap)
-        let data = recentBlocks.reduce(0, +)
+        guard let loss, !loss.isNaN, loss >= lossFloor, cap > 0 else { return 0 }
+        let scaled = (loss * 3 * 10000).rounded()
+        var r = scaled >= Double(cap) ? cap : min(max(Int(scaled), lowest), cap)
+        var data: UInt64 = 0
+        for k in recentBlocks where k > 0 {
+            let (sum, ov) = data.addingReportingOverflow(UInt64(k))
+            data = ov ? .max : sum
+        }
         guard data > 0 else { return r }
-        func share(_ r: Int) -> Int { recentBlocks.reduce(0) { $0 + ScreenUDPLayout.parity(data: $1, ratio: r) } * 10000 / data }
-        while r > 0, share(r) > cap {
+        func shareExceedsCap(_ r: Int) -> Bool {
+            var parity: UInt64 = 0
+            for k in recentBlocks where k > 0 {
+                let (sum, ov) = parity.addingReportingOverflow(UInt64(ScreenUDPLayout.parity(data: k, ratio: r)))
+                parity = ov ? .max : sum
+            }
+            let prod = parity.multipliedFullWidth(by: 10000)
+            let capProd = data.multipliedFullWidth(by: UInt64(cap))
+            // floor(parity * 10000 / data) > cap  <==>  parity * 10000 >= (cap + 1) * data
+            let (capPlusOneHigh, capPlusOneLow): (UInt64, UInt64) = {
+                let (low, ov) = capProd.low.addingReportingOverflow(data)
+                let (high, ov2) = capProd.high.addingReportingOverflow(ov ? 1 : 0)
+                return ov2 ? (.max, .max) : (high, low)
+            }()
+            if prod.high != capPlusOneHigh { return prod.high > capPlusOneHigh }
+            return prod.low >= capPlusOneLow
+        }
+        while r > 0, shareExceedsCap(r) {
             r = r > 1 ? r * 3 / 4 : 0
         }
         return r
@@ -243,7 +281,7 @@ public enum ScreenUDPParity {
     /// node's counters over a stretch, data > 0.
     public static func overhead(dataBytes: UInt64, parityBytes: UInt64, resentBytes: UInt64) -> Double {
         guard dataBytes > 0 else { return 0 }
-        return Double(parityBytes + resentBytes) / Double(dataBytes)
+        return (Double(parityBytes) + Double(resentBytes)) / Double(dataBytes)
     }
 }
 
@@ -257,6 +295,7 @@ public struct ScreenUDPLoss: Sendable {
     public init() {}
 
     public mutating func received(_ number: UInt64, at now: Double) {
+        guard now.isFinite else { return }
         seen.append((now, number))
         seen.removeAll { now - $0.at > Self.window }
     }
@@ -265,7 +304,7 @@ public struct ScreenUDPLoss: Sendable {
     public func loss(at now: Double, window: Double = ScreenUDPLoss.window, enough: Int = ScreenUDPLoss.enough) -> Double? {
         let recent = seen.filter { now - $0.at <= window }
         guard recent.count >= enough, let lo = recent.map(\.number).min(), let hi = recent.map(\.number).max() else { return nil }
-        let span = Double(hi - lo + 1)
+        let span = Double(hi - lo) + 1.0
         return max(0, 1 - Double(recent.count) / span)
     }
 }
@@ -289,23 +328,29 @@ public struct ScreenUDPPace: Sendable {
 
     /// A data packet of `bytes` (whole, on the wire) for the message at `offset`.
     public mutating func packet(offset: UInt64, bytes: Int, at now: Double) {
+        guard bytes >= 0, now.isFinite else { return }
         guard var t = trains[offset] else {
             trains[offset] = Train(first: now, last: now, bytes: 0, packets: 1)
             if trains.count > 64, let oldest = trains.keys.min() { trains[oldest] = nil }
             return
         }
-        t.packets += 1
-        t.bytes += bytes
+        let (nextPackets, pOv) = t.packets.addingReportingOverflow(1)
+        t.packets = pOv ? .max : nextPackets
+        let (nextBytes, bOv) = t.bytes.addingReportingOverflow(bytes)
+        t.bytes = bOv ? .max : nextBytes
         t.last = now
         trains[offset] = t
         if t.packets >= Self.train, t.last > t.first {
-            rates.append((now, Double(t.bytes) * 8 / (t.last - t.first) / 1000))
-            rates.removeAll { now - $0.at > Self.window }
+            let kbps = Double(t.bytes) * 8 / (t.last - t.first) / 1000
+            if !kbps.isNaN {
+                rates.append((now, kbps))
+                rates.removeAll { now - $0.at > Self.window }
+            }
         }
     }
 
     public func request(at now: Double, start: UInt32) -> UInt32 {
-        guard let best = rates.filter({ now - $0.at <= Self.window }).map(\.kbps).max() else { return start }
+        guard let best = rates.filter({ now - $0.at <= Self.window && !$0.kbps.isNaN }).map(\.kbps).max() else { return start }
         return UInt32(min(max(1.25 * best, Double(Self.lowest)), Double(Self.highest)))
     }
 }
@@ -324,15 +369,17 @@ public struct ScreenUDPCongestion: Sendable {
     public init() {}
 
     public mutating func look(loss: Double?, at now: Double) {
-        defer { lastLook = now }
-        guard let loss else { return }
+        guard now.isFinite else { return }
+        defer { if now > lastLook { lastLook = now } }
+        guard let loss, !loss.isNaN else { return }
         if loss >= Self.congested {
             if now - lastCut >= 2 {
                 scale = max(Self.lowest, scale * (1 - 0.5 * loss))
                 lastCut = now
             }
         } else if loss < Self.clear, lastLook.isFinite {
-            scale = min(1, scale * pow(1.05, min(now - lastLook, 2)))
+            let dt = now - lastLook
+            if dt > 0 { scale = min(1, scale * pow(1.05, min(dt, 2))) }
         }
     }
 }

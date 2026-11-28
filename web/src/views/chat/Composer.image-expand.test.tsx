@@ -116,6 +116,7 @@ describe("Composer expanded image stage", () => {
     await flush();
 
     expect(stage()?.dataset.composerImageStage).toBe("open");
+    expect(document.documentElement.dataset.composerStage).toBe("1");
     expect(host.querySelector("[data-composer-placeholder]")).not.toBeNull();
     expect(host.querySelector("[data-composer-image-expanded]")).not.toBeNull();
     expect(host.querySelectorAll(COMPOSER_INPUT)).toHaveLength(1);
@@ -423,6 +424,7 @@ describe("Composer expanded image stage", () => {
       { mime: "image/png", data: btoa("TWO") },
     ]);
     expect(stage()).toBeNull();
+    expect(document.documentElement.dataset.composerStage).toBeUndefined();
     expect(inputEl()).toBe(liveInput);
     expect(liveInput.value).toBe("");
   });

@@ -70,6 +70,7 @@
   "route_no_images": "暂不支持将图片直接发送给任务，请移除图片后重试。",
   "not_live": "非实时状态",
   "not_live_reload": "重新加载",
+  "not_live_reloading": "重新加载中…",
   "agent_status_repository": "打开仓库",
   "composer_source": "来源",
   "call_not_loaded": "该步骤不在已加载的历史记录中，请向上滚动加载后重试。",

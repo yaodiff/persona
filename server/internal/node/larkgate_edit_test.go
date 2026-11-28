@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func newLarkEditRig(t *testing.T, answer func(proto.Interaction) proto.Resolution, user ...proto.LarkRule) *spaceRig {
@@ -194,10 +195,39 @@ func TestLarkEditHookRetiresOriginalAndGrantsOnlyEditedCallOnce(t *testing.T) {
 }
 
 func TestLarkEditAcceptsStaticShellQuoting(t *testing.T) {
-	tests := []struct{ name, body, command string }{
-		{name: "double quoted JSON", body: `{"text":"hello"}`, command: `ex POST /conversations/F1/messages "{\"text\":\"hello\"}"`},
-		{name: "single quote and Unicode in the original", body: `{"text":"it's 雪😀"}`,
-			command: `ex POST /conversations/F1/messages ` + shellQuote(`{"text":"it's 雪😀"}`)},
+	tests := []struct {
+		name, body, wantText, command string
+	}{
+		{
+			name:     "double quoted JSON",
+			body:     `{"text":"hello"}`,
+			wantText: "hello",
+			command:  `ex POST /conversations/F1/messages "{\"text\":\"hello\"}"`,
+		},
+		{
+			name:     "double quoted JSON with escaped newline and quotes",
+			body:     `{"text":"line1\nline2 \"hi\""}`,
+			wantText: "line1\nline2 \"hi\"",
+			command:  `ex POST /conversations/F1/messages "{\"text\":\"line1\\nline2 \\\"hi\\\"\"}"`,
+		},
+		{
+			name:     "double quoted JSON with literal backslash-n",
+			body:     `{"text":"line1\nline2"}`,
+			wantText: "line1\nline2",
+			command:  `ex POST /conversations/F1/messages "{\"text\":\"line1\nline2\"}"`,
+		},
+		{
+			name:     "single quote and Unicode in the original",
+			body:     `{"text":"it's 雪😀"}`,
+			wantText: "it's 雪😀",
+			command:  `ex POST /conversations/F1/messages ` + shellQuote(`{"text":"it's 雪😀"}`),
+		},
+		{
+			name:     "shellQuote with apostrophe, newline, quotes, backslash, dollar, and Chinese",
+			body:     `{"text":"it's \"quoted\"\n第二行 C:\\tmp $5 😀"}`,
+			wantText: "it's \"quoted\"\n第二行 C:\\tmp $5 😀",
+			command:  `ex POST /conversations/F1/messages ` + shellQuote(`{"text":"it's \"quoted\"\n第二行 C:\\tmp $5 😀"}`),
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -206,6 +236,10 @@ func TestLarkEditAcceptsStaticShellQuoting(t *testing.T) {
 			spec := runLarkEditHook(t, r, cwd, tc.command, nil)
 			if spec["permissionDecision"] != "allow" {
 				t.Fatalf("static shell quoting was refused: %#v", spec)
+			}
+			card := r.hub.lastCreated(t)
+			if card.EditableText != tc.wantText {
+				t.Fatalf("card.EditableText = %q, want %q", card.EditableText, tc.wantText)
 			}
 			updated, _ := spec["updatedInput"].(map[string]any)
 			command, _ := updated["command"].(string)
@@ -530,6 +564,152 @@ func TestLarkEditAppliesHotReloadedRulesAndGateReorderWithoutLeakingOriginalGran
 		}
 		if code, _ := send(t, http.MethodPost, url, v.calls[0].Body); code != http.StatusOK {
 			t.Fatalf("reordered edited call = %d, want 200", code)
+		}
+	})
+}
+
+func TestLarkEditExecutionWordEscapesAndFailClosedQuoting(t *testing.T) {
+	parseLastWord := func(t *testing.T, cmd string) *syntax.Word {
+		t.Helper()
+		tree, _ := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+		if tree == nil || len(tree.Stmts) == 0 {
+			t.Fatalf("parser produced no statements for %q", cmd)
+		}
+		call, ok := tree.Stmts[0].Cmd.(*syntax.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			t.Fatalf("parser produced no call args for %q", cmd)
+		}
+		return call.Args[len(call.Args)-1]
+	}
+
+	t.Run("static POSIX escapes outside and inside double quotes", func(t *testing.T) {
+		cases := []struct {
+			name string
+			cmd  string
+			want string
+		}{
+			{
+				name: "double-quoted special escapes",
+				cmd:  `echo "\" \\ \$ \` + "`" + ` "`,
+				want: `" \ $ ` + "`" + ` `,
+			},
+			{
+				name: "double-quoted preserved backslashes",
+				cmd:  `echo "\n\t\r\'\a"`,
+				want: `\n\t\r\'\a`,
+			},
+			{
+				name: "double-quoted line continuation",
+				cmd:  "echo \"line1\\\nline2\"",
+				want: "line1line2",
+			},
+			{
+				name: "unquoted line continuation",
+				cmd:  "echo foo\\\nbar",
+				want: "foobar",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				got, dyn := executionWord(parseLastWord(t, tc.cmd))
+				if dyn || got != tc.want {
+					t.Fatalf("executionWord(%q) = (%q, %v), want (%q, false)", tc.cmd, got, dyn, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("ANSI-C, locale, nested quotes, and dangling trailing backslash fail closed as dynamic", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			cmd  string
+		}{
+			{name: "ANSI-C single quote command", cmd: `$'l\x61rk-cli'`},
+			{name: "ANSI-C single quote body", cmd: `ex $'{"text":"hi"}'`},
+			{name: "locale double quote", cmd: `ex $"{\"text\":\"hi\"}"`},
+			{name: "dangling backslash at EOF on command", cmd: `lark-c\li\`},
+			{name: "dangling backslash at EOF on arg", cmd: `echo hi\`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, dyn := executionWord(parseLastWord(t, tc.cmd))
+				if !dyn {
+					t.Fatalf("executionWord(%q) reported dynamic=false, want true", tc.cmd)
+				}
+			})
+		}
+
+		// Unclosed double quote ending in backslash and programmatically nested quote nodes fail closed as dynamic.
+		for _, tc := range []struct {
+			name string
+			part syntax.WordPart
+		}{
+			{name: "unclosed double quote ending in backslash", part: &syntax.Lit{Value: `foo\`}},
+			{name: "nested SglQuoted inside DblQuoted", part: &syntax.SglQuoted{Value: "x"}},
+			{name: "nested DblQuoted inside DblQuoted", part: &syntax.DblQuoted{Parts: []syntax.WordPart{&syntax.Lit{Value: "x"}}}},
+		} {
+			w := &syntax.Word{Parts: []syntax.WordPart{&syntax.DblQuoted{Parts: []syntax.WordPart{tc.part}}}}
+			if _, dyn := executionWord(w); !dyn {
+				t.Fatalf("%s reported dynamic=false, want true", tc.name)
+			}
+		}
+	})
+
+	t.Run("shellCommandUnknown, larkCheckOutcome bypass, classifyLark, and editableLarkCall fail closed", func(t *testing.T) {
+		for _, cmd := range []string{
+			`$'l\x61rk-cli' im +messages-send --text hi`,
+			`$"lark-cli" im +messages-send --text hi`,
+			`lark-c\li\`,
+		} {
+			if !shellCommandUnknown(cmd, false, 0) {
+				t.Errorf("shellCommandUnknown(%q) = false, want true", cmd)
+			}
+		}
+
+		r := newLarkEditRig(t, func(proto.Interaction) proto.Resolution {
+			return proto.Resolution{Allow: boolp(false), Message: "blocked"}
+		})
+		cwd := t.TempDir()
+		r.n.mu.Lock()
+		r.n.procs[testThread] = &assistantProc{id: testThread, agent: "claude", cwd: cwd}
+		r.n.mu.Unlock()
+		r.n.persistModes(testThread, proto.ModeBypass, "")
+
+		for _, cmd := range []string{
+			`$'l\x61rk-cli' im +messages-send --text hi`,
+			`$"lark-cli" im +messages-send --text hi`,
+			`lark-c\li\`,
+		} {
+			out, err := r.n.larkCheckOutcome(context.Background(), testThread, cwd, cmd, proto.Interaction{
+				SessionID: testThread, Cwd: cwd, ToolName: "Bash",
+			})
+			if err != nil {
+				t.Fatalf("larkCheckOutcome(%q): %v", cmd, err)
+			}
+			if out.decision != "deny" {
+				t.Fatalf("larkCheckOutcome(%q) in bypass = %+v, want confirmation/deny (must not auto-allow)", cmd, out)
+			}
+		}
+
+		for _, cmd := range []string{
+			`echo hi\`,
+			`echo "foo\`,
+			`lark-c\li\`,
+		} {
+			v := classifyLark(cmd, r.n.larkCfg.Gates, cwd, r.n.larkCLIRisk(r.n.larkCfg))
+			if !v.unparsed || !v.other {
+				t.Errorf("classifyLark(%q) = %+v, want unparsed=true other=true", cmd, v)
+			}
+		}
+
+		for _, cmd := range []string{
+			`ex POST /conversations/F1/messages $'{"text":"hi"}'`,
+			`ex POST /conversations/F1/messages $"{\"text\":\"hi\"}"`,
+			`ex POST /conversations/F1/messages hi\`,
+			`ex POST /conversations/F1/messages "foo\`,
+		} {
+			if _, _, _, ok := r.n.editableLarkCall(r.n.larkCfg, cmd, cwd); ok {
+				t.Errorf("editableLarkCall(%q) = true, want false", cmd)
+			}
 		}
 	})
 }

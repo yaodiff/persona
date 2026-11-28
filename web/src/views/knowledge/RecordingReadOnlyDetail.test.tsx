@@ -242,4 +242,95 @@ describe("RecordingReadOnlyDetail", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(callsBeforeStaleBlob);
     expect(host.querySelector("img")).toBeNull();
   });
+
+  it("shows stored speakers, neutral avatars and '?' aria-label with zero edit controls when recording module is off", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(jsonResp({ photos: [] }))));
+    mount(
+      recordingDetail("rec-ro-speakers", {
+        paused: "module_off",
+        segments: [
+          { start: 0, end: 5, text: "First line by Ada", speaker: "s1" },
+          { start: 6, end: 10, text: "Second line by Ada", speaker: "s1" },
+          { start: 15, end: 20, text: "Uncertain line", speaker: "s2", speaker_unsure: true },
+        ],
+        speakers: {
+          rev: 2,
+          state: "ready",
+          quality: "ok",
+          people: [
+            { id: "s1", name: "Ada", seconds: 120, lines: 2 },
+            { id: "s2", seconds: 60, lines: 1 },
+          ],
+          candidates: [],
+          spans: [],
+          covered: [],
+          trimmed: false,
+        },
+      }),
+    );
+    await flush();
+
+    expect(host.querySelector('[data-readonly-speakers="ready"]')?.textContent).toContain("Ada");
+    expect(host.querySelector('[data-readonly-speakers="ready"]')?.textContent).toContain(
+      t("knowledge-kbdetail.recording_speaker_n", { n: 2 }),
+    );
+    const groups = [...host.querySelectorAll<HTMLElement>("[data-speaker-group]")];
+    expect(groups.map((g) => [g.dataset.speakerGroup, g.dataset.speakerUnsure ?? ""])).toEqual([
+      ["s1", ""],
+      ["s2", "true"],
+    ]);
+    for (const av of host.querySelectorAll("[data-speaker-avatar]")) {
+      expect(av.getAttribute("aria-hidden")).toBe("true");
+    }
+    const unsure = host.querySelector("[data-speaker-unsure-mark]");
+    expect(unsure?.getAttribute("role")).toBe("img");
+    expect(unsure?.getAttribute("aria-label")).toBe(t("knowledge-kbdetail.recording_speaker_possibly"));
+    expect(host.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("renders low-quality, waiting and failed speaker states read-only and ignores cleared or malformed blocks", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(jsonResp({ photos: [] }))));
+
+    mount(
+      recordingDetail("rec-ro-low", {
+        segments: [{ start: 0, end: 5, text: "Line one", speaker: "s1" }],
+        speakers: { rev: 1, state: "ready", quality: "low", people: [{ id: "s1" }] },
+      }),
+    );
+    await flush();
+    expect(host.querySelector("[data-speakers-low-quality]")?.textContent).toContain(
+      t("knowledge-kbdetail.recording_speakers_low_quality"),
+    );
+    expect(host.querySelector('[data-speaker-group="s1"]')?.getAttribute("data-speaker-unsure")).toBe("true");
+    expect(host.querySelectorAll("button")).toHaveLength(0);
+
+    mount(
+      recordingDetail("rec-ro-wait", {
+        speakers: { rev: 1, state: "waiting", done: 120, end: 600 },
+      }),
+    );
+    await flush();
+    expect(host.querySelector('[data-readonly-speakers="waiting"]')?.textContent).toContain(
+      t("knowledge-kbdetail.recording_speakers_waiting_progress", { done: 2, total: 10 }),
+    );
+    expect(host.querySelectorAll("button")).toHaveLength(0);
+
+    mount(
+      recordingDetail("rec-ro-fail", {
+        speakers: { rev: 1, state: "failed", reason: "too_long" },
+      }),
+    );
+    await flush();
+    expect(host.querySelector('[data-readonly-speakers="failed"]')?.textContent).toContain(
+      t("knowledge-kbdetail.recording_speakers_failed_too_long"),
+    );
+    expect(host.querySelectorAll("button")).toHaveLength(0);
+
+    for (const speakers of [{ state: "cleared" }, { state: "unknown_future" }, "broken"]) {
+      mount(recordingDetail("rec-ro-hidden", { speakers }));
+      await flush();
+      expect(host.querySelector("[data-readonly-speakers]")).toBeNull();
+      expect(host.querySelectorAll("button")).toHaveLength(0);
+    }
+  });
 });

@@ -42,7 +42,12 @@ type handoffSecretsFake struct {
 func (f *handoffSecretsFake) LauncherSecret(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
+func (f *handoffSecretsFake) RefreshLauncherSecret(context.Context, string, string, string) error {
+	return nil
+}
 func (f *handoffSecretsFake) ForgetLauncherSecrets(string) {}
+func (f *handoffSecretsFake) RetainLauncherSecrets(context.Context, func(string, string, string) bool) {
+}
 func (f *handoffSecretsFake) SecretReference(context.Context, string) *extmgr.SecretReferenceView {
 	return nil
 }

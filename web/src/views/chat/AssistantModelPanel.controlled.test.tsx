@@ -543,11 +543,20 @@ describe("AssistantModelPanel default fallback compatibility", () => {
     });
     mocks.getSession.mockReturnValue(session);
     mocks.assistantSetup.mockReturnValue({ provider: "relay", model: "sonnet", effort: "high", source: "pick" });
-    mocks.api.mockRejectedValueOnce(new Error("hub rejected"));
+    // the panel also reads the four dimensions' catalog (an older hub's answer: no catalog); only the pick is refused
+    let refused = false;
+    mocks.api.mockImplementation(async (path: string) => {
+      if (path === "/assistant/conversations/example-conv/model" && !refused) {
+        refused = true;
+        throw new Error("hub rejected");
+      }
+      return { ok: true };
+    });
     mocks.forgetModel.mockResolvedValueOnce("cannot forget");
 
     await mount({ chat: makeChat({ session }) });
     await flush();
+    expect(mocks.api).toHaveBeenCalledWith("/execution/catalog", { query: { machine: "example-machine" } });
 
     expect(mocks.useStore).toHaveBeenCalled();
     expect(mocks.useChosenManager).toHaveBeenCalled();

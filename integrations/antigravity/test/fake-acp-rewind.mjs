@@ -87,6 +87,14 @@ const server = createServer(async (req, res) => {
       res.writeHead(503).end('{"message":"Native service unavailable"}')
       return
     }
+    if (snapshot.stepsTimeout) {
+      res.writeHead(504).end('{"message":"Antigravity conversation operation timed out"}')
+      return
+    }
+    if (snapshot.stepsNotFoundAlways || (snapshot.stepsNotFoundUnlessLoaded && !loaded.has(params.cascadeId))) {
+      res.writeHead(404).end('{"code":"not_found","message":"not_found: trajectory not found (error ID: test-id)"}')
+      return
+    }
     // Like agy for a conversation another process created: no steps until it is loaded.
     if (snapshot.stepsRequireLoad && !loaded.has(params.cascadeId)) {
       res.end('{}')
@@ -194,6 +202,10 @@ input.on('line', (line) => {
   }
   if (req.method === 'session/set_config_option' && Array.isArray(snapshot.rejectConfigOptions) && snapshot.rejectConfigOptions.includes(req.params?.configId)) {
     send({ id: req.id, error: { code: -32000, message: `Unsupported config option: ${req.params.configId}` } })
+    return
+  }
+  if (req.method === 'session/resume' && snapshot.resumeError) {
+    send({ id: req.id, error: { code: -32603, message: snapshot.resumeError } })
     return
   }
   if (req.method === 'session/resume' || req.method === 'session/load') {

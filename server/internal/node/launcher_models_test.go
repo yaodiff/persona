@@ -443,6 +443,85 @@ sleep 60
 	}
 }
 
+func TestManagedCodexModelProbeHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a Unix npm launcher and node socket")
+	}
+	home := launchKeyHome(t)
+	n, _ := testNode(t)
+	n.home, n.dir = home, filepath.Dir(nodeclient.SocketPath())
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.bin = self
+	localBin := filepath.Join(home, ".local", "bin")
+	writeExecutable(t, filepath.Join(localBin, "codex"), `#!/usr/bin/env node
+case " $* " in *" app-server "*) ;; *) exit 17 ;; esac
+[ -z "$PERSONA_MANAGED_MODEL_PROBE" ] || exit 18
+printf '%s' "$CODEX_HOME"
+`)
+	writeExecutable(t, filepath.Join(localBin, "node"), "#!/bin/sh\nexec /bin/sh \"$@\"\n")
+	serviceBin := filepath.Join(home, "service-bin")
+	writeExecutable(t, filepath.Join(serviceBin, "node"), "#!/bin/sh\nexit 19\n")
+	writeFile(t, filepath.Join(home, ".zshrc"), `: > "$HOME/rc-ran"`+"\n")
+	t.Setenv("PATH", serviceBin+":/usr/bin:/bin")
+	t.Setenv("PERSONA_NODEJS", "")
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("NODE_TEST_LAUNCH", "1")
+	inheritedHome := filepath.Join(home, "inherited codex")
+	providerHome := filepath.Join(home, "provider codex")
+	t.Setenv("CODEX_HOME", inheritedHome)
+	if _, err := n.listenOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	const gateway = "https://gw.example.com/v1"
+	for _, tc := range []struct {
+		name, baseURL, providerEnv, wantHome string
+		isolate                              bool
+	}{
+		{name: "custom gateway", baseURL: gateway, isolate: true},
+		{name: "default gateway", wantHome: inheritedHome},
+		{name: "provider home", baseURL: gateway, providerEnv: "export CODEX_HOME=" + shellQuote(providerHome), wantHome: providerHome},
+		{name: "explicit empty home", baseURL: gateway, providerEnv: "CODEX_HOME="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n.setManaged([]proto.ManagedLauncher{{Name: "gw", Agent: "codex", BaseURL: tc.baseURL, Env: tc.providerEnv}})
+			dir := t.TempDir()
+			isolatedHome := filepath.Join(dir, "codex-home")
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			cmd, err := n.agentModelsCommand(ctx, "gw", "codex", dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cmd.Path != n.bin || cmd.Dir != dir {
+				t.Fatalf("probe executable = %q in %q, want %q in %q", cmd.Path, cmd.Dir, n.bin, dir)
+			}
+			if !slices.Equal(cmd.Args[1:], []string{"launch", "gw", "app-server"}) {
+				t.Fatalf("probe command args = %q, want launch gw app-server", cmd.Args[1:])
+			}
+			wantHome := tc.wantHome
+			if tc.isolate {
+				wantHome = isolatedHome
+				if st, err := os.Stat(isolatedHome); err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
+					t.Fatalf("private Codex home: %v, %v", st, err)
+				}
+			} else if _, err := os.Stat(isolatedHome); !os.IsNotExist(err) {
+				t.Fatalf("unexpected temporary Codex home: %v", err)
+			}
+			out, err := cmd.CombinedOutput()
+			if err != nil || string(out) != wantHome {
+				t.Fatalf("Codex saw CODEX_HOME %q, want %q: %v", out, wantHome, err)
+			}
+			if _, err := os.Stat(filepath.Join(home, "rc-ran")); !os.IsNotExist(err) {
+				t.Fatalf("shell startup ran during the direct probe: %v", err)
+			}
+		})
+	}
+}
+
 // A list past its TTL is answered at once, and the CLI is asked again in the background for the next ask (#1501): the
 // picker does not wait seconds for the login shell and the CLI every ten minutes.
 func TestLauncherModelsAnswersAnExpiredListAtOnce(t *testing.T) {

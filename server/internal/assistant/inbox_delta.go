@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 // GET /api/v1/inbox?since=<cursor> (#4740, docs/protocol/protocol.md "Inbox delta"): the items added or changed since
@@ -142,22 +145,27 @@ func (k *inboxSnapshots) expire(now time.Time) {
 // writeInboxSince answers GET /api/v1/inbox?since=: the delta from the list since names, or the whole list, either with
 // the cursor of the list now. Without the memo's bytes it answers the whole list as before, with no cursor (and every
 // chain whole).
-func (s *Service) writeInboxSince(w http.ResponseWriter, shape inboxShape, since string) {
+func (s *Service) writeInboxSince(ctx context.Context, w http.ResponseWriter, shape inboxShape, since string) {
 	raws, ids, asOf, ok := s.inboxListRawIDs(shape)
 	if !inboxListMemoOn || !ok {
-		s.writeInboxList(w, shape.all)
+		s.writeInboxList(ctx, w, shape.all)
 		return
+	}
+	stored, known := s.inboxStoredSources(ctx)
+	var presence *assistantwire.InboxStoredSources
+	if known {
+		presence = &stored
 	}
 	k := &s.inbox.snapshots
 	old := k.find(since, shape, asOf)
 	now := k.note(shape, ids, raws, asOf)
 	cursor := k.cursor(now)
 	if old == nil {
-		writeInboxAnswer(w, raws, nil, cursor, false, asOf, s.inboxTriage())
+		writeInboxAnswer(w, raws, nil, cursor, false, asOf, s.inboxTriage(), presence)
 		return
 	}
 	changed, removed := inboxDelta(old, now, ids, raws)
-	writeInboxAnswer(w, changed, removed, cursor, true, asOf, s.inboxTriage())
+	writeInboxAnswer(w, changed, removed, cursor, true, asOf, s.inboxTriage(), presence)
 }
 
 // inboxDelta is the list now (ids and their bytes in order, with its snapshot) against the one then: the bytes of the
@@ -177,14 +185,19 @@ func inboxDelta(then, now *inboxSnapshot, ids []string, raws [][]byte) (changed 
 	return changed, removed
 }
 
-// writeInboxAnswer writes a list answered for `since`, its keys sorted as encoding/json writes a map's: as_of, cursor,
-// delta (a delta only), items, removed (a delta only: {"id"} objects, so the hub stamps their manager as it stamps the
-// items'), triage.
-func writeInboxAnswer(w http.ResponseWriter, items [][]byte, removed []string, cursor string, delta bool, asOf time.Time, triage InboxTriage) {
+// writeInboxAnswer writes a list answered for `since`, its keys ordered as encoding/json orders the response: as_of,
+// cursor, delta (a delta only), items, removed (a delta only: {"id"} objects, so the hub stamps their manager as it
+// stamps the items'), stored_sources when known, triage.
+func writeInboxAnswer(w http.ResponseWriter, items [][]byte, removed []string, cursor string, delta bool, asOf time.Time, triage InboxTriage, stored *assistantwire.InboxStoredSources) {
 	at, err1 := json.Marshal(asOf)
 	tr, err2 := json.Marshal(triage)
 	cur, _ := json.Marshal(cursor)
-	if err1 != nil || err2 != nil {
+	var sr []byte
+	var err3 error
+	if stored != nil {
+		sr, err3 = json.Marshal(stored)
+	}
+	if err1 != nil || err2 != nil || err3 != nil {
 		http.Error(w, "inbox: cannot encode the list", http.StatusInternalServerError)
 		return
 	}
@@ -216,6 +229,10 @@ func writeInboxAnswer(w http.ResponseWriter, items [][]byte, removed []string, c
 			b.WriteByte('}')
 		}
 		b.WriteByte(']')
+	}
+	if stored != nil {
+		b.WriteString(`,"stored_sources":`)
+		b.Write(sr)
 	}
 	b.WriteString(`,"triage":`)
 	b.Write(tr)

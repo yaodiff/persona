@@ -139,14 +139,17 @@ const (
 )
 
 // ContextParams is assistant.context's params. MachineID is the asking node's machine: the hub sets it from the
-// node's connection, never from the node's params. With Ack the call only confirms that a message carrying those
-// view errors (ContextResult.ViewErrors) was delivered, and answers nothing.
+// node's connection, never from the node's params. Cwd is the conversation's launch directory as the node reports it,
+// used only before the session is noted or listed (such as a new space conversation's first turn, including an
+// empty-id Codex start). With Ack the call only confirms that a message carrying those view errors
+// (ContextResult.ViewErrors) was delivered, and answers nothing.
 type ContextParams struct {
 	RecoveryID      string             `json:"recovery_id,omitempty"`
 	RecoveryOnly    bool               `json:"recovery_only,omitempty"`
 	PrepareRecovery bool               `json:"prepare_recovery,omitempty"`
 	SessionID       string             `json:"session_id"`
 	MachineID       string             `json:"machine_id,omitempty"`
+	Cwd             string             `json:"cwd,omitempty"`
 	Query           string             `json:"query,omitempty"`
 	Ack             []ViewErrorReceipt `json:"ack,omitempty"`
 }

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -479,6 +480,13 @@ func (n *Node) assistantContext(id string) contextAnswer {
 // assistantContextFor is assistantContext with the current turn's user text (capped to 4 KiB) so the hub can attach
 // entity-triggered local memory for the main conversation without waiting on any model.
 func (n *Node) assistantContextFor(id, query string) contextAnswer {
+	return n.assistantContextForCwd(id, "", query)
+}
+
+// assistantContextForCwd is assistantContextFor with the conversation's launch directory cwd (falling back to persisted
+// session state when cwd is empty) so a new space conversation gets its space context on the very first turn, before
+// assistant.send returns or sessions.changed publishes the session (#17557).
+func (n *Node) assistantContextForCwd(id, cwd, query string) contextAnswer {
 	if n.peer == nil {
 		return contextAnswer{}
 	}
@@ -487,6 +495,9 @@ func (n *Node) assistantContextFor(id, query string) contextAnswer {
 	st, _ := n.state.get(id)
 	res := contextAnswer{requested: true, requestedRecoveryID: st.RecoveryPending}
 	params := map[string]any{"session_id": id, "recovery_id": st.RecoveryPending, "prepare_recovery": true}
+	if dir := cmp.Or(strings.TrimSpace(cwd), strings.TrimSpace(st.Cwd)); dir != "" {
+		params["cwd"] = dir
+	}
 	if q := strings.TrimSpace(query); q != "" {
 		if len(q) > 4096 {
 			q = q[:4096]

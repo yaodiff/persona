@@ -6,7 +6,7 @@ import { tRich } from "../../i18n/rich";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { extensionSignatureLabel } from "../../lib/extension-market";
 import { previewBlocked } from "../../lib/extension-model";
-import { bytes } from "../../lib/format";
+import { bytes, safeWebURL } from "../../lib/format";
 import { Button, Collapse, cx, Dialog, toast, useNow } from "../../ui/atoms";
 import { Switch } from "../../views/settings/SettingsParts";
 import { AdminError, errorText, getExtensions, getMetricsOverview, installExtension, previewExtension, rollbackExtension, setExtensionEnabled, uninstallExtension, upgradeExtension, uploadExtension } from "../api";
@@ -240,13 +240,16 @@ function ExtensionRow({
             {p.previous_version && <Meta label={t("admin-pages-extensions.previous_version")} mono>{p.previous_version}</Meta>}
             {p.origin && <Meta label={t("admin-pages-extensions.installed_from")} mono>{p.origin}</Meta>}
             {p.publisher && <Meta label={t("admin-pages-extensions.publisher")}>{p.publisher}</Meta>}
-            {p.homepage && (
-              <Meta label={t("admin-pages-extensions.homepage")}>
-                <a href={p.homepage} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">
-                  {p.homepage}
-                </a>
-              </Meta>
-            )}
+            {(() => {
+              const homepage = safeWebURL(p.homepage, true);
+              return homepage ? (
+                <Meta label={t("admin-pages-extensions.homepage")}>
+                  <a href={homepage} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">
+                    {homepage}
+                  </a>
+                </Meta>
+              ) : null;
+            })()}
             {p.read_only && <Meta label={t("admin-pages-extensions.changes")}>{t("admin-pages-extensions.changes_hub_json")}</Meta>}
           </dl>
           {p.warnings?.map((w) => (

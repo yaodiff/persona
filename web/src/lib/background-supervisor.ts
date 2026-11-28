@@ -7,7 +7,9 @@
 // unlistedConversations). Pure functions, tested without a DOM.
 import { t } from "../i18n";
 import type { FeedItem } from "./feed";
-import type { AssistantInfo, Session } from "./types";
+import { sameManager } from "./manager-choice";
+import { supervisorHeld } from "./supervisor-held";
+import type { AssistantInfo, Interaction, Session } from "./types";
 
 /** `by` on a review's chat-activity entry the background supervisor made (#5084, docs/protocol/protocol.md, FeedItem "review"). */
 export const REVIEW_BY_BACKGROUND = "background";
@@ -18,6 +20,37 @@ export const SUPERVISE_PURPOSE = "assistant.supervise";
 /** Conversation `id` is the background supervisor. Never the main conversation; false on a hub before it, or before it was made. */
 export function isBackgroundSupervisor(assistant: Pick<AssistantInfo, "background_supervisor" | "main"> | null | undefined, id: string | undefined): boolean {
   return !!id && !!assistant?.background_supervisor && assistant.background_supervisor === id && id !== assistant.main;
+}
+
+/** Whether `ix` is a user-facing card raised by the hidden background supervisor conversation (or its folded children)
+ *  rather than an agent permission still held by a supervisor for internal review (`supervisorHeld`). */
+export function isBackgroundSupervisorInteraction(
+  assistant: Pick<AssistantInfo, "background_supervisor" | "main"> | null | undefined,
+  ix: Pick<Interaction, "session_id" | "folded_under" | "folded_side" | "kind" | "delegating" | "manager">,
+  manager?: string,
+): boolean {
+  const bg = assistant?.background_supervisor;
+  if (!bg || bg === assistant?.main || supervisorHeld(ix)) return false;
+  if (manager && !sameManager(ix.manager, manager)) return false;
+  return ix.session_id === bg || ix.folded_under === bg || ix.folded_side === bg;
+}
+
+const mainCopies = new WeakMap<Interaction, { mainSid: string; mainMid?: string; copy: Interaction }>();
+
+/** Wraps a background supervisor's own card so Main chat shows it cleanly above the composer with localized
+ *  attribution; child cards already folded under another parent keep their own child attribution unchanged. */
+export function asBackgroundSupervisorCard(ix: Interaction, mainSid: string, mainMid?: string): Interaction {
+  if (ix.folded_under) return ix;
+  const cached = mainCopies.get(ix);
+  if (cached && cached.mainSid === mainSid && cached.mainMid === mainMid) return cached.copy;
+  const copy: Interaction = {
+    ...ix,
+    folded_under: mainSid,
+    folded_under_machine_id: mainMid && ix.machine_id !== mainMid ? mainMid : undefined,
+    session_title: backgroundSupervisorTitle({ title: ix.session_title ?? "" }),
+  };
+  mainCopies.set(ix, { mainSid, mainMid, copy });
+  return copy;
 }
 
 /** What it is called: the hub's title (it names it in the owner's language), else this page's own name for it. */

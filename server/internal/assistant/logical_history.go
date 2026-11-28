@@ -218,6 +218,9 @@ func (s *Service) logicalHistoryPage(ctx context.Context, st logicalConversation
 		if p.Through != nil && seg.Offset >= *p.Through {
 			continue
 		}
+		if p.Through != nil && seg.FrozenEnd != nil && seg.Offset+*seg.FrozenEnd < max(1, intValue(p.From)) {
+			continue
+		}
 		if p.After != nil && seg.FrozenEnd != nil && seg.Offset+*seg.FrozenEnd <= *p.After {
 			continue
 		}
@@ -335,11 +338,15 @@ func (s *Service) logicalHistoryPage(ctx context.Context, st logicalConversation
 			return page, err
 		}
 		if seg.FrozenEnd != nil {
-			end = max(end, seg.Offset+*seg.FrozenEnd)
+			segEnd := seg.Offset + *seg.FrozenEnd
+			if p.Through != nil {
+				segEnd = min(segEnd, *p.Through)
+			}
+			end = max(end, segEnd)
 		}
 		page.Partial = page.Partial || source.Partial
 		moreSource = moreSource || source.MoreAfter || source.More
-		if p.After != nil && seg.FrozenEnd != nil && source.MoreAfter {
+		if (p.After != nil || p.Through != nil) && seg.FrozenEnd != nil && (source.MoreAfter || source.More) {
 			break // finish this segment before advancing to its successor
 		}
 		if len(page.Items) >= limit && p.Turns <= 0 {

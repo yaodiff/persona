@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -111,6 +112,176 @@ func TestTaskPlanRequiresABrief(t *testing.T) {
 	}
 	if got, isErr := tool(t, s, "task_plan", briefTask(map[string]any{"readonly": false, "goal": nil})); isErr {
 		t.Fatalf("writable with criteria and a time: %s", got)
+	}
+}
+
+func TestTaskBriefContractAcrossTodoModes(t *testing.T) {
+	t.Run("memory", func(t *testing.T) { testTaskBriefContractAcrossTodoModes(t, nil) })
+	t.Run("postgres", func(t *testing.T) { testTaskBriefContractAcrossTodoModes(t, todoTestDB(t)) })
+}
+
+func testTaskBriefContractAcrossTodoModes(t *testing.T, store Store) {
+	t.Helper()
+	s, _, _ := briefServiceOn(t, store, "prepare the weekly report")
+	ctx := t.Context()
+	plan, failed := tool(t, s, "task_plan", briefTask(map[string]any{
+		"goal": "Prepare the weekly report", "done_when": []string{"A draft report is available"},
+		"work_mode": "coordinate", "completion_mode": "draft",
+	}))
+	if failed {
+		t.Fatal(plan)
+	}
+	waitFor(t, "the agent", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	todo := onlyTodo(s)
+	brief, ok := s.briefOfTodo(todo.ID)
+	if !ok {
+		t.Fatal("missing brief")
+	}
+	assertBriefFields := func(brief TaskBrief, fields ...string) {
+		t.Helper()
+		raw, err := json.Marshal(brief)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, field := range fields {
+			if !strings.Contains(string(raw), field) {
+				t.Fatalf("brief missing %s: %s", field, raw)
+			}
+		}
+	}
+	assertBriefFields(brief, `"work_mode":"coordinate"`, `"completion_mode":"draft"`,
+		`"work_mode_now":"coordinate"`, `"completion_mode_now":"draft"`)
+
+	setTodosV2Enabled(t, s, true)
+	if _, err := runJSON(t, s, "conv1", "task_scope", map[string]any{
+		"todo_id": todo.ID, "change": "Make the report ready for review", "why": "The draft is complete",
+		"work_mode": "research", "completion_mode": "ready", "expect_minutes": 50,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	changed, _ := s.briefOfTodo(todo.ID)
+	if !changed.scopeRevision().After(brief.scopeRevision()) || changed.ExpectNow != 50 {
+		t.Fatalf("the combined contract and estimate change did not advance the scope: %+v", changed)
+	}
+	event := changed.Log[len(changed.Log)-1]
+	if event.Why != "The draft is complete" || event.Kind != briefEventScope {
+		t.Fatalf("scope change was not audited: %+v", event)
+	}
+
+	setTodosV2Enabled(t, s, false)
+	for _, on := range []bool{false, true} {
+		setTodosV2Enabled(t, s, on)
+		if s.settings(ctx).todosV2On() != on {
+			t.Fatalf("todos_v2 did not switch to %t", on)
+		}
+		raw, err := s.todoView(ctx, todo.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got Todo
+		if err := json.Unmarshal(raw, &got); err != nil || got.Brief == nil {
+			t.Fatalf("todos_v2=%t brief: %s (%v)", on, raw, err)
+		}
+		assertBriefFields(*got.Brief, `"work_mode":"coordinate"`, `"completion_mode":"draft"`,
+			`"work_mode_now":"research"`, `"completion_mode_now":"ready"`,
+			`"work_mode":"research"`, `"completion_mode":"ready"`)
+		if got.Brief.ID != brief.ID || !slices.Equal(got.Brief.Criteria, brief.Criteria) {
+			t.Fatalf("todos_v2=%t changed the brief or criteria: %+v", on, got.Brief)
+		}
+	}
+	if _, err := runJSON(t, s, "conv1", "task_scope", map[string]any{
+		"todo_id": todo.ID, "change": "Use the workspace delivery policy", "why": "Review is complete",
+		"completion_mode": "inherit",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.briefOfTodo(todo.ID)
+	last := after.Log[len(after.Log)-1]
+	if after.WorkModeNow != assistantwire.WorkModeResearch || after.CompletionModeNow != assistantwire.CompletionModeInherit ||
+		last.WorkMode != "" || last.CompletionMode != assistantwire.CompletionModeInherit {
+		t.Fatalf("completion-only edit changed the work mode or recorded the wrong event: %+v", after)
+	}
+	if store != nil {
+		restored, _, _ := briefServiceOn(t, store, "")
+		if err := restored.ensureTodosLoaded(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := restored.briefOfTodo(todo.ID)
+		if !ok || got.ID != after.ID || got.WorkMode != after.WorkMode || got.CompletionMode != after.CompletionMode ||
+			got.WorkModeNow != after.WorkModeNow || got.CompletionModeNow != after.CompletionModeNow ||
+			len(got.Log) != len(after.Log) || got.Log[len(got.Log)-1].CompletionMode != last.CompletionMode {
+			t.Fatalf("the stored brief did not survive a restart: %+v", got)
+		}
+	}
+}
+
+func TestTaskBriefContractToolValidationAndAdoption(t *testing.T) {
+	s, f, _ := briefService(t, "prepare the weekly report")
+	secretary(f)
+	for field, value := range map[string]string{"work_mode": "code", "completion_mode": ""} {
+		if got, failed := tool(t, s, "task_plan", briefTask(map[string]any{field: value})); !failed || !strings.Contains(got, field) {
+			t.Fatalf("task_plan %s = %s", field, got)
+		}
+		if got, failed := tool(t, s, "agent_supervise", map[string]any{
+			"machine": "box", "session_id": "sec00001", field: value,
+		}); !failed || !strings.Contains(got, field) {
+			t.Fatalf("agent_supervise %s = %s", field, got)
+		}
+	}
+	if todo := onlyTodo(s); todo.ID != "" {
+		t.Fatalf("an invalid contract made a to-do: %+v", todo)
+	}
+	if got, failed := tool(t, s, "agent_supervise", map[string]any{
+		"machine": "box", "session_id": "sec00001", "work_mode": "coordinate", "completion_mode": "verified",
+	}); failed {
+		t.Fatal(got)
+	}
+	todo := onlyTodo(s)
+	brief, ok := s.briefOfTodo(todo.ID)
+	if !ok || brief.WorkMode != assistantwire.WorkModeCoordinate || brief.WorkModeNow != brief.WorkMode ||
+		brief.CompletionMode != assistantwire.CompletionModeVerified || brief.CompletionModeNow != brief.CompletionMode {
+		t.Fatalf("adopted brief = %+v", brief)
+	}
+	if got, failed := tool(t, s, "task_scope", map[string]any{
+		"todo_id": todo.ID, "change": "Revisit the mode", "why": "The scope changed", "completion_mode": "released",
+	}); !failed || !strings.Contains(got, "completion_mode") {
+		t.Fatalf("task_scope with an invalid mode: %s", got)
+	}
+	if got, _ := s.briefOfTodo(todo.ID); len(got.Log) != len(brief.Log) || got.CompletionModeNow != brief.CompletionModeNow {
+		t.Fatalf("invalid scope change was recorded: %+v", got)
+	}
+}
+
+func TestScopeContractKeepsOwnerApproval(t *testing.T) {
+	s, f, asked := briefService(t, "Prepare a draft PR. Do not merge it.")
+	if got, failed := tool(t, s, "task_plan", briefTask(map[string]any{
+		"work_mode": "coordinate", "completion_mode": "draft",
+		"goal": "Prepare a draft PR", "done_when": []string{"A draft PR is available"},
+	})); failed {
+		t.Fatal(got)
+	}
+	waitFor(t, "the agent", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	todo := onlyTodo(s)
+	before, _ := s.briefOfTodo(todo.ID)
+	args := map[string]any{
+		"todo_id": todo.ID, "change": "Require landed delivery", "why": "The review is complete",
+		"work_mode": "execute", "completion_mode": "landed", "expect_minutes": 40,
+	}
+	if _, err := runJSON(t, s, "conv1", "task_scope", args); err == nil || !strings.Contains(err.Error(), "only the owner may allow (merge") {
+		t.Fatalf("scope change ignored the owner's restriction: %v", err)
+	}
+	if got, _ := s.briefOfTodo(todo.ID); len(got.Log) != len(before.Log) || got.CompletionModeNow != before.CompletionModeNow {
+		t.Fatalf("refused scope change was applied: %+v", got)
+	}
+	f.setItems(proto.Item{ID: "m2", Seq: 2, TS: asked.Add(time.Hour), Role: "user", Kind: proto.KindText, Text: "Yes, merge the PR now."})
+	if got, failed := tool(t, s, "task_scope", args); failed {
+		t.Fatal(got)
+	}
+	after, _ := s.briefOfTodo(todo.ID)
+	event := after.Log[len(after.Log)-1]
+	if event.Approval == nil || event.Approval.MessageID != "m2" || event.Kind != briefEventScope ||
+		after.WorkModeNow != assistantwire.WorkModeExecute || after.CompletionModeNow != assistantwire.CompletionModeLanded {
+		t.Fatalf("approved scope change was not recorded: %+v", after)
 	}
 }
 
@@ -650,7 +821,7 @@ func TestContinuationUsesAuthorizedScope(t *testing.T) {
 	fresh, _ := f.starts[0]["prompt"].(string)
 	f.mu.Unlock()
 	plan := &TaskPlan{ID: "waiting-continuation", Conversation: "conv1", State: planOpen, Tasks: []PlanTask{
-		{Title: "Continue task", Prompt: "Continue the earlier work", Machine: "box", Continues: todo.ID, ContinuesWhy: "The earlier Agent stopped"},
+		{Title: "Continue task", Prompt: "Continue the earlier work", Machine: "box", Cwd: "/code/app", Continues: todo.ID, ContinuesWhy: "The earlier Agent stopped"},
 	}}
 	ctx := context.Background()
 	if err := s.planBriefs(ctx, "", plan.Conversation, plan.Tasks); err != nil {

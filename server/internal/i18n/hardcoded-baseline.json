@@ -92,7 +92,7 @@
   "internal/extension/registry_install.go": 5,
   "internal/extension/registry_preview.go": 17,
   "internal/extension/registry_settings.go": 1,
-  "internal/extension/source.go": 22,
+  "internal/extension/source.go": 16,
   "internal/extension/toolinstall.go": 15,
   "internal/extmgr/bots_chat.go": 1,
   "internal/extmgr/browser.go": 3,

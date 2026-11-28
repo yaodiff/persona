@@ -113,4 +113,26 @@ describe("TodoCausalTraceSection (#16433)", () => {
     expect(apiMock).toHaveBeenCalledTimes(2);
     expect(host.querySelector('[data-testid="todo-causal-trace-empty"]')).not.toBeNull();
   });
+
+  it("rejects trace URLs with userinfo, backslash confusion, or non-http schemes", async () => {
+    apiMock.mockResolvedValueOnce({
+      todo_id: "td-2",
+      title: "Audit links",
+      count: 3,
+      events: [
+        { id: "e1", at: "2026-11-26T10:00:00Z", category: "pr", kind: "opened", summary: "Creds", ref: "#1", url: "https://user:pass@evil.example/pull/1" },
+        { id: "e2", at: "2026-11-26T10:01:00Z", category: "pr", kind: "opened", summary: "Backslash", ref: "#2", url: "https://evil.example\\@example.com/pull/2" },
+        { id: "e3", at: "2026-11-26T10:02:00Z", category: "pr", kind: "opened", summary: "Valid", ref: "#3", url: "https://github.com/org/repo/pull/3" },
+      ],
+    });
+    await act(async () => {
+      root.render(<TodoCausalTraceSection todoId="td-2" enabled={true} />);
+    });
+    await flush();
+    const toggle = host.querySelector<HTMLButtonElement>('[data-testid="todo-causal-trace-toggle"]')!;
+    await act(async () => toggle.click());
+    await flush();
+    const links = [...host.querySelectorAll<HTMLAnchorElement>('[data-testid="todo-causal-trace-link"]')].map((a) => a.href);
+    expect(links).toEqual(["https://github.com/org/repo/pull/3"]);
+  });
 });

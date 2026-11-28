@@ -24,8 +24,10 @@ private class FeatureSpec(
     val checks: List<String>,
     /** Something a computer may well not use: a warning alone means "Off". */
     val optional: Boolean = false,
-    /** For an optional one: whether this computer needs it, which turns the warning into "Broken". */
-    val needed: ((engine: String) -> Boolean)? = null,
+    /** For an optional one: whether this computer needs it (by the hosts it enables), which turns the warning into "Broken". */
+    val needed: ((hosts: List<String>) -> Boolean)? = null,
+    /** Of [checks], the ones this computer's hosts make it stand on (all of them when not given). */
+    val pick: ((hosts: List<String>) -> List<String>)? = null,
 )
 
 /** The checks the node reports and no feature stands on: the user's own settings, shown as information. */
@@ -35,8 +37,11 @@ private val Features = listOf(
     FeatureSpec("approvals", R.string.machines_health_approvals, R.string.machines_health_approvals_detail,
         listOf("node.sock", "claude-settings.json", "claude-hooks", "assistant-settings.json", "assistant-hooks", "command-paths")),
     FeatureSpec("status", R.string.machines_health_status, R.string.machines_health_status_detail, listOf("node.sock", "command-paths")),
-    FeatureSpec("terminal", R.string.machines_health_terminal, R.string.machines_health_terminal_detail, listOf("herdr"),
-        optional = true, needed = { it in setOf("herdr", "herdr-both") }),
+    // herdr's line where herdr is enabled, Orca's where Orca is (#17037; a node reports an orca line only where Orca is
+    // installed); herdr's for any other set, as before.
+    FeatureSpec("terminal", R.string.machines_health_terminal, R.string.machines_health_terminal_detail, listOf("herdr", "orca"),
+        optional = true, needed = { "herdr" in it || "orca" in it },
+        pick = { hosts -> listOf("herdr", "orca").filter { it in hosts }.ifEmpty { listOf("herdr") } }),
     FeatureSpec("mcp", R.string.machines_health_mcp, R.string.machines_health_mcp_detail, listOf("node.sock", "mcp.json", "command-paths")),
     FeatureSpec("skills", R.string.machines_health_skills, R.string.machines_health_skills_detail, listOf("agent-plugin", "claude-version")),
     FeatureSpec("runtimes", R.string.machines_health_runtimes, R.string.machines_health_runtimes_detail, listOf("runtime.sock"), optional = true),
@@ -71,19 +76,27 @@ private fun noteOf(check: DoctorCheck?): HealthNote? = when {
 }
 
 /**
- * The report as features, in a fixed order. A feature none of whose checks the report has (an older node reports fewer)
- * is left out; a check no feature covers and that is not fine makes "Other checks", so nothing hides.
+ * The hosts a computer's features are judged by: none for "No terminal engine" (the empty host set), else the hosts it
+ * enables (Engines.hosts); a hub that reports no engine at all is judged by none in particular, as before.
  */
-internal fun deriveFeatures(report: DoctorReport, engine: String = "herdr"): List<FeatureView> {
+internal fun healthHosts(machine: Machine): List<String> =
+    if (Engines.isNone(machine)) emptyList() else Engines.hosts(machine).ifEmpty { listOf(machine.engine) }
+
+/**
+ * The report as features, in a fixed order, for a computer that enables [hosts] (healthHosts). A feature none of whose checks
+ * the report has (an older node reports fewer) is left out; a check no feature covers and that is not fine makes "Other
+ * checks", so nothing hides.
+ */
+internal fun deriveFeatures(report: DoctorReport, hosts: List<String> = listOf("herdr")): List<FeatureView> {
     val byName = report.checks.associateBy { it.name }
     val out = Features.mapNotNull { spec ->
-        val checks = spec.checks.mapNotNull(byName::get)
+        val checks = (spec.pick?.invoke(hosts) ?: spec.checks).mapNotNull(byName::get)
         if (checks.isEmpty()) return@mapNotNull null
         val w = worst(checks)
         val state = when (w?.status) {
             // No terminal engine chosen: the terminal's own check is not needed, whatever it found.
-            "fail" -> if (spec.optional && spec.needed != null && engine == Engines.NONE) FeatureState.Off else FeatureState.Broken
-            "warn" -> if (spec.optional) (if (spec.needed?.invoke(engine) == true) FeatureState.Broken else FeatureState.Off) else FeatureState.Partial
+            "fail" -> if (spec.optional && spec.needed != null && hosts.isEmpty()) FeatureState.Off else FeatureState.Broken
+            "warn" -> if (spec.optional) (if (spec.needed?.invoke(hosts) == true) FeatureState.Broken else FeatureState.Off) else FeatureState.Partial
             else -> FeatureState.Ready
         }
         FeatureView(spec.id, spec.name, spec.detail, state, checks, noteOf(w))

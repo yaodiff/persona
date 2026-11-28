@@ -56,6 +56,9 @@ const (
 	packageDownload = 10 * time.Minute
 )
 
+// packageLookupBudget is the active timeout used by lookupShared and readPackageManifest (overridden in tests).
+var packageLookupBudget = packageLookup
+
 // nodePackage is a node build for a platform.
 type nodePackage struct {
 	// Version is what a node running it reports: the hub's version for its own builds, the release's otherwise.
@@ -106,14 +109,24 @@ type packageResult struct {
 	localRecent bool
 }
 
+// packageLookupCall tracks one in-flight shared package lookup and its active waiters.
+type packageLookupCall struct {
+	done      chan struct{}
+	cancel    context.CancelFunc
+	waiters   int
+	abandoned bool
+	pkg       nodePackage
+	err       error
+}
+
 // nodePackages remembers lookups, makes one lookup per platform and kind at a time (the others wait for it) and one
 // download per file at a time.
 type nodePackages struct {
 	mu       sync.Mutex
 	results  map[packageKey]packageResult
-	looking  map[packageKey]chan struct{} // closed when that lookup is done
-	fetching map[string]*sync.Mutex       // by the cache file a download goes to
-	scans    map[string]versionScan       // carriesVersion's answers, by path
+	looking  map[packageKey]*packageLookupCall
+	fetching map[string]*sync.Mutex // by the cache file a download goes to
+	scans    map[string]versionScan // carriesVersion's answers, by path
 	// httpClient replaces netproxy's client (tests); nil: netproxy.HTTPClient.
 	httpClient func(proxy *url.URL, timeout time.Duration) *http.Client
 	now        func() time.Time
@@ -191,10 +204,8 @@ func (d *Devices) rememberedPackage(k packageKey, allowRecent bool) (r packageRe
 	return r, p.clock().Sub(r.at) <= ttl && (allowRecent || !localRecent && !r.localRecent) && r.local == local, true
 }
 
-func (d *Devices) remember(k packageKey, pkg nodePackage, err error, local string, localRecent bool) {
+func (d *Devices) rememberLocked(k packageKey, pkg nodePackage, err error, local string, localRecent bool) {
 	p := &d.packages
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.results == nil {
 		p.results = map[packageKey]packageResult{}
 	}
@@ -236,37 +247,72 @@ func (d *Devices) nodePackageForInfo(ctx context.Context, info proto.NodeInfo) (
 }
 
 // lookupShared looks k up and remembers it, or waits for the lookup of k that is running already and takes its
-// result: the machines of one platform make one lookup between them.
+// result: the machines of one platform make one lookup between them. Canceling one caller detaches only that waiter;
+// the underlying lookup is canceled (without caching the cancellation) only if all waiters give up or the manager stops.
 func (d *Devices) lookupShared(ctx context.Context, k packageKey) (nodePackage, error) {
+	if err := ctx.Err(); err != nil {
+		return nodePackage{}, i18n.Err("devices-deploy.package_unreachable", i18n.Args{"os": k.goos, "arch": k.arch, "err": err.Error()})
+	}
+	deployCtx := d.deployContext()
 	p := &d.packages
 	p.mu.Lock()
-	if ch, ok := p.looking[k]; ok {
+	call, ok := p.looking[k]
+	if ok {
+		call.waiters++
 		p.mu.Unlock()
-		select {
-		case <-ch:
-		case <-ctx.Done():
-			return nodePackage{}, i18n.Err("devices-deploy.package_unreachable", i18n.Args{"os": k.goos, "arch": k.arch, "err": ctx.Err().Error()})
+	} else {
+		lctx, lcancel := context.WithTimeout(deployCtx, packageLookupBudget)
+		call = &packageLookupCall{done: make(chan struct{}), cancel: lcancel, waiters: 1}
+		if p.looking == nil {
+			p.looking = map[packageKey]*packageLookupCall{}
 		}
-		if r, fresh, ok := d.rememberedPackage(k, true); ok && fresh {
-			// This caller already waited on that generation. Later independent decisions still revalidate recent files.
-			return r.pkg, r.err
+		p.looking[k] = call
+		p.mu.Unlock()
+		go func() {
+			defer lcancel()
+			var (
+				pkg         nodePackage
+				err         error
+				local       string
+				localRecent bool
+				completed   bool
+			)
+			defer func() {
+				p.mu.Lock()
+				if completed && !call.abandoned && deployCtx.Err() == nil {
+					d.rememberLocked(k, pkg, err, local, localRecent)
+				}
+				if !completed && err == nil {
+					err = errors.New("package lookup failed")
+				}
+				call.pkg, call.err = pkg, err
+				if p.looking[k] == call {
+					delete(p.looking, k)
+				}
+				close(call.done)
+				p.mu.Unlock()
+			}()
+			local, localRecent = p.localStamp(k)
+			pkg, err = d.lookupPackage(lctx, k)
+			completed = true
+		}()
+	}
+	select {
+	case <-call.done:
+		return call.pkg, call.err
+	case <-ctx.Done():
+		p.mu.Lock()
+		call.waiters--
+		if call.waiters == 0 {
+			call.abandoned = true
+			if p.looking[k] == call {
+				delete(p.looking, k)
+			}
+			call.cancel()
 		}
-		return d.lookupShared(ctx, k) // forgotten already (a test's clock): look it up again
+		p.mu.Unlock()
+		return nodePackage{}, i18n.Err("devices-deploy.package_unreachable", i18n.Args{"os": k.goos, "arch": k.arch, "err": ctx.Err().Error()})
 	}
-	ch := make(chan struct{})
-	if p.looking == nil {
-		p.looking = map[packageKey]chan struct{}{}
-	}
-	p.looking[k] = ch
-	p.mu.Unlock()
-	local, localRecent := p.localStamp(k)
-	pkg, err := d.lookupPackage(ctx, k)
-	d.remember(k, pkg, err, local, localRecent)
-	p.mu.Lock()
-	delete(p.looking, k)
-	close(ch)
-	p.mu.Unlock()
-	return pkg, err
 }
 
 // lookupSoon looks k up in the background (once at a time) and says the machines may have changed when done.
@@ -279,9 +325,7 @@ func (d *Devices) lookupSoon(k packageKey) {
 		return
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(d.deployContext(), packageLookup)
-		defer cancel()
-		_, _ = d.lookupShared(ctx, k)
+		_, _ = d.lookupShared(d.deployContext(), k)
 		d.changed()
 	}()
 }
@@ -666,7 +710,7 @@ func (d *Devices) fetchManifest(ctx context.Context, u string) (*update.Manifest
 }
 
 func readPackageManifest(ctx context.Context, client *http.Client, u string) (*update.Manifest, error) {
-	ctx, cancel := context.WithTimeout(ctx, packageLookup)
+	ctx, cancel := context.WithTimeout(ctx, packageLookupBudget)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {

@@ -69,5 +69,19 @@
   "runtime_not_toplevel": "{path} is a folder inside a worktree, not the worktree itself; Persona deletes only a whole worktree",
   "runtime_folder_left": "{engine} archived the workspace but kept its folder {path}; remove the folder in {engine} or by hand",
   "runtime_remove_unanswered": "{engine} didn’t answer while removing the worktree; refresh to see whether it is gone before trying again",
-  "orca_directory_workspace": "Orca made no Git worktree and no branch: it opened a directory-level workspace in the existing checkout {path}, which it does when that checkout is already open as an Orca worktree. The task can start without a worktree of its own with workspace \"none\""
+  "orca_directory_workspace": "Orca made no Git worktree and no branch: it opened a directory-level workspace in the existing checkout {path}, which it does when that checkout is already open as an Orca worktree. The task can start without a worktree of its own with workspace \"none\"",
+  "worktree_list_unreadable": "Couldn’t read this repository’s worktree list: {reason}",
+  "orca_path_exists": "The checkout path already exists: Orca doesn’t use a folder that is there already, not even an empty one",
+  "head_unreadable": "Couldn’t read this workspace’s HEAD: {reason}",
+  "orca_branch_missing": "Orca did not report its generated branch",
+  "orca_branch_changed": "Orca didn’t use branch {branch} but made {got} (at {path}): {branch} may have just been checked out elsewhere, or Orca’s folder is taken",
+  "workspace_dir_unknown": "Persona doesn’t know this workspace’s folder",
+  "not_git_workspace": "This workspace isn’t in a Git repository",
+  "branch_required": "Enter a branch name",
+  "branch_invalid": "That isn’t a valid branch name",
+  "path_required": "Enter a checkout path",
+  "path_not_absolute": "Enter the checkout path as a full path",
+  "path_in_git": "The checkout path can’t be inside .git",
+  "path_is_file": "The checkout path is a file",
+  "path_unreadable": "Couldn’t read the checkout path: {reason}"
 }

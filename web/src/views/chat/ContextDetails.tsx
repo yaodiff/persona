@@ -19,7 +19,7 @@ export interface ContextLinkProps {
   /** Explicit manager skips reading LinkManager/ItemManager contexts; null selects the default manager. */
   linkManager?: string | null;
   /** Builds a link address without calling the default link router. */
-  resolveLinkHref?: (url: string) => string;
+  resolveLinkHref?: (url: string) => string | undefined;
   /** Handles link activation without calling the default panel's clickLink helper. */
   onLinkClick?: ContextLinkClick;
 }
@@ -75,7 +75,7 @@ function ContextBody({ c, linkManager, resolveLinkHref, onLinkClick }: { c: Cont
   return <DefaultContextBody c={c} resolveLinkHref={resolveLinkHref} />;
 }
 
-function DefaultContextBody({ c, resolveLinkHref }: { c: Context; resolveLinkHref?: (url: string) => string }) {
+function DefaultContextBody({ c, resolveLinkHref }: { c: Context; resolveLinkHref?: (url: string) => string | undefined }) {
   const manager = useLinkManager();
   return (
     <ContextBodyView
@@ -90,10 +90,11 @@ function DefaultContextBody({ c, resolveLinkHref }: { c: Context; resolveLinkHre
 function ContextBodyView({ c, manager, resolveLinkHref, onLinkClick }: {
   c: Context;
   manager: string | undefined;
-  resolveLinkHref: (url: string) => string;
+  resolveLinkHref: (url: string) => string | undefined;
   onLinkClick: ContextLinkClick;
 }) {
   const url = c.url;
+  const href = url ? resolveLinkHref(url) : undefined;
   return (
     <div className="flex flex-col gap-1.5 px-3 pb-2.5 pt-0.5">
       {c.text ? (
@@ -101,9 +102,9 @@ function ContextBodyView({ c, manager, resolveLinkHref, onLinkClick }: {
       ) : (
         <span className="text-[12px] text-ink-3">{t("chat-contextgroup.no_content")}</span>
       )}
-      {url && (
+      {url && href && (
         <a
-          href={resolveLinkHref(url)}
+          href={href}
           target="_blank"
           rel="noreferrer"
           onClick={(e) => onLinkClick(e, url, c.title, manager)}

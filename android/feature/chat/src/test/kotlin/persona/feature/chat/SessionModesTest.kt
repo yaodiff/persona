@@ -32,6 +32,19 @@ class SessionModesTest {
         assertNull(SessionModes.modeLabel(null, res))
     }
 
+    // #17054: an Orca chat's modes are what its row reports (#17046's bridge): a Claude chat that takes full access at any
+    // time offers it, another provider's chat offers the modes Orca lists for it, Plan included only where listed.
+    @Test fun anOrcaChatOffersWhatItsRowReports() {
+        fun chat(agent: String, caps: persona.core.contracts.SessionCapabilities, bypass: Boolean = false) = Session(sessionId = "s", agent = agent,
+            permissionMode = "default", sourceKind = "runtime", sourceInstanceId = "orca", spaceKind = "orca", bypassAvailable = bypass, capabilities = caps)
+        val claude = chat("claude", persona.core.contracts.SessionCapabilities(read = true, send = true, modes = true), bypass = true)
+        assertEquals(listOf("default", "acceptEdits", "plan", "auto", "bypassPermissions"), SessionModes.switchable(claude).map { it.id })
+        val codex = chat("codex", persona.core.contracts.SessionCapabilities(read = true, send = true, modes = false,
+            permissionModes = listOf("default", "auto", "bypassPermissions")))
+        assertEquals(listOf("default", "auto", "bypassPermissions"), SessionModes.switchable(codex).map { it.id })
+        assertFalse(SessionModes.switchable(codex).any { it.id == "plan" })
+    }
+
     @Test fun aCodexThreadOffersItsOwnLevels() {
         val codex = Session(sessionId = "s", agent = "codex", effort = "high", efforts = listOf("low", "high", "ultra", "turbo"))
         assertEquals(listOf("low", "high", "ultra", "turbo"), SessionModes.effortOptions(codex).map { it.id })

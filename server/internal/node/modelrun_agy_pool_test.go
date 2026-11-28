@@ -11,11 +11,13 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -368,8 +370,14 @@ func runFakeAgyHelper(args []string) int {
 						_ = conn.Close()
 					}
 				}
-				// Stop reading stdin forever so a large subsequent write fills the OS pipe buffer.
-				select {}
+				// Stop reading stdin until the node ends this process, so a large subsequent write fills the OS pipe
+				// buffer. Wait for its termination signal, not in select {}: with every goroutine parked and no timer
+				// or network waiter, Go on Linux ends such a process as a deadlock, a dead worker instead of a stalled
+				// one (#17725). A goroutine waiting for a signal never counts as one.
+				stop := make(chan os.Signal, 1)
+				signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+				<-stop
+				return 0
 			}
 
 		case "session/set_model":
@@ -473,6 +481,22 @@ func runFakeAgyHelper(args []string) int {
 
 			case promptText == "TRIGGER_CRASH":
 				return 1
+
+			case promptText == "TRIGGER_QUOTA_LINE":
+				// agy streams an account error as one line and ends the turn normally (#17860).
+				send(map[string]any{
+					"jsonrpc": "2.0",
+					"method":  "session/update",
+					"params": map[string]any{
+						"sessionId": p.SessionID,
+						"update": map[string]any{
+							"sessionUpdate": "agent_message_chunk",
+							"content":       map[string]any{"type": "text", "text": "⚠ RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 118h."},
+						},
+					},
+				})
+				send(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"stopReason": "end_turn"}})
+				continue
 
 			case promptText == "TRIGGER_PERMISSION":
 				srvID := `"perm-1"`

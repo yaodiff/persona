@@ -33,6 +33,7 @@ export function machineBrandMark(row:ResourceRow):Resource|undefined {
   return MARKS[osFamily(Wire.object(data,'system'),Wire.text(data,'os'))];
 }
 
+// OS distro brand identity colors (light/dark pairs) for Linux/macOS computer badges.
 const MARK_COLORS: Record<string,string[]> = {
   'ubuntu':['#E95420','#F26B3A'], 'debian':['#A80030','#E0245E'], 'fedora':['#3C6EB4','#51A2DA'], 'redhat':['#CC0000','#FF4D4D'],
   'centos':['#932279','#C14FA8'], 'rocky':['#10B981','#34D399'], 'alma':['#0F4266','#6CA6D9'], 'arch':['#1793D1','#3BAEE8'],
@@ -43,6 +44,7 @@ const RANGE_LABELS: string[] = ['machine_hour','machine_six_hours','machine_day'
 const RANGE_SECONDS: number[] = [3600,21600,86400];
 const RANGE_STEPS: number[] = [10,60,240];
 const HISTORY_FIELDS: string[] = ['cpu','mem','network','load'];
+// 7-char #RRGGBB hex strings required by MachineChart CanvasRenderingContext2D gradient stops.
 const FIELD_TINT: Record<string,string[]> = {
   'cpu':['#2A78D6','#3987E5'], 'mem':['#1BAF7A','#199E70'], 'network':['#EB6834','#D95926'],
   'upload':['#6250D6','#9085E9'], 'tokens':['#2C81DF','#4C98EC'], 'load':['#E87BA4','#D55181']
@@ -384,7 +386,7 @@ export struct MachineDirectory {
         this.count(tr('needs_you'),c.needs,Colors.needs,Colors.needsMark)
         this.count(tr('working'),c.working,Colors.working,Colors.workingMark)
         this.count(tr('machine_agent_idle'),c.idle,Colors.ink,Colors.tertiary)
-      }.width('100%').padding({left:12,right:12,top:8,bottom:8}).borderRadius(10).backgroundColor($r('app.color.machine_count_surface'))
+      }.width('100%').padding({left:12,right:12,top:8,bottom:8}).borderRadius(Tokens.radiusControl).backgroundColor($r('app.color.machine_count_surface'))
       else if (this.reason(c)) Column({space:selected ? 4 : 2}) {
         Text(this.reason(c)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).lineHeight(selected ? undefined : this.overviewTextHeight(14.33,21.67))
           .lineSpacing(LengthMetrics.vp(selected ? 0 : 2),{onlyBetweenLines:true}).fontColor(Colors.secondary).maxLines(selected ? 6 : 3)
@@ -490,7 +492,7 @@ export struct MachineDirectory {
       if (this.total > 0) {
         Row({space:2}) {
           ForEach(this.shares.filter((c:ComputerCard) => c.tokens>0),(c:ComputerCard,i:number) => {
-            Blank().height(PhoneStyle.sidebarMetric(7,nativeEnvironment.fontScale)).layoutWeight(c.tokens).backgroundColor(Colors.ink).borderRadius(5).opacity(NEUTRAL_SHADES[Math.min(i,4)])
+            Blank().height(PhoneStyle.sidebarMetric(7,nativeEnvironment.fontScale)).layoutWeight(c.tokens).backgroundColor(Colors.ink).borderRadius(Tokens.radiusBadge).opacity(NEUTRAL_SHADES[Math.min(i,4)])
           },(c:ComputerCard,i:number) => c.key+String(c.tokens)+String(i))
         }.width('100%')
         Flex({wrap:FlexWrap.Wrap,space:{main:LengthMetrics.vp(6),cross:LengthMetrics.vp(6)}}) {
@@ -575,7 +577,7 @@ export struct MachineDirectory {
       if (Number.isFinite(a.updated)) Text(this.ageLabel(a.updated)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12))
         .fontColor(Colors.secondary).maxLines(1).id('machines.agent.time')
       if (a.sourceLabel) Text(tr(a.sourceLabel)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12))
-        .fontColor(Colors.link).borderRadius(8).padding({left:6,right:6,top:1,bottom:1}).backgroundColor(Colors.control).id('machines.agent.source')
+        .fontColor(Colors.link).borderRadius(Tokens.radiusBadge).padding({left:6,right:6,top:1,bottom:1}).backgroundColor(Colors.control).id('machines.agent.source')
     }.alignItems(HorizontalAlign.End)
       // Align the time label to the title’s first baseline when they share a line.
       .padding({top:beside && Number.isFinite(a.updated) ?
@@ -777,14 +779,14 @@ export struct MachineDirectory {
           Button({type:ButtonType.Normal}) {
             Text(tr(key)).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).textAlign(TextAlign.Center)
               .fontWeight(this.range === i ? FontWeight.Bold : FontWeight.Normal).fontColor(this.range === i ? Colors.ink : Colors.secondary)
-          }.layoutWeight(1).constraintSize({minHeight:44}).padding({left:3,right:3,top:5,bottom:5}).borderRadius(8)
+          }.layoutWeight(1).constraintSize({minHeight:44}).padding({left:3,right:3,top:5,bottom:5}).borderRadius(Tokens.radiusControl)
             .backgroundColor(this.range === i ? Colors.surface : Color.Transparent)
             .animation(Motion.state(nativeEnvironment.reduceMotion))
             .accessibilityText(tr(key)).accessibilitySelected(this.range === i)
             .onTouch((event:TouchEvent) => { if (event.type === TouchType.Down && this.range !== i) Haptics.selection(); })
             .onClick(() => this.chooseRange(i)).id('machines.range.'+RANGES[i])
         },(key:string) => key)
-      }.width('100%').padding(3).backgroundColor(Colors.control).borderRadius(10)
+      }.width('100%').padding(3).backgroundColor(Colors.control).borderRadius(Tokens.radiusControl)
       if (this.detailSample) {
         if (this.inspected || (this.loading && this.shownRange !== this.range)) Row() {
           if (this.loading && this.shownRange !== this.range) LoadingProgress().width(18).height(18).margin({right:6})

@@ -619,8 +619,9 @@ struct SessionModesMenu: View {
 
     /// The button's title for this conversation; the effort carries the workflow mark while ultracode is on (#1307).
     static func title(_ session: Session?, setsModes: Bool) -> SessionModes.ComposerTitle? {
+        let showsEffort = setsModes || session?.sourceKind == Launcher.claudeDesktopSource
         var title = SessionModes.composerTitle(model: SessionModes.modelName(session?.model),
-                                               effort: setsModes ? SessionModes.effortLabel(session?.effort) : nil)
+                                               effort: showsEffort ? SessionModes.effortLabel(session?.effort) : nil)
         if setsModes {
             title?.mark = Ultracode.chipMark(session)
             title?.effortChange = SessionModes.effortChange(session)
@@ -730,6 +731,10 @@ struct SessionModesMenu: View {
                 }
             }
             if !UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
+        } else if session?.sourceKind == Launcher.claudeDesktopSource {
+            Section("Thinking Effort") {
+                Text(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]"))
+            }
         }
         if setsModes {
             // A restart into Allow Everything waits for the turn to end (#6513): said by the mode's row, which keeps the

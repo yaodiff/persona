@@ -300,7 +300,11 @@ class MainActivity : ComponentActivity() {
      */
     private fun focusing(resolve: (Router) -> ResolvedRoute?): (Router) -> ResolvedRoute? = { router ->
         resolve(router)?.also {
-            if (it.focusComposer) persona.feature.assistant.AssistantComposerFocus.request()
+            if (it.focusComposer) {
+                val chat = it.key as? ChatRoute
+                if (chat != null) persona.feature.chat.ChatComposerFocus.request(persona.core.contracts.SessionKey(chat.machineId, chat.sessionId))
+                else persona.feature.assistant.AssistantComposerFocus.request()
+            }
             // A card outside any session (#4808): Agents opens its sheet once the card is listed.
             it.card?.let(persona.feature.agents.AgentsCardOpen::request)
         }

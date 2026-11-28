@@ -32,12 +32,12 @@ func TestDeliveryMark(t *testing.T) {
 }
 
 func TestJudgedDelivery(t *testing.T) {
-	reply := func(text string) []prompts.TaskDoneReply { return []prompts.TaskDoneReply{{Text: text}} }
+	reply := func(text string) []taskDoneReply { return []taskDoneReply{doneReply(text)} }
 	pr := "开了 https://github.com/o/r/pull/12"
 	for _, tc := range []struct {
 		name                  string
 		state, gate, unblock  string
-		replies               []prompts.TaskDoneReply
+		replies               []taskDoneReply
 		wantState, wantUnhold string
 	}{
 		{"the judge's hold", "pr", "等用户批准合并", "user", reply(pr), deliveryPR, unblockUser},
@@ -77,10 +77,9 @@ func TestAutoFinishHoldsUndeliveredWork(t *testing.T) {
 	deliveryOn(t, s)
 	now := time.Now()
 	putTodo(s, Todo{ID: "todo_d", Title: "修登录", Origin: "conv1", CreatedAt: now.Add(-time.Hour),
-		Agents: []TodoAgent{{MachineID: "box", SessionID: "s9"}}})
+		Agents: []TodoAgent{{MachineID: "box", SessionID: "s9", LinkedAt: now.Add(-time.Minute)}}})
 	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s9", Status: proto.StatusDone})
-	f.setItems(proto.Item{Kind: proto.KindText, Role: "assistant",
-		Text: "修好了，https://github.com/o/r/pull/7\n交付：停在 PR；卡点：等用户批准合并；谁来解：用户"})
+	artifactReportProof(f, todoNow(s, "todo_d"), "修好了，https://github.com/o/r/pull/7\n交付：停在 PR；卡点：等用户批准合并；谁来解：用户", "https://github.com/o/r/pull/7")
 	f.judge = `{"verdict":"done","reason":"开了 PR","delivery":"pr","gate":"等用户批准合并","unblock":"user"}`
 	s.autoFinishTask(todoNow(s, "todo_d"), now, true)
 	got := todoNow(s, "todo_d")
@@ -157,6 +156,7 @@ func TestSupervisedUndeliveredTellsWhereItIsHeld(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	deliveryOn(t, s)
 	f.judge = `{"verdict":"done","reason":"开了 PR","delivery":"pr","gate":"等用户批准合并","unblock":"user"}`
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor", "fix/work", "fix/work", "abc", "abc")
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了，https://github.com/o/r/pull/901 等合并\n交付：停在 PR；卡点：等用户批准合并；谁来解：用户", 0)
 	waitFor(t, "the message", func() bool { return len(f.notices()) == 1 })
@@ -183,7 +183,7 @@ func TestDefaultOffVerificationRequiresExplicitReport(t *testing.T) {
 		{"unknown deployment", "The change was deployed; verification is pending.", deliveryMerged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			delivery := judgedDelivery(deliveryOff, "Enable the feature", unblockUser, []prompts.TaskDoneReply{{Text: tc.reply}})
+			delivery := judgedDelivery(deliveryOff, "Enable the feature", unblockUser, []taskDoneReply{{TaskDoneReply: prompts.TaskDoneReply{Text: tc.reply}}})
 			if delivery.State != tc.state {
 				t.Fatalf("state = %q, want %q", delivery.State, tc.state)
 			}
@@ -202,7 +202,7 @@ func TestDefaultOffJudgeChecksUseNormalizedDelivery(t *testing.T) {
 	model := &cannedJSON{answer: `{"verdict":"done","delivery":"off","gate":"Data backfill pending","unblock":"other"}`}
 	check, err := judgeTaskDoneWith(context.Background(), model, taskDoneInput{
 		Title: "Release the name fix", Delivery: true, Checks: true,
-		Replies: []prompts.TaskDoneReply{{Text: "<closeout status=\"done\" deployed=\"yes\">\ndelivery: live\nverified: HTTP 200, 5/5 records have names.\n</closeout>"}},
+		Replies: []taskDoneReply{{TaskDoneReply: prompts.TaskDoneReply{Text: "<closeout status=\"done\" deployed=\"yes\">\ndelivery: live\nverified: HTTP 200, 5/5 records have names.\n</closeout>"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestDefaultOffGateSeparatorsAndWordBoundaries(t *testing.T) {
 				t.Errorf("default-off claim in title %q = %v, want %v", title, got, test.want)
 			}
 			reply := "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\ndelivery: off\nmissing: " + test.gate + "\n</closeout>"
-			delivery := judgedDelivery(deliveryOff, test.gate, unblockUser, []prompts.TaskDoneReply{{Text: reply}})
+			delivery := judgedDelivery(deliveryOff, test.gate, unblockUser, []taskDoneReply{{TaskDoneReply: prompts.TaskDoneReply{Text: reply}}})
 			wantState := deliveryLive
 			if test.want {
 				wantState = deliveryOff

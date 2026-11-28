@@ -25,7 +25,8 @@ const secretValueForTest = "synthetic-secret-value-7f3a9c"
 
 // serveSecretProviderExtensionForTest resolves exv:// references by their last segment (ok, missing, signed_out,
 // limited, refuse, big, boom), and writes each call's method and params, and each secrets.used event, as a line of
-// JSON to SECRETS_OUT.
+// JSON to SECRETS_OUT. While SECRETS_OUT.locked exists it answers every resolve and describe not_signed_in, as op on a
+// computer does when it would have the user authorize it again.
 func serveSecretProviderExtensionForTest() {
 	out := os.Getenv("SECRETS_OUT")
 	var mu sync.Mutex
@@ -47,6 +48,10 @@ func serveSecretProviderExtensionForTest() {
 				}
 				_ = json.Unmarshal(params, &p)
 				last := p.Reference[strings.LastIndex(p.Reference, "/")+1:]
+				if _, err := os.Stat(out + ".locked"); err == nil && (method == "resolve" || method == "describe") {
+					// As 1Password's op on a computer whose authorization lapsed: it would have the user approve it.
+					return nil, &rpc.Error{Code: "not_signed_in", Message: "authorize op in the 1Password app"}
+				}
 				switch method {
 				case "used":
 					return nil, nil
@@ -367,9 +372,9 @@ func TestSecretReferencesInExtensionSecrets(t *testing.T) {
 	}
 }
 
-// A launcher key that is a reference: kept for secretKeep per launcher and computer, dropped when the launcher's
-// settings change, when its provider is switched off and when a resolution of that reference fails; the provider's
-// details list the launchers holding its references.
+// A launcher key that is a reference: kept per launcher and computer, in memory and sealed in the database, across a
+// restart; dropped when the launcher goes and when its provider is switched off, not by a failure that may pass nor by
+// a provider change that keeps its scheme; the provider's details list the launchers holding its references.
 func TestLauncherSecretsKept(t *testing.T) {
 	h, _ := extensionTestHub(t)
 	mux := h.routes()
@@ -421,30 +426,55 @@ func TestLauncherSecretsKept(t *testing.T) {
 		t.Fatalf("forgotten: %d", n)
 	}
 
-	h.extensions.kept.mu.Lock() // secretKeep later
-	for k, v := range h.extensions.kept.kept {
-		v.at = v.at.Add(-secretKeep)
-		h.extensions.kept.kept[k] = v
+	// Kept with no end: a new process (nothing in memory) answers from the sealed copy, and nobody is asked.
+	restart := func() {
+		h.extensions.kept.mu.Lock()
+		h.extensions.kept.kept, h.extensions.kept.loaded = nil, false
+		h.extensions.kept.mu.Unlock()
 	}
-	h.extensions.kept.mu.Unlock()
+	restart()
 	get("gateway", "")
-	if n := resolves(); n != 4 {
-		t.Fatalf("expired: %d", n)
+	if n := resolves(); n != 3 {
+		t.Fatalf("after a restart: %d resolutions", n)
+	}
+	var sealedCopies json.RawMessage
+	if ok, err := h.store.Setting(ctx, launcherKeptKey, &sealedCopies); !ok || err != nil {
+		t.Fatalf("no sealed copies: %v %v", ok, err)
+	}
+	if strings.Contains(string(sealedCopies), secretValueForTest) || strings.Contains(string(sealedCopies), "exv://") || !strings.Contains(string(sealedCopies), `"value_sealed"`) {
+		t.Fatalf("kept in the clear: %s", sealedCopies)
 	}
 
-	// Any resolution of the reference that fails drops the kept copies (here: refused before reaching the provider).
+	// A failure that may pass leaves what is kept (here: rate limited before reaching the provider), for every use.
 	h.extensions.resolves.mu.Lock()
 	h.extensions.resolves.most = 1
 	h.extensions.resolves.mu.Unlock()
-	if _, err := h.ResolveSecret(ctx, ref, wire.SecretPurpose{Kind: "extension", ID: "example-user"}, "settings"); err == nil {
+	for _, p := range []wire.SecretPurpose{{Kind: "extension", ID: "example-user"}, {Kind: "extension", ID: "example-user"}} {
+		_, _ = h.ResolveSecret(ctx, ref, p, "settings")
+	}
+	if err := h.RefreshLauncherSecret(ctx, ref, "gateway", ""); err == nil {
 		t.Fatal("limited")
 	}
 	h.extensions.resolves.mu.Lock()
 	h.extensions.resolves.most = secretResolvesMost
 	h.extensions.resolves.mu.Unlock()
+	n := resolves()
 	get("gateway", "")
-	if n := resolves(); n != 5 {
-		t.Fatalf("after a failure: %d", n)
+	if resolves() != n {
+		t.Fatalf("a failure that may pass dropped what is kept: %d → %d", n, resolves())
+	}
+	// A refresh asks, and keeps the answer.
+	if err := h.RefreshLauncherSecret(ctx, ref, "gateway", ""); err != nil || resolves() != n+1 {
+		t.Fatalf("refresh: %v %d", err, resolves())
+	}
+	// An upgrade, a new configuration, a restart of the provider that still claims the scheme keeps it.
+	for _, kind := range []string{"upgraded", "config", "secret", "enabled", "rolled_back"} {
+		h.extensions.keptProviderChanged(ctx, extension.Change{ID: "example-vault", Kind: kind})
+	}
+	restart()
+	get("gateway", "")
+	if resolves() != n+1 {
+		t.Fatalf("a provider change that keeps its scheme dropped what is kept: %d", resolves())
 	}
 
 	// The provider's details list the launchers holding its references, not others'.
@@ -474,21 +504,153 @@ func TestLauncherSecretsKept(t *testing.T) {
 	if left != 0 {
 		t.Fatalf("%d kept after the provider went", left)
 	}
+	var stored []storedKeptSecret
+	if _, err := h.store.Setting(ctx, launcherKeptKey, &stored); err != nil || len(stored) != 0 {
+		t.Fatalf("switched off, its sealed copies stay: %d %v", len(stored), err)
+	}
+}
+
+// How a failure of a kept launcher key's reference takes it (secret_kept.go): gone (not_found) or refused drops it,
+// from the database too; not signed in, rate limited, a provider that fell over leave it, and a stale one answers
+// while the provider cannot. A provider whose manifest no longer claims the scheme drops its references; an Agent's
+// hand-off or an extension's secret is never kept.
+func TestLauncherSecretsRevokedOrKept(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	mux := h.routes()
+	ctx := context.Background()
+	out := filepath.Join(t.TempDir(), "calls.jsonl")
+	_, pv := call(t, mux, "POST", "/api/v1/plugins/-/preview", h.cfg.Token, `{"source": "dir:`+secretProviderPackage(t, "example-vault", "exv", out)+`"}`)
+	if c, body := call(t, mux, "POST", "/api/v1/plugins/-/install", h.cfg.Token, fmt.Sprintf(`{"preview_id": %q, "permissions_digest": %q}`, pv["preview_id"], pv["permissions_digest"])); c != 200 {
+		t.Fatalf("install: %d %v", c, body)
+	}
+	waitLong(t, "the provider running", func() bool {
+		_, hp, err := h.extensions.secretProvider("exv://Example/item/ok")
+		return err == nil && hp != nil
+	})
+	const kept = "sk-test-kept-before-0000"
+	// As if each had resolved before (the provider's answer for them is what the test is about).
+	plant := func(ref string) {
+		h.loadKept(ctx)
+		_, _, gen, _ := h.extensions.kept.get(keptKey{reference: ref, kind: "launcher", id: "gw"})
+		if !h.extensions.kept.put(keptKey{reference: ref, kind: "launcher", id: "gw"}, kept, "example-vault", gen) {
+			t.Fatal("not planted")
+		}
+		h.saveKept(ctx)
+	}
+	isKept := func(ref string) bool {
+		_, _, _, ok := h.extensions.kept.get(keptKey{reference: ref, kind: "launcher", id: "gw"})
+		var stored []storedKeptSecret
+		_, _ = h.store.Setting(ctx, launcherKeptKey, &stored)
+		inDB := false
+		for _, e := range stored {
+			raw, err := h.openKey(e.ValueSealed)
+			inDB = inDB || (err == nil && strings.Contains(raw, ref))
+		}
+		if ok != inDB {
+			t.Fatalf("%s: kept in memory %v, in the database %v", ref, ok, inDB)
+		}
+		return ok
+	}
+	code := func(err error) string {
+		var se *SecretError
+		if errors.As(err, &se) {
+			return se.Code
+		}
+		return fmt.Sprint(err)
+	}
+	for _, c := range []struct {
+		last, code string
+		keep       bool
+	}{
+		{"signed_out", "not_signed_in", true}, {"limited", "rate_limited", true}, {"boom", "failed", true},
+		{"missing", "not_found", false}, {"refuse", "refused", false},
+	} {
+		ref := "exv://Example/item/" + c.last
+		plant(ref)
+		if v, err := h.LauncherSecret(ctx, ref, "gw", ""); err != nil || v != kept {
+			t.Fatalf("%s: kept answers without asking: %q %v", c.last, v, err)
+		}
+		if err := h.RefreshLauncherSecret(ctx, ref, "gw", ""); code(err) != c.code {
+			t.Fatalf("%s: refresh %v", c.last, err)
+		}
+		if got := isKept(ref); got != c.keep {
+			t.Fatalf("%s (%s): kept %v, want %v", c.last, c.code, got, c.keep)
+		}
+		if !c.keep {
+			if _, err := h.LauncherSecret(ctx, ref, "gw", ""); code(err) != c.code {
+				t.Fatalf("%s: after it was dropped: %v", c.last, err)
+			}
+			continue
+		}
+		// Stale (the provider stored a secret): asked at the next use, answered from what is kept while it cannot.
+		h.extensions.keptProviderStored(ctx, "example-vault")
+		if v, err := h.LauncherSecret(ctx, ref, "gw", ""); err != nil || v != kept || !isKept(ref) {
+			t.Fatalf("%s: stale and the provider cannot answer: %q %v", c.last, v, err)
+		}
+	}
+
+	// Stale and the provider answers: the new value is kept, stale no more.
+	plant("exv://Example/item/ok")
+	h.extensions.keptProviderStored(ctx, "example-vault")
+	if v, err := h.LauncherSecret(ctx, "exv://Example/item/ok", "gw", ""); err != nil || v != secretValueForTest {
+		t.Fatalf("stale, asked: %q %v", v, err)
+	}
+	if v, stale, _, _ := h.extensions.kept.get(keptKey{reference: "exv://Example/item/ok", kind: "launcher", id: "gw"}); stale || v != secretValueForTest {
+		t.Fatalf("after the answer: %q stale %v", v, stale)
+	}
+
+	// The provider's manifest no longer claims a kept reference's scheme: it goes; the others stay.
+	h.loadKept(ctx)
+	_, _, gen, _ := h.extensions.kept.get(keptKey{reference: "nop://Example/item/ok", kind: "launcher", id: "gw"})
+	h.extensions.kept.put(keptKey{reference: "nop://Example/item/ok", kind: "launcher", id: "gw"}, kept, "example-vault", gen)
+	h.extensions.keptProviderChanged(ctx, extension.Change{ID: "example-vault", Kind: "upgraded"})
+	if isKept("nop://Example/item/ok") || !isKept("exv://Example/item/ok") {
+		t.Fatal("an upgrade that drops a scheme")
+	}
+	// Another provider's change is not this one's.
+	h.extensions.keptProviderChanged(ctx, extension.Change{ID: "other-vault", Kind: "removed"})
+	if !isKept("exv://Example/item/ok") {
+		t.Fatal("another provider removed")
+	}
+
+	// ResolveSecret itself keeps nothing: an Agent's hand-off resolves after each card (an extension's secret is kept
+	// by the start that resolves it, extensionSecret, not here).
+	var before json.RawMessage
+	_, _ = h.store.Setting(ctx, launcherKeptKey, &before)
+	for _, p := range []wire.SecretPurpose{{Kind: "agent_run", ID: "run-1"}, {Kind: "extension", ID: "example-user"}} {
+		if v, err := h.ResolveSecret(ctx, "exv://Example/item/ok", p, "device:phone"); err != nil || v != secretValueForTest {
+			t.Fatalf("%s: %q %v", p.Kind, v, err)
+		}
+		if _, _, _, ok := h.extensions.kept.get(keptKey{reference: "exv://Example/item/ok", kind: p.Kind, id: p.ID}); ok {
+			t.Fatalf("%s kept", p.Kind)
+		}
+	}
+	var after json.RawMessage
+	_, _ = h.store.Setting(ctx, launcherKeptKey, &after)
+	if string(before) != string(after) {
+		t.Fatal("a hand-off or an extension's secret was written")
+	}
+
+	// Removed: nothing of it stays.
+	h.extensions.keptProviderChanged(ctx, extension.Change{ID: "example-vault", Kind: "removed"})
+	if isKept("exv://Example/item/ok") || isKept("exv://Example/item/signed_out") {
+		t.Fatal("removed, still kept")
+	}
 }
 
 // A value resolved while something was forgotten is not kept: its provider may have just gone.
 func TestKeptSecretsAfterAForget(t *testing.T) {
 	var k keptSecrets
 	key := keptKey{reference: "exv://a/b/c", kind: "launcher", id: "gw"}
-	_, gen, _ := k.get(key)
-	k.forgetProvider("example-vault")
+	_, _, gen, _ := k.get(key)
+	k.forgetReference("exv://other")
 	k.put(key, "v", "example-vault", gen)
-	if _, _, ok := k.get(key); ok {
+	if _, _, _, ok := k.get(key); ok {
 		t.Fatal("kept across a forget")
 	}
-	_, gen, _ = k.get(key)
+	_, _, gen, _ = k.get(key)
 	k.put(key, "v", "example-vault", gen)
-	if v, _, ok := k.get(key); !ok || v != "v" {
+	if v, _, _, ok := k.get(key); !ok || v != "v" {
 		t.Fatalf("not kept: %q %v", v, ok)
 	}
 }

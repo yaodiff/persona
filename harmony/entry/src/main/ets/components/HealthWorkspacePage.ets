@@ -312,8 +312,8 @@ export struct HealthWorkspacePage {
         .onClick(() => { Haptics.tap(); this.editingMemory = false; const index = this.workspace.indexMemory(); if (index) this.workspace.openMemory(index); })
         .id('health.memory.index')
       if (this.workspace.selectedMemory) this.memoryDetail(UIUtils.makeBinding((): HealthMemoryFile => this.workspace.selectedMemory || new HealthMemoryFile()))
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Colors.surface).borderRadius(22)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:22})
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
 
@@ -340,12 +340,12 @@ export struct HealthWorkspacePage {
           .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(PhoneStyle.cardRadius)
           .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
       }, (binding: BoundRow<HealthReport>) => binding.key)
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Colors.surface).borderRadius(22)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:22})
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
 
-  private reportTint(): string { return this.environment.dark ? '#FF6B8B' : '#D62E5C'; }
+  private reportTint(): ResourceColor { return Colors.healthRose; }
 
   @Builder suggestionLabel(key: string, upload: boolean) {
     Row({space:16}) {
@@ -395,8 +395,8 @@ export struct HealthWorkspacePage {
             .accessibilityText(tr(key)).enabled(this.workspace.canStartConversation() && !this.pickerBusy)
             .onClick(() => this.send(tr(key))).id('health.suggestion.'+key)
         }, (key: string) => key)
-      }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(26)
-        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:26})
+      }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
         .shadow(PhoneStyle.cardElevation(this.environment.dark)).clip(true)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
@@ -406,13 +406,13 @@ export struct HealthWorkspacePage {
       Row({space:Tokens.gap}) {
         SymbolGlyph($r('sys.symbol.checkmark_shield')).fontSize(Tokens.interfaceFontVp(17,this.environment.fontScale))
           .fontColor([Colors.ink]).accessibilityLevel('no')
-        Text(tr('privacy')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontWeight(600).fontColor(Colors.ink)
+        Text(tr('privacy')).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeHeading)).fontWeight(600).fontColor(Colors.ink)
       }
-      Text(tr('health_privacy_note')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary)
+      Text(tr('health_privacy_note')).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontColor(Colors.secondary)
         .width('100%').id('health.privacy.note')
     }.width('100%').alignItems(HorizontalAlign.Start).padding({left:20,right:20,top:16,bottom:16})
-      .backgroundColor(Colors.surface).borderRadius(26)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:26})
+      .backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
       .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('health.privacy')
   }
 

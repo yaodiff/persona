@@ -338,7 +338,7 @@ describe("Settings › Labs", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (url.endsWith("/api/v1/todos")) {
+      if (url.split("?")[0].endsWith("/api/v1/todos")) {
         todosRefreshes++;
         return new Response(JSON.stringify({ todos: [] }), {
           status: 200,

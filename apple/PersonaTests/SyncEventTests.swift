@@ -96,6 +96,12 @@ struct SyncEventTests {
         #expect(!assistantNoModes.canChangeModes)
     }
 
+    @Test func desktopComposerShowsObservedEffortWithModesDisabled() throws {
+        let s = try JSON.decoder.decode(Session.self, from: Data(#"{"session_id":"desktop","status":"idle","agent":"claude","source_kind":"claude_desktop","model":"sonnet","effort":"high","capabilities":{"read":true,"modes":false}}"#.utf8))
+        #expect(!s.canChangeModes && !s.setsEffortOnly)
+        #expect(SessionModesMenu.title(s, setsModes: false)?.effort == SessionModes.effortLabel("high"))
+    }
+
     /// A Codex thread the hub drives through its app-server lists its levels (`efforts`): only its effort changes, among them.
     @Test func codexThreadOnItsAppServerSetsItsEffortOnly() throws {
         func decode(_ body: String) throws -> Session { try JSON.decoder.decode(Session.self, from: Data(body.utf8)) }

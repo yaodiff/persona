@@ -26,5 +26,9 @@
   "handoff_chat_blocked": "このチャットは代理返信が禁止されています",
   "handoff_invalid": "引き渡しの {field} がないか、正しくありません",
   "handoff_rate_limited": "代理返信が多すぎます。しばらくしてからもう一度。",
-  "handoff_assistant_away": "アシスタントがこの引き渡しを受け取れませんでした。しばらくしてからもう一度。"
+  "handoff_assistant_away": "アシスタントがこの引き渡しを受け取れませんでした。しばらくしてからもう一度。",
+  "group_access_invalid": "グループアクセス設定の {field} がないか、正しくありません",
+  "group_access_tool_bad": "{tool} は読み取り専用のコネクタツールではありません",
+  "group_access_needs_owner": "先にボットをペアリングしてください。グループアクセスはオーナーのものです",
+  "group_access_conflict": "グループアクセスが別の場所で変更されました。読み込み直してからもう一度試してください。"
 }

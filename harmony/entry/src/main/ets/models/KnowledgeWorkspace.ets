@@ -157,7 +157,7 @@ export class KnowledgeWorkspace {
         if (KNOWLEDGE_KINDS.includes(initialKind)) { this.kind = initialKind; this.tag = ''; this.query = this.recordingPage ? Wire.text(saved, 'query') : ''; }
         else {
           this.kind = KNOWLEDGE_KINDS.includes(Wire.text(saved, 'kind')) ? Wire.text(saved, 'kind') : this.kind;
-          if (this.kind === 'recordings') this.kind = 'meetings';
+          if (this.kind === 'recordings' && !owner.client.demo) this.kind = 'meetings';
           this.tag = Wire.text(saved, 'tag'); this.query = Wire.text(saved, 'query');
         }
       }

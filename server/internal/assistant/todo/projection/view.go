@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,7 +56,29 @@ func place(f *Facts, now time.Time) placement {
 
 // place is the placement the rows and the steps give, without next_change_at.
 func (r *reading) place() placement {
-	return r.withSteps(r.own())
+	p := r.withSteps(r.own())
+	if p.Section != assistantwire.TodoListSectionTodo {
+		return p
+	}
+	// A gate or blocker fills an otherwise idle row before it is ranked or rolled up to a parent.
+	switch {
+	case r.f.TodosV2 && r.f.RepoGate != nil:
+		p.Reason = assistantwire.TodoReasonPrOpen
+		p.Line = line(assistantwire.TodoLineKeyPrOpen)
+		p.wait = copyWait(*r.f.RepoGate)
+	case len(r.f.ActiveBlockers) > 0:
+		b := r.f.ActiveBlockers[0]
+		p.Reason = assistantwire.TodoReasonParked
+		p.Line = line(assistantwire.TodoLineKeyParked, assistantwire.TodoLineArgReason, b.WaitingOn)
+		if remaining := len(r.f.ActiveBlockers) - 1; remaining > 0 {
+			p.Line = withArg(p.Line, "remaining", strconv.Itoa(remaining))
+		}
+		p.wait = copyWait(b)
+	default:
+		return p
+	}
+	p.Phase, p.Section, p.Inactive = assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, time.Time{}
+	return p
 }
 
 // own places the to-do by its own facts, rows 1 to 14.
@@ -73,6 +96,7 @@ func (r *reading) own() placement {
 		r.canWait,           // row 4
 		r.working,           // row 5
 		r.parked,            // row 8
+		r.structuredWait,    // row 8, from a runtime report or provider observation
 		r.finishedRecent,    // row 9
 		r.waiting,           // row 10
 		r.finishedSeen,      // row 11
@@ -313,7 +337,7 @@ func (r *reading) stoppedTurn() (run, time.Time, bool) {
 }
 
 func (r *reading) stoppedUnfinished() (placement, bool) {
-	if r.f.Unreached || r.settled() || reviewState(r.f) == reviewParked {
+	if r.f.Unreached || r.settled() || reviewState(r.f) == reviewParked || r.runtimeWait() != nil {
 		return placement{}, false
 	}
 	rn, since, ok := r.stoppedTurn()
@@ -578,7 +602,7 @@ func (r *reading) working() (placement, bool) {
 	// A supervised task whose agent stopped on a model error (e.g. 503) is its supervisor's to recover or escalate,
 	// just like a supervised failed start: keep it in Working / persona_working unless the task is already settled,
 	// parked, or awaiting optional owner verification (user_check).
-	if r.supervised() && !r.settled() && reviewState(r.f) != reviewParked && reviewState(r.f) != reviewUserCheck {
+	if r.supervised() && !r.settled() && reviewState(r.f) != reviewParked && reviewState(r.f) != reviewUserCheck && r.runtimeWait() == nil {
 		if rn, ok := firstRun(r.runs, runInterrupted); ok {
 			p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking)
 			p.Line, p.Since = line(assistantwire.TodoLineKeyInterrupted, "run", rn.title()), utc(rn.since())
@@ -609,6 +633,18 @@ func (r *reading) parked() (placement, bool) {
 	}
 	p.wait = buildParkedWait(sv)
 	p.wake = sv.Parked.Until
+	return p, true
+}
+
+func (r *reading) structuredWait() (placement, bool) {
+	w := r.runtimeWait()
+	if w == nil {
+		return placement{}, false
+	}
+	p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonParked)
+	p.wait = buildRuntimeWait(w, r.f.RuntimeAt)
+	p.Line = line(assistantwire.TodoLineKeyParked, assistantwire.TodoLineArgReason, p.wait.Reason, assistantwire.TodoLineArgUntil, stamp(p.wait.Until))
+	p.Since, p.wake = p.wait.Since, p.wait.Until
 	return p, true
 }
 

@@ -198,14 +198,28 @@ describe("negotiated bounded runtime lists", () => {
       waiting: undefined,
       background: [{ id: "bg", kind: "shell" }],
       background_ended: [{ id: "done", kind: "shell", status: "completed" }],
-      subagents: [], workflows: [], queued: ["Queued task"], permission_mode: "plan",
+      subagents: [], workflows: [], queued: ["Queued task"], queued_relayed: 1, permission_mode: "plan",
     })]);
     applyCompleteSessions([session("s0", { waiting: undefined, title: "Complete latest", permission_mode: "default" })]);
     expect(getSession("demo", "s0")?.title).toBe("Complete latest");
     expect(getSession("demo", "s0")?.background).toBeUndefined();
     expect(getSession("demo", "s0")?.background_ended).toBeUndefined();
     expect(getSession("demo", "s0")?.queued).toBeUndefined();
+    expect(getSession("demo", "s0")?.queued_relayed).toBeUndefined();
     expect(getSession("demo", "s0")?.permission_mode).toBe("default");
+  });
+  it("clears omitted queued fields on complete session upsert while preserving them on summary patches", async () => {
+    hello(["sessions_list", "sessions_lookup"]);
+    await settle();
+    upsertSession(session("s0", { waiting: undefined, queued: ["Queued item"], queued_relayed: 1 }));
+    expect(getSession("demo", "s0")?.queued).toEqual(["Queued item"]);
+    expect(getSession("demo", "s0")?.queued_relayed).toBe(1);
+    upsertSession(session("s0", { waiting: true, title: "Summary patch" }));
+    expect(getSession("demo", "s0")?.queued).toEqual(["Queued item"]);
+    expect(getSession("demo", "s0")?.queued_relayed).toBe(1);
+    upsertSession(session("s0", { waiting: undefined, title: "Complete pushed row" }));
+    expect(getSession("demo", "s0")?.queued).toBeUndefined();
+    expect(getSession("demo", "s0")?.queued_relayed).toBeUndefined();
   });
   it("retains a clicked filtered-row hint without treating it as complete detail", async () => {
     hello(["sessions_list", "sessions_lookup"]);

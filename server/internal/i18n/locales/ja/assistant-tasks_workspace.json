@@ -1,4 +1,5 @@
 {
+  "leader_placement_pending": "このコンピュータでリーダーのワークスペースをまだ確認できません。リーダーの準備ができてからメンバーの開始を再試行してください。",
   "infer": "{machine} のタスクワークスペースを推定できません。ワークスペースを明示的に選んでください",
   "resolve": "タスクワークスペース {path} を解決できません",
   "unavailable": "ワークスペース {path} は利用可能な絶対ディレクトリではありません",
@@ -20,5 +21,8 @@
   "own_checkout_dirty_files": "前回のワークスペースに未コミットの変更があります。コミットまたは stash してから再試行（task_retry）してください。別のブランチで新しいワークスペースを作ることもできます。変更されたファイルには {files} が含まれます。",
   "own_checkout_in_use": "この ToDo の以前のチェックアウト {path}（ブランチ {branch}）は Agent {owner} が使用中です。その Agent の終了を待つか停止してから、もう一度開始してください",
   "own_checkout_unverified": "{path} がこの ToDo のブランチ {branch} のクリーンなチェックアウトのままか確認できません。確認したうえで workspace {\"existing\": \"{path}\"} でタスクを計画し直してそこで続けるか、削除してください",
-  "own_path_taken": "このタスクのチェックアウト用フォルダ {path} にはすでにファイルがあるため、新しいチェックアウトは作成していません。この ToDo の以前の作業であれば、workspace {\"existing\": \"{path}\"} でタスクを計画し直してそこで続けるか、削除してください"
+  "own_path_taken": "このタスクのチェックアウト用フォルダ {path} にはすでにファイルがあるため、新しいチェックアウトは作成していません。この ToDo の以前の作業であれば、workspace {\"existing\": \"{path}\"} でタスクを計画し直してそこで続けるか、削除してください",
+  "scratch_unsupported": "コンピュータ {machine} の Persona Node が古いため、管理対象の隔離 scratch ワークスペースに対応していません。ノードを更新するか cwd を明示指定してください。Agent は開始していません",
+  "scratch_create": "管理対象の scratch ワークスペースを準備できませんでした。Agent は開始していません",
+  "scratch_path": "ノードが絶対パスの scratch ディレクトリを返しませんでした。Agent は開始していません"
 }

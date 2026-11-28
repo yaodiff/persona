@@ -287,7 +287,7 @@ func TestAcceptanceRetryRoundGuards(t *testing.T) {
 		dropped(t, s, lark, id)
 		// The next deploy is a round of its own, with its own card.
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		waitFor(t, "the next round's card", func() bool { a := askOf(s, id); return a != nil && a.MessageID != "" })
 		if cards, keys := lark.sent(); len(cards) != 1 || len(keys) != 2 || keys[0] == keys[1] {
 			t.Fatalf("cards %d, keys %q: the new round needs its own card and key", len(cards), keys)
@@ -320,7 +320,7 @@ func TestAcceptanceRetryRoundGuards(t *testing.T) {
 		closeAndReopen(t, s, id)
 		lark.then(acceptSend{err: errLarkDown})
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		waitFor(t, "the second round's ask", func() bool { a := askOf(s, id); return a != nil && a.MessageID == "" && !a.AskedAt.IsZero() })
 		if a := askOf(s, id); len(a.Earlier) != 1 || a.Earlier[0] != first {
 			t.Fatalf("the failed send's ask lost the earlier round's card: %+v", a)

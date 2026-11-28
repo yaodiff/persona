@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -114,7 +115,8 @@ const (
 // merged as mergeSHA, in newHub and not in oldHub.
 func deployService(t *testing.T) (*Service, *fakeHub, func() []string, *runningHub, *fakeForge) {
 	t.Helper()
-	s, f, posts := acceptService(t)
+	s, f, posts := acceptService(t, repositorystore.New(todoTestDB(t)))
+	artifactNodeProof(f, "https://github.com/o/r/pull/9", "contributor", "contributor", "fix/work", "fix/work", "abc", "abc")
 	s.ownerVerifiesAll = false
 	hub := &runningHub{commit: oldHub}
 	forge := &fakeForge{merged: true, sha: mergeSHA, contains: map[string]bool{oldHub: false, newHub: true}}
@@ -237,7 +239,7 @@ func TestDeployWatchKeepsConfirmedMergeAcrossBuildsDuringForgeOutage(t *testing.
 	if stage, live := s.gateDeployStage(ctx, got, "deploy", pr, "", "", ""); stage != "merge" || live {
 		t.Fatalf("repeat deployment claim during outage: stage %s, live %v", stage, live)
 	}
-	if d := s.gateDelivery(ctx, got, TodoDelivery{State: deliveryLive}, "https://github.com/o/r/pull/10"); d.State != deliveryPR {
+	if d := s.gateDelivery(ctx, got, TodoDelivery{State: deliveryLive}, "https://github.com/o/r/pull/10", true); d.State != deliveryPR {
 		t.Fatalf("another PR inherited merge evidence: %+v", d)
 	}
 }
@@ -316,14 +318,14 @@ func TestJudgedLiveIsGated(t *testing.T) {
 	s, _, _, hub, _ := deployService(t)
 	ctx := context.Background()
 	todo := Todo{ID: "todo_g", PRURL: "https://github.com/o/r/pull/9"}
-	if d := s.gateDelivery(ctx, todo, TodoDelivery{State: deliveryLive}, ""); d.State != deliveryMerged || d.Unblock != unblockOther {
+	if d := s.gateDelivery(ctx, todo, TodoDelivery{State: deliveryLive}, "", false); d.State != deliveryMerged || d.Unblock != unblockOther {
 		t.Fatalf("not deployed: %+v", d)
 	}
 	hub.deploy(newHub)
-	if d := s.gateDelivery(ctx, todo, TodoDelivery{State: deliveryLive}, ""); d.State != deliveryLive {
+	if d := s.gateDelivery(ctx, todo, TodoDelivery{State: deliveryLive}, "", false); d.State != deliveryLive {
 		t.Fatalf("deployed: %+v", d)
 	}
-	if d := s.gateDelivery(ctx, Todo{ID: "todo_x"}, TodoDelivery{State: deliveryLive}, ""); d.State != deliveryLive {
+	if d := s.gateDelivery(ctx, Todo{ID: "todo_x"}, TodoDelivery{State: deliveryLive}, "", false); d.State != deliveryLive {
 		t.Fatalf("no PR: %+v", d)
 	}
 }

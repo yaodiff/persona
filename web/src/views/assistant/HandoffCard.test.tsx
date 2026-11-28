@@ -187,6 +187,51 @@ describe("the hand-off card", () => {
     expect(host.querySelector("textarea")).toBeNull();
     expect(host.querySelector('[data-testid="handoff-card-confirm"]')?.textContent).toBe("知道了");
   });
+
+  it("shows bound @ mentions in live state and prunes them live when deleted from the draft", () => {
+    const mentions = [{ id: "101", name: "Alice" }, { id: "202", name: "Bob" }];
+    box.items = [open({ suggestion: { version: 2, kind: "reply", text: "@Alice @Bob please sync", mentions, conversation: { machine_id: "server", session_id: "m1" } } })];
+    draw(<HandoffCard item={{ ...feed, body: { ...feed.body, text: "@Alice @Bob please sync", mentions } }} />);
+    const bar = () => host.querySelector('[data-testid="bound-mentions"]');
+    expect(bar()?.textContent).toContain("将 @：");
+    expect(bar()?.textContent).toContain("@Alice");
+    expect(bar()?.textContent).toContain("@Bob");
+
+    const area = host.querySelector("textarea")!;
+    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => {
+      set.call(area, "@Alice please sync, and @Charlie");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(bar()?.textContent).toContain("@Alice");
+    expect(bar()?.textContent).not.toContain("@Bob");
+    expect(bar()?.textContent).not.toContain("@Charlie");
+
+    // Prefix collision (@AliceSmith) or @Alice only inside inline code must not keep @Alice bound.
+    act(() => {
+      set.call(area, "@AliceSmith and `@Alice` please sync");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(bar()).toBeNull();
+  });
+
+  it("renders Markdown and bound @ mentions once the reply is sent", () => {
+    const mentions = [{ id: "101", name: "Alice" }];
+    const mdText = "@Alice **Root cause confirmed**: call `fetch_report` and check [docs](https://example.com/doc)";
+    box.items = [open({
+      suggestion: undefined, done_at: "2026-11-18T13:00:00Z", done_by: "replied",
+      suggestion_attempts: [attempted("sent", { text: mdText, mentions })],
+    })];
+    draw(<HandoffCard item={{ ...feed, body: { ...feed.body, text: mdText, mentions } }} />);
+    expect(host.querySelector("strong")?.textContent).toBe("Root cause confirmed");
+    expect(host.querySelector("code")?.textContent).toBe("fetch_report");
+    const link = host.querySelector<HTMLAnchorElement>("a");
+    expect(link?.textContent).toBe("docs");
+    expect(link?.getAttribute("href")).toBe("https://example.com/doc");
+    const bar = host.querySelector('[data-testid="bound-mentions"]');
+    expect(bar?.textContent).toContain("已 @：");
+    expect(bar?.textContent).toContain("@Alice");
+  });
 });
 
 describe("Wrap up chips", () => {

@@ -20,6 +20,7 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/agentprompt"
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
@@ -180,7 +181,8 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 	}
 	var agyChannel *agyChannelSpec
-	if h.agent() == agyAgent {
+	isAgy := h.agent() == agyAgent
+	if isAgy {
 		var err error
 		agyChannel, err = n.agyChannelFor(ctx, launcher)
 		if err != nil {
@@ -225,9 +227,17 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 			startParams["supervision_instructions"] = policy
 		}
 		s, err := n.runtimeStartWith(ctx, h, startParams)
+		if err != nil && h.agent() == agyAgent && mode == "auto" && isAgyAutoModeUnavailableErr(err) {
+			mode = proto.ModeBypass
+			startParams["permission_mode"] = mode
+			s, err = n.runtimeStartWith(ctx, h, startParams)
+		}
 		if err != nil {
 			releaseEnv()
 			return "", n.localizeSupervisionRefusal(ctx, err)
+		}
+		if s.PermissionMode != "" {
+			mode = s.PermissionMode
 		}
 		id = s.SessionID
 		if id == "" {
@@ -248,11 +258,14 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if m := n.assistantModeOf(id); m != "" {
 		turn["mode"] = m
 	}
-	if !known || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") || (remote && !wasRemote) {
+	if !known || (isAgy && !st.RuntimeAssistant) || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") || (remote && !wasRemote) {
 		if st.StartedAt.IsZero() {
 			st.StartedAt = time.Now().UTC()
 		}
 		st.Launcher, st.Cwd = launcher, cwd
+		if isAgy {
+			st.RuntimeAssistant = true
+		}
 		if hasInput {
 			st.TaskExecution = strict
 		}
@@ -263,7 +276,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		awaitList(n.notifySessionsSoon())
 		return id, nil
 	}
-	if !startedNew && h.agent() == agyAgent {
+	if !startedNew && isAgy {
 		if err := n.agyIdleCompactBeforeInput(ctx, h, id, text, images, true, true); err != nil {
 			return "", err
 		}
@@ -283,7 +296,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	live, commit := "", func() {}
 	if !command {
 		if !public {
-			live, commit = n.turnContext(id, n.assistantContextFor(id, text))
+			live, commit = n.turnContext(id, n.assistantContextForCwd(id, cwd, text))
 		}
 		// Antigravity loads .agents/rules on every turn. Other generic runtimes have no verified native
 		// rule-directory contract, so carry the exact split remainder alongside their bounded AGENTS.md.
@@ -339,6 +352,15 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	}
 	finishAgy := n.runtimes.agyWorkBegin(h, "session.send", id)
 	err := h.peer.Call(cctx, "session.send", params, &said)
+	if err != nil && h.agent() == agyAgent && params["mode"] == "auto" && isAgyAutoModeUnavailableErr(err) {
+		mode = proto.ModeBypass
+		params["mode"] = mode
+		n.noteModes(id, mode, pickedEffort)
+		n.persistModes(id, mode, pickedEffort, modeExplicit)
+		rctx, rcancel := context.WithTimeout(ctx, runtimeCallTimeout)
+		err = h.peer.Call(rctx, "session.send", params, &said)
+		rcancel()
+	}
 	finishAgy(err, false)
 	if err != nil {
 		if !command && !maybeDelivered(err) {
@@ -413,6 +435,29 @@ func withClientMsgID(ctx context.Context, id string) context.Context {
 func clientMsgIDFrom(ctx context.Context) string {
 	id, _ := ctx.Value(clientMsgIDKey{}).(string)
 	return id
+}
+
+// isAgyAutoModeUnavailableErr reports whether an older Antigravity runtime rejected permission_mode=auto because OS
+// terminal sandbox auto mode is unavailable. Updated runtimes degrade to bypassPermissions inside the runtime itself.
+func isAgyAutoModeUnavailableErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "auto mode") &&
+		(strings.Contains(msg, "not available") || strings.Contains(msg, "unavailable") || strings.Contains(msg, "unsupported") || strings.Contains(msg, "sandbox"))
+}
+
+// assistantSendResult builds the assistant.send RPC payload, including the settled permission_mode when known so the
+// hub reflects runtime-side mode degradation (for example agy falling back from auto to bypassPermissions).
+func (n *Node) assistantSendResult(id string) map[string]any {
+	res := map[string]any{"session_id": id}
+	if id != "" {
+		if m := n.assistantModeOf(id); m != "" {
+			res["permission_mode"] = m
+		}
+	}
+	return res
 }
 
 // assistantModeOf is the permission mode the conversation was last set to (session.modes, or a message's),
@@ -578,7 +623,8 @@ func gateToolSchema(g proto.CommandGate) json.RawMessage {
 }
 
 // assistantGateTool runs a gated command for an assistant conversation on a runtime: the gate decides first, as for a
-// Bash call of Claude's (larkCheck: reads go, writes are confirmed on the phone, the configured rules deny), then the
+// Bash call of Claude's or a local assistant_environment runtime's (larkCheckOutcome: reads go, writes are confirmed on
+// the phone with editable text for eligible proxy-authenticated send/reply calls, the configured rules deny), then the
 // skill's script runs here with the gate's credentials in its environment only.
 func (n *Node) assistantGateTool(ctx context.Context, g *proto.CommandGate, session string, raw json.RawMessage) proto.ToolResult {
 	var a struct {
@@ -603,21 +649,77 @@ func (n *Node) assistantGateTool(ctx context.Context, g *proto.CommandGate, sess
 		words[i] = shellQuote(w)
 	}
 	command := g.Command + " " + strings.Join(words, " ")
-	ix := proto.Interaction{SessionID: session, Cwd: cwd, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(nodeclient.HookTimeout).UTC(),
-		ToolName: g.Tool.Name, ToolInput: raw, SessionTitle: filepath.Base(cwd)}
+	ix := proto.Interaction{
+		ID:           "ix_" + randHex(6),
+		SessionID:    session,
+		Cwd:          cwd,
+		CreatedAt:    time.Now().UTC(),
+		ExpiresAt:    time.Now().Add(nodeclient.HookTimeout).UTC(),
+		ToolName:     g.Tool.Name,
+		ToolInput:    raw,
+		SessionTitle: filepath.Base(cwd),
+	}
 	if s, _, ok := n.runtimes.rowOf(session); ok && s.Title != "" {
 		ix.SessionTitle = s.Title
 	}
-	decision, reason, err := n.larkCheck(ctx, session, cwd, command, ix)
+	cfg := n.assistantLark(ctx)
+	call, _, original, editable := n.editableLarkCall(cfg, command, cwd)
+	if editable {
+		ix.EditableText = original
+	}
+	out, err := n.larkCheckOutcome(ctx, session, cwd, command, ix)
 	if err != nil {
 		return proto.TextResult("没有执行："+err.Error(), true)
 	}
-	if decision == "deny" {
-		return proto.TextResult("没有执行："+reason, true)
+	if out.decision != "allow" {
+		return gateToolDenyResult(out)
+	}
+	if editable && out.editedText != "" && out.editedText != original {
+		card := out.card
+		if card.InteractionID == "" {
+			card.InteractionID = ix.ID
+		}
+		if err := n.applyLarkProxyEdit(ctx, cfg, session, card, call, out.editedText); err != nil {
+			return proto.TextResult("没有执行："+err.Error(), true)
+		}
 	}
 	rctx, cancel := context.WithTimeout(ctx, gateToolTimeout)
 	defer cancel()
 	return runGateScript(rctx, g.Command, script, a.Args, cwd, env)
+}
+
+// gateToolDenyResult maps a non-allow larkCheckOutcome to an MCP tool result, keeping detached pending cards as
+// non-error WaitingText/ClarifyingText, preserving owner deny notes, and avoiding misleading retry prompts on dismiss.
+func gateToolDenyResult(out larkCheckOutcome) proto.ToolResult {
+	switch {
+	case out.pending:
+		msg := strings.TrimSpace(out.reason)
+		if msg == "" {
+			msg = approvalops.WaitingText + " The command was not executed."
+		}
+		return proto.TextResult(msg, false)
+	case out.dismiss:
+		msg := strings.TrimSpace(out.reason)
+		if msg == "" {
+			msg = "审批已取消或未完成，没有执行，请勿自动重试。"
+		}
+		return proto.TextResult(msg, true)
+	case out.userDenied:
+		if out.userNote != "" {
+			return proto.TextResult("没有执行（用户已拒绝）："+out.userNote, true)
+		}
+		msg := strings.TrimSpace(out.reason)
+		if msg == "" {
+			msg = "用户拒绝了这次操作，没有执行。"
+		}
+		return proto.TextResult(msg, true)
+	default:
+		msg := strings.TrimSpace(out.reason)
+		if msg == "" {
+			msg = "权限校验未放行，无法执行该操作。"
+		}
+		return proto.TextResult("没有执行："+msg, true)
+	}
 }
 
 // gateOutputCap is how much of a gated command's output goes back to the assistant; gateOutputNotice follows it when

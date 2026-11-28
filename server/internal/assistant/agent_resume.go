@@ -55,7 +55,7 @@ func stoppedRefusal(c proto.Session) error {
 
 // resumeAllowed checks a resume before anything is asked or started: a reason, the computer reachable, room left in
 // the agent's context, and a task of self's it will be on (one it is on, or task, which the send's checks go on with).
-func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c proto.Session, why string, task *sendTask) error {
+func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c proto.Session, why string, task *sendTask, review resumeReview) error {
 	cause := proto.StopUnknown
 	if c.Capabilities != nil {
 		cause = c.Capabilities.StopCause
@@ -76,11 +76,18 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 	// Every stop but the user's may be resumed (#11528): an unknown cause too, an Agent that quit by itself or that a
 	// restart of its machine cut off. An archived one only with a cause the node recorded as not the user's: archiving
 	// it was the user's (or the assistant's own close, which records its cause).
-	if c.Capabilities == nil && !c.Archived {
+	oldNode := c.Capabilities == nil && !c.Archived
+	ownerOnlyStop := c.Archived && !cause.AllowsSupervisorResume() || !cause.SupervisorMayResume()
+	// An archive lookup failure above leaves the last verified cause intact. Background forwarding never
+	// contributes evidence to a supervisor's decision.
+	if review.reviewer != "" {
+		s.todos.noteResumeCheck(self, review, am.ID, c, oldNode || ownerOnlyStop)
+	}
+	if oldNode {
 		return fmt.Errorf("%s cannot be resumed by the assistant: its computer's node reports no stop cause (too old). "+
 			"The user's Resume on its terminal page can. Nothing was started or sent", agentLabel(c))
 	}
-	if c.Archived && !cause.AllowsSupervisorResume() || !cause.SupervisorMayResume() {
+	if ownerOnlyStop {
 		return fmt.Errorf("%s cannot be resumed by the assistant: stop cause is %s. %s require "+
 			"the user's Resume on its terminal page. Give that instruction separately from the choices on a decision card. Nothing was started or sent",
 			agentLabel(c), cause, userResumeOnly(c.Archived, cause))

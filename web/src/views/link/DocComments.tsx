@@ -7,7 +7,7 @@ import { ApiError } from "../../lib/api";
 import { clientIdFor, ON_DOCUMENT, readComments, replyText, sendComment, sendKey, setResolved, writeErrorText, findDocPeople, type CommentTarget, type DocReply, type DocThread } from "../../lib/doc-comments";
 import { ago } from "../../lib/format";
 import { mentionsIn, type LarkPerson } from "../../lib/lark-people";
-import { clickLink } from "../../lib/links";
+import { clickLink, linkHref } from "../../lib/links";
 import { defaultManager, useLinkManager } from "../../lib/manager-choice";
 import { Button, cx, EASE, IconButton, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -251,19 +251,23 @@ function Reply({ reply }: { reply: DocReply }) {
           {reply.edited && <> · {t("link-doccomments.edited")}</>}
         </div>
         <div className="text-[13px] leading-[1.6] whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
-          {reply.content.map((s, i) =>
-            s.kind === "mention" ? (
-              <span key={i} className="font-medium text-accent">
-                {s.text}
-              </span>
-            ) : s.href ? (
-              <a key={i} href={s.href} onClick={(e) => clickLink(e, s.href, undefined, manager)} target="_blank" rel="noreferrer noopener" className="text-accent underline-offset-2 hover:underline">
+          {reply.content.map((s, i) => {
+            if (s.kind === "mention") {
+              return (
+                <span key={i} className="font-medium text-accent">
+                  {s.text}
+                </span>
+              );
+            }
+            const safeHref = s.href && !s.href.trim().startsWith("/") ? linkHref(s.href) : undefined;
+            return safeHref ? (
+              <a key={i} href={safeHref} onClick={(e) => clickLink(e, s.href, undefined, manager)} target="_blank" rel="noreferrer noopener" className="text-accent underline-offset-2 hover:underline">
                 {s.text}
               </a>
             ) : (
               <span key={i}>{s.text}</span>
-            ),
-          )}
+            );
+          })}
           {Boolean(reply.imageCount) && <span className="text-ink-3"> {t("link-doccomments.images", { count: reply.imageCount ?? 0 })}</span>}
         </div>
       </div>

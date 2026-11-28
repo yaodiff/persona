@@ -15,5 +15,6 @@
   "follow_default": "恢复跟随默认",
   "undo_pick": "撤销单独选择",
   "provider_gone": "此电脑上已不存在该模型供应商。",
-  "pick_dropped": "「{launcher}」无法运行 Persona 对话，已切换回默认配置。"
+  "pick_dropped": "「{launcher}」无法运行 Persona 对话，已切换回默认配置。",
+  "restore_last_good": "恢复上次可用"
 }

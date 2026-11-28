@@ -9,8 +9,7 @@ import (
 )
 
 // updateOwnerWork writes only the private owner-work evidence. It must not hold todos.writing while waiting for the
-// ledger: editTodo's reopen takes them in the opposite order (writeMu then writing), so holding both here would
-// deadlock the task list under a concurrent reopen.
+// ledger: independent to-do writes should remain available while owner-work evidence waits.
 func TestUpdateOwnerWorkWaitsForTheLedgerWithoutTheTodoWriter(t *testing.T) {
 	s, _, todo, _ := ownerInstructionTask(t)
 	s.supervise.writeMu.Lock()
@@ -29,7 +28,7 @@ func TestUpdateOwnerWorkWaitsForTheLedgerWithoutTheTodoWriter(t *testing.T) {
 		return false
 	})
 	if !s.todos.writing.TryLock() {
-		t.Fatal("updateOwnerWork holds todos.writing while waiting for supervise.writeMu (editTodo's order is the reverse)")
+		t.Fatal("updateOwnerWork holds todos.writing while waiting for supervise.writeMu")
 	}
 	s.todos.writing.Unlock()
 	unlock()

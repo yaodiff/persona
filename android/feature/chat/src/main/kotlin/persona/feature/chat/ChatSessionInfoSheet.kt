@@ -19,6 +19,7 @@ import persona.core.contracts.Session
 import persona.core.contracts.SessionInfo
 import persona.core.contracts.parseTime
 import persona.core.designsystem.*
+import persona.core.domain.sort.isBotmux
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.answer.Delegated
@@ -220,6 +221,8 @@ internal fun ChatSessionInfoSheet(
                     onClick = { val _ = runCatching { uriHandler.openUri(url) } })
             }
         }
+        // A BotMux session reads as in Lark, or as its raw transcript (BotmuxMessages.kt).
+        if (session.isBotmux) BotmuxModeRow(Modifier.padding(top = Tokens.Space.m))
         // The questions the assistant answered for this agent; its own conversations have none.
         if (!session.assistant) DelegatedHistorySection(session, state)
         val loaded = info

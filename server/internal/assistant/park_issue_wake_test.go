@@ -53,7 +53,7 @@ func TestParkOnAnIssueIsWokenWhenItCloses(t *testing.T) {
 func TestOpenIssueRefusalNamesTheWaysOut(t *testing.T) {
 	s, todo, _ := linkRoleTask(t)
 	ctx := context.Background()
-	if err := s.importReportedLinks(ctx, todo.ID, []string{parkedIssue}, "issue", nil); err != nil {
+	if _, err := s.importReportedLinks(ctx, todo.ID, []string{parkedIssue}, "issue", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	_, err := acceptReview(s, todo.ID, nil)
@@ -65,9 +65,7 @@ func TestOpenIssueRefusalNamesTheWaysOut(t *testing.T) {
 			t.Errorf("the refusal lacks %q: %v", want, err)
 		}
 	}
-	if err := s.setTodoLinkRole(ctx, todo.ID, parkedIssue, repository.LinkRoleReference); err != nil {
-		t.Fatal(err)
-	}
+	setTestTodoLinkRole(t, s, todo.ID, parkedIssue, repository.LinkRoleReference)
 	if got := linkRoles(t, s, todo.ID)[parkedIssue]; got != repository.LinkRoleReference {
 		t.Fatalf("issue role = %q", got)
 	}

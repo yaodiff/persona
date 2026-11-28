@@ -83,6 +83,9 @@ var commandPromptSecret = sync.OnceValue(func() *regexp.Regexp {
 		`密码|口令|验证码|令牌|密钥|パスワード|暗証|認証コード|確認コード|トークン`)
 })
 
+// CommandPromptMasked reports whether a prompt asks for a secret, including a runtime prompt with no trailing punctuation.
+func CommandPromptMasked(line string) bool { return commandPromptSecret().MatchString(line) }
+
 // CommandPrompt says whether line, a command's last output line that no newline ended, reads as a prompt waiting
 // for input, and whether it reads as secret. line has its escapes removed already. A prompt is at most
 // CommandInputMaxPrompt characters and ends like one (commandPromptEnd); progress output does not stop on such a line.
@@ -91,5 +94,5 @@ func CommandPrompt(line string) (prompt string, secret, ok bool) {
 	if prompt == "" || utf8.RuneCountInString(prompt) > CommandInputMaxPrompt || !commandPromptEnd().MatchString(prompt) {
 		return "", false, false
 	}
-	return prompt, commandPromptSecret().MatchString(prompt), true
+	return prompt, CommandPromptMasked(prompt), true
 }

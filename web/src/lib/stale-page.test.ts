@@ -9,6 +9,7 @@ import {
   shouldPull,
   STALE_HINT_AFTER,
   STALE_PULL_EVERY_MS,
+  STALE_RECOVERY_WINDOW_MS,
   STALE_QUIET_MS,
   type StaleView,
 } from "./stale-page";
@@ -95,6 +96,12 @@ describe("shouldPull by rev (#1179)", () => {
     expect(shouldPull(burst({ visible: false }))).toBe(false);
     expect(shouldPull(burst({ pulling: true }))).toBe(false);
   });
+
+  it("waits STALE_QUIET_MS after a hidden tab becomes visible before pulling", () => {
+    const woke = T0 + 20_000;
+    expect(shouldPull(burst({ lastArrival: T0, revMovedAt: T0, visibleSince: woke, now: woke + STALE_QUIET_MS - 1 }))).toBe(false);
+    expect(shouldPull(burst({ lastArrival: T0, revMovedAt: T0, visibleSince: woke, now: woke + STALE_QUIET_MS }))).toBe(true);
+  });
 });
 
 describe("RevWatch", () => {
@@ -172,6 +179,19 @@ describe("the tally", () => {
 
   it("a push on a clean tally changes nothing", () => {
     expect(afterPush(FRESH_TALLY)).toBe(FRESH_TALLY);
+  });
+
+  it("treats isolated recoveries separated by more than STALE_RECOVERY_WINDOW_MS as separate blips", () => {
+    let t = afterPull(FRESH_TALLY, "found", T0);
+    expect(notLive(t)).toBe(false);
+    // Past the window: starts a fresh streak instead of flipping notLive.
+    t = afterPull(t, "found", T0 + STALE_RECOVERY_WINDOW_MS + 1);
+    expect(t.recovered).toBe(1);
+    expect(notLive(t)).toBe(false);
+    // A second recovery within the window still trips notLive.
+    t = afterPull(t, "found", T0 + STALE_RECOVERY_WINDOW_MS + 15_000);
+    expect(t.recovered).toBe(2);
+    expect(notLive(t)).toBe(true);
   });
 });
 

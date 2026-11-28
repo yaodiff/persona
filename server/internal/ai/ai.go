@@ -70,7 +70,7 @@ func NewWith(cfg Config, transport http.RoundTripper) *Client {
 
 // net/http copies headers from the first request on every redirect, so check the entire chain before retaining
 // provider-specific values. Once a chain leaves its original origin, all later hops use Persona's identity and omit
-// every custom provider header and gateway-scoped session header.
+// API credentials, custom provider headers and gateway-scoped session headers.
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	return checkRedirectHeaders(req, via, nil)
 }
@@ -83,11 +83,19 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
+	if len(via) == 0 || via[0] == nil || req == nil {
+		return nil
+	}
 	origin := via[0].URL
 	clearPrivate := func() {
 		for name := range headers {
 			req.Header.Del(name)
 		}
+		req.Header.Del("Authorization")
+		req.Header.Del("Proxy-Authorization")
+		req.Header.Del("X-Api-Key")
+		req.Header.Del("Cookie")
+		req.Header.Del("Cookie2")
 		req.Header.Set("User-Agent", modelhttp.UserAgent())
 		modelhttp.ClearOpenCodeSession(req.Header)
 		modelhttp.ClearSource(req.Header)
@@ -97,7 +105,7 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 		return nil
 	}
 	for _, previous := range via[1:] {
-		if !sameOrigin(origin, previous.URL) {
+		if previous == nil || !sameOrigin(origin, previous.URL) {
 			clearPrivate()
 			break
 		}
@@ -106,6 +114,9 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 }
 
 func sameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
 	port := func(u *url.URL) string {
 		if p := u.Port(); p != "" {
 			return p

@@ -122,7 +122,24 @@ func (e notFound) Unwrap() error { return e.error }
 func sameOrigin(a, b string) bool {
 	ua, err1 := url.Parse(a)
 	ub, err2 := url.Parse(b)
-	return err1 == nil && err2 == nil && ua.Scheme == ub.Scheme && strings.EqualFold(ua.Host, ub.Host)
+	if err1 != nil || err2 != nil || ua.Scheme == "" || ua.Hostname() == "" || !strings.EqualFold(ua.Scheme, ub.Scheme) {
+		return false
+	}
+	return strings.EqualFold(ua.Hostname(), ub.Hostname()) && canonicalPort(ua) == canonicalPort(ub)
+}
+
+func canonicalPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
 }
 
 // ErrRateLimited: the market refused a request for its rate limit, not for rights.

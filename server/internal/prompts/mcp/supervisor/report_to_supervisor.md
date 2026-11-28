@@ -4,6 +4,8 @@ Report individual done_when entries as they change with `criteria`: `number` is 
 
 For a to-do handoff, copy handoff_receipt from the request and report the head you checked. Use done with the result and evidence, or blocked for a failed check. The report goes to the originating to-do’s supervisor.
 
+Use phase when the task changes state. For a wait, supply wait_state with its specific target and reason. A later phase other than waiting clears the wait. Phase done reports your work for review. Use delivery_pr for the task's actual delivery PR. GitHub and running-build checks establish merge and deployment.
+
 ```json
 {
   "type": "object",
@@ -23,6 +25,29 @@ For a to-do handoff, copy handoff_receipt from the request and report the head y
       "items": { "type": "string" },
       "description": "links, command output, file paths that show it (a PR, CI, a screenshot)"
     },
+    "phase": {
+      "type": "string",
+      "enum": ["preparing", "working", "waiting", "reviewing", "done"]
+    },
+    "wait_state": {
+      "type": "object",
+      "required": ["waiting_on", "wait_target", "reason"],
+      "properties": {
+        "waiting_on": { "type": "string", "enum": ["user", "external", "dependency", "date"] },
+        "wait_target": {
+          "type": "object",
+          "required": ["ref"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["todo", "pr", "issue", "chat", "url", "time"] },
+            "ref": { "type": "string", "description": "exact reference, or a name if kind is omitted" },
+            "summary": { "type": "string" }
+          }
+        },
+        "reason": { "type": "string" },
+        "until": { "type": "string", "description": "RFC 3339 time, when known" }
+      }
+    },
+    "delivery_pr": { "type": "string", "description": "full URL of the bound or owned delivery PR" },
     "handoff_receipt": {
       "type": "object",
       "required": ["todo_id", "id", "head", "check"],

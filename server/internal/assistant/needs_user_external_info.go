@@ -74,12 +74,13 @@ func (s *Service) pendingNeedsUserSummary(t Todo) (question, recommend string) {
 
 // emitNeedsUserExternalInfo emits an idempotent, non-destructive wake to task t's supervisor when external
 // information arrives while t is in reviewNeedsUser. It never mutates the task's supervision state or ask card.
-func (s *Service) emitNeedsUserExternalInfo(ctx context.Context, t Todo, source, summary, signalKey string) bool {
+func (s *Service) emitNeedsUserExternalInfo(ctx context.Context, t Todo, source, summary, signalKey string, panes ...unlinkedPane) bool {
 	if !needsUserWakeEligible(t) {
 		return false
 	}
 	g := superviseSignal{
 		Key:            strings.TrimSpace(signalKey),
+		Unlinked:       panes,
 		ExternalSource: clip(oneLine(strings.TrimSpace(source)), 160),
 		Detail:         clip(oneLine(strings.TrimSpace(summary)), 500),
 	}
@@ -291,7 +292,10 @@ func (s *Service) needsUserAgentTurn(ctx context.Context, t Todo, c taskDoneChec
 	}
 	source := fmt.Sprintf("agent turn %s/%s", e.Machine, short(e.Session))
 	key := fmt.Sprintf("agent_turn:%s/%s@%s", e.Machine, e.Session, e.At.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano))
-	if s.emitNeedsUserExternalInfo(ctx, t, source, summary, key) {
+	if len(c.unlinked) > 0 {
+		source = "agent turn"
+	}
+	if s.emitNeedsUserExternalInfo(ctx, t, source, summary, key, c.unlinked...) {
 		s.logf("task %s: agent turn while the owner decides: supervisor told", t.ID)
 	}
 }

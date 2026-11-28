@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
@@ -80,6 +81,8 @@ func TestMain(m *testing.M) {
 	codexStartupLook = time.Second
 	// No test may reach the user's running Orca: the default metadata path points nowhere.
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
+	// Nor an Orca app installed on the developer's machine: Orca is not installed unless a test says so.
+	orcaInstalled = func() (bool, string) { return false, "" }
 	// Nor the user's book of Orca chats in the node's cache folder (orcabridge_book.go): kept in memory unless a test
 	// gives it a file.
 	orcaBookPath = func() string { return "" }
@@ -767,22 +770,40 @@ func TestOrcaPollsEverySecond(t *testing.T) {
 	}
 }
 
-// node.info finds Orca when its runtime answers with a protocol Persona speaks; an incompatible one is there, not
-// available, with a note.
+// withOrcaInstalled makes Orca installed (found, at version, "" for none) for one test, or not (TestMain's default).
+func withOrcaInstalled(t *testing.T, found bool, version string) {
+	t.Helper()
+	old := orcaInstalled
+	orcaInstalled = func() (bool, string) { return found, version }
+	t.Cleanup(func() { orcaInstalled = old })
+}
+
+// node.info finds Orca when its runtime answers with a protocol Persona speaks (running); an incompatible one is
+// there, not available, with its version and the catalog's note; one that does not answer is stopped when it is
+// installed (with the version its install says) and missing when it is not (#17037).
 func TestOrcaEngineDetection(t *testing.T) {
 	o := orcarttest.New(t)
 	e := orcaEngine(context.Background(), &orcart.Client{MetaPath: o.MetaPath})
-	if e != (proto.Engine{ID: "orca", Name: "Orca", Available: true, Version: "1.4.245"}) {
+	if e != (proto.Engine{ID: "orca", Name: "Orca", Available: true, Version: "1.4.245", State: proto.EngineRunning}) {
 		t.Errorf("engine %+v", e)
 	}
 	o.SetStatus(map[string]any{"runtimeProtocolVersion": 2})
 	e = orcaEngine(context.Background(), &orcart.Client{MetaPath: o.MetaPath})
-	if e.Available || e.Note == "" || e.Version != "1.4.245" {
+	if e.Available || e.Version != "1.4.245" || e.State != proto.EngineIncompatible ||
+		e.Note != i18n.T(i18n.Default, "node-engine.orca_incompatible") {
 		t.Errorf("incompatible: %+v", e)
 	}
-	e = orcaEngine(context.Background(), &orcart.Client{MetaPath: "/tmp/persona-no-such-dir/orca-runtime.json"})
-	if e != (proto.Engine{ID: "orca", Name: "Orca"}) {
+	// The hub words the note in each reader's language (i18n.EngineText).
+	if got := i18n.EngineText(i18n.En, e.Note); got != i18n.T(i18n.En, "node-engine.orca_incompatible") || got == e.Note {
+		t.Errorf("the note in English: %q", got)
+	}
+	absent := &orcart.Client{MetaPath: "/tmp/persona-no-such-dir/orca-runtime.json"}
+	if e = orcaEngine(context.Background(), absent); e != (proto.Engine{ID: "orca", Name: "Orca", State: proto.EngineMissing}) {
 		t.Errorf("absent: %+v", e)
+	}
+	withOrcaInstalled(t, true, "1.4.277")
+	if e = orcaEngine(context.Background(), absent); e != (proto.Engine{ID: "orca", Name: "Orca", Version: "1.4.277", State: proto.EngineStopped}) {
+		t.Errorf("installed, not running: %+v", e)
 	}
 	if hs := engineHosts(proto.EngineOrca, nil); len(hs) != 1 || hs[0].Kind() != host.Orca {
 		t.Errorf("orca hosts %v", hs)

@@ -20,6 +20,8 @@ type inboxStore interface {
 	PutInboxItem(ctx context.Context, id string, data []byte, updatedAt time.Time, doneAt *time.Time) error
 	// InboxItems hands each open item, and each one done since doneSince, to each (raw is valid only during the call).
 	InboxItems(ctx context.Context, doneSince time.Time, each func(raw []byte) error) error
+	// StoredInboxSources names every source retained, including completed items older than InboxItems holds.
+	StoredInboxSources(ctx context.Context) ([]string, error)
 	DoneInboxItems(ctx context.Context, q db.InboxDoneQuery) ([]db.InboxRow, error)
 	DoneInboxDays(ctx context.Context, zone string, connectors bool) ([]db.InboxDay, error)
 	DoneInboxItemsByID(ctx context.Context, ids []string) ([][]byte, error)

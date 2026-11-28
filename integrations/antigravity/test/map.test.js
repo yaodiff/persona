@@ -18,6 +18,7 @@ import {
   stepsToItems,
   toAgyId,
   toPersonaId,
+  workspacePathOf,
 } from '../lib/map.js'
 
 describe('antigravity transcript and tool mapping', () => {
@@ -934,5 +935,25 @@ describe('antigravity transcript and tool mapping', () => {
     })
     assert.equal(nbDirect.toolName, 'NotebookEdit')
     assert.equal(nbDirect.toolInput.notebook_path, '/tmp/work/direct.ipynb')
+  })
+
+  it('workspacePathOf ignores non-strings, remote/UNC file:// hosts, NUL bytes, and malformed URIs while preserving valid local and raw paths', () => {
+    assert.equal(workspacePathOf({ WorkspaceURIs: [undefined, null, '', '   '] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file://evil.example/etc/passwd'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file://127.0.0.1/tmp/x'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file:////evil.example/share'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file://\\\\evil.example\\share'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file:///%2f/evil.example/share'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file:///tmp/a%00b'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['/tmp/a\0b'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file:///%ZZbad'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file://localhost/tmp/local%20repo'] }, '/fallback'), '/tmp/local repo')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['FILE:///C:/Users/demo/repo'] }, '/fallback'), 'C:/Users/demo/repo')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['/tmp/a'] }, '/fallback'), '/tmp/a')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['C:\\foo'] }, '/fallback'), 'C:\\foo')
+    assert.equal(
+      workspacePathOf({ WorkspaceURIs: [undefined, 'file://attacker.example/secret', 'file:////evil.example/share', 'file:///workspace/ok'] }, '/fallback'),
+      '/workspace/ok',
+    )
   })
 })

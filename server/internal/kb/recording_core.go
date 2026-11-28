@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/recordingspeakers/recordingspeakersadapt"
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
@@ -74,6 +75,27 @@ func (c recordingCore) Project(slug recordingwire.ProjectSlug) (recordingwire.Ea
 }
 func (c recordingCore) HubTranscriptLocked(id recordingwire.ID) (HubTranscript, error) {
 	return c.e.Store.readHubLocked(string(id))
+}
+func (c recordingCore) SpeakerTurnsLocked(id recordingwire.ID) (*recordingwire.SpeakerTurnsFile, error) {
+	return c.e.Store.readSpeakerTurnsLocked(string(id))
+}
+func (c recordingCore) ImportSpeakerTimeline(in recordingwire.SpeakerImportInput) (recordingwire.SpeakerImportOutput, error) {
+	return recordingspeakersadapt.ImportTimeline(in)
+}
+func (c recordingCore) RecomputeSpeakerStats(in recordingwire.SpeakerRecomputeInput) (recordingwire.SpeakerRecomputeOutput, error) {
+	return recordingspeakersadapt.RecomputeAfterTranscriptChange(in)
+}
+func (c recordingCore) ApplySpeakerEdit(in recordingwire.SpeakerEditInput) (recordingwire.SpeakerEditOutput, error) {
+	return recordingspeakersadapt.ApplyEdit(in)
+}
+func (c recordingCore) AlignTranscriptSpeakers(in recordingwire.SpeakerAlignInput) (recordingwire.SpeakerAlignOutput, error) {
+	return recordingspeakersadapt.AlignTranscript(in)
+}
+func (c recordingCore) AttributeDebateSpeakers(in recordingwire.SpeakerDebatesAttrInput) (recordingwire.SpeakerDebatesAttrOutput, error) {
+	return recordingspeakersadapt.AttributeDebates(in)
+}
+func (c recordingCore) ResolveDebateDisplays(in recordingwire.SpeakerDisplayInput) []recordingwire.SpeakerDisplayLabel {
+	return recordingspeakersadapt.ResolveDebateDisplays(in)
 }
 func (c recordingCore) RenderTranscript(r *Recording, segs []RecordingSegment) string {
 	return c.e.Store.renderTranscript(r, segs)

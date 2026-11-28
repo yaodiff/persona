@@ -46,9 +46,7 @@ func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState, b
 	if err != nil {
 		return err
 	}
-	busy := func() error {
-		return refusal("agent_busy", "the stopped terminal changed or is in use; check it before closing", nil)
-	}
+	busy := terminalChangedRefusal
 	owned := func() (host.Agent, bool, error) {
 		// Host.Snapshot can reuse a disconnected named session's cached layout.
 		// Read the selected server directly, including when proving absence.

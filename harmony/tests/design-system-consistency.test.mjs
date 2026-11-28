@@ -7,6 +7,17 @@ const etsRoot = new URL('../entry/src/main/ets/', import.meta.url);
 const resRoot = new URL('../entry/src/main/resources/', import.meta.url);
 
 const readEts = (rel) => readFileSync(new URL(rel, etsRoot), 'utf8');
+const listEtsFiles = (dir = etsRoot, prefix = '') => {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      out.push(...listEtsFiles(new URL(entry.name + '/', dir), `${prefix}${entry.name}/`));
+    } else if (entry.name.endsWith('.ets') || entry.name.endsWith('.ts')) {
+      out.push(`${prefix}${entry.name}`);
+    }
+  }
+  return out;
+};
 const readColorMap = (mode, onlyFile = '') => {
   const dir = new URL(`${mode}/element/`, resRoot);
   const files = onlyFile ? [onlyFile] : readdirSync(dir).filter((name) => name.endsWith('.json'));
@@ -34,6 +45,17 @@ test('Colors.ets semantic app.color.* tokens exist in both base and dark color.j
   for (const name of refs) {
     assert.equal(allLight.has(name), true, `base/element/*.json missing ${name}`);
     assert.equal(allDark.has(name), true, `dark/element/*.json missing ${name}`);
+  }
+
+  for (const file of listEtsFiles()) {
+    const src = readEts(file);
+    for (const match of src.matchAll(/\$r\('app\.color\.([a-z0-9_]+)'\)/g)) {
+      const name = match[1];
+      assert.equal(allLight.has(name), true, `${file}: base/element/*.json missing ${name}`);
+      assert.equal(allDark.has(name), true, `${file}: dark/element/*.json missing ${name}`);
+      assert.match(allLight.get(name), /^#[0-9A-Fa-f]{6,8}$/, `base invalid hex for ${name}`);
+      assert.match(allDark.get(name), /^#[0-9A-Fa-f]{6,8}$/, `dark invalid hex for ${name}`);
+    }
   }
 
   const expectedNormalized = [
@@ -75,7 +97,27 @@ test('normalized surfaces and PhoneStyle contain zero hardcoded hex color litera
     'components/TodoWorkspacePage.ets',
     'components/StarredMessagesSheet.ets',
     'components/ChatExportSheet.ets',
-    'components/ArchivedConversationsSheet.ets'
+    'components/ArchivedConversationsSheet.ets',
+    'components/StandingAuthSheet.ets',
+    'components/AlwaysGrantsSection.ets',
+    'components/AssistantSearchSheet.ets',
+    'components/AutoConversationsSheet.ets',
+    'components/AssistantCards.ets',
+    'components/KnowledgeWorkspacePage.ets',
+    'components/InboxWorkspacePage.ets',
+    'components/HealthWorkspacePage.ets',
+    'components/HealthToday.ets',
+    'components/HealthConversationHistory.ets',
+    'components/TokenUsageSheet.ets',
+    'components/PersonalAgentsSheet.ets',
+    'components/MachineSubscriptionCards.ets',
+    'components/AgentListPage.ets',
+    'components/ProjectsPage.ets',
+    'components/SettingsDirectory.ets',
+    'components/SettingsPage.ets',
+    'components/TodoStageBar.ets',
+    'components/TodoDecisionsSection.ets',
+    'components/RuleSuggestionBar.ets'
   ];
 
   for (const file of guardedFiles) {
@@ -171,4 +213,27 @@ test('InteractionDecisionForm prevents Plan header and Auto-Accept Edits dock tr
   assert.match(secondary, /labelStyle\(\{\s*maxLines:\s*2,\s*minFontSize:\s*12,\s*maxFontSize:\s*Tokens\.typeSecondary,\s*overflow:\s*TextOverflow\.Ellipsis\s*\}\)/);
   assert.match(form, /Colors\.pressOverlay/);
   assert.match(form, /Colors\.hairlineGlass/);
+});
+
+test('Wave 5 visual polish fixes: ellipsis dots, Starred MarkdownText, wrapping Todo status row, and native Status icon', () => {
+  const strip = readEts('components/ComposerTopStrip.ets');
+  assert.doesNotMatch(strip, /\$r\('sys\.symbol\.more'\)/);
+  assert.match(strip, /id\('composer\.queue\.more\.' \+ item\.id\)/);
+
+  const starred = readEts('components/StarredMessagesSheet.ets');
+  assert.match(starred, /MarkdownText\(\{/);
+  assert.match(starred, /id\('starred\.snapshot\.text\.' \+ star\.id\)/);
+
+  const todo = readEts('components/TodoWorkspacePage.ets');
+  const statusWords = todo.slice(todo.indexOf('@Builder phoneStatusWords('), todo.indexOf('@Builder seenChip('));
+  assert.match(statusWords, /Flex\(\{\s*wrap:\s*FlexWrap\.Wrap/);
+  const listControls = todo.slice(todo.indexOf('@Builder phoneListControls('), todo.indexOf('@Builder listContent('));
+  assert.match(listControls, /SymbolGlyph\(\$r\('sys\.symbol\.list_checkmark'\)\)/);
+  assert.match(listControls, /borderRadius\(Tokens\.radiusCapsule\)/);
+
+  const index = readEts('pages/Index.ets');
+  const slimHeader = index.slice(index.indexOf('@Builder slimSessionHeader('), index.indexOf('@Computed get floatingDraftHeader'));
+  assert.match(slimHeader, /Colors\.elevatedGlass/);
+  assert.match(slimHeader, /Colors\.hairlineGlass/);
+  assert.match(slimHeader, /ButtonStyles\.touchRegion/);
 });

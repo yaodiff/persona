@@ -69,7 +69,7 @@ if [ "$lane" = all ] || [ "$lane" = core-node ]; then
   # out, the binaries build without their subcommands and the extension host registers no such extension. The modules'
   # own tests do not depend on the tags: they run in the shards.
   if [ -d server/internal/modules/volc ] || [ -d server/internal/modules/voice ]; then
-    ci_run 'Builds without the speech modules' 900 bash -c 'cd server && for t in persona_without_volc persona_without_voice; do go test -tags "$t" -count=1 -timeout=6m ./internal/builtinext/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=6m -run "Volc|Voice|Transcription" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TranscriptionEndToEnd" ./internal/assistant/ || exit 1; done'
+    ci_run 'Builds without the speech modules' 900 bash -c 'cd server && for t in persona_without_volc persona_without_voice; do go test -tags "$t" -count=1 -timeout=6m ./internal/builtinext/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=6m -run "Volc|Voice|Transcription|Orphan|ModulesOff" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TranscriptionEndToEnd" ./internal/assistant/ || exit 1; done'
   fi
   if [ -d server/internal/modules/lark ]; then
     # The Feishu / Lark module (#13404, docs/architecture/core-and-modules.md "Provider seams"): left out, the binaries

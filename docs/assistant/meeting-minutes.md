@@ -108,7 +108,7 @@ The minutes themselves are `detail.minutes`, present once minutes have been writ
 
 - `start` / `end` are the recording's span (its start, and its end or at least a minute after the start) in the user's time zone, to the second (#4713). Clients format them with their own localized date and time, as they show the recording's own dates, and show `when` only when they are absent (minutes from an older hub). `when` is never parsed. Minutes written before these fields existed get them from their recording when the detail is read.
 - `at` is seconds from the start of the recording, the same clock as `segments[].start`, so a client can jump straight to that part of the transcript. Every point, decision, action and open question carries one.
-- `who` is omitted unless the transcript or the calendar actually supports it. There is no speaker diarization, so a name appears only when someone was addressed by name or is the only attendee who could have said it. Otherwise the field is absent, not guessed.
+- `who` is omitted unless the transcript or the calendar actually supports it: a name appears only when someone was addressed by name or is the only attendee who could have said it; otherwise the field is absent, not guessed. Speaker numbers and owner-chosen speaker names never enter `who` ("Speakers (#17674)").
 - `by` is the deadline as spoken ("Friday", "before the 20th"), not a parsed date. Absent when none was said. `due_date` (`YYYY-MM-DD`) is added only when the spoken deadline resolves to one date unambiguously, counting from the meeting day.
 - `id` names an action within one `version` (`a1`, `a2`, …). `todo_id` is set once the user confirmed it as a to-do.
 - Sections with nothing in them are omitted, not filled with "none".
@@ -482,7 +482,7 @@ Both clients follow these rules:
 
 ## Disagreements (#16728)
 
-Minutes of a meeting with a real disagreement list it; all other minutes look exactly as before. A **Disagreements** section is written by the same minutes call, with no new setting. For each real disagreement it gives the question in dispute, two to four positions citing the transcript line where each side's holder says it, and whether the meeting settled it. It needs no speaker separation: a position names a person only when the transcript or the calendar supports it, exactly as `who` does today (decision 6, "No speaker attribution", is unchanged).
+Minutes of a meeting with a real disagreement list it; all other minutes look exactly as before. A **Disagreements** section is written by the same minutes call, with no new setting. For each real disagreement it gives the question in dispute, two to four positions citing the transcript line where each side's holder says it, and whether the meeting settled it. Without a speaker timeline, a position names a person only when the transcript or the calendar supports it, exactly as `who` does; when a hub-transcribed meeting carries a speaker timeline, positions also take their speaker attribution from it ("Speakers (#17674)").
 
 Unchanged: the "minutes ready" push text (still counts decisions and to-dos), the meeting summary card's counts, the material later meetings read (still copies only points, decisions, actions and open questions), and minutes written by extensions (`KBRecordingMinutes`, `schema/extension/kb.schema.json`).
 
@@ -638,36 +638,227 @@ A client decodes `debates` on its own, apart from the rest of the minutes, and s
 | This one | This one | The section when there is a disagreement; otherwise the minutes look as before. |
 | Rolled back to an older one | This one | The older hub's first rewrite drops `debates`. Confirming a to-do there leaves the section in `markdown` and `minutes.md` until the minutes are next rendered (a photo deleted, new minutes), so screens show no section while Copy, `kb_get`, search, Android and HarmonyOS still have it. |
 
+## Speakers (#17674)
+
+A meeting the hub transcribes can carry a **speaker timeline**: anonymous numbered speakers (`s1`, `s2`, …) with the times they spoke. A meeting without a speaker timeline looks exactly as before; with one, the transcript and the disagreements show their speakers with no action, and the owner only names them.
+
+- Every transcript line whose time is reliable gets its speaker (or "?" when unsure).
+- Each position of a disagreement in the minutes is attributed to a speaker, worked out by the hub from the line it cites, never by the model.
+- The owner names speakers once ("Speaker 2" → a name); names, merges and unmerges re-render the minutes and their Markdown immediately, with no model call, no push and no new minutes `version`.
+
+Nothing recognises a voice, across meetings or within one, and no voice features are stored: only which numbered speaker spoke when and the names the owner chose. Until a separation engine exists on the hub (a later phase), only the debug import stores a timeline.
+
+### Where things are kept
+
+| What | Where | Why |
+| --- | --- | --- |
+| The speaker list, state and quality | a `speakers` block in `meeting.json` | Kept when a transcript expires and is trimmed, so names survive; has per-part revisions and the `meeting_live` event; readable by the minutes gate and by Core with the recording module off |
+| The timeline | `speaker_turns.json` | Part of the transcript: expires with it (not on the trim keep list) and excluded from search (`kb/find.go` `searchable()`) |
+| Whether the hub transcript's times can be trusted | `hub_segments.json`: one `timing` field for the whole transcript | Core cannot ask an extension; absent (older transcripts) reads as `spread` |
+| A position's attribution | on the position in `minutes.json` | So names, merges and unmerges still work after the transcript expires |
+
+None of this data goes into `meta.json` (rewritten on every upload), the upload's undo journal or Postgres.
+
+### Field contract
+
+`meeting.json` gains a `speakers` block:
+
+```jsonc
+"speakers": {
+  "state": "ready",            // no block = never separated; waiting | ready | failed | cleared
+  "since": "2026-11-26T08:10:03Z",
+  "tries": 1,
+  "done": 1260.0,              // waiting only: recording seconds separated so far, when reported
+  "reason": "",                // failed only: engine_unavailable | no_audio | too_long | timeout | gave_up | audio_gone | error
+  "quality": "ok",             // ok | low ("Quality" below)
+  "quality_why": "",
+  "next": 6,                   // the next new speaker number
+  "people": [
+    {"id": "s1", "name": "Ada"},
+    {"id": "s2", "name": "Grace", "me": true}, // the owner: "me" makes the hub fill in the owner's name
+    {"id": "s3"},                              // unnamed: shown as "Speaker 3"
+    {"id": "s4", "merged_into": "s1"},         // a merge, which can be undone
+    {"id": "s5", "minor": true}                // spoke very little: folded, never used to attribute
+  ],
+  "stats": {"s1": [720.5, 34], "s2": [410.0, 21]},  // per original id: seconds and lines, last computed; summed per merged person on read
+  "edits": {"name": 3, "merge": 1}                   // how many edits of each kind, counts only
+}
+```
+
+- State, reason and quality are named closed types in `server/internal/recordingwire`, not bare strings, with no `*bool` fields.
+- `Meeting.Clone()` copies `speakers` deeply so uploads never drop the speaker list.
+- `speakers` uses `meeting.json`'s per-part revision (`speakers`); storing a timeline raises it under the same lock.
+- Names come only from the owner (picked or typed), trimmed, on one line, at most 100 characters.
+- State transitions:
+
+| Now | Timeline stored | Separation fails or times out | `clear` |
+| --- | --- | --- | --- |
+| no block | `ready` (through the debug import when no job ran) | — | no change |
+| `waiting` | `ready` | first failure: retry after a minute, `tries` + 1; second failure, or the wait limit: `failed` with its reason | `cleared`, the job cancelled |
+| `ready` | `ready`, the new timeline, names kept by the pairing rule | — | `cleared` |
+| `failed` | `ready` | — | `cleared` |
+| `cleared` | refused (`409 speakers_cleared`) | — | no change |
+
+`cleared` is a tombstone: after the owner deletes a meeting's speakers, a late timeline is refused. Writing `failed` first verifies the state is still the same attempt's `waiting`, so it never overwrites a `ready` stored a moment earlier.
+
+`speaker_turns.json`:
+
+```jsonc
+{
+  "run": "…",                                  // id of this timeline (one per attempt or import)
+  "source": "hub",
+  "engine": "example-engine 1.0 / model q8 / 10s",
+  "covered": [[0, 3412.5]],                     // recording seconds the hub had audio for
+  "turns": [[12.30, 18.92, "s1"], [18.40, 25.10, "s2"]],   // may overlap
+  "signals": {"slots": 6, "hole_share": 0.02}  // numbers and enums only, used by the quality check
+}
+```
+
+- **Every time is in recording seconds**: the same clock as `segments[].start`, the minutes' `at` and the audio the hub receives (writer sample count, pauses excluded).
+- **The hub numbers speakers.** An incoming timeline carries its own labels (`c1`, `c2`, …); the hub maps them to stable ids (`s1`, `s2`, …). The first timeline numbers them in order of first speech. A later timeline for the same meeting is paired one to one with the previous `turns` by overlap: largest overlap first, each old id taken at most once, and a pair counted only when the overlap is at least half of the new cluster's or of the old id's speaking time. Unpaired clusters get new ids from `next`. Names follow their ids.
+- **A merge never changes the timeline**: it is recorded as `merged_into` on `people`, so it can be undone:
+  - only naming triggers an automatic merge: giving a speaker the name another speaker already has merges the one who spoke less into the one who spoke more;
+  - `merged_into` points only at an unmerged speaker (no chains);
+  - an unmerged speaker comes back unnamed so two people with one name do not automatically merge again on the next edit; undoing an automatic merge uses the server's `undo` list to unmerge and restore the old name.
+- **Minor speakers.** A speaker with under 20 seconds of speech (absolute, counted per merged person; a starting value) is marked `minor`: folded on the naming screen, their lines still carry their number, and they are never used to attribute a position. Merged into a normal speaker, they stop being `minor`.
+- When a recording is shortened, turns past its new length are cut.
+
+`hub_segments.json` carries `timing` for the whole hub transcript: `exact` (the adapter declares the transcription service gives sentence times), `turn` (the built-in adapter's per-reply timing), or `spread` (everything else, and any transcript without the field).
+
+### Aligning lines to speakers
+
+One pure rule is implemented once on the hub and checked against shared fixtures under `spec/fixtures/`:
+
+1. **Layer one (original ids):** for a line `[a, b]`, compute the overlap in seconds with each original id in `turns`. Merges are ignored here.
+2. **Layer two (merged people):** sum the overlap of ids merged into the same person and pick the largest. No overlap at all gives no label.
+3. **Certainty:** a speaker is sure when the largest person has over 70% of all overlap, at least 1 second of overlap, and is not `minor`. An unsure line still shows its number with a `?` but never attributes a position.
+4. **Unreliable times and holes:** a line from the hub (`source: hub`) when the transcript's `timing` is `spread` gets no label. Lines inside a hole of `covered` get no label and are counted apart.
+5. **Echo:** lines marked as Persona's echo (`echo: true`) get no label.
+6. **Low quality:** when the meeting's `quality` is `low`, every labelled line counts as unsure: numbers show with `?` and none is used to attribute a position.
+
+Layer one is what is stored on minutes positions so a merge or unmerge only redoes layer two. 70% and 1 second are starting values (named constants); the target is at least 90% accuracy on attributed positions while attributing as many as possible within that bound.
+
+**Display names** (one shared rule for hub detail, Markdown and clients), for a position:
+
+| Order | When | Shows |
+| --- | --- | --- |
+| 1 | a sure `speaker` the owner named | the owner-chosen name |
+| 2 | a sure `speaker` not named | "Speaker N" (`Speaker 2` / `发言人 2` / `話者 2`) |
+| 3 | the model wrote `who` (named in the transcript, passed `named()`) | `who` |
+| 4 | otherwise | no name, no hint |
+
+### Quality
+
+Because nobody manually corrects every line, the hub judges each meeting and records `quality` (`ok` or `low`) with `quality_why`. When `quality` is `low`: the minutes do not attribute positions to speakers (a transcript `who` still shows), the minutes model does not see speaker numbers, and every speaker number in the transcript carries `?`.
+
+Quality is computed under the lock when a timeline is stored (before waking the minutes round) and recomputed whenever the transcript of record is replaced (final transcript stored or a full re-upload). Starting conditions (named constants) that mark a meeting `low`:
+
+- over a fifth (> 20%) of substantive lines (at least 2 seconds, or at least 8 CJK unified ideographs; English lines are judged by duration only) have no label, excluding lines in `covered` holes and lines left unlabelled by alignment rule 4;
+- one speaker has over 95% of speaking time while the calendar lists three or more attendees (skipped when there are no calendar attendees);
+- under 60 seconds of speech in total, or the timeline covers under half of the recording;
+- the calendar lists more than seven attendees.
+
+### Routes
+
+Feature flag `meeting_speakers` appears in WS `hello.features` and trusted `/health` only while the default manager is connected and names `meeting_speakers` beside `meeting_transcription` in its `manager.hello` capabilities (an extension's report cannot add it). With it the hub serves `detail.speakers`, `segments[].speaker` / `speaker_unsure` and the edit route. Engine selection and enablement settings arrive in the later engine phase under their own keys in `GET /api/v1/assistant`; clients show that settings row only when those keys are present.
+
+| Route | Owner | Use |
+| --- | --- | --- |
+| `POST /api/v1/recordings/{id}/speakers` | recording module | Edit: `{rev, ops: […]}` → `200 {speakers, undo: […]}`; `undo` is the inverse the server computed, sent back as is to undo. `rev` mismatch: `409 speakers_stale` |
+| `GET /api/v1/kb/recordings/{id}` (existing) | Core | Adds `detail.speakers` (below); each `detail.segments[]` gains optional `speaker` and `speaker_unsure`. Served with the recording module off too |
+| `meeting_live` event (existing) | | `changed` and `revs` gain `speakers` |
+| `PUT /api/v1/recordings/{id}/speakers/turns` | recording module | **Debug only; no client uses it.** Answers `404` unless the hub machine's `manager.json` enables `kb.speaker_turns_import` (off by default, read at start; no app or `PUT /api/v1/assistant` can change it). Full credentials only. Body `{run, engine, covered, turns, source, signals?}`; the same `run` with the same body gives the same answer, with a different body `409 op_id_reused`; at most 20000 turns and 2 MiB. Imports a timeline into a recorded meeting whose transcript is kept |
+
+`detail.speakers`:
+
+```jsonc
+{
+  "rev": 7, "state": "ready", "reason": "", "quality": "ok", "source": "hub",
+  "people": [{"id": "s1", "name": "Ada", "seconds": 720.5, "lines": 34, "samples": [312.0, 1504.5]},
+             {"id": "s2", "name": "Grace", "me": true, "seconds": 410.0, "lines": 21},
+             {"id": "s4", "merged_into": "s1"},
+             {"id": "s5", "minor": true, "seconds": 11.2, "lines": 3}],
+  "candidates": ["Ada", "Grace"],
+  "spans": [[12.30, 18.92, "s1"], [18.40, 25.10, "s2"]],   // original ids; merges are in people
+  "covered": [[0, 3412.5]],
+  "trimmed": false   // true after the transcript expired: spans empty; name, merge, unmerge and clear still work
+}
+```
+
+- While `state` is `waiting`, `detail.speakers` adds `done` and `end` (seconds separated, total seconds) for progress.
+- `samples` holds the start times of two or three of the person's longest sure lines.
+- `candidates` (computed on read, names only, never matched by voice) combines the owner ("me" is a separate choice), calendar attendees, names heard in the minutes (`who`), and names used in earlier meetings with overlapping calendar attendees or the same title.
+
+Edit operations (only these four):
+
+```jsonc
+{"op": "name",    "id": "s2", "name": "Ada"}   // empty name clears it; "me": true marks the owner
+{"op": "merge",   "from": "s4", "into": "s1"}   // the hub also does this automatically when two get one name
+{"op": "unmerge", "id": "s4"}
+{"op": "clear"}                                 // deletes timeline and list, state cleared, running job cancelled; cannot be undone
+```
+
+Errors reuse the existing recording codes (`400` for an invalid body, unknown op, unknown speaker, or a name that is multiline or over 100 characters; `404`; `410` deleted; `403 forbidden` without full credentials; `403 kb_read_only`; `409 not_meeting` for a non-meeting, track recording or device-mode meeting; `413 too_large` over the body or 20000-turn limit) plus `409 speakers_stale`, `409 speakers_cleared` and `409 op_id_reused`. Write routes require full credentials only and stay out of `extwire.RouteScopes`.
+
+**Exposure.** `detail.segments` is part of the extension KB contract (`schema/extension/kb.schema.json`, `sdk/go`, `sdk/ts`): extensions with `kb.read` see speaker numbers and names alongside the transcript and minutes they already read.
+
+### The minutes
+
+Positions in `debates` gain attribution fields beside `stance`, `at` and `who`:
+
+```jsonc
+{"stance": "Per recording: easier to explain",
+ "at": 340.5, "span": [340.5, 351.0], "over": {"s2": 3.1, "s1": 2.8}, "said_by": "s2",
+ "speaker": "s2", "speaker_unsure": true,
+ "also": [{"at": 402.0, "span": [402.0, 409.1], "over": {"s3": 6.2}, "said_by": "s3", "speaker": "s3"}],
+ "who": "Grace"}
+```
+
+- `span`: the cited line's start and end seconds for alignment; `at` stays the jump target and never changes. `est: true` marks a line whose time is unreliable (alignment rule 4); it is not attributed. `over`: layer-one overlap seconds per original id. `speaker` / `speaker_unsure`: layer two plus cross-checks, ready for clients. `said_by`: the model's `holder`. `also`: up to two further lines where others back the same position. `who` keeps its meaning and string type.
+- **What the model sees.** With a timeline and `quality` `ok`, a transcript line `[12] 10:03:15 text` becomes `[12] 10:03:15 〔S2〕 text`, or `〔S1?〕` when unsure. Only anonymous numbers are shown — never owner-chosen names and never which speaker is the owner; `named()` is unchanged. The prompt chooses between two wordings depending on whether a timeline is present, and chunking weights include the marker. With numbers, the prompt gives three rules: numbers are machine-separated and may be wrong (`?` more so); never write a speaker number (`S2`, `Speaker 2`) into any text field; for each position also give `holder`, the number of who holds it (usually the cited line's number, differing when someone else restates it). The model output gains `holder` and `also: [{line, holder}]` on positions: `holder` is read as `S` plus digits, lowercased (anything else counts as missing), and `also` is checked and merged on long meetings like the main citation (its lines join `notedLines`).
+- **Attribution at store time.** Computed under the lock when minutes are stored (not outside the lock in `buildMinutes`), for every cited line (main and `also`): store `at`, `span` and `est` from the lines the generation read; compute `over` from the current timeline; compute `speaker` and `speaker_unsure`. Cross-checks — any failing marks the attribution unsure:
+  - the model's `holder` (`said_by`) differs from the computed speaker;
+  - the same person appears on two positions of the same disagreement (`also` included);
+  - the model wrote `who`, the computed speaker has an owner-chosen name, and the two differ.
+  When the model saw no numbers (a late timeline), `said_by` is absent and the first check is skipped. Ordinary points, summary bullets and action items get no speaker; their `who` keeps its existing rule. Minutes written without `span` get no attribution until regenerated.
+- **After a name, merge, unmerge or new timeline.** Recompute attribution (transcript kept: from the stored `span` and the current timeline; transcript trimmed: from the stored `over` and current merges), re-render the Markdown, write `minutes.json` and `minutes.md`, and emit `meeting_live` with `speakers` plus the recording's `summary` notification (as confirming to-dos does) so clients that do not read the new keys reload the minutes. No model call, no push, and `minutes.version` stays unchanged so pending to-do confirmations are not rejected. A trimmed recording uses an explicit re-render path that reads only the stored position data and speaker list, without reading a transcript ("Privacy" below).
+- **A timeline later than the minutes** (including one arriving while minutes are generating): applies the same attribution update immediately, with no model call, no push, unchanged `minutes.version` and no silent full regeneration. A generation already in progress computes attribution under the same lock when it stores.
+- **The gate.** `SpeakersHolds` in `recordingwire/rules.go`, beside `TranscriptionHolds`: while `speakers.state` is `waiting`, hub transcription has ended (`final` or `failed`) and the wait limit has not been reached, minutes generation waits. Both "may the minutes start" checks use it. The wait limit is the later of 10 minutes after the final transcript was stored and "audio length ÷ 5 + 2 minutes" after `since`; a restart does not extend it. At the limit, after checking the state is still the same attempt's `waiting`, the hub marks `speakers.state` `failed` with reason `timeout` and minutes proceed without numbers. Storing a timeline wakes the minutes round. Audio deletion is unchanged because it already waits until minutes are written or will not be written, downstream of this gate.
+- **Markdown.** Disagreements lines put the display name in parentheses (`(Ada)`, `(Speaker 3)`, listing each attributed speaker when `also` adds more) by the display-name table above. Without a timeline, both layouts render byte for byte as before.
+- **Unchanged surfaces.** `transcript.md`, the live log, in-meeting batches, highlights and the material read by later meetings never carry a name derived from the speaker timeline.
+
+### Compatibility
+
+| Combination | Result |
+| --- | --- |
+| New client, older hub | No `meeting_speakers`, no `detail.speakers`; behaves as before |
+| Older client, this hub | Speakers and names appear in the minutes' Markdown (Copy, Android, HarmonyOS); older apps show no labels in the transcript |
+| Rolled back to an older hub | The older hub's first minutes rewrite drops disagreements and attribution; its first `meeting.json` write for a meeting drops that meeting's speaker list; its search indexes `speaker_turns.json` (numbers and ids only). Back on this hub: regenerating brings back disagreements where the transcript is kept; a lost timeline cannot be rebuilt once hub audio is gone; lost names must be given again |
+| Recording module off | `detail.speakers` and names still show (served by Core); speaker write routes answer `404` |
+
 ## Privacy
 
 Transcription stays on device, only text is uploaded, audio never leaves the phone, and the phone deletes its recordings after `recording_audio_days` (default 14), while the hub keeps their text for `recording_text_days` (forever by default, #16412). A meeting recorded in hub mode (#3862, chosen per meeting) is the exception: "Privacy per mode" below. In a meeting call, what is said while the user holds Talk goes to the realtime voice service in either mode (#3862, "Decided"). In a participant meeting, the text of an answer said aloud goes from the hub's voice extension to the realtime voice service the owner set up, to be said in its voice (#5004); without that service it is said by the phone's on-device voice.
 
-Minutes are kept at least as long as their transcript (#3780). A recording's text (transcript, summary, live log) stays for `recording_text_days`: **forever by default** (#16412), otherwise 1–3650 days. Past a finite one the hub **trims** a recording that has minutes instead of deleting it: its transcript (`segments.json`, `transcript.md`), the summary made from it, the live log and any undo journal are deleted, and only `meta.json` (now with `trimmed_at`), `minutes.json` and `minutes.md` stay, according to the assistant setting `minutes_days`: **forever by default** (unset or `0`), otherwise 1–3650 days after the meeting (#3862). A recording without minutes, or one past a finite `minutes_days`, is deleted entirely as before. With forever, retention never deletes trimmed minutes; the user’s delete still removes everything. `GET /api/v1/assistant` returns `0` for forever, otherwise `max(minutes_days, recording_text_days)`, and `0` while the text is kept forever. `PUT` accepts `0` or an integer from 1–3650 (`400` otherwise). `assistant.minutes_days` in `persona_settings` accepts `0` or `"forever"`, shows the value in words, and confirms changes before applying them. A positive value below `recording_text_days` (or any value while the text is kept forever) is saved as asked for, by both, and counts once `recording_text_days` is shorter. Before #16412 transcripts followed `recording_days` (14 by default), which is now the phone's audio window (`recording_audio_days`); a saved value of it is read as that window, so the upgrade deletes no text. The trim writes `meta.json` first; files a trim cut short leaves (a crash, a failed removal) go on the next sweep, also once a longer `recording_text_days` covers the recording again.
+Minutes are kept at least as long as their transcript (#3780). A recording's text (transcript, speaker timeline `speaker_turns.json`, summary, live log) stays for `recording_text_days`: **forever by default** (#16412), otherwise 1–3650 days. Past a finite one the hub **trims** a recording that has minutes instead of deleting it: its transcript (`segments.json`, `transcript.md`), its speaker timeline (`speaker_turns.json`), the summary made from it, the live log and any undo journal are deleted, and only `meta.json` (now with `trimmed_at`), `meeting.json` (keeping the speaker list and names), `minutes.json` and `minutes.md` stay, according to the assistant setting `minutes_days`: **forever by default** (unset or `0`), otherwise 1–3650 days after the meeting (#3862). A recording without minutes, or one past a finite `minutes_days`, is deleted entirely as before. With forever, retention never deletes trimmed minutes; the user’s delete still removes everything. `GET /api/v1/assistant` returns `0` for forever, otherwise `max(minutes_days, recording_text_days)`, and `0` while the text is kept forever. `PUT` accepts `0` or an integer from 1–3650 (`400` otherwise). `assistant.minutes_days` in `persona_settings` accepts `0` or `"forever"`, shows the value in words, and confirms changes before applying them. A positive value below `recording_text_days` (or any value while the text is kept forever) is saved as asked for, by both, and counts once `recording_text_days` is shorter. Before #16412 transcripts followed `recording_days` (14 by default), which is now the phone's audio window (`recording_audio_days`); a saved value of it is read as that window, so the upgrade deletes no text. The trim writes `meta.json` first; files a trim cut short leaves (a crash, a failed removal) go on the next sweep, also once a longer `recording_text_days` covers the recording again.
 
 A trimmed recording:
 
 - Is still returned by `GET /api/v1/kb/recordings/{id}` with `detail.meta` (`trimmed_at` included, `minutes_state` `ready`), `detail.minutes`, no `segments` and no `summary`; `kb_get` prints the minutes and says the transcript expired; `kb_search` still finds `minutes.md`; earlier-meeting retrieval remains available in code but is disabled for in-meeting answers until a private-meeting mark exists (#3862).
 - Still turns confirmed action items into to-dos (`POST …/minutes/todos`), but cannot regenerate them: `POST …/minutes` is `409 transcript_expired`.
+- Still lets the owner name, merge, unmerge and clear speakers (`POST /api/v1/recordings/{id}/speakers`): `detail.speakers` returns `trimmed: true` with empty `spans`, and the minutes re-render from the attribution data stored on each position without reading a transcript ("Speakers (#17674)").
 - Takes no upload: `PUT /api/v1/recordings/{id}` answers `expired` (the hub never takes a transcript back, even when `recording_text_days` grows again or becomes forever). Its attendance is turned off with the live log gone (its lines, asks, topics and highlights with it: `GET …/live` reads them empty, their revisions 0, "The `meeting_live` event"), and no live log is written to it again, not even by a write that read the log before the trim.
 - Stays in reconciliation (`GET /api/v1/recordings`) at its revision with `trimmed_at`, while `days` stays the audio window (`recording_audio_days`). A phone deletes its own copy at `days` and never uploads one that old; one that still holds it sees the hub has that revision and sends nothing, so the phone contract is unchanged.
 - Is deleted entirely by the user's delete, which leaves a tombstone as before. Tombstones keep the `recording_audio_days` window (forever with it): they only refuse late uploads, and no phone uploads a recording older than that window.
 
 Attending a meeting (below, off by default) also puts the meeting's lines into the chosen session's conversation. Those copies stay in that conversation and do not expire with `recording_days`.
 
-### Needs a decision: cloud transcription and speaker diarization
+### Decided: cloud transcription and speaker separation
 
-Decided in #3862 for meeting recordings: an opt-in hub mode transcribes with a GPT-Live-compatible live model, and speaker diarization is dropped ("Meeting conversation (#3862)", phase 5). The comparison that led there:
+Decided across #3862 and #17674:
 
-On-device transcription of a Chinese meeting is good enough for a single speaker and degrades with crosstalk, distance and accents, and it cannot say who spoke. Two options, **neither implemented**:
-
-| | On device (today) | Cloud or hub transcription, with diarization |
-| --- | --- | --- |
-| Privacy | Audio never leaves the phone | Audio, or a high-quality recording of it, leaves the phone for a third party or the hub machine |
-| Chinese meeting quality | Usable for one speaker nearby; poor across a table | Meaningfully better, and can label speakers |
-| Cost and dependency | None | A new service, or a model the hub does not run today, plus the bandwidth of an hour of audio |
-| Failure | Already handled: no text, no upload | A new failure mode for every meeting |
-
-Until that is decided, minutes name a speaker only when the words themselves or the calendar make it plain.
+- **Hub mode** ("Meeting conversation (#3862)", phase 5) transcribes on the hub with a GPT-Live-compatible live model, and separates speakers locally on the hub from the meeting audio the hub already holds ("Speakers (#17674)"). Only the timeline of who spoke when and the names the owner chooses are kept; no voice features are stored and cloud speaker diarization is not used.
+- **Privacy mode** (`device`) transcribes on the device, never uploads meeting audio, and has no speaker separation: minutes name a speaker only when the words themselves or the calendar support it (`who`).
 
 ## Attending a meeting (#2981)
 
@@ -861,7 +1052,7 @@ Decided by the owner in #3862; every phase follows them.
 3. **Two channels.** The **room conversation** may be heard by others, so the hub limits it to meeting material. **Just me** is private, on screen only, and goes to the main chat.
 4. **After the meeting, a new conversation**: a normal Persona conversation seeded with the meeting (minutes, transcript, the room thread), not the room conversation lifted in place. The apps show the room and the follow-up as one thread. It finds other meetings with `kb_search` (`kind=recordings`) and `kb_get`.
 5. **Transcription.** Privacy mode transcribes on the iPhone, and the meeting's audio never leaves it (only Talk's spans go to the realtime voice service, decision 7 and "Decided"). Hub mode transcribes with a GPT-Live-compatible live model, through that interface only (no second vendor), and is never locked to the recording's language: Chinese, English and sentences that mix them are written as spoken, never translated ("Language is a hint, never a lock"). Audio may be kept on both sides as quality needs: the phone keeps its audio until the hub confirms, and gaps can be uploaded and transcribed after the meeting. The architecture is the measured one in "Phase 5".
-6. **No speaker attribution.** The live model cannot tell voices apart (measured near chance). `who` keeps today's rule: only what the words or the calendar support.
+6. **Speakers are told apart, never identified.** For a meeting the hub transcribes, the hub separates the voices in the audio it already holds into numbered speakers and keeps only who spoke when. People name them; nothing recognises a voice across meetings and no voice features are stored. Names used in earlier meetings with the same attendees are offered again as candidates, never matched by voice. A name the owner chose shows where the hub derives it from the timeline: in the transcript and on the positions of a disagreement. It never enters `who`, the highlights or the material of later meetings, and nothing says it aloud during a meeting; the minutes carry it, and so do the follow-up conversation and the Agents that read them. Nothing is labelled during the meeting. Meetings the iPhone records and transcribes itself (privacy mode) have no speakers. Apple Watch meetings have none yet; a later phase may send their audio to the hub, for speakers only, once the owner turns that on.
 7. **Realtime voice first**, connected for the whole meeting (its cost is not a concern). Addressing stays a tap or push-to-talk (#2981 decision 4: no wake phrase): the voice session hears only what the owner says to it, while transcription hears everything.
 8. **Echo.** The system's echo cancellation (voice processing, on every iOS Persona supports), and a transcript line that overlaps a span when Persona spoke and says its words is Persona's echo: kept and marked, left out of the minutes, the summaries and the live log ("Persona's echo", #5905; before it, every line in such a span was dropped).
 9. **A new `transcription` extension point**, not a mode of the dictation proposal (#2083).
@@ -902,6 +1093,7 @@ Each phase has a feature flag that the hub lists in WS `hello.features` and trus
 
 - `meeting_conversation` (phase 1): the upload's `room` and `private`, the room conversation, `…/ask` answered by it, `…/just-me`, `…/private`, `…/followup`, the origins `meeting` and `meeting_followup`, the `meeting_live` event, and the fields phase 1 adds to `GET …/live` and `detail.meta`. A manager that names it names `meeting_attendance` too.
 - `meeting_live_view` (phase 2), `meeting_photos` (phase 3) and `meeting_transcription` (phase 5): what those phases add. Each comes only with `meeting_conversation`, and `meeting_transcription` only with `meeting_live_view` too (it uses phase 2's `lines` and `?from=`).
+- `meeting_speakers` (#17674): what "Speakers (#17674)" adds. It comes only with `meeting_transcription`.
 - `meeting_highlights` (phase 2b): what "Phase 2b: highlights" adds. It comes only with `meeting_live_view`. Without it the meeting page stays as phase 2 has it.
 - `meeting_notes` (#8851): the room's `notes` role ("The notes role (#8851)"). It comes only with `meeting_live_view`. Without it a meeting Persona is not in starts `off`, with no live view.
 - `meeting_echo` (#5905) comes with `meeting_attendance`, with or without the conversation: echo lines marked on the upload and `spoken` ("Persona's echo"). The phone reads it at every upload, not once per meeting.
@@ -1131,7 +1323,7 @@ In the apps (web, iPhone and Android):
 
 #### The `meeting_live` event
 
-A manager's WebSocket event, content-free: `{"type": "meeting_live", "recording_id": "<id>", "changed": ["room", "asks"], "revs": {"room": 3, "asks": 12}}`. It goes out when the room's state, the asks, the private mark or the follow-up change, and from later phases on new lines, topics, highlights, photos, transcription state and captions; at most one a second per recording. `changed` is an open set: `room`, `asks`, `private`, `followup`, `lines`, `topics`, `highlights`, `photos`, `transcription`, `interim` (phase 5: "Gaps and the final pass").
+A manager's WebSocket event, content-free: `{"type": "meeting_live", "recording_id": "<id>", "changed": ["room", "asks"], "revs": {"room": 3, "asks": 12}}`. It goes out when the room's state, the asks, the private mark or the follow-up change, and from later phases on new lines, topics, highlights, photos, transcription state, captions and speakers; at most one a second per recording. `changed` is an open set: `room`, `asks`, `private`, `followup`, `lines`, `topics`, `highlights`, `photos`, `transcription`, `interim` (phase 5: "Gaps and the final pass"), `speakers` ("Speakers (#17674)").
 
 - `revs` holds each changed part's revision: a number per recording and part that only goes up (for `lines`, the live log's length). Numbers only, so the event still carries nothing of the meeting. The one exception is the trim: it removes the live log, so `lines`, `asks`, `topics` and `highlights` read empty and their revisions start again from 0, with no event for them. A client compares those revisions only within a recording that is not trimmed (the live view is shown only while the recording is partial and not trimmed anyway).
 - `GET …/live` returns `revs` for every part it has, and takes `parts` (`?parts=asks,room`: only those parts, with their `revs`). `photos` has a revision there but no field: `?parts=photos` returns only its revision, and the photos come from `GET …/photos`. A client keeps the revisions it has read and on an event reads only the parts that are newer: `GET …/live?parts=…`, the new lines with `?from=` its own next position (phase 2), `GET …/photos` only for `photos` (phase 3). Without `parts` the read returns everything, as #2981 reads do.
@@ -1176,7 +1368,7 @@ While a meeting records, the top of the meeting page shows **3–4 highlights of
   - Why a minute and not the line: batch lines carry only their `[HH:MM]` (both apps read that form when they show a batch's lines in the thread, and a wider stamp would change those rows), and the room copies it from the line without counting seconds; an exact line would take a `meeting_lines` call in every batch's turn. The phone lights the minute's lines, so the point is among them.
 - **After each batch.** A batch shows the room the highlights so far after the topics in its context block ("None yet" before the first; for a room started with lean batches only at the boundaries in "Long meetings: lean batches and compaction (#8253)"), each on a line of its own as `- [HH:MM] text`, never as a line that starts with `[`: both apps read every line of a batch's block that starts with a clock stamp as a line of the meeting. Beside the topics (both calls may go in the same step), the room updates the highlights when the batch changed what matters most in the meeting so far, and otherwise leaves them. The instruction asks for 3 to 4 once the meeting has that many points, fewer before; each one short sentence in the meeting's language (about 30 characters in Chinese or Japanese, about 12 words otherwise), stating the point itself rather than that it was discussed, with the `[HH:MM]` of the line where it came to a head.
   - Highlights it keeps are sent again word for word with their `[HH:MM]`, so a kept point never changes its wording; it changes only what the batch changed. A point can give way to a weightier one, and a decision outweighs the discussion that led to it. An open question the meeting has answered gives way to its answer, at the answer's line. It never clears them.
-  - A person is named only when the words name them (owner decision 6), since the highlights are shown and may be said aloud.
+  - A person is named only when the words name them (owner decision 6: nothing is labelled during the meeting, and speaker names never enter highlights), since the highlights are shown and may be said aloud.
 - **Older rooms.** A room started before the hub had the tool keeps the tools it started with: its batches show no highlights and it sets none, so its meeting's `highlights` stay `[]`.
 - **Meeting material.** The highlights come from the room, so they are material like the topics: the follow-up's seed lists them after the topics. They live in `live.json` and go with the transcript: the trim empties them, and `revs.highlights` starts again from 0 ("The `meeting_live` event"). `detail.meta` and `kb_get` never show them. They are among what may be said aloud or shown on the Lock Screen ("What may be said aloud"), although the Live Activity does not show them. The minutes do not read them ("Summary card (#6563)").
 - **Flag.** `meeting_highlights`, listed only beside `meeting_live_view` and only while the default manager names it, as "Flags and compatibility" says (an extension's report cannot add it). The phone reads it when a recording starts, and a meeting keeps it. A hub or manager without the flag leaves the meeting page as phase 2 has it; with it, the top card is Highlights, with a waiting line before the first ones while Persona attends ("The meeting card").
@@ -1328,7 +1520,7 @@ Hub → phone:
 - **How it ends.** A pass that fails is tried again twice (after 1 and 5 minutes) from its first window not done; then `state` is `final` with the live sentences, or `failed` when the hub has no sentence of its own. A try that never reached the service (`upstream_unavailable` or `upstream_busy` with nothing billed: the hub machine's route to it was down, or the service turned the job away) costs nothing, so it is counted apart and tried again after 1, 5, 15, 30 and 60 minutes, about 1 h 50 min in all; a failed try after such ones still has its two retries (#9535). A replay job that sends nothing for 5 minutes (it keeps its socket open, its upstream stalled) is a failed try. The recording's delete or trim ends a pass at once, its replay job closed. A recording with no audio at all is `failed` at once. A contribution without `replay` makes the live sentences `final`.
 - **`transcription`** on `GET …/live` and in `detail.meta`, for every recording whose mode was decided: `{"mode": "device"}`, or `{"mode": "hub", "state": "live", "gaps": [[600.0, 642.5]]}` with `problem` (the socket's standing problem) and `fallback: true` (the live log is being filled from the phone) while they apply. `state` is `live`, `finishing` (complete: the final pass is due or running), `final` or `failed` (the hub made nothing usable; the phone's text is the transcript). `gaps` is always present, `[]` when none. A trimmed recording keeps `mode` and `state`, with `gaps: []`. While the final pass runs (`finishing`, once it has started, also while it waits for its next try) and the recording's end is known, `final_done` and `end` say how far it is (#13461): the recording seconds it has finished (the end of its last window, `0` as it starts and again after a restart, which starts over) and the recording's end, `final_done` at most `end`; neither otherwise. The manager writes `final_done` to `meeting.json` as each window ends, so it moves the transcription's revision about once a minute.
 - **Its revision, and `interim`.** `transcription` moves (in `revs` and `meeting_live`) when its `mode`, `state`, `gaps`, `problem` or `fallback` change, not when only the timeline grows; `?parts=transcription` returns it with its revision. `interim`, on `GET …/live` only, is `{"start", "text"}`: the latest caption while the meeting records, the role is not `off` and the caption is at most 10 seconds old; absent otherwise. `?parts=interim` returns it; `meeting_live` adds `interim`, at most once a second, with `revs.interim` the time the caption came, in milliseconds.
-- **Where the hub keeps it.** The audio goes in `recordings/<id>/attachments/audio/` (PCM chunks and the index of the spans held), where knowledge-base backups ([knowledge.md](./knowledge.md) "Backups") and search never look, so no backup taken during a meeting outlives the deletion below; a test checks that a backup taken while hub audio exists holds none of it. The hub's own transcript is `hub_segments.json` beside `meta.json`, which search skips as it skips `segments.json` (`transcript.md`, written from the transcript of record, is the searched text).
+- **Where the hub keeps it.** The audio goes in `recordings/<id>/attachments/audio/` (PCM chunks and the index of the spans held), where knowledge-base backups ([knowledge.md](./knowledge.md) "Backups"), whole-install backups ([server.md](../server/server.md) "Whole-install backup"), Web development update snapshots ([hub-update.md](../operations/hub-update.md) "Web development updates"), and search never look, so no backup taken during a meeting outlives the deletion below; tests check that backups taken while hub audio exists hold none of it. The hub's own transcript is `hub_segments.json` beside `meta.json`, which search skips as it skips `segments.json` (`transcript.md`, written from the transcript of record, is the searched text).
 - **Deleting the audio.** The hub keeps no meeting audio (owner decision, "Decided" 5). It deletes a recording's audio once its `state` is `final` or `failed` and either the minutes made from that transcript are written (a quiet remake counts), its minutes end `failed`, or it gets no minutes (not a meeting, or no text). Every retention pass deletes audio that should be gone (a crash between the steps). The trim and the recording's delete remove it too, whichever comes first, so it never outlives `recording_days`. A regenerate later needs only the transcript. The phone keeps its own audio as today, until `days` or the owner's delete, and the hub's `state` never extends that: a hub that never reaches `final` cannot make the phone keep audio longer. Within `days` the phone keeps a hub-mode recording's audio at least until `state` is `final` or `failed`, for gap uploads; gaps still open at `days` keep the phone's text.
 
 #### The transcript of record
@@ -1337,7 +1529,7 @@ Hub → phone:
 - Hub mode: the hub's sentences (the final pass's, else the live ones), with the phone's uploaded segments where the hub has none: a phone segment is used when the hub's sentences cover no more than half of it, counting the union of their spans (so several short sentences that each cover a little count together, and nothing is said twice). The phone's text is made on the device in the recording's language only, so in a mixed meeting it is the weaker text: it fills only where the hub has none.
 - `detail.segments`, `transcript.md`, search, `kb_get`, the minutes, the short summary (made again after the final pass) and the follow-up's seed use it, and each segment gains `source` (`hub` or `device`; absent means `device`). A `source` in the upload's `segments` is ignored: only the hub sets it. Persona's echo stays in it marked (`echo: true`: the hub's sentences by the echo rule, the phone's as uploaded) and is left out of the minutes, the summary and the seed as in device mode ("Persona's echo"). The upload still owns `segments`, `complete` and `revision`; the hub keeps its text apart, in `hub_segments.json`, with its own revision.
 - In hub mode every check of whether a recording has text (the minutes, `POST …/minutes`, `409 no_material`, `chars` in `detail.meta` and the lists) counts the transcript of record without Persona's echo, so a meeting whose phone wrote nothing still gets its minutes.
-- In hub mode the minutes wait for `state` `final` or `failed`, at most 45 minutes after `complete`; a later final pass makes them again without a second push.
+- In hub mode the minutes wait for `state` `final` or `failed`, at most 45 minutes after `complete`; a later final pass makes them again without a second push. Once hub transcription has ended (`final` or `failed`), the minutes also wait while `speakers.state` is `waiting`, up to the later of 10 minutes after the final transcript was stored and "audio length ÷ 5 + 2 minutes" after `since` (not extended by a restart; at the limit `speakers.state` becomes `failed` with reason `timeout` and the minutes proceed without numbers; "Speakers (#17674)").
 - **What the apps say while they wait** (#13461, `spec/fixtures/minutes-wait`). While `minutes_state` is `pending` and no minutes are shown, the iPhone, Android and web say the hub is checking the whole recording as long as `transcription` is `hub` and `finishing`, with the minutes done of the total once `final_done` and `end` come ("Checking the whole recording (40 of 105 min)…": `end / 60` rounded, at least 1; `final_done / 60` rounded down, at most that), and "Writing the minutes…" otherwise. An older hub sends no numbers, and the line says only that it is checking. HarmonyOS keeps "Writing the minutes…".
 
 #### The `transcription` extension point
@@ -1549,20 +1741,21 @@ What leaves the iPhone:
 | Questions and Just me | Text (and Just me's images) to the hub, and to the room's or the main chat's model | The same |
 | Photos | To the hub and the room's model | The same |
 | Spoken answers | The realtime voice: the meeting call's, else the voice extension's `speak` (#5004, the answer's text goes to the realtime voice service); the iPhone's on-device voice when neither can | The same |
+| Who spoke when | None: no speaker separation | Separated on the hub from the audio it already holds; only the timeline and owner-chosen names are kept, never voice features |
 
 Where things are kept, and for how long:
 
 | What | Where | Kept |
 | --- | --- | --- |
-| Transcript: the upload, the hub's text, the live log, asks, topics, highlights | The hub, in the recording's directory | `recording_text_days` (forever by default), then trimmed |
-| Minutes | The hub | `minutes_days` (forever by default) |
+| Transcript: the upload, the hub's text, the speaker timeline (`speaker_turns.json`), the live log, asks, topics, highlights | The hub, in the recording's directory | `recording_text_days` (forever by default), then trimmed |
+| Minutes and the speaker list (`meeting.json` `speakers`) | The hub | `minutes_days` (forever by default) |
 | Photos the minutes cite | The hub | With the minutes |
 | Other photos | The hub | With the transcript |
 | The room conversation (lines, inline photos, questions, answers) | The assistant's computer | Deleted at the transcript cut or with the recording |
 | The follow-up conversation | The assistant's computer | Like any conversation (archiving keeps it): it holds a copy of the transcript and the room thread |
 | Just me | The main chat; a receipt (digest and response, no text) in `client_ops` | Like the main chat; the receipt 30 days |
 | Audio on the iPhone | The iPhone | Until `days` or the owner's delete, as today, whatever the hub's state |
-| Audio on the hub | `recordings/<id>/attachments/audio/`, never in knowledge-base backups | Until the minutes from the final transcript are written, or the final pass ends when its minutes fail or it gets none ("Gaps and the final pass"); at most `recording_days` |
+| Audio on the hub | `recordings/<id>/attachments/audio/`, never in knowledge-base, `personad backup`, or development-update backups | Until the minutes from the final transcript are written, or the final pass ends when its minutes fail or it gets none ("Gaps and the final pass"); at most `recording_days` |
 | What the services received | The transcription and voice services | Under their own terms |
 
 **What may be said aloud** or shown on the Lock Screen is only what the room may know: this meeting's header, its lines said while Persona attended, its photos and their notes, its topics and highlights, its earlier questions and answers, and earlier meetings' minutes with their projects' status and their action items' to-do states, only of meetings marked not private ("The private mark"). Never Just me, the follow-up, the main chat, memory, About Me, the owner's own Claude Code instructions, or anything the room's tools do not return.
@@ -1589,4 +1782,4 @@ The owner answered the questions this contract first left open (#3862):
 6. **Later**: a push that opens the recording; a "meeting starting, record it?" nudge from the knowledge base's calendar; attendees, end and place on connector calendar items.
 7. **Meeting conversation** (#3862): its own phase plan, in "Meeting conversation (#3862)" above.
 
-Out of scope: speaker diarization and creating to-dos without confirmation. Uploading audio and transcription off the phone come only with hub mode (#3862, phase 5).
+Out of scope: recognising voices across or within meetings, storing voice features or profiles, labelling speakers during a meeting, and creating to-dos without confirmation. Uploading audio and transcription off the phone come only with hub mode (#3862, phase 5), and speaker separation applies only to hub-transcribed meetings ("Speakers (#17674)").

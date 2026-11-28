@@ -87,9 +87,25 @@ describe("deriveFeatures", () => {
     expect(state(r, "terminal", { engine: "herdr" })).toBe("broken");
     expect(state(r, "terminal", { engine: "herdr-both" })).toBe("broken");
     expect(state(r, "terminal", {})).toBe("broken"); // never chosen: herdr
-    expect(state(r, "terminal", { engine: "orca" })).toBe("off");
+    // An Orca computer stands on Orca's line, not herdr's: without one (an older node) the feature is left out (#17037).
+    expect(state(r, "terminal", { engine: "orca" })).toBeUndefined();
     expect(state(r, "terminal", { engine: "paseo" })).toBe("off");
-    expect(summarize(deriveFeatures(r, { engine: "orca" })).off).toBe("未配置：终端与引擎");
+    expect(summarize(deriveFeatures(r, { engine: "paseo" })).off).toBe("未配置：终端与引擎");
+  });
+
+  it("counts Orca as the engine where the computer's set enables it (#17037)", () => {
+    const withOrca = (status: "ok" | "warn") => {
+      const r = report({ herdr: { status: "warn", detail: "连不上 herdr 的 socket" } });
+      r.checks.push({ name: "orca", status, detail: "Orca", hint: status === "warn" ? "打开 Orca" : "" });
+      return r;
+    };
+    expect(state(withOrca("ok"), "terminal", { hosts: ["orca"] })).toBe("ready"); // herdr's socket does not matter
+    expect(state(withOrca("warn"), "terminal", { hosts: ["orca"] })).toBe("broken");
+    expect(deriveFeatures(withOrca("warn"), { hosts: ["orca"] }).find((f) => f.id === "terminal")?.note).toBe("打开 Orca");
+    expect(state(withOrca("ok"), "terminal", { hosts: ["herdr", "orca"] })).toBe("broken"); // herdr in the set too
+    expect(state(withOrca("warn"), "terminal", { hosts: ["herdr-core"] })).toBe("off"); // neither: herdr's line, not needed
+    expect(deriveFeatures(withOrca("warn"), { hosts: ["herdr"] }).map((f) => f.id)).not.toContain("other"); // never "Other checks"
+    expect(summarize(deriveFeatures(withOrca("ok"), { hosts: ["orca"] })).off).toBe(""); // the engine is not "off"
   });
 
   it("leaves a feature out when an older node does not report its checks, and shows an unknown bad check", () => {

@@ -55,11 +55,26 @@ func pushAgyRow(t *testing.T, n *Node, host *fakeRuntime, rows ...proto.Session)
 	}
 }
 
+// agyIdleReadyNow is agyIdleReady with the thresholds the node holds row's session to.
+func agyIdleReadyNow(n *Node, h *runtimeConn, row proto.Session, now time.Time) (time.Duration, bool) {
+	return n.agyIdleReady(h, row, n.agyIdleCompactionPolicy().For(n.agyIdleAssistant(row.SessionID)), now)
+}
+
+// sameAgyIdleThresholds holds assistant conversations to the task Agents' default thresholds, so a test of the
+// compaction mechanics can run an assistant and a task session through them together. By default the assistant's are
+// looser (TestAgyIdleAutoCompactAssistantFollowsAssistantSettings).
+func sameAgyIdleThresholds(n *Node) {
+	n.setAgyIdleCompaction(assistantwire.AgyIdleCompaction{
+		Enabled: true, IdleMinutes: 10, ContextTokens: 200_000, AssistantIdleMinutes: 10, AssistantContextTokens: 200_000,
+	})
+}
+
 func TestAgyIdleAutoCompactSweepTaskAgentAndAssistant(t *testing.T) {
 	base := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
 
 	n, host, _ := runtimeCompactFixture(t)
 	clock := setAgyIdleClock(n, base)
+	sameAgyIdleThresholds(n)
 	assistantID := runtimeCompactTestID
 	taskID := "agy-22222222-3333-4444-5555-666666666666"
 	n.state.put(assistantID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, ".persona", "assistant")})
@@ -167,6 +182,7 @@ func TestAgyIdleAutoCompactBeforeInputTaskAgentAndAssistant(t *testing.T) {
 
 	n, host, _ := runtimeCompactFixture(t)
 	clock := setAgyIdleClock(n, base)
+	sameAgyIdleThresholds(n)
 	assistantID := runtimeCompactTestID
 	taskID := "agy-33333333-4444-5555-6666-777777777777"
 	n.state.put(assistantID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, ".persona", "assistant")})
@@ -277,6 +293,7 @@ func TestAgyIdleAutoCompactWaitsForInFlightSweepBeforeAssistantInput(t *testing.
 
 	n, host, _ := runtimeCompactFixture(t)
 	clock := setAgyIdleClock(n, base)
+	sameAgyIdleThresholds(n)
 	assistantID := runtimeCompactTestID
 	n.state.put(assistantID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, ".persona", "assistant")})
 	pushAgyRow(t, n, host, proto.Session{
@@ -455,14 +472,13 @@ func TestAgyIdleAutoCompactGuardsAndConfiguration(t *testing.T) {
 		}},
 	}
 
-	policy := n.agyIdleCompactionPolicy()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			row, cleanup := tc.setup()
 			if cleanup != nil {
 				defer cleanup()
 			}
-			if _, ready := n.agyIdleReady(h, row, policy, clock.get()); ready {
+			if _, ready := agyIdleReadyNow(n, h, row, clock.get()); ready {
 				t.Fatalf("guard %q unexpectedly allowed compaction", tc.name)
 			}
 		})
@@ -478,7 +494,7 @@ func TestAgyIdleAutoCompactGuardsAndConfiguration(t *testing.T) {
 	if n.agyIdleCompactionPolicy().Enabled {
 		t.Fatal("expected policy to be disabled via node.configure")
 	}
-	if _, ready := n.agyIdleReady(h, readyRow(managedID), n.agyIdleCompactionPolicy(), clock.get()); ready {
+	if _, ready := agyIdleReadyNow(n, h, readyRow(managedID), clock.get()); ready {
 		t.Fatal("disabled policy should block compaction")
 	}
 	if _, err := nodeCall(t, n, "node.configure", map[string]any{
@@ -491,7 +507,7 @@ func TestAgyIdleAutoCompactGuardsAndConfiguration(t *testing.T) {
 	r.UpdatedAt = clock.get()
 	pushAgyRow(t, n, host, r)
 	clock.set(clock.get().Add(5 * time.Minute))
-	if _, ready := n.agyIdleReady(h, r, n.agyIdleCompactionPolicy(), clock.get()); !ready {
+	if _, ready := agyIdleReadyNow(n, h, r, clock.get()); !ready {
 		t.Fatal("custom thresholds (5m / 150k) should allow compaction at 5m / 160k")
 	}
 }
@@ -526,6 +542,9 @@ func TestAgyTranscriptMapsCompactToDividerNotices(t *testing.T) {
 }
 
 func TestAgyIdleAutoCompactMultiCompanionIsolationAndCleanup(t *testing.T) {
+	oldCap := agyIdleCompactMaxConcurrent
+	agyIdleCompactMaxConcurrent = 3
+	t.Cleanup(func() { agyIdleCompactMaxConcurrent = oldCap })
 	base := time.Date(2026, 11, 27, 14, 0, 0, 0, time.UTC)
 
 	n, host1, _ := runtimeCompactFixture(t)
@@ -605,10 +624,10 @@ func TestAgyIdleAutoCompactMultiCompanionIsolationAndCleanup(t *testing.T) {
 	)
 	clock.set(base.Add(14 * time.Minute)) // only 2m since failedID failed (< 5m cooldown)
 	n.sweepAgyIdleCompactions(t.Context(), clock.get())
-	if _, ready := n.agyIdleReady(n.runtimes.ownerOf(latchedID), proto.Session{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base}, n.agyIdleCompactionPolicy(), clock.get()); ready {
+	if _, ready := agyIdleReadyNow(n, n.runtimes.ownerOf(latchedID), proto.Session{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base}, clock.get()); ready {
 		t.Fatal("companion 2 session list wiped companion 1 attempted latch")
 	}
-	if _, ready := n.agyIdleReady(n.runtimes.ownerOf(failedID), proto.Session{SessionID: failedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000, UpdatedAt: base}, n.agyIdleCompactionPolicy(), clock.get()); ready {
+	if _, ready := agyIdleReadyNow(n, n.runtimes.ownerOf(failedID), proto.Session{SessionID: failedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000, UpdatedAt: base}, clock.get()); ready {
 		t.Fatal("companion 2 session list wiped companion 1 failure cooldown")
 	}
 	if sends := host1.got("session.send"); len(sends) != 3 {
@@ -638,7 +657,7 @@ func TestAgyIdleAutoCompactMultiCompanionIsolationAndCleanup(t *testing.T) {
 	if owner := n.runtimes.ownerOf(latchedID); owner == nil || owner.id() != "agy" {
 		t.Fatalf("expected host1 (agy) to remain owner of latchedID, got %v", owner)
 	}
-	if _, ready := n.agyIdleReady(n.runtimes.ownerOf(latchedID), proto.Session{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base}, n.agyIdleCompactionPolicy(), clock.get()); ready {
+	if _, ready := agyIdleReadyNow(n, n.runtimes.ownerOf(latchedID), proto.Session{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base}, clock.get()); ready {
 		t.Fatal("non-owner companion reporting 0 tokens wiped owner attempted latch")
 	}
 
@@ -680,7 +699,7 @@ func TestAgyIdleAutoCompactMultiCompanionIsolationAndCleanup(t *testing.T) {
 		got, _, ok := n.runtimes.rowOf(failoverID)
 		return ok && got.Status == proto.StatusDone && got.Rev == 4
 	})
-	if _, ready := n.agyIdleReady(n.runtimes.ownerOf(failoverID), proto.Session{SessionID: failoverID, Cwd: cwd1, Status: proto.StatusDone, Rev: 4, ContextTokens: 240_000, UpdatedAt: base}, n.agyIdleCompactionPolicy(), clock.get()); ready {
+	if _, ready := agyIdleReadyNow(n, n.runtimes.ownerOf(failoverID), proto.Session{SessionID: failoverID, Cwd: cwd1, Status: proto.StatusDone, Rev: 4, ContextTokens: 240_000, UpdatedAt: base}, clock.get()); ready {
 		t.Fatal("failover session unexpectedly re-compacted after ownership transfer")
 	}
 
@@ -735,7 +754,7 @@ func TestAgyIdleAutoCompactFailoverWindowReconnectStaleSnapshotAndClockRollback(
 	n.agyIdleMu.Unlock()
 	clock.set(base.Add(25 * time.Minute))
 	rowS1 := proto.Session{SessionID: s1, Cwd: cwd, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base}
-	if _, ready := n.agyIdleReady(h1, rowS1, n.agyIdleCompactionPolicy(), clock.get()); ready {
+	if _, ready := agyIdleReadyNow(n, h1, rowS1, clock.get()); ready {
 		t.Fatal("clock rollback fell back to older row.UpdatedAt and triggered instant compaction")
 	}
 	n.agyIdleMu.Lock()
@@ -840,7 +859,7 @@ func TestAgyIdleAutoCompactFailoverWindowReconnectStaleSnapshotAndClockRollback(
 	hClosed.hello = runtimeHello{Runtime: "agy-closing", Agent: agyAgent}
 	hClosed.ready = true
 	hClosed.mu.Unlock()
-	n.runtimes.setSessionList(hClosed, []proto.Session{{SessionID: s3, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000}}, nil)
+	n.runtimes.setSessions(hClosed, []proto.Session{{SessionID: s3, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000}})
 	n.markAgyIdleAttempt(hClosed, s3, clock.get())
 	// Sweep while hClosed.peer is closed but reg.remove(hClosed) has not run yet (ownerOf(s3) == hClosed).
 	n.sweepAgyIdleCompactions(t.Context(), clock.get())
@@ -940,4 +959,308 @@ func TestAgyIdleAutoCompactFailoverWindowReconnectStaleSnapshotAndClockRollback(
 	if stNewAttempt.host != h2 || !stNewAttempt.attempted || !stNewAttempt.lastAttempt.Equal(tNew) || stNewAttempt.attemptToken != tokNew {
 		t.Fatalf("stale-owner late failure clobbered newer owner attempt: %+v", stNewAttempt)
 	}
+}
+
+// Antigravity assistant conversations (the main chat and a leader's) follow the assistant's idle compaction settings,
+// 30 minutes and 300,000 tokens by default, not the task Agents' 10 minutes and 200,000 tokens (#17260).
+func TestAgyIdleAutoCompactAssistantFollowsAssistantSettings(t *testing.T) {
+	base := time.Date(2026, 11, 28, 9, 0, 0, 0, time.UTC)
+
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+	assistantCwd := filepath.Join(n.home, ".persona", "assistant")
+	mainID := runtimeCompactTestID
+	leaderID := "agy-66666666-7777-8888-9999-aaaaaaaaaaaa"
+	taskID := "agy-77777777-8888-9999-aaaa-bbbbbbbbbbbb"
+	n.state.put(mainID, sessionState{Launcher: "agy", Cwd: assistantCwd, IsMain: true})
+	n.state.put(leaderID, sessionState{Launcher: "agy", Cwd: assistantCwd})
+	n.state.put(taskID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, "proj")})
+	rows := func(rev int64, assistantTokens, taskTokens int32, at time.Time) []proto.Session {
+		return []proto.Session{
+			{SessionID: mainID, Cwd: assistantCwd, Status: proto.StatusDone, Rev: rev, ContextTokens: assistantTokens, UpdatedAt: at},
+			{SessionID: leaderID, Cwd: assistantCwd, Status: proto.StatusDone, Rev: rev, ContextTokens: assistantTokens, UpdatedAt: at},
+			{SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusIdle, Rev: rev, ContextTokens: taskTokens, UpdatedAt: at},
+		}
+	}
+	compacted := func() map[string]int {
+		out := map[string]int{}
+		for _, raw := range host.got("session.send") {
+			var p struct {
+				SessionID string `json:"session_id"`
+				Text      string `json:"text"`
+			}
+			if err := json.Unmarshal(raw, &p); err != nil {
+				t.Fatal(err)
+			}
+			if p.Text == "/compact" {
+				out[p.SessionID]++
+			}
+		}
+		return out
+	}
+
+	policy := n.agyIdleCompactionPolicy()
+	if got := policy.For(n.agyIdleAssistant(mainID)); !got.Enabled || got.IdleMinutes != 30 || got.ContextTokens != 300_000 {
+		t.Fatalf("main chat thresholds = %+v, want on, 30 minutes, 300000 tokens", got)
+	}
+	if got := policy.For(n.agyIdleAssistant(leaderID)); !got.Enabled || got.IdleMinutes != 30 || got.ContextTokens != 300_000 {
+		t.Fatalf("leader chat thresholds = %+v, want on, 30 minutes, 300000 tokens", got)
+	}
+	if got := policy.For(n.agyIdleAssistant(taskID)); !got.Enabled || got.IdleMinutes != 10 || got.ContextTokens != 200_000 {
+		t.Fatalf("task Agent thresholds = %+v, want on, 10 minutes, 200000 tokens", got)
+	}
+
+	// 250,000 tokens and 12 minutes idle: past the task Agents' thresholds, below the assistant's. Only the task compacts.
+	pushAgyRow(t, n, host, rows(1, 250_000, 250_000, base)...)
+	clock.set(base.Add(12 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	waitFor(t, "task Agent compacted at 10 minutes / 200,000 tokens", func() bool { return compacted()[taskID] == 1 })
+	pushAgyRow(t, n, host, rows(2, 250_000, 40_000, base)...)
+	waitFor(t, "task compaction released its sweep slot", func() bool {
+		n.agyIdleMu.Lock()
+		defer n.agyIdleMu.Unlock()
+		return n.agyIdleInFlight == 0
+	})
+	if got := compacted(); got[mainID] != 0 || got[leaderID] != 0 {
+		t.Fatalf("assistant conversations compacted on the task Agents' thresholds: %v", got)
+	}
+
+	// Both chats accept a message at 12 minutes and 250,000 tokens without sending /compact first.
+	for _, id := range []string{mainID, leaderID} {
+		row, owner, _ := n.runtimes.rowOf(id)
+		if _, ready := agyIdleReadyNow(n, owner, row, clock.get()); ready {
+			t.Fatalf("assistant chat %s ready to compact on task agent thresholds", id)
+		}
+		if _, err := nodeCall(t, n, "assistant.send", map[string]any{
+			"session_id": id, "text": "back after a short break", "launcher": "agy",
+		}); err != nil {
+			t.Fatalf("assistant.send: %v", err)
+		}
+	}
+	if got := compacted(); got[mainID] != 0 || got[leaderID] != 0 {
+		t.Fatalf("assistant chat compacted before input on task agent thresholds: %v", got)
+	}
+
+	// Over 300,000 tokens but 29 minutes idle: still too soon for either assistant conversation.
+	grownAt := base.Add(20 * time.Minute)
+	pushAgyRow(t, n, host, rows(3, 310_000, 40_000, grownAt)...)
+	clock.set(grownAt.Add(29 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	if got := compacted(); got[mainID] != 0 || got[leaderID] != 0 {
+		t.Fatalf("assistant conversations compacted before 30 minutes idle: %v", got)
+	}
+
+	// 30 minutes idle at 310,000 tokens: both assistant conversations compact.
+	clock.set(grownAt.Add(30 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	waitFor(t, "main and leader compacted at 30 minutes / 300,000 tokens", func() bool {
+		got := compacted()
+		return got[mainID] == 1 && got[leaderID] == 1
+	})
+	if got := compacted(); got[taskID] != 1 {
+		t.Fatalf("task Agent compacted again below its threshold: %v", got)
+	}
+	pushAgyRow(t, n, host, rows(4, 45_000, 40_000, clock.get())...)
+	waitFor(t, "assistant compactions settled", func() bool {
+		return !n.runtimes.compacting(mainID) && !n.runtimes.compacting(leaderID)
+	})
+}
+
+// The manager's assistant.idle_auto_compact_* values, sent with node.configure, move the assistant conversations'
+// thresholds and leave the task Agents' alone; turning assistant.idle_auto_compact off stops only theirs (#17260).
+func TestAgyIdleAutoCompactAssistantSettingsFromConfigure(t *testing.T) {
+	base := time.Date(2026, 11, 28, 10, 0, 0, 0, time.UTC)
+
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+	h := n.runtimes.ownerOf(runtimeCompactTestID)
+	assistantCwd := filepath.Join(n.home, ".persona", "assistant")
+	mainID := runtimeCompactTestID
+	taskID := "agy-88888888-9999-aaaa-bbbb-cccccccccccc"
+	routineID := "agy-77777777-9999-aaaa-bbbb-cccccccccccc"
+	projectCwd := filepath.Join(n.home, "proj")
+	n.state.put(mainID, sessionState{Launcher: "agy", Cwd: assistantCwd, IsMain: true})
+	n.state.put(taskID, sessionState{Launcher: "agy", Cwd: projectCwd})
+	n.state.put(routineID, sessionState{Launcher: "agy", Cwd: projectCwd, TaskExecution: true})
+	mainRow := proto.Session{SessionID: mainID, Cwd: assistantCwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 160_000, UpdatedAt: base}
+	taskRow := proto.Session{SessionID: taskID, Cwd: projectCwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 210_000, UpdatedAt: base}
+	routineRow := proto.Session{SessionID: routineID, Cwd: projectCwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 210_000, UpdatedAt: base}
+	pushAgyRow(t, n, host, mainRow, taskRow, routineRow)
+
+	configure := func(p assistantwire.AgyIdleCompaction) {
+		t.Helper()
+		if _, err := nodeCall(t, n, "node.configure", map[string]any{"agy_idle_compaction": p}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configure(assistantwire.AgyIdleCompaction{
+		Enabled: true, IdleMinutes: 10, ContextTokens: 200_000, AssistantIdleMinutes: 15, AssistantContextTokens: 150_000,
+	})
+	clock.set(base.Add(14 * time.Minute))
+	if _, ready := agyIdleReadyNow(n, h, mainRow, clock.get()); ready {
+		t.Fatal("main chat ready before its configured 15 minutes")
+	}
+	if _, ready := agyIdleReadyNow(n, h, taskRow, clock.get()); !ready {
+		t.Fatal("task Agent should keep its own 10 minutes / 200,000 tokens")
+	}
+	if _, ready := agyIdleReadyNow(n, h, routineRow, clock.get()); ready {
+		t.Fatal("scheduled assistant chat in a project became ready on task agent thresholds")
+	}
+	clock.set(base.Add(15 * time.Minute))
+	if _, ready := agyIdleReadyNow(n, h, mainRow, clock.get()); !ready {
+		t.Fatal("main chat should compact at its configured 15 minutes / 150,000 tokens")
+	}
+	if _, ready := agyIdleReadyNow(n, h, routineRow, clock.get()); !ready {
+		t.Fatal("scheduled assistant chat should become ready at the configured assistant thresholds")
+	}
+
+	configure(assistantwire.AgyIdleCompaction{
+		Enabled: true, IdleMinutes: 10, ContextTokens: 200_000, AssistantOff: true, AssistantIdleMinutes: 15, AssistantContextTokens: 150_000,
+	})
+	if _, ready := agyIdleReadyNow(n, h, mainRow, clock.get()); ready {
+		t.Fatal("assistant.idle_auto_compact off should stop the main chat's idle compaction")
+	}
+	if _, ready := agyIdleReadyNow(n, h, taskRow, clock.get()); !ready {
+		t.Fatal("assistant.idle_auto_compact off should leave task Agents compacting")
+	}
+	// After state.load the recorded runtime role is sufficient, even without the last input's execution mode.
+	n.state.put(routineID, sessionState{Launcher: "agy", Cwd: projectCwd, RuntimeAssistant: true})
+	if _, ready := agyIdleReadyNow(n, h, routineRow, clock.get()); ready {
+		t.Fatal("assistant.idle_auto_compact off should stop the scheduled assistant chat's compaction")
+	}
+
+	// An older manager sends no assistant fields: assistant conversations keep the assistant's defaults.
+	configure(assistantwire.AgyIdleCompaction{Enabled: true, IdleMinutes: 10, ContextTokens: 200_000})
+	if got := n.agyIdleCompactionPolicy().For(n.agyIdleAssistant(mainID)); !got.Enabled || got.IdleMinutes != 30 || got.ContextTokens != 300_000 {
+		t.Fatalf("main chat thresholds from an older manager = %+v, want on, 30 minutes, 300000 tokens", got)
+	}
+}
+
+// A session whose compaction keeps failing to start (an unloaded one: "Failed to read session …") is tried again
+// after 5, 10, 20 … minutes, not every five minutes forever; new activity on it starts over (#17260).
+func TestAgyIdleAutoCompactFailedStartsBackOff(t *testing.T) {
+	base := time.Date(2026, 11, 28, 11, 0, 0, 0, time.UTC)
+
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+	n.setAgyIdleCompaction(assistantwire.AgyIdleCompaction{Enabled: true, IdleMinutes: 1, ContextTokens: 200_000})
+	taskID := "agy-99999999-aaaa-bbbb-cccc-dddddddddddd"
+	cwd := filepath.Join(n.home, "proj")
+	n.state.put(taskID, sessionState{Launcher: "agy", Cwd: cwd})
+	row := proto.Session{SessionID: taskID, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 250_000, UpdatedAt: base}
+	pushAgyRow(t, n, host, row)
+
+	host.mu.Lock()
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "session.send" {
+			return nil, &rpc.Error{Code: "failed", Message: "Failed to read session " + taskID + "; retry, or load it with session/load"}
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	host.mu.Unlock()
+
+	h := n.runtimes.ownerOf(taskID)
+	runAt := func(at time.Time, want int) {
+		t.Helper()
+		clock.set(at)
+		if !n.tryAcquireAgyIdleSlot() {
+			t.Fatal("failed to reserve a sweep slot for the compaction attempt")
+		}
+		// Run the sweep's worker synchronously so the failure uses this exact clock reading.
+		n.runAgyIdleCompaction(t.Context(), h, taskID, int(row.ContextTokens), at.Sub(row.UpdatedAt))
+		if got := len(host.got("session.send")); got != want {
+			t.Fatalf("compaction attempts at %s after start = %d, want %d", at.Sub(base), got, want)
+		}
+	}
+
+	failedAt := base.Add(time.Minute)
+	runAt(failedAt, 1)
+	for i, wait := range []time.Duration{5 * time.Minute, 10 * time.Minute, 20 * time.Minute} {
+		runAt(failedAt.Add(wait-time.Minute), i+1)
+		failedAt = failedAt.Add(wait)
+		runAt(failedAt, i+2)
+	}
+
+	// New activity lets the session compact once idle again, even within its old cooldown.
+	active := failedAt.Add(time.Minute)
+	row.Rev, row.UpdatedAt = 2, active
+	pushAgyRow(t, n, host, row)
+	failedAt = active.Add(time.Minute)
+	runAt(failedAt, 5)
+	runAt(failedAt.Add(4*time.Minute), 5)
+	runAt(failedAt.Add(5*time.Minute), 6)
+
+	if got := agyIdleRetryDelay(100); got != agyIdleRetryCooldownMax {
+		t.Fatalf("back-off after 100 failures = %s, want the %s cap", got, agyIdleRetryCooldownMax)
+	}
+}
+
+func TestAgyIdleAutoCompactSweepCapsConcurrency(t *testing.T) {
+	base := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+
+	ids := []string{
+		"agy-11111111-1111-1111-1111-111111111111",
+		"agy-22222222-2222-2222-2222-222222222222",
+		"agy-33333333-3333-3333-3333-333333333333",
+		"agy-44444444-4444-4444-4444-444444444444",
+		"agy-55555555-5555-5555-5555-555555555555",
+	}
+	rows := make([]proto.Session, 0, len(ids))
+	for _, id := range ids {
+		cwd := filepath.Join(n.home, "proj", id)
+		n.state.put(id, sessionState{Launcher: "agy", Cwd: cwd})
+		rows = append(rows, proto.Session{
+			SessionID: id, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 250_000, UpdatedAt: base,
+		})
+	}
+	pushAgyRow(t, n, host, rows...)
+
+	// A single sweep with 5 ready sessions must cap concurrent auto-compactions at agyIdleCompactMaxConcurrent (2).
+	clock.set(base.Add(15 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	waitFor(t, "first batch of 2 compactions started", func() bool {
+		return len(host.got("session.send")) == agyIdleCompactMaxConcurrent
+	})
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-t.Context().Done():
+		t.Fatal(t.Context().Err())
+	case <-timer.C:
+	}
+	if got := len(host.got("session.send")); got != agyIdleCompactMaxConcurrent {
+		t.Fatalf("sweep started %d concurrent compactions, want cap %d", got, agyIdleCompactMaxConcurrent)
+	}
+
+	// Settle the first batch (drop tokens to 50k so they are no longer eligible) and verify the next sweep picks up 2 more.
+	started := map[string]bool{}
+	for _, raw := range host.got("session.send") {
+		var p struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil {
+			t.Fatal(err)
+		}
+		started[p.SessionID] = true
+	}
+	for i := range rows {
+		if started[rows[i].SessionID] {
+			rows[i].Rev = 2
+			rows[i].ContextTokens = 50_000
+			rows[i].UpdatedAt = clock.get()
+		}
+	}
+	pushAgyRow(t, n, host, rows...)
+	waitFor(t, "first batch settled and slots released", func() bool {
+		n.agyIdleMu.Lock()
+		defer n.agyIdleMu.Unlock()
+		return n.agyIdleInFlight == 0
+	})
+
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	waitFor(t, "second batch of 2 compactions started", func() bool {
+		return len(host.got("session.send")) == agyIdleCompactMaxConcurrent*2
+	})
 }

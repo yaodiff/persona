@@ -24,9 +24,8 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// listenRuntimeSocket gives n a runtime socket of its own, at runtimePath, for the connection it serves itself
-// (`--stdio` with no resident node: runtimehost.go). A resident node's Nodes share one instead.
-func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
+// newRuntimeHost creates a standalone RuntimeHost bound to n.runtimes without listening yet.
+func (n *Node) newRuntimeHost() *RuntimeHost {
 	rh := &RuntimeHost{reg: n.runtimes, path: n.runtimePath(), version: n.Version, logger: n.logger, autoCompanions: n.autoCompanions}
 	if rh.reg == nil {
 		rh.reg = newRuntimeRegistry()
@@ -34,9 +33,18 @@ func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
 	if rh.reg.logf == nil && n.logger != nil {
 		rh.reg.logf = n.logger.Printf
 	}
+	return rh
+}
+
+// listenRuntimeSocket gives n a runtime socket of its own, at runtimePath, for the connection it serves itself
+// (`--stdio` with no resident node: runtimehost.go). A resident node's Nodes share one instead.
+func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
+	rh := n.newRuntimeHost()
+	n.runtimes = rh.reg
 	if err := rh.Listen(ctx); err != nil {
 		return nil, err
 	}
+	n.runtimeHost = rh
 	rh.attach(n)
 	return rh, nil
 }
@@ -239,10 +247,11 @@ func normalizeRuntimeRows(h *runtimeConn, list []proto.Session, preview func(id,
 			s.Efforts = nil
 		}
 		// The permission modes it lists for an agent that is not Claude Code (#8261) go with its modes too, and only where
-		// the apps' Claude Code chips do not stand (claudeModes): the apps switch between those instead.
+		// the apps' Claude Code chips do not stand (claudeModes) — except Antigravity (agy), which keeps capabilities.modes
+		// true while advertising a narrower permission_modes subset when a native mode (such as auto) is unavailable.
 		claudeModes := modes && runtimeModes(caps.Modes, rt, agent, s)
 		permissionModes := own.PermissionModes
-		if !modes || claudeModes {
+		if !modes || (claudeModes && s.Agent != agyAgent && agent != agyAgent) {
 			permissionModes = 0
 		}
 		rowCaps := proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,

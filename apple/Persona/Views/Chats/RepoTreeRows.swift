@@ -278,6 +278,7 @@ struct WorkspaceChildrenChip: View {
 
 struct WorkspaceAgentRow: View {
     var session: Session
+    let pendingTitle: String?
     var time: AgentTime?
     var muted: Bool
     /// Present when a folded side session keeps this parent row Unread (#13524); nil leaves the row unchanged.
@@ -316,7 +317,7 @@ struct WorkspaceAgentRow: View {
             ThemedIcon(Theme.Icon.success).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.success)
         } else { StatusDot(state: session.state, size: Theme.Size.dotS) }
         AgentMark(session, side: Theme.Size.markXS)
-        Text(session.displayTitle(preferTab: preferHerdrTabName)).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
+        Text(pendingTitle ?? session.displayTitle(preferTab: preferHerdrTabName)).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
             .foregroundStyle(session.state == .unread ? Theme.WorkspaceSidebar.foreground : Theme.WorkspaceSidebar.muted)
             .lineLimit(1).layoutPriority(1)
         if let detail = session.displayTitleDetail(preferTab: preferHerdrTabName) {

@@ -404,4 +404,84 @@ final class ScreenUDPTests: XCTestCase {
         XCTAssertEqual(l.loss(at: 0) ?? -1, 0.05, accuracy: 0.001)
         XCTAssertNil(ScreenUDPLoss().loss(at: 0))
     }
+
+    func testPacketAndLayoutBoundsRejectMalformedInputsWithoutTrapping() {
+        let cipher = TestAESGCM(Data(count: 32))
+        let iv = Data(count: 12)
+        let flow = Data(count: 8)
+        // Short/wrong-length IV or short packet must return empty/nil instead of trapping out of bounds.
+        XCTAssertEqual(ScreenUDPPacket.nonce(iv: Data([1, 2, 3]), number: 7), Data())
+        XCTAssertNil(ScreenUDPPacket.seal(Data([1]), cipher: cipher, iv: Data([1, 2]), flow: flow, number: 0))
+        XCTAssertNil(ScreenUDPPacket.seal(Data([1]), cipher: cipher, iv: iv, flow: Data([1, 2]), number: 0))
+        XCTAssertNil(ScreenUDPPacket.open(Data(), cipher: cipher, iv: iv, number: 0))
+        XCTAssertNil(ScreenUDPPacket.open(Data(count: 10), cipher: cipher, iv: iv, number: 0))
+        XCTAssertNil(ScreenUDPPacket.open(Data(count: 40), cipher: cipher, iv: Data([1]), number: 0))
+        // Wrong version byte is rejected even on a long packet.
+        var badVer = Data(count: 40)
+        badVer[0] = 99
+        XCTAssertNil(ScreenUDPPacket.open(badVer, cipher: cipher, iv: iv, number: 0))
+
+        // Invalid Reed-Solomon shard counts (> blockShards or data+parity > 256) are rejected on decode.
+        let tooManyData = ScreenUDPMessage.data(
+            ScreenUDPFragmentHead(channel: 2, offset: 0, length: 100, block: 0, index: 0, data: 129, parity: 0, flags: 0),
+            fragment: Data([1])
+        ).encoded()
+        XCTAssertThrowsError(try ScreenUDPMessage.decode(tooManyData, fromNode: true))
+
+        let tooManyTotal = ScreenUDPMessage.data(
+            ScreenUDPFragmentHead(channel: 2, offset: 0, length: 100, block: 0, index: 0, data: 128, parity: 129, flags: 0),
+            fragment: Data([1])
+        ).encoded()
+        XCTAssertThrowsError(try ScreenUDPMessage.decode(tooManyTotal, fromNode: true))
+
+        // Layout handles negative, zero, and extreme sizes without negative shardLength or Int overflow.
+        XCTAssertTrue(ScreenUDPLayout.blocks(length: -5).isEmpty)
+        XCTAssertEqual(ScreenUDPLayout.blocks(length: 0), [ScreenUDPLayout.Block(first: 0, data: 1, shardLength: 0)])
+        XCTAssertEqual(ScreenUDPLayout.parity(data: 256, ratio: 4000), 0)
+        XCTAssertEqual(ScreenUDPLayout.parity(data: Int.max, ratio: 4000), 0)
+    }
+
+    func testReceiverAndMetricsRejectOversizedLengthsOverflowsAndBackwardClocks() {
+        var r = ScreenUDPReceiver(channel: 2, expected: 0)
+        // Forged 4 GiB length, zero length, oversized fragment, and offset overflow must be ignored cleanly.
+        let huge = ScreenUDPFragmentHead(channel: 2, offset: 0, length: UInt32.max, block: 0, index: 0, data: 128, parity: 0, flags: 0)
+        XCTAssertTrue(r.fragment(huge, Data(count: 10), at: 0).messages.isEmpty)
+        XCTAssertTrue(r.requests(at: 1.0, rtt: 0.01, jitter: 0).nack.isEmpty)
+
+        let zeroLen = ScreenUDPFragmentHead(channel: 2, offset: 0, length: 0, block: 0, index: 0, data: 1, parity: 0, flags: 0)
+        XCTAssertTrue(r.fragment(zeroLen, Data(), at: 0).messages.isEmpty)
+
+        let oversizedShard = ScreenUDPFragmentHead(channel: 2, offset: 0, length: 10, block: 0, index: 0, data: 1, parity: 0, flags: 0)
+        XCTAssertTrue(r.fragment(oversizedShard, Data(count: 100), at: 0).messages.isEmpty)
+
+        var nearMax = ScreenUDPReceiver(channel: 2, expected: UInt64.max - 5)
+        let overflowMsg = ScreenUDPFragmentHead(channel: 2, offset: UInt64.max - 5, length: 10, block: 0, index: 0, data: 1, parity: 0, flags: 0)
+        XCTAssertTrue(nearMax.fragment(overflowMsg, Data(count: 10), at: 0).messages.isEmpty)
+
+        // ScreenUDPLoss span `hi - lo == UInt64.max` must not overflow `hi - lo + 1`.
+        var loss = ScreenUDPLoss()
+        loss.received(0, at: 1)
+        loss.received(UInt64.max, at: 1)
+        XCTAssertNotNil(loss.loss(at: 1, window: 10, enough: 2))
+
+        // ScreenUDPParity overhead & ratio must not trap on UInt64 overflow, +Inf/NaN loss, or huge recentBlocks.
+        XCTAssertGreaterThan(ScreenUDPParity.overhead(dataBytes: 10, parityBytes: UInt64.max, resentBytes: UInt64.max), 1.0)
+        XCTAssertEqual(ScreenUDPParity.ratio(loss: .infinity, cap: 4000, recentBlocks: []), 4000)
+        XCTAssertEqual(ScreenUDPParity.ratio(loss: .nan, cap: 4000, recentBlocks: []), 0)
+        XCTAssertEqual(ScreenUDPParity.ratio(loss: 0.05, cap: 4000, recentBlocks: [Int.max, Int.max]), 1500)
+
+        // ScreenUDPPace handles extreme byte sums & tiny intervals without overflow or NaN traps.
+        var pace = ScreenUDPPace()
+        for i in 0 ..< 10 { pace.packet(offset: 1, bytes: Int.max / 2, at: 1.0 + Double(i) * 1e-9) }
+        XCTAssertEqual(pace.request(at: 1.1, start: 10_000), ScreenUDPPace.highest)
+
+        // ScreenUDPCongestion must not shrink scale on a backward clock during clear conditions.
+        var cong = ScreenUDPCongestion()
+        cong.look(loss: 0.4, at: 10)
+        let afterCut = cong.scale
+        cong.look(loss: 0.0, at: 5) // backward timestamp
+        XCTAssertEqual(cong.scale, afterCut, accuracy: 1e-12)
+        cong.look(loss: 0.0, at: 11) // forward from 10, not from 5
+        XCTAssertEqual(cong.scale, afterCut * 1.05, accuracy: 1e-9)
+    }
 }

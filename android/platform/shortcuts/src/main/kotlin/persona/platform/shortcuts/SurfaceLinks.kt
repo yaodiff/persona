@@ -56,6 +56,21 @@ internal object SurfaceLinks {
     /** The Persona tab with the cursor in its composer ("Ask Persona"). */
     fun ask(context: Context): Intent = view(context, Uri.parse(AskPersonaLink))
 
+    /** Opens a specific conversation with its composer focused and keyboard up. */
+    fun askConversation(context: Context, key: SessionKey, assistant: Boolean?): Intent {
+        val builder = Uri.Builder().scheme("persona").authority("open")
+            .appendQueryParameter("target", "chat")
+            .appendQueryParameter("machine", key.machineId)
+            .appendQueryParameter("session", key.sessionId)
+            .appendQueryParameter("focus", "composer")
+        when (assistant) {
+            true -> builder.appendQueryParameter("kind", "assistant")
+            false -> builder.appendQueryParameter("kind", "agent")
+            null -> Unit
+        }
+        return view(context, builder.build())
+    }
+
     /** A tap on the Ask Persona widget: the main chat composer when paired, otherwise the pairing page. */
     fun askWidget(context: Context, paired: Boolean): Intent = if (paired) ask(context) else app(context)
 

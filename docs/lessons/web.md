@@ -1,5 +1,36 @@
 # Lessons: web UI and interactions
 
+## Idle app ownership still needs takeover confirmation (#17419)
+
+A Codex takeover plan's `running` and `app_owned` flags describe different things. An idle app-owned session still
+requires explicit confirmation and `confirm_stop: true`; use both flags when opening the dialog and building the POST
+body. Keep the running-turn warning for active turns and show app-ownership copy for idle App sessions.
+
+## Closed history extends the to-do list without replacing the board (#17695)
+
+The hub projects the board and its direction counts before bounding the closed rows in GET /todos. Use those counts to
+offer a direction review even before its first completed row is loaded. Keep that review selected while the cursor reads
+older rows. Append those rows to Done or Cancelled without feeding them back into active board groups. Calendar shows
+the dated rows already in memory.
+
+Use `board.counts.needs_you` for the Web attention total. The section's visible count includes surfaced rows that
+do not add to that total, and Batch decide counts the immediate projected rows with an open decision. A merged
+board has hub-wide totals. Read the selected assistant's board when the browser shows one of several assistants.
+
+## Channel refreshes keep the routing draft (#17664)
+
+A channel read updates the current configuration document under one resource key. A refresh counter in that key or a
+different component tree at the split-pane breakpoint discards unsaved input. A committed PUT acknowledges the edit even
+when a GET overlaps it. Read again after the PUT to reconcile the displayed state and ignore the overlapping reply once
+that follow-up starts.
+
+## Configuration editors share the resource's write order (#17762)
+
+A layout can remount an editor while its save is in flight. Put the confirmed snapshot, draft and write queue under the
+same scoped resource key as its requests. When an endpoint receives a whole document, read a fresh baseline before
+applying the edited fields. A follow-up read can confirm a lost response for the named fields without repeating the
+write. Test a remount and a credential replacement separately, since only the latter retires the resource's queue.
+
 ## A TypeError is not a network failure (#16182)
 
 fetch rejects a failed connection with a TypeError, and JavaScript throws one for a bug in the page's own code.
@@ -622,6 +653,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 - `lib/viewport.ts` caches each MediaQueryList. A responsive test mock must expose a live `matches` getter (and deliver change events when testing an in-place resize), rather than capture its first value. Pin the test language explicitly: a shared Chrome's browser preferences can differ from the test driver's locale.
 - A host-owned secondary page under a connector route must opt out of the connector split-detail layout (#2412); otherwise the record ledger keeps an unrelated connector list beside it. Scope category-button assertions to the settings navigation: a secondary page's Back button can have the same label as its parent category. Legacy path aliases also need normalization on browser history events, not only on initial mount.
 - Continuous deep-link reloads hit a Vite development-module fetch failure during this check. Keep the failure record and rerun against the production build with the same mock hub; a working initial dev screenshot does not prove reload/share behavior.
+- A route change in lazy Settings can still alter the first screen. Calling `useShownOffline` with options kept its controlled-hook branches on the startup path. Match the existing offline result to the route owner in Settings. Importing the Settings path parser before the URL builder also reordered Vite's preload dependencies for other pages. Keep the parser behind the integration codec and compare the normalized production counts for each language on the same base (#17762).
 
 ## Message provenance is independent of model roles (#2125)
 
@@ -1610,6 +1642,12 @@ project lists each of its folders as its own `project_path`, so the section's fi
 Use a label linked by ID, with the select beside it. When a label wraps the native select, browser label lookup can
 include the option text in the label. Check the label in a real browser and attach any inherited-policy hint with
 `aria-describedby` so it stays available without changing the control's name.
+
+## Resolve Integrations support for the owning assistant (#17762)
+
+The roster announces the projection per assistant. Wait for that credential's roster before selecting the catalog
+reader. A failed projection read stays with its assistant and can be retried. A connector referenced by a detail
+section is loaded for that owner even when the sidebar shows another assistant with an identically named connector.
 
 ## A cached first screen is not evidence of an outcome (#16286)
 

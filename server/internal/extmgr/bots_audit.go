@@ -44,6 +44,18 @@ const (
 	auditBotHandoffPosted = "bot_handoff_posted"
 	// {chat_id, handoff_id, outcome}: a handoff ended without a post.
 	auditBotHandoffEnded = "bot_handoff_ended"
+
+	// {mode, allowed_users, allowed_chats, blocked_users, blocked_chats, guest_tools, per_chat_hourly}: ids and tool
+	// names only, when the policy changes. Never a label, never a message.
+	auditBotGroupPolicy = "bot_group_policy_changed"
+	// {chat_id, guest_id, mode, in_thread}: a non-owner's @bot was taken. Never the words or the name.
+	auditBotGuestTriggered = "bot_guest_triggered"
+	// {chat_id, guest_id}: the bot posted the guest's reply.
+	auditBotGuestPosted = "bot_guest_posted"
+	// {chat_id, guest_id, outcome}: a guest turn ended without a post.
+	auditBotGuestEnded = "bot_guest_ended"
+	// {chat_id, reason}: a trigger refused by a limit; at most one per chat per ten minutes.
+	auditBotGuestRefused = "bot_guest_refused"
 )
 
 // botRecord is an audit record of the bot's, written once its lock is let go.

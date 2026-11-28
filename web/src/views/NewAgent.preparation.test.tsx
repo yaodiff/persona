@@ -512,7 +512,20 @@ describe("New Agent workspace list (#7259)", () => {
     expect(starts()[0].body).toMatchObject({ machine_id: "computer", cwd: "/paseo/demo/persona-submitted-task", workspace_id: "made-for-it", host: "paseo" });
   });
 
-  it("offers no worktree for a chosen Orca workspace, and a switch turned on does not carry to the next choice", async () => {
+  it("starts in a new worktree Orca makes under the Orca workspace chosen (#17050)", async () => {
+    await list([{ ...paseo("orca-row"), source: "orca" }]);
+    await act(async () => choices()[0].click());
+    const request = await prepare();
+    // Orca says where its worktree goes and makes it, as a child of the workspace chosen
+    expect(calls.filter((c) => c.url.endsWith("/worktree/status")).at(-1)?.body).toEqual({ cwd: "/projects/orca-row", kind: "orca" });
+    expect(request.body).toMatchObject({ cwd: "/projects/orca-row", kind: "orca" });
+    await answer(request, { path: "/orca/workspaces/demo/persona-submitted-task", branch: "persona/submitted-task", root: "/projects/orca-row", workspace_id: "made-for-it" });
+    expect(starts()).toHaveLength(1);
+    // into the worktree Orca made, not the one chosen
+    expect(starts()[0].body).toMatchObject({ machine_id: "computer", cwd: "/orca/workspaces/demo/persona-submitted-task", workspace_id: "made-for-it", host: "orca" });
+  });
+
+  it("offers a chosen Orca workspace's worktree off, and a switch turned on does not carry to the next choice", async () => {
     await list([paseo("fix-login"), { ...paseo("orca-row"), source: "orca" }]);
     await act(async () => choices().find((b) => b.textContent?.includes("fix-login"))!.click());
     await tick(401);
@@ -520,7 +533,7 @@ describe("New Agent workspace list (#7259)", () => {
     await click(t("newagent-workspace.choose_folder"));
     await act(async () => choices().find((b) => b.textContent?.includes("orca-row"))!.click());
     await tick(401);
-    expect(document.querySelector('[data-testid="new-agent-worktree"]')).toBeNull();
+    expect(document.querySelector('[data-testid="new-agent-worktree"] [role="switch"]')!.getAttribute("aria-checked")).toBe("false");
     await click(t("newagent.start")); await tick();
     expect(pending).toHaveLength(0);
     expect(starts()[0].body).toMatchObject({ cwd: "/projects/orca-row", workspace_id: "orca-row", host: "orca" });

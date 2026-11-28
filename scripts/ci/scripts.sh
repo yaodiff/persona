@@ -13,6 +13,8 @@ trap 'rm -f "$others"' EXIT
   ci_run 'Android token ratchet' 180 python3 scripts/app/android_token_baseline.py || rc=1
   ci_run 'Android motion ratchet' 180 python3 scripts/app/android_motion_baseline.py || rc=1
   ci_run 'Android design-system slot order' 180 python3 scripts/app/android_slot_order.py || rc=1
+  ci_run 'Android Compose size budget' 60 python3 scripts/app/android_compose_budget.py || rc=1
+  ci_run 'Android nested Throwable name rules' 60 python3 scripts/app/android_nested_throwables.py || rc=1
   ci_run 'Workflow syntax and shell lint' 180 actionlint || rc=1
   # One file per step: bash -n reads only its first file, the rest become that script's arguments.
   ci_run 'Site language check shell syntax' 30 bash -n scripts/release/site_language_check.sh || rc=1

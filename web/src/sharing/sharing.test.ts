@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../lib/api";
+import type { Session } from "../lib/types";
 import { SharesClient } from "./client";
 import { SharingModel } from "./model";
-import { selectedCount } from "./SharingDialog";
+import SharingDialog, { displayTime, isoTime, localTime, selectedCount } from "./SharingDialog";
 import type { Catalog, ShareMetadata } from "./types";
 const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
 const now = () => new Date(Date.now() + 600000).toISOString();
@@ -118,5 +121,68 @@ describe("sharing uses the frozen HTTP contract", () => {
     const model = new SharingModel(new SharesClient("assistant-synthetic", "computer-synthetic", "session-synthetic", () => current), () => {});
     const opening = model.beginCreate(); current = false; finish(response(catalog)); await opening;
     expect(model.state.catalog).toBeNull(); expect(model.state.error).toBe("scope_changed"); model.dispose();
+  });
+
+  it("renders edit expiry safely on malformed created_at/expires_at and rejects out-of-range or rollover datetime-local values", async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    // Direct helper coverage for year boundaries (incl. 9999 crossing into 10000 in UTC+ zones) and calendar rollover.
+    expect(displayTime("not-a-date")).toBe("—");
+    expect(isoTime("2026-02-30T10:00")).toBe("");
+    expect(isoTime("275761-01-01T00:00")).toBe("");
+    expect(isoTime("2026-12-05T10:30")).toBe(new Date("2026-12-05T10:30").toISOString());
+    expect(localTime("+010000-01-01T00:00:00.000Z")).toBe("");
+    expect(localTime("-000001-01-01T00:00:00.000Z")).toBe("");
+
+    const validFuture = new Date(Date.now() + 86400000).toISOString();
+    const badShare = share({ share_id: "share-bad", created_at: "not-a-date", expires_at: "also-bad" });
+    const goodShare = share({ share_id: "share-good", expires_at: validFuture });
+    vi.stubGlobal("fetch", vi.fn<typeof globalThis.fetch>(async (url) => {
+      const s = String(url);
+      if (s.includes("/messages")) return response({ revision: 1, content_version: 1, messages: [], next_cursor: null });
+      if (s.includes("share-bad")) return response({ share: badShare, can_widen: true, reason: null });
+      if (s.includes("share-good")) return response({ share: goodShare, can_widen: true, reason: null });
+      return response({ shares: [badShare, goodShare] });
+    }));
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const sess = { machine_id: "computer-synthetic", session_id: "session-synthetic", manager: "assistant-synthetic" } as Session;
+    try {
+      await act(async () => root.render(createElement(SharingDialog, { session: sess, onClose: () => {} })));
+      for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
+      expect(document.body.textContent).not.toContain("Invalid Date");
+      const editBtns = [...document.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.textContent?.trim() === "Edit" || b.textContent?.trim() === "编辑");
+      expect(editBtns.length).toBe(2);
+
+      // 1. Malformed created_at & expires_at: renders without crash and omits max.
+      await act(async () => editBtns[0].click());
+      for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
+      let input = document.querySelector<HTMLInputElement>('input[type="datetime-local"]')!;
+      expect(input).toBeTruthy();
+      expect(input.value).toBe("");
+      expect(input.getAttribute("max")).toBeNull();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "275761-01-01T00:00");
+      await act(async () => { input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(input.value).toBe("");
+
+      // 2. Valid share edited to out-of-range year or calendar rollover (Feb 30) safely clears to "" instead of crashing or rolling over.
+      const backBtn = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Back" || b.textContent?.trim() === "返回")!;
+      await act(async () => backBtn.click());
+      for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
+      const editBtns2 = [...document.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.textContent?.trim() === "Edit" || b.textContent?.trim() === "编辑");
+      await act(async () => editBtns2[1].click());
+      for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
+      input = document.querySelector<HTMLInputElement>('input[type="datetime-local"]')!;
+      expect(input.value).toBe(localTime(validFuture));
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "2026-02-30T10:00");
+      await act(async () => { input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(input.value).toBe("");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "275761-01-01T00:00");
+      await act(async () => { input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(input.value).toBe("");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
   });
 });

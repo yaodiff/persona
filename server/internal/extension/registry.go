@@ -202,6 +202,10 @@ type Registry struct {
 	refSchemes map[string][]string
 	// keptOff are built-in extensions held off whatever their rows say (KeepOff).
 	keptOff map[string]*keptOff
+	// moduleHolds: the ids of modules an installed extension may supply (HoldModule), each with whether the modules
+	// setting switched it off. dormant: the rows of those ids Load set aside (dormant.go).
+	moduleHolds map[string]bool
+	dormant     map[string]Record
 }
 
 // keptOff is a built-in held off (KeepOff): what switching it on answers, and its row's own switch. The hold is not
@@ -215,7 +219,8 @@ type keptOff struct {
 func NewRegistry(dir string, store Store, seal Sealer, build int64) *Registry {
 	return &Registry{dir: dir, store: store, seal: seal, build: build, platform: runtime.GOOS + "-" + runtime.GOARCH,
 		extensions: map[string]*Extension{}, reserved: map[string]map[string]string{}, previews: map[string]*Preview{}, now: time.Now,
-		handoffs: map[string]bool{}, yields: map[string]bool{}, yielded: map[string]*Extension{}}
+		handoffs: map[string]bool{}, yields: map[string]bool{}, yielded: map[string]*Extension{},
+		moduleHolds: map[string]bool{}, dormant: map[string]Record{}}
 }
 
 // Yields marks the built-in plugin id as one an installed plugin of the same id takes the place of, while it moves out
@@ -339,8 +344,13 @@ func (r *Registry) Load(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.dropStalePreviews()
+	clear(r.dormant)
 	for _, row := range rows {
 		cur := r.extensions[row.ID]
+		if r.holdsDormant(row, cur) {
+			r.dormant[row.ID] = row
+			continue
+		}
 		switch {
 		case row.Source == SourceBuiltin && cur != nil && cur.Record.Source == SourceBuiltin:
 			mutation := r.settingsWriteLocked(row.ID)

@@ -718,6 +718,23 @@ func TestRuntimeRowListsItsPermissionModes(t *testing.T) {
 	}
 }
 
+func TestAgyRowPreservesPermissionModesAlongsideClaudeModes(t *testing.T) {
+	n, _ := runtimeNode(t)
+	h := dialRuntime(t, n, map[string]any{
+		"runtime": "agy", "name": "Antigravity", "agent": "agy", "launcher": "agy",
+		"caps": map[string]any{"send": true, "modes": true, "assistant": true},
+	})
+	noAuto := []string{"default", "acceptEdits", "plan", "bypassPermissions"}
+	_ = h.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": "agy-1", "status": "idle", "agent": "agy", "capabilities": map[string]any{"rewind": false, "permission_modes": noAuto}},
+	}})
+	waitFor(t, "agy row listed", func() bool { _, ok := listed(t, n)["agy-1"]; return ok })
+	got := listed(t, n)["agy-1"].Capabilities
+	if got == nil || got.Modes == nil || !*got.Modes || got.PermissionModes != proto.PermissionModeSetOf(noAuto...) {
+		t.Fatalf("agy caps = %+v, want modes=true and permission_modes=%v", got, noAuto)
+	}
+}
+
 // session.info of a runtime's session whose counts nobody gives (no transcript here) says they are unknown, so the
 // apps leave them out (#8261); the zeros stay for older apps, which decode them as required numbers.
 func TestRuntimeSessionInfoSaysItsCountsAreUnknown(t *testing.T) {

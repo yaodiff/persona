@@ -640,6 +640,27 @@ describe("a model error's Fix it", () => {
     expect(button(t("chat-modelpill.undo_pick"))).toBeUndefined();
     expect(button(t("chat-lines.fix_it"))).toBeDefined();
   });
+
+  // the four dimensions' last working setup (POST …/model/restore): on the card of a chat whose pick the hub keeps
+  it("restores the last working setup from the card, and says so when there is none", async () => {
+    await showChat(chat({ turn_error_code: "model_route", model_pick: { launcher: "relay", model: "haiku" } }));
+    pickAnswer = () => json({ ok: true, model_pick: { launcher: "claude", model: "opus", effort: "high", runtime: "claude", channel: "native:claude" } });
+    await act(async () => button(t("chat-modelpill.restore_last_good"))!.click());
+    await act(async () => vi.dynamicImportSettled());
+    await flush();
+    expect(calls.filter((c) => c.method === "POST" && c.url.endsWith("/assistant/conversations/c1/model/restore"))).toHaveLength(1);
+    expect(getSession(mid(), "c1")?.model_pick).toEqual({ launcher: "claude", model: "opus", effort: "high", runtime: "claude", channel: "native:claude" });
+    expect(toast).toHaveBeenCalledWith(t("execution.restored"), "ok");
+    pickAnswer = () => json({ error: "no last good" }, 404);
+    await act(async () => button(t("chat-modelpill.restore_last_good"))!.click());
+    await act(async () => vi.dynamicImportSettled());
+    await flush();
+    expect(toast).toHaveBeenCalledWith(t("execution.restore_none"), "info");
+    // an older hub keeps no pick: no restore either
+    Object.assign(getState(), { features: ["typed_models"] });
+    await showChat(chat({ turn_error_code: "model_route" }));
+    expect(button(t("chat-modelpill.restore_last_good"))).toBeUndefined();
+  });
 });
 
 

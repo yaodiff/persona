@@ -78,7 +78,9 @@ type kindEntry struct {
 	// Extension marks a declarative contribution: like a built-in, it cannot be
 	// replaced through the user's custom-kind API.
 	Extension bool
-	Revision  int64
+	// Owner is the extension contributing an Extension kind ("" for any other, and from a hub that does not say).
+	Owner    string
+	Revision int64
 	// Disabled says why the kind is not enabled (kindDisabledSchema, kindDisabledInvalid); its tracks are left out.
 	Disabled string
 }

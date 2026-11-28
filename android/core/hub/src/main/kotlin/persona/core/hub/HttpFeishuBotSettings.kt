@@ -12,6 +12,7 @@ import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.FeishuBotSettings
 import persona.core.contracts.api.FeishuBotStatus
 import persona.core.contracts.api.FeishuBotUpdate
+import persona.core.contracts.api.FeishuGroupAccessSettings
 import persona.core.contracts.api.LarkSyncSettings
 
 /**
@@ -21,9 +22,11 @@ import persona.core.contracts.api.LarkSyncSettings
 class HttpFeishuBotSettings internal constructor(
     /** The bot's daily sync, over the same connection. */
     override val sync: LarkSyncSettings? = null,
+    /** Who else may @ the bot in a group, over the same connection. */
+    override val groupAccess: FeishuGroupAccessSettings? = null,
     private val request: suspend (path: String, method: String, body: RequestBody?, readTimeoutSeconds: Long?) -> Response,
 ) : FeishuBotSettings {
-    constructor(connection: OkHttpHubConnection) : this(HttpLarkSync(connection), { path, method, body, timeout ->
+    constructor(connection: OkHttpHubConnection) : this(HttpLarkSync(connection), HttpFeishuGroupAccess(connection), { path, method, body, timeout ->
         connection.request(path, method, body, readTimeoutSeconds = timeout)
     })
 

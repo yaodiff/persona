@@ -8,6 +8,7 @@ import type { Compaction, Item } from "./types";
 
 export const COMPACT_FEATURE = "assistant_compact";
 export const NEW_MAIN_FEATURE = "assistant_main_new";
+export const COMPACT_REQUESTED_EVENT = "persona:compact-requested";
 
 /** POST …/compact: where it goes. */
 export function compactPath(sid: string): string {

@@ -4,6 +4,7 @@ import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from "reac
 import { t } from "../i18n";
 import { isSpaceMuted } from "../lib/agent-filter";
 import { isQuiet, sessionHost, type AgentMutes, type Space } from "../lib/agent-groups";
+import { engineName } from "../lib/engine-names";
 import { useHeldSeenOrder, useSeenRowsMode } from "../lib/seen-rows";
 import { showsWorktreeLevel, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos-core";
 import { paneRoute, tabRowKeys, type ChildStates, type HerdrMachine, type HerdrSpace, type HerdrTab } from "../lib/herdr-tree";
@@ -248,7 +249,7 @@ const TreeAgentRows = memo(function TreeAgentRows({ a, depth, showHost, keyPrefi
           </button>
         )}
         <div className="min-w-0 flex-1">
-          <SessionRow s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} host={showHost && sessionHost(s) !== "herdr" && sessionHost(s) !== "botmux" ? sessionHost(s) : undefined} onMenu={onRowMenu} />
+          <SessionRow s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} host={showHost && sessionHost(s) !== "herdr" && sessionHost(s) !== "botmux" ? engineName(sessionHost(s)) : undefined} onMenu={onRowMenu} />
         </div>
       </div>
       {a.children.length > 0 && (

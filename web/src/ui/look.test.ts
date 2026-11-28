@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { contrast, pageToken } from "./extension-theme";
 import {
@@ -173,5 +175,42 @@ describe("窗口外观风格", () => {
     Object.assign(window, { personaDesktop: { platform: "darwin", setSurfaceStyle: setSurface } });
     expect(() => applyLook()).not.toThrow();
     delete (window as { personaDesktop?: unknown }).personaDesktop;
+  });
+
+  it("seeds data-desktop-glass synchronously in the index.html pre-paint script before React hydration", () => {
+    const html = readFileSync(resolve(import.meta.dirname, "../../index.html"), "utf8");
+    const prePaintScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+      .map((m) => m[1]!)
+      .find((s) => s.includes("persona.surface-style"));
+    expect(prePaintScript).toBeDefined();
+    const runPrePaint = new Function(prePaintScript!);
+
+    try {
+      vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false }));
+      localStorage.setItem("persona.surface-style", "liquid-glass");
+      Object.assign(window, { personaDesktop: { platform: "darwin", setSurfaceStyle: vi.fn() } });
+      runPrePaint();
+      expect(document.documentElement.dataset.surfaceStyle).toBe("liquid-glass");
+      expect(document.documentElement.dataset.desktopGlass).toBe("1");
+
+      delete document.documentElement.dataset.desktopGlass;
+      delete document.documentElement.dataset.surfaceStyle;
+      delete (window as { personaDesktop?: unknown }).personaDesktop;
+      runPrePaint();
+      expect(document.documentElement.dataset.surfaceStyle).toBe("liquid-glass");
+      expect(document.documentElement.dataset.desktopGlass).toBeUndefined();
+
+      delete document.documentElement.dataset.surfaceStyle;
+      Object.assign(window, { personaDesktop: { platform: "win32", setSurfaceStyle: vi.fn() } });
+      runPrePaint();
+      expect(document.documentElement.dataset.desktopGlass).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      delete (window as { personaDesktop?: unknown }).personaDesktop;
+      document.documentElement.classList.remove("dark");
+      delete document.documentElement.dataset.surfaceStyle;
+      delete document.documentElement.dataset.desktopGlass;
+      document.documentElement.style.removeProperty("--glass-t");
+    }
   });
 });

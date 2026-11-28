@@ -49,10 +49,10 @@ func (s *Service) inboxRoutes() {
 			return
 		}
 		if q := r.URL.Query(); q.Has("since") { // only what changed since a list it had (inbox_delta.go)
-			s.writeInboxSince(w, inboxShape{all: q.Get("sources") == "all", lean: q.Get("chain") == "last"}, q.Get("since"))
+			s.writeInboxSince(r.Context(), w, inboxShape{all: q.Get("sources") == "all", lean: q.Get("chain") == "last"}, q.Get("since"))
 			return
 		}
-		s.writeInboxList(w, r.URL.Query().Get("sources") == "all") // from each item's kept bytes (inbox_list_memo.go)
+		s.writeInboxList(r.Context(), w, r.URL.Query().Get("sources") == "all") // from each item's kept bytes (inbox_list_memo.go)
 	})
 	s.handle("GET /api/v1/inbox/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
@@ -270,7 +270,7 @@ func (s *Service) inboxRoutes() {
 				"error": i18n.T(l, "assistant-inbox.refresh_failed"), "detail": i18n.Localize(err, l), "retryable": true})
 			return
 		}
-		s.writeInboxList(w, r.URL.Query().Get("sources") == "all")
+		s.writeInboxList(r.Context(), w, r.URL.Query().Get("sources") == "all")
 	})
 }
 

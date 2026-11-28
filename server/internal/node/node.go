@@ -61,6 +61,7 @@ type Node struct {
 	memoryMergeRetry map[string]time.Time
 
 	memoryMu     sync.Mutex
+	scratchMu    sync.Mutex
 	Version      string
 	skillImports assistantskills.Importer
 	updater      *nodeupdate.Manager // resident-owned, shared across attach connections
@@ -305,6 +306,7 @@ type Node struct {
 	agyIdleClock      func() time.Time // nil uses time.Now (tests override per-node)
 	agyIdlePolicy     *assistantwire.AgyIdleCompaction
 	agyIdleSessions   map[string]*agyIdleState
+	agyIdleInFlight   int
 	agyAttemptSeq     uint64
 	pendingIxSessions map[string]bool
 	// recoveries: a conversation's bounded model-failure recovery, surviving the process replaced by a model switch.
@@ -389,7 +391,15 @@ type Node struct {
 	previewOnce sync.Once
 
 	// hostAgents: each host's agents in its last answer (refreshHosts), kept for a host that does not answer.
-	hostAgents map[string][]host.Agent
+	// Per-host snapshot sequence numbers and agentsGen keep delayed older snapshots from overwriting newer live state (#2133).
+	// agentsGen numbers each merge of hostAgents as it is taken; agentsCommitted is the newest one written into agents. A
+	// merge gives way only to a newer one already written, never to one still running (#17826).
+	hostAgents      map[string][]host.Agent
+	hostSnapSeq     map[string]uint64
+	hostLayoutSeq   map[string]uint64
+	hostAgentsSeq   map[string]uint64
+	agentsGen       uint64
+	agentsCommitted uint64
 	// paneClaudes: when the outside-claude list first saw each claude whose environment names an engine pane, by pid
 	// (claudeInPane's grace while its engine has not reported it yet).
 	paneClaudes map[int]paneClaudeSeen
@@ -425,6 +435,8 @@ type Node struct {
 
 	// claudeV is claude's version as last asked (agentplugin.go).
 	claudeV claudeVersionCache
+	// engRep: the engines node.info said last, Orca's row as told since (orcaengine.go).
+	engRep engineReport
 	// resumeSignIn: launchers' sign-in per profile as last asked for a resume (assistant_resume_signin.go).
 	resumeSignIn resumeSignInCache
 
@@ -621,8 +633,28 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 	n.fsw.start(ctx, func(c fsChanged) { _ = n.peer.Notify(methodFsChanged, c) })
 	defer n.fsw.close()
+	// Bind n.runtimes and n.runtimeHost before starting any background goroutine or adopting
+	// assistants so unlocked reads of n.runtimes / n.runtimeHost never race with attach(), and
+	// listen before exposing a standalone RuntimeHost so Listen failure leaves n.runtimeHost nil.
+	var ownRuntimeHost *RuntimeHost
+	if n.runtimeHost != nil {
+		n.runtimes = n.runtimeHost.reg
+	} else {
+		if n.runtimes == nil {
+			n.runtimes = newRuntimeRegistry()
+		}
+		rh := n.newRuntimeHost()
+		if err := rh.Listen(ctx); err != nil { // runtimes (runtimes.go): beside the engine, whichever it is
+			n.logger.Printf("runtime socket: %v", err)
+		} else {
+			ownRuntimeHost = rh
+			n.runtimeHost = rh
+			defer rh.setAgyBridge(false)
+		}
+	}
 	n.cdirs.report = func(dirs []string) { _ = n.peer.Notify("claude.dirs", map[string]any{"dirs": dirs}) }
 	go n.watchClaudePlugin(ctx) // claudeplugin.go
+	go n.watchOrcaEngine(ctx)   // orcaengine.go
 	n.codices.report = func(cfg proto.CodexConfig) { _ = n.peer.Notify("codex.inventory", cfg) }
 	go n.runCodex(ctx)
 	var adopted []*assistantProc
@@ -630,17 +662,14 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		adopted = n.keeper.adopt(n)
 	}
 	n.startState(ctx, adopted)
-	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach sets (clicall.go mcpAssistantOf).
-	if rh := n.runtimeHost; rh != nil { // a resident node's: runtimes stay connected across hub connections
+	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach uses (clicall.go mcpAssistantOf).
+	if ownRuntimeHost != nil {
+		ownRuntimeHost.attach(n)
+		defer ownRuntimeHost.detach(n)
+	} else if n.runtimeHost != nil { // a resident node's: runtimes stay connected across hub connections
+		rh := n.runtimeHost
 		rh.attach(n)
 		defer rh.detach(n)
-	} else if rh, err := n.listenRuntimeSocket(ctx); err != nil { // runtimes (runtimes.go): beside the engine, whichever it is
-		n.logger.Printf("runtime socket: %v", err)
-	} else {
-		defer func() {
-			rh.setAgyBridge(false)
-			rh.detach(n)
-		}()
 	}
 	ln, err := n.listenHookSocket(ctx)
 	if err != nil {
@@ -1512,6 +1541,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// PendingInteractionSessions: session IDs on this machine currently holding pending hub interaction cards
 			// (ask_user / approval), so idle auto-compaction does not compact sessions waiting on the user.
 			PendingInteractionSessions *[]string `json:"pending_interaction_sessions"`
+			// BotmuxOwnerUnionID: the BotMux Owner Union ID of Settings › Agents (hostbotmux_owner.go), "" for none;
+			// nil (an older hub, a call that says nothing of it) leaves it as it is.
+			BotmuxOwnerUnionID *string `json:"botmux_owner_union_id"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
@@ -1529,7 +1561,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 			n.hubMCPWait.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.MCPWait))
 		}
-		if c.ClaudeDirs != nil || (c.Keep == nil && c.AgyIdleCompaction == nil && c.PendingInteractionSessions == nil) { // partial updates leave the directories
+		if c.ClaudeDirs != nil || (c.Keep == nil && c.AgyIdleCompaction == nil && c.PendingInteractionSessions == nil && c.BotmuxOwnerUnionID == nil) { // partial updates leave the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
 		}
 		if c.ClaudeDirsBlocked != nil {
@@ -1550,6 +1582,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if c.Botmux != nil {
 			n.useBotmux(*c.Botmux, false)
+		}
+		if c.BotmuxOwnerUnionID != nil {
+			n.setBotmuxOwner(*c.BotmuxOwnerUnionID)
 		}
 		if c.ClaudeStartDir != nil {
 			d := strings.TrimSpace(*c.ClaudeStartDir)
@@ -2136,7 +2171,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if err == nil && id != "" {
 				n.expectFirstLine(id, opts.ClientMsgID, p.Text, len(p.Images), at)
 			}
-			return map[string]any{"session_id": id}, err
+			return n.assistantSendResult(id), err
 		}
 		var once struct {
 			OnceID string `json:"once_id"`
@@ -2170,11 +2205,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 					n.recordSegmentInput(id, opts.ClientMsgID)
 				}
 			}
-			return round.answer(map[string]any{"session_id": id}), err
+			return round.answer(n.assistantSendResult(id)), err
 		}
 		if p.NewSessionID == "" || opts.ClientMsgID == "" {
 			id, err := send()
-			return round.answer(map[string]any{"session_id": id}), err
+			return round.answer(n.assistantSendResult(id)), err
 		}
 		// A start under a given id with its first message's client_msg_id (a meeting's room, its follow-up, Just me's
 		// new main chat): sent once, and its transcript item carries the id, as a session.send's (echo.go).
@@ -2188,7 +2223,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err == nil && id == "" {
 			id = p.NewSessionID // the same start asked again while it went: that conversation
 		}
-		return map[string]any{"session_id": id}, err
+		return n.assistantSendResult(id), err
 	case "assistant.guest_prepare": // a guest conversation's directory (assistant_guest.go)
 		return n.assistantGuestPrepare(params)
 	case "assistant.guest_delete": // a meeting's room, at its transcript's cut (assistant_guest.go)
@@ -2431,11 +2466,24 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 		}
 		over := n.turnOver(p.SessionID) // before the key: the Escape itself may end a turn
+		var qPath string
+		var qStat os.FileInfo
+		if !over {
+			if qPath = n.transcriptPath(p.SessionID); qPath != "" {
+				qStat, _ = os.Stat(qPath)
+			}
+		}
 		err := n.keys(ctx, p.SessionID, []string{"esc"}, "")
 		if err == nil && over && n.backgroundRuns(p.SessionID) {
 			// The Escape went to an idle prompt and the background work goes on: said, not claimed as an interruption
 			// (#10828). The key is pressed whatever this finds, so a turn that does run is never left running.
 			err = refusal(proto.CodeTurnOverBackground, i18n.T(i18n.From(ctx), "rpc-errors."+proto.CodeTurnOverBackground), nil)
+		} else if err == nil && !over && qPath != "" {
+			n.forgetMeta(qPath)
+			n.notifySessionsSoon()
+			if qStat != nil {
+				n.watchQueueSettle(qPath, qStat.Size(), qStat.ModTime())
+			}
 		}
 		return ok(err)
 	case "session.screen.before":
@@ -2723,11 +2771,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			limit = 80
 		}
 		if p.ThroughSeq > 0 { // a fold being opened: the lines it stands for
-			page, more := f.Range(p.FromSeq, p.ThroughSeq, 1000)
+			page, more, span := f.RangeSpan(p.FromSeq, p.ThroughSeq, 1000)
 			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)
 			n.toolViews.attach(p.SessionID, page, false, f)
 			n.ttft.annotate(p.SessionID, page, false)
-			return map[string]any{"items": items(page), "more": more}, nil
+			return withSpan(map[string]any{"items": items(page), "more": more}, span, true), nil
 		}
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {
@@ -3176,6 +3224,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		return map[string]any{"sent": true}, nil
 	case "workspace.close":
+		if p.Host == host.Orca {
+			return n.closeOrcaTaskSpace(ctx, p.TaskID, p.WorkspaceID)
+		}
 		return n.closeTaskSpace(ctx, p.TaskID, p.WorkspaceID)
 	case "assistant.cache_clear":
 		n.forgetCacheWarm(p.SessionID)
@@ -3358,7 +3409,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		Version:            n.Version,
 		System:             n.system(ctx),
 		Engine:             n.engine(),
-		Engines:            n.engines(ctx, hv),
+		Engines:            n.engRep.said(n.engines(ctx, hv)),
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramsInfo(),
@@ -3374,7 +3425,7 @@ func (n *Node) herdrRunning(ctx context.Context) (running, known bool) {
 	if !ok || h.c == nil {
 		return false, false
 	}
-	return herdrAlive(ctx, h.c.Socket), true
+	return herdrProbe(ctx, h.c.Socket)
 }
 
 func claudeVersion(ctx context.Context) string {

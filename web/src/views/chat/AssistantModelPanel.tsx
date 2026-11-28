@@ -4,7 +4,9 @@
 // own pick, with the way back. On a hub that keeps picks a pick is PUT for the conversation (it holds from the next
 // message, on every device), drawn at once and put back with the hub's words if it says no; following the default again
 // is a DELETE. An older hub: the pick lasts for this page and goes with each message, as before. The new-conversation
-// page: the pick goes with the conversation's start.
+// page: the pick goes with the conversation's start. On a hub that declares the four dimensions (GET /execution/catalog
+// with recommended combinations for the computer) the panel opens on the model and the effort only
+// (views/execution/SimpleModelSheet.tsx); "All models and providers" opens the launcher panel below.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, errorText, sessionPath } from "../../lib/api";
@@ -27,6 +29,9 @@ import { Button, Dialog, toast } from "../../ui/atoms";
 import { ModelPanel, type ModelPanelProps } from "../../ui/model-panel/ModelPanel";
 import { ASSISTANT_SEGMENTS_FEATURE, assistantSwitchNeeded, conversationSwitchState, prepareConversationSwitch, submitConversationSwitch, type ConversationSwitchRequest, type ConversationSwitchState } from "../../lib/conversation-switch";
 import { setServiceTier } from "./SessionDialogs";
+import { recommendedPicks, type ExecutionCatalog, type SpecPick } from "../../lib/execution";
+import { useExecutionCatalog } from "../execution/hooks";
+import { SimpleModelSheet } from "../execution/SimpleModelSheet";
 
 export type AssistantModelNoticeTone = "info" | "ok" | "error";
 export type AssistantModelNotice = (text: string, tone?: AssistantModelNoticeTone) => void;
@@ -138,6 +143,8 @@ export interface AssistantModelPanelProps {
   onNotice?: AssistantModelNotice;
   /** Controlled "Configure models" handler forwarded to `ModelPanel`. */
   onConfigure?: () => void;
+  /** Controlled execution catalog (`null`: none, the launcher panel only) skips GET /execution/catalog. */
+  execution?: ExecutionCatalog | null;
 }
 
 interface ResolvedCapabilitiesProps extends Omit<AssistantModelPanelProps, "canSwitch" | "typed" | "startServiceTier"> {
@@ -243,7 +250,12 @@ function AssistantModelPanelView({
   onRefreshAssistant,
   onNotice,
   onConfigure,
+  execution,
+  launchersInfo,
 }: ResolvedCatalogProps) {
+  // the four dimensions' catalog: read with the panel unless the caller controls the launcher catalog (or gives one)
+  const exec = useExecutionCatalog(mid, launchersInfo === undefined, execution);
+  const [full, setFull] = useState(false);
   const [switchPick, setSwitchPick] = useState<ModelPick | null>(null);
   const [switchError, setSwitchError] = useState("");
   const [switching, setSwitching] = useState(false);
@@ -440,8 +452,29 @@ function AssistantModelPanelView({
     header: <PickStrip chat={chat} setup={setup} named={named} onBack={back} />,
   };
 
+  const picks = full ? [] : recommendedPicks(exec.catalog);
+  const simple = exec.catalog && picks.length > 0 && !switchPick ? exec.catalog : null;
+  const restored = (pick: SpecPick) => {
+    const s = latest();
+    if (s) upsertSession({ ...s, model_pick: pick });
+  };
+
   return ( <>
-    {controlledQuotas !== undefined ? (
+    {simple ? (
+      <SimpleModelSheet
+        catalog={simple}
+        picks={picks}
+        machine={mid}
+        current={{ launcher: launcher?.name ?? setup.provider, model: state.current?.model ?? setup.model, effort: state.current?.effort ?? setup.effort }}
+        kept={chat.kept && chat.session ? chat.session : undefined}
+        header={<PickStrip chat={chat} setup={setup} named={named} onBack={() => { back(); onClose(); }} />}
+        onApply={apply}
+        onRestored={restored}
+        onNotice={notify}
+        onMore={() => setFull(true)}
+        onClose={onClose}
+      />
+    ) : controlledQuotas !== undefined ? (
       <ModelPanel {...panelProps} quotas={controlledQuotas} />
     ) : (
       <DefaultQuotasModelPanel {...panelProps} mid={mid} launchers={info?.launchers} />

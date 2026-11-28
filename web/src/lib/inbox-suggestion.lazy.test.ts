@@ -20,6 +20,8 @@ describe("inbox-suggestion", () => {
       "lib-inbox-events.agent_started",
       "lib-inbox-events.filed",
       "lib-inbox-events.handed_back",
+      "lib-inbox-events.handed_off",
+      "lib-inbox-events.handoff_unavailable",
       "lib-inbox-events.instructed",
       "lib-inbox-events.rejected",
       "lib-inbox-events.sent",

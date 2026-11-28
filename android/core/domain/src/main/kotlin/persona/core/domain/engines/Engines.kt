@@ -4,7 +4,9 @@ import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
 import persona.core.contracts.DetectedEngine
 import persona.core.contracts.Machine
+import persona.core.contracts.Session
 import persona.core.contracts.api.NO_TERMINAL_ENGINE
+import persona.core.domain.sort.hostKind
 
 /**
  * One terminal engine per machine, or none (docs/integrations/engines.md), as on iOS `EngineSelectionModel`; a set of several that
@@ -133,6 +135,19 @@ object Engines {
     fun name(id: String, machine: Machine): String = machine.engines.firstOrNull { it.id == id }?.name?.takeIf { it.isNotBlank() }
         ?: if (id == NONE) Key.EngineNone.english else known.firstOrNull { it.id == id }?.name ?: id
 
+    /** A known engine's name ("Orca", "Herdr App"), or its id: a host badge never shows a bare id this build can name (#17054). */
+    fun displayName(id: String): String = known.firstOrNull { it.id == id }?.name ?: id
+
+    /**
+     * The engine a session's terminal is in, by name, for the words that say where its tab or workspace is renamed (#17054,
+     * the web's `sessionEngineName`): its pane's host, else its space's kind when that is an engine (an Orca chat has no
+     * pane), else herdr.
+     */
+    fun sessionEngineName(session: Session): String {
+        val kind = session.hostKind.ifEmpty { session.spaceKind.orEmpty() }
+        return known.firstOrNull { it.id == kind }?.name ?: DEFAULT
+    }
+
     /** The machine pairing asks about: the hub's own (kind local), else the first one. */
     fun pairingMachine(machines: List<Machine>): Machine? = machines.firstOrNull { it.kind == "local" } ?: machines.firstOrNull()
 
@@ -164,16 +179,50 @@ object Engines {
     /** Whether an option says if it was found there: not for [NONE], it is there whenever the hub takes host sets. */
     fun showsDetection(id: String): Boolean = id != NONE
 
-    /** The detection line under an option; missing detection is not reported as "Not detected". */
+    /**
+     * The detection line under an option; missing detection is not reported as "Not detected". An installed Orca that is not
+     * running, and an incompatible one with its version (its note is shown under it), say so (#17037).
+     */
     fun detection(id: String, machine: Machine): CoreText {
         if (!machine.online) return CoreText.of(Key.EngineOffline)
         val found = machine.engines.firstOrNull { it.id == id } ?: return CoreText.of(Key.EngineUnknown)
+        val version = found.version.orEmpty()
         return when {
+            !found.available && state(found) == State.Stopped ->
+                if (version.isBlank()) CoreText.of(Key.EngineStopped) else CoreText.of(Key.EngineStoppedVersion, version)
+            !found.available && state(found) == State.Incompatible && version.isNotBlank() -> CoreText.of(Key.EngineIncompatibleVersion, version)
             !found.available -> CoreText.of(Key.EngineMissing)
-            !found.version.isNullOrBlank() -> CoreText.of(Key.EngineFoundVersion, found.version.orEmpty())
+            version.isNotBlank() -> CoreText.of(Key.EngineFoundVersion, version)
             else -> CoreText.of(Key.EngineFound)
         }
     }
+
+    /** What a node found of an engine (proto.EngineState, #17037): only Orca's row says it. */
+    enum class State(val wire: String) {
+        Running("running"), Stopped("stopped"), Incompatible("incompatible"), Missing("missing"),
+        /** The row does not say (an older node, another engine's row), or says something this build does not know. */
+        Unknown("");
+
+        companion object {
+            fun of(wire: String?): State = entries.firstOrNull { it != Unknown && it.wire == wire } ?: Unknown
+        }
+    }
+
+    fun state(engine: DetectedEngine?): State = State.of(engine?.state)
+
+    /**
+     * The hosts the machine enables: its host set, else the set its single engine stands for ([hostsOf], an older hub). A
+     * hub that reports no engine at all reads as no host, as [judged] keeps it blank.
+     */
+    fun hosts(machine: Machine): List<String> =
+        machine.engineHosts ?: machine.engine.takeIf { it.isNotBlank() }?.let(::hostsOf).orEmpty()
+
+    /**
+     * Orca is in the machine's engine set and its node says Orca is installed and not running: what the Agents list's "Orca
+     * isn't running" notice is shown for (an incompatible Orca, a missing one, an older node's row never are; #17037).
+     */
+    fun orcaStopped(machine: Machine): Boolean =
+        machine.online && "orca" in hosts(machine) && state(machine.engines.firstOrNull { it.id == "orca" }) == State.Stopped
 
     /**
      * The note under the options, for the option [selected] (the machine's own until something else is picked). On a [isSet]

@@ -171,9 +171,11 @@ type Manager struct {
 	uiPages       pageSessions
 	uiDelivery    pageDelivery
 	agents        *agents.Service
-	bots          botHub
-	channels      channelsHub
-	chans         struct{ in inbound }
+	// orcaBots are the Orca bots found on the computers (orcabots.go, #16891), each an Agents → Bots source.
+	orcaBots orcaBotDiscovery
+	bots     botHub
+	channels channelsHub
+	chans    struct{ in inbound }
 	// clarificationProofs are one-time owner-question attestations issued after
 	// a fresh channel action, never reusable approval capabilities.
 	clarificationProofs clarificationProofBook
@@ -393,10 +395,34 @@ func (h *Manager) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 	if h.opts.Ask == nil {
 		return proto.Resolution{}, errAssistantOffline
 	}
-	return h.opts.Ask(ctx, ix)
+	r, err := h.opts.Ask(ctx, ix)
+	if r.Allow != nil && *r.Allow && !r.UserAllowed() && !proto.MaintenanceAllowed(ix, r, time.Now()) {
+		r.Allow = nil
+	}
+	if proto.InternalMaintenanceApproval(ix) && r.Remembered {
+		r.Allow = nil // forced reruns require a fresh decision, not a remembered grant
+	}
+	if err != nil || ctx.Err() != nil || !time.Now().Before(ix.ExpiresAt) || r.Late || r.Cancel || r.Dismiss {
+		r.Allow = nil
+	}
+	return r, err
 }
 
 func (h *Manager) waitPrepared(ctx context.Context, ix proto.Interaction, op approval.Operation) (approval.Outcome, error) {
+	if proto.InternalMaintenanceApproval(ix) {
+		if op.Apply == nil {
+			return approval.Outcome{}, fmt.Errorf("%w: maintenance operation has no apply callback", approval.ErrNotApplied)
+		}
+		r, err := h.waitInteraction(ctx, ix)
+		if err != nil {
+			return approval.Outcome{}, fmt.Errorf("%w: %w", approval.ErrNotApplied, err)
+		}
+		if ctx.Err() == nil && time.Now().Before(ix.ExpiresAt) && (r.UserAllowed() || proto.MaintenanceAllowed(ix, r, time.Now())) {
+			text, err := op.Apply(ctx, r)
+			return approval.Outcome{Text: text}, err
+		}
+		return approval.Outcome{Text: op.Unanswered}, nil
+	}
 	if h.opts.AskPrepared != nil {
 		return h.opts.AskPrepared(ctx, ix, op)
 	}

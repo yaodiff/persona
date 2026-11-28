@@ -33,7 +33,7 @@ func TestWorkMachineQuestionsAndApprovals(t *testing.T) {
 				t.Fatal("the fixture must enforce work privacy before testing its cards")
 			}
 			ix := proto.Interaction{ID: "ix_work", MachineID: "untrusted-payload", SessionID: tc.session,
-				Kind: tc.kind, Agent: tc.agent, ToolName: tc.tool, Summary: "Continue the build?",
+				Kind: tc.kind, OutwardWrite: tc.kind == proto.IxPermission, Agent: tc.agent, ToolName: tc.tool, Summary: "Continue the build?",
 				ExpiresAt: time.Now().Add(time.Minute), CreatedAt: time.Now().UTC()}
 			answer := `{"allow":true}`
 			switch tc.kind {

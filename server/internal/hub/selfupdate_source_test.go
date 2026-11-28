@@ -19,6 +19,34 @@ import (
 	"github.com/nwverse/persona/server/internal/update"
 )
 
+func TestWebDevelopmentBuildRespectsConfiguredUpdateSource(t *testing.T) {
+	for _, tc := range []struct {
+		name, configured, wantURL, wantFrom string
+		invalid, privateOnly                bool
+	}{
+		{name: "custom", configured: "https://mirror.example.com/dl/", wantURL: "https://mirror.example.com/dl", wantFrom: "hub.json"},
+		{name: "invalid", configured: "https://mirror.example.com/dl/latest.json", invalid: true},
+		{name: "invalid in private network mode", configured: "https://mirror.example.com/dl/latest.json", invalid: true, privateOnly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHub(t)
+			h.version = "web-dev-fixture"
+			h.build = update.Make(h.version, update.Release, "202611171200", "")
+			h.cfg.Update.URL = tc.configured
+			h.cfg.Security.PrivateNetworkOnly = tc.privateOnly
+			s := h.updateSource()
+			if s.url != tc.wantURL || s.from != tc.wantFrom || (s.urlErr != nil) != tc.invalid {
+				t.Fatalf("update source: %+v", s)
+			}
+			if tc.invalid {
+				if key, _ := h.upd.whyNotKey(); key != "bad_source" {
+					t.Fatalf("reason = %q, want bad_source", key)
+				}
+			}
+		})
+	}
+}
+
 // hub.json's update.url replaces the URL the build was made with (#4522: v0.2.1's pointed at a site that stayed on an
 // old release): checks read it, and GET /api/v1/hub/update says which source is in effect and where it came from.
 func TestUpdateSourceFromHubJSON(t *testing.T) {

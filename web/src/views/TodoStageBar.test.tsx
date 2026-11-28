@@ -120,7 +120,7 @@ describe("TodoStageBar", () => {
 
   it("names a PR address without a number just PR, and draws no link for anything but http(s)", () => {
     expect(html(undefined, "https://example.com/merge_requests")).toContain(">" + t("todos.stage_pr") + "<");
-    ["javascript:alert(1)", "data:text/html,x", "ftp://example.com/project/merge_requests/42", "not a url"].forEach((url) => {
+    ["javascript:alert(1)", "data:text/html,x", "ftp://example.com/project/merge_requests/42", "not a url", "https://user:pass@example.com/project/pull/7", "https://evil.example\\@example.com/project/pull/7", "https:/example/project/pull/7"].forEach((url) => {
       expect(html(undefined, url)).toBe("");
       expect(html("review", url, "general")).toBe("");
       expect(html("review", url, "code")).not.toContain("href=");

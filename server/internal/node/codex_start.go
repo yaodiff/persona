@@ -600,7 +600,12 @@ func codexThreadStart(path string) (time.Time, string) {
 		return time.Time{}, ""
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
+	reader, closeReader, err := codexRolloutReader(f)
+	if err != nil {
+		return time.Time{}, ""
+	}
+	defer closeReader()
+	sc := bufio.NewScanner(reader)
 	sc.Buffer(make([]byte, 64<<10), 8<<20)
 	var began time.Time
 	for lines := 0; sc.Scan() && lines < 200; lines++ {

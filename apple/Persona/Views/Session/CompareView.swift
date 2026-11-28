@@ -1,3 +1,4 @@
+import ImageIO
 import PersonaKit
 import SwiftUI
 
@@ -124,6 +125,7 @@ struct CompareView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.kind == .image {
                 ImageCompareView(model: model)
+                    .id(ObjectIdentifier(model))
             } else if let result = model.result {
                 TextCompareView(result: result, added: model.oldMissing, deleted: model.newMissing)
             }
@@ -208,21 +210,57 @@ private struct TextCompareView: View {
     }
 }
 
+/// The two previews belong to this comparison; both layouts draw the same prepared pictures.
+nonisolated struct ComparePictures: Sendable {
+    let maxPixel: Int
+    let old: UIImage?
+    let new: UIImage?
+
+    @concurrent static func prepare(old: Data?, new: Data?, maxPixel: Int) async -> Self {
+        func preview(_ data: Data?) -> UIImage? {
+            guard !Task.isCancelled, let data, let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+            let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                             kCGImageSourceCreateThumbnailWithTransform: true,
+                                             kCGImageSourceShouldCacheImmediately: true,
+                                             kCGImageSourceThumbnailMaxPixelSize: maxPixel]
+            // Like UIImage(data:), compare the first frame, including in multi-image HEIC files.
+            return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map { UIImage(cgImage: $0) }
+        }
+        return Self(maxPixel: maxPixel, old: preview(old), new: preview(new))
+    }
+}
+
 /// Two pictures: side by side, or the new over the old with a slider between them.
 private struct ImageCompareView: View {
     let model: CompareModel
+    @Environment(\.displayScale) private var displayScale
+    @State private var pictures: ComparePictures?
     @State private var slider = false
     @State private var split = 0.5
 
     var body: some View {
+        GeometryReader { area in
+            let pixels = Int((max(area.size.width, area.size.height) * displayScale).rounded(.up))
+            Group {
+                if let pictures { comparison(pictures) } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
+            }
+            .task(id: pixels) {
+                guard pixels > (pictures?.maxPixel ?? 0) else { return }
+                let prepared = await ComparePictures.prepare(old: model.old?.data, new: model.new?.data, maxPixel: pixels)
+                if !Task.isCancelled { pictures = prepared }
+            }
+        }
+    }
+
+    private func comparison(_ pictures: ComparePictures) -> some View {
         VStack(spacing: Theme.Space.m) {
             SegmentedChoice("", [(false, String(localized: "Side by Side")), (true, String(localized: "Slider"))], selection: $slider)
                 .padding(.horizontal, Theme.Space.page)
-            if slider, let o = image(model.old), let n = image(model.new) {
+            if slider, let o = pictures.old, let n = pictures.new {
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
-                        n.resizable().scaledToFit().frame(width: g.size.width, height: g.size.height)
-                        o.resizable().scaledToFit().frame(width: g.size.width, height: g.size.height)
+                        Image(uiImage: n).resizable().scaledToFit().frame(width: g.size.width, height: g.size.height)
+                        Image(uiImage: o).resizable().scaledToFit().frame(width: g.size.width, height: g.size.height)
                             .mask(alignment: .leading) { Rectangle().frame(width: g.size.width * split) }
                         Rectangle().fill(Theme.accent).frame(width: Theme.Size.rule).offset(x: g.size.width * split)
                     }
@@ -234,8 +272,8 @@ private struct ImageCompareView: View {
                     .padding(.horizontal, Theme.Space.page)
             } else {
                 HStack(alignment: .top, spacing: Theme.Space.m) {
-                    side(String(localized: "Old"), model.old, missing: model.oldMissing ? String(localized: "Not in this version yet") : nil)
-                    side(String(localized: "New"), model.new, missing: model.newMissing ? String(localized: "Deleted in this version") : nil)
+                    side(String(localized: "Old"), model.old, picture: pictures.old, missing: model.oldMissing ? String(localized: "Not in this version yet") : nil)
+                    side(String(localized: "New"), model.new, picture: pictures.new, missing: model.newMissing ? String(localized: "Deleted in this version") : nil)
                 }
                 .padding(.horizontal, Theme.Space.page)
             }
@@ -245,16 +283,11 @@ private struct ImageCompareView: View {
         .accessibilityIdentifier("compare-image")
     }
 
-    private func image(_ v: CompareModel.Version?) -> Image? {
-        guard let v, let ui = UIImage(data: v.data) else { return nil }
-        return Image(uiImage: ui)
-    }
-
-    private func side(_ title: String, _ v: CompareModel.Version?, missing: String?) -> some View {
+    private func side(_ title: String, _ v: CompareModel.Version?, picture: UIImage?, missing: String?) -> some View {
         VStack(spacing: Theme.Space.s) {
             Text(title).font(Theme.Font.captionStrong).foregroundStyle(.secondary)
-            if let img = image(v) {
-                img.resizable().scaledToFit()
+            if let picture {
+                Image(uiImage: picture).resizable().scaledToFit()
                     .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
                 if let v { Text(Int64(v.data.count).storageText).font(Theme.Font.label).foregroundStyle(.tertiary) }
             } else {

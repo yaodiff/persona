@@ -303,6 +303,8 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	route("PUT /api/v1/machines/{mid}/herdr/sessions/blocked", d.putHerdrSessionsBlocked)
 	route("GET /api/v1/machines/{mid}/botmux", d.getBotmux)
 	route("PUT /api/v1/machines/{mid}/botmux", d.putBotmux)
+	route("GET /api/v1/machines/{mid}/orca-chat-starts", d.getOrcaChatStarts)
+	route("PUT /api/v1/machines/{mid}/orca-chat-starts", d.putOrcaChatStarts)
 	route("GET /api/v1/machines/{mid}/health/reports", d.listHealthReports)
 	route("DELETE /api/v1/machines/{mid}/health/reports/{name}", d.deleteHealthReport)
 	route("POST /api/v1/machines/{mid}/deploy", func(w http.ResponseWriter, r *http.Request, m *Machine) {

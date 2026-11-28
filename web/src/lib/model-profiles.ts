@@ -44,6 +44,9 @@ export type ModelProfileLauncherModels = Partial<Record<LauncherModelField, stri
 
 export interface ModelProfileTierCandidate {
   launcher: string;
+  /** The four dimensions' runtime and channel (lib/execution.ts): given without a launcher, the hub fills in the alias. */
+  runtime?: string;
+  channel?: string;
   model?: string;
   effort?: string;
   permission_mode?: string;
@@ -52,6 +55,8 @@ export interface ModelProfileTierCandidate {
 
 export interface ModelProfileTier {
   launcher: string;
+  runtime?: string;
+  channel?: string;
   model?: string;
   effort?: string;
   permission_mode?: string;

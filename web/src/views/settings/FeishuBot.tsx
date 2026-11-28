@@ -10,7 +10,7 @@ import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react
 import { errorText } from "../../lib/api";
 import { connectorState, connectorSummary, signsInHere, connectorTone, isEnabled, larkcliOptions, listConnectors, setConnector, type ConnectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
-import { ago } from "../../lib/format";
+import { ago, safeWebURL } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import {
   botStateText, botStatus, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, DEFAULT_NUDGE_AFTER, livePairing, nudgeChoices, nudgeLabel, pairBot, pairingLeft,
@@ -49,7 +49,7 @@ function missingScopes(c: HubConnector): string[] {
 
 /** The open-platform page for the missing permissions: the hub's guide_url, or a permission_url. */
 function permissionLink(c: HubConnector): string {
-  return c.guide_url || c.permission_url || "";
+  return safeWebURL(c.guide_url, true) || safeWebURL(c.permission_url, true) || "";
 }
 
 function combinedLarkState(bot: FeishuBotStatus | null, loading: boolean, c: HubConnector): { label: string; tone?: ConnectorTone } {

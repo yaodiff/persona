@@ -517,14 +517,18 @@ func (p *Proc) Notify(event string, params any) error {
 // strike counts a timeout or a missed ping; enough in a row restart the program.
 func (p *Proc) strike(why string) {
 	p.mu.Lock()
-	p.strikes++
 	kill := p.kill
+	if kill == nil {
+		p.mu.Unlock()
+		return
+	}
+	p.strikes++
 	n := p.strikes
 	if n >= StrikesToKill {
 		p.strikes = 0
 	}
 	p.mu.Unlock()
-	if n >= StrikesToKill && kill != nil {
+	if n >= StrikesToKill {
 		p.note("%s, %d times in a row: restarting it", why, n)
 		kill()
 	}
@@ -533,18 +537,26 @@ func (p *Proc) strike(why string) {
 // BeginHTTP is a request about to be relayed to the plugin's HTTP side: a plugin started by requests is started and
 // waited for. end is called when the request is over (a WebSocket's end included).
 func (p *Proc) BeginHTTP(ctx context.Context) (end func(), err error) {
+	select {
+	case <-p.done:
+		return nil, p.notRunningErr()
+	default:
+	}
 	p.mu.Lock()
 	p.openHTTP++
 	p.lastUse = time.Now()
 	ready := p.ready
 	p.mu.Unlock()
 	p.poke()
+	var once sync.Once
 	end = func() {
-		p.mu.Lock()
-		p.openHTTP--
-		p.lastUse = time.Now()
-		p.mu.Unlock()
-		p.poke()
+		once.Do(func() {
+			p.mu.Lock()
+			p.openHTTP--
+			p.lastUse = time.Now()
+			p.mu.Unlock()
+			p.poke()
+		})
 	}
 	if !ready && p.spec.OnHTTP {
 		wctx, cancel := context.WithTimeout(ctx, ReadyWithin)
@@ -552,6 +564,13 @@ func (p *Proc) BeginHTTP(ctx context.Context) (end func(), err error) {
 		if err := p.Wait(wctx); err != nil {
 			end()
 			return nil, err
+		}
+	} else {
+		select {
+		case <-p.done:
+			end()
+			return nil, p.notRunningErr()
+		default:
 		}
 	}
 	return end, nil
@@ -591,11 +610,7 @@ func (p *Proc) loop(ctx context.Context) {
 			return
 		}
 		start := time.Now()
-		err := p.runOnce(ctx)
-		p.mu.Lock()
-		wasUp := p.ready
-		p.sess, p.ready, p.kill, p.strikes = nil, false, nil, 0
-		p.mu.Unlock()
+		wasUp, err := p.runOnce(ctx)
 		if (!wasUp || p.spec.attached()) && p.spec.Release != nil {
 			p.spec.Release()
 		}
@@ -717,7 +732,8 @@ type child struct {
 }
 
 // runOnce runs the plugin once: nil when it was stopped because nothing needed it, the reason otherwise.
-func (p *Proc) runOnce(ctx context.Context) error {
+// wasUp reports whether the run became ready before teardown cleared readiness.
+func (p *Proc) runOnce(ctx context.Context) (wasUp bool, _ error) {
 	// An attached plugin keeps the state its last try left (offline): each try is not a start of its own.
 	switch st, _ := p.Status(); {
 	case !p.spec.attached():
@@ -730,12 +746,12 @@ func (p *Proc) runOnce(ctx context.Context) error {
 	}
 	if p.spec.Check != nil {
 		if err := p.spec.Check(ctx); err != nil {
-			return err
+			return false, err
 		}
 	}
 	ch, out, err := p.spawn(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !p.spec.attached() { // an attached one's run starts when it comes online (up)
 		p.run(RunStart, "")
@@ -764,7 +780,7 @@ func (p *Proc) runOnce(ctx context.Context) error {
 		if err := p.initialize(runCtx, s); err != nil {
 			stopRun()
 			p.end(ch, peer)
-			return err
+			return false, err
 		}
 	}
 	killed := make(chan struct{})
@@ -772,12 +788,23 @@ func (p *Proc) runOnce(ctx context.Context) error {
 	p.mu.Lock()
 	p.generation++
 	p.sess = s
+	p.strikes = 0
 	p.kill = func() { once.Do(func() { close(killed) }) }
 	p.mu.Unlock()
 	defer func() {
-		// Fence host callbacks before waiting for child/peer cleanup. Neither
-		// process loss nor slow cleanup may extend a storage invocation's life.
+		// Fence host callbacks and clear readiness/session before waiting for
+		// child/peer cleanup so callers during slow teardown cannot observe a
+		// dying run as ready or dial its closing peer.
 		stopRun()
+		p.mu.Lock()
+		wasUp = p.ready
+		changed := p.sess != nil || p.ready
+		p.sess, p.ready, p.kill, p.strikes = nil, false, nil, 0
+		if changed {
+			close(p.change)
+			p.change = make(chan struct{})
+		}
+		p.mu.Unlock()
 		var peer *rpc.Peer
 		if s != nil {
 			peer = s.peer
@@ -806,29 +833,29 @@ func (p *Proc) runOnce(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return false, nil
 		case <-ch.exited:
 			if ch.waitErr == nil {
-				return i18n.ErrEnglish("extension-status.exited")
+				return false, i18n.ErrEnglish("extension-status.exited")
 			}
-			return ch.waitErr
+			return false, ch.waitErr
 		case <-peerDone:
-			return i18n.ErrEnglish("extension-status.connection_closed", i18n.Args{"err": s.peer.Err()})
+			return false, i18n.ErrEnglish("extension-status.connection_closed", i18n.Args{"err": s.peer.Err()})
 		case <-killed:
-			return i18n.ErrEnglish("extension-status.not_answering")
+			return false, i18n.ErrEnglish("extension-status.not_answering")
 		case <-p.kick:
 			p.mu.Lock()
 			wanted := p.wantedLocked()
 			p.mu.Unlock()
 			if !wanted {
-				return nil
+				return false, nil
 			}
 		case <-health.C:
 			p.mu.Lock()
 			wanted := p.wantedLocked()
 			p.mu.Unlock()
 			if !wanted {
-				return nil
+				return false, nil
 			}
 			if !p.spec.HTTP {
 				continue
@@ -838,11 +865,11 @@ func (p *Proc) runOnce(ctx context.Context) error {
 			} else if healthMisses++; healthMisses >= StrikesToKill && p.spec.Command != "" && !p.spec.RPC {
 				// A hung HTTP-only program the hub runs: end the run so it is restarted. One elsewhere has
 				// nothing to restart, and a protocol one is covered by its pings.
-				return i18n.ErrEnglish("extension-status.missed_health", i18n.Args{"count": healthMisses})
+				return false, i18n.ErrEnglish("extension-status.missed_health", i18n.Args{"count": healthMisses})
 			}
 			if !readyBy.IsZero() && time.Now().After(readyBy) {
 				if st, _ := p.Status(); st == StateStarting {
-					return i18n.ErrEnglish("extension-status.health_timeout", i18n.Args{"duration": ReadyWithin.String()})
+					return false, i18n.ErrEnglish("extension-status.health_timeout", i18n.Args{"duration": ReadyWithin.String()})
 				}
 				readyBy = time.Time{} // it came up; later failures are the health check's
 			}
@@ -855,7 +882,7 @@ func (p *Proc) runOnce(ctx context.Context) error {
 			cancel()
 			if err != nil {
 				if misses++; misses >= StrikesToKill {
-					return i18n.ErrEnglish("extension-status.missed_ping", i18n.Args{"count": misses})
+					return false, i18n.ErrEnglish("extension-status.missed_ping", i18n.Args{"count": misses})
 				}
 			} else {
 				misses = 0

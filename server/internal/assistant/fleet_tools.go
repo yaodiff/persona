@@ -143,6 +143,26 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		}
 		return guestTools(s.larkModule().HandoffTools(), allowed), nil
 	}
+	// A group guest lists the reply tool and the owner-listed connector tools (bot_guest.go).
+	if key, group, err := s.groupGuestOf(ctx, machine, session); guest && err == nil && group {
+		_ = key
+		if s.isWorkMachine(machine) {
+			return []proto.Tool{}, nil
+		}
+		// The connector tools come from the extensions' own list, agent-facing and assistant-only. mcpTools builds its
+		// list from the built-in catalog and panics on a connector's name.
+		var connectorTools []proto.Tool
+		if s.ext != nil {
+			agents, assistantOnly := s.ext.AgentTools(ctx, true)
+			for _, t := range append(agents, assistantOnly...) {
+				if s.ext.ConnectorTool(t.Name) {
+					connectorTools = append(connectorTools, t)
+				}
+			}
+		}
+		tools := guestTools(append(s.larkModule().HandoffTools(), connectorTools...), allowed)
+		return slices.DeleteFunc(tools, func(t proto.Tool) bool { return isKnowledgeFolderTool(t.Name) }), nil
+	}
 	if _, room, err := s.roomOf(ctx, machine, session); guest && err == nil && room {
 		if s.isWorkMachine(machine) {
 			return []proto.Tool{}, nil

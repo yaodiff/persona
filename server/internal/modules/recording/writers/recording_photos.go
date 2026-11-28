@@ -331,7 +331,7 @@ func (e *engine) photoUncite(r *Recording, n int, listed bool) error {
 	case err == nil && minutesPhotos(m)[n]:
 		dropPhotos(m, func(p int) bool { return p == n })
 		m.Version = max(m.Version, r.MinutesVersion) + 1
-		m.Markdown = renderMinutes(m, r.StartedAt, st.Zone())
+		m.Markdown = e.renderMinutes(m, r.StartedAt, st.Zone(), meetingSpeakersOf(r.Conv))
 		if wrote, err := st.putMinutes(r.ID, m); err != nil {
 			return err
 		} else if !wrote {

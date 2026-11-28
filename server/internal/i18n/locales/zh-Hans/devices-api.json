@@ -3,5 +3,6 @@
   "no_store": "没有可保存设置的存储",
   "need_on": "需要 on",
   "need_autostart": "需要 autostart",
-  "not_herdr": "这台电脑没有启用 herdr 引擎"
+  "not_herdr": "这台电脑没有启用 herdr 引擎",
+  "orca_chat_starts_read_only": "这台设备不能更改这台电脑启动新 Agent 的方式"
 }

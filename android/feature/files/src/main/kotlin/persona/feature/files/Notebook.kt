@@ -57,35 +57,216 @@ internal object Notebooks {
             if (i < 0) return s
         }
         if (i + 1 >= s.length) return s
-        val rest = s.substring(i + 1).removeSuffix("\n").split('\n').size
+        val end = if (s.endsWith('\n')) s.length - 1 else s.length
+        var rest = 1
+        var pos = i + 1
+        while (pos < end) {
+            if (s[pos] == '\n') rest++
+            pos++
+        }
         return s.substring(0, i + 1) + more(rest)
     }
 
     /** HTML as the text it shows: tags dropped, block ends as line breaks, table cells apart, entities decoded. */
-    fun htmlText(html: String): String {
-        val noScript = html.replace(Regex("(?is)<(script|style)\\b.*?</\\1>"), "")
-        val breaks = noScript.replace(Regex("(?i)<br\\s*/?>|</(p|div|tr|li|h[1-6]|thead|tbody|table)>"), "\n")
-            .replace(Regex("(?i)</t[dh]>"), "\t")
-        val text = breaks.replace(Regex("<[^>]*>"), "")
-            .replace(numericEntity) { m ->
-                val code = m.groupValues[1].let { if (it.startsWith("x", true)) it.drop(1).toIntOrNull(16) else it.toIntOrNull() }
-                code?.takeIf { Character.isValidCodePoint(it) }?.let { String(Character.toChars(it)) } ?: m.value
+    fun htmlText(html: String): String = htmlText(html, more = null, maxLines = Int.MAX_VALUE, paddingBudget = PaddingBudget())
+
+    private class PaddingBudget(var remaining: Int = MAX_ALIGN_PADDING_CHARS)
+
+    private fun htmlText(html: String, more: ((Int) -> String)?, maxLines: Int, paddingBudget: PaddingBudget): String {
+        val noScript = stripScriptAndStyle(html)
+        val breaks = noScript.replace(blockBreak, "\n").replace(cellBreak, "\t")
+        val stripped = stripTags(breaks)
+        val text = if ('&' in stripped) {
+            stripped.replace(htmlEntity) { m ->
+                val num = m.groupValues[1]
+                if (num.isNotEmpty()) {
+                    val code = if (num.startsWith("x", true)) num.drop(1).toIntOrNull(16) else num.toIntOrNull()
+                    code?.takeIf { it in 1..0xD7FF || it in 0xE000..Character.MAX_CODE_POINT }
+                        ?.let { String(Character.toChars(it)) } ?: m.value
+                } else {
+                    when (m.groupValues[2]) {
+                        "nbsp" -> " "
+                        "lt" -> "<"
+                        "gt" -> ">"
+                        "quot" -> "\""
+                        "apos" -> "'"
+                        "amp" -> "&"
+                        else -> m.value
+                    }
+                }
             }
-            .replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
-        val lines = text.lines().map { it.trimEnd() }.joinToString("\n").replace(Regex("\n{3,}"), "\n\n").trim('\n').lines()
-        return alignColumns(lines).joinToString("\n").trim('\n')
+        } else {
+            stripped
+        }
+
+        val cap = if (more != null) maxLines.coerceAtLeast(0) else Int.MAX_VALUE
+        val kept = ArrayList<String>()
+        var totalLines = 0
+        var pendingBlank = false
+        var pos = 0
+        val len = text.length
+        while (pos < len) {
+            var lineEnd = pos
+            while (lineEnd < len && text[lineEnd] != '\n' && text[lineEnd] != '\r') lineEnd++
+            var trimEnd = lineEnd
+            while (trimEnd > pos && text[trimEnd - 1].isWhitespace()) trimEnd--
+            if (trimEnd == pos) {
+                if (totalLines > 0) pendingBlank = true
+            } else {
+                if (pendingBlank) {
+                    if (kept.size < cap) kept.add("")
+                    totalLines++
+                    pendingBlank = false
+                }
+                if (kept.size < cap) kept.add(text.substring(pos, trimEnd))
+                totalLines++
+            }
+            pos = if (lineEnd < len && text[lineEnd] == '\r' && lineEnd + 1 < len && text[lineEnd + 1] == '\n') {
+                lineEnd + 2
+            } else {
+                lineEnd + 1
+            }
+        }
+        if (totalLines == 0) return ""
+        val aligned = alignColumns(kept, paddingBudget).joinToString("\n")
+        val hidden = totalLines - kept.size
+        return if (more != null && hidden > 0) {
+            if (kept.isEmpty()) more(hidden) else "$aligned\n${more(hidden)}"
+        } else {
+            aligned.trim('\n')
+        }
     }
 
-    private val numericEntity = Regex("&#([xX]?[0-9a-fA-F]+);")
+    private const val MAX_ALIGN_COLUMN_WIDTH = 80
+    private const val MAX_ALIGN_COLUMNS = 64
+    private const val MAX_ALIGN_PADDING_CHARS = 200_000
+
+    private val blockBreak = Regex("(?i)<br\\s*/?>|</(p|div|tr|li|h[1-6]|thead|tbody|table)>")
+    private val cellBreak = Regex("(?i)</t[dh]>")
+    private val htmlEntity = Regex("&(?:#([xX]?[0-9a-fA-F]+)|(nbsp|lt|gt|quot|apos|amp));")
+    private val whitespace = Regex("\\s+")
+
+    /** Linear-time removal of `<script>...</script>` and `<style>...</style>` blocks without regex backtracking. */
+    private fun stripScriptAndStyle(html: String): String {
+        var pos = 0
+        var lt = html.indexOf('<')
+        if (lt < 0) return html
+        var out: StringBuilder? = null
+        var noMoreScriptEnd = false
+        var noMoreStyleEnd = false
+        val len = html.length
+        while (lt >= 0) {
+            val tag = when {
+                !noMoreScriptEnd && html.regionMatches(lt + 1, "script", 0, 6, ignoreCase = true) && isTagNameEnd(html, lt + 7) -> "script"
+                !noMoreStyleEnd && html.regionMatches(lt + 1, "style", 0, 5, ignoreCase = true) && isTagNameEnd(html, lt + 6) -> "style"
+                else -> null
+            }
+            if (tag != null) {
+                val closePrefix = if (tag == "script") "</script" else "</style"
+                val closeEnd = findCloseTagEnd(html, closePrefix, lt + 1 + tag.length)
+                if (closeEnd >= 0) {
+                    if (out == null) out = StringBuilder(len)
+                    out.append(html, pos, lt)
+                    pos = closeEnd
+                    lt = html.indexOf('<', pos)
+                    continue
+                } else {
+                    if (tag == "script") noMoreScriptEnd = true else noMoreStyleEnd = true
+                }
+            }
+            lt = html.indexOf('<', lt + 1)
+        }
+        if (out == null) return html
+        out.append(html, pos, len)
+        return out.toString()
+    }
+
+    private fun isTagNameEnd(s: String, index: Int): Boolean =
+        index < s.length && (s[index] == '>' || s[index] == '/' || s[index].isWhitespace())
+
+    /** Returns the index just after a matching `</script ...>` / `</style ...>` end tag, or -1 if none exists at or after [from]. */
+    private fun findCloseTagEnd(html: String, closePrefix: String, from: Int): Int {
+        val len = html.length
+        var search = from
+        while (search < len) {
+            val idx = html.indexOf(closePrefix, search, ignoreCase = true)
+            if (idx < 0) return -1
+            var p = idx + closePrefix.length
+            while (p < len && html[p].isWhitespace()) p++
+            if (p < len && html[p] == '>') return p + 1
+            search = idx + closePrefix.length
+        }
+        return -1
+    }
+
+    /** Linear-time removal of `<...>` tags matching `<[^>]*>` without quadratic backtracking on unclosed `<`. */
+    private fun stripTags(s: String): String {
+        var lt = s.indexOf('<')
+        if (lt < 0) return s
+        var gt = s.indexOf('>', lt + 1)
+        if (gt < 0) return s
+        val out = StringBuilder(s.length)
+        var pos = 0
+        while (true) {
+            out.append(s, pos, lt)
+            pos = gt + 1
+            lt = s.indexOf('<', pos)
+            if (lt < 0) break
+            gt = s.indexOf('>', lt + 1)
+            if (gt < 0) break
+        }
+        out.append(s, pos, s.length)
+        return out.toString()
+    }
 
     /** Rows of tab-separated cells (an HTML table's text) padded into columns for the mono face; other lines as they are. */
-    private fun alignColumns(lines: List<String>): List<String> {
-        val rows = lines.map { it.split('\t').map(String::trim) }
-        val widths = IntArray(rows.maxOf { it.size })
-        rows.filter { it.size > 1 }.forEach { row -> row.forEachIndexed { i, cell -> widths[i] = maxOf(widths[i], textCells(cell)) } }
+    private fun alignColumns(lines: List<String>, paddingBudget: PaddingBudget): List<String> {
+        if (lines.isEmpty()) return lines
+        var maxCols = 0
+        val rows = lines.map { line ->
+            if ('\t' !in line) {
+                if (maxCols < 1) maxCols = 1
+                listOf(line.trim())
+            } else {
+                val cells = line.split('\t').map(String::trim)
+                if (cells.size > maxCols) maxCols = cells.size
+                cells
+            }
+        }
+        val alignedCols = minOf(maxCols, MAX_ALIGN_COLUMNS)
+        val widths = IntArray(alignedCols)
+        for (row in rows) {
+            if (row.size <= 1) continue
+            val limit = minOf(row.size, alignedCols)
+            for (i in 0 until limit) {
+                val cell = row[i]
+                val w = if (cell.length >= MAX_ALIGN_COLUMN_WIDTH * 2) MAX_ALIGN_COLUMN_WIDTH else minOf(textCells(cell), MAX_ALIGN_COLUMN_WIDTH)
+                if (w > widths[i]) widths[i] = w
+            }
+        }
         return rows.map { row ->
-            if (row.size == 1) row[0]
-            else row.mapIndexed { i, cell -> if (i == row.lastIndex) cell else cell + " ".repeat(widths[i] - textCells(cell) + 2) }.joinToString("").trimEnd()
+            if (row.size == 1) {
+                row[0]
+            } else {
+                val sb = StringBuilder()
+                for (i in row.indices) {
+                    val cell = row[i]
+                    sb.append(cell)
+                    if (i != row.lastIndex) {
+                        val extra = if (i < alignedCols && paddingBudget.remaining > 0) {
+                            val w = if (cell.length >= MAX_ALIGN_COLUMN_WIDTH * 2) MAX_ALIGN_COLUMN_WIDTH else minOf(textCells(cell), MAX_ALIGN_COLUMN_WIDTH)
+                            val needed = (widths[i] - w).coerceAtLeast(0)
+                            val granted = minOf(needed, paddingBudget.remaining)
+                            paddingBudget.remaining -= granted
+                            granted
+                        } else {
+                            0
+                        }
+                        repeat(extra + 2) { sb.append(' ') }
+                    }
+                }
+                sb.toString().trimEnd()
+            }
         }
     }
 
@@ -98,9 +279,9 @@ internal object Notebooks {
     private val images = listOf("image/png", "image/jpeg", "image/gif", "image/webp")
 
     /** The one representation of a rich output the viewer shows, best first (as Jupyter's own front ends choose). */
-    private fun rich(data: JsonObject, more: (Int) -> String): Output? {
-        for (mime in images) data[mime]?.let { return Output.Image(mime, str(it).replace(Regex("\\s+"), "")) }
-        data["text/html"]?.let { return Output.Html(capLines(htmlText(str(it)), more)) }
+    private fun rich(data: JsonObject, more: (Int) -> String, paddingBudget: PaddingBudget): Output? {
+        for (mime in images) data[mime]?.let { return Output.Image(mime, str(it).replace(whitespace, "")) }
+        data["text/html"]?.let { return Output.Html(htmlText(str(it), more, MAX_OUTPUT_LINES, paddingBudget)) }
         data["text/markdown"]?.let { return Output.Markdown(str(it)) }
         data["text/latex"]?.let { v ->
             val tex = str(v).trim()
@@ -119,11 +300,11 @@ internal object Notebooks {
 
     private fun v3Bundle(o: JsonObject) = JsonObject(o.mapNotNull { (k, v) -> (v3Keys[k] ?: k.takeIf { '/' in it })?.let { it to v } }.toMap())
 
-    private fun output(o: JsonObject, more: (Int) -> String): Output? = when (str(o["output_type"])) {
+    private fun output(o: JsonObject, more: (Int) -> String, paddingBudget: PaddingBudget): Output? = when (str(o["output_type"])) {
         // v3 names the stream "stream", v4 "name"; ANSI stripping and line capping run after consecutive chunks merge.
         "stream" -> Output.Stream(str(o["name"] ?: o["stream"]) == "stderr", str(o["text"]))
-        "execute_result", "display_data" -> rich(o["data"] as? JsonObject ?: v3Bundle(o), more)
-        "pyout" -> rich(v3Bundle(o), more)
+        "execute_result", "display_data" -> rich(o["data"] as? JsonObject ?: v3Bundle(o), more, paddingBudget)
+        "pyout" -> rich(v3Bundle(o), more, paddingBudget)
         "error", "pyerr" -> Output.Error(str(o["ename"]), str(o["evalue"]),
             // whole: a traceback cut short loses the line that failed
             stripAnsi((o["traceback"] as? JsonArray)?.joinToString("\n") { str(it) } ?: str(o["traceback"])))
@@ -175,15 +356,16 @@ internal object Notebooks {
             nb["worksheets"] is JsonArray -> ((nb["worksheets"] as JsonArray).firstOrNull() as? JsonObject)?.get("cells") as? JsonArray ?: JsonArray(emptyList())
             else -> throw Invalid(R.string.files_notebook_no_cells)
         }
+        val paddingBudget = PaddingBudget()
         val cells = raw.mapNotNull { it as? JsonObject }.map { c ->
             val kind = str(c["cell_type"])
             val type = when (kind) { "code" -> CellType.Code; "markdown", "heading" -> CellType.Markdown; else -> CellType.Raw }
             var source = str(c["source"] ?: c["input"])
             if (kind == "heading") source = "#".repeat(((c["level"] as? JsonPrimitive)?.intOrNull ?: 1).coerceIn(1, 6)) + " " + source
             val attachments = (c["attachments"] as? JsonObject).orEmpty().mapNotNull { (name, bundle) ->
-                ((bundle as? JsonObject)?.let { b -> rich(b, more) } as? Output.Image)?.let { name to it.base64 }
+                ((bundle as? JsonObject)?.let { b -> rich(b, more, paddingBudget) } as? Output.Image)?.let { name to it.base64 }
             }.toMap()
-            val outputs = if (type == CellType.Code) mergeStreams((c["outputs"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let { o -> output(o, more) } }, more) else emptyList()
+            val outputs = if (type == CellType.Code) mergeStreams((c["outputs"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let { o -> output(o, more, paddingBudget) } }, more) else emptyList()
             val count = ((c["execution_count"] ?: c["prompt_number"]) as? JsonPrimitive)?.intOrNull
             Cell(type, source, count, outputs, attachments)
         }

@@ -111,7 +111,7 @@ func TestTaskReviewLateOwnerActivityCommitsNothing(t *testing.T) {
 						if boundary == "closure" {
 							lock = &s.todos.writing
 							if reviewer == "no ledger" && verdict == reviewCancelled {
-								method = "reviewDoneTodo"
+								method = "commitReviewedTodo"
 							}
 						}
 						lock.Lock()

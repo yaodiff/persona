@@ -2650,9 +2650,11 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     var usage: [TokenUsage]? = nil
     /// Declarative UI views returned out-of-band by folded tool results (`Fold.toolViews`, UI version 12).
     var toolViews: [FoldToolView]? = nil
+    /// Successful BotMux replies retained while their sending calls are folded away.
+    var botmux: [BotmuxMessage]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case items, tools, thoughts, until, images, tasks, changes, usage
+        case items, tools, thoughts, until, images, tasks, changes, usage, botmux
         case toolViews = "tool_views"
         case supervisionUser = "supervision_user"
         case throughSeq = "through_seq", throughID = "through_id"
@@ -2908,9 +2910,11 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var model: String? = nil
     /// kind == .toolResult: out-of-band declarative UI views (maps, routes, search pins) drawn in the chat, never shown to models.
     var toolViews: [ExtensionView]? = nil
+    /// Display-only BotMux metadata; text remains the original transcript.
+    var botmux: BotmuxMessage? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage, model
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage, model, botmux
         case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
         case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
@@ -2922,6 +2926,42 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var cutText: String {
         guard fullSize != nil, let text, let r = text.range(of: "\n…（已截断", options: .backwards) else { return text ?? "" } // i18n-ignore: matches the hub's text
         return String(text[..<r.lowerBound])
+    }
+}
+
+/// Safe display metadata from the node. Unknown kinds remain decodable and fall back to the original transcript.
+nonisolated struct BotmuxMessage: Codable, Hashable, Sendable {
+    var kind: String
+    var text: String
+    var sender: String?
+    var senderType: String?
+    var quoted: Bool?
+    var topicContext: Bool?
+    var thread: Bool?
+    var attachments: Int?
+    var attachmentMeta: [Attachment]?
+    var mentions: [String]?
+    var source: String?
+    var final: Bool?
+    var voice: Bool?
+    var truncated: Bool?
+
+    var isInbound: Bool { kind == "message" || kind == "trigger" }
+
+    enum CodingKeys: String, CodingKey {
+        case kind, text, sender, quoted, thread, attachments, mentions, source, final, voice, truncated
+        case senderType = "sender_type", topicContext = "topic_context", attachmentMeta = "attachment_meta"
+    }
+
+    nonisolated struct Attachment: Codable, Hashable, Sendable {
+        var kind: String
+        var name: String?
+        var mimeType: String?
+
+        enum CodingKeys: String, CodingKey {
+            case kind, name
+            case mimeType = "mime_type"
+        }
     }
 }
 
@@ -2976,7 +3016,8 @@ nonisolated struct Question: Codable, Hashable, Sendable, Identifiable {
 /// A decoded optional Date that also retains its RFC3339 text for exact occurrence
 /// comparisons. Assigning a Date directly clears the wire text and keeps the old
 /// memberwise-initializer behavior; equality remains the old Date-only equality.
-@propertyWrapper
+/// This is plain storage rather than a property wrapper on Interaction: Swift 6.2
+/// does not allow a property wrapper on a stored property of a nonisolated type.
 nonisolated struct InteractionOccurrenceDate: Codable, Hashable, Sendable {
     private var raw: String?
     var wrappedValue: Date? {
@@ -3039,7 +3080,12 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var cwd: String?
     var kind: InteractionKind
     /// Display precision stays Date-compatible; `createdAtWire` retains the full occurrence timestamp.
-    @InteractionOccurrenceDate var createdAt: Date? = nil
+    /// The separate box is not a CodingKey: encoding below writes it as created_at, preserving the exact input text.
+    var createdAt: Date? = nil {
+        didSet { createdAtOccurrence = InteractionOccurrenceDate(wrappedValue: createdAt) }
+    }
+    /// Internal only because a private stored property would make Interaction's memberwise initializer private.
+    var createdAtOccurrence = InteractionOccurrenceDate()
     var expiresAt: Date?
     var toolName: String?
     var toolUseID: String?
@@ -3175,7 +3221,7 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
 
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     /// The exact timestamp received from the hub; nil for a directly constructed card.
-    var createdAtWire: String? { $createdAt }
+    var createdAtWire: String? { createdAtOccurrence.projectedValue }
     /// The computer of the session the card is shown on (the ancestor's machine for a cross-machine fold, else `machineID`).
     var requestHomeMachineID: String {
         guard let under = foldedUnder, !under.isEmpty else { return machineID }
@@ -3224,11 +3270,9 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-extension Interaction {
-    // A property wrapper's backing storage is non-optional, so synthesized
-    // Decodable would require created_at even though wrappedValue is optional.
-    // Decode that one field explicitly and retain the old missing/null behavior.
-    // Keeping this initializer in an extension preserves the memberwise initializer.
+nonisolated extension Interaction {
+    // Keep the old missing/null date behavior and the memberwise initializer. The plain occurrence box avoids
+    // Swift 6.2's property-wrapper restriction on nonisolated types; its raw text also drives encoding below.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -3238,7 +3282,9 @@ extension Interaction {
         taskTitle = try c.decodeIfPresent(String.self, forKey: .taskTitle)
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
         kind = try c.decode(InteractionKind.self, forKey: .kind)
-        _createdAt = try c.decodeIfPresent(InteractionOccurrenceDate.self, forKey: .createdAt) ?? InteractionOccurrenceDate()
+        let occurrence = try c.decodeIfPresent(InteractionOccurrenceDate.self, forKey: .createdAt) ?? InteractionOccurrenceDate()
+        createdAt = occurrence.wrappedValue
+        createdAtOccurrence = occurrence
         expiresAt = try c.decodeIfPresent(Date.self, forKey: .expiresAt)
         toolName = try c.decodeIfPresent(String.self, forKey: .toolName)
         toolUseID = try c.decodeIfPresent(String.self, forKey: .toolUseID)
@@ -3282,6 +3328,62 @@ extension Interaction {
         noExpiry = try c.decodeIfPresent(Bool.self, forKey: .noExpiry)
         ownerApprovalPhrases = try c.decodeIfPresent([String].self, forKey: .ownerApprovalPhrases)
         noHandBack = try c.decodeIfPresent(Bool.self, forKey: .noHandBack)
+    }
+
+    // Explicit rather than synthesized so created_at uses the occurrence box's exact RFC3339 text.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(machineID, forKey: .machineID)
+        try c.encode(sessionID, forKey: .sessionID)
+        try c.encodeIfPresent(sessionTitle, forKey: .sessionTitle)
+        try c.encodeIfPresent(taskTitle, forKey: .taskTitle)
+        try c.encodeIfPresent(cwd, forKey: .cwd)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(createdAtOccurrence, forKey: .createdAt)
+        try c.encodeIfPresent(expiresAt, forKey: .expiresAt)
+        try c.encodeIfPresent(toolName, forKey: .toolName)
+        try c.encodeIfPresent(toolUseID, forKey: .toolUseID)
+        try c.encodeIfPresent(questions, forKey: .questions)
+        try c.encodeIfPresent(canCancel, forKey: .canCancel)
+        try c.encodeIfPresent(plan, forKey: .plan)
+        try c.encodeIfPresent(planThen, forKey: .planThen)
+        try c.encodeIfPresent(toolInput, forKey: .toolInput)
+        try c.encodeIfPresent(summary, forKey: .summary)
+        try c.encodeIfPresent(format, forKey: .format)
+        try c.encodeIfPresent(screen, forKey: .screen)
+        try c.encodeIfPresent(dialog, forKey: .dialog)
+        try c.encodeIfPresent(secret, forKey: .secret)
+        try c.encodeIfPresent(fields, forKey: .fields)
+        try c.encodeIfPresent(agent, forKey: .agent)
+        try c.encodeIfPresent(reason, forKey: .reason)
+        try c.encodeIfPresent(alwaysLabel, forKey: .alwaysLabel)
+        try c.encodeIfPresent(alwaysKeys, forKey: .alwaysKeys)
+        try c.encodeIfPresent(alwaysHonored, forKey: .alwaysHonored)
+        try c.encodeIfPresent(toolTitle, forKey: .toolTitle)
+        try c.encodeIfPresent(agentLabelHint, forKey: .agentLabelHint)
+        try c.encodeIfPresent(hubGroup, forKey: .hubGroup)
+        try c.encodeIfPresent(mutedFlag, forKey: .mutedFlag)
+        try c.encodeIfPresent(delegating, forKey: .delegating)
+        try c.encodeIfPresent(delegate, forKey: .delegate)
+        try c.encodeIfPresent(suggestion, forKey: .suggestion)
+        try c.encodeIfPresent(manager, forKey: .manager)
+        try c.encodeIfPresent(mirrorOf, forKey: .mirrorOf)
+        try c.encodeIfPresent(elicitation, forKey: .elicitation)
+        try c.encodeIfPresent(mcpServerName, forKey: .mcpServerName)
+        try c.encodeIfPresent(mcpConfigSource, forKey: .mcpConfigSource)
+        try c.encodeIfPresent(agentID, forKey: .agentID)
+        try c.encodeIfPresent(agentType, forKey: .agentType)
+        try c.encodeIfPresent(foldedUnderText, forKey: .foldedUnderText)
+        try c.encodeIfPresent(foldedUnderMachineIDText, forKey: .foldedUnderMachineIDText)
+        try c.encodeIfPresent(foldedAsText, forKey: .foldedAsText)
+        try c.encodeIfPresent(foldedSideText, forKey: .foldedSideText)
+        try c.encodeIfPresent(approvalBatchID, forKey: .approvalBatchID)
+        try c.encodeIfPresent(approvalItemID, forKey: .approvalItemID)
+        try c.encodeIfPresent(ownerProposal, forKey: .ownerProposal)
+        try c.encodeIfPresent(noExpiry, forKey: .noExpiry)
+        try c.encodeIfPresent(ownerApprovalPhrases, forKey: .ownerApprovalPhrases)
+        try c.encodeIfPresent(noHandBack, forKey: .noHandBack)
     }
 }
 

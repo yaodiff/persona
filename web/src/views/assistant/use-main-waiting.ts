@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { assistantEntries, type AssistantEntries } from "../../lib/assistant-entries";
+import { isBackgroundSupervisorInteraction } from "../../lib/background-supervisor";
 import { directUserInteraction, directUserWaiting, directWaitingCount } from "../../lib/direct-waiting";
 import { loadFeed, useFeed, type FeedItem } from "../../lib/feed";
 import { useShownManager } from "../../lib/manager-choice";
@@ -29,7 +30,8 @@ export function useMainWaiting(main?: Session) {
   const taskRows = useStore((s) => s.taskRows);
   const interactions = useStore((s) => s.interactions);
   const answered = useStore((s) => s.answered);
-  const mainId = useStore((s) => s.assistant?.main);
+  const assistantInfo = useStore((s) => s.assistant);
+  const mainId = assistantInfo?.main;
   const [restored] = useRestoredTodos();
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -50,8 +52,9 @@ export function useMainWaiting(main?: Session) {
     if (!main) return EMPTY_ASKS;
     return interactions.filter((ix) =>
       (ix.machine_id === main.machine_id && (ix.session_id === main.session_id || ix.folded_side === main.session_id)) ||
-      ((ix.folded_under_machine_id || ix.machine_id) === main.machine_id && ix.folded_under === main.session_id));
-  }, [main, interactions]);
+      ((ix.folded_under_machine_id || ix.machine_id) === main.machine_id && ix.folded_under === main.session_id) ||
+      isBackgroundSupervisorInteraction(assistantInfo, ix, manager));
+  }, [main, interactions, assistantInfo, manager]);
   const ownAsks = useMemo(() => ownInteractions.filter(directUserInteraction), [ownInteractions]);
   const projectedCount = directWaitingCount(waiting, ownAsks);
   // Older hubs and the first snapshot may expose only a scalar. Once cards are

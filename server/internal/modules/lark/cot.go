@@ -33,26 +33,18 @@ import (
 // cotResultMost is how much of a tool's output the agent message shows.
 const cotResultMost = 1500
 
-// cotScope is where a run's agent message would live. A closed enum.
-type cotScope int
-
+// The scopes a run's agent message would live in (core.cotScope says which is r's).
 const (
-	cotScopeNone  cotScope = iota // a /read: never an agent message
-	cotScopeDM                    // the owner's private chat: dm_cot
-	cotScopeTopic                 // a topic of an opted-in group: topic_cot
+	cotScopeNone  = iota // a /read: never an agent message
+	cotScopeDM           // the owner's private chat: dm_cot
+	cotScopeTopic        // a topic of an opted-in group: topic_cot
 )
 
-func (c cotScope) Valid() bool { return c >= cotScopeNone && c <= cotScopeTopic }
-
-// cotReason is cot_complete's reason. A closed enum.
-type cotReason string
-
+// cot_complete's reasons.
 const (
-	cotReasonDone  cotReason = "done"
-	cotReasonError cotReason = "error"
+	cotReasonDone  = "done"
+	cotReasonError = "error"
 )
-
-func (r cotReason) Valid() bool { return r == cotReasonDone || r == cotReasonError }
 
 // cotFinal is a turn's terminal snapshot for the worker.
 type cotFinal struct {
@@ -67,7 +59,7 @@ type cotOutcome struct {
 }
 
 // cotScope: where r's agent message would live. A /read never has one.
-func (s core) cotScope(r *channel.Run) cotScope {
+func (s core) cotScope(r *channel.Run) int {
 	if s.runExt(r, readChatKey) != "" {
 		return cotScopeNone
 	}
@@ -142,7 +134,7 @@ func (s core) cotCall(ctx context.Context, method string, params map[string]any)
 }
 
 // cotAllowed reads the scope's switch. It gates only creation: an open agent message is finished regardless.
-func (f feishuSink) cotAllowed(ctx context.Context, scope cotScope) bool {
+func (f feishuSink) cotAllowed(ctx context.Context, scope int) bool {
 	features, ready := f.s.feishuFeatures(ctx)
 	if !ready {
 		return false
@@ -157,14 +149,14 @@ func (f feishuSink) cotAllowed(ctx context.Context, scope cotScope) bool {
 }
 
 // cotUnified: cot_answer is on and scope's own switch is.
-func (f feishuSink) cotUnified(ctx context.Context, scope cotScope) bool {
+func (f feishuSink) cotUnified(ctx context.Context, scope int) bool {
 	features, ready := f.s.feishuFeatures(ctx)
 	return ready && features.CotAnswer && f.cotAllowed(ctx, scope)
 }
 
 // cotEndReason is cot_complete's reason for a run that ended as end: a turn that did not finish normally is closed as
 // done (stopped, recalled, unrelated) or as an error (failed, timed out, gone, offline), never as a finished run.
-func cotEndReason(end channel.End) cotReason {
+func cotEndReason(end channel.End) string {
 	switch end {
 	case channel.EndError, channel.EndGaveUp, channel.EndGone, channel.EndOffline:
 		return cotReasonError
@@ -180,7 +172,7 @@ func (p *cotProgress) owned() bool { return p.persist != nil }
 func (f feishuSink) cotStart(ctx context.Context, r *channel.Run, p *cotProgress) bool {
 	s := f.s
 	params := map[string]any{"reply_to": r.ReplyTo}
-	to := s.runTo(s.runExts(r, "chat", "thread"))
+	to := runTo(s.runExts(r, "chat", "thread"))
 	if to.ChatID != "" {
 		params["chat_id"], params["in_thread"] = to.ChatID, true
 	}
@@ -387,7 +379,7 @@ func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *runLive, ite
 			s.logf("bots: agent message: %v; the progress card takes over", err)
 			s.setCotExt(r, &p.cot, "cot_off", "1")
 			p.cot.off, p.cot.queue = true, nil
-			_ = s.cotCall(ctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": string(cotReasonError)})
+			_ = s.cotCall(ctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": cotReasonError})
 			return false
 		}
 		events = events[len(chunk):]
@@ -504,12 +496,12 @@ func (f feishuSink) cotFinishNowItems(ctx context.Context, r *channel.Run, p *ru
 
 // cotEnd ends an agent message with cot_complete, tried a few times on its own deadline (the answer's may be what
 // ran out).
-func (f feishuSink) cotEnd(ctx context.Context, cot, msg string, reason cotReason) error {
+func (f feishuSink) cotEnd(ctx context.Context, cot, msg, reason string) error {
 	var err error
 	for _, wait := range f.s.timingList("cot_end_tries") {
 		time.Sleep(wait)
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		err = f.s.cotCall(cctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": string(reason)})
+		err = f.s.cotCall(cctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": reason})
 		cancel()
 		if err == nil || !(f.s.cotNotSent(err) || f.s.h.Offline(err) || errors.Is(err, rpc.ErrClosed) || f.s.cotMaybeSent(err) || cotPassing(err)) {
 			return err

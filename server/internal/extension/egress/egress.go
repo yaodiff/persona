@@ -135,6 +135,7 @@ type Proxy struct {
 	Dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 	Logf    func(string, ...any)
 
+	unixMu        sync.Mutex // serializes Unix socket bind/replace/close; lock order: unixMu -> mu
 	mu            sync.Mutex
 	closed        bool
 	ln            net.Listener
@@ -188,35 +189,76 @@ func (p *Proxy) Addr() string {
 	return p.ln.Addr().String()
 }
 
+// parseStrictPort parses a canonical ASCII decimal TCP port in 1..65535 (no leading zero, no sign, no service names).
+func parseStrictPort(port string) (uint16, bool) {
+	if len(port) == 0 || len(port) > 5 || port[0] == '0' {
+		return 0, false
+	}
+	var n uint32
+	for i := 0; i < len(port); i++ {
+		c := port[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + uint32(c-'0')
+	}
+	if n == 0 || n > 65535 {
+		return 0, false
+	}
+	return uint16(n), true
+}
+
 // ownPort says whether port is the loopback listener's own (LocalHost must not lead back into the proxy).
+// Non-canonical or invalid ports fail closed (true).
 func (p *Proxy) ownPort(port string) bool {
-	_, own, err := net.SplitHostPort(p.Addr())
-	return err == nil && own == port
+	want, ok := parseStrictPort(port)
+	if !ok {
+		return true
+	}
+	addr := p.Addr()
+	if addr == "" {
+		return false
+	}
+	_, own, err := net.SplitHostPort(addr)
+	ownNum, ok := parseStrictPort(own)
+	if err != nil || !ok {
+		return true
+	}
+	return want == ownNum
 }
 
 // hubPort says whether port is the hub's own listener port (or 18660 when HubAddr is unset).
+// Non-canonical, invalid, or unparseable ports fail closed (true).
 func (p *Proxy) hubPort(port string) bool {
+	want, ok := parseStrictPort(port)
+	if !ok {
+		return true
+	}
 	if p.HubAddr == "" {
-		return port == "18660"
+		return want == 18660
 	}
 	_, hp, err := net.SplitHostPort(p.HubAddr)
-	return err != nil || hp == port
+	hubNum, ok := parseStrictPort(hp)
+	if err != nil || !ok {
+		return true
+	}
+	return want == hubNum
 }
 
 // Close stops every listener and revokes all registrations, settings checks, and active I/O.
 func (p *Proxy) Close() {
+	p.unixMu.Lock()
+	defer p.unixMu.Unlock()
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.closed = true
-	if p.ln != nil {
-		_ = p.ln.Close()
-		p.ln = nil
-	}
+	ln := p.ln
+	p.ln = nil
+	toClose := make([]net.Listener, 0, len(p.unix)+len(p.relay))
 	for _, l := range p.unix {
-		_ = l.Close()
+		toClose = append(toClose, l)
 	}
 	for _, l := range p.relay {
-		_ = l.Close()
+		toClose = append(toClose, l)
 	}
 	for ext := range p.active {
 		p.cancelIOLocked(ext)
@@ -228,6 +270,13 @@ func (p *Proxy) Close() {
 	clear(p.creds)
 	clear(p.credOf)
 	p.unix, p.relay = nil, nil
+	p.mu.Unlock()
+	if ln != nil {
+		_ = ln.Close()
+	}
+	for _, l := range toClose {
+		_ = l.Close()
+	}
 }
 
 // SetTargets replaces the addresses ext's settings name (Rule.Targets) while its program runs: its settings changed,
@@ -291,8 +340,9 @@ func (p *Proxy) Register(ext string, r Rule) string {
 
 // Unregister forgets ext: its credential and its socket stop working (switched off, removed).
 func (p *Proxy) Unregister(ext string) {
+	p.unixMu.Lock()
+	defer p.unixMu.Unlock()
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.cancelIOLocked(ext)
 	p.endChecksLocked(ext)
 	if cred, ok := p.credOf[ext]; ok {
@@ -300,13 +350,16 @@ func (p *Proxy) Unregister(ext string) {
 		delete(p.credOf, ext)
 	}
 	delete(p.rules, ext)
-	if l := p.unix[ext]; l != nil {
-		_ = l.Close()
-		delete(p.unix, ext)
+	unixLn := p.unix[ext]
+	delete(p.unix, ext)
+	relayLn := p.relay[ext]
+	delete(p.relay, ext)
+	p.mu.Unlock()
+	if unixLn != nil {
+		_ = unixLn.Close()
 	}
-	if l := p.relay[ext]; l != nil {
-		_ = l.Close()
-		delete(p.relay, ext)
+	if relayLn != nil {
+		_ = relayLn.Close()
 	}
 }
 

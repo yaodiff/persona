@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -58,13 +61,16 @@ func remoteTarget(cfg MachineConfig, info proto.NodeInfo, bin string) string {
 	return defaultRemoteBin
 }
 
-// gzipPipe is r gzipped as it is read, for an ssh's stdin. The caller closes it once ssh is done: exec copies a
-// non-*os.File Stdin in its own goroutine and never closes it, so once ssh exits early (auth failure, connect timeout,
-// the remote script failing, ctx done) nothing reads it, and the gzip writer would block for good (#2377). Closing it
-// makes that Write fail with io.ErrClosedPipe so it returns.
-func gzipPipe(r io.Reader) *io.PipeReader {
+// gzipPipe is r gzipped as it is read, for an ssh's stdin. The returned cleanup closes the pipe and waits for the
+// writer goroutine to return: exec copies a non-*os.File Stdin in its own goroutine and never closes it, so once ssh
+// exits early (auth failure, connect timeout, the remote script failing, ctx done) nothing reads it, and the gzip
+// writer would block for good (#2377). Closing it makes that Write fail with io.ErrClosedPipe so it returns before the
+// caller closes r.
+func gzipPipe(r io.Reader) (*io.PipeReader, func()) {
 	pr, pw := io.Pipe()
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		zw, _ := gzip.NewWriterLevel(pw, gzip.BestSpeed)
 		_, err := io.Copy(zw, r)
 		if err == nil {
@@ -72,7 +78,96 @@ func gzipPipe(r io.Reader) *io.PipeReader {
 		}
 		pw.CloseWithError(err)
 	}()
-	return pr
+	return pr, func() {
+		_ = pr.Close()
+		<-done
+	}
+}
+
+// validateSSHHost rejects hosts that could be parsed as ssh options, ssh:// URIs, or inject shell/ProxyCommand
+// characters across OpenSSH versions (including CVE-2023-51385).
+func validateSSHHost(host string) error {
+	if host == "" {
+		return errors.New("empty ssh host")
+	}
+	const badChars = "/`$;|&'\"\\()<>*?"
+	for _, r := range host {
+		if unicode.IsSpace(r) || unicode.IsControl(r) || strings.ContainsRune(badChars, r) {
+			return fmt.Errorf("invalid ssh host %q: contains forbidden character", host)
+		}
+	}
+	hostPart := host
+	if user, rest, hasAt := strings.Cut(host, "@"); hasAt {
+		if user == "" || rest == "" || strings.ContainsRune(rest, '@') {
+			return fmt.Errorf("invalid ssh host %q: malformed user@host", host)
+		}
+		if strings.HasPrefix(user, "-") || strings.ContainsRune(user, '%') {
+			return fmt.Errorf("invalid ssh host %q: invalid username", host)
+		}
+		hostPart = rest
+	}
+	if strings.HasPrefix(hostPart, "-") {
+		return fmt.Errorf("invalid ssh host %q: must not start with '-'", host)
+	}
+	if strings.HasPrefix(hostPart, "[") || strings.HasSuffix(hostPart, "]") {
+		if !strings.HasPrefix(hostPart, "[") || !strings.HasSuffix(hostPart, "]") {
+			return fmt.Errorf("invalid ssh host %q: unmatched bracket", host)
+		}
+		inner := hostPart[1 : len(hostPart)-1]
+		if strings.ContainsAny(inner, "[]") || !validIPv6Literal(inner) {
+			return fmt.Errorf("invalid ssh host %q: invalid bracketed IPv6 host", host)
+		}
+		return nil
+	}
+	if strings.ContainsAny(hostPart, "[]") {
+		return fmt.Errorf("invalid ssh host %q: unexpected bracket", host)
+	}
+	if strings.ContainsRune(hostPart, '%') && !validIPv6Literal(hostPart) {
+		return fmt.Errorf("invalid ssh host %q: forbidden '%%' outside IPv6 zone", host)
+	}
+	return nil
+}
+
+func validIPv6Literal(s string) bool {
+	addr, err := netip.ParseAddr(s)
+	if err != nil || !addr.Is6() {
+		return false
+	}
+	if z := addr.Zone(); z != "" {
+		if strings.HasPrefix(z, "-") {
+			return false
+		}
+		for _, r := range z {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// validateRemotePath rejects empty, option-like, directory-like, or multi-line/control remote binary paths
+// (anyShellQuote requires one line because csh rejects newlines inside quotes, and remoteTarget may come from
+// node-reported NodeInfo.Executable).
+func validateRemotePath(remote string) error {
+	if remote == "" {
+		return errors.New("empty remote target path")
+	}
+	if strings.HasPrefix(remote, "-") {
+		return fmt.Errorf("invalid remote target path %q: must not start with '-'", remote)
+	}
+	if strings.HasSuffix(remote, "/") {
+		return fmt.Errorf("invalid remote target path %q: must name a file", remote)
+	}
+	for _, r := range remote {
+		if r < 0x20 || r == 0x7f || unicode.IsControl(r) {
+			return fmt.Errorf("invalid remote target path %q: contains control character", remote)
+		}
+	}
+	if base := path.Base(remote); base == "." || base == ".." {
+		return fmt.Errorf("invalid remote target path %q: invalid file name %q", remote, base)
+	}
+	return nil
 }
 
 // errFallbackOnRedeploy: an update the manager makes by itself found a fallback build (the newest release, another
@@ -174,9 +269,8 @@ func (m *Machine) startDeployOf(auto bool) (*deployRun, error) {
 		return nil, blocked
 	}
 	// The build for its platform and kind of program (packages.go): looked up afresh, a release's manifest at most.
-	lookup, cancel := context.WithTimeout(m.d.deployContext(), packageLookup)
-	pkg, err := m.d.nodePackageForInfo(lookup, info)
-	cancel()
+	// lookupShared enforces packageLookup internally so a site timeout still runs offline fallbacks and caches backoff.
+	pkg, err := m.d.nodePackageForInfo(m.d.deployContext(), info)
 	m.d.changed() // what the machine should run may be another build now
 	if err != nil {
 		return nil, err
@@ -257,7 +351,7 @@ func deployScript(bin string, personaNode bool) string {
 			`echo "$b is personad, which may run a hub or a manager too: not replacing it with persona-node" >&2; exit 3; fi; `
 	}
 	legacy := shellQuote(compat.DaemonBinary)
-	return posixCommand("set -e; b=" + target + `; mkdir -p "$(dirname "$b")"; d=$(cd -P "$(dirname "$b")" && pwd); b="$d/${b##*/}"; ` +
+	return posixCommand("set -e; b=" + target + `; mkdir -p -- "$(dirname -- "$b")"; d=$(cd -P -- "$(dirname -- "$b")" && pwd); b="$d/${b##*/}"; ` +
 		`if [ -L "$b" ]; then case "${b##*/}:$(readlink "$b")" in ` + legacy + `:personad|` + legacy + `:"$d/personad") b="$d/personad";; *) exit ` +
 		strconv.Itoa(deployExitWrapper) + `;; esac; fi; gzip -dc > "$b.new"; chmod 755 "$b.new"; ` + keep +
 		`if ! "$b.new" version >/dev/null; then rm -f "$b.new"; echo "$b failed its staged version check: keeping the current binary and node" >&2; exit 4; fi; ` +
@@ -269,31 +363,31 @@ func deployScript(bin string, personaNode bool) string {
 
 // Capable nodes use update RPC directly. Older installations check their
 // managed services and signal only the main process using the replaced image.
-const reloadLegacyResident = `
-if [ -d /proc ] && command -v systemctl >/dev/null; then
-  for unit in personad-node.service persona-node.service ` + compat.HubService + `-node.service; do
-    pid=$(systemctl --user show --property=MainPID --value "$unit" 2>/dev/null) || continue
-    case "$pid" in ''|*[!0-9]*) continue;; esac
-    [ "$pid" -gt 1 ] || continue
-    exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
-    [ "$exe" = "$b (deleted)" ] || continue
-    awk '$1 == "SigCgt:" && $2 ~ /[13579bdf]$/ { ok=1 } END { exit !ok }' "/proc/$pid/status" 2>/dev/null || continue
-    kill -HUP "$pid" 2>/dev/null || true
-    break
-  done
-elif command -v launchctl >/dev/null; then
-  for label in com.persona.node ` + compat.NodeLabel + `; do
-    job=$(launchctl print "gui/$(id -u)/$label" 2>/dev/null) || continue
-    exe=$(printf '%s\n' "$job" | sed -n 's/^[[:space:]]*program = //p')
-    [ "$exe" = "$b" ] || { [ "$exe" = "$d/` + compat.DaemonBinary + `" ] && [ "$b" = "$d/personad" ]; } || continue
-    pid=$(printf '%s\n' "$job" | sed -n 's/^[[:space:]]*pid = //p')
-    case "$pid" in ''|*[!0-9]*) continue;; esac
-    [ "$pid" -gt 1 ] || continue
-    kill -HUP "$pid" 2>/dev/null || true
-    break
-  done
-fi
-`
+// Must remain a single line because deployScript wraps it with anyShellQuote
+// and csh/tcsh reject newlines inside quotes.
+const reloadLegacyResident = `if [ -d /proc ] && command -v systemctl >/dev/null; then ` +
+	`for unit in personad-node.service persona-node.service ` + compat.HubService + `-node.service; do ` +
+	`pid=$(systemctl --user show --property=MainPID --value "$unit" 2>/dev/null) || continue; ` +
+	`case "$pid" in ''|*[!0-9]*) continue;; esac; ` +
+	`[ "$pid" -gt 1 ] || continue; ` +
+	`exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue; ` +
+	`[ "$exe" = "$b (deleted)" ] || continue; ` +
+	`awk '$1 == "SigCgt:" && $2 ~ /[13579bdf]$/ { ok=1 } END { exit !ok }' "/proc/$pid/status" 2>/dev/null || continue; ` +
+	`kill -HUP "$pid" 2>/dev/null || true; ` +
+	`break; ` +
+	`done; ` +
+	`elif command -v launchctl >/dev/null; then ` +
+	`for label in com.persona.node ` + compat.NodeLabel + `; do ` +
+	`job=$(launchctl print "gui/$(id -u)/$label" 2>/dev/null) || continue; ` +
+	`exe=$(printf '%s\n' "$job" | sed -n 's/^[[:space:]]*program = //p'); ` +
+	`[ "$exe" = "$b" ] || { [ "$exe" = "$d/` + compat.DaemonBinary + `" ] && [ "$b" = "$d/personad" ]; } || continue; ` +
+	`pid=$(printf '%s\n' "$job" | sed -n 's/^[[:space:]]*pid = //p'); ` +
+	`case "$pid" in ''|*[!0-9]*) continue;; esac; ` +
+	`[ "$pid" -gt 1 ] || continue; ` +
+	`kill -HUP "$pid" 2>/dev/null || true; ` +
+	`break; ` +
+	`done; ` +
+	`fi`
 
 // shellQuote quotes s for a POSIX shell only (the script inside posixCommand); a remote command goes through
 // anyShellQuote.
@@ -335,9 +429,15 @@ func (m *Machine) deploy(ctx context.Context, bin, target string) error {
 	m.mu.Lock()
 	remote := remoteTarget(m.cfg, m.info, bin)
 	m.mu.Unlock()
+	if err := validateRemotePath(remote); err != nil {
+		return explain(i18n.Err("devices-deploy.install_failed", i18n.Args{"err": err.Error()}), err)
+	}
 	host := m.cfg.SSHHost
 	if host == "" {
 		host = m.cfg.ID
+	}
+	if err := validateSSHHost(host); err != nil {
+		return explain(i18n.Err("devices-deploy.install_failed", i18n.Args{"err": err.Error()}), err)
 	}
 	f, err := os.Open(bin)
 	if err != nil {
@@ -347,9 +447,9 @@ func (m *Machine) deploy(ctx context.Context, bin, target string) error {
 	// The guard keeps persona-node off a file that is not the device's own (a personad installed since the node said
 	// what it runs); the device's file takes either program.
 	guard := isPersonaNodeBuild(bin) && !update.IsDeviceFile(remote)
-	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, deployScript(remote, guard))
-	pr := gzipPipe(f)
-	defer pr.Close()
+	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "--", host, deployScript(remote, guard))
+	pr, closePipe := gzipPipe(f)
+	defer closePipe()
 	cmd.Stdin = pr
 	if out, err := cmd.CombinedOutput(); err != nil {
 		var exit *exec.ExitError

@@ -52,7 +52,7 @@ type importPackage struct {
 var importName = lazyre.New(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 func windowsReserved(s string) bool {
-	base := strings.ToLower(strings.SplitN(s, ".", 2)[0])
+	base := strings.ToLower(strings.TrimRight(strings.SplitN(s, ".", 2)[0], " "))
 	switch base {
 	case "con", "prn", "aux", "nul", "clock$", "conin$", "conout$":
 		return true

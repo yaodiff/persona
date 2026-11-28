@@ -301,7 +301,7 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 	err = n.prompt(ctx, pane, text)
 	if errors.Is(err, host.ErrAgentBlocked) && (kind == "codex" || kind == traexAgent) {
 		// herdr refuses to prompt a Codex with an async question open; its box (checked above) takes the message.
-		err = n.codexType(ctx, pane, text, func(draft string) bool { return stillPrompted(draft, text) || pastedRE.MatchString(draft) })
+		err = n.codexType(ctx, pane, text, func(draft string) bool { return stillPrompted(draft, text) || codexPasted(draft, text) })
 	}
 	if r := deliveryRefusal(err); r != nil { // the host refused it with nothing typed (herdr-core, Orca's front)
 		log.Printf("send %s: the host refused it, nothing typed: %v", id, err) // which check refused, in its words

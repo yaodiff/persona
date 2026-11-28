@@ -23,7 +23,9 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // Exercise authentication and the bus codec with in-memory tokens and an RPC pipe, without Postgres.
@@ -190,6 +192,8 @@ func TestBusForwardsTheAssistantRoutes(t *testing.T) {
 		{"POST", "/api/v1/todos/reorganize"},
 		{"POST", "/api/v1/todos/decisions/batch"},
 		{"POST", "/api/v1/todos/t1/blockers"},
+		{"POST", "/api/v1/todos/t1/backend-workspace/prepare"},
+		{"POST", "/api/v1/assistant/repositories/repo_web/mirrors/node1/sync"},
 		{"DELETE", "/api/v1/todos/t1/blockers/blk_1"},
 		{"PUT", "/api/v1/todos/t1/spaces/m1/group/alpha"}, {"GET", "/api/v1/assistant"}, {"PUT", "/api/v1/assistant"},
 		{"POST", "/api/v1/assistant/conversations"}, {"POST", "/api/v1/assistant/main/new"}, {"POST", "/api/v1/assistant/main/clear"},
@@ -220,6 +224,29 @@ func TestBusForwardsTheAssistantRoutes(t *testing.T) {
 	}
 	if resp, _ := do("GET", "/api/v1/machines", ""); resp.StatusCode != 200 {
 		t.Fatalf("the hub's own: %d", resp.StatusCode)
+	}
+}
+
+func TestBusForwardWorkspaceTimeouts(t *testing.T) {
+	mux := http.NewServeMux()
+	(&Hub{}).assistantRoutesRelayed(mux)
+	perRepo := repositorywire.MirrorEnsureTimeout + taskworkspace.GitTimeout + taskworkspace.ColdFetchTimeout
+	for _, tc := range []struct {
+		path string
+		want time.Duration
+	}{
+		{"/api/v1/task-plans/p1/start", 5 * time.Minute},
+		{"/api/v1/assistant/repositories/repo_web/mirrors/node1/sync", repositorywire.MirrorEnsureTimeout + time.Minute},
+		{"/api/v1/todos/t1/backend-workspace/prepare", repositorywire.MaxTaskRepositories*perRepo + taskworkspace.RPCTimeout + time.Minute},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, nil)
+		_, pattern := mux.Handler(req)
+		if pattern == "" {
+			t.Fatalf("no route registered for %s", tc.path)
+		}
+		if got := relayHTTPTimeout(pattern); got != tc.want {
+			t.Errorf("%s relay timeout = %v, want %v", tc.path, got, tc.want)
+		}
 	}
 }
 
@@ -404,6 +431,35 @@ func TestHTTPParamsAreJSONMarshals(t *testing.T) {
 				t.Errorf("%s %s, frame budget %d: wrote %d bytes, %v; was %d, %v", req.Method, req.Path, budget, len(got), err, len(want), werr)
 			}
 		}
+	}
+}
+
+func TestCallHTTPInlineUsesAppendedParams(t *testing.T) {
+	req := assistantwire.HTTPRequest{
+		Method: http.MethodPut, Path: "/example", Query: "a=1&b=2",
+		Body: bytes.Repeat([]byte{0, 0xff, 0x1f}, bodyStreamMin/3+1),
+	}
+	wantLine, err := callLineOf(req, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := managerBusCaller{call: func(_ context.Context, _, method string, params, out any) error {
+		if method != "http.request" {
+			t.Fatalf("method = %q, want http.request", method)
+		}
+		if _, ok := params.(rpc.Appended); !ok {
+			t.Fatalf("large body sent as %T, want rpc.Appended", params)
+		}
+		got, err := callLineOf(params, 0)
+		if err != nil || !bytes.Equal(got, wantLine) {
+			t.Fatalf("appended request wrote %d bytes, %v, want the same %d wire bytes", len(got), err, len(wantLine))
+		}
+		*out.(*assistantwire.HTTPResponse) = assistantwire.HTTPResponse{Status: http.StatusCreated}
+		return nil
+	}}
+	var res assistantwire.HTTPResponse
+	if err := callHTTPInline(t.Context(), caller, assistantwire.HTTPMethod, req, &res); err != nil || res.Status != http.StatusCreated {
+		t.Fatalf("callHTTPInline = %+v, %v, want HTTP 201", res, err)
 	}
 }
 

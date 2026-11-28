@@ -33,6 +33,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import persona.core.inbox.*
+import persona.core.moduleapi.HubModule
+import persona.core.moduleapi.ModuleRegistry
 
 /** [onOpenCard]: the app opens a request card outside any session on Agents (#5610); without it, Agents opens. */
 @Composable
@@ -204,6 +206,19 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     var composeDraft by remember { mutableStateOf<MailDraft?>(null) }
     val mailTransport by repository.mailTransport.collectAsStateWithLifecycle()
     val mailAccess = LocalMailAccess.current
+    val larkFeatures = LocalLarkFeatures.current
+    val hubFeatures = LocalHubFeatures.current
+    val sourceVisibility = inboxSourceVisibility(
+        larkOffered = larkFeatures.chats || ModuleRegistry.isActive(HubModule.Lark, hubFeatures),
+        mailOffered = mailAccess == MailAccess.Live,
+        stored = snapshot.storedSources,
+    )
+    // The Kind sheet and the Glass strip offer the same fixed values with the same labels (#17814).
+    val kindFilterOptions = visibleInboxFilterKinds(sourceVisibility).map { it to inboxFilterKindLabel(res, it) }
+    // A hidden Mail kind choice must not remain as an invisible persisted filter (#17814), matching the web fallback.
+    LaunchedEffect(sourceVisibility.mail, kind) {
+        if (!sourceVisibility.mail && kind == "mail") filter(currentFilters.copy(kind = ""))
+    }
 
     val haptics = rememberHaptics()
     // Tap-driven row motion only (#9600). A hub refresh changes the rows with the flag clear.
@@ -503,8 +518,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         }
     }
     if (filterPage == "kind") JActionSheet(title = stringResource(R.string.inbox_kind), onDismiss = { filterPage = null }, actions =
-        listOf("" to res.getString(R.string.inbox_all_kinds), "mention" to res.getString(R.string.inbox_mention_me), "dm" to res.getString(R.string.inbox_kind_dm),
-            "group" to res.getString(R.string.inbox_kind_group), "mail" to res.getString(R.string.inbox_source_mail), "agent" to res.getString(R.string.inbox_kind_agent)).map { (value, label) ->
+        (listOf("" to res.getString(R.string.inbox_all_kinds)) + kindFilterOptions).map { (value, label) ->
             JAction(label, checked = kind == value) {
                 // A kind chip (InboxView.swift:1263, :1294).
                 animateChange { filter(currentFilters.copy(kind = value)) }
@@ -601,6 +615,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     Spacer(Modifier.height(Tokens.Space.xs))
                     GlassInboxFilterStrip(
                         sources = sourceOptions,
+                        kinds = kindFilterOptions,
                         activeSource = source,
                         activeKind = kind,
                         onSelectSource = { next -> animateChange { filter(currentFilters.copy(source = next)) } },
@@ -665,7 +680,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     )
                     empty == InboxBar.Empty.NoMatch -> JEmptyState(stringResource(R.string.inbox_empty_search_title), stringResource(R.string.inbox_empty_search_text, query.trim()), icon = PhIcons.MagnifyingGlass)
                     snapshot.records.isEmpty() && snapshot.interactions.isEmpty() -> JEmptyState(stringResource(R.string.inbox_empty_title),
-                        stringResource(R.string.inbox_empty_text), icon = PhIcons.Tray)
+                        stringResource(inboxEmptyText(sourceVisibility)), icon = PhIcons.Tray)
                     else -> JEmptyState(stringResource(R.string.inbox_empty_caught_up_title), stringResource(R.string.inbox_empty_caught_up_text), icon = PhIcons.CheckCircle)
                 }
             } }
@@ -939,6 +954,12 @@ private fun kindLabel(res: Resources, kind: String) = when (kind) {
     "mention" -> res.getString(R.string.inbox_mention_me); "dm" -> res.getString(R.string.inbox_kind_dm)
     "group" -> res.getString(R.string.inbox_kind_group); "bot" -> res.getString(R.string.inbox_bot)
     "mail" -> res.getString(R.string.inbox_source_mail); "moment" -> res.getString(R.string.inbox_moments); else -> ""
+}
+
+/** Labels for the fixed Kind filter values shared by the Kind sheet and Glass strip (#17814). */
+internal fun inboxFilterKindLabel(res: Resources, kind: String): String = when (kind) {
+    "agent" -> res.getString(R.string.inbox_kind_agent)
+    else -> kindLabel(res, kind)
 }
 
 /** The row's kind: an @ of everyone is "@all", a mail the user was only copied on is "Cc" (the old app's labels). */

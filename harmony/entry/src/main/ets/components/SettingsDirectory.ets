@@ -35,6 +35,7 @@ function settingIcon(id:string):Resource {
   switch (id) {
     case 'models': return $r('sys.symbol.square_stack_3d');
     case 'assistant': return Symbols.persona;
+    case 'standing_authorizations': return $r('sys.symbol.checkmark_shield');
     case 'channels': return $r('sys.symbol.ellipsis_bubble');
     case 'connectors': return $r('sys.symbol.link');
     case 'extensions': return Symbols.apps;
@@ -87,9 +88,10 @@ function settingTint(id:string):ResourceColor {
       return Colors.danger;
     case 'appearance':
     case 'phone_language_options':
-      return '#5856D6';
+      return Colors.indigo;
     case 'models':
     case 'assistant':
+    case 'standing_authorizations':
     case 'privacy':
     case 'phone_xiaoyi':
       return Colors.ai;
@@ -139,6 +141,7 @@ function settingLabel(id:string, label:(page:string)=>string):string {
   if (id === 'phone_language_options') return tr('phone_settings_language_dictation');
   if (id === 'models') return tr('phone_settings_models');
   if (id === 'assistant') return tr('phone_settings_profile');
+  if (id === 'standing_authorizations') return tr('standing_auth_title');
   if (id === 'appearance') return tr('phone_settings_display');
   if (id === 'phone_meeting_options') return tr('meetings');
   if (id === 'machines') return tr('phone_machines');
@@ -261,7 +264,7 @@ export struct SettingsDirectory {
     Button({type:ButtonType.Normal}) { Row({space:12}) {
       Stack({alignContent:Alignment.BottomEnd}) {
         Text(this.account().slice(0,1)).fontSize('17vp').fontWeight(FontWeight.Bold).fontColor(Color.White)
-          .width(38).height(38).textAlign(TextAlign.Center).backgroundColor(Colors.ai).borderRadius(19)
+          .width(38).height(38).textAlign(TextAlign.Center).backgroundColor(Colors.ai).borderRadius(Tokens.radiusCapsule)
         Circle().width(10).height(10).fill(this.model.connected ? Colors.positive : Colors.secondary)
           .stroke(Colors.card(this.elevated)).strokeWidth(2)
       }.width(38).height(38)
@@ -358,9 +361,9 @@ export struct SettingsDirectory {
             .onChange((v:string) => { this.query = v; this.onQueryChange(v); }).id('settings.search')
           if (this.showDismissSearch && this.query.length) this.clearSearchButton()
         }.padding({left:this.showDismissSearch ? 12.33 : 12,right:this.showDismissSearch && this.query.length ? this.searchSize(2.33,5.67) : 8})
-          .layoutWeight(1).borderRadius(32).backgroundColor(this.elevated ? Colors.sheetControl : Colors.control)
+          .layoutWeight(1).borderRadius(Tokens.radiusCapsule).backgroundColor(this.elevated ? Colors.sheetControl : Colors.control)
           .linearGradient(this.searchGradient())
-          .outlineWidth(this.systemSearchMaterial() ? 0.33 : 0).outlineColor($r('app.color.settings_search_outline')).outlineRadius(32)
+          .outlineWidth(this.systemSearchMaterial() ? 0.33 : 0).outlineColor($r('app.color.settings_search_outline')).outlineRadius(Tokens.radiusCapsule)
           .shadow({radius:this.systemSearchMaterial() ? 4 : 0,color:$r('app.color.settings_search_shadow'),offsetY:2})
           if (this.showDismissSearch && this.query.trim()) Button({type:ButtonType.Circle}) {
             PhoneOutlineIcon({name:'navigationClose',color:Colors.ink,iconScale:this.searchSize(1.02,23.33/17)})

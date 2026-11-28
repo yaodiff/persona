@@ -175,7 +175,7 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-models_launchers.err_name_taken", i18n.Args{"name": in.Name}))
 			return
 		}
-		if err := s.sealKeyReferences(ctx, &in, false); err != nil {
+		if err := s.sealKeyReferences(ctx, &in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
@@ -226,6 +226,10 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-models_launchers.err_not_managed"))
 			return
 		}
+		if old.channelAlias != "" {
+			apierr.Write(w, http.StatusBadRequest, errChannelAlias(*old))
+			return
+		}
 		if err := s.checkScope(r.Context(), in.scopeInput); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
@@ -234,7 +238,7 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		if err := s.sealKeyReferences(r.Context(), &in, true); err != nil {
+		if err := s.sealKeyReferences(r.Context(), &in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
@@ -262,6 +266,11 @@ func (s *Service) launcherRoutes() {
 			return
 		}
 		if i := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == name }); i >= 0 {
+			if list[i].channelAlias != "" {
+				s.models.mu.Unlock()
+				apierr.Write(w, http.StatusBadRequest, errChannelAlias(list[i]))
+				return
+			}
 			// Check dependencies, delete and publish the confirmed snapshot under the configuration lock.
 			uses, err := s.providerModelUses(withManagedSnapshot(ctx, list), launcherProvider(name))
 			if err == nil && len(uses) == 0 {
@@ -325,6 +334,9 @@ func (s *Service) launcherRoutes() {
 		}
 		apierr.WriteJSON(w, out)
 	})
+	// "Refresh key": the provider extension is asked again for the launcher's keys that are references (the secret was
+	// rotated in it); until then what is kept answers every use (launcher_secrets.go). Never a value in the answer.
+	s.handle("POST /api/v1/launchers/{name}/refresh-key", s.refreshLauncherKey)
 	// What still names a launcher as its own (Model configuration's purposes, extensions' too, scheduled tasks, model
 	// profiles and their tiers), in words, for the hide confirmation (#4661): hiding an rc-file launcher only takes it
 	// out of the pickers, and these keep running on it.
@@ -556,6 +568,10 @@ func (s *Service) machineLauncherRoutes() {
 			out["unavailable"] = unavailable
 		}
 		if purpose == "" || purpose == "agent.new" {
+			// where a start that keeps the default opens, when the computer starts New Agents as Orca chats (#17650)
+			if opens := s.orcaChatDefault(ctx, d, def, r.URL.Query().Get("host")); opens != nil {
+				out["default_opens"] = opens
+			}
 			usable := make([]ConfiguredLauncher, 0, len(shown))
 			for _, l := range shown {
 				usable = append(usable, l.ConfiguredLauncher)

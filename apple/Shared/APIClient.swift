@@ -2785,6 +2785,14 @@ extension APIClient {
         )
     }
 
+    static let agentAutonameFeature = "agent_autoname"
+
+    /// The manager publishes the new title before replying. Let the session feed apply it so
+    /// a delayed HTTP response can never overwrite a more recent manual rename.
+    func autoRenameSession(_ key: SessionKey) async throws {
+        _ = try await request("POST", "/api/v1/sessions/\(Self.enc(key.machineID))/\(Self.enc(key.sessionID))/autoname", timeout: 60)
+    }
+
     /// Renames the session's herdr tab and / or the Claude session (`/rename`).
     func renameSession(_ k: SessionKey, tabName: String?, title: String?) async throws {
         try await post("/api/v1/sessions/\(k.machineID)/\(k.sessionID)/rename", body: RenameBody(tabName: tabName, title: title))

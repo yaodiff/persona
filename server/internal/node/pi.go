@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -95,12 +96,13 @@ func (n *Node) resumeInEngine(ctx context.Context, h *runtimeConn, id string, ar
 // (Orca's Run); an omp is not resumed in Orca (resumeOmp).
 func (n *Node) resumeInTerminal(ctx context.Context, cwd string, argv []string, id string, params json.RawMessage, isNewOwner func(*runtimeConn) bool) (any, error) {
 	if st, err := os.Stat(cwd); cwd == "" || err != nil || !st.IsDir() {
-		return nil, refusal("not_running", "这个会话的目录不在了，没法在终端里接着它，这次没有发送。", nil)
+		return nil, refusal(notRunning, i18n.T(i18n.From(ctx), "rpc-errors.not_running_directory_gone"),
+			map[string]any{"reason": notRunningDirectoryGone})
 	}
 	launch, err := hostCap[host.Launcher](n)
 	if err != nil {
-		name := n.defaultEngineName()
-		return nil, refusal(engineMissing, fmt.Sprintf("这个会话是在 %s 里跑的，要在 %s 里接着它，可这台电脑上的 %s 没在运行（或没装），这次没有发送。", name, name, name), nil)
+		return nil, refusal(engineMissing, i18n.T(i18n.From(ctx), "rpc-errors.engine_resume_unavailable", i18n.Args{"engine": n.defaultEngineName()}),
+			map[string]any{"engine": n.defaultKind(), "reason": engineResumeUnavailable})
 	}
 	ws, err := n.workspaceFor(ctx, launch, cwd)
 	if err != nil {
@@ -125,7 +127,7 @@ func (n *Node) resumeInTerminal(ctx context.Context, cwd string, argv []string, 
 		created, err = createStartSlot(ctx, launch, ws, cwd, tabLabel("", n.tabLabels(ctx, launch, ws)))
 	}
 	if err != nil {
-		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
+		return nil, hostFailure(ctx, "terminal_open_failed", err)
 	}
 	pane := created.Pane.String()
 	n.forgetPane(pane)                 // a new tab, as newTab's: no older session's binding of its id stays
@@ -157,8 +159,9 @@ func (n *Node) resumeInTerminal(ctx context.Context, cwd string, argv []string, 
 		}
 		if time.Now().After(deadline) {
 			screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
-			return nil, refusal("not_running", fmt.Sprintf("在新标签里接着这个会话，%s 秒内没等到它起来，这次没有发送。\n%s",
-				fmt.Sprint(int(piResumeWait.Seconds())), lastLines(screen, 12)), nil)
+			seconds, tail := int(piResumeWait.Seconds()), lastLines(screen, 12)
+			return nil, refusal(notRunning, i18n.T(i18n.From(ctx), "rpc-errors.not_running_resume_timeout", i18n.Args{"seconds": seconds})+"\n"+tail,
+				map[string]any{"reason": notRunningResumeTimeout, "seconds": seconds, "detail": tail})
 		}
 		select {
 		case <-ctx.Done():

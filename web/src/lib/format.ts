@@ -96,9 +96,10 @@ export function shellPath(path: string): string {
 }
 
 export function sessionMenuActions(s: Session): string[] {
+  const foreground = viewOf(s).reason?.kind !== "background" && !s.background_working && !s.background_waiting;
   return [
     ...(sessionCan(s, "attach") ? ["attach"] : []),
-    ...(stateOf(s) === "working" && sessionCan(s, "interrupt") ? ["stop"] : []),
+    ...(stateOf(s) === "working" && foreground && sessionCan(s, "interrupt") ? ["stop"] : []),
     ...(sessionCan(s, "terminal") ? ["resume"] : []),
     ...(!s.assistant && activityOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
   ];
@@ -206,15 +207,30 @@ export function failureReason(s: Session | undefined): string | undefined {
   return failureText(s.failure_reason) || undefined;
 }
 
-/** "Open in Lark": the session's place outside Persona, a web (https) link only (iOS externalLink). */
-export function externalLink(s?: Pick<Session, "external_url">): string | undefined {
-  const raw = s?.external_url?.trim();
-  if (!raw) return undefined;
+const CTRL_CHARS = /[\u0000-\u001f\u007f]/;
+
+/** Validates a credential-free http(s) URL (https-only when `httpsOnly` is true), rejecting single-slash
+ *  same-origin relative URLs (`https:/admin`), backslash/userinfo authority confusion, and C0/DEL control
+ *  characters. Returns the canonical `URL.href` or undefined. */
+export function safeWebURL(raw?: string, httpsOnly = false): string | undefined {
+  const s = raw?.trim();
+  if (!s || CTRL_CHARS.test(s)) return undefined;
+  const m = httpsOnly ? /^https:\/\//i.exec(s) : /^https?:\/\//i.exec(s);
+  if (!m) return undefined;
+  const auth = s.slice(m[0].length).split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return undefined;
   try {
-    return new URL(raw).protocol === "https:" ? raw : undefined;
+    const u = new URL(s);
+    if ((httpsOnly ? u.protocol !== "https:" : u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname || u.username || u.password) return undefined;
+    return u.href;
   } catch {
     return undefined;
   }
+}
+
+/** "Open in Lark": the session's place outside Persona, a web (https) link only (iOS externalLink). */
+export function externalLink(s?: Pick<Session, "external_url">): string | undefined {
+  return safeWebURL(s?.external_url, true);
 }
 
 type SessionNameFields = Pick<Session, "title" | "cwd" | "assistant" | "slot_name" | "slot_id" | "tab_id" | "space_kind" | "host">;

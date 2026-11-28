@@ -506,6 +506,7 @@ internal fun ChatLine.contentType(): String = when (this) {
     is ChatLine.ApiError -> "api_error"
     is ChatLine.Recaps -> "recaps"
     is ChatLine.Viewed -> "viewed"
+    is ChatLine.BotmuxReplies -> "botmux_replies"
     is ChatLine.Extra -> "extra"
     is ChatLine.ModelChange -> "model_change"
     is ChatLine.EngineChanged -> "engine_change"

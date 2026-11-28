@@ -96,6 +96,7 @@ type deployProbe struct {
 type prSeen struct {
 	hub, state string
 	at         time.Time
+	deployPR   string
 	statusPR   string
 	statusAt   time.Time
 }
@@ -362,21 +363,24 @@ func (s *Service) gateDeployStage(ctx context.Context, t Todo, stage, pr, machin
 	}
 	d := s.heldDelivery(ctx, r, s.knownDeployMerge(ctx, t, pr))
 	s.watchDeploy(ctx, t.ID, deployWatch{PR: pr, MachineID: machine, SessionID: session, Reply: clipMiddle(reply, 4000), Since: time.Now(), Hub: r.Hub, State: r.State, Merged: d.State == deliveryMerged, CheckedAt: time.Now()})
-	s.setTaskDelivery(ctx, t.ID, d)
+	s.writeTaskDelivery(ctx, t.ID, d, true)
 	return deliveryStage(d.State), false
 }
 
-// gateDelivery checks a judged delivery that says live (deliveryLive) against the running hub: held, it is merged
-// (or pr) with why. replies name the PR (else the todo's).
-func (s *Service) gateDelivery(ctx context.Context, t Todo, d TodoDelivery, pr string) TodoDelivery {
-	if d.State != deliveryLive {
-		return d
-	}
+// gateDelivery checks a judged delivery against the running hub using an owned or saved PR.
+// A reply naming another PR needs independent confirmation before it can count as merged or deployed.
+func (s *Service) gateDelivery(ctx context.Context, t Todo, d TodoDelivery, pr string, otherPR bool) TodoDelivery {
 	if pr == "" {
 		pr = t.PRURL
 	}
+	if otherPR && pr == "" && d.State != deliveryNone {
+		return TodoDelivery{} // no delivery status to save and no progress to apply
+	}
+	if d.State != deliveryLive && !(otherPR && (d.State == deliveryMerged || d.State == deliveryOff)) {
+		return d
+	}
 	r := s.checkDeployed(ctx, pr)
-	if !r.held() {
+	if !r.held() && (!otherPR || r.State == deployIn && (d.State != deliveryMerged || r.Merge != "")) {
 		return d
 	}
 	h := s.heldDelivery(ctx, r, s.knownDeployMerge(ctx, t, pr))
@@ -396,6 +400,7 @@ type deployWatch struct {
 	State     string    `json:"state,omitempty"`  // what that check said
 	Merged    bool      `json:"merged,omitempty"` // last known upstream merge for this PR
 	CheckedAt time.Time `json:"checked_at"`
+	Gate      string    `json:"gate,omitempty"` // objective deployment hold for a structured task
 }
 
 // deployWatchMost is how long a held task is watched for its deploy.
@@ -412,6 +417,9 @@ func (s *Service) watchDeploy(ctx context.Context, id string, w deployWatch) {
 		return
 	}
 	cur := b.stages[id]
+	if cur.hasTaskRuntime() {
+		return // the objective sweep owns deployment checks for this task
+	}
 	cur.Deploy = &w
 	b.stages[id] = cur
 	s.saveStagesLocked(ctx, id)
@@ -473,6 +481,9 @@ func (s *Service) sweepDeploys(now time.Time) {
 	}
 	for id, w := range watches {
 		t, ok := s.todoNow(id)
+		if ok && t.DoneAt == nil && t.hasTaskRuntime() {
+			continue // sweepPRs records observations for structured tasks
+		}
 		if !ok || now.Sub(w.Since) > deployWatchMost {
 			s.unwatchDeploy(ctx, id, w.Since)
 			continue
@@ -485,8 +496,8 @@ func (s *Service) sweepDeploys(now time.Time) {
 		case r.State == deployIn:
 			s.unwatchDeploy(ctx, id, w.Since)
 			s.logf("task %s: the running hub (%s) now contains %s: deployed", id, shortSHA(r.Hub), w.PR)
-			s.setTaskDelivery(ctx, id, TodoDelivery{State: deliveryLive, At: now})
-			if w.Reply != "" { // held from a turn that said deployed (sweepPRs' finds have no reply: nothing to verify by)
+			kept := s.writeTaskDelivery(ctx, id, TodoDelivery{State: deliveryLive, At: now}, true)
+			if kept && w.Reply != "" { // held from a turn that said deployed (sweepPRs' finds have no reply: nothing to verify by)
 				s.askAcceptance(t, w.MachineID, w.SessionID, w.Reply)
 			}
 		case r.State == deployUnverified:
@@ -504,7 +515,7 @@ func (s *Service) sweepDeploys(now time.Time) {
 			b.mu.Unlock()
 			if r.State != deployUnknown {
 				if d := s.heldDelivery(ctx, r, w.Merged); t.Delivery == nil || t.Delivery.State != d.State || t.Delivery.Gate != d.Gate {
-					s.setTaskDelivery(ctx, id, d)
+					s.writeTaskDelivery(ctx, id, d, true)
 				}
 			}
 		}
@@ -522,40 +533,103 @@ func (s *Service) sweepPRs(ctx context.Context, now time.Time, hub string, watch
 	}
 	p := &s.deploy
 	for _, t := range s.todosOf(ctx, "*") {
-		if t.PRURL == "" || t.DoneAt != nil || t.Cancelled() || stageIndex(t.Stage) >= stageIndex("deploy") {
+		if t.DoneAt != nil || t.Cancelled() {
 			continue
 		}
-		if d := t.Delivery; d != nil && d.State != deliveryNone && d.State != deliveryPR {
-			continue
+		pr, structured := t.PRURL, t.hasTaskRuntime()
+		if structured {
+			if pr == "" && len(t.PRs) == 1 {
+				pr = t.PRs[0]
+			}
+			w := watched[t.ID]
+			if w.PR == pr && w.Hub == hub && (w.State == deployIn || w.State == deployOut || w.State == deployNotIn) {
+				continue // a different running build changes this observation
+			}
+		} else {
+			if stageIndex(t.Stage) >= stageIndex("deploy") {
+				continue
+			}
+			if d := t.Delivery; d != nil && d.State != deliveryNone && d.State != deliveryPR {
+				continue
+			}
+			if _, ok := watched[t.ID]; ok {
+				continue
+			}
 		}
-		if _, ok := watched[t.ID]; ok {
+		if pr == "" {
 			continue
 		}
 		p.mu.Lock()
 		last, ok := p.seen[t.ID]
 		p.mu.Unlock()
-		if ok && last.hub == hub && (last.state == deployOut || last.state == deployUnverified || now.Sub(last.at) < deployRecheck) {
+		if ok && last.deployPR == pr && last.hub == hub && (last.state == deployOut || last.state == deployUnverified || now.Sub(last.at) < deployRecheck) {
 			continue
 		}
-		r := s.checkDeployed(ctx, t.PRURL)
+		r := s.checkDeployed(ctx, pr)
+		if structured {
+			if err := s.applyRuntimeDeploy(ctx, t, pr, r, now); err != nil {
+				s.logf("task %s: keep deployment observation: %v", t.ID, err)
+				continue
+			}
+		}
 		p.mu.Lock()
 		if p.seen == nil || len(p.seen) > 2000 {
 			p.seen = map[string]prSeen{}
 		}
 		seen := p.seen[t.ID]
-		seen.hub, seen.state, seen.at = hub, r.State, now
+		seen.hub, seen.state, seen.at, seen.deployPR = hub, r.State, now, pr
 		p.seen[t.ID] = seen
 		p.mu.Unlock()
+		if structured {
+			continue
+		}
 		switch r.State {
 		case deployIn:
 			s.logf("task %s: %s is in the running hub (%s): deployed", t.ID, t.PRURL, shortSHA(hub))
-			s.setTaskDelivery(ctx, t.ID, TodoDelivery{State: deliveryLive, At: now})
+			s.writeTaskDelivery(ctx, t.ID, TodoDelivery{State: deliveryLive, At: now}, true)
 		case deployOut:
 			s.logf("task %s: %s is merged, not in the running hub (%s): merged, not deployed", t.ID, t.PRURL, shortSHA(hub))
 			s.watchDeploy(ctx, t.ID, deployWatch{PR: t.PRURL, Since: now, Hub: hub, State: r.State, CheckedAt: now})
-			s.setTaskDelivery(ctx, t.ID, s.heldDelivery(ctx, r, false))
+			s.writeTaskDelivery(ctx, t.ID, s.heldDelivery(ctx, r, false), true)
 		}
 	}
+}
+
+// applyRuntimeDeploy keeps a checked build and its projected task state in one
+// write. A result for a replaced reference or from an older pass cannot win.
+func (s *Service) applyRuntimeDeploy(ctx context.Context, t Todo, pr string, r deployResult, at time.Time) error {
+	switch r.State {
+	case deployIn, deployOut, deployNotIn, deployUnmerged:
+	default:
+		return nil
+	}
+	reason := ""
+	if r.State == deployOut || r.State == deployNotIn {
+		reason = s.deployGateText(ctx, r)
+	}
+	checksReason := i18n.T(s.lang(ctx), "assistant-reports.pr_checks_pending")
+	brief, _ := s.committedBriefOfTodo(t.ID)
+	_, err := s.updateTaskRuntime(ctx, t.ID, func(_ Todo, st *todoStage) (bool, error) {
+		if !st.hasTaskRuntime() || st.PR != t.PRURL ||
+			st.PR == "" && (len(st.PRs) != 1 || st.PRs[0] != pr) {
+			return false, nil
+		}
+		old := st.Deploy
+		if old != nil && old.PR == pr && !at.After(old.CheckedAt) {
+			return false, nil
+		}
+		merged := r.mergeKnown(old != nil && old.PR == pr && old.Merged)
+		if p := st.runtimePR(); p != nil && p.URL == pr && p.State == "merged" {
+			merged = true
+		}
+		if r.State == deployNotIn && !merged || r.State == deployUnmerged && (old == nil || old.PR != pr || old.State != deployIn) {
+			return false, nil // an unknown deployment or an ordinary open PR adds no deployment evidence
+		}
+		st.Deploy = &deployWatch{PR: pr, Since: at.UTC(), Hub: r.Hub, State: r.State, Merged: merged, CheckedAt: at.UTC(), Gate: reason}
+		st.refreshRuntimeFromProviders(at, checksReason, brief.CompletionModeNow)
+		return true, nil
+	})
+	return err
 }
 
 // unwatchDeploy drops task id's watch made at since (a newer one stays).

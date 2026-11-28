@@ -1511,6 +1511,18 @@ nonisolated enum RowMemo {
     static func prewarm(_ items: [Item], scope: String) {
         for it in items {
             if Task.isCancelled { return }
+            if it.botmux?.isInbound == true {
+                let shown = BotmuxPresentation.user(it)
+                _ = user(key(scope, shown.id)) { _ in UserRowText(shown.text ?? "") }
+            }
+            if let reply = it.botmux, reply.kind == "reply" {
+                let shown = BotmuxPresentation.reply(reply, from: it)
+                _ = assistant(key(scope, shown.id)) { _ in AssistantRowText(reply.text) }
+            }
+            for (index, reply) in (it.fold?.botmux ?? []).enumerated() where reply.kind == "reply" {
+                let shown = BotmuxPresentation.reply(reply, from: it, index: index)
+                _ = assistant(key(scope, shown.id)) { _ in AssistantRowText(reply.text) }
+            }
             if it.kind == .toolUse { ToolDiffMemo.prewarm(it) }
             if it.kind == .toolUse || it.kind == .toolResult { ToolTextMemo.prewarm(it, scope: scope) }
             guard it.kind == .text else { continue }

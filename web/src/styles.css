@@ -81,6 +81,13 @@
 [data-sidebar-scroller] {
   scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));
 }
+/* Fade overflowing sidebar row text before the overlay ⋯ button so "..." and "⋯" never read as six dots. */
+[data-sidebar-rows] .group\/row:has(> button[aria-haspopup="menu"]):hover > :is(a, div) .truncate,
+[data-sidebar-rows] .group\/row:has(> button[aria-haspopup="menu"]) > :is(a, div)[aria-current="page"] .truncate {
+  text-overflow: clip;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+}
 
 /* Assistant trays (#4656): an open one lets the dock (ChatView's DOCK_MAX) take most of what is visible, the chat above
    giving up the room, and fills only what it needs; expanded, it fills the chat column and the chat steps aside. Count
@@ -769,26 +776,50 @@ select:not([multiple], [size], .appearance-none) {
   [data-app-shell][data-mac-bay="rail"] [data-rail-top-controls] {
     display: none;
   }
-  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] [data-sidebar-root] {
+    position: relative;
+    padding-top: 38px;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] [data-sidebar-rail] {
+    padding-top: 50px;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] [data-rail-top-controls] {
+    display: none;
+  }
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main,
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] > main {
     border: 0;
     border-radius: 0;
   }
-  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header.h-14,
-  [data-app-shell][data-mac-chrome="windowed"] > aside header.h-14 {
+  [data-app-shell][data-sidebar-animating="1"] [data-sidebar-column] {
+    display: block;
+    overflow: hidden;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside :is(header.h-14, header[data-terminal-header]) {
     height: 45px;
     -webkit-app-region: drag;
   }
-  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header.h-14 :is(button, a, input, select, [role="button"]),
-  [data-app-shell][data-mac-chrome="windowed"] > aside header.h-14 :is(button, a, input, select, [role="button"]) {
+  [data-app-shell][data-mac-chrome="windowed"] > aside [data-subagent-panel] > header > :first-child {
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) :is(button, a, input, select, [role="button"], [data-chat-title]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside :is(header.h-14, header[data-terminal-header]) :is(button, a, input, select, [role="button"], [data-chat-title]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside [data-subagent-panel] > header > :first-child :is(button, a, input, select, [role="button"]),
+  [data-app-shell][data-mac-chrome="windowed"] [role="separator"] {
     -webkit-app-region: no-drag;
+    app-region: no-drag;
   }
-  [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 header.h-14 {
-    padding-left: 130px;
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
+    padding-left: var(--mac-header-inset, 1rem);
   }
-  [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 header.h-14 {
-    padding-left: 180px;
+  [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
+    padding-left: 146px;
   }
-  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main > .min-h-0 > * > :not(:first-child) header.h-14 {
+  [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
+    padding-left: 200px;
+  }
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"]) > main > .min-h-0 > * > :not(:first-child) :is(header.h-14, header[data-terminal-header]) {
     padding-left: 1rem;
   }
 }
@@ -814,6 +845,11 @@ select:not([multiple], [size], .appearance-none) {
 :root[data-surface-style="liquid-glass"][data-desktop-glass="1"],
 :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body {
   background: transparent;
+}
+/* Over native NSVisualEffectView, disable Chromium CSS backdrop-filter across the document (main, split panel <aside>, portals, and arbitrary utilities) to prevent vibrancy alpha-clearing ghosting and double-compositing focus flashes (electron#39529). */
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] [class*="backdrop-"] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
   background:
@@ -886,15 +922,25 @@ select:not([multiple], [size], .appearance-none) {
   border-color: var(--glass-main-border);
   box-shadow: var(--glass-main-shadow);
 }
-:root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
+:root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
   box-shadow: none;
   filter: drop-shadow(0 2px 10px rgba(17, 17, 19, 0.055));
 }
-:root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
+:root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
   filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.34));
 }
+/* While ComposerImageStage elevates the live composer, clear shell filters/clip-path so position:fixed anchors to the viewport cleanly. */
+:root[data-composer-stage="1"] [data-app-shell],
+:root[data-composer-stage="1"] [data-app-shell] > :is(main, aside) {
+  filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  clip-path: none !important;
+  -webkit-clip-path: none !important;
+}
 @media (prefers-reduced-transparency: reduce) {
-  :root[data-surface-style="liquid-glass"] {
+  :root[data-surface-style="liquid-glass"],
+  :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] {
     background: #f1f1f4;
     --canvas: #f1f1f4;
     --page: #f7f7f9;
@@ -902,7 +948,8 @@ select:not([multiple], [size], .appearance-none) {
     --glass-main-shadow: none;
     --glass-sidebar-shadow: none;
   }
-  :root.dark[data-surface-style="liquid-glass"] {
+  :root.dark[data-surface-style="liquid-glass"],
+  :root.dark[data-surface-style="liquid-glass"][data-desktop-glass="1"] {
     background: #0b0b0c;
     --canvas: #0b0b0c;
     --page: #111113;
@@ -910,14 +957,24 @@ select:not([multiple], [size], .appearance-none) {
     --glass-main-shadow: none;
     --glass-sidebar-shadow: none;
   }
-  :root[data-surface-style="liquid-glass"] body {
+  :root[data-surface-style="liquid-glass"] body,
+  :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body,
+  :root.dark[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
     background: var(--page);
   }
   :root[data-surface-style="liquid-glass"] [data-app-shell],
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell],
   :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
-  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > main,
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > aside {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+  }
+  :root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main,
+  :root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
+    filter: none;
   }
 }
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); transition: transform 150ms var(--ease-out-strong); }

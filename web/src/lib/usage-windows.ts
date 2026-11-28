@@ -42,6 +42,8 @@ export interface UsageAccount {
   stale_at?: string;
   /** Where the numbers came from (#2595): an agent's files on one of the computers, and/or account-pool gateways by name. */
   local?: boolean;
+  /** Present only for values read from a saved Codex session. Older hubs omit the field. */
+  reading_source?: "rollout";
   sources?: string[];
   /** The computers (by name) that read it (#1907); an older hub only says `local`. */
   machines?: string[];
@@ -258,6 +260,15 @@ export function canonicalUsageProvider(provider: string): string {
   return id === "agy" ? "antigravity" : id;
 }
 
+export function isHistoricalCodexReading(a: UsageAccount): boolean {
+  return a.reading_source === "rollout" && a.stale === true && canonicalUsageProvider(a.provider) === "codex";
+}
+
+/** The hub's public Codex row ID survives quota resets. Saved session readings can describe an unidentified source. */
+export function canAliasUsageAccount(a: UsageAccount): boolean {
+  return Boolean(a.id) && canonicalUsageProvider(a.provider) === "codex" && a.reading_source !== "rollout";
+}
+
 /** The sidebar takes the two accounts with lowest headroom `h = r - R`, with stale accounts last. Rank whole
  *  percentages as displayed so sub-percent jitter keeps the same order. Balance accounts have their own rows. */
 export function topAccounts(accounts: UsageAccount[], n = 2): UsageAccount[] {
@@ -435,9 +446,10 @@ export type SidebarUsageItem =
  *  when pinned IDs match at least one live pinnable account or window, show those matched items in pinned order;
  *  otherwise fall back to the default automatic ranking (`topAccounts(live)` followed by live balance accounts). */
 export function selectSidebarUsageItems(
-  live: UsageAccount[],
+  readings: UsageAccount[],
   pinnedIds: readonly string[],
 ): { items: SidebarUsageItem[]; custom: boolean } {
+  const live = readings.filter((a) => !isHistoricalCodexReading(a));
   if (pinnedIds.length > 0) {
     const byId = new Map(live.map((a) => [a.id, a]));
     const items: SidebarUsageItem[] = [];

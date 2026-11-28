@@ -321,20 +321,25 @@ func TestOpenTaskKeepsTerminalAfterUnexplainedStop(t *testing.T) {
 
 func TestTerminalResumeOptionTargetsOnlyItsBoundAgent(t *testing.T) {
 	task := Todo{Agents: []TodoAgent{{MachineID: "box", SessionID: "00000001-example"}}}
+	asked := time.Now()
 	label := "Resume 00000001 on its terminal page"
-	if target := decisionTerminal(task, label); target == nil || target.MachineID != "box" {
+	if target := decisionTerminal(task, label, asked); target == nil || target.MachineID != "box" {
 		t.Fatal(target)
 	}
-	if decisionTerminal(task, "Resume 00000002 on its terminal page") != nil {
+	if decisionTerminal(task, "Resume 00000002 on its terminal page", asked) != nil {
 		t.Fatal("unrelated terminal")
 	}
-	if terminalResumeLabel("Start a replacement") {
+	if terminalResumeLabel("Start a replacement", nil) {
 		t.Fatal("ordinary decision classified as a terminal action")
 	}
 	now := time.Now()
 	task.Agents[0].ReleasedAt = &now
-	if decisionTerminal(task, label) != nil || soleDecisionAgent(task, now) != nil {
+	if decisionTerminal(task, label, asked) != nil {
 		t.Fatal("released Agent")
+	}
+	task.Agents = append(task.Agents, TodoAgent{MachineID: "box", SessionID: "00000001-other", LinkedAt: asked.Add(time.Minute)})
+	if decisionTerminal(task, label, asked) != nil {
+		t.Fatal("matching prefix from a later Agent binding")
 	}
 }
 

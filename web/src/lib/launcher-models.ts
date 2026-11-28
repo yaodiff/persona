@@ -85,6 +85,9 @@ export interface MachineLaunchers {
    *  why in the request's language (shown off, not hidden). For "New agent" (#8109): the Persona-managed providers its
    *  own-service rule leaves out on this computer, with why; absent when there are none, or from an older hub. */
   unavailable?: UnavailableLauncher[];
+  /** "New agent" only (#17650): the Orca chat a start that keeps the default opens as, while the computer's "Start new
+   *  Agents as Orca chats" is on and its Orca offers that chat; absent otherwise and from an older hub (lib/orca-chat.ts). */
+  default_opens?: import("./orca-chat").DefaultOpens;
 }
 
 /** One of MachineLaunchers.unavailable: a launcher of the computer or a Model provider that can't run assistant chats here

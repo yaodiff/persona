@@ -336,3 +336,29 @@ func TestFoldCountsErrorsAndNamesTools(t *testing.T) {
 		t.Fatalf("a run of thoughts: %s", b)
 	}
 }
+
+func TestRangeSpanReportsHistoryAndBounds(t *testing.T) {
+	path := longCodexRollout(t, 4, 2, 1)
+	f := NewFile(path)
+	if _, err := f.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	_, _, endSpan := f.Page(0, 1)
+	if endSpan.History == "" {
+		t.Fatal("expected non-empty file history")
+	}
+	// Paginated range (limit 2) advances from/to contiguously and keeps history.
+	first, more, sp1 := f.RangeSpan(2, endSpan.To, 2)
+	if !more || len(first) == 0 || sp1.History != endSpan.History || sp1.From != 1 || sp1.To != first[len(first)-1].Seq {
+		t.Fatalf("first page: len=%d more=%v span=%+v", len(first), more, sp1)
+	}
+	rest, more2, sp2 := f.RangeSpan(sp1.To+1, endSpan.To, 1000)
+	if more2 || len(rest) == 0 || sp2.History != endSpan.History || sp2.From != sp1.To || sp2.To != endSpan.To {
+		t.Fatalf("rest page: len=%d more=%v span=%+v", len(rest), more2, sp2)
+	}
+	// Inverted / past-end ranges return an empty bounded span with history preserved.
+	empty, moreEmpty, spEmpty := f.RangeSpan(endSpan.To+5, endSpan.To+10, 100)
+	if moreEmpty || len(empty) != 0 || spEmpty.History != endSpan.History || spEmpty.From != endSpan.To || spEmpty.To != endSpan.To {
+		t.Fatalf("past-end range: len=%d more=%v span=%+v", len(empty), moreEmpty, spEmpty)
+	}
+}

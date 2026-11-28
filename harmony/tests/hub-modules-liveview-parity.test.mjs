@@ -41,7 +41,7 @@ registerHooks({
         './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility',
         './InteractionDecision', '../core/ClientLocale', '../core/Domain', '../core/HubModules',
         '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent',
-        '../core/TranscriptCache', '../core/XiaoYiActions'
+        '../core/TranscriptCache', '../core/XiaoYiActions', '../core/NextSuggestions'
       ].includes(specifier)) {
         const base = new URL(specifier, context.parentURL);
         return { url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true };

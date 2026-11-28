@@ -612,17 +612,23 @@ func TestModelProfileCaptureDoesNotTurnMissingAliasesIntoClears(t *testing.T) {
 		t.Fatal(err)
 	}
 	models := launchers["work"]
-	if models.SonnetModel == nil || *models.SonnetModel != "vendor/standard" || models.OpusModel != nil || models.FableModel != nil {
+	if models.SonnetModel == nil || *models.SonnetModel != "vendor/standard" || models.OpusModel != nil ||
+		models.HaikuModel != nil || models.FableModel != nil || models.SubagentModel != nil {
 		t.Fatal("capture did not distinguish configured aliases from missing aliases")
 	}
 	storeProfiles(t, store, ModelProfile{ID: "captured", Name: "Captured", Launchers: launchers})
 	launcher.OpusModel = "vendor/strong"
+	launcher.HaikuModel = "vendor/fast"
+	launcher.FableModel = "vendor/fable"
+	launcher.SubagentModel = "vendor/helper"
 	putLaunchers(t, s, launcher)
 	if _, err := s.applyModelProfile(ctx, "captured", ProfileActor{Kind: "hub"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.storedLaunchers(ctx)[0].OpusModel; got != "vendor/strong" {
-		t.Fatalf("profile switch erased alias set after capture: %s", got)
+	got := s.storedLaunchers(ctx)[0]
+	if got.SonnetModel != "vendor/standard" || got.OpusModel != "vendor/strong" || got.HaikuModel != "vendor/fast" ||
+		got.FableModel != "vendor/fable" || got.SubagentModel != "vendor/helper" {
+		t.Fatalf("profile switch erased aliases set after capture: %+v", got)
 	}
 }
 
@@ -1123,6 +1129,32 @@ func TestModelProfileRollbackHistoryBounded(t *testing.T) {
 		if got := s.storedLaunchers(ctx)[0].Model; got != fmt.Sprintf("m-%d", step) {
 			t.Fatalf("after rollback got %q, want m-%d", got, step)
 		}
+	}
+}
+
+func TestPresetHostProfileRoundTrip(t *testing.T) {
+	s, _, _ := modelService(t)
+	for _, tc := range []struct {
+		name, fields, want string
+		status             int
+	}{
+		{name: "set", fields: `,"host":" herdr "`, want: "herdr", status: http.StatusOK},
+		{name: "omit", want: "herdr", status: http.StatusOK},
+		{name: "invalid", fields: `,"host":"tmux"`, want: "herdr", status: http.StatusBadRequest},
+		{name: "clear", fields: `,"host":""`, status: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"revision":%d,"name":"Host preset","tiers":{"agy-work":{"launcher":"agy"%s}}}`, profilesOf(t, s).Revision, tc.fields)
+			res := request(s, http.MethodPut, "/api/v1/model-profiles/host-preset", body)
+			if res.Code != tc.status {
+				t.Fatalf("PUT = %d %s, want %d", res.Code, res.Body, tc.status)
+			}
+			ps, _ := storedTiers(t, s)
+			tier, ok := tierOf(ps, "host-preset", "agy-work")
+			if !ok || tier.startHost() != tc.want {
+				t.Fatalf("stored tier = %+v, want host %q", tier, tc.want)
+			}
+		})
 	}
 }
 

@@ -16,11 +16,12 @@
 import { assistantPreview } from '../../runtime-sdk/lib/assistant-preview.js'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, relative, resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { createRuntime, interactionId, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { OpencodeAcpClient, privateAcpArgs } from './acp.js'
 import { createAssistantWorkers } from './assistant-workers.js'
+import { isMemoryWritePath } from './memory-write.js'
 import { createSupervisionStore, policyEnvironment, supportsSystemPrompt } from './supervision.js'
 import { defaultDbPath, openReadOnly } from './db.js'
 import {
@@ -1010,22 +1011,88 @@ export function createOpencodeCompanion(options = {}) {
 
   // ---- permissions ----
 
-  function isMemoryWrite(s, rawName, input, rawInput) {
+  const MEMORY_RAW_INPUT_KEYS = new Set([
+    'filePath', 'path', 'file_path',
+    'content', 'oldString', 'old_string', 'newString', 'new_string',
+    'replaceAll', 'replace_all', 'edits', 'tool',
+  ])
+  const MEMORY_EDIT_ITEM_KEYS = new Set([
+    'filePath', 'path', 'file_path',
+    'oldString', 'old_string', 'newString', 'new_string',
+    'replaceAll', 'replace_all',
+  ])
+  const MEMORY_PATH_KEYS = ['filePath', 'path', 'file_path']
+  const MEMORY_ALLOWED_TITLES = new Set(['', 'write', 'edit', 'write_file', 'edit_file'])
+
+  function isMemoryWrite(s, rawName, toolCall) {
     if (!s?.assistant || !s.memoryDir || s.mode === 'plan') return false
     if (rawName !== 'write' && rawName !== 'edit') return false
-    const file = typeof rawInput?.filePath === 'string' && rawInput.filePath
-      ? rawInput.filePath
-      : (typeof rawInput?.path === 'string' && rawInput.path
-        ? rawInput.path
-        : (typeof rawInput?.file_path === 'string' && rawInput.file_path
-          ? rawInput.file_path
-          : (typeof input?.file_path === 'string' ? input.file_path : '')))
-    if (!file) return false
-    const baseDir = s.cwd || s.memoryDir
-    const target = isAbsolute(file) ? resolve(file) : resolve(baseDir, file)
-    const memRoot = resolve(s.memoryDir)
-    const rel = relative(memRoot, target)
-    return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+    if (!toolCall || typeof toolCall !== 'object' || Array.isArray(toolCall)) return false
+    if (Object.prototype.hasOwnProperty.call(toolCall, 'title') && toolCall.title !== undefined) {
+      if (typeof toolCall.title !== 'string') return false
+      const titleWord = (toolCall.title.trim().split(/\s+/)[0] || '').toLowerCase()
+      if (!MEMORY_ALLOWED_TITLES.has(titleWord)) return false
+    }
+    const rawInput = toolCall.rawInput
+    if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) return false
+    for (const key of Object.keys(rawInput)) {
+      if (!MEMORY_RAW_INPUT_KEYS.has(key)) return false
+    }
+    if (Object.prototype.hasOwnProperty.call(rawInput, 'tool') && rawInput.tool !== undefined) {
+      if (typeof rawInput.tool !== 'string') return false
+      const explicit = rawInput.tool.trim().toLowerCase()
+      if (explicit !== 'write' && explicit !== 'edit') return false
+    }
+    const files = []
+    for (let i = 0; i < MEMORY_PATH_KEYS.length; i++) {
+      const key = MEMORY_PATH_KEYS[i]
+      if (!Object.prototype.hasOwnProperty.call(rawInput, key) || rawInput[key] === undefined) continue
+      if (typeof rawInput[key] !== 'string' || !rawInput[key]) return false
+      files.push(rawInput[key])
+    }
+    if (files.length === 0) return false
+    if (Object.prototype.hasOwnProperty.call(rawInput, 'edits') && rawInput.edits !== undefined) {
+      if (!Array.isArray(rawInput.edits)) return false
+      for (let i = 0; i < rawInput.edits.length; i++) {
+        if (!(i in rawInput.edits)) return false
+        const edit = rawInput.edits[i]
+        if (!edit || typeof edit !== 'object' || Array.isArray(edit)) return false
+        for (const key of Object.keys(edit)) {
+          if (!MEMORY_EDIT_ITEM_KEYS.has(key)) return false
+        }
+        for (let j = 0; j < MEMORY_PATH_KEYS.length; j++) {
+          const key = MEMORY_PATH_KEYS[j]
+          if (!Object.prototype.hasOwnProperty.call(edit, key) || edit[key] === undefined) continue
+          if (typeof edit[key] !== 'string' || !edit[key]) return false
+          files.push(edit[key])
+        }
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(toolCall, 'locations') && toolCall.locations !== undefined) {
+      if (!Array.isArray(toolCall.locations)) return false
+      for (let i = 0; i < toolCall.locations.length; i++) {
+        if (!(i in toolCall.locations)) return false
+        const loc = toolCall.locations[i]
+        if (!loc || typeof loc !== 'object' || Array.isArray(loc) || typeof loc.path !== 'string' || !loc.path) return false
+        files.push(loc.path)
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(toolCall, 'content') && toolCall.content !== undefined) {
+      if (!Array.isArray(toolCall.content)) return false
+      for (let i = 0; i < toolCall.content.length; i++) {
+        if (!(i in toolCall.content)) return false
+        const item = toolCall.content[i]
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+        if (item.type === 'diff' || (Object.prototype.hasOwnProperty.call(item, 'path') && item.path !== undefined)) {
+          if (typeof item.path !== 'string' || !item.path) return false
+          files.push(item.path)
+        }
+      }
+    }
+    for (let i = 0; i < files.length; i++) {
+      if (!isMemoryWritePath(files[i], s.memoryDir, s.cwd)) return false
+    }
+    return true
   }
 
   function pickOption(options, kind) {
@@ -1076,7 +1143,7 @@ export function createOpencodeCompanion(options = {}) {
 
     // 3. Auto-approve: assistant memory writes (outside plan), acceptEdits (write/edit), or bypassPermissions.
     const acceptEditAuto = s.mode === 'acceptEdits' && (card.raw_name === 'write' || card.raw_name === 'edit')
-    if (isMemoryWrite(s, card.raw_name, card.tool_input, rawInput) || acceptEditAuto || s.mode === 'bypassPermissions') {
+    if (isMemoryWrite(s, card.raw_name, params?.toolCall) || acceptEditAuto || s.mode === 'bypassPermissions') {
       return allowOnce
         ? { outcome: { outcome: 'selected', optionId: allowOnce.optionId } }
         : { outcome: { outcome: 'cancelled' } }

@@ -261,6 +261,7 @@ func (m *Machine) snapshot() proto.Machine {
 	}
 	clipboardOn := d.clipboardOn(m.cfg.ID)
 	fileTransferOn := d.fileTransferOn(m.cfg.ID)
+	orcaChats := orcaChatStartsField(choice, d.orcaChatStartsOn(m.cfg.ID))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	engines := []proto.Engine{} // what the node found: none while offline
@@ -320,10 +321,11 @@ func (m *Machine) snapshot() proto.Machine {
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
-		Clipboard:    m.clipboardStateLocked(clipboardOn),
-		FileTransfer: m.fileTransferState(fileTransferOn),
-		ClaudePlugin: m.info.ClaudePlugin,
-		LinkSwitch:   linkSwitch,
+		Clipboard:      m.clipboardStateLocked(clipboardOn),
+		FileTransfer:   m.fileTransferState(fileTransferOn),
+		OrcaChatStarts: orcaChats,
+		ClaudePlugin:   m.info.ClaudePlugin,
+		LinkSwitch:     linkSwitch,
 	}
 }
 
@@ -374,7 +376,7 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	// abroad at ~15 KB/s, 2026-10-31) an 87 KB page took 5.6 s and a 500-item page passed the hub's 30 s deadline;
 	// on a LAN it costs next to nothing.
 	return exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "Compression=yes",
-		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", host, bin+" node --stdio")
+		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--", host, bin+" node --stdio")
 }
 
 // localNode is the program the node of the hub's computer runs as (docs/server/server.md "Programs"): persona-node
@@ -455,6 +457,15 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 		ac := &activityConn{Conn: c, now: m.timings.now}
 		ac.touch()
 		return &nodePipe{r: ac, w: ac, lastErr: func() string { return "" }, close: func() { _ = c.Close() }, activity: ac}, nil
+	}
+	if via == "ssh" && m.nodeCmd == nil {
+		host := m.cfg.SSHHost
+		if host == "" {
+			host = m.cfg.ID
+		}
+		if err := validateSSHHost(host); err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := m.command(ctx)
@@ -636,6 +647,17 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			(proto.FasterSpeed(strings.TrimSpace(fields.Speed)) && !nodeHas(info, nodeproto.SessionStartSpeed)) {
 			// An older node would drop the explicit, billable choice and start at the launcher's own speed.
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_session_start_speed")}
+		}
+	}
+	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.SessionStartModelAliases) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			ModelAliases map[string]string `json:"model_aliases"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if len(fields.ModelAliases) != 0 {
+			// An older node would drop the per-start aliases and run the launcher's models.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_aliases")}
 		}
 	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.StartGoal) {
@@ -1086,6 +1108,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		return // the manager's alone
 	case "claude.dirs":
 		m.rememberClaudeDirs(params)
+	case proto.EventEnginesChanged: // what the node found of its engines changed since node.info (node/orcaengine.go)
+		m.onEnginesChanged(params)
+		return
 	case "claude.plugin": // the Persona plugin for Claude Code there changed (node/claudeplugin.go)
 		var st proto.ClaudePlugin
 		if json.Unmarshal(params, &st) == nil && st.State != "" {

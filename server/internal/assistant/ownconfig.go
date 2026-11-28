@@ -50,6 +50,9 @@ type ownConfig struct {
 		ImportProvider *assistantwire.KBImportProvider `json:"import_provider"`
 		// LarkMinutes: importing Lark minutes and document titles through lark-cli; missing or not enabled: off.
 		LarkMinutes *assistantwire.KBLarkMinutes `json:"lark_minutes"`
+		// SpeakerTurnsImport: debug-only switch enabling PUT /api/v1/recordings/{id}/speakers/turns (#17674); off by
+		// default, read once at manager start, and never changeable from an app or PUT /api/v1/assistant.
+		SpeakerTurnsImport bool `json:"speaker_turns_import"`
 	} `json:"kb"`
 	AI *aiwire.Config `json:"ai"`
 	// Inbox: of it the hello carried the models and the AI twin's machine, each replaced only when it is there (the

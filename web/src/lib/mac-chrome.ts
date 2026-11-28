@@ -53,24 +53,54 @@ export const useMacChrome = (): DesktopWindowChrome => useSyncExternalStore(subs
 export const macChromeMode = (chrome: DesktopWindowChrome): "windowed" | "fullscreen" | undefined =>
   chrome.unifiedTitlebar ? (chrome.fullScreen ? "fullscreen" : "windowed") : undefined;
 
-/** Computes the 44 px co-linear Apple G2 continuous-curvature SVG cutout and contour paths for `<main>`. */
-export function appleG2Contour(W: number, H: number, bay: "rail" | "hidden" | null): { clip: string; stroke: string; rim: string } {
+const getModeSnapshot = () => macChromeMode(getSnapshot());
+
+/** Subscribes only to `"windowed" | "fullscreen" | undefined` so window focus/blur churn never re-renders the shell. */
+export const useMacChromeMode = (): "windowed" | "fullscreen" | undefined =>
+  useSyncExternalStore(subscribe, getModeSnapshot, () => undefined);
+
+const BAY_ANCHOR_X = 168;
+const BAY_CUTOUT_MAX = 166;
+const BAY_RAMP_BX = 24;
+
+/** Cutout depth `bx` for the macOS 44 px control bay as a function of the live sidebar width in px. */
+export function sidebarBayCutout(sidebarWidth: number): number {
+  return Math.min(BAY_CUTOUT_MAX, Math.max(0, Math.round(BAY_ANCHOR_X - sidebarWidth)));
+}
+
+/** Matching `<main>` top header left padding (px) ahead of a bay cutout `bx`. */
+export function macHeaderInset(bx: number): number {
+  if (bx <= 0) return 16;
+  return Math.round(16 + Math.min(1, bx / BAY_RAMP_BX) * 18 + bx);
+}
+
+const fmtCoord = (n: number): string => String(Math.round(n * 100) / 100);
+
+/** Computes the Apple G2 continuous-curvature SVG cutout and contour paths at any bay depth `bx` (0 = rounded rect, 112 = rail, 166 = hidden). */
+export function appleG2ContourAt(W: number, H: number, bx: number): { clip: string; stroke: string; rim: string } {
   const clipTail = `H ${W - 14} A 14,14 0 0 1 ${W},14 V ${H - 14} A 14,14 0 0 1 ${W - 14},${H} H 14 A 14,14 0 0 1 0,${H - 14}`;
   const strokeTail = `H ${W - 14} A 13.5,13.5 0 0 1 ${W - 0.5},14 V ${H - 14} A 13.5,13.5 0 0 1 ${W - 14},${H - 0.5} H 14 A 13.5,13.5 0 0 1 0.5,${H - 14}`;
-  if (!bay) {
+  if (bx <= 0.5) {
     return {
       clip: `M 14,0 ${clipTail} V 14 A 14,14 0 0 1 14,0 Z`,
       stroke: `M 14,0.5 ${strokeTail} V 14 A 13.5,13.5 0 0 1 14,0.5 Z`,
       rim: `M 14,1.25 H ${W - 14}`,
     };
   }
-  const by = 44;
-  const bx = bay === "rail" ? 94 : 144;
-  const sx = bx + 0.5;
-  const sy = by + 0.5;
+  const t = Math.min(1, bx / BAY_RAMP_BX);
+  const by = 44 * t;
+  const sy = 0.5 + by;
+  const x0 = bx < BAY_RAMP_BX ? 14 : bx - 10;
+  const sx0 = bx < BAY_RAMP_BX ? 14 + 0.5 * t : bx - 9.5;
+  const c = fmtCoord;
   return {
-    clip: `M ${bx + 22},0 ${clipTail} V ${by + 14} C 0,${by + 5} 5,${by} 14,${by} H ${bx - 10} C ${bx + 1.5},${by} ${bx + 3.5},${by - 6} ${bx + 6},${by / 2} C ${bx + 8.5},6 ${bx + 10.5},0 ${bx + 22},0 Z`,
-    stroke: `M ${sx + 22},0.5 ${strokeTail} V ${sy + 13.5} C 0.5,${sy + 5} 5,${sy} 14,${sy} H ${sx - 10} C ${sx + 1.5},${sy} ${sx + 3.5},${sy - 6} ${sx + 6},${by / 2 + 0.25} C ${sx + 8.5},6.25 ${sx + 10.5},0.5 ${sx + 22},0.5 Z`,
-    rim: `M ${bx + 22},1.25 H ${W - 14}`,
+    clip: `M ${c(x0 + 32 * t)},0 ${clipTail} V ${c(by + 14)} C 0,${c(by + 5)} 5,${c(by)} 14,${c(by)} H ${c(x0)} C ${c(x0 + 11.5 * t)},${c(by)} ${c(x0 + 13.5 * t)},${c(by - 6 * t)} ${c(x0 + 16 * t)},${c(by / 2)} C ${c(x0 + 18.5 * t)},${c(6 * t)} ${c(x0 + 20.5 * t)},0 ${c(x0 + 32 * t)},0 Z`,
+    stroke: `M ${c(sx0 + 32 * t)},0.5 ${strokeTail} V ${c(sy + 13.5)} C 0.5,${c(sy + 5)} 5,${c(sy)} 14,${c(sy)} H ${c(sx0)} C ${c(sx0 + 11.5 * t)},${c(sy)} ${c(sx0 + 13.5 * t)},${c(sy - 6 * t)} ${c(sx0 + 16 * t)},${c(0.5 + 21.75 * t)} C ${c(sx0 + 18.5 * t)},${c(0.5 + 5.75 * t)} ${c(sx0 + 20.5 * t)},0.5 ${c(sx0 + 32 * t)},0.5 Z`,
+    rim: `M ${c(x0 + 32 * t)},1.25 H ${W - 14}`,
   };
+}
+
+/** Computes the 44 px co-linear Apple G2 continuous-curvature SVG cutout and contour paths for `<main>`. */
+export function appleG2Contour(W: number, H: number, bay: "rail" | "hidden" | null): { clip: string; stroke: string; rim: string } {
+  return appleG2ContourAt(W, H, bay === "rail" ? 112 : bay === "hidden" ? 166 : 0);
 }

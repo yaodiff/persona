@@ -18,6 +18,8 @@ type runtimeRegistry struct {
 	mu     sync.Mutex
 	serial int
 	conns  map[int]*runtimeConn
+	// Only a node-directed start can bind protected command input to a session.
+	inputBindings map[string]*runtimeInputBinding
 	// owner: session id -> the runtime listing it (the newest connection wins when two list the same id).
 	owner map[string]*runtimeConn
 	// watching: sessions the hub watches -> the last seq pushed for each, so a runtime that reconnects is asked to
@@ -756,16 +758,17 @@ func (b *runtimeRegistry) beginWatchLocked(h *runtimeConn, id string, since int)
 // yet (with the sequence and generation of each attempt), and the sessions it now runs that another runtime started
 // for the hub lately, which it has not been told of yet (runtime.driven).
 func (b *runtimeRegistry) setSessions(h *runtimeConn, list []proto.Session) (map[string]runtimeWatchAttempt, []string) {
-	return b.setSessionList(h, list, nil)
+	return b.setSessionList(h, list, nil, nil)
 }
 
-func (b *runtimeRegistry) setSessionList(h *runtimeConn, list []proto.Session, agyPaneBackground map[string][]proto.BackgroundTask) (map[string]runtimeWatchAttempt, []string) {
+func (b *runtimeRegistry) setSessionList(h *runtimeConn, list []proto.Session, agyPaneBackground map[string][]proto.BackgroundTask, waits map[runtimeInputKey]runtimeInputReport) (map[string]runtimeWatchAttempt, []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	h.mu.Lock()
 	h.sessions = list
 	h.sessionsListed = true
 	h.agyPaneBackground = agyPaneBackground
+	h.inputWaits = b.reconcileInputs(h, list, waits)
 	if h.hello.Runtime == agyRuntimeID && h.daemon == "" {
 		h.agyPreviews = nextAgyPreviews(h.agyPreviews, list)
 	}

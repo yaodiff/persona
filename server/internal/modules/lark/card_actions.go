@@ -142,7 +142,7 @@ func (s core) botCardAction(ctx context.Context, a *botcard.CardAction, action s
 		// A progress card may outlive its run when its final edit was refused.
 		f, _ := s.feishuFeatures(ctx)
 		t := botTarget{Kind: a.Str("k"), MachineID: a.Str("m"), SessionID: a.Str("s")}
-		return toast(s.h.StopProgressCard(ctx, f, t, a.Context.MessageID))
+		return toast(s.stopProgressCard(ctx, f, t, a.Context.MessageID))
 	}
 	return toast("info", i18n.T(l, "assistant-feishu_cards.card_expired"))
 }

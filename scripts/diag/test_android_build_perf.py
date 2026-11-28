@@ -107,6 +107,42 @@ class AndroidBuildPerfTest(unittest.TestCase):
         self.assertEqual(both["chat"], "persona://open?tab=agents&machine=server&session=s-1")
         self.assertEqual(list(perf.scenarios("server/s-1", ["chat"])), ["chat"])
 
+    def test_interrupted_report_write_preserves_previous_round(self):
+        def adb(command, **kwargs):
+            args = command[4:]
+            if args == ["wm", "size"]:
+                stdout = "Physical size: 1080x2400"
+            elif args[:2] == ["dumpsys", "gfxinfo"] and args[-1] != "reset":
+                stdout = GFXINFO
+            else:
+                stdout = ""
+            return subprocess.CompletedProcess(command, 0, stdout)
+
+        with tempfile.TemporaryDirectory() as directory:
+            out = pathlib.Path(directory) / "out.json"
+            dump = json.dump
+            completed = []
+
+            def write(report, stream, **kwargs):
+                if not completed:
+                    dump(report, stream, **kwargs)
+                    completed.append(json.dumps(report, **kwargs).encode())
+                else:
+                    stream.write('{"partial":')
+                    raise OSError("synthetic write failure")
+
+            argv = ["android_build_perf", "synthetic", str(out), "debug=test.app"]
+            with (patch.object(sys, "argv", argv), patch.dict(os.environ, {"CHAT": "", "ONLY": "agents"}),
+                  patch.object(perf, "RUNS", 2), patch.object(perf, "COLD", 0), patch.object(perf.time, "sleep"),
+                  patch.object(subprocess, "run", side_effect=adb), patch.object(json, "dump", side_effect=write),
+                  redirect_stdout(io.StringIO())):
+                with self.assertRaisesRegex(OSError, "synthetic write failure"):
+                    perf.main()
+            self.assertEqual(len(completed), 1)
+            self.assertEqual(out.read_bytes(), completed[0])
+            self.assertEqual(json.loads(out.read_bytes())["debug/agents"]["frames_total"], 10)
+            self.assertEqual(list(out.parent.iterdir()), [out])
+
     def test_failed_or_incomplete_round_preserves_complete_sample(self):
         for failure, expected in (
                 ("reset", "adb shell dumpsys failed (exit 1)"),

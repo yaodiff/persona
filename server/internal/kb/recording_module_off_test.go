@@ -306,3 +306,119 @@ func (p hookedProvider) SummarizeRecordings(ctx context.Context, max int) int {
 func hookedWriters(e *Engine) recordingwire.Provider {
 	return hookedProvider{rest: RecordingWriters(e)}
 }
+
+// A hub-transcribed meeting with a speaker timeline and owner-chosen names remains fully readable (detail.speakers,
+// speaker names, and segments[].speaker) when the recording module is off, without changing any file on disk (#17674).
+func TestRecordingSpeakersStayReadableWithoutTheModule(t *testing.T) {
+	on := goldenEngine(t, nil)
+	on.SetRecordingProvider(hookedWriters(on))
+	now := time.Date(2026, 11, 10, 16, 0, 0, 0, goldenZone)
+	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
+
+	u := meetingUpload(1, start,
+		"Ada explained the storage contract for speaker timelines.",
+		"Grace confirmed the module-off read path stays in Core.")
+	u.Duration = 90
+	u.Segments[0].Start, u.Segments[0].End = 0, 35
+	u.Segments[1].Start, u.Segments[1].End = 36, 72
+	putRecording(t, on, recID, u, now)
+
+	// Write meeting.json (hub transcription + speakers), hub_segments.json (timing: turn), and speaker_turns.json.
+	meeting := Meeting{
+		Transcription: &recordingwire.MeetingTranscription{Mode: recordingwire.TranscriptionHub, State: recordingwire.TranscriptionFinal},
+		Speakers: &recordingwire.MeetingSpeakers{
+			State:   recordingwire.SpeakerStateReady,
+			Since:   now,
+			Tries:   1,
+			Quality: recordingwire.SpeakerQualityOk,
+			Next:    3,
+			People: []recordingwire.SpeakerPerson{
+				{ID: "s1", Name: "Ada"},
+				{ID: "s2", Name: "Grace", Me: true},
+			},
+			Stats: map[recordingwire.SpeakerID]recordingwire.SpeakerStat{
+				"s1": {Seconds: 35, Lines: 1},
+				"s2": {Seconds: 36, Lines: 1},
+			},
+		},
+		Revs: map[string]int64{PartSpeakers: 2},
+	}
+	mRaw, err := json.MarshalIndent(meeting, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(on.Store.Path(KindRecording, recID, meetingFile), append(mRaw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hub := HubTranscript{
+		Rev:    1,
+		Pass:   recordingwire.HubPassFinal,
+		Timing: recordingwire.TimingTurn,
+		Segments: []RecordingSegment{
+			{Start: 0, End: 35, Text: u.Segments[0].Text, Source: recordingwire.SourceHub},
+			{Start: 36, End: 72, Text: u.Segments[1].Text, Source: recordingwire.SourceHub},
+		},
+	}
+	hRaw, err := json.MarshalIndent(hub, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(on.Store.Path(KindRecording, recID, hubSegmentsFile), append(hRaw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turns := SpeakerTurnsFile{
+		Run:     "modoff-run-1",
+		Source:  recordingwire.SpeakerSourceHub,
+		Engine:  "fixture-engine 1.0",
+		Covered: []recordingwire.SpeakerSpan{{0, 75}},
+		Turns: []recordingwire.SpeakerTurn{
+			{Start: 0, End: 35, Speaker: "s1"},
+			{Start: 36, End: 72, Speaker: "s2"},
+		},
+	}
+	tRaw, err := json.MarshalIndent(turns, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(on.Store.Path(KindRecording, recID, speakerTurnsFile), append(tRaw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writtenMinutes(t, on, recID)
+
+	before := recordingFilesOnDisk(t, on.Store.Dir)
+
+	st, err := NewStore(on.Store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Rezone(goldenZone); err != nil {
+		t.Fatal(err)
+	}
+	off := &Engine{Store: st, Owner: on.Owner, Logf: func(string, ...any) {}}
+
+	want, err := on.Get(KindRecording, recID, 20000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := off.Get(KindRecording, recID, 20000)
+	if err != nil {
+		t.Fatalf("detail without the module: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		a, _ := json.Marshal(want)
+		b, _ := json.Marshal(got)
+		t.Fatalf("speaker detail differs without the module:\n with    %s\n without %s", a, b)
+	}
+	if got.Speakers == nil || got.Speakers.State != recordingwire.SpeakerStateReady || len(got.Speakers.People) != 2 {
+		t.Fatalf("detail.speakers without module: %+v", got.Speakers)
+	}
+	if got.Speakers.People[0].Name != "Ada" || got.Speakers.People[1].Name != "Grace" || !got.Speakers.People[1].Me {
+		t.Fatalf("speaker names without module: %+v", got.Speakers.People)
+	}
+	if len(got.Segments) != 2 || got.Segments[0].Speaker != "s1" || got.Segments[1].Speaker != "s2" || got.Segments[0].SpeakerUnsure || got.Segments[1].SpeakerUnsure {
+		t.Fatalf("segment speaker labels without module: %+v", got.Segments)
+	}
+	if after := recordingFilesOnDisk(t, off.Store.Dir); !reflect.DeepEqual(after, before) {
+		t.Fatal("reading speakers without the module changed files on disk")
+	}
+}

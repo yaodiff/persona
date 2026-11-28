@@ -28,7 +28,7 @@ func newMemLogicalFixture(t *testing.T, active conversationlog.Segment) (*Servic
 				SessionID: "main",
 				Epoch:     2,
 				Segments: []conversationlog.Segment{
-					{ID: "one", Ordinal: 1, MachineID: "server", SessionID: "main", Engine: "claude", Launcher: "claude", State: "retired"},
+					reloadSegment("one", 1, "main", "claude", "claude", "retired"),
 					active,
 				},
 			},
@@ -40,6 +40,14 @@ func newMemLogicalFixture(t *testing.T, active conversationlog.Segment) (*Servic
 	f.known[active.SessionID] = true
 	f.mu.Unlock()
 	return svc, f, st
+}
+
+// reloadSegment is one segment of a conversation on the machine "server", built from the documented zero (archguard's
+// out-literal rule, as placeholderSegment is); a case that needs a model or an effort sets it on the result.
+func reloadSegment(id string, ordinal int, session, engine, launcher, state string) conversationlog.Segment {
+	var s conversationlog.Segment
+	s.ID, s.Ordinal, s.MachineID, s.SessionID, s.Engine, s.Launcher, s.State = id, ordinal, "server", session, engine, launcher, state
+	return s
 }
 
 func (m *memLogicalStore) LogicalConversation(_ context.Context, machine, session string) (*db.LogicalConversation, error) {
@@ -107,6 +115,7 @@ func (m *memLogicalStore) ConversationInputReceipt(context.Context, string, stri
 func (m *memLogicalStore) ClaimConversationInput(context.Context, string, string, int64) (*db.ConversationInput, error) {
 	return nil, nil
 }
+
 var (
 	_ logicalConversationStore = (*memLogicalStore)(nil)
 	_ logicalPickStore         = (*memLogicalStore)(nil)
@@ -139,10 +148,7 @@ func (m *memLogicalStore) SetConversationPick(_ context.Context, machine, sessio
 
 func TestLogicalSegmentWithoutExplicitModelInheritsConfiguredModel(t *testing.T) {
 	t.Run("same launcher inherits shared and main-override models consistently across send and relay", func(t *testing.T) {
-		s, f, _ := newMemLogicalFixture(t, conversationlog.Segment{
-			ID: "two", Ordinal: 2, MachineID: "server", SessionID: "target-agy",
-			Engine: "agy|runtime:runtime-agy", Launcher: "agy", State: "active",
-		})
+		s, f, _ := newMemLogicalFixture(t, reloadSegment("two", 2, "target-agy", "agy|runtime:runtime-agy", "agy", "active"))
 		f.mu.Lock()
 		f.launcherList = append(f.launcherList, proto.Launcher{Name: "agy", Source: "runtime-agy", Agent: "agy", Assistant: true})
 		f.mu.Unlock()
@@ -180,10 +186,9 @@ func TestLogicalSegmentWithoutExplicitModelInheritsConfiguredModel(t *testing.T)
 	})
 
 	t.Run("segment explicit effort is preserved while inheriting global model", func(t *testing.T) {
-		s, f, _ := newMemLogicalFixture(t, conversationlog.Segment{
-			ID: "two", Ordinal: 2, MachineID: "server", SessionID: "target-agy",
-			Engine: "agy|runtime:runtime-agy", Launcher: "agy", Effort: "low", State: "active",
-		})
+		seg := reloadSegment("two", 2, "target-agy", "agy|runtime:runtime-agy", "agy", "active")
+		seg.Effort = "low"
+		s, f, _ := newMemLogicalFixture(t, seg)
 		f.mu.Lock()
 		f.launcherList = append(f.launcherList, proto.Launcher{Name: "agy", Source: "runtime-agy", Agent: "agy", Assistant: true})
 		f.mu.Unlock()
@@ -198,11 +203,9 @@ func TestLogicalSegmentWithoutExplicitModelInheritsConfiguredModel(t *testing.T)
 	})
 
 	t.Run("segment explicit model stays pinned over global model", func(t *testing.T) {
-		s, _, _ := newMemLogicalFixture(t, conversationlog.Segment{
-			ID: "two", Ordinal: 2, MachineID: "server", SessionID: "target-agy",
-			Engine: "agy|runtime:runtime-agy", Launcher: "agy", Model: "gemini-4-neon-pinned", Effort: "medium",
-			State: "active",
-		})
+		seg := reloadSegment("two", 2, "target-agy", "agy|runtime:runtime-agy", "agy", "active")
+		seg.Model, seg.Effort = "gemini-4-neon-pinned", "medium"
+		s, _, _ := newMemLogicalFixture(t, seg)
 		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.agy", Model: "gemini-4-neon-xhigh", Effort: "xhigh"})
 		p := map[string]any{}
 		if err := s.sendModel(t.Context(), "server", "main", p, s.lang(t.Context())); err != nil {
@@ -214,10 +217,7 @@ func TestLogicalSegmentWithoutExplicitModelInheritsConfiguredModel(t *testing.T)
 	})
 
 	t.Run("different configured launcher never rebinds or injects foreign model into active segment", func(t *testing.T) {
-		s, _, _ := newMemLogicalFixture(t, conversationlog.Segment{
-			ID: "two", Ordinal: 2, MachineID: "server", SessionID: "target-codex",
-			Engine: "codex", Launcher: "codex", State: "active",
-		})
+		s, _, _ := newMemLogicalFixture(t, reloadSegment("two", 2, "target-codex", "codex", "codex", "active"))
 		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "claude-opus", Effort: "high"})
 		p := map[string]any{}
 		if err := s.sendModel(t.Context(), "server", "main", p, s.lang(t.Context())); err != nil {

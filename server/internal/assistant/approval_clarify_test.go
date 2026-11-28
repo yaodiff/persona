@@ -348,7 +348,7 @@ func TestClarifiedApprovalAnswerEndRestoresRemainingDecisionTime(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ft := newFleetTestNoStore(t)
 		preparedTestConversation(ft)
-		ix := proto.Interaction{ID: "ix_pause_resume", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+		ix := proto.Interaction{ID: "ix_pause_resume", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 			ExpiresAt: time.Now().Add(250 * time.Millisecond)}
 		done := make(chan preparedTestResult, 1)
 		go func() {
@@ -394,7 +394,7 @@ func TestEquivalentApprovalReplacesClarifiedCard(t *testing.T) {
 	newDone := make(chan preparedTestResult, 1)
 	go func() {
 		out, err := ft.s.waitPreparedCard(context.Background(), proto.Interaction{ID: "ix_new", MachineID: "mac", SessionID: "s1",
-			Kind: proto.IxPermission, ExpiresAt: time.Now().Add(time.Hour)}, approvalops.Operation{Replacement: "same-setting",
+			Kind: proto.IxPermission, OutwardWrite: true, ExpiresAt: time.Now().Add(time.Hour)}, approvalops.Operation{Replacement: "same-setting",
 			Apply: func(context.Context, proto.Resolution) (string, error) { newApplies.Add(1); return "new applied", nil }})
 		newDone <- preparedTestResult{out: out, err: err}
 	}()

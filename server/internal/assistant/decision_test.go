@@ -365,8 +365,9 @@ func TestDecisionAskedWhileAPleaseVerifyIsWritten(t *testing.T) {
 	}
 }
 
-// A session-list failure is a transient lookup, not proof that no Agent exists: the decision must stay retryable.
-func TestSessionListFailureKeepsDecisionRetryable(t *testing.T) {
+// A session list that keeps failing leaves the task's Agents unknown: the owner's choice is still made (#17431), recorded
+// and handed to the supervisor once, never sent again by the hub, and the owner is told it did not reach the Agent.
+func TestSessionListFailureRecordsDecisionForSupervisor(t *testing.T) {
 	reachA, reachB, reachM := agentReachAttempts, agentReachBackoff, agentReachMax
 	agentReachAttempts, agentReachBackoff, agentReachMax = 2, time.Millisecond, 200*time.Millisecond
 	t.Cleanup(func() { agentReachAttempts, agentReachBackoff, agentReachMax = reachA, reachB, reachM })
@@ -377,32 +378,31 @@ func TestSessionListFailureKeepsDecisionRetryable(t *testing.T) {
 	}
 	calls := f.sessionsListCalls("box")
 	f.sessionsFail["box"] = 1000
+	sent := len(sentToAgent(f))
+	key := "undelivered|" + askOf(s, todo.ID).AskedAt.UTC().Format(time.RFC3339Nano)
 	result, err := s.chooseOption(context.Background(), todo.ID, "", "直接全量")
-	if err == nil || result.taken || noAgentCanTake(err) {
-		t.Fatalf("a failed session list took the decision: result=%+v err=%v", result, err)
+	var routeErr *i18n.Message
+	if err != nil || !result.taken || !errors.As(result.undelivered, &routeErr) || routeErr.Key != "assistant-tasks.route_offline" {
+		t.Fatalf("a failed session list did not record the decision: result=%+v err=%v", result, err)
 	}
 	if f.sessionsListCalls("box")-calls != agentReachAttempts+1 {
 		t.Fatalf("session list calls = %d, want initial lookup plus %d retries", f.sessionsListCalls("box")-calls, agentReachAttempts)
 	}
-	key := "undelivered|" + askOf(s, todo.ID).AskedAt.UTC().Format(time.RFC3339Nano)
+	s.supervise.dedupMu.Lock()
 	s.supervise.mu.Lock()
 	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
 	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
 	s.supervise.mu.Unlock()
-	var routeErr *i18n.Message
-	if !errors.As(err, &routeErr) || routeErr.Key != "assistant-tasks.route_offline" {
-		t.Fatalf("a failed session list returned the wrong error: %v", err)
+	s.supervise.dedupMu.Unlock()
+	if (!pending || g.Key != key || !strings.Contains(g.Detail, "直接全量")) && !told {
+		t.Fatalf("supervisor not told: %+v (told %v)", g, told)
 	}
-	if pending && g.Key == key || told || listedAsk(t, s, todo.ID) == nil {
-		t.Fatalf("the lookup failure ended the decision: %+v", g)
+	if listedAsk(t, s, todo.ID) != nil || len(sentToAgent(f)) != sent {
+		t.Fatalf("the decision still waits, or was sent: %d sends", len(sentToAgent(f))-sent)
 	}
 	f.sessionsFail["box"] = 0
-	result, err = s.chooseOption(context.Background(), todo.ID, "", "直接全量")
-	if err != nil || !result.taken || result.undelivered != nil {
-		t.Fatalf("the recovered lookup did not deliver the choice: result=%+v err=%v", result, err)
-	}
-	if listedAsk(t, s, todo.ID) != nil {
-		t.Fatal("the recovered choice is still waiting")
+	if result, err = s.chooseOption(context.Background(), todo.ID, "", "直接全量"); err != nil || result.taken || len(sentToAgent(f)) != sent {
+		t.Fatalf("the recorded decision was taken again: result=%+v err=%v", result, err)
 	}
 }
 
@@ -715,7 +715,9 @@ func TestOptionChosenGoesToTheAgent(t *testing.T) {
 }
 
 // A stopped, absent or offline Agent cannot take the owner's answer, but the answer is still made: it is recorded,
-// the ask ends, and the supervisor gets the choice and the delivery failure. An ordinary send failure stays retryable.
+// the ask ends, and the supervisor gets the choice and the delivery failure. So is one whose send failed before
+// anything was typed (the node's "Authentication required", a request that never went out, #17431): the reply says
+// so, with the reason. A failure the hub cannot tell stays retryable.
 func TestDecisionWithoutLiveAgentIsRecordedForSupervisor(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -736,6 +738,16 @@ func TestDecisionWithoutLiveAgentIsRecordedForSupervisor(t *testing.T) {
 		{"offline", func(f *fakeHub) {
 			f.mu.Lock()
 			f.devices = []Device{}
+			f.mu.Unlock()
+		}, http.StatusOK},
+		{"authentication failure", func(f *fakeHub) {
+			f.mu.Lock()
+			f.failSend = &rpc.Error{Message: "Authentication required"}
+			f.mu.Unlock()
+		}, http.StatusOK},
+		{"never sent", func(f *fakeHub) {
+			f.mu.Lock()
+			f.failSend = rpc.NotSent(context.Canceled)
 			f.mu.Unlock()
 		}, http.StatusOK},
 		{"transient send failure", func(f *fakeHub) {
@@ -789,8 +801,11 @@ func TestDecisionWithoutLiveAgentIsRecordedForSupervisor(t *testing.T) {
 					}
 					return
 				}
-				if body["ok"] != true || body["delivered"] != "none" {
+				if reason, _ := body["reason"].(string); body["ok"] != true || body["delivered"] != "none" || reason == "" {
 					t.Fatalf("recorded response %v", body)
+				}
+				if tc.name == "authentication failure" && body["reason"] != "Authentication required" {
+					t.Fatalf("reason %v", body["reason"])
 				}
 				if len(decisions) != 1 || decisions[0].Choice != option {
 					t.Fatalf("decisions %+v", decisions)
@@ -1056,4 +1071,36 @@ func TestUndecidableUnderStopWaitsForTheUser(t *testing.T) {
 		}
 		return false
 	})
+}
+
+func TestUndeliveredDecisionBypassesSupervisionBatchAndCooldown(t *testing.T) {
+	ctx := t.Context()
+	s, _ := newQuietService(t)
+	todo := orphanTask(t, s)
+	s.supervise.mu.Lock()
+	s.supervise.stopped = true // inspect the scheduled signal without racing its timer
+	s.supervise.mu.Unlock()
+	now := time.Now()
+	reply := s.decisionNotDelivered(ctx, todo.ID, now, "Use the agreed option", errors.New("no Agent"))
+	if !reply.taken || reply.undelivered == nil {
+		t.Fatalf("decision handoff = %+v", reply)
+	}
+	s.supervise.mu.Lock()
+	g := s.supervise.pending[todo.ID+"|"+sigIdle]
+	s.supervise.mu.Unlock()
+	if !g.Handoff || !strings.Contains(g.Detail, "Use the agreed option") {
+		t.Fatalf("decision was not routed to supervision: %+v", g)
+	}
+	for _, batch := range []time.Duration{0, time.Hour} {
+		if wait, ok := digestWaitWithBatch(g.At, g.At, []superviseSignal{g}, s.superviseTimings(), batch); !ok || wait != 0 {
+			t.Fatalf("decision delayed by %s with batch %s", wait, batch)
+		}
+	}
+	s.supervise.mu.Lock()
+	s.supervise.told = map[string]time.Time{"conv1": g.At}
+	s.supervise.mu.Unlock()
+	groups := map[string][]superviseSignal{"conv1": {g}}
+	if got := s.gateDigestBatches([]string{"conv1"}, groups, g.At, time.Hour, time.Hour); len(got) != 1 || got[0] != "conv1" {
+		t.Fatalf("the recipient's digest still waits: %v", got)
+	}
 }

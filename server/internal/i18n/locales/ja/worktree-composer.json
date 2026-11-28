@@ -69,5 +69,19 @@
   "runtime_not_toplevel": "{path} はワークツリーの中のフォルダで、ワークツリーそのものではありません。Persona が削除するのはワークツリー全体だけです",
   "runtime_folder_left": "{engine} はワークスペースをアーカイブしましたが、フォルダ {path} は残っています。{engine} で、または手動で削除してください",
   "runtime_remove_unanswered": "{engine} はワークツリーの削除中に応答しませんでした。再試行する前に、更新して削除されたか確認してください",
-  "orca_directory_workspace": "Orca は Git のワークツリーもブランチも作らず、既存のチェックアウト {path} にディレクトリ単位のワークスペースを作りました。このチェックアウトがすでに Orca のワークツリーとして開かれていると、Orca はこう動作します。workspace \"none\" を使えば、専用のワークツリーなしでタスクを開始できます"
+  "orca_directory_workspace": "Orca は Git のワークツリーもブランチも作らず、既存のチェックアウト {path} にディレクトリ単位のワークスペースを作りました。このチェックアウトがすでに Orca のワークツリーとして開かれていると、Orca はこう動作します。workspace \"none\" を使えば、専用のワークツリーなしでタスクを開始できます",
+  "worktree_list_unreadable": "このリポジトリのワークツリー一覧を読み取れませんでした：{reason}",
+  "orca_path_exists": "チェックアウトパスはすでに存在します。Orca は既存のフォルダを使いません（空のフォルダでも使いません）",
+  "head_unreadable": "このワークスペースの HEAD を読み取れませんでした：{reason}",
+  "orca_branch_missing": "Orca が生成したブランチを返しませんでした",
+  "orca_branch_changed": "Orca はブランチ {branch} を使わずに {got} を作りました（{path}）。{branch} が別の場所でチェックアウトされたばかりか、Orca のフォルダが使われている可能性があります",
+  "workspace_dir_unknown": "このワークスペースのフォルダがわかりません",
+  "not_git_workspace": "このワークスペースは Git リポジトリにありません",
+  "branch_required": "ブランチ名を入力してください",
+  "branch_invalid": "ブランチ名が正しくありません",
+  "path_required": "チェックアウトパスを入力してください",
+  "path_not_absolute": "チェックアウトパスは絶対パスで入力してください",
+  "path_in_git": "チェックアウトパスを .git の中にすることはできません",
+  "path_is_file": "チェックアウトパスはファイルです",
+  "path_unreadable": "チェックアウトパスを読み取れませんでした：{reason}"
 }

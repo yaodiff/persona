@@ -175,8 +175,11 @@ func (s *Service) spaceTools(ctx context.Context, machine, session string) []pro
 // offers it only there (spaceTools); a call from anywhere else is refused here as well.
 func (s *Service) toolSpaceStateUpdate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	_, guest, err := s.guestOf(ctx, machine, self)
-	if err != nil || guest || s.isWorkMachine(machine) || isOutwardReader(ctx) || len(s.spaceTools(ctx, machine, self)) == 0 {
+	if err != nil || guest || s.isWorkMachine(machine) || len(s.spaceTools(ctx, machine, self)) == 0 {
 		return "", errors.New(spaceStateTool + " is only for the conversations inside a space")
+	}
+	if why := s.spaceStateRefusal(ctx, machine, self); why != "" {
+		return "", errors.New(why)
 	}
 	var p struct {
 		Text string `json:"text"`
@@ -209,4 +212,38 @@ func (s *Service) toolSpaceStateUpdate(ctx context.Context, machine, self string
 	// The instructions are written again from it at the next refresh (refreshInstructions), not in the middle of this
 	// turn.
 	return "The state block of SPACE.md now holds what you gave; the rest of SPACE.md is unchanged, and the previous file is kept in .space/history/.", nil
+}
+
+// spaceStateRefusal says why conversation self on machine, inside a space (spaceTools), may not write its SPACE.md's
+// state block, "" when it may. The state block ends the space's instructions, so what writes it is what other people's
+// words must not reach: a conversation that talks with others (the inbox's AI twin, a Feishu /agent) or that an
+// extension opened for its own ends (outward_reader.go) does not write it. A conversation the extension contributing
+// the space's kind opened in that space is the space's own, as the user's in the app is: that extension is the space
+// product itself (space-conversations opens each of a space's conversations from the user's message on its page).
+// It is refused while where the conversation comes from cannot be told, as outwardReader is.
+func (s *Service) spaceStateRefusal(ctx context.Context, machine, self string) string {
+	if !isOutwardReader(ctx) {
+		return ""
+	}
+	refused := spaceStateTool + " is only for the space's own conversations: this one talks with other people or was opened by an extension for its own use"
+	b := &s.origins
+	b.mu.Lock()
+	if !s.originsLocked(ctx) {
+		b.mu.Unlock()
+		return refused
+	}
+	o := b.m[self]
+	b.mu.Unlock()
+	if o == nil || o.Origin != OriginExtension || o.Ext == "" || !s.sameMachine(machine, o.MachineID) {
+		return refused
+	}
+	space, _ := s.selfSpace(ctx, self)
+	e, ok := s.spaceTrack(ctx, space)
+	if !ok {
+		return refused
+	}
+	if k, ok := kindOf(s.trackKinds(ctx), e.Kind); !ok || !k.Extension || k.Owner == "" || k.Owner != o.Ext {
+		return refused
+	}
+	return ""
 }

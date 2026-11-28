@@ -69,6 +69,8 @@ data class Fold(
     val usage: List<TokenUsage> = emptyList(),
     /** Out-of-band views belonging to folded tool results. */
     @SerialName("tool_views") val toolViews: List<FoldToolView> = emptyList(),
+    /** The `botmux send` replies folded into this run, in order ([Botmux]); older nodes omit it. */
+    val botmux: List<Botmux> = emptyList(),
 )
 
 /** A connector's declarative view carried with its tool identity in a folded work run. */

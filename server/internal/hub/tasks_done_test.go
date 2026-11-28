@@ -134,7 +134,14 @@ func receipts(h *Hub) int { return strings.Count(strings.Join(feedKinds(h, "conv
 // The judge finds the work delivered: the todo stays open for review or explicit user completion, with its conclusion and live link.
 // The agent remains attached to the task until the user or main actually accepts it (#5732).
 func TestTaskAutoDone(t *testing.T) {
-	h, _ := newTaskHub(t)
+	h, node := newTaskHub(t)
+	// The fake node confirms the task Agent owns the published PR before the judge uses it.
+	node.mu.Lock()
+	node.prOwnership = json.RawMessage(`{
+		"branch":"fix-login","head_oid":"1111111111111111111111111111111111111111","viewer":"example-author",
+		"pr":{"url":"https://github.com/o/r/pull/901","author":"example-author","head":"fix-login","head_oid":"1111111111111111111111111111111111111111"}
+	}`)
+	node.mu.Unlock()
 	js := stubJudge(t, h, http.StatusOK, `{"verdict":"done","reason":"已合并 PR 并发了 TestFlight"}`)
 	todo := startedTask(t, h)
 	runTurn(h, "修好了，PR https://github.com/o/r/pull/901 已合并，TestFlight 构建号 202611041200")

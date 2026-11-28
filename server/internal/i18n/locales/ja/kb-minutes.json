@@ -16,6 +16,7 @@
   "debate_outcome": "結果：",
   "decided": "決定：",
   "who": "（{who}）",
+  "speaker": "話者 {n}",
   "owner": "{who}：",
   "by": "（{by}）",
   "photo": "（写真 {n}）",

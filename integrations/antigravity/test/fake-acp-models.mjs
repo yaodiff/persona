@@ -27,7 +27,11 @@ let mode = 'default'
 const configuration = () => [
   { id: 'model', category: 'model', currentValue: model.replace(effortSuffix, '') },
   { id: 'thought_level', currentValue: effort },
-  { id: 'mode', currentValue: mode },
+  {
+    id: 'mode',
+    currentValue: mode,
+    ...(settings().availableModes ? { options: settings().availableModes.map((entry) => ({ value: entry.id, name: entry.name || entry.id })) } : {}),
+  },
 ]
 let pendingPrompt
 let pendingPermissions
@@ -214,7 +218,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       timer.unref?.()
       return
     }
-    if (params.modeId === 'auto' && settings().autoThenDefault) {
+    if (params.modeId === 'auto' && settings().rejectAuto) {
+      error = { code: -32602, message: 'Auto mode is not available: it needs the OS terminal sandbox and may not be rolled out to you yet' }
+    } else if (params.modeId === 'auto' && settings().autoThenDefault) {
       mode = 'auto'
       result = { modes: { currentModeId: mode }, configOptions: configuration() }
       mode = 'default'

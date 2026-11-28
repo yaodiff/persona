@@ -1,15 +1,26 @@
 package db
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -222,5 +233,220 @@ func TestExtensionPlanPostgresFailureRestoresPackagesAndRecords(t *testing.T) {
 				t.Error("successful retry changed sealed secrets:", e)
 			}
 		})
+	}
+}
+
+// orphanTestManifest is the package (or, at 9.0.0 without grants, the built-in) whose rows TestOrphanAdoptionThroughRegistry moves.
+func orphanTestManifest(t *testing.T, id, version string) []byte {
+	t.Helper()
+	m := map[string]any{"manifest_version": 1, "id": id, "name": id, "version": version,
+		"contributes": map[string]any{
+			"providers": []map[string]string{{"id": id + "-provider", "name": id, "base_url": "https://provider.example.com"}}},
+		"configuration": map[string]any{"type": "object", "properties": map[string]any{"saved": map[string]string{"type": "string"}}},
+		"secrets":       []map[string]any{{"name": "api_key", "title": "Example key", "required": true}}}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// orphanTestMarket is a market signing its catalog with a fresh key: the official market's (the compiled-in key
+// swapped for it until the test ends) or a private one's.
+type orphanTestMarket struct {
+	spec, id, key string
+	priv          ed25519.PrivateKey
+}
+
+func newOrphanTestMarket(t *testing.T, official bool) *orphanTestMarket {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := &orphanTestMarket{spec: "github:example/private-plugins", id: "private", key: "ed25519:" + base64.StdEncoding.EncodeToString(pub), priv: priv}
+	if official {
+		previous := extension.Official
+		extension.Official.SigningKey = mk.key
+		t.Cleanup(func() { extension.Official = previous })
+		mk.spec, mk.id = extension.Official.Spec, "official"
+	}
+	return mk
+}
+
+func (mk *orphanTestMarket) preview(t *testing.T, reg *extension.Registry, raw []byte) (*extension.Preview, error) {
+	t.Helper()
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	_ = tw.WriteHeader(&tar.Header{Name: extension.ManifestFile, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(raw))})
+	_, _ = tw.Write(raw)
+	_ = tw.Close()
+	_ = gz.Close()
+	pkg := archive.Bytes()
+	sum := sha256.Sum256(pkg)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(pkg) }))
+	t.Cleanup(srv.Close)
+	spec, err := extension.ParseMarket(mk.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := extension.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := extension.MarketEntry{Manifest: raw, Parsed: m, Packages: []extension.MarketPackage{{URL: srv.URL + "/pkg.tar.gz", SHA256: hex.EncodeToString(sum[:])}}}
+	payload, err := json.Marshal(extension.MarketIndex{MarketVersion: 1, Name: "Example", Extensions: []extension.MarketEntry{entry}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := json.Marshal(map[string]any{"payload": string(payload), "signatures": []map[string]string{{"alg": "ed25519",
+		"key_id": extension.KeyID(mk.priv.Public().(ed25519.PublicKey)), "sig": base64.StdEncoding.EncodeToString(ed25519.Sign(mk.priv, payload))}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := extension.ParseCatalog(signed, mk.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg.PreviewMarket(t.Context(), &extension.Market{Spec: spec, Client: srv.Client(), TrustedKey: mk.key}, mk.id, &verified.Index.Extensions[0], "")
+}
+
+// A build without a module finds its built-in's row (#16263). Before the dormant table, installing the official
+// package of that id from such a build was a plain new install the database refused (ErrIdentity), so the owner could
+// never get the module back. Now the registry adopts the row in place on real Postgres; a local upload or a private
+// market's package over it is still refused and leaves its bytes and its key as they were.
+func TestOrphanAdoptionThroughRegistry(t *testing.T) {
+	d, ctx := open(t), t.Context()
+	const id = "orphan-registry-test"
+	cleanupStorageFixture(t, d, id)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = d.pool.Exec(cleanupCtx, `DELETE FROM plugin_audit WHERE plugin=$1; DELETE FROM plugin_secrets WHERE plugin=$1; DELETE FROM plugin_identities WHERE plugin=$1`, id)
+	})
+	root := t.TempDir()
+	store := &planTestStore{DB: d}
+	builtin, err := extension.Parse(orphanTestManifest(t, id, "9.0.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A build with the module: the owner configures its built-in.
+	withModule := extension.NewRegistry(root, store, planTestSealer{}, 202611100000)
+	if err = withModule.AddBuiltin(builtin, t.TempDir(), false); err != nil {
+		t.Fatal(err)
+	}
+	withModule.HoldModule(id, false)
+	if err = withModule.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = withModule.SetConfig(ctx, id, json.RawMessage(`{"saved":"retained"}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err = withModule.SetSecret(ctx, id, "api_key", "synthetic-value", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err = withModule.SetContribution(ctx, id, "providers", id+"-provider", false, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err = withModule.SetEnabled(ctx, id, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	raw := func() string {
+		t.Helper()
+		var s string
+		if err := d.pool.QueryRow(ctx, `SELECT to_jsonb(p)::text FROM plugins p WHERE id=$1`, id).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	var manifestColumn string
+	if err = d.pool.QueryRow(ctx, `SELECT source || ' ' || COALESCE(manifest::text, '') FROM plugins WHERE id=$1`, id).Scan(&manifestColumn); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(manifestColumn, extension.SourceBuiltin+" {") || !strings.Contains(manifestColumn, `"providers"`) {
+		t.Fatalf("the built-in's row keeps no manifest to adopt by: %s", manifestColumn) // plan §14-2
+	}
+	secrets, err := d.ExtensionSecrets(ctx, id)
+	if err != nil || secrets["api_key"] == "" {
+		t.Fatalf("the built-in's key: %v %v", secrets, err)
+	}
+
+	// The build without it holds the row: not listed, Load fine.
+	without := extension.NewRegistry(root, store, planTestSealer{}, 202611100000)
+	without.HoldModule(id, false)
+	if err = without.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if without.Get(id) != nil {
+		t.Fatal("the orphan is listed")
+	}
+	refused := func(t *testing.T, pv *extension.Preview, err error) {
+		t.Helper()
+		before := raw()
+		if err == nil {
+			_, err = without.Install(ctx, pv.ID, pv.Digest, "test")
+		}
+		if !errors.Is(err, extension.ErrIdentity) {
+			t.Fatalf("expected ErrIdentity, got %v", err)
+		}
+		if raw() != before {
+			t.Fatal("the refused install changed the row")
+		}
+		if now, err := d.ExtensionSecrets(ctx, id); err != nil || !reflect.DeepEqual(now, secrets) {
+			t.Fatalf("the refused install changed the key: %v", err)
+		}
+		if without.Get(id) != nil {
+			t.Fatal("the refused install is listed")
+		}
+	}
+	t.Run("upload", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, extension.ManifestFile), orphanTestManifest(t, id, "1.0.0"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		pv, err := without.Preview(ctx, "dir:"+dir, "")
+		refused(t, pv, err)
+	})
+	t.Run("private_market", func(t *testing.T) {
+		pv, err := newOrphanTestMarket(t, false).preview(t, without, orphanTestManifest(t, id, "1.0.0"))
+		refused(t, pv, err)
+	})
+
+	// The official package adopts it in place.
+	pv, err := newOrphanTestMarket(t, true).preview(t, without, orphanTestManifest(t, id, "1.0.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = without.Install(ctx, pv.ID, pv.Digest, "test"); err != nil {
+		t.Fatalf("the official package over the orphan: %v", err)
+	}
+	rows, err := d.Extensions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(rows, func(r extension.Record) bool { return r.StorageKey() == id })
+	if i < 0 {
+		t.Fatal("the slot is gone")
+	}
+	got := rows[i]
+	if got.Source != extension.SourceInstalled || !got.VerifiedBuiltinPredecessor() || got.PreviousOrigin != "builtin:"+id || got.PreviousVersion != "9.0.0" ||
+		!got.Enabled || !strings.Contains(string(got.Config), `"retained"`) || !slices.Contains(got.DisabledContributions, "providers/"+id+"-provider") {
+		t.Fatalf("adopted row %+v", got)
+	}
+	if now, err := d.ExtensionSecrets(ctx, id); err != nil || !reflect.DeepEqual(now, secrets) {
+		t.Fatalf("the key moved: %v", err)
+	}
+	if p := without.Get(id); p == nil || p.Record.Source != extension.SourceInstalled {
+		t.Fatal("the adopted package is not listed")
+	}
+	// A restart of the build without the module reads it as an installed package.
+	again := extension.NewRegistry(root, store, planTestSealer{}, 202611100000)
+	again.HoldModule(id, false)
+	if err = again.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p := again.Get(id); p == nil || !p.Record.VerifiedBuiltinPredecessor() {
+		t.Fatal("the adopted package is not read back")
 	}
 }

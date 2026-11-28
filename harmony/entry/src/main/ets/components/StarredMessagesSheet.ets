@@ -17,6 +17,7 @@ import { starredStore, StarredStore } from '../models/StarredStore';
 import { toastCenter } from '../models/ToastCenter';
 import { Haptics } from '../platform/Haptics';
 import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
+import { MarkdownText } from './MarkdownText';
 
 /**
  * Secondary sheet showing all starred message snapshots across Assistant & Agent chats,
@@ -243,14 +244,15 @@ export struct StarredMessagesSheet {
           .maxLines(1)
       }
 
-      Text(this.displayText(star))
-        .fontSize(Tokens.typeSecondary)
-        .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
-        .lineHeight(Tokens.lineHeightSecondary)
-        .fontColor(Colors.ink)
-        .width('100%')
-        .copyOption(CopyOptions.LocalDevice)
-        .id('starred.snapshot.text.' + star.id)
+      Column() {
+        MarkdownText({
+          text: this.displayText(star),
+          chatReply: false
+        })
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .id('starred.snapshot.text.' + star.id)
 
       if (this.isLongText(star.text)) {
         Button(tr(this.expandedIds.includes(star.id) ? 'bubble_show_less' : 'bubble_show_more'), { type: ButtonType.Normal })

@@ -23,5 +23,8 @@
   "topics_space_none": "这个群目前没有绑定空间。",
   "topics_space_bad": "空间 {space} 不存在或不可绑定到话题群。",
   "chat_not_enabled": "这个群没有为机器人开启，先在群里发 /topics。",
-  "chat_unknown": "暂时判断不出这张卡片在哪个聊天里，请稍后再试。"
+  "chat_unknown": "暂时判断不出这张卡片在哪个聊天里，请稍后再试。",
+  "guest_busy": "还在回答这个话题里的上一个问题，稍等片刻再试。",
+  "guest_rate_limited": "这里现在的问题太多了，过一会儿再试。",
+  "guest_too_long": "这条消息太长了，我在这里答不了。"
 }

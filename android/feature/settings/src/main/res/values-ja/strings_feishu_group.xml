@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings › Lark bot › Group access (#16848); words shared with the web (settings-feishubot group_access_*). -->
+<resources>
+    <string name="settings_feishu_group_title">グループアクセス</string>
+    <string name="settings_feishu_group_footer">あなた以外で、グループでボットに @ できる人と、その人が使える機能を決めます。ブロックした人とグループは、どのモードでも拒否されます。</string>
+    <string name="settings_feishu_group_mode">グループでボットに質問できる人</string>
+    <string name="settings_feishu_group_mode_owner_only">自分だけ</string>
+    <string name="settings_feishu_group_mode_allowlist">許可した人</string>
+    <string name="settings_feishu_group_mode_everyone">許可したグループの全員</string>
+    <string name="settings_feishu_group_detail_owner_only">グループでボットに @ できるのはあなただけです。他の人のメッセージは無視されます。</string>
+    <string name="settings_feishu_group_detail_allowlist">追加した人だけが、許可したグループで @ できます。</string>
+    <string name="settings_feishu_group_detail_everyone">許可したグループの誰でも @ できます。</string>
+    <string name="settings_feishu_group_guest_caution">ゲストには、あなたのデータ、タスク、コンピュータが見えない別のアシスタントが割り当てられます。使えるのは下でオンにしたツールだけです。</string>
+    <string name="settings_feishu_group_per_hour">グループごとの 1 時間あたりの質問数</string>
+    <string name="settings_feishu_group_per_hour_hint">1 つのグループの全員が 1 時間にボットへ質問できる上限です。</string>
+    <string name="settings_feishu_group_groups">許可したグループ</string>
+    <string name="settings_feishu_group_groups_footer">ボットがゲストに答えるのは、これらのグループだけです。トピックグループをここに追加すると許可されます。</string>
+    <string name="settings_feishu_group_people">許可した人</string>
+    <string name="settings_feishu_group_people_footer">許可したグループで @ できるのは、これらの人だけです。</string>
+    <string name="settings_feishu_group_none_groups">グループはまだありません</string>
+    <string name="settings_feishu_group_none_people">人はまだいません</string>
+    <string name="settings_feishu_group_requests">最近のリクエスト</string>
+    <string name="settings_feishu_group_requests_footer">許可していない場所でボットに @ した人です。ここで許可またはブロックできます。</string>
+    <string name="settings_feishu_group_blocked">ブロック</string>
+    <string name="settings_feishu_group_blocked_footer">ブロックは、どのモードでも常に優先されます。</string>
+    <string name="settings_feishu_group_blocked_people">人</string>
+    <string name="settings_feishu_group_blocked_groups">グループ</string>
+    <string name="settings_feishu_group_tools">ゲストが使えるツール</string>
+    <string name="settings_feishu_group_tools_footer">ゲストが回答のために使える読み取り専用のコネクタツールです。何かを変更するツールは提供されません。</string>
+    <string name="settings_feishu_group_no_tools">読み取り専用のコネクタツールがインストールされていません</string>
+    <string name="settings_feishu_group_tool_label">%1$s · %2$s</string>
+    <string name="settings_feishu_group_group_id">グループ ID</string>
+    <string name="settings_feishu_group_person_id">Open ID</string>
+    <string name="settings_feishu_group_name">名前（任意）</string>
+    <string name="settings_feishu_group_add">追加</string>
+    <string name="settings_feishu_group_add_group">グループを追加</string>
+    <string name="settings_feishu_group_add_person">人を追加</string>
+    <string name="settings_feishu_group_remove">%1$s を削除</string>
+    <string name="settings_feishu_group_request_actions">%1$s の操作</string>
+    <string name="settings_feishu_group_allow">許可</string>
+    <string name="settings_feishu_group_block">ブロック</string>
+    <string name="settings_feishu_group_load_failed">グループアクセスを読み込めませんでした: %1$s</string>
+    <string name="settings_feishu_group_save_failed">グループアクセスを保存できませんでした: %1$s</string>
+    <string name="settings_feishu_group_conflict">グループアクセスは別の場所で変更されたため、最新の内容を表示しています。必要であれば、もう一度変更してください。</string>
+    <string name="settings_feishu_group_id_invalid">空白を含まない 1～100 文字にしてください。</string>
+    <string name="settings_feishu_group_id_taken">すでにこのリストにあります。</string>
+    <string name="settings_feishu_group_list_full">このリストは上限です。</string>
+</resources>

@@ -75,4 +75,24 @@ final class CapturePlanTests: XCTestCase {
         XCTAssertEqual(CapturePlan.initialKbps(cap: 12_000), CapturePlan.startKbps, "starts below a high cap")
         XCTAssertEqual(CapturePlan.initialKbps(cap: 1_500), 1_500, "Low Data Mode: starts at the cap")
     }
+
+    func testLargeSizesDoNotOverflow() {
+        let hugeScaled = CapturePlan.size(width: 1_000_000_000_000, height: 500_000_000_000, maxSize: 200_000_000_000)
+        XCTAssertTrue(hugeScaled == (200_000_000_000, 100_000_000_000))
+        // Exercises 128-bit carry == true: (2^32 - 1) * (2^32 + 1) = 2^64 - 1, plus (2^32 + 2) / 2 overflows low word.
+        let carryScaled = CapturePlan.size(width: (1 << 32) + 2, height: (1 << 32) - 1, maxSize: (1 << 32) + 1)
+        XCTAssertTrue(carryScaled == (1 << 32, (1 << 32) - 2))
+        let maxScaled = CapturePlan.size(width: Int.max, height: Int.max - 1, maxSize: Int.max - 2)
+        XCTAssertEqual(maxScaled.width, (Int.max - 2) & ~1)
+        XCTAssertEqual(maxScaled.height, (Int.max - 2) & ~1)
+        // Exact IEEE 754 Double(Int.max) == 2^63 boundary at scale 1.
+        let boundaryPoints = CapturePlan.size(points: (Int.max, Int.max), pixels: (Int.max, Int.max), scale: 1, maxSize: 0)
+        XCTAssertEqual(boundaryPoints.width, Int.max & ~1)
+        XCTAssertEqual(boundaryPoints.height, Int.max & ~1)
+        let hugePoints = CapturePlan.size(points: (Int.max, Int.max / 2), pixels: (Int.max, Int.max), scale: 4, maxSize: 0)
+        XCTAssertEqual(hugePoints.width, Int.max & ~1)
+        XCTAssertEqual(hugePoints.height, Int.max & ~1)
+        let cappedHugePoints = CapturePlan.size(points: (Int.max / 2, Int.max / 2), pixels: (4000, 2000), scale: 4, maxSize: 1920)
+        XCTAssertTrue(cappedHugePoints == (1920, 960))
+    }
 }

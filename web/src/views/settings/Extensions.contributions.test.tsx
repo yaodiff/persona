@@ -64,6 +64,6 @@ describe("contribution switches", () => {
 
     act(() => titled.click());
     await flush();
-    expect(hub.set).toHaveBeenCalledWith("search-as-code", "skills", "search-as-code", false);
+    expect(hub.set).toHaveBeenCalledWith("search-as-code", "skills", "search-as-code", false, expect.objectContaining({ managerId: "assistant" }));
   });
 });

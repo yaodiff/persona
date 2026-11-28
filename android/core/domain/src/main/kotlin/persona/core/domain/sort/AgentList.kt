@@ -504,11 +504,11 @@ fun buildFlatAgentList(
             }
             linked.forEach { (todo, rows) -> todoSection("todo/${todo.id}", CoreText.plain(todo.title), rows, "todo/${todo.id}" in settings.folded) }
             val unlinked = live.filter { it.session.key !in claimed }
-            // Opened by hand in herdr and on no to-do: a section of its own before "No to-do", open.
-            val manual = unlinked.filter { it.session.isManualHerdr }
+            // Opened by hand in herdr or Orca and on no to-do: a section of its own before "No to-do", open.
+            val manual = unlinked.filter { it.session.isOpenedByHand }
             if (manual.isNotEmpty()) todoSection(TodoManualGroup, CoreText.of(Key.AgentsManual), manual, TodoManualGroup in settings.folded)
             // Folded under the sections above ("Opened by hand" included) unless something in it needs you.
-            noTodo(unlinked.filterNot { it.session.isManualHerdr }, above = linked.isNotEmpty() || manual.isNotEmpty())
+            noTodo(unlinked.filterNot { it.session.isOpenedByHand }, above = linked.isNotEmpty() || manual.isNotEmpty())
         }
         AgentGrouping.Direction -> {
             // Direction › To-do › Agent, as the hub's tree has them (#4352): no regrouping here. Each agent shows once, where
@@ -680,5 +680,8 @@ const val TodoNoneOpened = "todo-none"
 /** Recently Used's single section (#9199, iOS `recentSection`). */
 const val RecentGroup = "recent"
 
-/** Opened by hand in herdr: not started by Persona (nor spawned through it), web `isManualHerdr`. */
-val persona.core.contracts.Session.isManualHerdr: Boolean get() = spaceKind == "herdr" && !startedByPersona
+/**
+ * Opened by hand in herdr or Orca (its terminals and its own chats, #17054): not started by Persona (nor spawned through
+ * it), web `isManualHerdr`.
+ */
+val persona.core.contracts.Session.isOpenedByHand: Boolean get() = (spaceKind == "herdr" || spaceKind == "orca") && !startedByPersona

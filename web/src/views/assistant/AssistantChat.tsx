@@ -3,22 +3,21 @@
 // conversation's "Compact context", the main conversation's "New main chat", and the strip while it compacts (#1727). Its
 // model is the composer's model pill (views/chat/ModelPill.tsx AssistantModelPill, #5033).
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { api, errorText } from "../../lib/api";
 import { assistantInfoText, conversationKey, effectiveLauncher, shortModel, usePickedLauncher } from "../../lib/assistant-chat";
-import { isBackgroundSupervisor } from "../../lib/background-supervisor";
-import { COMPACT_FEATURE, compactBody, compactionView, compactPath, NEW_MAIN_FEATURE, type CompactionView } from "../../lib/compaction";
+import { isBackgroundSupervisor, isBackgroundSupervisorInteraction } from "../../lib/background-supervisor";
+import { COMPACT_FEATURE, COMPACT_REQUESTED_EVENT, compactionView, NEW_MAIN_FEATURE, type CompactionView } from "../../lib/compaction";
 import { runtimeFallbackText } from "../../lib/runtime-fallback";
 import { personaState } from "../../lib/persona";
 import { conversationPage } from "../../lib/conversation-page";
 import { lazyPage } from "../../lib/lazy-page";
-import { CLEAR_MAIN_FEATURE, clearMainContext } from "../../lib/main-clear";
+import { CLEAR_MAIN_FEATURE, useMainClearing } from "../../lib/main-clear";
 import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import { hubHas, useStore } from "../../lib/store";
 import type { Item, Session } from "../../lib/types";
-import { copyText, IconButton, Spinner, toast, type MenuItem } from "../../ui/atoms";
+import { copyText, IconButton, Spinner, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { conversationArchiveItem } from "../ConversationMenu";
+import { assistantContextItems, conversationArchiveItem } from "../ConversationMenu";
 import { lazyDialog } from "../LazyOverlay";
 import { PersonaDot, usePersona } from "./Persona";
 import { t } from "../../i18n";
@@ -32,7 +31,14 @@ export function AssistantFace({ session, last }: { session?: Session; last?: Pic
   const persona = usePersona();
   const conn = useStore((s) => s.conn);
   const machineOnline = useStore((s) => s.machines.find((m) => m.id === (session?.machine_id ?? s.assistant?.machine_id))?.online);
-  const waiting = useStore((s) => (session ? s.interactions.filter((i) => i.machine_id === session.machine_id && i.session_id === session.session_id).length : 0));
+  const waiting = useStore((s) => {
+    if (!session) return 0;
+    const isMainSession = Boolean(s.assistant?.main && s.assistant.main === session.session_id);
+    return s.interactions.filter((i) =>
+      (i.machine_id === session.machine_id && i.session_id === session.session_id) ||
+      (isMainSession && isBackgroundSupervisorInteraction(s.assistant, i, session.manager)),
+    ).length;
+  });
   if (!persona.info && !persona.mochi) return null;
   const state = personaState({ online: conn === "online", machineOnline, state: session?.state, interactions: waiting, last });
   return <PersonaDot size={30} state={state} fallback={null} className="-my-1" />;
@@ -49,25 +55,31 @@ export function useAssistantMenu(session: Session | undefined): { items: MenuIte
   const canCompact = useStore((s) => hubHas(s.features, COMPACT_FEATURE));
   const canNewMain = useStore((s) => hubHas(s.features, NEW_MAIN_FEATURE));
   const canClear = useStore((s) => hubHas(s.features, CLEAR_MAIN_FEATURE));
+  const clearing = useMainClearing(session?.session_id);
   const picked = usePickedLauncher(session ? conversationKey(session.machine_id, session.session_id) : "");
-  const [newMain, setNewMain] = useState(false);
+  const isMain = Boolean(session && assistant?.main === session.session_id);
+  const mainScope = session ? JSON.stringify([session.machine_id, session.session_id, session.manager ?? "", isMain, canNewMain]) : "";
+  const [mainScopeState, setMainScopeState] = useState<{ scope: string; epoch: number }>(() => ({ scope: mainScope, epoch: 1 }));
+  const mainEpoch = mainScopeState.scope === mainScope ? mainScopeState.epoch : mainScopeState.epoch + 1;
+  if (mainScopeState.scope !== mainScope) {
+    setMainScopeState({ scope: mainScope, epoch: mainEpoch });
+  }
+  const [newMainState, setNewMainState] = useState<{ epoch: number; open: boolean }>({ epoch: mainEpoch, open: false });
+  const newMain = newMainState.epoch === mainEpoch && newMainState.open;
+  const setNewMain = (open: boolean) => setNewMainState({ epoch: mainEpoch, open });
   if (!session) return { items: [], dialogs: null };
-  const isMain = assistant?.main === session.session_id;
   const launcher = effectiveLauncher({ isMain, picked: session.model_pick?.launcher || picked, session: session.launcher, config: assistant?.launcher });
   const cwd = session.cwd || assistant?.cwd || "~/.persona/assistant";
   const title = !isMain && session.title && session.title !== "Claude Code" ? session.title : undefined;
-  const compacting = session.compaction?.state === "running";
   const items: MenuItem[] = [
     { key: "profile", label: t("assistant-assistantchat.details"), icon: "info", onSelect: () => navigate({ name: "profile" }) },
     { key: "kb", label: t("assistant-assistantchat.knowledge"), icon: "book", onSelect: () => navigate({ name: "kb" }) },
     ...(assistant?.main && !isMain ? [{ key: "main", label: t("assistant-assistantchat.back_to_main"), icon: "home" as const, onSelect: () => navigate(conversationPage(assistant.main!, assistant.machine_id, shownManager())) }] : []),
     ...(!isMain && !isBackgroundSupervisor(assistant, session.session_id) ? [conversationArchiveItem(session)] : []),
-    ...(canCompact
-      ? [{ key: "compact", label: compacting ? t("assistant-assistantchat.compacting") : t("assistant-assistantchat.compact"), icon: "layers" as const, disabled: compacting, onSelect: () => void startCompaction(session) }]
-      : []),
-    // as /clear (#5095): no confirmation, the old conversation is archived, not deleted
-    ...(isMain && canClear ? [{ key: "clear", label: t("assistant-assistantchat.clear"), icon: "retry" as const, onSelect: () => void clearMainContext(session.session_id) }] : []),
-    ...(isMain && canNewMain ? [{ key: "newmain", label: t("assistant-assistantchat.new_main_ellipsis"), icon: "compose" as const, onSelect: () => setNewMain(true) }] : []),
+    ...assistantContextItems(session, {
+      canCompact, canClearMain: isMain && canClear, canNewMain: isMain && canNewMain,
+      clearingMain: clearing, onNewMain: () => setNewMain(true),
+    }, false),
     {
       key: "copyinfo",
       label: t("assistant-assistantchat.copy_info"),
@@ -75,24 +87,11 @@ export function useAssistantMenu(session: Session | undefined): { items: MenuIte
       onSelect: () => void copyText(assistantInfoText({ title, isMain, sessionId: session.session_id, machine, machineId: session.machine_id, cwd, launcher, model: shortModel(session.model) || undefined })),
     },
   ];
-  const dialogs = isMain && canNewMain ? <NewMainDialog open={newMain} onClose={() => setNewMain(false)} session={session} /> : null;
+  const dialogs = isMain && canNewMain ? <NewMainDialog open={newMain} onClose={() => setNewMain(false)} session={session} scopeKey={`${mainEpoch}:${mainScope}`} /> : null;
   return { items, dialogs };
 }
 
 // ── Compact context ─────────────────────────────────────
-
-const COMPACT_REQUESTED = "persona:compact-requested";
-
-/** Asks the hub to compact the conversation; its progress comes on the session (`compaction`). */
-async function startCompaction(session: Session) {
-  try {
-    await api(compactPath(session.session_id), { method: "POST", json: compactBody(session.machine_id) });
-    window.dispatchEvent(new CustomEvent(COMPACT_REQUESTED, { detail: { mid: session.machine_id, sid: session.session_id } }));
-  } catch (e) {
-    // 409: busy (answering), compacting, gone, unsupported — the hub's words say which
-    toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
-  }
-}
 
 const dismissedKey = (mid: string, sid: string) => `compact-dismissed:${mid}/${sid}`;
 /** How long a done compaction's notice stays. */
@@ -177,8 +176,8 @@ function Compaction({ session }: { session: Session }) {
       const d = (e as CustomEvent<{ mid: string; sid: string }>).detail;
       if (d.mid === mid && d.sid === sid) setRequested({ sig, at: Date.now() });
     };
-    window.addEventListener(COMPACT_REQUESTED, on);
-    return () => window.removeEventListener(COMPACT_REQUESTED, on);
+    window.addEventListener(COMPACT_REQUESTED_EVENT, on);
+    return () => window.removeEventListener(COMPACT_REQUESTED_EVENT, on);
   }, [mid, sid, sig]);
   useEffect(() => {
     if (!requested) return;

@@ -10,7 +10,7 @@ import { toAgyId } from '../lib/map.js'
 import { createAgyRuntime } from '../lib/runtime.js'
 
 const FAKE_ACP_SOURCE = `
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
@@ -24,6 +24,9 @@ record({
   key: process.env.GEMINI_API_KEY || '',
   base: process.env.GOOGLE_GEMINI_BASE_URL || '',
   provider: process.env.PERSONA_AGY_MODEL_PROVIDER || '',
+  ext: process.env.PERSONA_ASSISTANT_BIN || '',
+  oldKey: process.env.OLD_KEY || '',
+  newKey: process.env.NEW_KEY || '',
 })
 
 if (process.argv.includes('models')) {
@@ -63,8 +66,13 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   }
   if (msg.method === 'authenticate') {
     authed = msg.params?.methodId || ''
+    if (authed === 'oauth-personal') writeFileSync(join(home, 'oauth-ready'), 'ready')
     record({ kind: 'auth', methodId: authed })
     send({ jsonrpc: '2.0', id: msg.id, result: {} })
+    return
+  }
+  if (msg.method.startsWith('session/') && existsSync(join(home, 'require-oauth')) && !existsSync(join(home, 'oauth-ready'))) {
+    send({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'Authentication required' } })
     return
   }
   if (msg.method === 'session/new') {
@@ -73,7 +81,10 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     const brain = join(home, '.gemini', 'antigravity', 'brain', id)
     mkdirSync(brain, { recursive: true })
     writeFileSync(join(brain, 'transcript.json'), JSON.stringify({ steps: [] }))
-    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: id } })
+    const models = process.env.GEMINI_API_KEY
+      ? { availableModels: [{ modelId: 'managed-leaked-model', name: 'Managed Leaked Model' }] }
+      : undefined
+    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: id, ...(models ? { models } : {}) } })
     return
   }
   if (msg.method === 'session/resume') {
@@ -113,8 +124,30 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     const jsonl = rows.map((r) => JSON.stringify(r)).join('\\n') + '\\n'
     writeFileSync(join(logsDir, 'transcript.jsonl'), jsonl)
     writeFileSync(join(logsDir, 'transcript_full.jsonl'), jsonl)
-    record({ kind: 'prompt_done', sessionId: sid, reply, authed, key: process.env.GEMINI_API_KEY || '' })
+    record({
+      kind: 'prompt_done',
+      sessionId: sid,
+      reply,
+      authed,
+      key: process.env.GEMINI_API_KEY || '',
+      base: process.env.GOOGLE_GEMINI_BASE_URL || '',
+      provider: process.env.PERSONA_AGY_MODEL_PROVIDER || '',
+      ext: process.env.PERSONA_ASSISTANT_BIN || '',
+      oldKey: process.env.OLD_KEY || '',
+      newKey: process.env.NEW_KEY || '',
+    })
     send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } })
+    return
+  }
+  if (msg.method === 'session/set_model' || msg.method === 'session/set_config_option') {
+    const marker = process.env.FAKE_REJECT_MODEL_ONCE
+    if (marker && existsSync(marker)) {
+      writeFileSync(marker + '.tripped', String(process.pid))
+      try { unlinkSync(marker) } catch {}
+      send({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'unknown model' } })
+      return
+    }
+    send({ jsonrpc: '2.0', id: msg.id, result: {} })
     return
   }
   if (msg.id !== undefined) {
@@ -144,6 +177,7 @@ async function poolFixture(t, options = {}) {
     assistantAcpIdleMs: options.assistantAcpIdleMs ?? 300_000,
     exportPollMs: options.exportPollMs ?? 20,
     env: options.env ?? { ...process.env },
+    fetchImpl: options.fetchImpl,
     log: (m) => logs.push(m),
   })
   t.after(async () => {
@@ -315,4 +349,348 @@ test('launchers.models isolates native OAuth catalog from managed channel catalo
   // Re-querying native models still returns the native catalog, completely unpolluted.
   const nativeAgain = await node.peer.call('launchers.models', { launcher: 'agy' })
   assert.deepEqual(nativeAgain.models.map((m) => m.id), ['native-oauth-model'])
+})
+
+test('managed channel session/new models never pollute native OAuth catalog and ambient provider env never leaks across channels', async (t) => {
+  const trapHits = []
+  const trapServer = createServer((req, res) => {
+    trapHits.push({ url: req.url, key: req.headers['x-goog-api-key'] || '' })
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ models: [] }))
+  })
+  await new Promise((resolve) => trapServer.listen(0, '127.0.0.1', resolve))
+  t.after(() => trapServer.close())
+  const trapBase = `http://127.0.0.1:${trapServer.address().port}`
+
+  const fetched = []
+  const fetchImpl = async (url, init) => {
+    fetched.push({ url: String(url), key: init?.headers?.['x-goog-api-key'] || '' })
+    return new Response(JSON.stringify({
+      models: [{ name: 'models/gemini-4-neon', baseModelId: 'gemini-4-neon', supportedGenerationMethods: ['generateContent'] }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+
+  // Simulate ambient shell env vars that would hijack a direct managed channel or leak into OAuth models.
+  const prevBase = process.env.GOOGLE_GEMINI_BASE_URL
+  const prevKey = process.env.GEMINI_API_KEY
+  process.env.GOOGLE_GEMINI_BASE_URL = trapBase
+  process.env.GEMINI_API_KEY = 'ambient-shell-key'
+  t.after(() => {
+    if (prevBase === undefined) delete process.env.GOOGLE_GEMINI_BASE_URL
+    else process.env.GOOGLE_GEMINI_BASE_URL = prevBase
+    if (prevKey === undefined) delete process.env.GEMINI_API_KEY
+    else process.env.GEMINI_API_KEY = prevKey
+  })
+
+  const { home, node, events } = await poolFixture(t, {
+    env: {
+      ...process.env,
+      GEMINI_API_KEY: 'ambient-shell-key',
+      GOOGLE_GEMINI_BASE_URL: trapBase,
+      PERSONA_AGY_MODEL_PROVIDER: '',
+    },
+    fetchImpl,
+  })
+
+  // 1. Native OAuth models discovery strips ambient provider env vars.
+  const nativeBefore = await node.peer.call('launchers.models', { launcher: 'agy', refresh: true })
+  assert.deepEqual(nativeBefore.models.map((m) => m.id), ['native-oauth-model'])
+  const oauthModelSpawn = events().find((e) => e.kind === 'spawn' && Array.isArray(e.argv) && e.argv.includes('models'))
+  assert.ok(oauthModelSpawn, 'expected native models subprocess spawn')
+  assert.equal(oauthModelSpawn.key, '')
+  assert.equal(oauthModelSpawn.base, '')
+  assert.equal(oauthModelSpawn.provider, '')
+
+  // 2. Direct managed API-key channel (no GOOGLE_GEMINI_BASE_URL) must NOT inherit ambient GOOGLE_GEMINI_BASE_URL
+  // in either launchers.models or ACP child spawn, and its session/new models must NOT pollute native OAuth catalog.
+  const chDirect = {
+    id: 'gw-direct',
+    auth_mode: 'gemini-api-key',
+    rev: 'r1',
+    env: { GEMINI_API_KEY: 'direct-channel-secret', PERSONA_AGY_MODEL_PROVIDER: 'gemini' },
+  }
+  const directModels = await node.peer.call('launchers.models', { launcher: 'agy', refresh: true, channel: chDirect })
+  assert.ok(directModels.models.length > 0)
+  assert.equal(trapHits.length, 0, 'managed channel secret leaked to ambient GOOGLE_GEMINI_BASE_URL')
+  assert.ok(fetched.some((f) => f.url.startsWith('https://generativelanguage.googleapis.com/') && f.key === 'direct-channel-secret'))
+
+  const started = await node.peer.call('session.start', { cwd: home, channel: chDirect })
+  await node.peer.call('session.send', { session_id: started.session.session_id, text: 'hi-direct', channel: chDirect })
+  await until('direct turn completed', () => events().some((e) => e.kind === 'prompt_done' && e.sessionId === toAgyId(started.session.session_id)))
+  const directDone = events().find((e) => e.kind === 'prompt_done' && e.sessionId === toAgyId(started.session.session_id))
+  const directSpawn = events().find((e) => e.kind === 'spawn' && e.pid === directDone.pid)
+  assert.equal(directSpawn.key, 'direct-channel-secret')
+  assert.equal(directSpawn.base, '', 'managed channel ACP inherited ambient GOOGLE_GEMINI_BASE_URL')
+
+  // Native OAuth catalog must still be ['native-oauth-model'], NOT polluted with 'managed-leaked-model'.
+  const nativeAfter = await node.peer.call('launchers.models', { launcher: 'agy' })
+  assert.deepEqual(nativeAfter.models.map((m) => m.id), ['native-oauth-model'])
+})
+
+test('assistant bound to managed channel keeps its channel credentials after ACP exit when follow-up omits channel', async (t) => {
+  const { home, node, events } = await poolFixture(t)
+  const assistantDir = join(home, '.persona', 'assistant')
+  mkdirSync(assistantDir, { recursive: true })
+  const chAsst = {
+    id: 'gw-asst',
+    auth_mode: 'gemini-api-key',
+    rev: 'r1',
+    env: {
+      GOOGLE_GEMINI_BASE_URL: 'https://asst-gw.example.com',
+      GEMINI_API_KEY: 'secret-asst-999',
+      PERSONA_AGY_MODEL_PROVIDER: 'gemini',
+    },
+  }
+
+  const started = await node.peer.call('session.start', { cwd: assistantDir, channel: chAsst })
+  const sid = started.session.session_id
+  const rawId = toAgyId(sid)
+  await node.peer.call('session.send', { session_id: sid, text: 'first-turn', channel: chAsst })
+  await until('first assistant turn completed', () => events().some((e) => e.kind === 'prompt_done' && e.sessionId === rawId))
+  const firstPid = events().find((e) => e.kind === 'prompt_done' && e.sessionId === rawId).pid
+
+  // Kill the assistant ACP process so acp.proc becomes null while assistantAcps still holds the binding.
+  process.kill(firstPid, 'SIGKILL')
+  await delay(100)
+
+  // Follow-up call supplies extra env WITHOUT channel: must preserve chAsst credentials on respawn.
+  await node.peer.call('session.send', { session_id: sid, text: 'second-turn', env: { PERSONA_EXTRA: '1' } })
+  await until('second assistant turn completed', () => events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId).length === 2)
+  const secondDone = events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId)[1]
+  assert.notEqual(secondDone.pid, firstPid)
+  assert.equal(secondDone.authed, 'gemini-api-key')
+  assert.equal(secondDone.key, 'secret-asst-999')
+  assert.match(secondDone.reply, /^reply:gemini-api-key:https:\/\/asst-gw\.example\.com:second-turn$/)
+})
+
+test('recycleForModel refreshes the managed channel catalog rather than the default OAuth catalog', async (t) => {
+  const gwServer = createServer((req, res) => {
+    if (req.headers['x-goog-api-key'] !== 'secret-recycle-key') {
+      res.writeHead(401).end('{}')
+      return
+    }
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({
+      models: [{ name: 'models/gateway-special', baseModelId: 'gateway-special', supportedGenerationMethods: ['generateContent'] }],
+    }))
+  })
+  await new Promise((resolve) => gwServer.listen(0, '127.0.0.1', resolve))
+  t.after(() => gwServer.close())
+  const gwBase = `http://127.0.0.1:${gwServer.address().port}`
+
+  const { home, node, events } = await poolFixture(t)
+  const rejectOnce = join(home, 'reject-model-once')
+  writeFileSync(rejectOnce, '1')
+  const ch = {
+    id: 'gw-recycle',
+    auth_mode: 'gemini-api-key',
+    rev: 'r1',
+    env: {
+      GOOGLE_GEMINI_BASE_URL: gwBase,
+      GEMINI_API_KEY: 'secret-recycle-key',
+      PERSONA_AGY_MODEL_PROVIDER: 'gemini',
+      FAKE_REJECT_MODEL_ONCE: rejectOnce,
+    },
+  }
+
+  // First session/set_model fails with "unknown model"; recycleForModel must refresh ch's catalog
+  // (finding gateway-special-high, which does NOT exist in native OAuth catalog), recycle ACP, and succeed.
+  const started = await node.peer.call('session.start', { cwd: home, channel: ch, model: 'gateway-special-high' })
+  assert.ok(started.session.session_id)
+  const trippedPid = Number(readFileSync(rejectOnce + '.tripped', 'utf8'))
+  assert.ok(trippedPid > 0)
+  assert.ok(events().some((e) => e.kind === 'exit' && e.pid === trippedPid), 'expected stale managed ACP to be recycled')
+})
+
+test('assistant respawn preserves both channel creds and assistant extension env, updates channelSpec, and rotates when warm idle', async (t) => {
+  const { home, node, events } = await poolFixture(t)
+  const assistantDir = join(home, '.persona', 'assistant')
+  mkdirSync(assistantDir, { recursive: true })
+  const chR1 = {
+    id: 'gw-asst-rot',
+    auth_mode: 'gemini-api-key',
+    rev: 'r1',
+    env: {
+      GOOGLE_GEMINI_BASE_URL: 'https://r1-asst.example.com',
+      GEMINI_API_KEY: 'secret-asst-r1',
+      PERSONA_AGY_MODEL_PROVIDER: 'gemini',
+    },
+  }
+
+  // 1. Start assistant with both managed channel and assistant extension env.
+  const started = await node.peer.call('session.start', {
+    cwd: assistantDir,
+    channel: chR1,
+    env: { PERSONA_ASSISTANT_BIN: '/opt/persona-ext' },
+  })
+  const sid = started.session.session_id
+  const rawId = toAgyId(sid)
+  await node.peer.call('session.send', { session_id: sid, text: 't1', channel: chR1 })
+  await until('t1 done', () => events().some((e) => e.kind === 'prompt_done' && e.sessionId === rawId))
+  const pid1 = events().find((e) => e.kind === 'prompt_done' && e.sessionId === rawId).pid
+
+  // 2. Kill ACP; follow-up omitting BOTH env and channel must preserve BOTH chR1 creds and PERSONA_ASSISTANT_BIN.
+  process.kill(pid1, 'SIGKILL')
+  await delay(100)
+  await node.peer.call('session.send', { session_id: sid, text: 't2' })
+  await until('t2 done', () => events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId).length === 2)
+  const done2 = events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId)[1]
+  assert.notEqual(done2.pid, pid1)
+  assert.equal(done2.key, 'secret-asst-r1')
+  assert.equal(done2.ext, '/opt/persona-ext')
+
+  // 3. Kill ACP again; respawn with same poolKey (rev r1) but updated env must update acp.channelSpec
+  // so a subsequent respawn with spec === null retains the new key.
+  process.kill(done2.pid, 'SIGKILL')
+  await delay(100)
+  const chR1Updated = {
+    ...chR1,
+    env: { ...chR1.env, GEMINI_API_KEY: 'secret-asst-r1-updated' },
+  }
+  await node.peer.call('session.send', { session_id: sid, text: 't3', channel: chR1Updated })
+  await until('t3 done', () => events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId).length === 3)
+  const done3 = events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId)[2]
+  assert.equal(done3.key, 'secret-asst-r1-updated')
+  assert.equal(done3.ext, '/opt/persona-ext')
+
+  process.kill(done3.pid, 'SIGKILL')
+  await delay(100)
+  await node.peer.call('session.send', { session_id: sid, text: 't4', env: { PERSONA_ASSISTANT_BIN: '/opt/persona-ext', PERSONA_EXTRA: '1' } })
+  await until('t4 done', () => events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId).length === 4)
+  const done4 = events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId)[3]
+  assert.equal(done4.key, 'secret-asst-r1-updated')
+  assert.equal(done4.ext, '/opt/persona-ext')
+
+  // 4. Warm idle assistant (NOT killed!) receives send() with rotated rev r2: must retire old PID and rotate to r2.
+  const chR2 = {
+    id: 'gw-asst-rot',
+    auth_mode: 'gemini-api-key',
+    rev: 'r2',
+    env: {
+      GOOGLE_GEMINI_BASE_URL: 'https://r2-asst.example.com',
+      GEMINI_API_KEY: 'secret-asst-r2',
+      PERSONA_AGY_MODEL_PROVIDER: 'gemini',
+    },
+  }
+  await node.peer.call('session.send', { session_id: sid, text: 't5', channel: chR2 })
+  await until('t5 done', () => events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId).length === 5)
+  const done5 = events().filter((e) => e.kind === 'prompt_done' && e.sessionId === rawId)[4]
+  assert.notEqual(done5.pid, done4.pid, 'warm idle assistant must rotate to new PID on channel rev change')
+  assert.equal(done5.key, 'secret-asst-r2')
+  assert.equal(done5.ext, '/opt/persona-ext')
+  assert.match(done5.reply, /^reply:gemini-api-key:https:\/\/r2-asst\.example\.com:t5$/)
+})
+
+test('assistant env strips native provider vars (cannot hijack managed or OAuth ACP) and replaces snapshots cleanly', async (t) => {
+  const { home, node, events } = await poolFixture(t)
+  const assistantDir = join(home, '.persona', 'assistant')
+  mkdirSync(assistantDir, { recursive: true })
+
+  // 1. Managed channel assistant: provider keys in params.env cannot override managed ch.env.
+  const chSafe = {
+    id: 'gw-asst-safe',
+    auth_mode: 'gemini-api-key',
+    rev: 'r1',
+    env: {
+      GOOGLE_GEMINI_BASE_URL: 'https://safe-gw.example.com',
+      GEMINI_API_KEY: 'secret-asst-safe',
+      PERSONA_AGY_MODEL_PROVIDER: 'gemini',
+    },
+  }
+  const evilEnv = {
+    GOOGLE_GEMINI_BASE_URL: 'https://evil.example',
+    GEMINI_API_KEY: 'evil-key',
+    PERSONA_AGY_MODEL_PROVIDER: 'evil',
+    PERSONA_ASSISTANT_BIN: '/bin/asst',
+    OLD_KEY: 'old-1',
+  }
+  const managed = await node.peer.call('session.start', { cwd: assistantDir, channel: chSafe, env: evilEnv })
+  const managedSid = managed.session.session_id
+  const managedRaw = toAgyId(managedSid)
+  await node.peer.call('session.send', { session_id: managedSid, text: 'm1', channel: chSafe, env: evilEnv })
+  await until('m1 done', () => events().some((e) => e.kind === 'prompt_done' && e.sessionId === managedRaw))
+  const m1 = events().find((e) => e.kind === 'prompt_done' && e.sessionId === managedRaw)
+  assert.equal(m1.key, 'secret-asst-safe')
+  assert.equal(m1.base, 'https://safe-gw.example.com')
+  assert.equal(m1.provider, 'gemini')
+  assert.equal(m1.ext, '/bin/asst')
+  assert.equal(m1.oldKey, 'old-1')
+  assert.equal(m1.newKey, '')
+
+  // 2. Full-snapshot replacement: new env replaces assistantEnv (removing OLD_KEY) and still strips provider vars.
+  process.kill(m1.pid, 'SIGKILL')
+  await delay(100)
+  await node.peer.call('session.send', {
+    session_id: managedSid,
+    text: 'm2',
+    env: { NEW_KEY: '1', GEMINI_API_KEY: 'evil-respawn', GOOGLE_GEMINI_BASE_URL: 'https://evil.example' },
+  })
+  await until('m2 done', () => events().filter((e) => e.kind === 'prompt_done' && e.sessionId === managedRaw).length === 2)
+  const m2 = events().filter((e) => e.kind === 'prompt_done' && e.sessionId === managedRaw)[1]
+  assert.equal(m2.key, 'secret-asst-safe')
+  assert.equal(m2.base, 'https://safe-gw.example.com')
+  assert.equal(m2.oldKey, '', 'new snapshot must drop removed OLD_KEY')
+  assert.equal(m2.newKey, '1')
+  assert.equal(m2.ext, '', 'new snapshot must drop omitted PERSONA_ASSISTANT_BIN')
+
+  // Omitting env on subsequent respawn preserves the previous assistantEnv snapshot.
+  process.kill(m2.pid, 'SIGKILL')
+  await delay(100)
+  await node.peer.call('session.send', { session_id: managedSid, text: 'm3' })
+  await until('m3 done', () => events().filter((e) => e.kind === 'prompt_done' && e.sessionId === managedRaw).length === 3)
+  const m3 = events().filter((e) => e.kind === 'prompt_done' && e.sessionId === managedRaw)[2]
+  assert.equal(m3.key, 'secret-asst-safe')
+  assert.equal(m3.oldKey, '')
+  assert.equal(m3.newKey, '1')
+
+  // 3. OAuth assistant (default channel): provider keys in params.env never leak into OAuth ACP.
+  const oauth = await node.peer.call('session.start', { cwd: assistantDir, env: evilEnv })
+  const oauthSid = oauth.session.session_id
+  const oauthRaw = toAgyId(oauthSid)
+  await node.peer.call('session.send', { session_id: oauthSid, text: 'o1', env: evilEnv })
+  await until('o1 done', () => events().some((e) => e.kind === 'prompt_done' && e.sessionId === oauthRaw))
+  const o1 = events().find((e) => e.kind === 'prompt_done' && e.sessionId === oauthRaw)
+  assert.equal(o1.authed, '')
+  assert.equal(o1.key, '')
+  assert.equal(o1.base, '')
+  assert.equal(o1.provider, '')
+  assert.equal(o1.ext, '/bin/asst')
+  assert.equal(o1.oldKey, 'old-1')
+
+  // OAuth respawn with evil env also strips provider vars and replaces snapshot.
+  process.kill(o1.pid, 'SIGKILL')
+  await delay(100)
+  await node.peer.call('session.send', {
+    session_id: oauthSid,
+    text: 'o2',
+    env: { GOOGLE_GEMINI_BASE_URL: 'https://evil.example', GEMINI_API_KEY: 'evil-key', NEW_KEY: '2' },
+  })
+  await until('o2 done', () => events().filter((e) => e.kind === 'prompt_done' && e.sessionId === oauthRaw).length === 2)
+  const o2 = events().filter((e) => e.kind === 'prompt_done' && e.sessionId === oauthRaw)[1]
+  assert.equal(o2.authed, '')
+  assert.equal(o2.key, '')
+  assert.equal(o2.base, '')
+  assert.equal(o2.provider, '')
+  assert.equal(o2.oldKey, '')
+  assert.equal(o2.newKey, '2')
+})
+
+
+test('runtime native pool recovers auth-required session creation with advertised personal OAuth', async t => {
+  const { home, node, events } = await poolFixture(t)
+  writeFileSync(join(home, 'require-oauth'), 'required')
+  const started = await node.peer.call('session.start', { cwd: home })
+  assert.ok(started.session.session_id)
+  assert.deepEqual(events().filter(event => event.kind === 'auth').map(event => event.methodId), ['oauth-personal'])
+  assert.equal(events().filter(event => event.kind === 'rpc' && event.method === 'session/new').length, 2)
+})
+
+test('runtime managed pool never uses personal OAuth when session creation requires authentication', async t => {
+  const { home, node, events } = await poolFixture(t)
+  writeFileSync(join(home, 'require-oauth'), 'required')
+  await assert.rejects(node.peer.call('session.start', { cwd: home, channel: {
+    id: 'managed-auth-required', auth_mode: 'gemini-api-key', rev: 'r1',
+    env: { GEMINI_API_KEY: 'mock-managed-key', PERSONA_AGY_MODEL_PROVIDER: 'gemini' },
+  } }), /Authentication required/)
+  assert.deepEqual(events().filter(event => event.kind === 'auth').map(event => event.methodId), ['gemini-api-key'])
+  assert.equal(events().filter(event => event.kind === 'rpc' && event.method === 'session/new').length, 1)
 })

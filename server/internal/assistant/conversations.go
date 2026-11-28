@@ -365,6 +365,10 @@ type relayBook struct {
 	// role-change refusal instead holds every message (roleChange below): passing over the last failed message must not
 	// let another one retry that refusal on every session list (#10194, #13918). In memory: a restart tries at once.
 	failedAt map[string]time.Time
+	// msgFailedAt: by conversation and relayMsgID, when each queued message last failed with a retryable error. Keeps
+	// multi-message queues from ping-ponging past relayRetryGap once every eligible message has tried and failed (#17592),
+	// while still letting a never-failed message try once without waiting on an earlier failed head (#10194). In memory.
+	msgFailedAt map[string]map[string]time.Time
 	// roleChange: by conversation, a role-change busy refusal waits for the old process's work to end. The value says a
 	// session list has shown that work since the refusal. While shown, no message goes; the first later idle list releases
 	// at once. If no list ever shows it, failedAt remains the bounded fallback (#13918). In memory, like failedAt.
@@ -479,6 +483,7 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 		b.quoted, b.roundsFrom = map[string]time.Time{}, map[string]time.Time{}
 		b.stuck = map[string]relayMsg{}
 		b.failedAt = map[string]time.Time{}
+		b.msgFailedAt = map[string]map[string]time.Time{}
 		b.roleChange = map[string]bool{}
 		b.placeholderGone = map[string]int{}
 		b.placeholderWait = map[string]bool{}
@@ -1005,6 +1010,9 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	}
 	text := relayDeliveryText(msg)
 	source, onceID := msg.source(), relayMsgID(to, msg)
+	if block := s.agyRelayBlock(ctx, machine, to, msg); block != "" {
+		ctx = context.WithValue(ctx, agyRelayContextKey{}, agyRelayContext{machine: machine, session: to, onceID: onceID, block: block})
+	}
 	if strings.TrimSpace(text) != "" && relayWords(text) == "" {
 		text = prompts.RelayMessageText(text, source, onceID)
 	}
@@ -1033,7 +1041,7 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	if msg.standalonePermission() {
 		cfg := s.settings(ctx)
 		ix, pending := s.pendingStandalonePermission(to, msg, time.Now())
-		if !pending || cfg.Main != to || s.canonical(cfg.MachineID) != s.canonical(machine) || s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
+		if !pending || s.canonical(cfg.MachineID) != s.canonical(machine) || s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
 			return superviseRoundReply{}, false, errStandalonePermissionStale
 		}
 	}
@@ -1090,6 +1098,16 @@ func relayDeliveryText(msg relayMsg) string {
 // relayDelivered notes a message that went into conversation to: the hop it is working on, or the report turn a
 // notice starts.
 func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
+	if msg.standalonePermission() {
+		if ix, ok := s.pendingStandalonePermission(to, msg, time.Now()); ok {
+			s.fleet.mu.Lock()
+			if p := s.fleet.interactions[ix.ID]; p != nil && p.route != nil && p.route.routedAt.Equal(msg.At) {
+				p.route.delivered = true
+			}
+			s.fleet.mu.Unlock()
+			s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_delivered", map[string]any{"id": ix.ID, "to": to})
+		}
+	}
 	if msg.Tool == superviseTool {
 		s.backgroundRoundDelivered(ctx, to, msg, time.Now())
 		s.askRelayDelivered(to, msg)
@@ -1209,8 +1227,10 @@ func (s *Service) takeRelayHeadLocked(id string, msg relayMsg, replayOK bool) (r
 	msgID := relayMsgID(id, msg)
 	delete(b.doubted, msgID) // durable and in-memory delivery evidence leave only with the actual head
 	delete(b.placeholderGone, msgID)
+	b.clearMsgFailedLocked(id, msgID)
 	if len(b.st.Queue[id]) == 0 {
 		delete(b.st.Queue, id)
+		delete(b.msgFailedAt, id)
 	}
 	return replay
 }
@@ -1258,6 +1278,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 		if !placeholder && b.placeholderWait[id] {
 			delete(b.placeholderWait, id)
 			delete(b.failedAt, id)
+			delete(b.msgFailedAt, id)
 			delete(b.stuck, id)
 		}
 		background := backgroundRunning(c)
@@ -1274,6 +1295,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 		if waiting && sawWork {
 			delete(b.roleChange, id)
 			delete(b.failedAt, id) // work completion is the retry event; do not add another gap after it
+			delete(b.msgFailedAt, id)
 			waiting = false
 		}
 		i, wait := b.pickLocked(id, leads[id], now)
@@ -1318,6 +1340,12 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			// reported blocked (#4332): ask the task once more right before it would interrupt. A node that cannot
 			// be reached is not an answer, so its notice stays queued for a later drain.
 			stale, keep := msg.Withdrawn || s.chatReplyStale(ctx, msg), false
+			if !stale && msg.standalonePermission() {
+				// A restored card gets a fresh route. An old wake must leave before its
+				// transcript lookup can delay the current wake behind it.
+				_, pending := s.pendingStandalonePermission(id, msg, time.Now())
+				stale = !pending
+			}
 			if !stale && msg.Tool == noticeTool && msg.State == "needs" {
 				// The loading read covers a hub restart whose first drain runs before the todos were read in:
 				// an unreadable todo is unknown, so the notice is delivered as without the recheck.
@@ -1363,6 +1391,17 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 							retry = relayLookGap
 						}
 					}
+				}
+			}
+			if !stale && !keep && !landed && msg.Tool == prFollowupTool {
+				// Pre-upgrade queued follow-ups also become quiet. A delivery
+				// already in doubt was checked above under its original identity.
+				quiet := msg
+				quiet.OnceID = relayMsgID(id, original)
+				_, stale = s.keepRelayLater(id, quiet)
+				keep = !stale
+				if keep {
+					retry = relayRetryGap
 				}
 			}
 			if !stale && !keep && !landed {
@@ -1412,8 +1451,21 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			if leaves && err != nil && failure == relayFailedGone {
 				// Dropped: a hand-over it carried will not be tried again, marked before the queue without it is saved.
 				s.handoverEnded(msg.Handover, handoverGone)
-				if msg.Tool == "conversation_send" || msg.Tool == "conversation_new" {
+				switch {
+				case msg.Tool == "conversation_send" || msg.Tool == "conversation_new":
 					then = func(ctx context.Context) { s.tellRelayRefused(ctx, machine, id, msg, handoverGone) }
+				case msg.Tool == askAnswerTool && !strings.HasPrefix(msg.From, approvalResultFrom):
+					// Preserve an owner's card answer when a side conversation is gone by moving it to the main conversation,
+					// matching askTarget and relayRefused. When the main conversation itself is gone (or unset), drop it.
+					here := s.settings(context.Background())
+					if here.Main != "" && here.Main != id && s.moveRelay(here.Main, msg) {
+						then = func(ctx context.Context) {
+							s.publish(ctx)
+							if c, ok := s.session(ctx, here.MachineID, here.Main); ok && c.Status != proto.StatusWorking && !c.Starting {
+								s.drainRelays(here.MachineID, []proto.Session{c})
+							}
+						}
+					}
 				}
 			}
 			b.mu.Lock()
@@ -1433,8 +1485,13 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			delete(b.failedAt, id)
 			delete(b.roleChange, id)
 			delete(b.placeholderWait, id)
+			if (err == nil && !stale && !keep) || landed {
+				delete(b.msgFailedAt, id)
+			}
 			if err != nil && !keep && !leaves && failure != relayFailedInDoubt {
-				b.failedAt[id] = time.Now()
+				now := time.Now()
+				b.failedAt[id] = now
+				b.recordMsgFailedLocked(id, msg, now)
 				if placeholder {
 					if b.placeholderWait == nil {
 						b.placeholderWait = map[string]bool{}
@@ -2045,7 +2102,9 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		b := &s.relays
 		b.mu.Lock()
 		if b.failedAt != nil && !relayInDoubt(err) {
-			b.failedAt[c.SessionID] = time.Now()
+			now := time.Now()
+			b.failedAt[c.SessionID] = now
+			b.recordMsgFailedLocked(c.SessionID, msg, now)
 		}
 		b.mu.Unlock()
 		n := s.queueRelay(c.SessionID, msg)

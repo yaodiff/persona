@@ -41,12 +41,7 @@ func TestSupervisedCommandScreenStaysWithItsSupervisor(t *testing.T) {
 	plain := commandScreen("ordinary", "unrelated-session")
 	plainAnswer := e.raise(plain)
 	waitFor(t, "the unsupervised dialog routed to the main conversation", func() bool {
-		for _, m := range laterFor(e.s, "conv1") {
-			if m.From == cardAgentQuestion && strings.Contains(m.Text, "interaction_id="+plain.ID) {
-				return true
-			}
-		}
-		return false
+		return hasRelayFrom(e.s, "conv1", cardAgentQuestion, "interaction_id="+plain.ID)
 	})
 	if !e.lastShown(plain.ID).Delegating {
 		t.Fatal("an unsupervised non-owner dialog was not marked delegating")

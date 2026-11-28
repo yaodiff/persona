@@ -253,4 +253,69 @@ final class RateControllerTests: XCTestCase {
         XCTAssertNil(moved.receive(report(at: now, queue: 200), now: now).kbps)
         XCTAssertEqual(stayed.receive(report(at: now, queue: 200), now: now).kbps, 2_800, "without it: read as queueing")
     }
+
+    func testExtremeTimestampsAndBackwardClocksDoNotTrapOrEvictBaseline() {
+        var rate = RateController(cap: 12_000)
+        let t0: UInt64 = 10 * second
+
+        // Extreme arrival/capture gap across Int64 bounds: captureMicros = Int64.max + 1 exercises the
+        // `0 - Int64.min` first-subtraction trap, and delay - floor exercises the second-subtraction trap.
+        let minDelayReport = ReceiverReport(lastFrame: 1, captureMicros: UInt64(Int64.max) + 1, arrivalMicros: 0, bytesSinceLast: 0, flags: [])
+        _ = rate.receive(minDelayReport, now: t0)
+        XCTAssertEqual(rate.lastQueueMicros, 0)
+
+        let maxDelayReport = ReceiverReport(lastFrame: 2, captureMicros: 0, arrivalMicros: UInt64(Int64.max), bytesSinceLast: 0, flags: [])
+        // delay = Int64.max, floor = Int64.min -> delay - floor overflows Int64; saturates to Int64.max.
+        XCTAssertEqual(rate.queueing(of: maxDelayReport), Int64.max)
+        let congested = rate.receive(maxDelayReport, now: t0 + 10_000)
+        XCTAssertEqual(rate.lastQueueMicros, Int64.max)
+        XCTAssertTrue(congested.skipping)
+        XCTAssertNotNil(congested.kbps)
+
+        // Opposite sign overflow in queueing(of:): delay < floor saturates to Int64.min (never wraps positive).
+        var highFloor = RateController(cap: 12_000)
+        _ = highFloor.receive(maxDelayReport, now: t0)
+        XCTAssertEqual(highFloor.queueing(of: minDelayReport), Int64.min)
+
+        // Backward `now` must not wrap UInt64 subtraction to evict the baseline, bypass cutHold, trigger a spurious raise,
+        // or bypass admit() probe throttling.
+        var bw = RateController(cap: 12_000)
+        _ = bw.receive(report(at: t0, queue: 0), now: t0)
+        let firstCut = bw.receive(report(at: t0 + 20_000, queue: 600), now: t0 + 20_000)
+        XCTAssertEqual(firstCut.kbps, 2_800)
+        XCTAssertTrue(firstCut.skipping)
+        XCTAssertTrue(bw.admit(now: t0 + 20_000))
+        XCTAssertFalse(bw.admit(now: t0 + 10_000), "backward now must not bypass 250 ms probe throttle")
+
+        // Strictly before baseline[0].at (t0 - 1_000 < t0): must neither evict the t0 floor nor wrap cutHold.
+        let held = bw.receive(report(at: t0 + 15_000, queue: 200), now: t0 - 1_000)
+        XCTAssertNil(held.kbps, "backward now must not wrap cutHold and cut again")
+        XCTAssertEqual(bw.lastQueueMicros, 200_000, "now < baseline[0].at must not wrap and evict the baseline floor")
+
+        // Backward `now` during calm stretch must neither wrap calmSince into an immediate raise nor exit slowStart.
+        var calmRate = RateController(cap: 12_000)
+        _ = calmRate.setBand(min: 1_000, max: 12_000, target: 2_000)
+        _ = calmRate.receive(report(at: t0, queue: 0), now: t0)
+        XCTAssertNil(calmRate.receive(report(at: t0, queue: 0), now: t0 - 1_000).kbps,
+                     "backward now must not wrap calmSince into a spurious raise")
+        XCTAssertEqual(calmRate.receive(report(at: t0 + second, queue: 0), now: t0 + second).kbps, 2_500,
+                       "slowStart (+25% after 1 calm second) must survive a backward clock step")
+    }
+
+    func testHugeDeliveredBytesDoNotOverflowDeliveredKbpsOrCutTarget() {
+        var rate = RateController(cap: 12_000)
+        _ = rate.setBand(min: 1_000, max: 12_000, target: 8_000)
+        let start: UInt64 = 10 * second
+        // Very large byte counts over the minimum 200 ms span: deliveredKbps and cutTarget must never trap.
+        for i in 0..<6 {
+            let now = start + UInt64(i) * 50_000
+            let r = ReceiverReport(lastFrame: UInt32(i + 1), captureMicros: start,
+                                   arrivalMicros: start + UInt64(i) * 50_000 + (i == 5 ? 300_000 : 0),
+                                   bytesSinceLast: UInt32.max, flags: [])
+            _ = rate.receive(r, now: now)
+        }
+        XCTAssertNotNil(rate.deliveredKbps)
+        // With delivered >> kbps, cutTarget uses min(kbps, delivered) * 85 / 100 = 8000 * 85 / 100 = 6800.
+        XCTAssertEqual(rate.kbps, 6_800)
+    }
 }

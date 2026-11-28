@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -108,10 +110,15 @@ func TestCodexAssistantCommandWindowsPathsUseForwardSlashes(t *testing.T) {
 	checkScriptWords(t, launcher, slashed(bin), "launch", "box")
 }
 
-// The model list runs a managed Codex launcher's app-server (#8797), or plain claude with claude_start_dir, the same way.
+// When it needs the shell, the model list quotes the Codex app-server launch or plain Claude with claude_start_dir.
 func TestAgentModelsCommandWindowsPathsUseForwardSlashes(t *testing.T) {
 	const bin = `C:\Program Files\Persona\personad.exe`
 	n := windowsScriptNode(t, bin, "box")
+	if runtime.GOOS != "windows" {
+		binDir := t.TempDir()
+		writeExecutable(t, filepath.Join(binDir, "codex"), "#!/bin/sh\nexit 1\n")
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	if _, err := interactiveShell(); err != nil {
 		t.Skip(err)
 	}
@@ -119,11 +126,17 @@ func TestAgentModelsCommandWindowsPathsUseForwardSlashes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	launcher, ok := strings.CutPrefix(icScript(t, cmd.Args), codexShell(""))
-	if !ok {
-		t.Fatalf("not codexShell: %q", cmd.Args)
+	if runtime.GOOS == "windows" {
+		if !slices.Equal(cmd.Args, []string{bin, "launch", "box", "app-server"}) {
+			t.Fatalf("not a direct Windows launch: %q", cmd.Args)
+		}
+	} else {
+		launcher, ok := strings.CutPrefix(icScript(t, cmd.Args), codexShell(""))
+		if !ok {
+			t.Fatalf("not codexShell: %q", cmd.Args)
+		}
+		checkScriptWords(t, launcher, slashed(bin), "launch", "box", "app-server")
 	}
-	checkScriptWords(t, launcher, slashed(bin), "launch", "box", "app-server")
 
 	start := `C:\Users\Example User\.claude-work`
 	n.claudeStartDir.Store(&start)

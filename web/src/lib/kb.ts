@@ -110,6 +110,10 @@ export interface KBDetail {
   moments?: KBMomentRef[] | null;
   /** recordings: the transcript, seconds from the start (docs/protocol/protocol.md "Recording sync"). */
   segments?: KBSegment[] | null;
+  /** recordings: hub-separated speakers and owner-chosen names (#17674, docs/assistant/meeting-minutes.md "Speakers
+   *  (#17674)"). Read defensively on its own (lib/recording-speakers.ts `decodeSpeakers`), so a broken block never
+   *  costs the rest of the detail. */
+  speakers?: unknown;
   /** Recordings may retain older minutes while a newer revision is pending or failed. */
   minutes?: RecordingMinutes | null;
   /** An all-day recording's recap (#4741), kept while a newer one is pending or failed. */
@@ -233,6 +237,10 @@ export interface KBSegment {
   /** Persona's own answer heard by the meeting's microphone (#5905, docs/assistant/meeting-minutes.md "Persona's echo"):
    *  kept on the hub, not shown as the meeting's. */
   echo?: boolean;
+  /** Hub-assigned speaker id ("s1", "s2", ...) for a hub-transcribed meeting with a timeline (#17674). */
+  speaker?: string;
+  /** True when the line's speaker assignment is unsure or the meeting's separation quality is low (#17674). */
+  speaker_unsure?: boolean;
 }
 
 /** One question asked in an attended meeting (docs/assistant/meeting-minutes.md "Attending a meeting", `Ask`). `state`,

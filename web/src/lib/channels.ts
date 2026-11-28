@@ -8,6 +8,7 @@
 import { formatList, t } from "../i18n";
 import { api, enc } from "./api";
 import type { ConnectorPrompt } from "./connectors";
+import type { ScopedAssistantClient } from "./scoped-assistant-api";
 
 // ── wire types (server/internal/channel) ─────────────────
 
@@ -94,8 +95,9 @@ export type ChannelPrompt = ConnectorPrompt;
 
 // ── the hub's interface ──────────────────────────────────
 
-export function channelDetail(id: string): Promise<ChannelDetail> {
-  return api<ChannelDetail>(`/channels/${enc(id)}`);
+export function channelDetail(id: string, client?: ScopedAssistantClient): Promise<ChannelDetail> {
+  const request = client?.request ?? api;
+  return request<ChannelDetail>(`/channels/${enc(id)}`);
 }
 
 export interface ChannelUpdateBody {
@@ -106,8 +108,9 @@ export interface ChannelUpdateBody {
   thread_idle_hours?: number;
 }
 
-export function updateChannel(id: string, body: ChannelUpdateBody): Promise<ChannelDetail> {
-  return api<ChannelDetail>(`/channels/${enc(id)}`, { method: "PUT", json: body });
+export function updateChannel(id: string, body: ChannelUpdateBody, client?: ScopedAssistantClient): Promise<ChannelDetail> {
+  const request = client?.request ?? api;
+  return request<ChannelDetail>(`/channels/${enc(id)}`, { method: "PUT", json: body });
 }
 
 /** Normalizes a channel's thread_mode, falling back to channel_default when absent or unknown. */
@@ -126,12 +129,14 @@ export function isValidThreadIdleHours(hours: number): boolean {
   return Number.isInteger(hours) && hours >= 0 && hours <= MAX_THREAD_IDLE_HOURS;
 }
 
-export function bindChannel(id: string, step: string, values: Record<string, string>): Promise<ChannelPrompt> {
-  return api<ChannelPrompt>(`/channels/${enc(id)}/bind`, { method: "POST", json: { step, values } });
+export function bindChannel(id: string, step: string, values: Record<string, string>, client?: ScopedAssistantClient): Promise<ChannelPrompt> {
+  const request = client?.request ?? api;
+  return request<ChannelPrompt>(`/channels/${enc(id)}/bind`, { method: "POST", json: { step, values } });
 }
 
-export function unbindChannel(id: string): Promise<ChannelDetail> {
-  return api<ChannelDetail>(`/channels/${enc(id)}/binding`, { method: "DELETE" });
+export function unbindChannel(id: string, client?: ScopedAssistantClient): Promise<ChannelDetail> {
+  const request = client?.request ?? api;
+  return request<ChannelDetail>(`/channels/${enc(id)}/binding`, { method: "DELETE" });
 }
 
 export interface ChannelTestResult {
@@ -140,8 +145,9 @@ export interface ChannelTestResult {
   note?: string;
 }
 
-export function testChannel(id: string): Promise<ChannelTestResult> {
-  return api<ChannelTestResult>(`/channels/${enc(id)}/test`, { method: "POST" });
+export function testChannel(id: string, client?: ScopedAssistantClient): Promise<ChannelTestResult> {
+  const request = client?.request ?? api;
+  return request<ChannelTestResult>(`/channels/${enc(id)}/test`, { method: "POST" });
 }
 
 // ── words ────────────────────────────────────────────────

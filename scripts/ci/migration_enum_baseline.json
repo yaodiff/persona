@@ -1,20 +1,10 @@
 {
  "hub": [
-  "bus_identities.role",
   "client_ops.kind",
-  "client_ops.result",
-  "client_ops.target",
   "device_tokens.kind",
   "device_tokens.role",
   "devices.kind",
-  "devices.prefs",
-  "hub_settings.value",
-  "machine_audit.detail",
-  "peers.endpoints",
-  "phone_tools.input_schema",
-  "phone_write_queue.result",
-  "sent_messages.echo",
-  "sent_messages.state"
+  "hub_settings.value"
  ],
  "manager": [
   "a2a_tasks.body",
@@ -71,8 +61,6 @@
   "sent_as_user.let_through",
   "sent_as_user.origin",
   "sent_as_user.target",
-  "sent_messages.echo",
-  "sent_messages.state",
   "session_mode_changes.actor_kind",
   "session_mode_changes.kind",
   "session_work.work",

@@ -32,6 +32,19 @@ func newMemBlockerStore() *memBlockerStore {
 func (m *memBlockerStore) UpsertTodoBlocker(_ context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
 	m.bmu.Lock()
 	defer m.bmu.Unlock()
+	return m.putBlockerLocked(r), nil
+}
+
+func (m *memBlockerStore) EnsureTodoBlocker(_ context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
+	m.bmu.Lock()
+	defer m.bmu.Unlock()
+	if _, found := m.blockers[r.ID]; found {
+		return nil, nil
+	}
+	return m.putBlockerLocked(r), nil
+}
+
+func (m *memBlockerStore) putBlockerLocked(r db.TodoBlockerRow) *db.TodoBlockerRow {
 	if r.ConditionJSON == "" {
 		r.ConditionJSON = "{}"
 	}
@@ -45,8 +58,7 @@ func (m *memBlockerStore) UpsertTodoBlocker(_ context.Context, r db.TodoBlockerR
 		r.UpdatedAt = r.CreatedAt
 	}
 	m.blockers[r.ID] = r
-	cp := r
-	return &cp, nil
+	return &r
 }
 
 func (m *memBlockerStore) listFiltered(keep func(db.TodoBlockerRow) bool) []db.TodoBlockerRow {
@@ -71,6 +83,30 @@ func (m *memBlockerStore) ListActiveTodoBlockers(_ context.Context) ([]db.TodoBl
 	return m.listFiltered(func(r db.TodoBlockerRow) bool { return r.State == db.TodoBlockerStateActive }), nil
 }
 
+func (m *memBlockerStore) ListTodoReadinessBlockers(_ context.Context, todoIDs []string) ([]db.TodoBlockerRow, error) {
+	return m.listFiltered(func(r db.TodoBlockerRow) bool {
+		return slices.Contains(todoIDs, r.TodoID) && (r.State == db.TodoBlockerStateActive || r.Kind == todoBlockerKindTodoStage || r.Kind == todoBlockerKindExternalPR)
+	}), nil
+}
+
+func (m *memBlockerStore) ListMergeTrainPRBlockers(_ context.Context, prURL, repoKey string) ([]db.TodoBlockerRow, error) {
+	return m.listFiltered(func(r db.TodoBlockerRow) bool {
+		return r.Kind == todoBlockerKindMergeTrain && (strings.EqualFold(r.TargetRef, prURL) || strings.EqualFold(r.TargetRef, repoKey))
+	}), nil
+}
+
+func (m *memBlockerStore) UpdateActiveTodoBlockerCondition(_ context.Context, id, condition string, at time.Time) (*db.TodoBlockerRow, error) {
+	m.bmu.Lock()
+	defer m.bmu.Unlock()
+	row, found := m.blockers[id]
+	if !found || row.State != db.TodoBlockerStateActive {
+		return nil, nil
+	}
+	row.ConditionJSON, row.UpdatedAt = condition, at
+	m.blockers[id] = row
+	return &row, nil
+}
+
 func (m *memBlockerStore) ListTodoBlockersByTodo(_ context.Context, todoID string) ([]db.TodoBlockerRow, error) {
 	return m.listFiltered(func(r db.TodoBlockerRow) bool { return r.TodoID == todoID }), nil
 }
@@ -86,7 +122,7 @@ func (m *memBlockerStore) ResolveTodoBlocker(_ context.Context, id string, at ti
 	m.bmu.Lock()
 	defer m.bmu.Unlock()
 	r, ok := m.blockers[id]
-	if !ok {
+	if !ok || r.State != db.TodoBlockerStateActive {
 		return nil, nil
 	}
 	r.State = db.TodoBlockerStateResolved
@@ -104,7 +140,7 @@ func (m *memBlockerStore) CancelTodoBlocker(_ context.Context, id string, at tim
 	m.bmu.Lock()
 	defer m.bmu.Unlock()
 	r, ok := m.blockers[id]
-	if !ok {
+	if !ok || r.State != db.TodoBlockerStateActive {
 		return nil, nil
 	}
 	r.State = db.TodoBlockerStateCancelled
@@ -122,7 +158,7 @@ func (m *memBlockerStore) IncrementTodoBlockerAttempts(_ context.Context, id str
 	m.bmu.Lock()
 	defer m.bmu.Unlock()
 	r, ok := m.blockers[id]
-	if !ok {
+	if !ok || r.State != db.TodoBlockerStateActive {
 		return nil, nil
 	}
 	r.Attempts++
@@ -241,16 +277,7 @@ func TestTodosV2BlockersExternalPRAutoWakeAndSharedAggregation(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	prState := "open"
 	var wokeIDs []string
-	s.setTodoBlockerPRFetcher(func(_ context.Context, targetRef string) (todoBlockerPRFact, bool) {
-		mu.Lock()
-		defer mu.Unlock()
-		if strings.TrimRight(targetRef, "/") == prURL {
-			return todoBlockerPRFact{URL: prURL, State: prState, Merged: prState == "merged"}, true
-		}
-		return todoBlockerPRFact{}, false
-	})
 	s.setTodoBlockerUnblockedHook(func(_ context.Context, todoID string) {
 		mu.Lock()
 		wokeIDs = append(wokeIDs, todoID)
@@ -269,13 +296,8 @@ func TestTodosV2BlockersExternalPRAutoWakeAndSharedAggregation(t *testing.T) {
 		t.Fatalf("expected shared blocker group on %s with count 2, got %+v", prURL, sum1.SharedGroups)
 	}
 
-	// Upstream PR merges without sending any notification; targeted scan resolves both PR edges,
-	// wakes todoA (0 remaining blockers), and keeps todoB blocked by prereq.
-	mu.Lock()
-	prState = "merged"
-	mu.Unlock()
-
-	sum2, err := s.reconcilePersistedTodoBlockers(ctx, prURL)
+	// A targeted observation resolves both PR edges and wakes only the ready to-do.
+	sum2, err := s.reconcileTodoBlockersForPR(ctx, TodoPRStatus{URL: prURL, State: "merged"})
 	if err != nil {
 		t.Fatalf("reconcile merged PR: %v", err)
 	}

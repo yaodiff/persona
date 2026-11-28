@@ -89,10 +89,7 @@ var probeToken = func(ctx context.Context, c *assistant.ManagerConfig) error {
 	if c == nil {
 		return nil
 	}
-	var client *http.Client
-	if c.Fingerprint != "" {
-		client = link.Pinned(c.Fingerprint)
-	}
+	client := probeTokenClient(c.Fingerprint)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ws, err := bus.Dial(ctx, c.Hub, c.Token, client)
@@ -101,6 +98,16 @@ var probeToken = func(ctx context.Context, c *assistant.ManagerConfig) error {
 	}
 	_ = ws.Close(websocket.StatusNormalClosure, "probe")
 	return nil
+}
+
+// probeTokenClient returns the HTTP client probeToken dials the hub's bus with: pinned when a TLS fingerprint is
+// configured (link.Pinned already disables redirects), or a non-redirecting client so 3xx responses cannot leak the
+// bearer token across origins/downgrades or spoof a 101 upgrade.
+func probeTokenClient(fingerprint string) *http.Client {
+	if fingerprint != "" {
+		return link.Pinned(fingerprint)
+	}
+	return &http.Client{CheckRedirect: noRedirect}
 }
 
 // waitNewToken returns once manager.json in dir has a token other than before's (renewed), after most (not renewed:

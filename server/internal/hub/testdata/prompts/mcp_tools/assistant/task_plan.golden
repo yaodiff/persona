@@ -1,6 +1,6 @@
 {
   "name": "task_plan",
-  "description": "Split code, repo research and multi-step work. Use machines_list, KB, agents_list and preferences to explain choices. Main/lead, read-only, user_requested and preapproved plans start now; others and owner_step need 开始. Queued means dispatched; check the to-do. Reuse suggested idle Agents via agent_send, even after closure, when context and permissions fit.\n\nExplicit machine keeps fixed (default, refuses unavailable launchers) or flexible (moves portable work on failed health checks, explain why). Omit machine for automatic placement with optional placement_constraints. Planning leads own their tasks; main owns its own and receives needs_user escalations. Main may pick a lead; agent_transfer persists ownership. Incompatible leads need supervision_policy first. Check returned supervisor and similar work, reusing an active same-directory Agent before starting a new one. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).\n\nStarted tasks keep a hub brief (owner request or started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides. Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.\n\nEdits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.\n\nUse repositories_list or repository_get when needed; an explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.\n\nSaved workspace naming plan on existing todo: {\"backend\":{\"operation_id\":\"\u003cid\u003e\"}}. Multi-repo container: {\"container\":{\"selected_repo_ids\":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.\n\nWorkspace: \"new\" isolates; {\"new\":{\"branch\":\"task/my-change\"}} names it (default task/\u003ctodo id\u003e); reuse needs a clean, unused checkout. {\"existing\":\"\u003ccwd or id\u003e\",\"queue\":true} selects it without switching; busy queues FIFO only if requested or owner waits. \"none\" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.",
+  "description": "Plan multi-step work. Check machines_list, KB, agents_list and preferences. Main/lead, readonly, user_requested and preapproved tasks start now. Others and owner_step need 开始. Queued means dispatched. Reuse suitable Agents via agent_send. Keep reminders and events separate.\n\nAn explicit machine is fixed by default. Use flexible for portable work or omit machine for automatic placement. Leads own their tasks and escalate needs_user to main. Main can select a lead (agent_transfer persists). Use supervision_policy for incompatible leads. Match open issue or PR work with continues, todo_id or distinct_from. Other duplicate hints are advisory.\n\nWritable tasks need done_when and read-only tasks need goal. Set completion_mode for draft or review-ready delivery. Use continues and continues_why to carry work on, task_retry for failed starts and task_scope with scope_revision for scope changes.\n\nEdits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.\n\nUse repositories_list or repository_get when needed. An explicit repository URL or path takes precedence. Set machine and cwd separately from bindings. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.\n\nPass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.\n\nWorkspace new isolates and can name a branch (default task/\u003ctodo id\u003e). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. Scratch uses a managed isolated dir (omit cwd). None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch. Inline observation includes `completed` with this input's `reply`, `question` with a pending `interaction_id`, or `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`. Observation records known input and session ids. Observation never answers questions, accepts tasks, resends or cancels work. Normal supervision and `task_review` apply. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single task waits.",
   "input_schema": {
     "type": "object",
     "required": [
@@ -35,6 +35,20 @@
               "required": [
                 "cwd"
               ]
+            },
+            {
+              "type": "object",
+              "required": [
+                "workspace"
+              ],
+              "properties": {
+                "workspace": {
+                  "type": "string",
+                  "enum": [
+                    "scratch"
+                  ]
+                }
+              }
             },
             {
               "type": "object",
@@ -138,20 +152,21 @@
             },
             "cwd": {
               "type": "string",
-              "description": "Abs or ~/ dir, unless workspace.backend/container supplies it."
+              "description": "Abs or ~/ dir; omit for scratch/backend/container."
             },
             "workspace": {
               "type": [
                 "string",
                 "object"
               ],
-              "description": "workspace policy; omit for default; existing: path or workspace id",
+              "description": "policy; existing: path/id",
               "oneOf": [
                 {
                   "type": "string",
                   "enum": [
                     "new",
-                    "none"
+                    "none",
+                    "scratch"
                   ]
                 },
                 {
@@ -295,6 +310,26 @@
               "type": "boolean",
               "description": "true only for read-only tasks; false for authorized edits. Adds「本任务只读：不改项目文件、不提交、不对外写入」when true"
             },
+            "work_mode": {
+              "type": "string",
+              "enum": [
+                "execute",
+                "research",
+                "coordinate"
+              ],
+              "description": "New task only. Defaults to research for readonly and execute otherwise."
+            },
+            "completion_mode": {
+              "type": "string",
+              "enum": [
+                "inherit",
+                "draft",
+                "ready",
+                "landed",
+                "verified"
+              ],
+              "description": "New task. Inherit uses assistant settings. Draft is a draft artifact, ready is for review, landed is merged or published, verified is confirmed live."
+            },
             "user_requested": {
               "type": "boolean",
               "description": "True only if user's latest message asked for it."
@@ -334,7 +369,7 @@
             },
             "continues": {
               "type": "string",
-              "description": "Original todo id; reuses todo/brief, stops prior Agents, reopens if closed."
+              "description": "Original todo id (needs continues_why); reuses todo/brief, stops prior Agents, reopens if closed."
             },
             "scope_revision": {
               "type": "string",
@@ -343,6 +378,27 @@
             "continues_why": {
               "type": "string",
               "description": "With continues: one-line replacement reason."
+            },
+            "distinct_from": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "todo_id",
+                  "reason"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "todo_id": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "description": "new tasks only: explain each conflicting open todo. Reasons stay in the brief"
             },
             "started_why": {
               "type": "string",
@@ -371,7 +427,7 @@
                 "human",
                 "autonomous"
               ],
-              "description": "Optional: human or autonomous."
+              "description": "Optional to-do audience."
             },
             "direction_id": {
               "type": "string",
@@ -394,7 +450,7 @@
             },
             "inbox_item": {
               "type": "string",
-              "description": "Handed-off Inbox ID or 'none'; links without filing/replying."
+              "description": "Inbox ID or 'none' to skip. Omit for strong-match inference outside continuations. Never files or replies."
             },
             "tier": {
               "type": "string",

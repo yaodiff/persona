@@ -28,6 +28,12 @@ type superviseFingerprint struct {
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
+	if g.todoV2Wake() {
+		// Keep the latest round in each to-do, repository, or peer slot. Rendered wording can change on retries.
+		key, _ := json.Marshal(g.id())
+		sum := sha256.Sum256([]byte(g.Key))
+		return string(key), hex.EncodeToString(sum[:])
+	}
 	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.Kind == sigOrphaned && g.WorkerSet != "" {
 		// One durable wake per to-do and canonical prerequisite/children set, outage episode, or accepted-worker set, independent of restarts or sweeps.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind})
@@ -212,7 +218,7 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent || signals[i].Kind == sigPRMerged || signals[i].Kind == sigNeedsUserExternalInfo || signals[i].Kind == sigRecovered || keptUntilChange(signals[i]) {
 			fingerprint.Todo = signals[i].Todo
 		}
-		if g := signals[i]; g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		if g := signals[i]; g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.todoV2Wake() || g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
 			fingerprint.Todo = g.Todo
 		}
 		next[key] = fingerprint
@@ -263,7 +269,7 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 	next := maps.Clone(history)
 	changed := false
 	for _, g := range signals {
-		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo || g.Kind == sigOutageRecovery ||
+		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo || g.Kind == sigOutageRecovery || g.todoV2Wake() ||
 			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 		if !stable {
 			// Unmarked legacy deliveries retain their established acknowledgment path.
@@ -462,9 +468,7 @@ func (s *Service) restoreDigest(signals []superviseSignal, at, prev time.Time) {
 		b.last = prev
 	}
 	for _, g := range signals {
-		if b.sent[g.id()] == g.Key {
-			delete(b.sent, g.id())
-		}
+		b.forgetToldLocked(g) // put back untold: neither the key last told nor one a digest still holds (#17838)
 		if cur, newer := b.pending[g.id()]; !newer {
 			b.pending[g.id()] = g
 		} else if g.Kind == sigInbox && cur.Key != g.Key {

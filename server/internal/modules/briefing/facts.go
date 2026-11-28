@@ -158,6 +158,9 @@ func (r *runner) FactsAt(ctx context.Context, now time.Time, self string) *modap
 	if self == "evening" { // the day's recap was written for it, 30 minutes before (kb_day.go)
 		f.Day = r.Day(ctx, now, loc)
 	}
+	if r.todos != nil && (self == "morning" || self == "evening") {
+		f.DeferredSupervision = r.todos.DeferredSupervision(ctx, now)
+	}
 	f.Captures = r.tasks.Captures(ctx, l, since)
 	return f
 }
@@ -479,6 +482,12 @@ func (r *runner) ModelText(f *modapi.BriefSnapshot) string {
 	b.Briefs, b.BriefsDone, b.Day = f.Briefs, f.BriefsDone, f.Day
 	b.Setup = f.Setup.Lines()
 	b.Captures = f.Captures
+	if len(f.DeferredSupervision) > 0 {
+		b.DeferredSupervisionHeading = r.prompts.Translate(f.Lang, "assistant-briefing.supervision_deferred", nil)
+		for _, row := range f.DeferredSupervision {
+			b.DeferredSupervision = append(b.DeferredSupervision, row.Title+" — "+row.Reason)
+		}
+	}
 	for _, p := range f.Progress {
 		b.Progress = append(b.Progress, modapi.BriefProgress{Title: clip(oneLine(p.Title), 60), Stage: p.Stage})
 	}

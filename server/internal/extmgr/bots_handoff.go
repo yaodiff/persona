@@ -89,6 +89,9 @@ func (s FeishuBotSettings) handoffView() *botHandoffView {
 // handoffDelivery says how a handoff for chatID is answered: direct, or confirm (the owner approves first). A refusal
 // is the error code (handoff_off, chat_blocked); delivery is then "".
 func (s FeishuBotSettings) handoffDelivery(chatID string) (delivery assistantwire.FeishuHandoffDelivery, refusal string) {
+	if s.groupChatBlocked(chatID) {
+		return "", "chat_blocked"
+	}
 	h := s.Handoff
 	if h != nil && slices.Contains(h.BlockedChats, chatID) {
 		return "", "chat_blocked"

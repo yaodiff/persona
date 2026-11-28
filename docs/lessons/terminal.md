@@ -5,7 +5,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - A herdr workspace label is not task ownership (#4786): directory basenames and user renames make it ambiguous. Record
   `task_id` and the actual `workspace_id` with every task session, select resumes by that ID, and require the same pair
   before `workspace.close`. A label is needed only to create or recreate the task workspace. `worktree.create`'s
-  `open_workspace` defaults to true; only a herdr leader task's checkout sets it false, with its Agent tab opening in
+  `open_workspace` defaults to true; task checkouts on classic herdr and grouped Orca workers can set it false, with the Agent tab opening in
   the shared task workspace instead. Older herdr versions have no checkout-only RPC, so the node uses its existing Git
   fallback for this path. Closing that workspace is not deleting its Git checkout.
 - herdr `pane read --source recent` returns at most about 1000 lines (even with a larger --lines), has no offset or scrolling API, and does not persist them: terminal history can only be read in chunks within those 1000 lines; the transcript holds the complete history.
@@ -96,6 +96,16 @@ own emulator skips dim cells for its internal "typed text" checks; no method on 
 what an engine's read returns against a real Agent on an isolated runtime (its own HOME and profile, a throwaway repo,
 a stand-in Messages API) before trusting a plain-text rule, and capture the empty box, a typed draft and the grey
 suggestion separately.
+
+## Orca's schema is not its behavior: fences, folders and tab names (#17043)
+
+On Orca 1.4.277's local socket, `terminal.split` and `terminal.closeTab` accept `expectedIncarnationId` but do not
+hold it (a wrong one still split and closed the tab), the split's `cwd` is honoured only by the layout-addressed form
+the socket refuses (`host_not_owned`), and on a runtime with no window `terminal.rename` changes the terminals' titles
+and the phone tab model (`session.tabs.list`'s `customTitle`) but not the tab title in `terminal.list`'s layouts. Look
+the terminal up yourself right before a call whose fence the runtime ignores, reach a folder through the new shell's
+`command`, and read a tab's current name where renames land. Check each of these on an isolated runtime: the request
+schema in Orca's bundle says what it accepts, not what it does.
 
 ## A visible Codex composer does not prove takeover readiness
 

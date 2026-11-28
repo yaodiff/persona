@@ -271,4 +271,96 @@ describe("侧边面板的键盘操作", () => {
     act(() => { separator().dispatchEvent(e); });
     expect(host.querySelector("aside")).not.toBeNull();
   });
+
+  it("ignores Safari IME Escape (keyCode 229) without closing the panel", () => {
+    separator().focus();
+    const e = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    Object.defineProperty(e, "keyCode", { value: 229 });
+    act(() => { separator().dispatchEvent(e); });
+    expect(host.querySelector("aside")).not.toBeNull();
+  });
+
+  it("keeps the panel open and blocks window Escape when pressing Escape inside an editable field (textarea / input / contenteditable)", () => {
+    const onWindow = vi.fn();
+    addEventListener("keydown", onWindow);
+    const aside = host.querySelector("aside")!;
+    const area = document.createElement("textarea");
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    const child = document.createElement("span");
+    editable.append(child);
+    aside.append(area, editable);
+    try {
+      area.focus();
+      press(area, "Escape");
+      expect(host.querySelector("aside")).not.toBeNull();
+      expect(onWindow).not.toHaveBeenCalled();
+
+      press(child, "Escape");
+      expect(host.querySelector("aside")).not.toBeNull();
+      expect(onWindow).not.toHaveBeenCalled();
+
+      // Non-text inputs (e.g. checkbox) still close the panel on Escape.
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      aside.append(check);
+      try {
+        check.focus();
+        press(check, "Escape");
+        expect(host.querySelector("aside")).toBeNull();
+      } finally {
+        check.remove();
+      }
+    } finally {
+      removeEventListener("keydown", onWindow);
+      area.remove();
+      editable.remove();
+    }
+  });
+
+  it("does not swallow Escape when an input is inside an open dialog above the panel, and ignores closing dialogs", () => {
+    const onWindow = vi.fn();
+    addEventListener("keydown", onWindow);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const input = document.createElement("input");
+    dialog.append(input);
+    const aside = host.querySelector("aside")!;
+    aside.append(dialog);
+    try {
+      input.focus();
+      press(input, "Escape");
+      expect(host.querySelector("aside")).not.toBeNull();
+      expect(onWindow).toHaveBeenCalledTimes(1);
+      // Once the dialog is leaving (data-closing), Esc on the panel itself closes the panel again.
+      dialog.setAttribute("data-closing", "");
+      separator().focus();
+      press(separator(), "Escape");
+      expect(host.querySelector("aside")).toBeNull();
+    } finally {
+      removeEventListener("keydown", onWindow);
+      dialog.remove();
+    }
+  });
+
+  it("keeps the panel open and delegates Escape to an unsaved editor when focus is on the resize handle", () => {
+    const onWindow = vi.fn();
+    addEventListener("keydown", onWindow);
+    const aside = host.querySelector("aside")!;
+    const editor = document.createElement("div");
+    editor.setAttribute("data-unsaved-edit", "");
+    const onUnsaved = vi.fn((ev: Event) => ev.preventDefault());
+    editor.addEventListener("persona:escape-unsaved", onUnsaved);
+    aside.append(editor);
+    try {
+      separator().focus();
+      press(separator(), "Escape");
+      expect(onUnsaved).toHaveBeenCalledTimes(1);
+      expect(host.querySelector("aside")).not.toBeNull();
+      expect(onWindow).not.toHaveBeenCalled();
+    } finally {
+      removeEventListener("keydown", onWindow);
+      editor.remove();
+    }
+  });
 });

@@ -3,8 +3,6 @@ package node
 import (
 	"context"
 	"crypto/rand"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,7 +66,7 @@ func (h *orcaHost) createWorktree(ctx context.Context, space, branch, path, pare
 		}
 	}
 	if src == nil {
-		return nil, errors.New("Orca 里找不到这个工作区")
+		return nil, composerError(ctx, "workspace_missing")
 	}
 	parentFound := false
 	for _, w := range trees {
@@ -78,20 +76,20 @@ func (h *orcaHost) createWorktree(ctx context.Context, space, branch, path, pare
 		}
 	}
 	if !parentFound {
-		return nil, errors.New("The parent workspace is no longer available in Orca")
+		return nil, composerError(ctx, "parent_missing")
 	}
 	repoID, _, ok := strings.Cut(space, "::") // Orca's worktree ids are <repo id>::<path>
 	if !ok || repoID == "" {
-		return nil, errors.New("不知道这个工作区属于 Orca 的哪个项目")
+		return nil, composerError(ctx, "project_missing")
 	}
 	if !automatic {
 		if at, err := branchCheckedOutAt(ctx, src.Path, branch); err != nil {
-			return nil, fmt.Errorf("读不了这个仓库的 worktree 列表：%w", err)
+			return nil, composerError(ctx, "worktree_list_unreadable", i18n.Args{"reason": err.Error()})
 		} else if at != "" {
-			return nil, fmt.Errorf("分支 %s 已经在 %s 检出了", branch, at)
+			return nil, composerError(ctx, "branch_taken", i18n.Args{"branch": branch, "path": at})
 		}
 		if _, err := os.Lstat(path); err == nil {
-			return nil, errors.New("检出路径已存在：Orca 不用已有的目录（空目录也不行）")
+			return nil, composerError(ctx, "orca_path_exists")
 		}
 	}
 	req := orcart.WorktreeCreate{Repo: "id:" + repoID, Name: filepath.Base(path), Branch: branch, Parent: "id:" + parent}
@@ -107,7 +105,7 @@ func (h *orcaHost) createWorktree(ctx context.Context, space, branch, path, pare
 		base, err := git(ctx, src.Path, "branch", "--show-current")
 		if base = strings.TrimSpace(base); err != nil || base == "" {
 			if base, err = git(ctx, src.Path, "rev-parse", "HEAD"); err != nil {
-				return nil, fmt.Errorf("读不了这个工作区的 HEAD：%w", err)
+				return nil, composerError(ctx, "head_unreadable", i18n.Args{"reason": err.Error()})
 			}
 		}
 		req.Base = strings.TrimSpace(base)
@@ -125,13 +123,12 @@ func (h *orcaHost) createWorktree(ctx context.Context, space, branch, path, pare
 	}
 	got := strings.TrimPrefix(wt.Branch, "refs/heads/")
 	if automatic && got == "" {
-		return nil, errors.New("Orca did not report its generated branch")
+		return nil, composerError(ctx, "orca_branch_missing")
 	}
 	if !automatic && got != branch {
 		// A real worktree on another branch, made all the same (nothing is deleted): the user sees what Orca did
 		// instead. A directory-level workspace, with no branch, is told apart above.
-		return nil, fmt.Errorf("Orca 没有用分支 %s，而是建了 %s（在 %s）：%s 可能刚被别处检出，或者 Orca 的目录被占了", branch, got,
-			wt.Path, branch)
+		return nil, composerError(ctx, "orca_branch_changed", i18n.Args{"branch": branch, "got": got, "path": wt.Path})
 	}
 	c := &host.Created{SpaceID: wt.ID, Path: wt.Path, Branch: got}
 	if t := h.terminalIn(ctx, wt.ID); t != nil {

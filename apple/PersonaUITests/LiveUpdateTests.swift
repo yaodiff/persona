@@ -381,7 +381,7 @@ final class LiveUpdateTests: XCTestCase {
         // The row starts below the cards that need you (#836), or under the tab bar on a smaller iPhone (#488).
         app.bringAboveTabBar(row)
         row.press(forDuration: 1.2)
-        let close = app.buttons["关闭 Agent…"]
+        let close = app.buttons["关闭 Agent"]
         XCTAssertTrue(close.waitForExistence(timeout: 5), "the row's menu")
         churn()
         XCTAssertTrue(close.exists, "the menu is still open")

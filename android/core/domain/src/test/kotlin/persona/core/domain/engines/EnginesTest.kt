@@ -70,6 +70,38 @@ class EnginesTest {
         assertEquals("T3 Code 里的 Agent", (Engines.detail("t3code")).zhAny())
     }
 
+    /** A closed Orca is not "Not detected"; an incompatible one shows its version (its note is shown under it, #17037). */
+    @Test fun detectionTellsAClosedOrcaFromAMissingOne() {
+        fun on(o: DetectedEngine) = machine(engines = listOf(o))
+        assertEquals("已安装，没在运行", (Engines.detection("orca", on(orca.copy(state = "stopped")))).zhAny())
+        assertEquals("已安装，没在运行，版本 1.4.277", (Engines.detection("orca", on(orca.copy(state = "stopped", version = "1.4.277")))).zhAny())
+        assertEquals("不兼容，版本 1.4.100", (Engines.detection("orca", on(orca.copy(state = "incompatible", version = "1.4.100")))).zhAny())
+        assertEquals("没检测到", (Engines.detection("orca", on(orca.copy(state = "missing")))).zhAny())
+        assertEquals("没检测到", (Engines.detection("orca", on(orca.copy(state = "from-the-future")))).zhAny())
+        assertEquals("检测到可用，版本 1.4.277",
+            (Engines.detection("orca", on(orca.copy(available = true, state = "running", version = "1.4.277")))).zhAny())
+        assertEquals(Engines.State.Unknown, Engines.state(orca.copy(state = "sleeping")))
+        assertEquals(Engines.State.Unknown, Engines.state(null))
+        assertEquals(Engines.State.Stopped, Engines.state(orca.copy(state = "stopped")))
+    }
+
+    /** One rule for "Orca isn't running": online, Orca in the engine set, and its node says installed and stopped (#17037). */
+    @Test fun orcaIsStoppedOnlyWhereItIsEnabledAndSaidSo() {
+        val stopped = orca.copy(note = null, state = "stopped")
+        val m = Machine(id = "m1", online = true, engine = "herdr", engineHosts = listOf("herdr", "orca"), engineDefault = "herdr",
+            engines = listOf(herdr, stopped))
+        assertTrue("in the set, not the default", Engines.orcaStopped(m))
+        assertTrue(Engines.orcaStopped(m.copy(engine = "orca", engineHosts = listOf("orca"), engineDefault = "orca")))
+        assertFalse("not enabled", Engines.orcaStopped(m.copy(engineHosts = listOf("herdr"))))
+        assertFalse(Engines.orcaStopped(m.copy(online = false)))
+        assertFalse(Engines.orcaStopped(m.copy(engines = listOf(herdr, stopped.copy(available = true, state = "running")))))
+        assertFalse(Engines.orcaStopped(m.copy(engines = listOf(herdr, stopped.copy(state = "incompatible", note = "update")))))
+        assertFalse("an older node", Engines.orcaStopped(m.copy(engines = listOf(herdr, stopped.copy(state = null)))))
+        assertTrue("an older hub: its single engine", Engines.orcaStopped(m.copy(engine = "orca", engineHosts = null)))
+        assertEquals(listOf("herdr", "herdr-core"), Engines.hosts(m.copy(engine = "herdr-both", engineHosts = null)))
+        assertEquals(emptyList<String>(), Engines.hosts(m.copy(engineHosts = emptyList())))
+    }
+
     @Test fun detectionNamesAndNotes() {
         val m = machine(engines = listOf(herdr, core))
         assertEquals("检测到可用，版本 0.9.3", (Engines.detection("herdr", m)).zhAny())

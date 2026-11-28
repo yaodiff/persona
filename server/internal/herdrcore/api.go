@@ -2,9 +2,11 @@ package herdrcore
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -193,8 +195,14 @@ func (c *Client) Subscribe(ctx context.Context, started func(), fn func(Event)) 
 }
 
 func (c *Client) subscribe(ctx context.Context, started func(), fn func(Event)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	conn, err := c.dial(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
 	defer conn.Close()
@@ -202,11 +210,18 @@ func (c *Client) subscribe(ctx context.Context, started func(), fn func(Event)) 
 	defer stop()
 	_ = conn.SetDeadline(time.Now().Add(callTimeout))
 	id := c.seq.Add(1)
+	idStr := strconv.FormatInt(id, 10)
 	if err := writeRequest(conn, id, "events.subscribe", map[string]any{}); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("herdr-core events.subscribe: %w", err)
 	}
 	r := bufio.NewReaderSize(conn, 64<<10)
 	for live := false; ; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		line, err := readLine(r, maxLine)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -214,21 +229,36 @@ func (c *Client) subscribe(ctx context.Context, started func(), fn func(Event)) 
 			}
 			return fmt.Errorf("herdr-core events: %w", err)
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(heartbeatGap))
 		var msg response
 		if json.Unmarshal(line, &msg) != nil {
 			continue
 		}
+		if live {
+			_ = conn.SetReadDeadline(time.Now().Add(heartbeatGap))
+		}
 		if !live {
 			if msg.Method != "" {
+				continue
+			}
+			rawID := bytes.TrimSpace(msg.ID)
+			if msg.Error != nil && (len(rawID) == 0 || string(rawID) == "null") {
+				return msg.decode(nil)
+			}
+			if string(rawID) != idStr {
 				continue
 			}
 			if err := msg.decode(nil); err != nil {
 				return err
 			}
 			_ = conn.SetWriteDeadline(time.Time{})
+			_ = conn.SetReadDeadline(time.Now().Add(heartbeatGap))
 			live = true
-			started()
+			if started != nil {
+				started()
+			}
+			continue
+		}
+		if fn == nil {
 			continue
 		}
 		switch msg.Method {

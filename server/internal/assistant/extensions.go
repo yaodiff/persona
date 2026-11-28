@@ -142,6 +142,7 @@ type domainTrackKinds interface {
 // SetExtensions gives the service the extensions' tools (before Run).
 func (s *Service) SetExtensions(e ExtensionTools) {
 	s.ext = e
+	s.integrationReads, _ = e.(integrationReads)
 	s.trackKindsExt, _ = e.(domainTrackKinds)
 	s.heard, _ = e.(ownerHeard)
 	if r, ok := e.(launcherSecrets); ok {

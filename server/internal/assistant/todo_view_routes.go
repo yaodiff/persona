@@ -159,27 +159,40 @@ type todoItem struct {
 // viewedTodo is to-do id as GET /api/v1/todos/{id} answers it: its row as the list has it, with its view and its
 // brief; false when there is none.
 func (s *Service) viewedTodo(ctx context.Context, id string) (listedTodo, bool, error) {
-	t, _, found, err := s.viewedTodoRuns(ctx, id)
+	t, _, found, err := s.viewedTodoRuns(ctx, id, false)
 	return t, found, err
 }
 
 // viewedTodoRuns is viewedTodo with the sessions of the to-do's active runs as its view read them (todoFactsOf),
 // which its timeline reads rather than ask the computers again (todo_timeline.go).
-func (s *Service) viewedTodoRuns(ctx context.Context, id string) (listedTodo, []proto.Session, bool, error) {
+func (s *Service) viewedTodoRuns(ctx context.Context, id string, extension bool) (listedTodo, []proto.Session, bool, error) {
 	list, p, err := s.todosViewed(ctx, false)
 	if err != nil {
 		return listedTodo{}, nil, false, err
 	}
-	if s.settings(ctx).todosV2On() {
-		populateTodoEffectiveDirections(list, s.todoBoardDirectionLabels(ctx))
+	i := slices.IndexFunc(list, func(t listedTodo) bool { return t.ID == id })
+	if i == -1 {
+		return listedTodo{}, nil, false, nil
 	}
-	for i, t := range list {
-		if t.ID == id {
-			t.Todo = s.withBrief(t.Todo) // as withBriefFrom gives it in the list
-			return t, p.facts[i].Sessions, true, nil
+	sessions := p.facts[i].Sessions
+	if cfg := s.settings(ctx); cfg.todosV2On() {
+		if extension {
+			// The requested row passed todoScoped. Its direction can also come from another row, so
+			// apply the extension's list visibility rules to the graph before resolving that field.
+			list, _, err = s.extensionRows(ctx, list, p)
+			if err != nil {
+				return listedTodo{}, nil, false, err
+			}
+			i = slices.IndexFunc(list, func(t listedTodo) bool { return t.ID == id })
+			if i == -1 {
+				return listedTodo{}, nil, false, nil
+			}
 		}
+		s.populateTodoEffectiveDirections(list, s.todoDirectionLabels(ctx, cfg))
 	}
-	return listedTodo{}, nil, false, nil
+	t := list[i]
+	t.Todo = s.withBrief(t.Todo)
+	return t, sessions, true, nil
 }
 
 func (s *Service) todoViewRoutes() {
@@ -200,7 +213,8 @@ func (s *Service) todoViewRoutes() {
 			apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", i18n.Err("assistant-todos.not_found"))
 			return
 		}
-		t, sessions, found, err := s.viewedTodoRuns(r.Context(), id)
+		ext := r.Header.Get(RoleHeader) == roleExtension
+		t, sessions, found, err := s.viewedTodoRuns(r.Context(), id, ext)
 		switch {
 		case err != nil:
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -213,7 +227,6 @@ func (s *Service) todoViewRoutes() {
 				return
 			}
 			// Its runs' sessions as its view read them: the timeline asks no computer again.
-			ext := r.Header.Get(RoleHeader) == roleExtension
 			item := todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), t.Todo, raw, sessions, ext)}
 			if !ext {
 				item.Handoff = s.latestTodoContextHandoff(r.Context(), t.ID)

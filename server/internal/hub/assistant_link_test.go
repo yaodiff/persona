@@ -291,3 +291,27 @@ func TestAssistantLinkTaskInstructionsCapability(t *testing.T) {
 		}
 	}
 }
+
+func TestAssistantLinkScratchWorkspaceCapability(t *testing.T) {
+	h, n := conversationsHub(t)
+	for _, tc := range []struct {
+		protocol int
+		cap      bool
+		want     bool
+	}{{0, true, false}, {1, false, false}, {1, true, true}} {
+		n.m.mu.Lock()
+		n.m.info.Protocol = tc.protocol
+		n.m.info.Capabilities = nil
+		if tc.cap {
+			n.m.info.Capabilities = []string{"scratch_workspace_v1"}
+		}
+		n.m.mu.Unlock()
+		raw, err := (assistantLink{h}).DeviceCall(t.Context(), assistant.DeviceCall{Device: assistant.DeviceAll, Method: assistant.DeviceDevicesList})
+		var out struct {
+			Devices []assistant.Device `json:"devices"`
+		}
+		if err != nil || json.Unmarshal(raw, &out) != nil || len(out.Devices) != 1 || out.Devices[0].ScratchWorkspace != tc.want {
+			t.Fatalf("scratch capability=%s %v", raw, err)
+		}
+	}
+}

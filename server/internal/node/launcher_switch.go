@@ -344,11 +344,6 @@ func (n *Node) switchSession(ctx context.Context, id string, engine bool) (host.
 	if _, ok := h.(host.ForegroundNamer); !ok {
 		return a, nil, ref, unsupported(h.Kind() + " cannot say what runs in the agent's terminal")
 	}
-	if h.Kind() == host.Orca {
-		// Orca names what runs in a terminal now (#17039), but restarting an agent in its own Orca terminal is not
-		// checked end to end yet (#17040).
-		return a, nil, ref, unsupported("Orca cannot restart an agent in its terminal yet")
-	}
 	launch, err := n.launcherFor(h.Kind())
 	if err != nil {
 		return a, nil, ref, unsupported(err.Error())

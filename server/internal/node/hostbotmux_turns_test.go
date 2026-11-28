@@ -37,7 +37,10 @@ type fakeBotmuxTurnsServer struct {
 	turnsSince   []string
 	triggers     []map[string]any
 	onTurnsGet   func() // runs while a turns GET is answered (a concurrent dashboard refresh)
-	srv          *httptest.Server
+	// triggerStatus / triggerErr: a refusal /api/trigger answers with instead (botmux's 403 owner_unresolved, …).
+	triggerStatus int
+	triggerErr    string
+	srv           *httptest.Server
 }
 
 func newFakeBotmuxTurnsServer(t *testing.T) *fakeBotmuxTurnsServer {
@@ -92,6 +95,13 @@ func newFakeBotmuxTurnsServer(t *testing.T) *fakeBotmuxTurnsServer {
 			var body map[string]any
 			_ = json.Unmarshal(b, &body)
 			fs.triggers = append(fs.triggers, body)
+			if fs.triggerStatus != 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(fs.triggerStatus)
+				// botmux's shape (dashboard-ipc-server.ts): the code in errorCode, its words in error.
+				fmt.Fprintf(w, `{"ok":false,"errorCode":%q,"error":"refused by the fake"}`, fs.triggerErr)
+				return
+			}
 			resp := map[string]any{"ok": true, "action": "delivered"}
 			if fs.echoActor && body["actor"] == "owner" {
 				resp["actor"] = "owner"
@@ -110,6 +120,7 @@ func (fs *fakeBotmuxTurnsServer) makeHost(bin string) *botmuxHost {
 	port := fs.srv.URL[strings.LastIndex(fs.srv.URL, ":")+1:]
 	return &botmuxHost{
 		bin:    bin,
+		owner:  bmxOwner, // a BotMux Owner Union ID is set; TestBotmuxOwnerUnset* clear it
 		client: fs.srv.Client(),
 		run: func(_ context.Context, args ...string) ([]byte, error) {
 			fs.mu.Lock()
@@ -133,6 +144,9 @@ func (fs *fakeBotmuxTurnsServer) makeHost(bin string) *botmuxHost {
 		},
 	}
 }
+
+// bmxOwner is the BotMux Owner Union ID the hosts of these tests have (Settings › Agents).
+const bmxOwner proto.BotmuxOwnerUnionID = "on_testowner0000000000000000000000"
 
 func sha256Of(s string) string {
 	sum := sha256.Sum256([]byte(s))
@@ -413,8 +427,8 @@ func TestBotmuxVersionProbeAndOwnerActorSend(t *testing.T) {
 	if fs.turnsGets != 1 {
 		t.Fatalf("expected 1 cached probe GET for old botmux, got %d", fs.turnsGets)
 	}
-	if !h.externalTriggerNotice() {
-		t.Fatal("expected externalTriggerNotice() == true on 404 old botmux")
+	if h.externalTriggerNotice() != proto.BotmuxTriggerUpgrade {
+		t.Fatal("expected the upgrade notice on 404 old botmux")
 	}
 	if len(fs.triggers) != 2 || fs.triggers[0]["actor"] != nil || fs.triggers[1]["actor"] != nil {
 		t.Fatalf("old botmux triggers must not carry actor: %+v", fs.triggers)
@@ -435,8 +449,8 @@ func TestBotmuxVersionProbeAndOwnerActorSend(t *testing.T) {
 	if fs.turnsGets != 2 {
 		t.Fatalf("expected re-probe after upgrade, turnsGets = %d", fs.turnsGets)
 	}
-	if h.externalTriggerNotice() {
-		t.Fatal("expected externalTriggerNotice() == false when ownerActor is supported")
+	if got := h.externalTriggerNotice(); got != "" {
+		t.Fatalf("expected no notice when ownerActor is supported and an owner is set, got %q", got)
 	}
 	last := fs.triggers[len(fs.triggers)-1]
 	if last["actor"] != "owner" {
@@ -458,8 +472,8 @@ func TestBotmuxVersionProbeAndOwnerActorSend(t *testing.T) {
 	if err := h.Prompt(ctx, host.PaneRef{Kind: host.Botmux, ID: sidA}, "hello no-actor"); err != nil {
 		t.Fatalf("no-actor prompt: %v", err)
 	}
-	if !h.externalTriggerNotice() {
-		t.Fatal("expected externalTriggerNotice() == true when capabilities omits ownerActor")
+	if h.externalTriggerNotice() != proto.BotmuxTriggerUpgrade {
+		t.Fatal("expected the upgrade notice when capabilities omits ownerActor")
 	}
 	if got := fs.triggers[len(fs.triggers)-1]["actor"]; got != nil {
 		t.Fatalf("expected no actor when capability absent, got %v", got)
@@ -479,7 +493,7 @@ func TestBotmuxOwnerActorUnechoedDoesNotResend(t *testing.T) {
 	if len(fs.triggers) != 1 {
 		t.Fatalf("must never resend on unechoed actor; got %d triggers", len(fs.triggers))
 	}
-	if !h.externalTriggerNotice() {
+	if h.externalTriggerNotice() != proto.BotmuxTriggerUpgrade {
 		t.Fatal("unechoed actor must mark ownerActor unavailable for future sends")
 	}
 }
@@ -657,8 +671,8 @@ func TestBotmuxUnknownSession404DoesNotPoisonCache(t *testing.T) {
 	if caps.known {
 		t.Fatalf("404 unknown_session must not be cached as old botmux: %+v", caps)
 	}
-	if h.externalTriggerNotice() {
-		t.Fatal("unknown_session must not enable externalTriggerNotice")
+	if got := h.externalTriggerNotice(); got != "" {
+		t.Fatalf("unknown_session must not enable externalTriggerNotice, got %q", got)
 	}
 }
 
@@ -898,9 +912,14 @@ func bmxMustJSON(v any) json.RawMessage {
 func TestBotmuxListKeyIncludesExternalTrigger(t *testing.T) {
 	a := []proto.Session{{SessionID: sidA, PaneID: "botmux:" + sidA, UpdatedAt: time.Unix(100, 0)}}
 	b := []proto.Session{{SessionID: sidA, PaneID: "botmux:" + sidA, UpdatedAt: time.Unix(100, 0)}}
-	b[0].SetBotmuxExternalTrigger(true)
+	b[0].SetBotmuxExternalTrigger(proto.BotmuxTriggerUpgrade)
 	if listKey(a) == listKey(b) {
 		t.Fatal("listKey must change when BotmuxExternalTrigger toggles")
+	}
+	c := []proto.Session{b[0]}
+	c[0].SetBotmuxExternalTrigger(proto.BotmuxTriggerOwnerUnset)
+	if listKey(b) == listKey(c) {
+		t.Fatal("listKey must change when the external-trigger reason changes")
 	}
 }
 
@@ -918,12 +937,12 @@ func TestBotmuxOwnerActorUnechoedSurvivesStructuredRead(t *testing.T) {
 	if len(fs.triggers) != 1 || fs.triggers[0]["actor"] != "owner" {
 		t.Fatalf("prompt 1 should have attempted actor=owner: %+v", fs.triggers)
 	}
-	if !h.externalTriggerNotice() {
-		t.Fatal("expected externalTriggerNotice() == true after unechoed actor")
+	if h.externalTriggerNotice() != proto.BotmuxTriggerUpgrade {
+		t.Fatal("expected the upgrade notice after unechoed actor")
 	}
 
 	// Structured read between two Prompts returns capabilities: ["ownerActor"], must NOT clear the sticky fallback.
-	if _, _ = h.sessionTurns(ctx, sidA); !h.externalTriggerNotice() {
+	if _, _ = h.sessionTurns(ctx, sidA); h.externalTriggerNotice() != proto.BotmuxTriggerUpgrade {
 		t.Fatal("sessionTurns must not overwrite sticky unechoed ownerActor=false")
 	}
 

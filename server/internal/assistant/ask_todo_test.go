@@ -16,7 +16,7 @@ import (
 // An ask_user nobody answers in time becomes a to-do that waits for the owner's call, and the call goes back to the
 // conversation that asked (#1617, ask_todo.go). All ids are placeholders.
 
-const askTodoArgs = `{"questions":[{"question":"Merge the release PR now?","header":"Merge","options":[` +
+const askTodoArgs = `{"why_owner":"priority","questions":[{"question":"Merge the release PR now?","header":"Merge","options":[` +
 	`{"label":"Merge (Recommended)","description":"CI is green"},{"label":"Wait","description":"until the review is in"}]}]}`
 
 // askTodoEnv is threadEnv (a paired bot, the main conversation m1 and the conversation c1x1x1 on server) where c1x1x1 asks.

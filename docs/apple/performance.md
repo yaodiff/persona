@@ -332,8 +332,9 @@ decode takes tens of milliseconds. `UIImage(data:)` decodes lazily at first draw
 - `apple/Persona/Persona/PersonaStore.swift:566`: `avatar(_:points:scale:)` reads and decodes the avatar file and calls
   `preparingForDisplay()` on the main actor; `apple/Persona/Persona/PersonaViews.swift:19` calls it from `body`, so the
   first draw of each avatar decodes on the main thread (cached afterwards).
-- `apple/Persona/Views/Session/CompareView.swift:249`: `UIImage(data:)` in `body`, on every render.
 - `apple/Persona/Views/Chat/PhotoAttach.swift:35`: picked photos decoded, scaled and encoded on the main actor.
+- Fixed before: `ImageCompareView` created both images on each divider update. It now keeps the two ImageIO previews
+  for the displayed revision pair and shares them between the side-by-side and slider layouts (#4267).
 - Fixed before: `LarkAttachmentView` decoded its thumbnail in `body` on every render. Its attachment-ID-keyed,
   byte-costed `LarkAttachmentThumbnailCache` now shares ImageIO thumbnails decoded off the main actor at the compact and
   full pixel sizes; malformed or missing thumbnail bytes keep the file-card fallback.
@@ -682,7 +683,6 @@ Grep counts are across `apple/` without tests; they are leads to read, not each 
 **P8: images**
 
 - `apple/Persona/Persona/PersonaStore.swift:566`: avatar decode and `preparingForDisplay()` on the main actor, from `body` (`apple/Persona/Persona/PersonaViews.swift:19`); `isOnPhone` checks the file system before the cache on every call.
-- `apple/Persona/Views/Session/CompareView.swift:249`: decodes both full images of a comparison from `body`, every render.
 - `apple/Persona/Views/Chat/PhotoAttach.swift:35`: picked photos are decoded at full size, scaled and encoded to JPEG on the main actor (`MessagePhotos`); `apple/Persona/Views/Assistant/AssistantView.swift:1036-1042` does the same.
 - `apple/PersonaWatch/WatchPetView.swift:169`: `UIImage(contentsOfFile:)` in a watch row's `body`.
 - Good: `apple/Persona/Views/Inbox/Lark/LarkMedia.swift:110`, `apple/Persona/Views/Chat/ChatImageLoader.swift:34`, `apple/Persona/Views/Settings/AvatarUploadModel.swift:82`.

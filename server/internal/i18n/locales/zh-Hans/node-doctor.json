@@ -165,5 +165,10 @@
   "agy_hooks_stale": "Persona 的 Antigravity CLI 钩子指向别的程序",
   "agy_hooks_hint": "运行 personad node doctor --fix（之后各引擎里的 agy 窗格都能读到对话）",
   "agy_hooks_off": "Persona 的 Antigravity CLI 钩子是特意卸掉的（personad node agy-hooks install 装回）",
-  "agy_hooks_unreadable": "读不了 Antigravity CLI 的钩子文件（{error}）"
+  "agy_hooks_unreadable": "读不了 Antigravity CLI 的钩子文件（{error}）",
+  "orca_ok": "Orca {version} 在运行",
+  "orca_stopped": "Orca 装了，但没在运行",
+  "orca_stopped_hint": "Orca 是这台电脑的引擎时先打开它；用别的引擎时可以忽略",
+  "orca_incompatible": "Orca {version} 在运行，但和这个版本的 Persona 不兼容",
+  "orca_incompatible_hint": "把 Orca 和 Persona 都更新到最新版"
 }

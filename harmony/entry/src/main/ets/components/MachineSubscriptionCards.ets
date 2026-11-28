@@ -88,7 +88,7 @@ struct SubscriptionTimeline {
   @Require @Param now:number;
   @Require @Param locale:string;
   @Local private plotWidth:number=0;
-  private weekColor():ResourceColor {return nativeEnvironment.dark ? '#5B9BFF' : '#2E6FD0';}
+  private weekColor(): ResourceColor { return Colors.chartBlue; }
   private x(reset:number):number { return this.plotWidth*usageTimelinePosition((reset-this.now)/3600000); }
   private caption(h:number):string {return h===0 ? words('now') : h<24 ? words('axis_hours',String(h)) : words('axis_days',String(h/24));}
   @Builder lane(reset:number,color:ResourceColor,height:number) {
@@ -106,7 +106,7 @@ struct SubscriptionTimeline {
     }.height(15).width('100%')
   }
   @Builder legend(title:string,color:ResourceColor) {
-    Row({space:4}) { Row().width(16).height(6).borderRadius(3).backgroundColor(color); Text(title).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary).maxLines(1) }
+    Row({space:4}) { Row().width(16).height(6).borderRadius(Tokens.radiusCapsule).backgroundColor(color); Text(title).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontColor(Colors.secondary).maxLines(1) }
   }
   build(){
     Column({space:4}) {
@@ -132,7 +132,7 @@ struct SubscriptionTimeline {
               .position({x:Math.min(Math.max(0,this.plotWidth-1),this.plotWidth*usageTimelinePosition(h)),y:0})},(h:number)=>String(h))
             Column() {this.lane(a.planReset(300,this.now),Colors.teal,6);this.lane(a.planReset(10080,this.now),this.weekColor(),9)}.width('100%')
           }.layoutWeight(1).height(30)
-        }.width('100%').height(30).backgroundColor(index%2===0 ? Colors.subtle : Color.Transparent).borderRadius(6)
+        }.width('100%').height(30).backgroundColor(index%2===0 ? Colors.subtle : Color.Transparent).borderRadius(Tokens.radiusBadge)
           .accessibilityGroup(true).accessibilityText([a.name,Number.isFinite(a.planReset(300,this.now)) ? '5h '+resetLabel(a.planReset(300,this.now),this.now,this.locale) : '',
             Number.isFinite(a.planReset(10080,this.now)) ? '7d '+resetLabel(a.planReset(10080,this.now),this.now,this.locale) : ''].filter((s:string)=>!!s).join(', '))
       },(a:SubscriptionAccount)=>a.id)
@@ -226,7 +226,7 @@ export struct MachineSubscriptionCards {
       Circle().width('100%').height('100%').fill(this.source.hidden.length ? this.accent() : Color.Transparent).stroke(this.accent()).strokeWidth(1.6)
       Column({space:1.7}) {
         ForEach([10,7,3.5],(width:number)=>{
-          Row().width(width).height(1.4).borderRadius(1).backgroundColor(this.source.hidden.length ? Colors.onAction : this.accent())
+          Row().width(width).height(1.4).borderRadius(Tokens.radiusCapsule).backgroundColor(this.source.hidden.length ? Colors.onAction : this.accent())
         },(width:number)=>String(width))
       }
     }.width(Tokens.interfaceFontVp(20,nativeEnvironment.fontScale)).height(Tokens.interfaceFontVp(20,nativeEnvironment.fontScale)).accessibilityLevel('no')

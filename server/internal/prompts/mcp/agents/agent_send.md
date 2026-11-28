@@ -1,12 +1,12 @@
-Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Any stop but the user's allows resume, an unknown one too. User or exit stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.
+Send the user's request. Busy Agents may queue it. To keep context after a stop, use resume and resume_why, including for unknown stops. User or exit stops need the owner's Resume. Give task unless the Agent has your open task. Nearly full Agents compact first. Use agent_start for unrelated work, ask_user if unsure. An unused branch starts on first send. Only /exit or /quit stops an Agent and keeps its tab. The owner closes other chats' Agents.
 
 For dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.
 
-Give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.
+Give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task or use null for a reply, nudge or decision. Blank fields count as omitted.
 
-Use `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result. A stopped Agent resumes onto its own open to-do with `todo_id` (never with `task`).
+Use `handoff` for your stopped to-do. A node ack starts its result wait. Resume a stopped Agent onto its own open to-do with `todo_id` (never `task`).
 
-`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.{{template "shared/mcp_language" .}}
+`wait_seconds` observes up to 50s after dispatch. `Inline observation` JSON: `completed` (this input's `reply`), `question` (pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids. It never answers questions, accepts tasks, resends or cancels work. Normal supervision via `task_review` applies. Older nodes may time out rather than return an unrelated reply.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -26,6 +26,10 @@ Use `handoff` for an already-stopped to-do you supervise. A node acknowledgement
     },
     "text": {
       "type": "string"
+    },
+    "inbox_item": {
+      "type": "string",
+      "description": "Inbox ID to link to the task. Omit to skip linking."
     },
     "resume": {
       "type": "boolean",

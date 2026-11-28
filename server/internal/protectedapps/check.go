@@ -23,6 +23,7 @@ package protectedapps
 
 import (
 	"encoding/json"
+	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -156,33 +157,39 @@ func (l *Look) Check(where, tool string, args json.RawMessage) Verdict {
 	if !Acts(tool) {
 		return Verdict{}
 	}
-	var a struct {
-		App      string          `json:"app"`
-		Name     string          `json:"name"`
-		BundleID string          `json:"bundle_id"`
-		Script   string          `json:"script"`
-		Steps    json.RawMessage `json:"steps"`
-	}
-	_ = json.Unmarshal(args, &a)
+	var top map[string]json.RawMessage
+	_ = json.Unmarshal(args, &top)
 	var named []string
 	var targets []target
+	addNamed := func(n string) {
+		if n = strings.TrimSpace(n); n != "" && !slices.Contains(named, n) {
+			named = append(named, n)
+		}
+	}
 	switch tool {
 	case "run_script":
-		apps, all := ScriptApps(a.Script)
+		apps, all := ScriptApps(rawStringField(top, "script"))
 		if !all {
 			return Verdict{Why: UnreadableScript, Rule: "script"}
 		}
-		named = apps
+		for _, n := range apps {
+			addNamed(n)
+		}
 	case "run_steps":
-		named, _ = StepsApps(a.App, a.Steps)
+		apps, _ := StepsApps(rawStringField(top, "app"), top["steps"])
+		for _, n := range apps {
+			addNamed(n)
+		}
 		targets = stepsTargets(args)
 	default:
-		for _, n := range []string{a.App, a.Name, a.BundleID} {
-			if strings.TrimSpace(n) != "" {
-				named = append(named, n)
-			}
+		for _, k := range []string{"app", "name", "bundle_id"} {
+			addNamed(rawStringField(top, k))
 		}
 		targets = []target{targetOf(tool, args)}
+	}
+	// Defense in depth: ensure every target's app name is also checked as a named app.
+	for _, t := range targets {
+		addNamed(t.app)
 	}
 	operate := func(app string) Verdict {
 		return Verdict{Why: Refusal(where, "it would operate "+app), Rule: "named", App: app}
@@ -319,8 +326,7 @@ const (
 // tokenCheck traces t's element token to its window: refused when it is one of System Settings' windows, or when
 // that cannot be told.
 func (l *Look) tokenCheck(where string, t target) Verdict {
-	snap, _, ok := strings.Cut(t.token, ":")
-	if !ok || !isSnapshotID(snap) {
+	if isBareRow(t.token) {
 		// A bare row number is a row of window_id's current snapshot: the window was judged by its id (aimed).
 		if len(t.wids) > 0 {
 			return Verdict{}
@@ -328,6 +334,12 @@ func (l *Look) tokenCheck(where string, t target) Verdict {
 		name := l.listed(settings, false)[0]
 		return Verdict{Why: TokenUnchecked(where, name), Rule: "token", App: name}
 	}
+	snap, row, ok := strings.Cut(t.token, ":")
+	if !ok || !isSnapshotID(snap) || !isBareRow(row) {
+		name := l.listed(settings, false)[0]
+		return Verdict{Why: TokenUnchecked(where, name), Rule: "token", App: name}
+	}
+	snap = strings.ToLower(snap)
 	for i, w := range l.windows {
 		if l.kinds[i] != settings {
 			continue
@@ -374,13 +386,27 @@ func (l *Look) ownerOf(snap string, w Window) owner {
 	return o
 }
 
-// isSnapshotID: "s" and hex digits, as Cua Driver's snapshot ids are.
-func isSnapshotID(s string) bool {
-	if len(s) < 2 || s[0] != 's' {
+// isBareRow reports whether s is a non-empty ASCII decimal row index without a snapshot prefix.
+func isBareRow(s string) bool {
+	if s == "" {
 		return false
 	}
-	for _, c := range s[1:] {
-		if !strings.ContainsRune("0123456789abcdef", c) {
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isSnapshotID: "s" (case-insensitive) followed by hex digits, as Cua Driver's snapshot ids are.
+func isSnapshotID(s string) bool {
+	if len(s) < 2 || (s[0] != 's' && s[0] != 'S') {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return false
 		}
 	}
@@ -484,19 +510,43 @@ func (l *Look) framesOf(t target) []Window {
 type point struct{ x, y float64 }
 
 // ray is where window-local pixels p can land in r: from r's origin plus p at scale 2 out along the same line to
-// r's edge (at scale 2 when p is not toward r).
+// r's edge (at scale 2 when p is not toward r). Computes boundary intersections via bounded ratios so tiny positive
+// coordinates cannot overflow r.Width/p.x to +Inf or produce +Inf*0 = NaN.
 func ray(r Rect, p point) (from, to point) {
-	lo, hi := 0.5, -1.0
-	if p.x > 0 {
-		hi = r.Width / p.x
+	const lo = 0.5
+	if math.IsNaN(r.X) || math.IsNaN(r.Y) || math.IsInf(r.X, 0) || math.IsInf(r.Y, 0) {
+		return point{}, point{}
 	}
-	if p.y > 0 && (hi < 0 || r.Height/p.y < hi) {
-		hi = r.Height / p.y
+	if math.IsNaN(p.x) || math.IsNaN(p.y) || math.IsInf(p.x, 0) || math.IsInf(p.y, 0) ||
+		math.IsNaN(r.Width) || math.IsNaN(r.Height) || math.IsInf(r.Width, 0) || math.IsInf(r.Height, 0) {
+		return point{r.X, r.Y}, point{r.X, r.Y}
 	}
-	if p.x < 0 || p.y < 0 || hi < lo {
-		hi = lo
+	from = point{r.X + lo*p.x, r.Y + lo*p.y}
+	if math.IsInf(from.x, 0) || math.IsInf(from.y, 0) {
+		return point{r.X, r.Y}, point{r.X, r.Y}
 	}
-	return point{r.X + lo*p.x, r.Y + lo*p.y}, point{r.X + hi*p.x, r.Y + hi*p.y}
+	if p.x < 0 || p.y < 0 || (p.x == 0 && p.y == 0) ||
+		r.Width <= 0 || r.Height <= 0 || lo*p.x > r.Width || lo*p.y > r.Height {
+		return from, from
+	}
+	switch {
+	case p.x == 0:
+		return from, point{r.X, r.Y + r.Height}
+	case p.y == 0:
+		return from, point{r.X + r.Width, r.Y}
+	case p.y <= p.x:
+		ratio := p.y / p.x // in (0, 1], finite
+		if y := ratio * r.Width; y <= r.Height {
+			return from, point{r.X + r.Width, r.Y + y}
+		}
+		return from, point{r.X + r.Height/ratio, r.Y + r.Height}
+	default:
+		inv := p.x / p.y // in (0, 1), finite
+		if x := inv * r.Height; x <= r.Width {
+			return from, point{r.X + x, r.Y + r.Height}
+		}
+		return from, point{r.X + r.Width, r.Y + r.Width/inv}
+	}
 }
 
 // coveredAlong is the System Settings window on top somewhere between a and b, if any: looked at each place the line
@@ -630,19 +680,20 @@ func targetOf(tool string, raw json.RawMessage) target {
 	if w, ok := number("window_id"); ok && w > 0 {
 		t.wids = append(t.wids, int(w))
 	}
-	var aim struct {
-		Kind     string `json:"kind"`
-		PID      int    `json:"pid"`
-		WindowID int    `json:"window_id"`
-	}
+	var aim map[string]json.RawMessage
 	if json.Unmarshal(a["target"], &aim) == nil {
-		if aim.PID > 0 && !slices.Contains(t.pids, aim.PID) {
-			t.pids = append(t.pids, aim.PID)
+		var pidF, widF float64
+		if raw, ok := aim["pid"]; ok && json.Unmarshal(raw, &pidF) == nil && pidF > 0 {
+			if pid := int(pidF); !slices.Contains(t.pids, pid) {
+				t.pids = append(t.pids, pid)
+			}
 		}
-		if aim.WindowID > 0 && !slices.Contains(t.wids, aim.WindowID) {
-			t.wids = append(t.wids, aim.WindowID)
+		if raw, ok := aim["window_id"]; ok && json.Unmarshal(raw, &widF) == nil && widF > 0 {
+			if wid := int(widF); !slices.Contains(t.wids, wid) {
+				t.wids = append(t.wids, wid)
+			}
 		}
-		t.desktop = aim.Kind == "desktop"
+		t.desktop = rawStringField(aim, "kind") == "desktop"
 	}
 	t.desktop = t.desktop || text("scope") == "desktop"
 	for _, k := range [][2]string{{"x", "y"}, {"from_x", "from_y"}, {"to_x", "to_y"}} {
@@ -656,43 +707,41 @@ func targetOf(tool string, raw json.RawMessage) target {
 	return t
 }
 
+// carriesTarget reports whether a single-action step for tool establishes an active window/app
+// target that subsequent steps may inherit. Windowless, browser, page, and launch_app actions
+// never establish a desktop-window focus target for later steps.
+func carriesTarget(tool string) bool {
+	return tool != "" && tool != "launch_app" && !windowless[tool] && !strings.HasPrefix(tool, "browser_") && tool != "page"
+}
+
 // stepsTargets is each action of a run_steps call: a step names its tool ({"tool": …, "args": …} or {<tool>: args});
-// one naming no window has the call's default (app, window, pid, window_id), or the window of the step before.
-// A step that is only a check (wait_for, expect) acts on nothing.
+// one naming no window has the call's default (app, window, pid, window_id), or the window of a previous single-action
+// step that carries a target. A step that is only a check (wait_for, expect) acts on nothing.
 func stepsTargets(call json.RawMessage) []target {
-	var c struct {
-		Steps []map[string]json.RawMessage `json:"steps"`
-	}
-	_ = json.Unmarshal(call, &c)
+	var top map[string]json.RawMessage
+	_ = json.Unmarshal(call, &top)
+	var steps []map[string]json.RawMessage
+	_ = json.Unmarshal(top["steps"], &steps)
 	last := targetOf("", call)
 	var out []target
-	for _, s := range c.Steps {
-		var actions [][2]any
-		if raw, has := s["tool"]; has {
-			var tool string
-			_ = json.Unmarshal(raw, &tool)
-			actions = append(actions, [2]any{tool, s["args"]})
-		} else {
-			keys := make([]string, 0, len(s))
-			for k := range s {
-				if k != "wait_for" && k != "expect" && k != "timeout_ms" {
-					keys = append(keys, k)
-				}
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				actions = append(actions, [2]any{k, s[k]})
-			}
-		}
-		for _, x := range actions {
-			raw, _ := x[1].(json.RawMessage)
-			t := targetOf(x[0].(string), raw)
+	for _, s := range steps {
+		actions := stepActions(s)
+		prev := last
+		var nextLast target
+		updateLast := false
+		for _, a := range actions {
+			t := targetOf(a.tool, a.raw)
 			if t.placed() {
-				last = t
+				if len(actions) == 1 && carriesTarget(a.tool) {
+					nextLast, updateLast = t, true
+				}
 			} else {
-				t.app, t.title, t.pids, t.wids, t.token = last.app, last.title, last.pids, last.wids, last.token
+				t.app, t.title, t.pids, t.wids, t.token = prev.app, prev.title, prev.pids, prev.wids, prev.token
 			}
 			out = append(out, t)
+		}
+		if updateLast {
+			last = nextLast
 		}
 	}
 	return out

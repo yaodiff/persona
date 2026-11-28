@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { startFakeNode, until as waitUntil } from '../../runtime-sdk/testing/fake-node.js'
 import { conversationRpc, createDesktopRuntime, extractModelEntries, resolveModel, rpc } from '../lib/desktop.js'
+import { cleanUserText } from '../lib/map.js'
 
 const DESKTOP_ENTRY = fileURLToPath(new URL('../desktop.mjs', import.meta.url))
 
@@ -656,4 +657,146 @@ test('desktop merges trajectory-only sessions when ListConversations returns emp
   await waitUntil('unarchived trajectory session restored', () =>
     node.last('runtime.sessions')?.sessions?.length === 1 &&
     node.last('runtime.sessions').sessions[0].session_id === legacySession)
+})
+
+test('desktop findHub skips symlinked and null-JSON hub files, postJson rejects non-object/oversized replies, and send wraps context cleanly', async t => {
+  // 1. postJson rejects null/primitive JSON and oversized (>16 MiB) responses cleanly once.
+  const rpcServer = createServer((req, res) => {
+    if (req.url?.endsWith('/NullResp')) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end('null')
+      return
+    }
+    if (req.url?.endsWith('/PrimitiveResp')) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end('42')
+      return
+    }
+    if (req.url?.endsWith('/ArrayResp')) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify([{ id: 'model-a', name: 'Model A' }]))
+      return
+    }
+    if (req.url?.endsWith('/TruncatedResp')) {
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': '100' })
+      res.write('{"partial":')
+      setTimeout(() => req.socket.destroy(), 5)
+      return
+    }
+    if (req.url?.endsWith('/HugeResp')) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      const chunk = Buffer.alloc(1024 * 1024, 'a')
+      for (let i = 0; i < 18; i++) {
+        if (res.destroyed) break
+        res.write(chunk)
+      }
+      res.end()
+      return
+    }
+    if (req.url?.endsWith('/ListConversations')) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ conversations: [] }))
+      return
+    }
+    if (req.url?.endsWith('/GetAllCascadeTrajectories')) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ trajectorySummaries: {} }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }).end('{}')
+  })
+  await new Promise(resolve => rpcServer.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise(resolve => rpcServer.close(resolve)))
+  const port = rpcServer.address().port
+  const hub = { httpPort: port, csrfToken: 'tok-valid' }
+
+  await assert.rejects(rpc(hub, 'NullResp', {}), /returned non-object JSON/)
+  await assert.rejects(rpc(hub, 'PrimitiveResp', {}), /returned non-object JSON/)
+  await assert.rejects(rpc(hub, 'HugeResp', {}), /Desktop RPC response is too large/)
+  await assert.rejects(rpc(hub, 'TruncatedResp', {}), /response truncated|aborted|socket hang up|ECONNRESET/i)
+  assert.deepEqual(await conversationRpc(hub, 'ArrayResp', {}), [{ id: 'model-a', name: 'Model A' }])
+
+  // 2. Default discover (findHub) skips a symlink hub file (ELOOP), a JSON `null` hub file, and a hub directory (EISDIR), and finds the live hub.
+  const dir = mkdtempSync(join(tmpdir(), 'desktop-agy-findhub-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const daemonDir = join(dir, 'daemon')
+  mkdirSync(daemonDir, { recursive: true })
+  const dummyTarget = join(dir, 'outside.json')
+  writeFileSync(dummyTarget, '{}', { mode: 0o600 })
+  symlinkSync(dummyTarget, join(daemonDir, 'hub_1.json'))
+  writeFileSync(join(daemonDir, 'hub_2.json'), 'null', { mode: 0o600 })
+  mkdirSync(join(daemonDir, 'hub_3.json'))
+  const validHubPath = join(daemonDir, `hub_${port}.json`)
+  writeFileSync(validHubPath, JSON.stringify({ pid: process.pid, httpPort: port, csrfToken: 'tok-valid' }), { mode: 0o600 })
+  chmodSync(validHubPath, 0o600)
+
+  const nodeFind = await startFakeNode(t)
+  const rtFind = createDesktopRuntime({ dir, socketPath: nodeFind.path, workingPollMs: 0 })
+  t.after(() => rtFind.stop())
+  await rtFind.start()
+  await nodeFind.ready
+  await waitUntil('default findHub discovers live hub despite symlink and null-JSON files', () =>
+    Array.isArray(nodeFind.last('runtime.sessions')?.sessions))
+
+  // 3. send() wraps params.context with persona-context envelope (ignoring whitespace-only context) so cleanUserText & client_msg_id match.
+  const key = '22222222-3333-4444-8555-666666666666'
+  const sid = 'desktop-agy-' + key
+  const logsDir = join(dir, 'brain', key, '.system_generated', 'logs')
+  mkdirSync(logsDir, { recursive: true })
+  const transcriptPath = join(logsDir, 'transcript.jsonl')
+  writeFileSync(transcriptPath, '')
+  const sentPayloads = []
+  const nodeSend = await startFakeNode(t)
+  const rtSend = createDesktopRuntime({
+    dir,
+    socketPath: nodeSend.path,
+    workingPollMs: 0,
+    discover: async () => hub,
+    conversationCall: async () => ({ conversations: [] }),
+    call: async (_, method, params) => {
+      if (method === 'GetAllCascadeTrajectories') {
+        return { trajectorySummaries: { [key]: { summary: 'ctx test', lastModifiedTime: new Date().toISOString(), stepCount: 0 } } }
+      }
+      if (method === 'GetCascadeTrajectorySteps') {
+        return { steps: [{ userInput: { userConfig: { plannerConfig: { planModel: 'pro' } } } }] }
+      }
+      if (method === 'SendUserCascadeMessage') {
+        sentPayloads.push(params)
+        return {}
+      }
+      return {}
+    },
+  })
+  t.after(() => rtSend.stop())
+  await rtSend.start()
+  await nodeSend.ready
+
+  await nodeSend.peer.call('session.send', { session_id: sid, context: '   \n  ', text: 'plain msg', client_msg_id: 'cid-1' })
+  assert.equal(sentPayloads[0].items[0].text, 'plain msg')
+  writeFileSync(
+    transcriptPath,
+    JSON.stringify({ step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'plain msg' }) + '\n',
+  )
+
+  await nodeSend.peer.call('session.send', { session_id: sid, context: 'Branch: main', text: 'check diff', client_msg_id: 'cid-2' })
+  const wrapped = sentPayloads[1].items[0].text
+  assert.match(wrapped, /^Content of persona-context:\/\/\/snapshot\.txt:\n<persona-context>\nBranch: main\n<\/persona-context>\n\ncheck diff$/)
+  assert.equal(cleanUserText(wrapped), 'check diff')
+
+  // Transcript readback matches recorded client_msg_id because cleanUserText strips the wrapped context.
+  appendFileSync(
+    transcriptPath,
+    JSON.stringify({ step_index: 1, type: 'USER_INPUT', source: 'USER_EXPLICIT', content: wrapped }) + '\n',
+  )
+  const pageRes = await nodeSend.peer.call('session.items', { session_id: sid })
+  assert.equal(pageRes.items[0].client_msg_id, 'cid-1')
+  assert.equal(pageRes.items[1].text, 'check diff')
+  assert.equal(pageRes.items[1].client_msg_id, 'cid-2')
+
+  // Two <persona-context> blocks with middle text and lowercase context headers must still be wrapped in an outer envelope
+  // so cleanUserText strips all context cleanly without leaking middle text into the user prompt.
+  const twoBlockCtx = '<persona-context>a</persona-context>\nmiddle\n<persona-context>b</persona-context>'
+  await nodeSend.peer.call('session.send', { session_id: sid, context: twoBlockCtx, text: 'after two blocks', client_msg_id: 'cid-3' })
+  const wrappedTwo = sentPayloads[2].items[0].text
+  assert.equal(cleanUserText(wrappedTwo), 'after two blocks')
+
+  const lowerEnvCtx = 'content of persona-context:///snapshot.txt:\n<persona-context>x</persona-context>'
+  await nodeSend.peer.call('session.send', { session_id: sid, context: lowerEnvCtx, text: 'after lower env', client_msg_id: 'cid-4' })
+  const wrappedLower = sentPayloads[3].items[0].text
+  assert.equal(cleanUserText(wrappedLower), 'after lower env')
 })

@@ -11,6 +11,8 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/repositorywire"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 func taskRecoveryDatabase(t *testing.T) *db.DB {
@@ -168,6 +170,48 @@ func TestRunRecoversTaskStarts(t *testing.T) {
 	}
 	if receipts := recoveryReceipts(t, restarted, pt.TodoID); len(receipts) != 1 || receipts[0].State != "failed" {
 		t.Fatalf("Run did not persist the failed receipt: %+v", receipts)
+	}
+}
+
+func TestRecoverTaskStartsUsesWorkspaceBudgetAndKeepsLiveStart(t *testing.T) {
+	ctx := t.Context()
+	s, _ := newTaskService(t)
+	before := time.Now()
+	// Recover a start that had time to attempt a mirror and a whole direct cold fetch.
+	elapsed := taskStartTimeout + 3*taskworkspace.RPCTimeout + repositorywire.MirrorEnsureTimeout + taskworkspace.GitTimeout + taskworkspace.ColdFetchTimeout
+	updated := before.Add(-elapsed)
+	p := &TaskPlan{ID: "plan_workspace_start", Conversation: "conv1", State: planStarted, CreatedAt: updated, UpdatedAt: updated}
+	interrupted := pendingRecoveryTask(t, s, p.ID)
+	saved := pendingRecoveryTask(t, s, p.ID)
+	saved.Workspace = &TaskWorkspace{Mode: workspaceBackend, Backend: &BackendWorkspaceSelection{OperationID: "op_saved"}}
+	live := pendingRecoveryTask(t, s, p.ID)
+	ordinary := pendingRecoveryTask(t, s, p.ID)
+	for _, pt := range []*PlanTask{&interrupted, &live} {
+		pt.Workspace = &TaskWorkspace{Mode: workspaceContainer}
+		pt.WorkspaceResolved = &TaskWorkspaceResolved{Repositories: []BackendLaunchRepository{{}}}
+	}
+	p.Tasks = []PlanTask{interrupted, saved, live, ordinary}
+	if err := s.savePlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	claim, ok := s.claimTaskStart(live.TodoID)
+	if !ok {
+		t.Fatal("could not claim the live start")
+	}
+	t.Cleanup(func() { s.endTaskStart(live.TodoID, claim, proto.Session{}) })
+
+	if err := s.recoverTaskStarts(ctx, before); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{interrupted.TodoID, saved.TodoID} {
+		if todo := todoNow(s, id); todo.StartError == "" {
+			t.Errorf("interrupted workspace start %s was outside the recovery window", id)
+		}
+	}
+	for _, id := range []string{live.TodoID, ordinary.TodoID} {
+		if todo := todoNow(s, id); !unstartedTodo(todo) {
+			t.Errorf("recovery modified task %s: start error %q", id, todo.StartError)
+		}
 	}
 }
 

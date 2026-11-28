@@ -242,6 +242,8 @@ export interface TurnFix {
   launcher?: string;
   onPickModel?: () => boolean;
   back?: { label: string; run: () => void };
+  /** Back to the last setup the chat finished a turn on (…/model/restore): a Persona chat whose pick the hub keeps. */
+  restore?: { label: string; run: () => void };
 }
 
 /** A turn that ended on a model error the user must fix: the card's title and its button (4.4 "Model error"). A model

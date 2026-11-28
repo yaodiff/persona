@@ -376,9 +376,10 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
       <div className={docked ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-5 pb-[10vh]"}>
         <div className={docked ? "contents" : "w-full max-w-[640px]"} style={docked ? undefined : { animation: `fade-up 450ms ${EASE} backwards` }}>
           {sending ? (
-            // the conversation page's middle (ChatView): the message where its bubble will be, "Preparing" where the answer comes
+            // the conversation page's middle (ChatView): match ChatView's [data-chat-content] padding and gap so the
+            // first bubble stays at the same vertical position when ChatView takes over
             <div className="relative min-h-0 flex-1 overflow-y-auto" data-start-pending>
-              <div className="mx-auto flex w-full max-w-[880px] flex-col gap-7 px-5 pt-6 pb-10 sm:px-8" style={{ animation: `fade-up ${MOVE_MS}ms ${EASE} ${MOVE_MS / 2}ms both` }}>
+              <div className="mx-auto flex w-full max-w-[880px] flex-col gap-3.5 px-5 pt-7 pb-10 sm:px-8" style={main && cleared ? undefined : { animation: `fade-up ${MOVE_MS}ms ${EASE} ${MOVE_MS / 2}ms both` }}>
                 {/* what the conversation page opens with, before and after its transcript comes (ChatView's `opening`) */}
                 <div className="text-center text-[11.5px] text-ink-3">{t("chat-chatview.chat_start")}</div>
                 <DayLine date={startOfDay(sending.at)} />

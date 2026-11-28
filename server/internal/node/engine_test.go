@@ -256,7 +256,7 @@ func TestEngineDetection(t *testing.T) {
 	if len(got) != 9 || got[0] != (proto.Engine{ID: "herdr", Name: "herdr", Available: true, Version: "0.9.3"}) ||
 		got[1] != (proto.Engine{ID: "herdr-core", Name: "Herdr App", Available: true, Version: "0.1.16"}) ||
 		got[2] != (proto.Engine{ID: "herdr-both", Name: "herdr + Herdr App", Available: true}) ||
-		got[3] != (proto.Engine{ID: "orca", Name: "Orca"}) || // no Orca here (TestMain): listed, not available
+		got[3] != (proto.Engine{ID: "orca", Name: "Orca", State: proto.EngineMissing}) || // no Orca here (TestMain): listed, not available
 		got[4] != (proto.Engine{ID: "tern", Name: "Tern"}) || // nor Tern
 		got[5] != (proto.Engine{ID: "rex", Name: "Rex"}) || // nor Rex
 		got[6] != (proto.Engine{ID: "paseo", Name: "Paseo"}) || // nor Paseo

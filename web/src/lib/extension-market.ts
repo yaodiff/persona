@@ -8,6 +8,7 @@ import { itemHeaders } from "./manager-choice";
 import { extRoot, listOf } from "./extension-api";
 import { changed, type HubExtension, type HubExtensionDetail, type ExtensionPermission } from "./extensions";
 import { previewConsent, type DependencyState, type PackMember } from "./extension-model";
+import type { ScopedAssistantClient } from "./scoped-assistant-api";
 import { t } from "../i18n";
 
 /** One market the hub reads (its token, if any, is never sent back). */
@@ -105,6 +106,10 @@ export interface CatalogItem {
   permissions?: ExtensionPermission[];
   /** Why this hub cannot install it (no package for its platform, needs a newer hub). */
   problem?: string;
+  /** A newer release in this market that requires a newer Persona hub build. */
+  latest_incompatible_version?: string;
+  /** Localized reason why `latest_incompatible_version` cannot run on this hub. */
+  latest_incompatible_reason?: string;
   /** The installed version, if any. */
   installed?: string;
   installed_source?: string;
@@ -196,12 +201,13 @@ export interface ExtensionRemovalResult {
   warnings?: string[] | null;
 }
 /** Only one installed from a market (`origin` market:…); keepData leaves ~/.persona/extensions/data/<id>/. */
-export const uninstallExtension = (id: string, keepData = false, cascade = false, members = false) => {
+export const uninstallExtension = (id: string, keepData = false, cascade = false, members = false, client?: ScopedAssistantClient) => {
   const q = new URLSearchParams();
   if (keepData) q.set("keep_data", "1");
   if (cascade) q.set("cascade", "1");
   if (members) q.set("members", "1");
-  return api<ExtensionRemovalResult>(`${extRoot()}/${enc(id)}/-/${q.size ? `?${q}` : ""}`, { method: "DELETE" }).then(changed);
+  const remove = client?.request ?? api;
+  return remove<ExtensionRemovalResult>(`${extRoot()}/${enc(id)}/-/${q.size ? `?${q}` : ""}`, { method: "DELETE" }).then(changed);
 };
 
 // ── words and rules ─────────────────────────────────────
@@ -279,6 +285,16 @@ export function itemState(it: CatalogItem): ItemState {
 
 /** Uninstalling from here: only an extension this market installed. */
 export const canUninstall = (it: CatalogItem) => Boolean(it.installed && it.from_this_market);
+
+/** Newer release blocked by the hub build, surfaced only when the active release is not already blocked by `problem`. */
+export function newerIncompatibleHint(
+  it: Pick<CatalogItem, "problem" | "latest_incompatible_version" | "latest_incompatible_reason">,
+): { version: string; reason: string } | null {
+  if (it.problem?.trim()) return null;
+  const version = it.latest_incompatible_version?.trim() ?? "";
+  if (!version) return null;
+  return { version, reason: it.latest_incompatible_reason?.trim() ?? "" };
+}
 
 /** A market's line under its name: how many extensions, when it was read, whether it has a token. */
 export function marketLine(m: Market, ago: (iso?: string) => string): string {

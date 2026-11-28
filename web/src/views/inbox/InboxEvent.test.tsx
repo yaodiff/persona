@@ -63,7 +63,7 @@ import type { AgentState, Session } from "../../lib/types";
 import { stateName } from "../../lib/state-labels";
 import { toast } from "../../ui/atoms";
 import { InboxDetail } from "./InboxDetail";
-import { chainIconMeaning, EventBody } from "./InboxEvent";
+import { chainIconMeaning, EventBody, EventMark, SuggestionCard } from "./InboxEvent";
 import { InboxList } from "./InboxList";
 import { resetRoster, setRoster } from "../../lib/managers";
 import { settleRosterDefault } from "../../lib/manager-choice";
@@ -134,6 +134,89 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+});
+
+describe("a handoff suggestion in the open Inbox", () => {
+  const suggestion = { kind: "handoff", target_title: "Launch", machine_id: "m1", session_id: "s-target", text: "Review the dates", version: 7 };
+  const item = { ...plain(reply), now: "confirm_handoff", suggestion };
+  const confirmed = { ...item, suggestion: undefined };
+  const path = "/inbox/lark:oc_demo1:100/suggestion";
+
+  function LoadedCards({ show, detail = false }: { show: boolean; detail?: boolean }) {
+    const current = useInbox((state) => state.items[0]);
+    if (!show || !current) return null;
+    if (detail) return <EventBody item={current} onSource={() => {}} />;
+    return <><EventMark it={current} />{current.suggestion && <SuggestionCard item={current} suggestion={current.suggestion} />}</>;
+  }
+
+  beforeEach(async () => {
+    calls.items = [item];
+    await act(async () => root.render(<LoadedCards show={false} />));
+    calls.list = [];
+    await act(async () => root.render(<LoadedCards show />));
+  });
+
+  it("shows the destination in both surfaces without a request, then confirms the displayed version once", async () => {
+    expect(calls.list).toEqual([]);
+    expect(host.querySelector("[data-event-mark]")?.textContent).toContain("Launch");
+    expect(host.querySelector("[data-suggestion]")?.textContent).toContain("Launch");
+    calls.suggestion = async () => confirmed;
+    const button = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "转交")!;
+    await act(async () => { button.click(); button.click(); });
+    expect(calls.list).toEqual([expect.objectContaining({ path, method: "POST", json: expect.objectContaining({ version: 7, action: "confirm" }) })]);
+    expect(toast).toHaveBeenCalledWith("已转交", "ok");
+  });
+
+  it("keeps the processing conversation available while waiting for confirmation", async () => {
+    await act(async () => root.render(<LoadedCards show detail />));
+    expect(host.querySelector('[data-event-now="confirm_handoff"]')?.textContent).toContain("处理对话");
+  });
+
+  it("identifies an untitled main chat only on its own manager and machine", async () => {
+    const unnamed = { ...suggestion, target_title: "" };
+    const assistant = getState().assistant;
+    Object.assign(getState(), { assistant: { manager: "team", main: unnamed.session_id, main_machine_id: "m1", machine_id: "m2", conversations: [] } });
+    try {
+      for (const [manager, machine, target] of [["team", "m1", "主对话"], ["other", "m1", "未命名会话"], ["team", "m2", "未命名会话"]]) {
+        const proposed = { ...unnamed, machine_id: machine };
+        const current = { ...item, manager, suggestion: proposed };
+        await act(async () => root.render(<><EventMark it={current} /><SuggestionCard item={current} suggestion={proposed} /></>));
+        expect(host.querySelector("[data-event-mark]")?.textContent).toContain(target);
+        expect(host.querySelector("[data-suggestion]")?.textContent).toContain(target);
+      }
+      expect(calls.list).toEqual([]);
+    } finally {
+      Object.assign(getState(), { assistant });
+    }
+  });
+
+  it("names the proposed destination when the AI needs the user's judgment", async () => {
+    const proposal = { ...suggestion, handback: true };
+    const current = { ...item, now: "decide", suggestion: proposal };
+    await act(async () => root.render(<><EventMark it={current} /><SuggestionCard item={current} suggestion={proposal} /></>));
+    expect(host.querySelector("[data-event-mark]")?.textContent).toContain("Launch");
+    expect(buttons()).toContain("确认");
+    expect(buttons()).not.toContain("转交");
+  });
+
+  it.each([
+    ["suggestion_stale", "建议已更新", "info"],
+    ["handoff_target_unavailable", "目标会话已不可用，未转交。", "error"],
+  ])("updates the open card after %s without a success receipt", async (code, message, tone) => {
+    await act(async () => root.render(<LoadedCards show detail />));
+    calls.suggestion = async () => { throw new ApiError(409, code, { code, item: confirmed }); };
+    await press("转交");
+    expect(toast).toHaveBeenCalledWith(message, tone);
+    expect(toast).not.toHaveBeenCalledWith(expect.any(String), "ok");
+    expect(buttons()).not.toContain("转交");
+  });
+
+  it("returns a rejected proposal to the AI", async () => {
+    calls.suggestion = async () => confirmed;
+    await press("驳回");
+    expect(toast).toHaveBeenCalledWith("已驳回，交回 AI", "ok");
+    expect(toast).not.toHaveBeenCalledWith("已转交", "ok");
+  });
 });
 
 describe("opening an Inbox handling conversation", () => {

@@ -6,45 +6,29 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
-	"net/url"
-	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"weak"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/todo/mergetrain"
 	"github.com/nwverse/persona/server/internal/db"
 )
 
-// mergeTrainOutcome captures the deterministic result of feeding a PR status observation
-// into the per-Service merge train coordinator under todos_v2.
 type mergeTrainOutcome struct {
 	Tracked  bool
 	RepoKey  string
 	Decision mergetrain.Decision
-	Escalate bool
-	Detail   string
 
-	promotedTodoID   string
-	promotedPRURL    string
-	promotedRepoKey  string
-	previousPRURL    string
-	previousState    string
-	promotedPolicy   mergetrain.MergePolicy
-	promotedApproved bool
-	turnWakeupKey    string
-	emitTurnWakeup   bool
+	turnWakeup superviseSignal
 }
 
-type mergeTrainConflictTrack struct {
-	inConflict bool
-	lastHead   string
+type mergeTrainTurnWake struct {
+	RepoKey       string `json:"repo_key"`
+	PreviousPRURL string `json:"previous_pr_url"`
+	PreviousState string `json:"previous_state"`
 }
 
 type mergeTrainBlockerCondition struct {
@@ -54,248 +38,75 @@ type mergeTrainBlockerCondition struct {
 	MaxAttempts int    `json:"max_attempts,omitempty"`
 }
 
-type mergeTrainDBAction struct {
-	persistConflict bool
-	hadActiveRow    bool
-	attempts        int
-	headOID         string
-	resolveBlocker  bool
-}
-
-func mergeTrainBlockerID(todoID, normURL string) string {
-	sum := sha256.Sum256([]byte(todoID + "\x00" + todoBlockerKindMergeTrain + "\x00" + normURL))
+func mergeTrainBlockerID(prURL string) string {
+	sum := sha256.Sum256([]byte(todoBlockerKindMergeTrain + "\x00" + prURL))
 	return "mt_" + hex.EncodeToString(sum[:8])
 }
 
-// mergeTrainCoordinator wraps the pure mergetrain.Train state machine with concurrency-safe
-// conflict-cycle tracking, escalation deduplication, and turn-wakeup deduplication for live PR status polling.
 type mergeTrainCoordinator struct {
-	mu               sync.Mutex
-	train            *mergetrain.Train
-	conflicts        map[string]*mergeTrainConflictTrack
-	escalated        map[string]struct{}
-	turnWakeups      map[string]struct{}
-	hydrated         map[string]bool
-	hasActiveBlocker map[string]bool
+	mu        sync.Mutex
+	train     *mergetrain.Train
+	checkedAt map[string]time.Time // by canonical PR URL
 }
 
-func newMergeTrainCoordinator() *mergeTrainCoordinator {
-	return &mergeTrainCoordinator{
-		train:            mergetrain.New(),
-		conflicts:        make(map[string]*mergeTrainConflictTrack),
-		escalated:        make(map[string]struct{}),
-		turnWakeups:      make(map[string]struct{}),
-		hydrated:         make(map[string]bool),
-		hasActiveBlocker: make(map[string]bool),
+func (s *Service) resetMergeTrain() {
+	c := &s.mergeTrain
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.train = nil
+	clear(c.checkedAt)
+}
+
+func mergeTrainBlockerPR(targetRef, conditionJSON string) (string, mergeTrainBlockerCondition) {
+	var condition mergeTrainBlockerCondition
+	_ = json.Unmarshal([]byte(conditionJSON), &condition)
+	for _, ref := range []string{condition.PRURL, targetRef} {
+		if _, _, prURL, ok := mergetrain.ParsePRURL(ref); ok {
+			return prURL, condition
+		}
 	}
+	return "", condition
 }
 
-func (c *mergeTrainCoordinator) reset() {
+func (s *Service) clearMergeTrainBlocker(todoID, targetRef, conditionJSON string) {
+	c := &s.mergeTrain
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.train = mergetrain.New()
-	clear(c.conflicts)
-	clear(c.escalated)
-	clear(c.turnWakeups)
-	clear(c.hydrated)
-	clear(c.hasActiveBlocker)
-}
-
-func (c *mergeTrainCoordinator) isHydrated(trackKey string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.hydrated[trackKey]
-}
-
-func (c *mergeTrainCoordinator) setHasActiveBlocker(trackKey string, active bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if active {
-		c.hasActiveBlocker[trackKey] = true
-	} else {
-		delete(c.hasActiveBlocker, trackKey)
-	}
-}
-
-func (c *mergeTrainCoordinator) clearBlocker(todoID, targetRef, conditionJSON string) {
-	todoID = strings.TrimSpace(todoID)
-	if todoID == "" {
+	if c.train == nil {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	var cond mergeTrainBlockerCondition
-	if strings.TrimSpace(conditionJSON) != "" {
-		_ = json.Unmarshal([]byte(conditionJSON), &cond)
-	}
-
-	repoKey := mergetrain.NormalizeRepoKey(cond.RepoKey)
-	normURL := triageNormalizePRURL(cond.PRURL)
-	if rk, _, u, ok := parseMergeTrainPRURL(targetRef); ok {
-		if repoKey == "" {
-			repoKey = rk
-		}
-		if normURL == "" {
-			normURL = u
-		}
-	} else if repoKey == "" {
-		repoKey = mergetrain.NormalizeRepoKey(targetRef)
-	}
-	if repoKey == "" && normURL != "" {
-		if rk, _, _, ok := parseMergeTrainPRURL(normURL); ok {
-			repoKey = rk
-		}
-	}
-	if normURL == "" && c.train != nil && repoKey != "" {
-		if entry, ok := c.train.Entry(repoKey, todoID); ok && strings.TrimSpace(entry.PRURL) != "" {
-			normURL = triageNormalizePRURL(entry.PRURL)
-		}
-	}
-
-	if normURL != "" {
-		trackKey := todoID + "|" + normURL
-		delete(c.hasActiveBlocker, trackKey)
-		delete(c.conflicts, trackKey)
-		delete(c.hydrated, trackKey)
-		escPrefix := todoID + "|" + normURL + "|"
-		for k := range c.escalated {
-			if strings.HasPrefix(k, escPrefix) {
-				delete(c.escalated, k)
-			}
-		}
-	} else {
-		todoPrefix := todoID + "|"
-		matchesKey := func(k string) bool {
-			if !strings.HasPrefix(k, todoPrefix) {
-				return false
-			}
-			if repoKey == "" {
-				return true
-			}
-			rest := strings.TrimPrefix(k, todoPrefix)
-			prPart, _, _ := strings.Cut(rest, "|")
-			rk, _, _, ok := parseMergeTrainPRURL(prPart)
-			return ok && rk == repoKey
-		}
-		for k := range c.hasActiveBlocker {
-			if matchesKey(k) {
-				delete(c.hasActiveBlocker, k)
-			}
-		}
-		for k := range c.conflicts {
-			if matchesKey(k) {
-				delete(c.conflicts, k)
-			}
-		}
-		for k := range c.hydrated {
-			if matchesKey(k) {
-				delete(c.hydrated, k)
-			}
-		}
-		for k := range c.escalated {
-			if matchesKey(k) {
-				delete(c.escalated, k)
-			}
-		}
-	}
-
-	if c.train != nil && repoKey != "" {
-		_, _ = c.train.Cancel(repoKey, todoID)
-		c.train = rebuildMergeTrainWithout(c.train, repoKey, todoID)
-	}
-}
-
-func rebuildMergeTrainWithout(old *mergetrain.Train, dropRepoKey, dropTodoID string) *mergetrain.Train {
-	if old == nil {
-		return mergetrain.New()
-	}
-	snap := old.Snapshot()
-	next := mergetrain.New()
-	for _, rs := range snap.Repos {
-		var entries []mergetrain.Entry
-		if rs.Head != nil {
-			entries = append(entries, *rs.Head)
-		}
-		entries = append(entries, rs.Queue...)
-		entries = append(entries, rs.Escalated...)
-		for _, e := range entries {
-			if rs.RepoKey == dropRepoKey && e.TodoID == dropTodoID {
+	prURL, condition := mergeTrainBlockerPR(targetRef, conditionJSON)
+	if prURL == "" {
+		// A legacy row with only a repo and to-do can be paired with a single known PR.
+		// Leave the queue alone if that identity is ambiguous.
+		repoKey := mergetrain.NormalizeRepoKey(firstNonEmpty(condition.RepoKey, targetRef))
+		for _, repo := range c.train.Snapshot().Repos {
+			if repo.RepoKey != repoKey {
 				continue
 			}
-			_, _ = next.Enqueue(mergetrain.Entry{
-				TodoID:            e.TodoID,
-				RepoKey:           e.RepoKey,
-				PRNumber:          e.PRNumber,
-				PRURL:             e.PRURL,
-				Priority:          e.Priority,
-				Policy:            e.Policy,
-				Approved:          e.Approved,
-				MaxRebaseFailures: e.MaxRebaseFailures,
-				ConflictReasons:   e.ConflictReasons,
-			})
-			for range e.RebaseFailures {
-				_, _ = next.RecordRebaseFailure(e.RepoKey, e.TodoID, e.LastError)
+			entries := slices.Concat(repo.Queue, repo.Escalated)
+			if repo.Head != nil {
+				entries = append(entries, *repo.Head)
+			}
+			for _, entry := range entries {
+				if entry.TodoID == todoID {
+					if prURL != "" {
+						return
+					}
+					prURL = entry.PRURL
+				}
 			}
 		}
 	}
-	return next
+	c.train.Forget(prURL)
 }
 
-func (c *mergeTrainCoordinator) hydrateIfNeeded(trackKey, todoID, repoKey string, prNumber int, normURL string, status TodoPRStatus, activeRow *db.TodoBlockerRow) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.hydrated[trackKey] {
-		return
+func (s *Service) mergeTrainSnapshot(ctx context.Context) mergetrain.Snapshot {
+	if !s.settings(ctx).todosV2On() {
+		s.resetMergeTrain()
+		return mergetrain.Snapshot{}
 	}
-	c.hydrated[trackKey] = true
-	if activeRow == nil {
-		return
-	}
-	c.hasActiveBlocker[trackKey] = true
-
-	var cond mergeTrainBlockerCondition
-	if strings.TrimSpace(activeRow.ConditionJSON) != "" {
-		_ = json.Unmarshal([]byte(activeRow.ConditionJSON), &cond)
-	}
-	lastHead := strings.TrimSpace(cond.LastHeadOID)
-
-	if !strings.EqualFold(strings.TrimSpace(status.State), "open") || activeRow.Attempts <= 0 {
-		return
-	}
-	if c.train == nil {
-		c.train = mergetrain.New()
-	}
-	policy := mergeTrainPolicyForStatus(status)
-	approved := policy == mergetrain.PolicyAutoMerge
-	if _, err := c.train.Enqueue(mergetrain.Entry{
-		TodoID:   todoID,
-		RepoKey:  repoKey,
-		PRNumber: prNumber,
-		PRURL:    normURL,
-		Policy:   policy,
-		Approved: approved,
-	}); err != nil {
-		return
-	}
-	replay := min(activeRow.Attempts, mergetrain.DefaultMaxRebaseFailures)
-	errMsg := "restored prior merge conflict"
-	if lastHead != "" {
-		errMsg = fmt.Sprintf("merge conflicts at head %s", lastHead)
-	}
-	for range replay {
-		_, _ = c.train.RecordRebaseFailure(repoKey, todoID, errMsg)
-	}
-	c.conflicts[trackKey] = &mergeTrainConflictTrack{
-		inConflict: true,
-		lastHead:   lastHead,
-	}
-	if activeRow.Attempts >= mergetrain.DefaultMaxRebaseFailures && lastHead != "" {
-		c.escalated[todoID+"|"+normURL+"|"+lastHead] = struct{}{}
-	}
-}
-
-func (c *mergeTrainCoordinator) snapshot() mergetrain.Snapshot {
+	c := &s.mergeTrain
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.train == nil {
@@ -304,519 +115,231 @@ func (c *mergeTrainCoordinator) snapshot() mergetrain.Snapshot {
 	return c.train.Snapshot()
 }
 
-func (c *mergeTrainCoordinator) headTodoIDLocked(repoKey string) string {
-	if c.train == nil {
-		return ""
+func mergeTrainHeadState(entry mergetrain.Entry) bool {
+	return entry.State == mergetrain.StateActive || entry.State == mergetrain.StateAwaitingApproval
+}
+
+func (s *Service) mergeTrainHeadForWake(g superviseSignal) (mergetrain.Entry, bool) {
+	c := &s.mergeTrain
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.train == nil || g.MergeTrainTurn == nil {
+		return mergetrain.Entry{}, false
 	}
-	for _, rs := range c.train.Snapshot().Repos {
-		if rs.RepoKey == repoKey {
-			if rs.Head != nil {
-				return rs.Head.TodoID
-			}
-			return ""
+	head, ok := c.train.Head(g.MergeTrainTurn.RepoKey)
+	_, _, prURL, _ := mergetrain.ParsePRURL(g.PRURL)
+	return head, ok && mergeTrainHeadState(head) && head.PRURL == prURL && head.TodoID == g.Todo
+}
+
+func mergeTrainTurnSignal(repoKey, previousPR string, status TodoPRStatus, head mergetrain.Entry) superviseSignal {
+	at := status.terminalAt
+	if at.IsZero() {
+		at = status.CheckedAt
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return superviseSignal{
+		Todo: head.TodoID, Kind: sigMergeTrainTurn, PRURL: head.PRURL,
+		Key:            previousPR + "@" + status.State + "@" + at.UTC().Format(time.RFC3339Nano),
+		MergeTrainTurn: &mergeTrainTurnWake{RepoKey: repoKey, PreviousPRURL: previousPR, PreviousState: status.State},
+	}
+}
+
+// onPRStatusMergeTrain follows an observed PR through the repository queue and stores conflict
+// evidence. Forge observations never count as rebase attempts. The existing PR feedback path
+// already wakes supervisors about conflicts.
+func (s *Service) onPRStatusMergeTrain(ctx context.Context, todo Todo, status TodoPRStatus) mergeTrainOutcome {
+	if !s.settings(ctx).todosV2On() {
+		s.resetMergeTrain()
+		return mergeTrainOutcome{}
+	}
+	repoKey, _, prURL, ok := mergetrain.ParsePRURL(status.URL)
+	if todo.ID == "" || !ok {
+		return mergeTrainOutcome{}
+	}
+	status.State = strings.ToLower(strings.TrimSpace(status.State))
+	if status.State != "open" && status.State != "merged" && status.State != "closed" {
+		return mergeTrainOutcome{}
+	}
+
+	out, changed, resolved, err := s.applyMergeTrainObservation(ctx, todo.ID, repoKey, prURL, status)
+	if err != nil {
+		s.logf("merge train: persist observation of %s: %v", prURL, err)
+	}
+	if changed {
+		s.todosChanged(ctx)
+	}
+	for _, row := range resolved {
+		ready, err := s.blockerUnblockStillHolds(ctx, superviseSignal{Todo: row.TodoID, Key: blockerResolutionKey(row)})
+		if ready || err != nil {
+			s.emitTodoBlockerWake(ctx, todoBlockerWake{last: row})
 		}
 	}
-	return ""
+	if len(resolved) > 0 {
+		s.sweepAdmissionQueue(ctx)
+	}
+	if wake := out.turnWakeup; wake.Todo != "" {
+		if next, ok := s.todoNow(wake.Todo); ok && next.DoneAt == nil && !next.Cancelled() {
+			wake.To = s.todoReadySupervisor(ctx, s.settings(ctx), next)
+			s.signal(wake)
+		}
+	}
+	return out
 }
 
-func (c *mergeTrainCoordinator) recordPromotedTurnLocked(repoKey, prevTodoID, prevPRURL, prevState, prevHeadID string, dec mergetrain.Decision, out *mergeTrainOutcome) {
-	if out == nil || c.train == nil {
-		return
-	}
-	nextTodoID := strings.TrimSpace(dec.TodoID)
-	if nextTodoID == "" || nextTodoID == prevTodoID || nextTodoID == prevHeadID {
-		return
-	}
-	nextEntry, ok := c.train.Entry(repoKey, nextTodoID)
-	if !ok || nextEntry.State == mergetrain.StateEscalated {
-		return
-	}
-	wakeKey := "mergetrain_turn:" + repoKey + ":" + nextTodoID + ":" + prevPRURL
-	emit := false
-	if _, seen := c.turnWakeups[wakeKey]; !seen {
-		c.turnWakeups[wakeKey] = struct{}{}
-		emit = true
-	}
-	out.promotedTodoID = nextTodoID
-	out.promotedPRURL = nextEntry.PRURL
-	out.promotedRepoKey = repoKey
-	out.previousPRURL = prevPRURL
-	out.previousState = prevState
-	out.promotedPolicy = nextEntry.Policy
-	out.promotedApproved = nextEntry.Approved
-	out.turnWakeupKey = wakeKey
-	out.emitTurnWakeup = emit
-}
-
-func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repoKey string, prNumber int, normURL string) (mergeTrainOutcome, mergeTrainDBAction) {
+func (s *Service) applyMergeTrainObservation(ctx context.Context, todoID, repoKey, prURL string, status TodoPRStatus) (mergeTrainOutcome, bool, []db.TodoBlockerRow, error) {
+	// Keep the observed row and queue transition ordered with other PR observations and blocker reconciliation.
+	s.blockerReconcile.mu.Lock()
+	defer s.blockerReconcile.mu.Unlock()
+	c := &s.mergeTrain
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	out := mergeTrainOutcome{RepoKey: repoKey}
+	if !s.settings(ctx).todosV2On() || !status.CheckedAt.IsZero() && status.CheckedAt.Before(c.checkedAt[prURL]) {
+		return out, false, nil, nil
+	}
 	if c.train == nil {
 		c.train = mergetrain.New()
+		c.checkedAt = make(map[string]time.Time)
 	}
-
-	trackKey := todoID + "|" + normURL
-	state := strings.ToLower(strings.TrimSpace(status.State))
-	var dbAct mergeTrainDBAction
-
-	switch state {
-	case "merged":
-		delete(c.conflicts, trackKey)
-		if c.hasActiveBlocker[trackKey] {
-			dbAct.resolveBlocker = true
+	old, seen := c.train.Entry(prURL)
+	if seen {
+		if old.State == mergetrain.StateMerged && status.State != "merged" {
+			return out, false, nil, nil
 		}
-		prevHeadID := c.headTodoIDLocked(repoKey)
-		dec, err := c.train.RecordMerged(repoKey, todoID)
-		if errors.Is(err, mergetrain.ErrEntryNotFound) {
-			return mergeTrainOutcome{RepoKey: repoKey, Decision: dec}, dbAct
-		}
-		out := mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}
-		if err == nil {
-			c.recordPromotedTurnLocked(repoKey, todoID, normURL, state, prevHeadID, dec, &out)
-		}
-		return out, dbAct
-
-	case "closed":
-		delete(c.conflicts, trackKey)
-		if c.hasActiveBlocker[trackKey] {
-			dbAct.resolveBlocker = true
-		}
-		prevHeadID := c.headTodoIDLocked(repoKey)
-		dec, err := c.train.Cancel(repoKey, todoID)
-		if errors.Is(err, mergetrain.ErrEntryNotFound) {
-			return mergeTrainOutcome{RepoKey: repoKey, Decision: dec}, dbAct
-		}
-		out := mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}
-		if err == nil {
-			c.recordPromotedTurnLocked(repoKey, todoID, normURL, state, prevHeadID, dec, &out)
-		}
-		return out, dbAct
-
-	case "open":
-		policy := mergeTrainPolicyForStatus(status)
-		approved := policy == mergetrain.PolicyAutoMerge
-		entry, err := c.train.Enqueue(mergetrain.Entry{
-			TodoID:   todoID,
-			RepoKey:  repoKey,
-			PRNumber: prNumber,
-			PRURL:    normURL,
-			Policy:   policy,
-			Approved: approved,
-		})
-		if err != nil {
-			return mergeTrainOutcome{RepoKey: repoKey}, dbAct
-		}
-
-		if strings.EqualFold(strings.TrimSpace(status.Review), "approved") && !status.Draft && !entry.Approved && entry.State != mergetrain.StateEscalated {
-			if _, approveErr := c.train.Approve(repoKey, todoID); approveErr == nil {
-				if updated, ok := c.train.Entry(repoKey, todoID); ok {
-					entry = updated
-				}
-			}
-		}
-
-		headOID := strings.TrimSpace(status.HeadOID)
-		if status.Conflicts {
-			track := c.conflicts[trackKey]
-			if track == nil {
-				track = &mergeTrainConflictTrack{}
-				c.conflicts[trackKey] = track
-			}
-			isNewConflict := !track.inConflict || (headOID != "" && track.lastHead != headOID)
-			track.inConflict = true
-			if headOID != "" {
-				track.lastHead = headOID
-			}
-			if isNewConflict {
-				errMsg := "merge conflicts detected"
-				if headOID != "" {
-					errMsg = fmt.Sprintf("merge conflicts at head %s", headOID)
-				}
-				dec, failErr := c.train.RecordRebaseFailure(repoKey, todoID, errMsg)
-				if failErr == nil {
-					attempts := 1
-					if latest, ok := c.train.Entry(repoKey, todoID); ok && latest.RebaseFailures > 0 {
-						attempts = latest.RebaseFailures
-					}
-					dbAct.persistConflict = true
-					dbAct.hadActiveRow = c.hasActiveBlocker[trackKey]
-					dbAct.attempts = attempts
-					dbAct.headOID = headOID
-				}
-				if failErr == nil && dec.Action == mergetrain.ActionEscalateNeedsUser {
-					dedupKey := todoID + "|" + normURL + "|" + headOID
-					escalate := false
-					if _, seen := c.escalated[dedupKey]; !seen {
-						c.escalated[dedupKey] = struct{}{}
-						escalate = true
-					}
-					detail := formatMergeTrainEscalationDetail(status.URL, headOID, dec.Reason)
-					return mergeTrainOutcome{
-						Tracked:  true,
-						RepoKey:  repoKey,
-						Decision: dec,
-						Escalate: escalate,
-						Detail:   detail,
-					}, dbAct
-				}
-				if failErr == nil {
-					return mergeTrainOutcome{
-						Tracked:  true,
-						RepoKey:  repoKey,
-						Decision: dec,
-					}, dbAct
-				}
-			}
-			if latest, ok := c.train.Entry(repoKey, todoID); ok && latest.State == mergetrain.StateEscalated {
-				return mergeTrainOutcome{
-					Tracked: true,
-					RepoKey: repoKey,
-					Decision: mergetrain.Decision{
-						RepoKey: repoKey,
-						TodoID:  todoID,
-						Action:  mergetrain.ActionEscalateNeedsUser,
-						State:   mergetrain.StateEscalated,
-						Reason:  latest.LastError,
-					},
-				}, dbAct
-			}
-			return mergeTrainOutcome{
-				Tracked: true,
-				RepoKey: repoKey,
-				Decision: mergetrain.Decision{
-					RepoKey: repoKey,
-					TodoID:  todoID,
-					Action:  mergetrain.ActionWaitQueue,
-					State:   entry.State,
-					Reason:  "waiting on merge conflict resolution",
-				},
-			}, dbAct
-		}
-
-		// Conflicts cleared: reset consecutive failure streak for non-escalated entries.
-		if track := c.conflicts[trackKey]; track != nil {
-			track.inConflict = false
-			track.lastHead = ""
-		}
-		if c.hasActiveBlocker[trackKey] {
-			dbAct.resolveBlocker = true
-		}
-		_ = c.train.RecordRebaseSuccess(repoKey, todoID)
-
-		if latest, ok := c.train.Entry(repoKey, todoID); ok {
-			entry = latest
-		}
-		// Escalated entries must never trigger head evaluation (they may still be queued behind
-		// a different active head, whose checks must not be evaluated using this PR's status).
-		if entry.State == mergetrain.StateEscalated {
-			reason := "rebase failure circuit breaker tripped"
-			if entry.LastError != "" {
-				reason = fmt.Sprintf("rebase failure circuit breaker tripped (%d/%d): %s",
-					entry.RebaseFailures, entry.MaxRebaseFailures, entry.LastError)
-			}
-			return mergeTrainOutcome{
-				Tracked: true,
-				RepoKey: repoKey,
-				Decision: mergetrain.Decision{
-					RepoKey: repoKey,
-					TodoID:  todoID,
-					Action:  mergetrain.ActionEscalateNeedsUser,
-					State:   mergetrain.StateEscalated,
-					Reason:  reason,
-				},
-			}, dbAct
-		}
-		// Only evaluate the repository head using this PR's own checks; queued entries wait their turn.
-		if entry.State == mergetrain.StateActive || entry.State == mergetrain.StateAwaitingApproval {
-			checksGreen := strings.EqualFold(strings.TrimSpace(status.Checks), "success") && !status.Draft
-			reviewApproved := strings.EqualFold(strings.TrimSpace(status.Review), "approved")
-			// Never auto-merge an already-approved entry if current review status is no longer approved
-			// (e.g. changes_requested, required, pending after dismissal/truncation, or empty).
-			if !reviewApproved && (entry.Policy == mergetrain.PolicyAutoMerge || entry.Approved) {
-				checksGreen = false
-			}
-			dec := c.train.EvaluateHead(repoKey, checksGreen)
-			return mergeTrainOutcome{
-				Tracked:  true,
-				RepoKey:  repoKey,
-				Decision: dec,
-			}, dbAct
-		}
-		return mergeTrainOutcome{
-			Tracked: true,
-			RepoKey: repoKey,
-			Decision: mergetrain.Decision{
-				RepoKey: repoKey,
-				TodoID:  todoID,
-				Action:  mergetrain.ActionWaitQueue,
-				State:   entry.State,
-				Reason:  "queued behind active repository head",
-			},
-		}, dbAct
-	default:
-		return mergeTrainOutcome{RepoKey: repoKey}, dbAct
+		todoID = old.TodoID
 	}
-}
-
-func mergeTrainPolicyForStatus(status TodoPRStatus) mergetrain.MergePolicy {
-	if status.Draft || !strings.EqualFold(strings.TrimSpace(status.Review), "approved") {
-		return mergetrain.PolicyHumanReviewRequired
-	}
-	return mergetrain.PolicyAutoMerge
-}
-
-func formatMergeTrainEscalationDetail(prURL, headOID, reason string) string {
-	headPart := ""
-	if headOID != "" {
-		headPart = " at head " + headOID
-	}
-	if strings.TrimSpace(reason) != "" {
-		return fmt.Sprintf("Merge train circuit breaker tripped (needs_user) for PR %s%s: %s. Automatic conflict retries stopped; manual resolution required.", prURL, headPart, reason)
-	}
-	return fmt.Sprintf("Merge train circuit breaker tripped (needs_user) for PR %s%s. Automatic conflict retries stopped; manual resolution required.", prURL, headPart)
-}
-
-func formatMergeTrainTurnWakeupDetail(o mergeTrainOutcome) string {
-	verb := "merged"
-	if o.previousState == "closed" {
-		verb = "closed and left the merge queue"
-	}
-	prPart := ""
-	if strings.TrimSpace(o.promotedPRURL) != "" {
-		prPart = " (" + strings.TrimSpace(o.promotedPRURL) + ")"
-	}
-	policyNote := "Ready to rebase, verify checks, and merge according to its review policy."
-	if o.promotedPolicy == mergetrain.PolicyHumanReviewRequired && !o.promotedApproved {
-		policyNote = "Human review approval is still required before merging; ready to rebase and verify checks without auto-merging."
-	}
-	return fmt.Sprintf("Preceding PR %s in %s has %s. Your PR%s is now at the head of the merge queue (position 1). %s",
-		o.previousPRURL, o.promotedRepoKey, verb, prPart, policyNote)
-}
-
-// parseMergeTrainPRURL extracts a canonical RepoKey (e.g. "github.com/owner/repo"),
-// PR number, and normalized URL from a pull/merge request URL.
-func parseMergeTrainPRURL(raw string) (repoKey string, prNumber int, normURL string, ok bool) {
-	normURL = triageNormalizePRURL(raw)
-	if normURL == "" {
-		return "", 0, "", false
-	}
-	if m := ciPRURL.FindStringSubmatch(normURL); m != nil {
-		n, err := strconv.Atoi(m[2])
-		if err != nil || n <= 0 {
-			return "", 0, "", false
-		}
-		return mergetrain.NormalizeRepoKey("github.com/" + strings.ToLower(m[1])), n, normURL, true
-	}
-	u, err := url.Parse(normURL)
-	if err != nil || u.Host == "" {
-		return "", 0, "", false
-	}
-	host := strings.ToLower(strings.TrimSpace(u.Host))
-	p := strings.Trim(u.Path, "/")
-	for _, sep := range []string{"/-/merge_requests/", "/merge_requests/", "/pull/"} {
-		if repoPath, tail, found := strings.Cut(p, sep); found {
-			numStr, _, _ := strings.Cut(tail, "/")
-			n, convErr := strconv.Atoi(numStr)
-			if convErr != nil || n <= 0 || strings.TrimSpace(repoPath) == "" {
-				return "", 0, "", false
-			}
-			return mergetrain.NormalizeRepoKey(host + "/" + strings.ToLower(strings.Trim(repoPath, "/"))), n, normURL, true
-		}
-	}
-	return "", 0, "", false
-}
-
-// mergeTrainRegistry isolates per-Service merge train coordinators without modifying Service fields
-// and cleans up entries automatically when a Service is garbage-collected.
-var mergeTrainRegistry = struct {
-	mu    sync.Mutex
-	bySvc map[weak.Pointer[Service]]*mergeTrainCoordinator
-}{
-	bySvc: make(map[weak.Pointer[Service]]*mergeTrainCoordinator),
-}
-
-func (s *Service) mergeTrainCoordinator() *mergeTrainCoordinator {
-	if s == nil {
-		return nil
-	}
-	wp := weak.Make(s)
-	mergeTrainRegistry.mu.Lock()
-	defer mergeTrainRegistry.mu.Unlock()
-	if coord, ok := mergeTrainRegistry.bySvc[wp]; ok {
-		return coord
-	}
-	coord := newMergeTrainCoordinator()
-	mergeTrainRegistry.bySvc[wp] = coord
-	runtime.AddCleanup(s, func(key weak.Pointer[Service]) {
-		mergeTrainRegistry.mu.Lock()
-		delete(mergeTrainRegistry.bySvc, key)
-		mergeTrainRegistry.mu.Unlock()
-	}, wp)
-	return coord
-}
-
-func (s *Service) peekMergeTrainCoordinator() *mergeTrainCoordinator {
-	if s == nil {
-		return nil
-	}
-	wp := weak.Make(s)
-	mergeTrainRegistry.mu.Lock()
-	defer mergeTrainRegistry.mu.Unlock()
-	return mergeTrainRegistry.bySvc[wp]
-}
-
-func (s *Service) resetMergeTrain() {
-	if coord := s.peekMergeTrainCoordinator(); coord != nil {
-		coord.reset()
-	}
-}
-
-func (s *Service) clearMergeTrainBlocker(todoID, targetRef, conditionJSON string) {
-	if coord := s.peekMergeTrainCoordinator(); coord != nil {
-		coord.clearBlocker(todoID, targetRef, conditionJSON)
-	}
-}
-
-// mergeTrainSnapshot returns a read-only snapshot of this Service's merge train queues.
-// When todos_v2 is disabled, it clears any retained in-memory queue and returns an empty snapshot.
-func (s *Service) mergeTrainSnapshot(ctx context.Context) mergetrain.Snapshot {
-	if s == nil || !s.settings(ctx).todosV2On() {
-		s.resetMergeTrain()
-		return mergetrain.Snapshot{}
-	}
-	coord := s.peekMergeTrainCoordinator()
-	if coord == nil {
-		return mergetrain.Snapshot{}
-	}
-	return coord.snapshot()
-}
-
-// onPRStatusMergeTrain updates the in-memory per-repository merge train from a persisted PR status
-// observation when todos_v2 is enabled, persists consecutive conflict counts in todo_blockers
-// (kind="merge_train", zero new migrations) so counts survive Hub restarts, and bypasses/resets
-// immediately when todos_v2 is off.
-func (s *Service) onPRStatusMergeTrain(ctx context.Context, t Todo, status TodoPRStatus) mergeTrainOutcome {
-	if s == nil || !s.settings(ctx).todosV2On() {
-		s.resetMergeTrain()
-		return mergeTrainOutcome{}
-	}
-	if strings.TrimSpace(t.ID) == "" {
-		return mergeTrainOutcome{}
-	}
-	repoKey, prNumber, normURL, ok := parseMergeTrainPRURL(status.URL)
-	if !ok {
-		return mergeTrainOutcome{}
-	}
-	coord := s.mergeTrainCoordinator()
-	if coord == nil {
-		return mergeTrainOutcome{}
-	}
-	trackKey := t.ID + "|" + normURL
-	blockerID := mergeTrainBlockerID(t.ID, normURL)
-	st := s.todoBlockerDB()
-	if st != nil && !coord.isHydrated(trackKey) {
-		if rows, err := st.ListTodoBlockersByTodo(ctx, t.ID); err == nil {
-			var activeRow *db.TodoBlockerRow
-			for i := range rows {
-				if rows[i].ID == blockerID && rows[i].Kind == todoBlockerKindMergeTrain && rows[i].State == db.TodoBlockerStateActive {
-					cp := rows[i]
-					activeRow = &cp
-					break
-				}
-			}
-			coord.hydrateIfNeeded(trackKey, t.ID, repoKey, prNumber, normURL, status, activeRow)
-		}
-	}
-
-	outcome, dbAct := coord.observe(t.ID, status, repoKey, prNumber, normURL)
-	if st != nil {
-		if dbAct.persistConflict {
-			if err := s.persistMergeTrainConflictBlocker(ctx, st, blockerID, t.ID, repoKey, normURL, dbAct.headOID, dbAct.attempts, dbAct.hadActiveRow); err != nil {
-				s.logf("todos_v2 mergetrain persist conflict blocker %s: %v", t.ID, err)
-			} else {
-				coord.setHasActiveBlocker(trackKey, true)
-			}
-		} else if dbAct.resolveBlocker {
-			if _, err := st.ResolveTodoBlocker(ctx, blockerID, time.Now().UTC()); err != nil {
-				s.logf("todos_v2 mergetrain resolve conflict blocker %s: %v", t.ID, err)
-			} else {
-				coord.setHasActiveBlocker(trackKey, false)
-			}
-		}
-	}
-	if outcome.Escalate && status.State == "open" && status.Conflicts &&
-		(status.URL == t.PRURL || slices.Contains(t.PRs, status.URL)) &&
-		status.HeadOID != "" && t.Supervision != nil &&
-		!s.isReferencePRLink(ctx, t.ID, status.URL) &&
-		!t.Supervision.externalPRConflictWoke(status.URL, status.HeadOID) {
-		s.signal(superviseSignal{
-			Todo:   t.ID,
-			Kind:   sigPRConflict,
-			PRURL:  status.URL,
-			Key:    status.URL + "@" + status.HeadOID,
-			Detail: outcome.Detail,
-		})
-	}
-	if outcome.emitTurnWakeup && outcome.promotedTodoID != "" {
-		if nextTodo, ok := s.todoNow(outcome.promotedTodoID); ok && nextTodo.DoneAt == nil && !nextTodo.Cancelled() {
-			s.signal(superviseSignal{
-				Todo:   outcome.promotedTodoID,
-				Kind:   sigTodoReady,
-				Key:    outcome.turnWakeupKey,
-				To:     s.todoReadySupervisor(ctx, s.settings(ctx), nextTodo),
-				Detail: formatMergeTrainTurnWakeupDetail(outcome),
-			})
-		}
-	}
-	return outcome
-}
-
-func (s *Service) persistMergeTrainConflictBlocker(
-	ctx context.Context,
-	st todoBlockerStore,
-	blockerID, todoID, repoKey, normURL, headOID string,
-	attempts int,
-	hadActiveRow bool,
-) error {
-	now := time.Now().UTC()
-	condBytes, err := json.Marshal(mergeTrainBlockerCondition{
-		RepoKey:     repoKey,
-		PRURL:       normURL,
-		LastHeadOID: headOID,
-		MaxAttempts: mergetrain.DefaultMaxRebaseFailures,
-	})
+	write, err := s.storeMergeTrainObservation(ctx, todoID, repoKey, prURL, status)
+	changed, resolved := write.changed, write.resolved
 	if err != nil {
-		return err
+		return out, changed, resolved, err
 	}
-	condJSON := string(condBytes)
-	if hadActiveRow {
-		if incRow, incErr := st.IncrementTodoBlockerAttempts(ctx, blockerID, now); incErr == nil && incRow != nil {
-			incRow.ConditionJSON = condJSON
-			incRow.State = db.TodoBlockerStateActive
-			incRow.TargetRef = repoKey
-			incRow.UpdatedAt = now
-			incRow.ResolvedAt = nil
-			_, err = st.UpsertTodoBlocker(ctx, *incRow)
-			return err
+	if !seen && write.owner != "" {
+		todoID = write.owner
+	}
+	if !status.CheckedAt.IsZero() {
+		c.checkedAt[prURL] = status.CheckedAt
+	}
+
+	if status.State != "open" {
+		before, _ := c.train.Head(repoKey)
+		if status.State == "merged" {
+			out.Decision, err = c.train.RecordMerged(prURL)
+		} else {
+			out.Decision, err = c.train.Cancel(prURL)
+		}
+		if err != nil {
+			return out, changed, resolved, nil
+		}
+		out.Tracked = true
+		after, _ := c.train.Head(repoKey)
+		if after.PRURL != before.PRURL && mergeTrainHeadState(after) {
+			out.turnWakeup = mergeTrainTurnSignal(repoKey, prURL, status, after)
+		}
+		return out, changed || old.State != mergetrain.StateMerged && old.State != mergetrain.StateCancelled, resolved, nil
+	}
+
+	approved := strings.EqualFold(strings.TrimSpace(status.Review), "approved") && !status.Draft
+	policy := mergetrain.PolicyHumanReviewRequired
+	if approved {
+		policy = mergetrain.PolicyAutoMerge
+	}
+	entry, err := c.train.Enqueue(mergetrain.Entry{TodoID: todoID, PRURL: prURL, Policy: policy, Approved: approved})
+	if err != nil {
+		return out, changed, resolved, err
+	}
+	if approved && !entry.Approved {
+		if _, err := c.train.Approve(prURL); err == nil {
+			entry, _ = c.train.Entry(prURL)
 		}
 	}
-	if attempts < 1 {
-		attempts = 1
+	out.Tracked = true
+	out.Decision = mergetrain.Decision{RepoKey: repoKey, TodoID: entry.TodoID, State: entry.State, Action: mergetrain.ActionWaitQueue}
+	switch {
+	case entry.State == mergetrain.StateEscalated:
+		out.Decision.Action = mergetrain.ActionEscalateNeedsUser
+		out.Decision.Reason = entry.LastError
+	case status.Conflicts:
+		out.Decision.Reason = "waiting on merge conflict resolution"
+	case mergeTrainHeadState(entry):
+		green := strings.EqualFold(strings.TrimSpace(status.Checks), "success") && !status.Draft
+		if !approved && (entry.Policy == mergetrain.PolicyAutoMerge || entry.Approved) {
+			green = false
+		}
+		out.Decision = c.train.EvaluateHead(repoKey, green)
 	}
-	_, err = st.UpsertTodoBlocker(ctx, db.TodoBlockerRow{
-		ID:            blockerID,
-		TodoID:        todoID,
-		Kind:          todoBlockerKindMergeTrain,
-		TargetRef:     repoKey,
-		ConditionJSON: condJSON,
-		State:         db.TodoBlockerStateActive,
-		Attempts:      attempts,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		ResolvedAt:    nil,
-	})
-	return err
+	return out, changed || !seen || old.State != out.Decision.State || old.Approved != entry.Approved, resolved, nil
+}
+
+type mergeTrainObservationWrite struct {
+	owner    string
+	changed  bool
+	resolved []db.TodoBlockerRow
+}
+
+func (s *Service) storeMergeTrainObservation(ctx context.Context, todoID, repoKey, prURL string, status TodoPRStatus) (mergeTrainObservationWrite, error) {
+	st := s.todoBlockerDB()
+	if st == nil {
+		return mergeTrainObservationWrite{}, nil
+	}
+	rows, err := st.ListMergeTrainPRBlockers(ctx, prURL, repoKey)
+	if err != nil {
+		return mergeTrainObservationWrite{}, err
+	}
+	conflict := status.State == "open" && status.Conflicts
+	now := time.Now().UTC()
+	hasActive, dismissed := false, false
+	var result mergeTrainObservationWrite
+	var writeErr error
+	for _, row := range rows {
+		storedPR, condition := mergeTrainBlockerPR(row.TargetRef, row.ConditionJSON)
+		if storedPR != prURL {
+			continue
+		}
+		if row.State != db.TodoBlockerStateActive {
+			dismissed = dismissed || row.State == db.TodoBlockerStateCancelled && condition.LastHeadOID == status.HeadOID
+			continue
+		}
+		if result.owner == "" {
+			result.owner = row.TodoID
+		}
+		if !conflict {
+			saved, err := st.ResolveTodoBlocker(ctx, row.ID, now)
+			writeErr = errors.Join(writeErr, err)
+			if saved != nil {
+				result.changed = true
+				result.resolved = append(result.resolved, *saved)
+			}
+			continue
+		}
+		hasActive = true
+		if condition.LastHeadOID != status.HeadOID {
+			condition.LastHeadOID = status.HeadOID
+			data, err := json.Marshal(condition)
+			if err != nil {
+				return result, err
+			}
+			saved, err := st.UpdateActiveTodoBlockerCondition(ctx, row.ID, string(data), now)
+			writeErr = errors.Join(writeErr, err)
+			result.changed = result.changed || saved != nil
+		}
+	}
+	if conflict && !hasActive && !dismissed {
+		data, err := json.Marshal(mergeTrainBlockerCondition{RepoKey: repoKey, PRURL: prURL, LastHeadOID: status.HeadOID})
+		if err != nil {
+			return result, err
+		}
+		saved, err := st.UpsertTodoBlocker(ctx, db.TodoBlockerRow{
+			ID: mergeTrainBlockerID(prURL), TodoID: todoID, Kind: todoBlockerKindMergeTrain,
+			TargetRef: prURL, ConditionJSON: string(data), State: db.TodoBlockerStateActive,
+			CreatedAt: now, UpdatedAt: now,
+		})
+		writeErr = errors.Join(writeErr, err)
+		result.changed = result.changed || saved != nil
+	}
+	return result, writeErr
 }
 
 type mergeTrainQueueItemView struct {
@@ -869,6 +392,13 @@ func buildMergeTrainSnapshotResponse(snap mergetrain.Snapshot, hidden map[string
 		Repos:  make([]mergeTrainRepoQueueView, 0, len(snap.Repos)),
 		ByTodo: make(map[string]mergeTrainTodoBadgeView),
 	}
+	addBadge := func(todoID string, next mergeTrainTodoBadgeView) {
+		current, exists := resp.ByTodo[todoID]
+		if !exists || current.State != string(mergetrain.StateEscalated) &&
+			(next.State == string(mergetrain.StateEscalated) || next.Position < current.Position) {
+			resp.ByTodo[todoID] = next
+		}
+	}
 	for _, rs := range snap.Repos {
 		rv := mergeTrainRepoQueueView{
 			RepoKey: rs.RepoKey,
@@ -877,11 +407,11 @@ func buildMergeTrainSnapshotResponse(snap mergetrain.Snapshot, hidden map[string
 		if rs.Head != nil && !hidden[rs.Head.TodoID] {
 			item := mergeTrainItemView(*rs.Head, 1)
 			rv.Head = &item
-			resp.ByTodo[rs.Head.TodoID] = mergeTrainTodoBadgeView{
+			addBadge(rs.Head.TodoID, mergeTrainTodoBadgeView{
 				RepoKey:  rs.RepoKey,
 				Position: 1,
 				State:    string(rs.Head.State),
-			}
+			})
 		}
 		basePos := 1
 		if rs.Head != nil {
@@ -901,23 +431,23 @@ func buildMergeTrainSnapshotResponse(snap mergetrain.Snapshot, hidden map[string
 				aheadURL = rs.Queue[i-1].PRURL
 			}
 			rv.Queue = append(rv.Queue, mergeTrainItemView(e, pos))
-			resp.ByTodo[e.TodoID] = mergeTrainTodoBadgeView{
+			addBadge(e.TodoID, mergeTrainTodoBadgeView{
 				RepoKey:    rs.RepoKey,
 				Position:   pos,
 				AheadPRURL: aheadURL,
 				State:      string(e.State),
-			}
+			})
 		}
 		for _, e := range rs.Escalated {
 			if hidden[e.TodoID] {
 				continue
 			}
 			rv.Escalated = append(rv.Escalated, mergeTrainItemView(e, 0))
-			resp.ByTodo[e.TodoID] = mergeTrainTodoBadgeView{
+			addBadge(e.TodoID, mergeTrainTodoBadgeView{
 				RepoKey:  rs.RepoKey,
 				Position: 0,
 				State:    string(e.State),
-			}
+			})
 		}
 		if rv.Head != nil || len(rv.Queue) > 0 || len(rv.Escalated) > 0 {
 			resp.Repos = append(resp.Repos, rv)

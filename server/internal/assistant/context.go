@@ -36,9 +36,13 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 	snapshot := ""
 	cleanRound := s.cleanRoundSession(p.SessionID)
 	if !cleanRound { // a granted schedule's round reads nothing from outside (schedule_grant.go)
-		if track := s.contextTrack(ctx, p, background); track != "" {
+		if track, suppressMain := s.contextTrack(ctx, p, background); track != "" || suppressMain {
 			// a conversation in a track other than the main space: its own short context, not the snapshot (space_context.go)
-			return s.contextResult(ctx, p, s.spaceContext(ctx, track), "", false)
+			text := ""
+			if track != "" {
+				text = s.spaceContext(ctx, track)
+			}
+			return s.contextResult(ctx, p, text, "", false)
 		}
 		snapshot = s.contextSnapshot(ctx, s.snapshotScope(ctx, p.SessionID), background)
 		// The memory extension's standing entries this conversation may use, a section of its own (memory_extension_source.go).

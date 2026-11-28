@@ -1,5 +1,6 @@
 import { t } from "../../i18n";
 import { stripBase } from "../../lib/base";
+import { safeWebURL } from "../../lib/format";
 import { navigate, parse, type Route } from "../../lib/router";
 import { Icon, type IconName } from "../../ui/icons";
 
@@ -16,15 +17,9 @@ interface DecisionEvidenceLink {
  *  the to-do's own /todos/<id> page, formats PR/MR/Issue references concisely, uses in-app navigation for same-origin
  *  Persona routes, and opens external URLs safely in a new tab. */
 function evidenceLink(raw: string | undefined, todoId: string): DecisionEvidenceLink | undefined {
-  const trimmed = raw?.trim();
-  if (!trimmed) return undefined;
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    return undefined;
-  }
-  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) return undefined;
+  const safe = safeWebURL(raw);
+  if (!safe) return undefined;
+  const parsed = new URL(safe);
   const cleanPath = parsed.pathname.replace(/\/+$/, "");
   const stripped = stripBase(cleanPath).replace(/\/+$/, "");
   const selfEncoded = `/todos/${encodeURIComponent(todoId)}`;

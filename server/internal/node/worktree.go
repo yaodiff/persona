@@ -95,7 +95,7 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 	}
 	dir, err = n.gitDir(dir)
 	if err != nil {
-		return nil, "", repo, errors.New("不知道这个工作区的目录")
+		return nil, "", repo, composerError(ctx, "workspace_dir_unknown")
 	}
 	if repo, err = repoAt(ctx, dir); err != nil {
 		return nil, "", repo, err
@@ -125,7 +125,7 @@ func repoAt(ctx context.Context, dir string) (worktreeRepo, error) {
 	var repo worktreeRepo
 	root, err := git(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil || strings.TrimSpace(root) == "" {
-		return repo, errors.New("这个工作区不在 Git 仓库里")
+		return repo, composerError(ctx, "not_git_workspace")
 	}
 	repo.root = strings.TrimSpace(root)
 	// "" on a detached HEAD
@@ -253,13 +253,13 @@ func (n *Node) worktreePrepare(ctx context.Context, kind, workspace, cwd string)
 // revision expression.
 func checkBranch(ctx context.Context, root, branch string) error {
 	if branch == "" {
-		return errors.New("分支名不能为空")
+		return composerError(ctx, "branch_required")
 	}
 	if len(branch) > maxBranch || strings.HasPrefix(branch, "-") {
-		return errors.New("分支名不合法")
+		return composerError(ctx, "branch_invalid")
 	}
 	if out, err := git(ctx, root, "check-ref-format", "--branch", branch); err != nil || strings.TrimSpace(out) != branch {
-		return errors.New("分支名不合法")
+		return composerError(ctx, "branch_invalid")
 	}
 	return nil
 }
@@ -270,29 +270,29 @@ func checkBranch(ctx context.Context, root, branch string) error {
 func (n *Node) checkoutPath(ctx context.Context, root, typed string) (string, error) {
 	p := strings.TrimSpace(typed)
 	if p == "" {
-		return "", errors.New("检出路径不能为空")
+		return "", composerError(ctx, "path_required")
 	}
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		p = filepath.Join(n.home, p[1:])
 	}
 	if !filepath.IsAbs(p) {
-		return "", errors.New("检出路径要写完整路径")
+		return "", composerError(ctx, "path_not_absolute")
 	}
 	p = filepath.Clean(p)
 	// Compared as real paths: git gives the root with its symlinks resolved (macOS's /var is /private/var), so a
 	// path typed through a link would pass a check of the spelling alone (#2650).
 	if within(realPath(p), realPath(filepath.Join(root, ".git"))) {
-		return "", errors.New("检出路径不能放在 .git 里面")
+		return "", composerError(ctx, "path_in_git")
 	}
 	switch fi, err := os.Stat(p); {
 	case err == nil && !fi.IsDir():
-		return "", errors.New("检出路径已经是一个文件")
+		return "", composerError(ctx, "path_is_file")
 	case err == nil:
 		if entries, err := os.ReadDir(p); err != nil || len(entries) > 0 {
 			return "", pathTakenError(ctx, p)
 		}
 	case !errors.Is(err, os.ErrNotExist):
-		return "", fmt.Errorf("读不了检出路径：%w", err)
+		return "", composerError(ctx, "path_unreadable", i18n.Args{"reason": err.Error()})
 	}
 	return p, nil
 }
@@ -310,7 +310,7 @@ func within(p, dir string) bool {
 	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
 }
 
-// worktreeCreate makes the checkout and, unless openWorkspace is false for a herdr task, opens it as a workspace of the host.
+// worktreeCreate makes the checkout and, unless a grouped task requests checkout only, opens it as a workspace of the host.
 func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch, path, parentWorkspace string, openWorkspace *bool) (proto.WorktreeCreateResult, error) {
 	var res proto.WorktreeCreateResult
 	branch = strings.TrimSpace(branch)
@@ -319,7 +319,7 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 			return res, err
 		}
 		if openWorkspace != nil && !*openWorkspace {
-			return res, errors.New("open_workspace=false is supported only on herdr")
+			return res, errors.New("open_workspace=false is supported only on classic herdr or Orca")
 		}
 		return n.runtimeWorktreeCreate(ctx, rt, workspace, cwd, branch, path, parentWorkspace)
 	}
@@ -344,8 +344,8 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 		parent = workspace
 	}
 	if checkoutOnly {
-		if _, ok := h.(*herdrHost); !ok {
-			return res, errors.New("open_workspace=false is supported only on herdr")
+		if h.Kind() != host.Herdr && h.Kind() != host.Orca {
+			return res, errors.New("open_workspace=false requires classic herdr or Orca")
 		}
 		// Older herdr versions have no checkout-only RPC. Use the node's existing Git fallback for every
 		// source workspace, then open the Agent's tab in the task workspace instead of opening a new one.
@@ -398,7 +398,7 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 		_ = n.refreshHosts(ctx, h)           // the new workspace is in the layout the terminal page lists
 	}
 	res = proto.WorktreeCreateResult{WorkspaceID: created.SpaceID, TabID: created.SlotID, Path: dest, Branch: branch}
-	if h.Kind() == host.Orca {
+	if h.Kind() == host.Orca && !checkoutOnly {
 		res.ParentWorkspaceID = parent
 	}
 	if created.Path != "" {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { agentGroupLabel, agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel, worstTreeState } from "./todo-tree";
+import { buildV2SidebarTree } from "../features/todos/board-sidebar-tree";
+import { groupTodosByProject, projectOf } from "../features/todos/project-groups";
+import { agentGroupLabel, agentTreeState, buildTodoTree, nestAgents, STALE_MS, todoTreeState, treeStateLabel, worstTreeState } from "./todo-tree";
 import { makeSessionLookup, todoStatus, type Todo } from "./todos";
 import { todoLook, waitOf } from "./todo-wait-reason";
 import { matchesFilter } from "./agent-filter";
@@ -231,18 +233,16 @@ describe("waiting in the background in the tree (#6045)", () => {
 });
 
 describe("todos_v2 top-level goal folding in By to-do (#14831)", () => {
-  it("keeps the tree 100% identical when todosV2 is false or omitted", () => {
+  it("keeps branches flat in the standard tree", () => {
     const all = [s("a", "working", "/code/p"), s("b", "idle", "/code/p")];
     const list: Todo[] = [
       todo("goal", [], { title: "Launch" }),
       todo("c1", [link("a")], { title: "API", part_of: "goal" }),
       todo("c2", [link("b")], { title: "Docs", part_of: "goal" }),
     ];
-    const omitted = buildTodoTree(all, machines, list, noMutes, NOW);
-    const disabled = buildTodoTree(all, machines, list, noMutes, NOW, { todosV2: false });
-    expect(disabled).toEqual(omitted);
-    expect(disabled.todos.map((td) => td.todoId)).toEqual(["c1", "c2"]);
-    expect(disabled.todos.every((td) => td.goalProgress === undefined)).toBe(true);
+    const tree = buildTodoTree(all, machines, list, noMutes, NOW);
+    expect(tree.todos.map((td) => td.todoId)).toEqual(["c1", "c2"]);
+    expect(tree.todos.every((td) => td.goalProgress === undefined)).toBe(true);
   });
 
   it("folds non-urgent part_of subtasks (including grandchildren) under their open parent goal with done/total progress", () => {
@@ -254,7 +254,7 @@ describe("todos_v2 top-level goal folding in By to-do (#14831)", () => {
       todo("gc1", [link("b")], { title: "Migration", part_of: "c1" }),
       todo("open-no-agent", [], { title: "Checklist", part_of: "goal" }),
     ];
-    const tree = buildTodoTree(all, machines, list, noMutes, NOW, { todosV2: true });
+    const tree = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
     expect(tree.todos.map((td) => td.todoId)).toEqual(["goal"]);
     const goal = tree.todos[0]!;
     expect(goal.name).toBe("Ship v2");
@@ -270,7 +270,7 @@ describe("todos_v2 top-level goal folding in By to-do (#14831)", () => {
       todo("goal", [link("p")], { title: "Main goal" }),
       todo("c1", [link("c")], { title: "Subtask", part_of: "goal" }),
     ];
-    const tree = buildTodoTree(all, machines, list, noMutes, NOW, { todosV2: true });
+    const tree = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
     expect(tree.todos).toHaveLength(1);
     const goal = tree.todos[0]!;
     expect(goal.todoId).toBe("goal");
@@ -293,7 +293,7 @@ describe("todos_v2 top-level goal folding in By to-do (#14831)", () => {
       todo("blocked", [link("n")], { title: "Approve schema", part_of: "goal" }),
       todo("asking", [link("ask")], { title: "Pick rollout", part_of: "goal", ask: { verdict: "Roll out?", outcome: "decide", asked_at: fresh } }),
     ];
-    const tree = buildTodoTree(all, machines, list, noMutes, NOW, { todosV2: true });
+    const tree = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
     // Surfaced blockers appear first and unfolded (in sortTodos order), followed by the folded parent goal
     expect(tree.todos.map((td) => td.todoId)).toEqual(["asking", "blocked", "goal"]);
     expect(tree.todos[0]!.folded).toBe(false);
@@ -319,7 +319,7 @@ describe("todos_v2 top-level goal folding in By to-do (#14831)", () => {
       todo("closedGoal", [], { done_at: fresh }),
       todo("closedChildT", [link("closed-child")], { part_of: "closedGoal" }),
     ];
-    const tree = buildTodoTree(all, machines, list, noMutes, NOW, { todosV2: true });
+    const tree = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
     expect(tree.todos.map((td) => td.todoId).sort()).toEqual(["closedChildT", "cycA", "cycB", "orphanT", "selfT"]);
     expect(tree.todos.every((td) => td.goalProgress === undefined)).toBe(true);
   });
@@ -331,10 +331,12 @@ describe("todos_v2 top-level goal folding in By to-do (#14831)", () => {
       todo("c1", [link("a")], { title: "One", part_of: "goal" }),
       todo("c2", [link("b")], { title: "Two", part_of: "goal" }),
     ];
-    const on = buildTodoTree(all, machines, list, noMutes, NOW, { todosV2: true });
+    const on = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
     expect(on.todos.map((td) => td.todoId)).toEqual(["goal"]);
-    const off = buildTodoTree(all, machines, list, noMutes, NOW, { todosV2: false });
+    const unfolded = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: false });
+    expect(unfolded.todos.map((td) => td.todoId)).toEqual(["c1", "c2"]);
+    const off = buildTodoTree(all, machines, list, noMutes, NOW);
     expect(off.todos.map((td) => td.todoId)).toEqual(["c1", "c2"]);
-    expect(off).toEqual(buildTodoTree(all, machines, list, noMutes, NOW));
+    expect(off).toEqual(unfolded);
   });
 });

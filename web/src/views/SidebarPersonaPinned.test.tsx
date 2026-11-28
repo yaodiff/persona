@@ -94,6 +94,7 @@ describe("the pinned Persona row", () => {
     expect(css).toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\[data-app-shell\]\s+:is\(\[data-sidebar-root\],\s*\[data-sidebar-rail\],\s*\[data-sidebar-sticky\]\)\s*\{[^}]*background:\s*transparent/);
     expect(css).toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\.sidebar-group-heading\s*\{[^}]*position:\s*static;\s*[^}]*background:\s*transparent/);
     expect(css).toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\.sidebar-group-heading\[data-edge\]::after\s*\{[^}]*display:\s*none/);
+    expect(css).toMatch(/\[data-sidebar-rows\]\s+\.group\\\/row:has\(>\s*button\[aria-haspopup="menu"\]\):hover\b/);
   });
 });
 

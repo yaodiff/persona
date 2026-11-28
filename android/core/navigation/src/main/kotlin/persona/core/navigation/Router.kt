@@ -143,8 +143,8 @@ class Router(
             else -> return null
         }
         val resolved = resolve(key) ?: return null
-        // Only the Persona tab has a composer to focus; elsewhere the parameter means nothing.
-        return if (parameters["focus"] == "composer" && resolved.key == AssistantRoute) {
+        // Both the Persona tab (main chat) and an explicit ChatRoute have a composer to focus.
+        return if (parameters["focus"] == "composer" && (resolved.key == AssistantRoute || resolved.key is ChatRoute)) {
             ResolvedRoute(resolved.tab, resolved.key, resolved.pairingLink, focusComposer = true)
         } else resolved
     }
@@ -216,8 +216,8 @@ internal fun linkedPage(name: String): NavKey? = when (name.lowercase()) {
 fun ResolvedRoute.restore(stacks: Map<AppTab, MutableList<NavKey>>, newTodo: NewTodoRequests = NewTodoOpen): AppTab {
     val stack = stacks.getValue(tab)
     if (stack.isEmpty()) stack.add(tabRoot(tab))
-    // The card is listed on the tab's root and the composer to focus sits there: pages left open on top are closed first.
-    if (card != null || focusComposer) while (stack.size > 1) stack.removeAt(stack.lastIndex)
+    // The card is listed on the tab's root and the Persona tab's composer sits there: pages left open on top are closed first.
+    if (card != null || (focusComposer && key == tabRoot(tab))) while (stack.size > 1) stack.removeAt(stack.lastIndex)
     if (key == tabRoot(tab)) return tab
     // Conversations have one owning tab; secondary pages can legitimately remain open in both stacks.
     if (key is ChatRoute || key is InteractionRoute) {

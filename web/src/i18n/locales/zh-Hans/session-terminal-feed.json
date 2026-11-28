@@ -1,7 +1,7 @@
 {
   "hub_unreachable": "无法连接到 hub",
   "load_failed": "终端加载失败，请刷新页面后重试。",
-  "not_in_herdr": "此会话未在 herdr 中运行",
+  "not_running_in": "此会话未在 {engine} 中运行",
   "watch_only_computer": "这台电脑仅支持查看，不支持接管。",
   "taken": "另一台设备已接管此终端",
   "lost": "终端已恢复为电脑上的原始尺寸",

@@ -266,7 +266,12 @@ func (c *Client) rpcOnce(ctx context.Context, method string, params any, out any
 		if cerr := ctx.Err(); cerr != nil {
 			return fmt.Errorf("herdr %s: %w", method, cerr)
 		}
-		return fmt.Errorf("%w: %v", errNoSocket, err)
+		// A dial timeout indicates a busy/overloaded herdr rather than a missing socket (#13578).
+		var ne net.Error
+		if dctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+			return fmt.Errorf("herdr %s: %w", method, err)
+		}
+		return fmt.Errorf("%w: %w", errNoSocket, err)
 	}
 	defer conn.Close()
 	return c.rpcConn(dctx, conn, method, params, out)

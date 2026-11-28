@@ -202,6 +202,7 @@ export class TodoWorkspaceItem {
   wait: TodoWait | undefined;
   waitUnknownKind: string = '';
   stage: string = '';
+  stageKind: string = '';
   prUrl: string = '';
   kind: string = '';
   agents: TodoWorkspaceAgent[] = [];
@@ -247,6 +248,7 @@ export class TodoWorkspaceItem {
     this.wait = parsedWait?.wait;
     this.waitUnknownKind = parsedWait?.unknownKind || '';
     this.stage = Wire.text(data, 'stage');
+    this.stageKind = Wire.text(data, 'stage_kind');
     this.prUrl = Wire.text(data, 'pr_url');
     this.kind = Wire.text(data, 'kind');
     this.agents = Wire.rows(data, 'agents').map((item: Record<string, Object>) => new TodoWorkspaceAgent(item));

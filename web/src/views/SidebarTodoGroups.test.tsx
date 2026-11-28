@@ -11,7 +11,7 @@ vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 import { buildTodoTree } from "../lib/todo-tree";
-import { consumeBoardSidebarTree } from "../features/todos/board-consumer";
+import { buildV2SidebarTree, consumeBoardSidebarTree } from "../features/todos/board-sidebar-tree";
 import type { Todo, TodoBoardProjection } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { GroupBranch, TodoTreeView } from "./SidebarTree";
@@ -207,14 +207,14 @@ describe("By to-do under todos_v2 (#14831)", () => {
 
   it("folds non-urgent subtasks under their parent goal with compact progress and surfaces needs_you blockers at the top, reverting losslessly when off", () => {
     // todos_v2 = false (default): flat branches, no goal progress badge
-    const flatTree = buildTodoTree(goalSessions, machines, goalTodos, { spaces: [], sessions: [] }, Date.now(), { todosV2: false });
+    const flatTree = buildTodoTree(goalSessions, machines, goalTodos, { spaces: [], sessions: [] }, Date.now());
     show(<TodoTreeView tree={flatTree} activeKey="" {...stable} />);
     const flatKeys = [...host.querySelectorAll("[data-tree-branch]")].map((el) => el.getAttribute("data-tree-branch"));
     expect(flatKeys).toEqual(["todo:sub-block", "todo:sub-work"]);
     expect(host.querySelector("[data-goal-progress]")).toBeNull();
 
     // todos_v2 = true: needs_you child surfaces first, non-urgent child folds under parent goal with 1/3 progress
-    const v2Tree = buildTodoTree(goalSessions, machines, goalTodos, { spaces: [], sessions: [] }, Date.now(), { todosV2: true });
+    const v2Tree = buildV2SidebarTree(goalSessions, machines, goalTodos, { spaces: [], sessions: [] }, Date.now(), { board: null, foldChildren: true });
     show(<TodoTreeView tree={v2Tree} activeKey="" {...stable} />);
     const v2Keys = [...host.querySelectorAll("[data-tree-branch]")].map((el) => el.getAttribute("data-tree-branch"));
     expect(v2Keys).toEqual(["todo:sub-block", "todo:goal"]);

@@ -65,12 +65,12 @@ func followupRows(t *testing.T, s *Service) []repository.PRFollowup {
 	return rows
 }
 
-func queuedFollowupTools(s *Service) []string {
+func keptFollowupNotices(s *Service) []string {
 	b := &s.relays
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var tools []string
-	for _, msg := range b.st.Queue[fupSup] {
+	for _, msg := range b.st.Later[fupSup] {
 		if msg.Tool == prFollowupTool {
 			tools = append(tools, msg.Text)
 		}
@@ -82,7 +82,7 @@ func TestGoldenPRFollowupLanguages(t *testing.T) {
 	for _, locale := range []string{"zh-Hans", "en", "ja"} {
 		for _, event := range []string{"merged", "closed", "conflict", "changes_requested"} {
 			text := prompts.RenderPRFollowupNotice(prompts.PRFollowupNotice{
-				ID: fupTodo, Title: "Task 原文", PRURL: fupPR, Event: event, Realtime: true,
+				ID: fupTodo, Title: "Task 原文", PRURL: fupPR, Event: event,
 				Language: answerLanguage(locale),
 			})
 			if !strings.Contains(text, "Task 原文") || !strings.Contains(text, fupPR) {
@@ -140,24 +140,21 @@ func TestPRFollowupTerminalNoticeRequiresPostClosureTransition(t *testing.T) {
 			if rows := followupRows(t, s); len(rows) != 0 {
 				t.Fatalf("terminal PR left %d follow-up subscriptions", len(rows))
 			}
-			if queued := queuedFollowupTools(s); len(queued) != 0 {
-				t.Fatalf("idle supervisor has queued follow-ups: %v", queued)
+			if sent := f.sentTexts(fupSup); len(sent) != 0 || s.queuedFor(fupSup) != 0 {
+				t.Fatalf("post-closure observation scheduled a wake: %v", sent)
 			}
-			got := f.sentTexts(fupSup)
+			got := keptFollowupNotices(s)
 			if tc.want == "" && len(got) != 0 {
-				t.Fatalf("preexisting terminal state woke the supervisor: %v", got)
+				t.Fatalf("preexisting terminal state left a follow-up: %v", got)
 			}
-			if tc.want != "" {
-				if len(got) != 1 || !strings.Contains(got[0], tc.want) {
-					t.Fatalf("expected one %q notice, got %v", tc.want, got)
-				}
-				assertSentSource(t, f, &proto.MessageSource{Kind: proto.SourceNotice, Title: "Persona"})
+			if tc.want != "" && (len(got) != 1 || !strings.Contains(got[0], tc.want)) {
+				t.Fatalf("expected one quiet %q notice, got %v", tc.want, got)
 			}
 		})
 	}
 }
 
-func TestPRFollowupConflictNotifiesOncePerHeadAndKeepsTodoClosed(t *testing.T) {
+func TestPRFollowupConflictStaysQuietAndIsRecordedOncePerHead(t *testing.T) {
 	s, forge := followupEnv(t, TodoPRStatus{State: "open", HeadOID: "h1"})
 	now := time.Now()
 	seedFollowup(t, s, now.Add(-time.Minute))
@@ -171,18 +168,21 @@ func TestPRFollowupConflictNotifiesOncePerHeadAndKeepsTodoClosed(t *testing.T) {
 	if rows[0].NotifiedConflictHead != "h1" {
 		t.Fatalf("conflict head not recorded: %+v", rows[0])
 	}
-	if got := queuedFollowupTools(s); len(got) != 1 || !strings.Contains(got[0], "冲突") {
+	if got := keptFollowupNotices(s); len(got) != 1 || !strings.Contains(got[0], "冲突") {
 		t.Fatalf("expected one conflict notice, got %v", got)
 	}
-	// A second sweep on the same conflicting head must not re-wake the supervisor.
+	if s.queuedFor(fupSup) != 0 {
+		t.Fatal("closed-task conflict queued a supervisor wake")
+	}
+	// The same conflicting head is kept once.
 	s.sweepPRFollowups(context.Background(), now.Add(time.Minute))
-	if got := queuedFollowupTools(s); len(got) != 1 {
+	if got := keptFollowupNotices(s); len(got) != 1 {
 		t.Fatalf("same-head conflict re-notified: %d notices", len(got))
 	}
-	// A new head with a conflict wakes once again.
+	// A new head with a conflict adds another quiet record.
 	s.deploy.forge = &statusForge{status: TodoPRStatus{State: "open", HeadOID: "h2", Conflicts: true, CheckedAt: time.Now()}}
 	s.sweepPRFollowups(context.Background(), now.Add(2*time.Minute))
-	if got := queuedFollowupTools(s); len(got) != 2 {
+	if got := keptFollowupNotices(s); len(got) != 2 {
 		t.Fatalf("new-head conflict did not re-notify: %d notices", len(got))
 	}
 }
@@ -194,7 +194,7 @@ func TestPRFollowupCurrentHeadChangesRequestedNotifies(t *testing.T) {
 	s.sweepPRFollowups(t.Context(), now.Add(-time.Second))
 	forge.status.Review, forge.status.ChangesRequestedAt = "changes_requested", &now
 	s.sweepPRFollowups(t.Context(), now)
-	if got := queuedFollowupTools(s); len(got) != 1 || !strings.Contains(got[0], "changes-requested") {
+	if got := keptFollowupNotices(s); len(got) != 1 || !strings.Contains(got[0], "changes-requested") {
 		t.Fatalf("expected one changes-requested notice, got %v", got)
 	}
 	rows := followupRows(t, s)
@@ -224,7 +224,7 @@ func TestPRFollowupForgeUnavailableDoesNotPretendToWatch(t *testing.T) {
 	if len(rows) != 1 || rows[0].LastObservedAt != nil || rows[0].WatchStatus != repository.PRFollowupWatchHostNotConnected {
 		t.Fatalf("repeated disconnected sweep corrupted subscription: %+v", rows)
 	}
-	if got := queuedFollowupTools(s); len(got) != 0 {
+	if got := keptFollowupNotices(s); len(got) != 0 {
 		t.Fatalf("unavailable forge sent a notice: %v", got)
 	}
 }
@@ -446,7 +446,7 @@ func TestPRFollowupDisconnectAfterActiveWatchingAndTransientErrors(t *testing.T)
 	if len(rows) != 1 || rows[0].LastObservedAt == nil || !rows[0].LastObservedAt.Equal(t0) {
 		t.Fatalf("second disconnected sweep mutated LastObservedAt: %+v", rows)
 	}
-	if got := queuedFollowupTools(s); len(got) != 0 {
+	if got := keptFollowupNotices(s); len(got) != 0 {
 		t.Fatalf("disconnect spammed notices: %v", got)
 	}
 }
@@ -498,7 +498,7 @@ func TestPRFollowupHostNotConnectedSurvivesRestartAndRecovers(t *testing.T) {
 		rows2[0].NotifiedConflictHead != "h1" {
 		t.Fatalf("after recovery sweep: %+v", rows2)
 	}
-	if got := queuedFollowupTools(s2); len(got) != 1 || !strings.Contains(got[0], "冲突") {
+	if got := keptFollowupNotices(s2); len(got) != 1 || !strings.Contains(got[0], "冲突") {
 		t.Fatalf("recovery conflict notice = %v", got)
 	}
 	if td, ok := s2.todoNow(fupTodo); !ok || td.DoneAt == nil {
@@ -509,7 +509,7 @@ func TestPRFollowupHostNotConnectedSurvivesRestartAndRecovers(t *testing.T) {
 	t2 := t0.Add(10 * time.Minute)
 	forge2.status = TodoPRStatus{State: "open", HeadOID: "h2", Review: "changes_requested", ChangesRequestedAt: &t2}
 	s2.sweepPRFollowups(ctx, t2)
-	if got := queuedFollowupTools(s2); len(got) != 2 || !strings.Contains(got[1], "changes-requested") {
+	if got := keptFollowupNotices(s2); len(got) != 2 || !strings.Contains(got[1], "changes-requested") {
 		t.Fatalf("post-recovery review notice = %v", got)
 	}
 
@@ -520,7 +520,7 @@ func TestPRFollowupHostNotConnectedSurvivesRestartAndRecovers(t *testing.T) {
 	if rows := followupRows(t, s2); len(rows) != 0 {
 		t.Fatalf("terminal PR after recovery left %d subscriptions", len(rows))
 	}
-	if got := queuedFollowupTools(s2); len(got) != 3 || !strings.Contains(got[2], "已合并") {
+	if got := keptFollowupNotices(s2); len(got) != 3 || !strings.Contains(got[2], "已合并") {
 		t.Fatalf("post-recovery terminal notice = %v", got)
 	}
 }
@@ -757,7 +757,7 @@ func TestPRFollowupProviderHostUnsupportedAndRecovery(t *testing.T) {
 	if rows := followupRows(t, s); len(rows) != 0 {
 		t.Fatalf("merged provider MR left %d subscriptions", len(rows))
 	}
-	if got := queuedFollowupTools(s); len(got) != 1 || !strings.Contains(got[0], "已合并") {
+	if got := keptFollowupNotices(s); len(got) != 1 || !strings.Contains(got[0], "已合并") {
 		t.Fatalf("provider terminal notice = %v", got)
 	}
 }

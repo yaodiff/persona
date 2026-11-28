@@ -2,7 +2,10 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // What an extension may read of the assistant's sensitive information (#13246, migrations/manager/
@@ -13,6 +16,16 @@ type ExtensionTrust struct {
 	Extension  string
 	Trust      string // "owner" or "third_party"; "" when no row says
 	Categories []string
+}
+
+// ExtensionTrustOf reads one extension's trust level. An absent row has an empty level.
+func (d *DB) ExtensionTrustOf(ctx context.Context, extension string) (string, error) {
+	var trust string
+	err := d.pool.QueryRow(ctx, `SELECT trust FROM assistant_extension_trust WHERE extension_id = $1`, extension).Scan(&trust)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return trust, err
 }
 
 // ExtensionTrusts are every extension a trust or a grant was kept for, by extension id.

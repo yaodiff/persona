@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -55,7 +56,7 @@ func (s *Service) taskStageItems(ctx context.Context, p SessionItems) {
 			t = current
 		}
 		if it.Role == "assistant" && it.Kind == proto.KindText && it.FullSize == 0 && strings.TrimSpace(it.Text) != "" {
-			s.advanceTaskReply(ctx, t, p.MachineID, p.SessionID, it.Text)
+			s.advanceTaskReplyAt(ctx, t, p.MachineID, p.SessionID, it.Text, it.TS)
 		}
 	}
 }
@@ -76,9 +77,9 @@ func (s *Service) taskStageSessions(ctx context.Context, d DeviceSessions) {
 		}
 		s.tasks.mu.Lock()
 		if s.tasks.stageReplies == nil {
-			s.tasks.stageReplies = map[SessionRef][2]string{}
+			s.tasks.stageReplies = map[SessionRef][3]string{}
 		}
-		key := [2]string{t.ID, c.LastText}
+		key := [3]string{t.ID, c.LastText, c.UpdatedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)}
 		if s.tasks.stageReplies[ref] == key {
 			s.tasks.mu.Unlock()
 			continue
@@ -94,7 +95,7 @@ func (s *Service) taskStageSessions(ctx context.Context, d DeviceSessions) {
 		if strings.HasSuffix(c.LastText, "…") {
 			continue // a clipped suffix can hide a negation or the change link
 		}
-		s.advanceTaskReply(ctx, t, d.MachineID, c.SessionID, c.LastText)
+		s.advanceTaskReplyAt(ctx, t, d.MachineID, c.SessionID, c.LastText, c.UpdatedAt)
 	}
 	s.tasks.mu.Lock()
 	for ref := range s.tasks.stageReplies {

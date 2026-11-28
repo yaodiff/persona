@@ -43,6 +43,11 @@ A pending plan-approval card is reliable; `working` and a reply mentioning a pla
 
 Every path that closes a task has to apply the delivery rule, not only the judge's finish: a supervisor's `task_review accepted` used to close a task with an open draft PR while `done_needs_delivery` was on and the stage ledger already said "not in the running hub" (#6428). Acceptance criteria that only ask for a PR do not override the switch.
 
+Keep a reported wait independent from delivery evidence (#17256). A PR can merge while a task still waits for a
+decision, translation or publication window. Match the exact linked PR (and check its observed head) before treating
+an external wait as CI. Apply build observations to the linked PR under the stage lock so a delayed comparison
+cannot mark a different delivery live.
+
 ## Not done yet
 
 - The iOS / Mac to-do cards do not yet show where delivery is stuck (web and Android already do).
@@ -64,3 +69,19 @@ Develop after the task was accepted. Words that only name what is read or used (
 - From words, take only a change asked for outright, outside conditional and negated sentences, and let a doubt read
   general: a missing strip costs nothing until the change appears; a strip on work that changes no code never moves.
 - Finished work needs an ending the strip can show without claiming a step: Done after the steps taken, not Verified.
+
+## A stage PR is a saved delivery link too (#17788)
+
+`setTaskStage` saves every stage PR as a repository link with the default role, and the store keeps an explicit
+`delivery` role as the same empty value. So on Postgres, "the task has a saved delivery PR" holds for every task with a
+stage PR. #17714 skipped closeout recovery whenever a saved delivery link existed. That turned recovery and the non-PR
+cleanup off on every real hub, and an issue number recorded as a PR blocked acceptance with a 404 again (#8248). The
+memory store has no repository store, so only the Postgres cases showed it, and the PR's `-run` filter selected tests by
+name and missed them.
+
+- Store explicit delivery intent on the link (#17792). Stage equality is a recovery fallback for rows without
+  provenance, and stage mirrors can still be cleaned up. A deliberately bound PR keeps its delivery gate even when
+  its URL also appears in the current or earlier stage record. Preserve the binding through report replays and
+  title edits, and check for it again before cleanup in case the link changed during forge verification.
+- When a change reads saved links, run the Postgres cases of every test file that reaches that gate on the hub. A name
+  pattern such as `.*Delivery` is not enough.

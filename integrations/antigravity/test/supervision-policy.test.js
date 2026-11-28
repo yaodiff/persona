@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { toAgyId, workspacePathOf } from '../lib/map.js'
-import { AGY_RULE_MAX_BYTES, isPolicyDir, POLICY_DIR_NAME, policyDirOf, readPolicy, SUPERVISION_ERROR_CODE, syncPolicy } from '../lib/policy.js'
+import { AGY_RULE_MAX_BYTES, isPolicyDir, POLICY_DIR_NAME, policyDirOf, readPolicy, removePolicy, splitPolicy, SUPERVISION_ERROR_CODE, syncPolicy } from '../lib/policy.js'
 import { createAgyRuntime } from '../lib/runtime.js'
 import { AgyAcpClient } from '../lib/acp.js'
 
@@ -402,4 +402,202 @@ test('rejected supervision preparation preserves an idle session without publish
   assert.equal(row.status, 'idle')
   assert.equal(row.turn_error, undefined)
   assert.equal(n.all('session.items').slice(batches).flatMap((batch) => batch.items).some((item) => item.text === 'Not accepted.'), false)
+})
+
+test('splitPolicy accepts valid 24KB-48KB policies with early newlines and preserves UTF-8 boundaries', (t) => {
+  // Single early newline followed by >24KB continuous payload (previously rejected because cut fell back to early \n).
+  const earlyNl = `# Supervision\n${'a'.repeat(25_000)}`
+  const r1 = splitPolicy(earlyNl)
+  assert.equal(r1.primary + r1.secondary, earlyNl)
+  assert.equal(Buffer.byteLength(r1.primary, 'utf8'), AGY_RULE_MAX_BYTES)
+  assert.equal(Buffer.byteLength(r1.secondary, 'utf8'), Buffer.byteLength(earlyNl, 'utf8') - AGY_RULE_MAX_BYTES)
+
+  // End-to-end syncPolicy + readPolicy round-trip for early-newline mid-line fallback.
+  const base = mkdtempSync(join(tmpdir(), 'agy-policy-split-'))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  syncPolicy(base, 'sess-early-nl', earlyNl)
+  assert.equal(readPolicy(base, 'sess-early-nl'), earlyNl)
+
+  // Byte-0 newline followed by >24KB payload falls back to safe byte cut.
+  const byte0Nl = `\n${'a'.repeat(25_000)}`
+  const r0 = splitPolicy(byte0Nl)
+  assert.equal(r0.primary + r0.secondary, byte0Nl)
+  assert.equal(Buffer.byteLength(r0.primary, 'utf8'), AGY_RULE_MAX_BYTES)
+  assert.equal(Buffer.byteLength(r0.secondary, 'utf8'), 1_001)
+
+  // CRLF straddling byte 24,000 round-trips byte-for-byte.
+  const crlfStraddle = `${'a'.repeat(AGY_RULE_MAX_BYTES - 1)}\r\n${'b'.repeat(100)}`
+  const rCr = splitPolicy(crlfStraddle)
+  assert.equal(rCr.primary + rCr.secondary, crlfStraddle)
+  assert.equal(Buffer.byteLength(rCr.primary, 'utf8'), AGY_RULE_MAX_BYTES)
+  assert.equal(Buffer.byteLength(rCr.secondary, 'utf8'), 101)
+
+  // 3-byte CJK char straddling byte 24,000 is not split mid-codepoint.
+  const cjkStraddle = `${'a'.repeat(AGY_RULE_MAX_BYTES - 1)}中${'b'.repeat(100)}`
+  const rCjk = splitPolicy(cjkStraddle)
+  assert.equal(rCjk.primary + rCjk.secondary, cjkStraddle)
+  assert.equal(Buffer.byteLength(rCjk.primary, 'utf8'), AGY_RULE_MAX_BYTES - 1)
+  assert.equal(Buffer.byteLength(rCjk.secondary, 'utf8'), 103)
+
+  // 4-byte emoji straddling byte 24,000 is not split mid-surrogate-pair.
+  const emojiStraddle = `${'a'.repeat(AGY_RULE_MAX_BYTES - 2)}😀${'b'.repeat(100)}`
+  const rEmoji = splitPolicy(emojiStraddle)
+  assert.equal(rEmoji.primary + rEmoji.secondary, emojiStraddle)
+  assert.equal(Buffer.byteLength(rEmoji.primary, 'utf8'), AGY_RULE_MAX_BYTES - 2)
+  assert.equal(Buffer.byteLength(rEmoji.secondary, 'utf8'), 104)
+
+  // Near-48KB policy with a single early newline.
+  const nearLimit = `# Header\n${'b'.repeat(47_000)}`
+  const r2 = splitPolicy(nearLimit)
+  assert.equal(r2.primary + r2.secondary, nearLimit)
+  assert.ok(Buffer.byteLength(r2.primary, 'utf8') <= AGY_RULE_MAX_BYTES)
+  assert.ok(Buffer.byteLength(r2.secondary, 'utf8') <= AGY_RULE_MAX_BYTES)
+
+  // When a newline leaves a tail <= maxBytes, split still prefers the clean line boundary.
+  const balanced = `${'x'.repeat(20_000)}\n${'y'.repeat(20_000)}`
+  const r3 = splitPolicy(balanced)
+  assert.equal(r3.primary, `${'x'.repeat(20_000)}\n`)
+  assert.equal(r3.secondary, 'y'.repeat(20_000))
+
+  // Exact 48,000-byte 4-byte UTF-8 surrogate-pair policy splits cleanly without splitting a codepoint.
+  const emojis = '😀'.repeat(12_000)
+  assert.equal(Buffer.byteLength(emojis, 'utf8'), AGY_RULE_MAX_BYTES * 2)
+  const r4 = splitPolicy(emojis)
+  assert.equal(r4.primary + r4.secondary, emojis)
+  assert.equal(Buffer.byteLength(r4.primary, 'utf8'), AGY_RULE_MAX_BYTES)
+  assert.equal(Buffer.byteLength(r4.secondary, 'utf8'), AGY_RULE_MAX_BYTES)
+
+  // safe === 0 when single codepoint exceeds maxBytes fails closed.
+  assert.throws(
+    () => splitPolicy('😀', 2),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+
+  // Exceeding 48,000 bytes still fails closed.
+  assert.throws(
+    () => splitPolicy('z'.repeat(AGY_RULE_MAX_BYTES * 2 + 1)),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+})
+
+test('syncPolicy, readPolicy, and removePolicy refuse symlink traversal and replace/clear file symlinks safely', (t) => {
+  const base = mkdtempSync(join(tmpdir(), 'agy-policy-sym-'))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+
+  const outsideDir = join(base, 'outside')
+  mkdirSync(outsideDir, { recursive: true })
+  const victim = join(outsideDir, 'victim.txt')
+  writeFileSync(victim, 'UNTOUCHED_VICTIM')
+
+  // 1. Symlinked policyRoot and ENOTDIR ancestor must fail closed with SUPERVISION_ERROR_CODE.
+  const symRoot = join(base, 'sym-root')
+  symlinkSync(outsideDir, symRoot)
+  assert.throws(
+    () => syncPolicy(symRoot, 'sess-1', 'POLICY'),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+  assert.throws(
+    () => syncPolicy(symRoot, 'sess-1', ''),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+  const fileAncestorRoot = join(victim, 'persona-supervision')
+  assert.throws(
+    () => syncPolicy(fileAncestorRoot, 'sess-1', 'POLICY'),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+  assert.throws(
+    () => syncPolicy(fileAncestorRoot, 'sess-1', ''),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+  assert.equal(readPolicy(fileAncestorRoot, 'sess-1'), '')
+  assert.equal(readPolicy(symRoot, 'sess-1'), '')
+  mkdirSync(join(outsideDir, 'sess-keep'), { recursive: true })
+  writeFileSync(join(outsideDir, 'sess-keep', 'AGENTS.md'), 'KEEP_ME')
+  removePolicy(symRoot, 'sess-keep')
+  assert.equal(readFileSync(join(outsideDir, 'sess-keep', 'AGENTS.md'), 'utf8'), 'KEEP_ME')
+
+  // 2. Symlinked session policy directory must fail closed on write, clear, and removePolicy without altering symlink or target.
+  const realRoot = join(base, 'real-root')
+  mkdirSync(realRoot, { recursive: true })
+  const symSessionDir = join(realRoot, 'sess-dir-sym')
+  symlinkSync(outsideDir, symSessionDir)
+  assert.throws(
+    () => syncPolicy(realRoot, 'sess-dir-sym', 'NEW_POLICY'),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+  assert.throws(
+    () => syncPolicy(realRoot, 'sess-dir-sym', ''),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+  assert.equal(lstatSync(symSessionDir).isSymbolicLink(), true, 'failed clear leaves symlinked session dir untouched')
+  removePolicy(realRoot, 'sess-dir-sym')
+  assert.equal(lstatSync(symSessionDir).isSymbolicLink(), true, 'removePolicy refuses symlinked session dir')
+  assert.equal(existsSync(join(outsideDir, 'AGENTS.md')), false)
+  assert.equal(readPolicy(realRoot, 'sess-dir-sym'), '')
+
+  // 3. Mixed regular + symlinked AGENTS.md / GEMINI.md causes readPolicy to fail closed ("") rather than returning partial policy.
+  const sessMixed = 'sess-mixed'
+  const mixedDir = join(realRoot, sessMixed)
+  mkdirSync(mixedDir, { recursive: true })
+  writeFileSync(join(mixedDir, 'AGENTS.md'), 'PRIMARY_OK')
+  symlinkSync(victim, join(mixedDir, 'GEMINI.md'))
+  assert.equal(readPolicy(realRoot, sessMixed), '', 'symlinked GEMINI.md must fail closed for the whole policy')
+  rmSync(join(mixedDir, 'GEMINI.md'))
+  rmSync(join(mixedDir, 'AGENTS.md'))
+  symlinkSync(victim, join(mixedDir, 'AGENTS.md'))
+  writeFileSync(join(mixedDir, 'GEMINI.md'), 'SECONDARY_OK')
+  assert.equal(readPolicy(realRoot, sessMixed), '', 'symlinked AGENTS.md must fail closed for the whole policy')
+
+  // 4. Directory at AGENTS.md or GEMINI.md fails closed without partially overwriting AGENTS.md.
+  const sessBadFile = 'sess-dir-at-file'
+  const badFileDir = join(realRoot, sessBadFile)
+  mkdirSync(badFileDir, { recursive: true })
+  writeFileSync(join(badFileDir, 'AGENTS.md'), 'KEEP_PRIMARY')
+  mkdirSync(join(badFileDir, 'GEMINI.md'))
+  assert.throws(
+    () => syncPolicy(realRoot, sessBadFile, 'UPDATED_PRIMARY'),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+  assert.equal(readFileSync(join(badFileDir, 'AGENTS.md'), 'utf8'), 'KEEP_PRIMARY', 'directory at GEMINI.md must fail before overwriting AGENTS.md')
+  assert.equal(readPolicy(realRoot, sessBadFile), '')
+  rmSync(join(badFileDir, 'GEMINI.md'), { recursive: true })
+  rmSync(join(badFileDir, 'AGENTS.md'))
+  mkdirSync(join(badFileDir, 'AGENTS.md'))
+  assert.throws(
+    () => syncPolicy(realRoot, sessBadFile, 'UPDATED_PRIMARY'),
+    (err) => err.code === SUPERVISION_ERROR_CODE,
+  )
+
+  // 5. Symlinked AGENTS.md (even with matching contents!) is replaced atomically with a regular file without modifying victim.
+  const sessId = 'sess-file-sym'
+  const sessDir = join(realRoot, sessId)
+  mkdirSync(sessDir, { recursive: true })
+  const primaryPath = join(sessDir, 'AGENTS.md')
+  const secondaryPath = join(sessDir, 'GEMINI.md')
+  symlinkSync(victim, primaryPath)
+  assert.equal(readPolicy(realRoot, sessId), '', 'readPolicy never follows file symlinks')
+  syncPolicy(realRoot, sessId, 'UNTOUCHED_VICTIM')
+  assert.equal(lstatSync(primaryPath).isSymbolicLink(), false, 'matching-content symlink must be replaced with regular file')
+  assert.equal(lstatSync(primaryPath).isFile(), true)
+  assert.equal(readFileSync(primaryPath, 'utf8'), 'UNTOUCHED_VICTIM')
+  assert.equal(readFileSync(victim, 'utf8'), 'UNTOUCHED_VICTIM')
+
+  // Replace symlinked AGENTS.md with different content -> victim stays untouched.
+  rmSync(primaryPath)
+  symlinkSync(victim, primaryPath)
+  syncPolicy(realRoot, sessId, 'DIFFERENT_POLICY')
+  assert.equal(lstatSync(primaryPath).isSymbolicLink(), false)
+  assert.equal(readFileSync(primaryPath, 'utf8'), 'DIFFERENT_POLICY')
+  assert.equal(readFileSync(victim, 'utf8'), 'UNTOUCHED_VICTIM')
+
+  // 6. Dangling GEMINI.md symlink is removed when shrinking back to primary-only.
+  symlinkSync(join(base, 'does-not-exist'), secondaryPath)
+  assert.equal(lstatSync(secondaryPath).isSymbolicLink(), true)
+  syncPolicy(realRoot, sessId, 'SHORT_POLICY')
+  assert.equal(lstatSync(secondaryPath, { throwIfNoEntry: false }), undefined, 'dangling GEMINI.md symlink must be removed')
+
+  // 7. Clearing policy with "" removes a real directory containing dangling symlinks cleanly.
+  symlinkSync(join(base, 'missing-target'), secondaryPath)
+  syncPolicy(realRoot, sessId, '')
+  assert.equal(lstatSync(sessDir, { throwIfNoEntry: false }), undefined)
 })

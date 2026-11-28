@@ -69,5 +69,19 @@
   "runtime_not_toplevel": "{path} 是工作树里的一个文件夹，不是工作树本身；Persona 只删除整个工作树",
   "runtime_folder_left": "{engine} 归档了这个工作区，但保留了它的文件夹 {path}；请在 {engine} 里或手动删除这个文件夹",
   "runtime_remove_unanswered": "{engine} 在移除工作树时没有回应；重试前先刷新，看看它是否已经移除",
-  "orca_directory_workspace": "Orca 没有新建 Git 工作树，也没有建分支，而是在已有的检出 {path} 里建了一个目录级工作区：这个检出已经作为 Orca 工作树打开时，Orca 就会这样做。可以用 workspace \"none\" 启动任务，不建它自己的工作树"
+  "orca_directory_workspace": "Orca 没有新建 Git 工作树，也没有建分支，而是在已有的检出 {path} 里建了一个目录级工作区：这个检出已经作为 Orca 工作树打开时，Orca 就会这样做。可以用 workspace \"none\" 启动任务，不建它自己的工作树",
+  "worktree_list_unreadable": "读不了这个仓库的 worktree 列表：{reason}",
+  "orca_path_exists": "检出路径已存在：Orca 不用已有的目录（空目录也不行）",
+  "head_unreadable": "读不了这个工作区的 HEAD：{reason}",
+  "orca_branch_missing": "Orca 没有说它生成的分支",
+  "orca_branch_changed": "Orca 没有用分支 {branch}，而是建了 {got}（在 {path}）：{branch} 可能刚被别处检出，或者 Orca 的目录被占了",
+  "workspace_dir_unknown": "不知道这个工作区的目录",
+  "not_git_workspace": "这个工作区不在 Git 仓库里",
+  "branch_required": "分支名不能为空",
+  "branch_invalid": "分支名不合法",
+  "path_required": "检出路径不能为空",
+  "path_not_absolute": "检出路径要写完整路径",
+  "path_in_git": "检出路径不能放在 .git 里面",
+  "path_is_file": "检出路径已经是一个文件",
+  "path_unreadable": "读不了检出路径：{reason}"
 }

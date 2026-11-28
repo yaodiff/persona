@@ -15,7 +15,6 @@ import persona.core.contracts.Machine
 import persona.core.contracts.MachineBrowser
 import persona.core.contracts.api.DoctorCheck
 import persona.core.contracts.api.UsageAccount
-import persona.core.domain.engines.Engines
 import persona.core.domain.usage.*
 import persona.core.contracts.api.UsageWindow
 import persona.core.contracts.parseTime
@@ -80,7 +79,7 @@ internal fun LazyListScope.machineHealth(
         }
         doctor is DoctorLoad.Report -> {
             val report = doctor.report
-            val features = deriveFeatures(report, Engines.judged(machine))
+            val features = deriveFeatures(report, healthHosts(machine))
             val attention = attentionCount(features)
             val fixable = fixableChecks(report)
             val info = infoChecks(report)

@@ -563,3 +563,20 @@ test('a negatively checked static summary_behind row lists with zero reads and i
   assert.ok(api.counts.fullReadFile >= 1, 'creating .persona-turn-completion must invalidate the static summary_behind cache')
   assert.equal(markerAdded.status, 'done')
 })
+
+test('listedTranscriptCache serves background tasks without retaining full exported steps', { timeout: 30_000 }, async (t) => {
+  const api = await setupBehindListCache(t)
+  api.writeMarker()
+  api.evictTranscriptCache()
+  api.counts.fullReadFile = 0
+  const first = await api.refresh('bg-summary-first')
+  assert.equal(first.status, 'done')
+  assert.ok(api.counts.fullReadFile >= 1, 'initial list reads full transcript once')
+
+  api.evictTranscriptCache()
+  api.counts.fullReadFile = 0
+  const second = await api.refresh('bg-summary-second')
+  assert.equal(second.status, 'done')
+  assert.equal(api.counts.fullReadFile, 0, 'cached list reuses compact background summary with zero transcript reads')
+  assert.deepEqual(second.agy_pane_background, first.agy_pane_background)
+})

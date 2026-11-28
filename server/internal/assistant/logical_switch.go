@@ -86,6 +86,7 @@ func (s *Service) segmentsEnabled(ctx context.Context) bool {
 	return err == nil && (v.Enabled == nil || *v.Enabled)
 }
 func (s *Service) logicalSwitchRoutes() {
+	s.logicalDeliveryRoutes()
 	s.handle("GET /api/v1/assistant/segments", func(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteJSON(w, map[string]any{"enabled": s.segmentsEnabled(r.Context()), "feature": "assistant_segments", "routing": true})
 	})
@@ -141,7 +142,7 @@ func (s *Service) logicalSwitchRoutes() {
 			}
 			epoch = c.Epoch
 			if c.Switch != nil {
-				operation = map[string]any{"operation_id": c.Switch.OperationID, "phase": c.Switch.Phase}
+				operation = map[string]any{"operation_id": c.Switch.OperationID, "phase": c.Switch.Phase, "error": c.Switch.Error}
 			}
 		}
 		role, err := s.logicalRoleRequired(ctx, machine, id)
@@ -149,7 +150,7 @@ func (s *Service) logicalSwitchRoutes() {
 			apierr.Call(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"enabled": s.segmentsEnabled(ctx), "epoch": epoch, "switch": operation, "supervision_required": role})
+		apierr.WriteJSON(w, map[string]any{"enabled": s.segmentsEnabled(ctx), "epoch": epoch, "switch": operation, "supervision_required": role, "blocked_input": s.logicalBlockedInput(ctx, st, c)})
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/switch", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -193,7 +194,12 @@ func (s *Service) logicalSwitchRoutes() {
 			http.NotFound(w, r)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"operation_id": op.OperationID, "phase": op.Phase, "expected_epoch": op.ExpectedEpoch, "error": op.Error})
+		c, err := st.LogicalConversation(r.Context(), r.URL.Query().Get("machine_id"), r.PathValue("id"))
+		if err != nil {
+			apierr.Call(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"operation_id": op.OperationID, "phase": op.Phase, "expected_epoch": op.ExpectedEpoch, "error": op.Error, "blocked_input": s.logicalBlockedInput(r.Context(), st, c)})
 	})
 }
 
@@ -587,6 +593,18 @@ func (s *Service) restoreLogicalSource(ctx context.Context, c *db.LogicalConvers
 }
 
 func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwitchStore, c *db.LogicalConversation) error {
+	unresolved, unresolvedErr := st.ConversationUnresolvedInput(ctx, c.MachineID, c.SessionID)
+	if unresolvedErr != nil {
+		return unresolvedErr
+	}
+	// A pre-upgrade switch may already be preparing with a source delivery in
+	// doubt. Coordinate that input before preparation/activation can block drain.
+	if unresolved != nil {
+		if active, ok := c.Active(); ok {
+			return s.reconcileLogicalInput(ctx, st, c, active, *unresolved)
+		}
+		return nil
+	}
 	for _, seg := range c.Segments {
 		if seg.ClosePending {
 			closeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -803,7 +821,7 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 }
 
 func (s *Service) isZeroTurnEmptyTail(ctx context.Context, c *db.LogicalConversation, source conversationlog.Segment, tail historyPage, err error, allowOfflineSource bool) bool {
-	emptyPage := err == nil && tail.History == "" && tail.ToSeq == nil && len(tail.Items) == 0
+	emptyPage := err == nil && (tail.ToSeq == nil || *tail.ToSeq == 0) && len(tail.Items) == 0
 	missingTranscript := err != nil && isMissingTranscriptErr(err)
 	offlineAllowed := allowOfflineSource && err != nil && (errors.Is(busError(err), apierr.ErrOffline) || errors.Is(busError(err), rpc.ErrClosed) || s.machinePhysicallyOffline(ctx, source.MachineID))
 	return (emptyPage || missingTranscript || offlineAllowed) && s.isZeroTurnPreparedSegment(ctx, c, source)
@@ -870,29 +888,7 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 		return err
 	}
 	if unresolved != nil {
-		// A positive receipt proves delivery. An absent receipt never proves refusal.
-		raw, err := s.logicalPhysical(ctx, a.MachineID, "assistant.segment.input", map[string]any{"session_id": a.SessionID, "client_msg_id": unresolved.ClientMsgID})
-		var receipt struct {
-			Accepted bool `json:"accepted"`
-		}
-		if err != nil || json.Unmarshal(raw, &receipt) != nil || !receipt.Accepted {
-			return nil
-		}
-		operation := ""
-		if c.Switch != nil {
-			operation = c.Switch.OperationID
-		}
-		if err = st.ResolveConversationDelivery(ctx, c.MachineID, c.SessionID, unresolved.ClientMsgID, c.Epoch, operation, "accepted"); err != nil {
-			return err
-		}
-		if c.Switch != nil {
-			next, err := st.LogicalConversation(ctx, c.MachineID, c.SessionID)
-			if err != nil {
-				return err
-			}
-			s.logicalRebind(ctx, next)
-		}
-		return nil
+		return s.reconcileLogicalInput(ctx, st, c, a, *unresolved)
 	}
 	if c.Switch != nil && c.Switch.Phase != "active" {
 		return nil
@@ -902,10 +898,15 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 		return err
 	}
 	vanishedActiveTarget := c.Switch != nil && c.Switch.Phase == "active" && s.isVanishedZeroTurnSegment(ctx, c, a)
+	delivery, ok := st.(logicalDeliveryStore)
+	if !ok {
+		return logicalRefusal(ctx, "unavailable")
+	}
 	input, err := st.ClaimConversationInput(ctx, c.MachineID, c.SessionID, c.Epoch)
 	if err != nil || input == nil {
 		return err
 	}
+	defer s.publishSoon() // its row's undelivered bubble moves on: awaiting its receipt, then gone or expired
 	// Until the input call is attempted, local validation/restore failures prove
 	// no message was sent. Do not strand that input as an ambiguous crash claim.
 	dispatched := false
@@ -919,7 +920,7 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 		if c.Switch != nil {
 			operation = c.Switch.OperationID
 		}
-		if err := st.RequeueConversationInput(cleanup, c.MachineID, c.SessionID, input.ClientMsgID, c.Epoch, operation); err != nil {
+		if err := delivery.RequeueClaimedConversationInput(cleanup, c.MachineID, c.SessionID, c.Epoch, *input, operation); err != nil {
 			retErr = errors.Join(retErr, err)
 			return
 		}
@@ -988,6 +989,13 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 		if !ok || active.ID != a.ID {
 			return db.ErrConversationEpoch
 		}
+		valid, err := delivery.ConversationInputClaimCurrent(ctx, c.MachineID, c.SessionID, c.Epoch, *input)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			return db.ErrConversationEpoch
+		}
 		if vanishedActiveTarget && current.Switch != nil && current.Switch.Phase == "active" && s.physicalSegmentMissing(ctx, active) {
 			return logicalRefusal(ctx, "unavailable")
 		}
@@ -1023,7 +1031,7 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 	if c.Switch != nil {
 		operation = c.Switch.OperationID
 	}
-	if err = st.ResolveConversationDelivery(ctx, c.MachineID, c.SessionID, input.ClientMsgID, c.Epoch, operation, outcome); err != nil {
+	if err = delivery.ResolveClaimedConversationDelivery(ctx, c.MachineID, c.SessionID, c.Epoch, *input, operation, outcome); err != nil {
 		return err
 	}
 	if c.Switch != nil {

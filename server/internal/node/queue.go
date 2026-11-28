@@ -11,6 +11,11 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+const (
+	queueSettlePoll = 150 * time.Millisecond
+	queueSettleWait = 2500 * time.Millisecond
+)
+
 // editQueue takes the queued input back out of claude (the TUI's "press up to edit queued messages" pulls every
 // queued message into the input box), clears the input, and re-queues the ones listed in keep, in order.
 // It returns the messages that were queued so the phone can put the edited one in its composer.
@@ -19,6 +24,11 @@ func (n *Node) editQueue(ctx context.Context, id string, keep []int) ([]string, 
 	if err != nil {
 		return nil, n.paneless(id, "queue_edit_unsupported", "its queue is on its own screen, in no pane Persona can type in", err)
 	}
+	unlock, err := n.inputTurn(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	p := n.transcriptPath(id)
 	if p == "" {
 		return nil, fmt.Errorf("transcript for session %s not found", id)
@@ -27,13 +37,23 @@ func (n *Node) editQueue(ctx context.Context, id string, keep []int) ([]string, 
 	if err != nil {
 		return nil, err
 	}
-	queue := n.meta(p, st).queue
+	beforeSize, beforeMod := st.Size(), st.ModTime()
+	queue := n.metaNow(p, st).queue
 	if len(queue) == 0 {
 		return nil, fmt.Errorf("nothing is queued")
 	}
+	reconcile := false
+	defer func() {
+		if reconcile {
+			n.forgetMeta(p)
+			n.notifySessionsSoon()
+			n.watchQueueSettle(p, beforeSize, beforeMod)
+		}
+	}()
 	if err := n.sendKeys(ctx, pane, "up"); err != nil {
 		return nil, err
 	}
+	reconcile = true
 	time.Sleep(300 * time.Millisecond)
 	// ctrl+u only clears the current line: walk back through every line of the pulled-back text.
 	lines := 0
@@ -53,6 +73,42 @@ func (n *Node) editQueue(ctx context.Context, id string, keep []int) ([]string, 
 		}
 	}
 	return queue, nil
+}
+
+// watchQueueSettle briefly follows a transcript after a queue mutation so asynchronous queue-operation
+// writes (popOne, popAll, and re-enqueued items) invalidate cached meta and trigger a session push.
+func (n *Node) watchQueueSettle(p string, beforeSize int64, beforeMod time.Time) {
+	if n == nil || p == "" {
+		return
+	}
+	parent := n.firstPromptParent
+	if parent == nil {
+		parent = context.Background()
+	}
+	n.firstWait.Add(1)
+	go func() {
+		defer n.firstWait.Done()
+		ctx, cancel := context.WithTimeout(parent, queueSettleWait)
+		defer cancel()
+		tick := time.NewTicker(queueSettlePoll)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				st, err := os.Stat(p)
+				if err != nil {
+					continue
+				}
+				if st.Size() != beforeSize || !st.ModTime().Equal(beforeMod) {
+					beforeSize, beforeMod = st.Size(), st.ModTime()
+					n.forgetMeta(p)
+					n.notifySessionsSoon()
+				}
+			}
+		}
+	}()
 }
 
 // paneless is a queue call's error when paneFor found no pane: a refusal with code for a session a claude outside
@@ -112,14 +168,24 @@ func (n *Node) sendQueuedNow(ctx context.Context, id string) error {
 			}
 		}
 	}
+	p := n.transcriptPath(id)
+	var beforeSize int64
+	var beforeMod time.Time
+	hasStat := false
+	if p != "" {
+		if st, err := os.Stat(p); err == nil {
+			hasStat = true
+			beforeSize, beforeMod = st.Size(), st.ModTime()
+		}
+	}
 	hint, keys := sendNowOffer(screen)
 	if keys == nil {
 		// Something is queued but its hint is not one Persona can press: nothing pressed, and no guess at the keys.
 		if hint != "" {
 			return refusal("send_now_unrecognized", fmt.Sprintf("the screen offers send-now as %q, keys Persona cannot press", hint), nil)
 		}
-		if p := n.transcriptPath(id); p != "" {
-			if st, err := os.Stat(p); err == nil && len(n.meta(p, st).queue) > 0 {
+		if p != "" {
+			if st, err := os.Stat(p); err == nil && len(n.metaNow(p, st).queue) > 0 {
 				return refusal("send_now_unrecognized", "messages are queued but the screen shows no send-now hint Persona knows", nil)
 			}
 		}
@@ -140,8 +206,14 @@ func (n *Node) sendQueuedNow(ctx context.Context, id string) error {
 		if s, err := n.readPane(ctx, pane, "visible", 80); err == nil && !offersSendNow(s) {
 			if hasAgent && a.Agent == agyAgent {
 				n.clearAgyQueue(id, pane)
-				n.notifySessionsSoon()
 			}
+			if p != "" {
+				n.forgetMeta(p)
+				if hasStat {
+					n.watchQueueSettle(p, beforeSize, beforeMod)
+				}
+			}
+			n.notifySessionsSoon()
 			return nil
 		}
 	}

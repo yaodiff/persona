@@ -584,6 +584,9 @@ func (s *Service) saveWork(e db.SessionWork) {
 	if err := st.PutSessionWork(ctx, e); err != nil {
 		s.logf("work: save %s/%s: %v", e.MachineID, e.SessionID, err)
 	}
+	if err := s.importTaskRepositoryArtifacts(ctx, e); err != nil {
+		s.logf("work: repository links %s/%s not saved: %v", e.MachineID, e.SessionID, err)
+	}
 }
 
 // startWorkEventWrite serializes new event writes with fixture teardown. A stopped service starts no new write; every

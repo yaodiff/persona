@@ -26,5 +26,9 @@
   "handoff_chat_blocked": "这个会话已被禁止代答",
   "handoff_conflict": "这个引用已经用于另一次交接",
   "handoff_rate_limited": "代答太频繁，请稍后再试。",
-  "handoff_assistant_away": "助手暂时接不了这次交接，请稍后再试。"
+  "handoff_assistant_away": "助手暂时接不了这次交接，请稍后再试。",
+  "group_access_invalid": "群访问设置的 {field} 缺失或无效",
+  "group_access_tool_bad": "{tool} 不是只读的连接器工具",
+  "group_access_needs_owner": "先配对机器人：群访问是主人的",
+  "group_access_conflict": "群访问在别处被改过了。重新加载后再试。"
 }

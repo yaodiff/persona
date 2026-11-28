@@ -71,6 +71,33 @@ extension InboxView {
     }
 }
 
+/// The existing source entries and empty-state wording, from capability plus Core's retained presence (#17399).
+/// Unknown keeps today's behavior; a source is hidden only when its module is not offered and Core explicitly says none is stored.
+nonisolated struct InboxSourceVisibility: Hashable, Sendable {
+    let lark: Bool
+    let mail: Bool
+
+    init(larkOffered: Bool, mailOffered: Bool, stored: InboxStoredSources?) {
+        lark = larkOffered || stored?.lark != false
+        mail = mailOffered || stored?.mail != false
+    }
+
+    /// Only Mail's kind entry depends on mail; @Me, DMs, Group chat and Agent remain independent (#17814).
+    func shows(kind: String) -> Bool { kind != "mail" || mail }
+
+    /// All when the selected kind's entry disappeared; every still-visible selection stays as it was.
+    func selection(forKind kind: String) -> String { shows(kind: kind) ? kind : "" }
+
+    var caughtUpMessage: String {
+        switch (lark, mail) {
+        case (true, true): String(localized: "New Lark messages and emails show up here.")
+        case (true, false): String(localized: "New Lark messages show up here.")
+        case (false, true): String(localized: "New emails show up here.")
+        case (false, false): String(localized: "New messages show up here.")
+        }
+    }
+}
+
 /// The inbox's page itself, in whatever stack shows it: Inbox's own (InboxView), or the shell's Assistant page (pushed from
 /// the drawer, docs/apple/ios.md「New shell」), which passes `embedded` so the page brings its destinations and link handling.
 struct InboxPage: View {
@@ -206,6 +233,7 @@ struct InboxPage: View {
                     // its Inbox opens on Needs You, as any Inbox entered (#9053)
                     bar.enter(query)
                 }
+                .onChange(of: sourceVisibility) { _, visibility in keepSelectedFilterVisible(visibility) }
                 // The section bar (#9053): text in the search shows All, clearing it brings the choice back.
                 .onChange(of: query) { _, text in bar.search(text) }
                 // The Inbox entered again while this page stayed up (the place in front chosen again, a widget, a quick
@@ -215,6 +243,7 @@ struct InboxPage: View {
                 // Entered for the first time beneath an item (a place's kept path brought back): the list opens on the
                 // item's choice, so Back lands where the item is. Later appearances keep the choice as it was.
                 .onAppear {
+                    keepSelectedFilterVisible(sourceVisibility)
                     guard !appeared else { return }
                     appeared = true
                     if let item = InboxBarLanding.shared.shown { land(on: item) }
@@ -805,7 +834,7 @@ struct InboxPage: View {
                            tint: .secondary)
         case .caughtUp:
             EmptyStateView(symbol: "checkmark.seal", title: String(localized: "All Caught Up"),
-                           message: String(localized: "New Lark messages and emails show up here."))
+                           message: sourceVisibility.caughtUpMessage)
         case .filtered:
             EmptyStateView(symbol: Theme.Icon.filter, title: String(localized: "Nothing Open Matches These Filters"),
                            message: String(localized: "Clear the filters to see the whole Inbox."),
@@ -1303,13 +1332,28 @@ struct InboxPage: View {
 
     // MARK: Filters
 
+    private var sourceVisibility: InboxSourceVisibility {
+        InboxSourceVisibility(larkOffered: model.larkFeatures.chats || LarkModule.botEntry.isOffered,
+                              mailOffered: MailModule.access.offersMail, stored: store.storedSources)
+    }
+
+    private func keepSelectedFilterVisible(_ visibility: InboxSourceVisibility) {
+        let selected = visibility.selection(forKind: kind)
+        guard selected != kind else { return }
+        // All is source + kind; do not leave another source active beneath the reset Mail kind.
+        source = ""
+        kind = selected
+    }
+
     /// Sources (all, Lark, each mail account) then kinds, as one row of chips; in the BeautifulUI style its filter chips,
     /// wrapping to a second row (no sideways scrolling at the top of a page, like the Agents list).
     @ViewBuilder private var filters: some View {
         if AppStyle.current.usesBeautifulUI {
             LarkFlowLayout(spacing: Theme.Space.xs, lineSpacing: Theme.Space.sm) {
                 filterChip(String(localized: "All"), on: source.isEmpty && kind.isEmpty) { source = ""; kind = "" }
-                filterChip(String(localized: "Lark [Inbox Event Views 7e4419]"), on: source == "feishu") { source = source == "feishu" ? "" : "feishu" }
+                if sourceVisibility.lark {
+                    filterChip(String(localized: "Lark [Inbox Event Views 7e4419]"), on: source == "feishu") { source = source == "feishu" ? "" : "feishu" }
+                }
                 ForEach(accounts) { a in
                     filterChip(Self.short(a.email), on: source == a.id) { source = source == a.id ? "" : a.id }
                 }
@@ -1317,7 +1361,9 @@ struct InboxPage: View {
                     filterChip(c.name, on: source == c.id) { source = source == c.id ? "" : c.id }
                 }
                 ForEach(Self.kinds, id: \.0) { k, title in
-                    filterChip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    if sourceVisibility.shows(kind: k) {
+                        filterChip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1338,7 +1384,9 @@ struct InboxPage: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Theme.Space.s) {
                 chip(String(localized: "All"), on: source.isEmpty && kind.isEmpty) { source = ""; kind = "" }
-                chip(String(localized: "Lark [Inbox Event Views 7e4419]"), symbol: Theme.Icon.feishuChats, on: source == "feishu") { source = source == "feishu" ? "" : "feishu" }
+                if sourceVisibility.lark {
+                    chip(String(localized: "Lark [Inbox Event Views 7e4419]"), symbol: Theme.Icon.feishuChats, on: source == "feishu") { source = source == "feishu" ? "" : "feishu" }
+                }
                 ForEach(accounts) { a in
                     chip(Self.short(a.email), symbol: Theme.Icon.mail, on: source == a.id) { source = source == a.id ? "" : a.id }
                 }
@@ -1347,7 +1395,9 @@ struct InboxPage: View {
                 }
                 Divider().scaledFrame(height: Theme.Size.badge)
                 ForEach(Self.kinds, id: \.0) { k, title in
-                    chip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    if sourceVisibility.shows(kind: k) {
+                        chip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    }
                 }
             }
             .padding(.horizontal, Theme.Space.l)

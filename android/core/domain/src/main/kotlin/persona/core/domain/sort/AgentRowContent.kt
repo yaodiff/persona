@@ -4,6 +4,7 @@ import persona.core.contracts.AgentState
 import persona.core.contracts.CoreText
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.Session
+import persona.core.domain.engines.Engines
 import persona.core.domain.modelShortName
 
 // What an Agents row says beside its title and its latest words, as iOS's default row draws it (the Avatar style:
@@ -91,7 +92,8 @@ fun AgentSession.rowContent(
         place += it
         if (pane?.launcher == true) place += CoreText.of(Key.AgentsStartedTab)
     }
-    if (context.host) s.hostKind.takeIf { it.isNotEmpty() && it != "herdr" }?.let { place += CoreText.plain(it) }
+    // the host by its name ("Orca", "Herdr App"), never its id (#17054)
+    if (context.host) s.hostKind.takeIf { it.isNotEmpty() && it != "herdr" }?.let { place += CoreText.plain(Engines.displayName(it)) }
     val slot = if (pane == null && primaryTab == null) context.slot ?: s.slotLabel else null
     val space = if (context.located) s.spaceName?.takeIf(String::isNotBlank) ?: s.folderName.takeIf(String::isNotBlank) else null
     when {

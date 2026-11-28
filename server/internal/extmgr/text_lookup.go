@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // textLookupTimeout bounds one call to the dictionary: the apps wait on a tap.
@@ -31,7 +31,7 @@ const textLookupLetters = `A-Za-z\x{00C0}-\x{00D6}\x{00D8}-\x{00F6}\x{00F8}-\x{0
 
 // textLookupWord is a word the apps may look up: Latin letters, with an apostrophe or a hyphen only between two
 // letters ("don't", "well-known", "café"). textLookupWordMost bounds its length in characters, not bytes.
-var textLookupWord = regexp.MustCompile(`^[` + textLookupLetters + `]+(?:['-][` + textLookupLetters + `]+)*$`)
+var textLookupWord = lazyre.New(`^[` + textLookupLetters + `]+(?:['-][` + textLookupLetters + `]+)*$`)
 
 const textLookupWordMost = 64
 

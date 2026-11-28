@@ -27,13 +27,70 @@ public final class X264Process: @unchecked Sendable {
     /// The input socket's buffers: a whole 4K NV12 frame fits, so a write never waits on ffmpeg reading it.
     public static let bufferBytes: Int32 = 16 << 20
 
+    /// Stdin descriptor owned separately from `X264Process` so `stop()` (including from `deinit`) can close it on
+    /// `writer` without capturing `self`. Accessed only on `writer`.
+    private final class InputPipe: @unchecked Sendable {
+        let fd: Int32
+        var open = true
+
+        init(fd: Int32) { self.fd = fd }
+
+        deinit { closeIfOpen() }
+
+        func closeIfOpen() {
+            guard open else { return }
+            open = false
+            Darwin.close(fd)
+        }
+    }
+
+    /// Synchronizes termination and reaping between `stop()` and the reader thread without retaining `X264Process`, so
+    /// a PID is never signaled after `waitpid` has released it back to the OS.
+    private final class ProcessState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stopped = false
+        private var reaped = false
+        private let signal: @Sendable (pid_t, Int32) -> Int32
+
+        init(signal: @escaping @Sendable (pid_t, Int32) -> Int32) {
+            self.signal = signal
+        }
+
+        func beginStop(pid: pid_t) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !stopped else { return false }
+            stopped = true
+            if !reaped { _ = signal(pid, SIGKILL) }
+            return true
+        }
+
+        func killBeforeReap(pid: pid_t) {
+            lock.lock()
+            defer { lock.unlock() }
+            if !reaped { _ = signal(pid, SIGKILL) }
+        }
+
+        func reap(pid: pid_t, waited: Bool) {
+            var status: Int32 = 0
+            if waited {
+                lock.lock()
+                reaped = true
+                while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+                lock.unlock()
+            } else {
+                lock.lock()
+                reaped = true
+                lock.unlock()
+                while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+            }
+        }
+    }
+
     public let pid: pid_t
-    private let input: Int32
+    private let input: InputPipe
     private let writer = DispatchQueue(label: "persona-screen.x264.write", qos: .userInteractive)
-    /// The input is open: read and set only on `writer`, so no write ever goes to a closed (and reused) descriptor.
-    private var inputOpen = true
-    private let lock = NSLock()
-    private var killed = false
+    private let state: ProcessState
 
     private typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>?, Int32) -> Int32
 
@@ -48,7 +105,12 @@ public final class X264Process: @unchecked Sendable {
     public static var canSpawn: Bool { disclaim != nil }
 
     /// Starts `ffmpeg` with `arguments`; `onEvent` is called on a reader thread of its own, in order.
-    public init(ffmpeg: String, arguments: [String], onEvent: @escaping @Sendable (Event) -> Void) throws {
+    public convenience init(ffmpeg: String, arguments: [String], onEvent: @escaping @Sendable (Event) -> Void) throws {
+        try self.init(ffmpeg: ffmpeg, arguments: arguments, signal: { Darwin.kill($0, $1) }, onEvent: onEvent)
+    }
+
+    init(ffmpeg: String, arguments: [String], signal: @escaping @Sendable (pid_t, Int32) -> Int32,
+         onEvent: @escaping @Sendable (Event) -> Void) throws {
         guard let disclaim = Self.disclaim else { throw SpawnError.noDisclaim }
         guard ffmpeg.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: ffmpeg) else { throw SpawnError.notExecutable }
 
@@ -92,10 +154,12 @@ public final class X264Process: @unchecked Sendable {
             close(ours); close(readEnd)
             throw SpawnError.system(disclaimed == 0 ? "posix_spawn" : "disclaim", spawned)
         }
+        let state = ProcessState(signal: signal)
         self.pid = pid
-        input = ours
+        input = InputPipe(fd: ours)
+        self.state = state
 
-        let reader = Thread { [pid] in
+        let reader = Thread { [pid, state] in
             var flv = FLVReader()
             var failure: Error?
             var chunk = [UInt8](repeating: 0, count: 1 << 18)
@@ -107,13 +171,18 @@ public final class X264Process: @unchecked Sendable {
                     for item in try flv.push(Data(chunk[0 ..< n])) { onEvent(.item(item)) }
                 } catch {
                     failure = error
-                    kill(pid, SIGKILL)
+                    state.killBeforeReap(pid: pid)
                     break
                 }
             }
             close(readEnd)
-            var status: Int32 = 0
-            while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+            // Wait for exit with WNOWAIT first so the PID cannot be reused before `reap` records `reaped = true`.
+            var info = siginfo_t()
+            var waited: Int32 = -1
+            repeat {
+                waited = waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT)
+            } while waited < 0 && errno == EINTR
+            state.reap(pid: pid, waited: waited == 0)
             onEvent(.ended(failure))
         }
         reader.qualityOfService = .userInteractive
@@ -126,12 +195,13 @@ public final class X264Process: @unchecked Sendable {
     /// Runs `body` on this process's writer queue with a function that writes all of a buffer to ffmpeg's input
     /// (false once it can't: the process ended). Frames go in the order sent.
     public func send(_ body: @escaping @Sendable (_ write: (UnsafeRawPointer, Int) -> Bool) -> Void) {
-        writer.async { [self] in
-            guard inputOpen else { return }
+        let input = self.input
+        writer.async {
+            guard input.open else { return }
             body { pointer, count in
                 var done = 0
                 while done < count {
-                    let n = Darwin.write(input, pointer + done, count - done)
+                    let n = Darwin.write(input.fd, pointer + done, count - done)
                     if n < 0, errno == EINTR { continue }
                     guard n > 0 else { return false }
                     done += n
@@ -143,15 +213,10 @@ public final class X264Process: @unchecked Sendable {
 
     /// Ends the process now; a write it was taking returns false. Its last output is not waited for.
     public func stop() {
-        lock.lock()
-        let first = !killed
-        killed = true
-        lock.unlock()
-        guard first else { return }
-        kill(pid, SIGKILL)
-        writer.async { [self] in // after any write in progress, which the kill ends
-            inputOpen = false
-            close(input)
+        guard state.beginStop(pid: pid) else { return }
+        let input = self.input
+        writer.async { // after any write in progress, which the kill ends; never captures `self` (safe in `deinit`)
+            input.closeIfOpen()
         }
     }
 }
@@ -205,13 +270,22 @@ public final class X264Session<Context>: @unchecked Sendable {
     private let queue: DispatchQueue
     private let clock: () -> UInt64
     private let onEvent: (Event) -> Void
+    private let makeProcess: (String, [String], @escaping @Sendable (X264Process.Event) -> Void) throws -> X264Process
     private var active: Run?
     private var spare: Run?
     private var watch = X264Watch()
     private var ended = false
 
-    public init(ffmpeg: String, width: Int, height: Int, fps: Int, threads: Int, capKbps: Int, queue: DispatchQueue,
-                clock: @escaping () -> UInt64, onEvent: @escaping (Event) -> Void) {
+    public convenience init(ffmpeg: String, width: Int, height: Int, fps: Int, threads: Int, capKbps: Int, queue: DispatchQueue,
+                            clock: @escaping () -> UInt64, onEvent: @escaping (Event) -> Void) {
+        self.init(ffmpeg: ffmpeg, width: width, height: height, fps: fps, threads: threads, capKbps: capKbps,
+                  queue: queue, clock: clock, makeProcess: X264Process.init(ffmpeg:arguments:onEvent:), onEvent: onEvent)
+    }
+
+    init(ffmpeg: String, width: Int, height: Int, fps: Int, threads: Int, capKbps: Int, queue: DispatchQueue,
+         clock: @escaping () -> UInt64,
+         makeProcess: @escaping (String, [String], @escaping @Sendable (X264Process.Event) -> Void) throws -> X264Process,
+         onEvent: @escaping (Event) -> Void) {
         self.ffmpeg = ffmpeg
         self.width = width
         self.height = height
@@ -219,12 +293,21 @@ public final class X264Session<Context>: @unchecked Sendable {
         arguments = X264Plan.arguments(width: width, height: height, fps: fps, threads: threads, capKbps: capKbps)
         self.queue = queue
         self.clock = clock
+        self.makeProcess = makeProcess
         self.onEvent = onEvent
     }
 
+    deinit { stop() }
+
     /// Starts the encoding process and its spare. False when ffmpeg can't be started.
     public func start() -> Bool {
-        guard let first = spawn(), let second = spawn() else {
+        guard !ended, active == nil, spare == nil else { return false }
+        guard let first = spawn() else {
+            stop()
+            return false
+        }
+        guard let second = spawn() else {
+            first.process.stop()
             stop()
             return false
         }
@@ -259,7 +342,8 @@ public final class X264Session<Context>: @unchecked Sendable {
         let now = clock()
         guard !ended, let run = active, let oldest = run.pending.first,
               X264Watch.overdue(oldest: oldest.given, now: now) else { return }
-        let detail = String(format: "frame %d still inside after %.0f ms", oldest.index, Double(now &- oldest.given) / 1000)
+        let elapsed = now > oldest.given ? now - oldest.given : 0
+        let detail = String(format: "frame %d still inside after %.0f ms", oldest.index, Double(elapsed) / 1000)
         off(oldest.index == 0 ? .failed : .slow, detail)
     }
 
@@ -275,7 +359,7 @@ public final class X264Session<Context>: @unchecked Sendable {
     private func spawn() -> Run? {
         let run = Run()
         do {
-            run.process = try X264Process(ffmpeg: ffmpeg, arguments: arguments) { [weak self, weak run, queue] event in
+            run.process = try makeProcess(ffmpeg, arguments) { [weak self, weak run, queue] event in
                 queue.async { self?.handle(event, from: run) }
             }
         } catch {
@@ -305,7 +389,8 @@ public final class X264Session<Context>: @unchecked Sendable {
                     return off(.failed, "frame \(pending.index) out of order (\(timestamp) ms)")
                 }
                 let now = clock()
-                let micros = Int64(bitPattern: now &- pending.given)
+                let elapsed = now > pending.given ? now - pending.given : 0
+                let micros = elapsed > UInt64(Int64.max) ? Int64.max : Int64(elapsed)
                 let own = X264Watch.ownMicros(given: pending.given, lastOut: run.lastOut, now: now)
                 run.lastOut = now
                 onEvent(.frame(sample: sample, keyframe: keyframe, context: pending.context, encodeMicros: micros))

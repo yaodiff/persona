@@ -9,9 +9,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 )
+
+func buildTodoBoardProjection(items []listedTodo, directions map[string]string) *todoBoardProjection {
+	items = slices.Clone(items)
+	(&Service{}).populateTodoEffectiveDirections(items, directions)
+	facts := make([]projection.Facts, len(items))
+	views := make([]assistantwire.TodoSummary, len(items))
+	for i, item := range items {
+		facts[i] = projection.Facts{ID: item.ID, PartOf: item.PartOf, Quiet: item.Quiet}
+		if item.View != nil {
+			views[i] = *item.View
+		}
+	}
+	return buildTodoBoardProjectionWithOptions(items, directions, true, projection.Counts(facts, views))
+}
+
+func requireBoardStatusGroup(t *testing.T, board *todoBoardProjection, key string) todoBoardStatusGroup {
+	t.Helper()
+	for _, group := range board.StatusGroups {
+		if group.Key == key {
+			return group
+		}
+	}
+	t.Fatalf("board is missing %s", key)
+	return todoBoardStatusGroup{}
+}
 
 func TestTodosV2BoardProjectionEmpty(t *testing.T) {
 	got := buildTodoBoardProjection(nil, nil)
@@ -38,6 +64,41 @@ func TestTodosV2BoardProjectionEmpty(t *testing.T) {
 	}
 	if got.Counts != (todoBoardCounts{}) {
 		t.Fatalf("counts = %+v, want zero counts", got.Counts)
+	}
+}
+
+func TestTodosV2BoardProjectionSeparatesStatusFromAttention(t *testing.T) {
+	at := time.Now()
+	items := []listedTodo{
+		{Todo: Todo{ID: "parent"}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseNeedsYou, Section: assistantwire.TodoListSectionNeedsYou}},
+		{Todo: Todo{ID: "step", PartOf: "parent"}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseNeedsYou, Section: assistantwire.TodoListSectionNeedsYou}},
+		{Todo: Todo{ID: "todo_od_independent", PartOf: "parent"}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseNeedsYou, Section: assistantwire.TodoListSectionNeedsYou}},
+		{Todo: Todo{ID: "quiet", Quiet: true}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseNeedsYou, Section: assistantwire.TodoListSectionNeedsYou}},
+		{Todo: Todo{ID: "deferred"}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseNeedsYou, Section: assistantwire.TodoListSectionCanWait, CanWait: true}},
+		{Todo: Todo{ID: "plain", PartOf: "cancelled"}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseTodo, Section: assistantwire.TodoListSectionTodo}},
+		{Todo: Todo{ID: "someday"}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseSomeday, Section: assistantwire.TodoListSectionSomeday}},
+		{Todo: Todo{ID: "cancelled", DoneAt: &at}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseDone, Section: assistantwire.TodoListSectionDone, Reason: assistantwire.TodoReasonCanceled}},
+		{Todo: Todo{ID: "fresh-cancellation", DoneAt: &at, CancelledAt: &at}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseDone, Section: assistantwire.TodoListSectionJustFinished, Reason: assistantwire.TodoReasonClosedUnseen}},
+		{Todo: Todo{ID: "done", DoneAt: &at}, View: &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseDone, Section: assistantwire.TodoListSectionDone}},
+	}
+	board := buildTodoBoardProjection(items, nil)
+	wantCounts := todoBoardCounts{NeedsYou: 2, CanWait: 1, Todo: 1, Someday: 1, Done: 1, Cancelled: 2, OpenTotal: 5}
+	if got := board.Counts; got != wantCounts {
+		t.Errorf("board.counts = %+v, want %+v", got, wantCounts)
+	}
+	sections := map[string]string{}
+	for _, group := range board.StatusGroups {
+		for _, entry := range group.Entries {
+			sections[entry.TodoID] = group.Key
+		}
+	}
+	for id, want := range map[string]string{
+		"step": "needs_you", "deferred": "can_wait", "plain": "todo",
+		"cancelled": "cancelled", "fresh-cancellation": "cancelled", "done": "done",
+	} {
+		if got := sections[id]; got != want {
+			t.Errorf("section of %s = %q, want %q", id, got, want)
+		}
 	}
 }
 
@@ -282,15 +343,18 @@ func TestTodosV2BoardProjectionStatusGroupsAndGoalFolding(t *testing.T) {
 		t.Fatalf("pending_review = %+v, want [review_1]", pr)
 	}
 
-	// waiting: raw total is 4 (grandchild_wait folded, cycle_a, cycle_b, open_child_of_done visible).
+	// Waiting has one folded grandchild and two visible rows. The ordinary follow-up is a To-do.
 	wt := byKey[boardSectionWaiting]
-	if wt.TotalCount != 4 || wt.VisibleCount != 3 {
-		t.Fatalf("waiting = %+v, want total=4 visible=3", wt)
+	if wt.TotalCount != 3 || wt.VisibleCount != 2 {
+		t.Fatalf("waiting = %+v, want total=3 visible=2", wt)
 	}
-	gotWaitIDs := []string{wt.Entries[0].TodoID, wt.Entries[1].TodoID, wt.Entries[2].TodoID}
-	wantWaitIDs := []string{"cycle_a", "cycle_b", "open_child_of_done"}
+	gotWaitIDs := []string{wt.Entries[0].TodoID, wt.Entries[1].TodoID}
+	wantWaitIDs := []string{"cycle_a", "cycle_b"}
 	if !reflect.DeepEqual(gotWaitIDs, wantWaitIDs) {
 		t.Fatalf("waiting visible IDs = %v, want %v", gotWaitIDs, wantWaitIDs)
+	}
+	if plain := byKey[boardSectionTodo]; plain.TotalCount != 1 || plain.VisibleCount != 1 || plain.Entries[0].TodoID != "open_child_of_done" {
+		t.Fatalf("todo = %+v, want open_child_of_done", plain)
 	}
 
 	// someday: someday_1.
@@ -305,15 +369,15 @@ func TestTodosV2BoardProjectionStatusGroupsAndGoalFolding(t *testing.T) {
 		t.Fatalf("done = %+v, want total=2 visible=1 [done_parent]", dn)
 	}
 
-	// Global counts match status_groups raw counts and open_total = needs_you + in_progress + pending_review + waiting.
+	// Summary counts carry direct steps with their parents independently of status group visibility.
 	wantCounts := todoBoardCounts{
-		NeedsYou:      2,
-		InProgress:    2,
+		NeedsYou:      1,
+		InProgress:    1,
 		PendingReview: 1,
-		Waiting:       4,
+		Todo:          1,
 		Someday:       1,
-		Done:          2,
-		OpenTotal:     9,
+		Done:          1,
+		OpenTotal:     4,
 	}
 	if got.Counts != wantCounts {
 		t.Fatalf("counts = %+v, want %+v", got.Counts, wantCounts)
@@ -558,7 +622,8 @@ func TestTodosV2BoardProjectionHTTPGatingAndRollback(t *testing.T) {
 		t.Fatalf("GET /api/v1/todos on: %d %s", onResp.Code, onResp.Body.String())
 	}
 	var onPayload struct {
-		Board *todoBoardProjection `json:"board"`
+		Board  *todoBoardProjection     `json:"board"`
+		Counts assistantwire.TodoCounts `json:"counts"`
 	}
 	if err := json.Unmarshal(onResp.Body.Bytes(), &onPayload); err != nil {
 		t.Fatalf("decode on payload: %v", err)
@@ -567,10 +632,10 @@ func TestTodosV2BoardProjectionHTTPGatingAndRollback(t *testing.T) {
 		t.Fatal("todos_v2=true expected non-nil board in GET /api/v1/todos")
 	}
 	b := onPayload.Board
-	// projection.Views rolls up childBlocked's failed_start onto goal, so both goal and childBlocked
-	// are in needs_you (with childQuiet folded under goal and waiting total=1, visible=0).
-	if b.Counts.OpenTotal != 3 || b.Counts.NeedsYou != 2 || b.Counts.Waiting != 1 {
-		t.Fatalf("todos_v2=true board.counts = %+v, want open=3 needs_you=2 waiting=1", b.Counts)
+	// Both the goal and its blocking child surface in Needs you. The list and board totals count their goal once.
+	if b.Counts.OpenTotal != 1 || b.Counts.NeedsYou != 1 ||
+		b.Counts.OpenTotal != onPayload.Counts.Open || b.Counts.NeedsYou != onPayload.Counts.NeedsYou {
+		t.Fatalf("board.counts = %+v, list counts = %+v, want open=1 needs_you=1", b.Counts, onPayload.Counts)
 	}
 	nyGroup := b.StatusGroups[0]
 	if nyGroup.Key != boardSectionNeedsYou || nyGroup.TotalCount != 2 || nyGroup.VisibleCount != 2 {
@@ -594,9 +659,9 @@ func TestTodosV2BoardProjectionHTTPGatingAndRollback(t *testing.T) {
 		goalEntry.FoldedCount != 1 {
 		t.Fatalf("goal entry = %+v", goalEntry)
 	}
-	waitGroup := b.StatusGroups[3]
-	if waitGroup.Key != boardSectionWaiting || waitGroup.TotalCount != 1 || waitGroup.VisibleCount != 0 {
-		t.Fatalf("waiting group = %+v, want total=1 visible=0", waitGroup)
+	todoGroup := requireBoardStatusGroup(t, b, boardSectionTodo)
+	if todoGroup.TotalCount != 1 || todoGroup.VisibleCount != 0 {
+		t.Fatalf("todo group = %+v, want total=1 visible=0", todoGroup)
 	}
 	if len(b.DirectionGroups) != 1 || b.DirectionGroups[0].DirectionID != "dir_alpha" || b.DirectionGroups[0].Counts.Total != 3 {
 		t.Fatalf("direction_groups = %+v, want [dir_alpha(total=3)]", b.DirectionGroups)
@@ -648,13 +713,12 @@ func TestTodosV2RepoGatePromotesBoundOpenPRToWaitingNotDraftOrRef(t *testing.T) 
 			},
 		},
 	}
-	views := []assistantwire.TodoSummary{
-		{Phase: assistantwire.TodoPhaseTodo, Section: assistantwire.TodoListSectionTodo, Reason: assistantwire.TodoReasonRest},
-		{Phase: assistantwire.TodoPhaseTodo, Section: assistantwire.TodoListSectionTodo, Reason: assistantwire.TodoReasonRest},
-		{Phase: assistantwire.TodoPhaseTodo, Section: assistantwire.TodoListSectionTodo, Reason: assistantwire.TodoReasonRest},
+	facts := make([]projection.Facts, len(list))
+	for i, row := range list {
+		facts[i] = projectionFacts(row, nil, nil)
+		facts[i].TodosV2 = true
 	}
-	waits := make([]*assistantwire.TodoWait, len(list))
-	applyRepoGateToViews(list, views, waits)
+	views, waits := projection.ViewsAndWaits(facts, base)
 
 	if views[0].Section != assistantwire.TodoListSectionWaiting || views[0].Reason != assistantwire.TodoReasonPrOpen {
 		t.Fatalf("open_pr_repo view = %+v, want waiting/pr_open", views[0])
@@ -676,7 +740,7 @@ func TestTodosV2RepoGatePromotesBoundOpenPRToWaitingNotDraftOrRef(t *testing.T) 
 	if secOpen != boardSectionWaiting || subOpen != 0 {
 		t.Fatalf("classifyBoardSection(open_pr_repo) = (%q, %d), want (%q, 0)", secOpen, subOpen, boardSectionWaiting)
 	}
-	if secDraft != boardSectionWaiting || subDraft != 1 {
-		t.Fatalf("classifyBoardSection(draft_pr_repo) = (%q, %d), want (%q, 1)", secDraft, subDraft, boardSectionWaiting)
+	if secDraft != boardSectionTodo || subDraft != 0 {
+		t.Fatalf("classifyBoardSection(draft_pr_repo) = (%q, %d), want (%q, 0)", secDraft, subDraft, boardSectionTodo)
 	}
 }

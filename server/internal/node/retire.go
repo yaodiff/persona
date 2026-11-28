@@ -901,6 +901,11 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 			}
 			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, taken))
 		}
+		// Orca opens the tab in the worktree that holds cwd: one Orca just made for this Agent (worktree.add) has a first
+		// shell that is Persona's, gone now as after a start into the workspace by id (#17050).
+		if _, orca := launch.(*orcaHost); orca && err == nil && created.SpaceID != "" {
+			n.closeWorktreeShells(ctx, launch, created.SpaceID, created.Pane.String())
+		}
 	} else {
 		created, err = createStartSlot(ctx, launch, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
 		var missing *herdr.Error
@@ -916,7 +921,7 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
+		return nil, hostFailure(ctx, "terminal_open_failed", err)
 	}
 	n.forgetPane(created.Pane.String()) // a new tab: whatever ran in a pane of its id before, nothing runs in it yet
 	ts.opened(created.SpaceID)

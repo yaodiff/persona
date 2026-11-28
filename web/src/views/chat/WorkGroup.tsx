@@ -64,6 +64,8 @@ export interface WorkProps {
   /** The dock RunningStatusBar already shows this foreground turn's elapsed clock, so the stream header keeps its
    *  expandable summary without rendering a second competing timer (#12380). */
   hideClock?: boolean;
+  /** The outermost group's fold fetch failed and is waiting for manual retry: suppress the fold loading spinner. */
+  foldFailed?: boolean;
 }
 
 /** A Workflow call that draws its run's card (the hub lists the run); one that does not is the row it always was. */
@@ -127,6 +129,11 @@ function foldsOf(g: WorkGroupNode): Item[] {
   return g.children.flatMap((c) => (c.kind === "group" ? foldsOf(c) : c.step.kind === "fold" ? [c.step.item] : []));
 }
 
+/** Whether a group's subtree has any visible step outside unloaded folds. */
+function hasNonFoldContent(nodes: readonly WorkNode[]): boolean {
+  return nodes.some((c) => (c.kind === "group" ? hasNonFoldContent(c.children) : c.step.kind !== "fold"));
+}
+
 /** The screen's status line while this exchange is live (contract §3): a thinking line at the live group's end. Read
  *  here, not handed down: it changes about once a second while the agent works, and only this line shows it (#5417). */
 function useThinkingNow(mid: string, sid: string) {
@@ -159,10 +166,14 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
   const actions = useMemo(() => actionSummary(g), [g]);
   const heading = p.nested && actions.text ? actions.text : groupTitle(g);
   const [loading, setLoading] = useState(false);
+  // a fetch that failed (the hub restarting, the network): the group says so, and "Retry" runs it again
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const opens = workLineOpens(g, style, turnLive);
   const open = workLineOpen({ style, turnLive, remembered, liveOverride }) && opens;
   const rowsLive = p.nested ? Boolean(p.rowsLive) : g.live;
-  const inside = useMemo(() => ({ ...p, nested: true, rowsLive, currentRun: g.live }), [p, rowsLive, g.live]);
+  const foldFailed = p.nested ? Boolean(p.foldFailed) : failed && !loading;
+  const inside = useMemo(() => ({ ...p, nested: true, rowsLive, currentRun: g.live, foldFailed }), [p, rowsLive, g.live, foldFailed]);
   const toggle = () => {
     const next = !open;
     setOpen(next);
@@ -187,19 +198,33 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
   const folds = useMemo(() => (open && !p.nested ? foldsOf(g) : []), [open, p.nested, g]);
   const foldKey = folds.map((f) => f.id).join(" ");
   const expandFold = p.expandFold;
-  // a fetch that failed (the hub restarting, the network): the group says so, and "Retry" runs it again
-  const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     // every fold is in: done. A run cut short by the last fold coming in (its key changed) does not get to say so, and
     // the header's spinner kept spinning (#1614)
-    if (!foldKey) return setLoading(false);
+    if (!foldKey) {
+      setFailed(false);
+      setLoading(false);
+      return;
+    }
     let live = true;
     setLoading(true);
     setFailed(false);
     folds
       // each fold that comes in runs this again with the rest: this run stops there
-      .reduce<Promise<boolean | void>>((done, f) => done.then(() => (live ? expandFold(f) : undefined)), Promise.resolve())
+      .reduce<Promise<boolean | void>>(
+        (done, f) =>
+          done.then(() =>
+            live
+              ? Promise.resolve()
+                  .then(() => expandFold(f))
+                  .then((ok) => {
+                    if (live && ok === false) setFailed(true);
+                  })
+                  .catch(() => live && setFailed(true))
+              : undefined,
+          ),
+        Promise.resolve(),
+      )
       .catch(() => live && setFailed(true))
       .finally(() => live && setLoading(false));
     return () => {
@@ -251,13 +276,15 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
           <button type="button" onClick={() => setAttempt((n) => n + 1)} className="touch-hit rounded-control px-1.5 py-0.5 font-medium whitespace-nowrap text-accent-ink hover:bg-hover">{t("chat-workgroup.retry")}</button>
         </div>
       )}
-      <Collapse open={open} lazy>
-        <div className={cx("mt-1 flex min-w-0 flex-col gap-2 py-[2px]", p.nested ? "pl-3" : "ml-1.5 border-l-2 border-tool-rail pl-3")} data-work-detail>
-          <WorkNodes nodes={g.children} p={inside} live={rowsLive} limit={drawn} />
-          {/* once, in the innermost live group: a live timeline's last run is live too */}
-          {g.live && !g.children.some((c) => c.kind === "group" && c.live) && <LiveThinking mid={p.mid} sid={p.sid} />}
-        </div>
-      </Collapse>
+      {(!foldFailed || hasNonFoldContent(g.children) || (g.live && !g.children.some((c) => c.kind === "group" && c.live))) && (
+        <Collapse open={open} lazy>
+          <div className={cx("mt-1 flex min-w-0 flex-col gap-2 py-[2px]", p.nested ? "pl-3" : "ml-1.5 border-l-2 border-tool-rail pl-3")} data-work-detail>
+            <WorkNodes nodes={g.children} p={inside} live={rowsLive} limit={drawn} />
+            {/* once, in the innermost live group: a live timeline's last run is live too */}
+            {g.live && !g.children.some((c) => c.kind === "group" && c.live) && <LiveThinking mid={p.mid} sid={p.sid} />}
+          </div>
+        </Collapse>
+      )}
     </div>
   );
 });
@@ -453,6 +480,7 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
         </div>
       );
     case "fold":
+      if (p.foldFailed) return null;
       return (
         <div className="flex h-7 items-center gap-2 px-2 text-[13px] text-tool-ink">
           <Spinner size={11} /> {t("chat-workgroup.loading_steps", { count: step.item.fold?.items ?? 0 })}

@@ -9,8 +9,8 @@ import { classifyConnectError } from "./connect-errors.js";
 import { allowPinnedSessionRequest, isValidPin, verifyPinnedCertificate } from "./tls-pin.js";
 import type { HubPin } from "./tls-pin.js";
 import { installDesktopIPC, DesktopNotifications } from "./ipc.js";
-import { applyDesktopThemeSource } from "./theme-source.js";
-import { applyMacSurfaceStyle } from "./surface-style.js";
+import { applyDesktopThemeSource, parseDesktopThemeSource } from "./theme-source.js";
+import { applyMacSurfaceStyle, liquidGlassVibrancy, seedMacSurfaceState } from "./surface-style.js";
 import { PageRoutes } from "./page-routes.js";
 import { installSetupIPC, installSetupProtocol } from "./setup-ipc.js";
 import type { ConnectResponse } from "./setup-ipc.js";
@@ -222,16 +222,27 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     mainWindow.show();
     return mainWindow;
   }
-  const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
+  const saved = await store().read<{ window?: unknown; surfaceStyle?: unknown; themeSource?: unknown }>();
+  const state = restoreWindow(saved?.window, screen.getAllDisplays().map(d => d.workArea));
   if (owner !== hub || generation !== hubWindow.generation) return undefined;
+  const savedTheme = parseDesktopThemeSource(saved?.themeSource);
+  if (savedTheme && nativeTheme.themeSource !== savedTheme) nativeTheme.themeSource = savedTheme;
+  const initialStyle: DesktopSurfaceStyle = saved?.surfaceStyle === "liquid-glass" ? "liquid-glass" : "default";
+  const initialVibrancy = liquidGlassVibrancy(nativeTheme.shouldUseDarkColors);
+  const initialBackground = initialStyle === "liquid-glass" ? "#00000000" : windowBackground();
   const current = new BrowserWindow({
     ...DEFAULT_WINDOW,
     ...state,
     show: false,
     title: "Persona",
     autoHideMenuBar: true,
-    backgroundColor: windowBackground(),
-    ...(process.platform === "darwin" ? { transparent: true, titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 19 }, visualEffectState: "active" as const } : {}),
+    backgroundColor: initialBackground,
+    ...(process.platform === "darwin" ? {
+      titleBarStyle: "hiddenInset" as const,
+      trafficLightPosition: { x: 14, y: 19 },
+      ...(initialStyle === "liquid-glass" ? { vibrancy: initialVibrancy } : {}),
+      visualEffectState: "active" as const,
+    } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, "preload.cjs"),
       contextIsolation: true,
@@ -249,7 +260,13 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     },
   });
   mainWindow = current;
-  let surfaceStyle: DesktopSurfaceStyle = "default";
+  let surfaceStyle: DesktopSurfaceStyle = initialStyle;
+  if (process.platform === "darwin") {
+    seedMacSurfaceState(current, {
+      vibrancy: initialStyle === "liquid-glass" ? initialVibrancy : null,
+      background: initialBackground,
+    });
+  }
   const readWindowChrome = (): DesktopWindowChrome => ({
     unifiedTitlebar: process.platform === "darwin",
     fullScreen: !current.isDestroyed() && current.isFullScreen(),
@@ -260,11 +277,9 @@ async function showMain(): Promise<BrowserWindow | undefined> {
   };
   current.on("enter-full-screen", publishChrome);
   current.on("leave-full-screen", publishChrome);
-  current.on("focus", publishChrome);
-  current.on("blur", publishChrome);
   const onThemeUpdated = () => {
     if (current.isDestroyed()) return;
-    if (surfaceStyle === "liquid-glass") applySurfaceStyle(current, surfaceStyle);
+    if (process.platform === "darwin") applySurfaceStyle(current, surfaceStyle);
     else current.setBackgroundColor(windowBackground());
   };
   nativeTheme.on("updated", onThemeUpdated);
@@ -318,9 +333,11 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     setSurfaceStyle: style => {
       surfaceStyle = style;
       applySurfaceStyle(current, style);
+      void store().update({ surfaceStyle: style });
     },
     setThemeSource: theme => {
       applyDesktopThemeSource(nativeTheme, theme, () => applySurfaceStyle(current, surfaceStyle));
+      void store().update({ themeSource: theme });
     },
   });
   const save = () => {

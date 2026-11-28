@@ -1,26 +1,52 @@
 // Loaded when a sidebar conversation menu opens; the first screen does not carry its delete and arrange controls (#12017).
 import { lazy, Suspense, useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { COMPACT_FEATURE, NEW_MAIN_FEATURE } from "../lib/compaction";
 import { useCanDeleteConversation } from "../lib/conversation-delete";
-import { navigate, type Route } from "../lib/router";
+import { CLEAR_MAIN_FEATURE, clearMainContext, useMainClearing } from "../lib/main-clear";
+import { navigate, routeAt, type Route } from "../lib/router";
 import { sameValue } from "../lib/stable-lines";
+import { getState, hubHas, useStore } from "../lib/store";
 import type { Session } from "../lib/types";
 import { Dialog, Loading, Menu, type MenuItem, type ToastAction } from "../ui/atoms";
 import type { MenuAt } from "../ui/menu-model";
 import { t } from "../i18n";
-import { ConversationDeleteConfirmation, conversationMenuDeps, conversationMenuItems, type ConversationMenuDeps } from "./ConversationMenu";
+import { ConversationDeleteConfirmation, conversationMenuDeps, conversationMenuItems, type ConversationMenuDeps, type ConversationMenuOptions } from "./ConversationMenu";
 import type { DeleteConversationDialogDeps } from "./DeleteConversationDialog";
+import { lazyDialog } from "./LazyOverlay";
+import type { NewMainDialogDeps } from "./assistant/NewMainDialog";
 
 const LazyDeleteConversationDialog = lazy(() => import("./DeleteConversationDialog").then((m) => ({ default: m.DeleteConversationDialog })));
+const LazyNewMainDialog = lazyDialog(() => import("./assistant/NewMainDialog").then((m) => m.NewMainDialog));
+
+export interface MainCapabilities {
+  canCompact: boolean;
+  canClearMain: boolean;
+  canNewMain: boolean;
+  clearingMain: boolean;
+}
+
+const NO_MAIN_CAPABILITIES: MainCapabilities = {
+  canCompact: false,
+  canClearMain: false,
+  canNewMain: false,
+  clearingMain: false,
+};
 
 export interface ConversationRowMenuViewProps {
   s: Session;
   at: MenuAt;
   items: MenuItem[];
   deleting: boolean;
+  startingNewMain?: boolean;
   onClose: () => void;
+  onNewMainClose?: () => void;
+  onNavigate?: () => void;
   menuKey?: string | number;
   dialogKey?: string | number;
+  newMainDialogKey?: string | number;
+  newMainScopeKey?: string;
   deleteDialogDeps?: DeleteConversationDialogDeps;
+  newMainDialogDeps?: NewMainDialogDeps;
   renderMenu?: (props: {
     anchor: HTMLElement | null;
     point?: { x: number; y: number };
@@ -33,10 +59,15 @@ export interface ConversationRowMenuViewProps {
     onClose: () => void;
     dialogKey?: string | number;
   }) => ReactNode;
+  renderNewMainDialog?: (props: {
+    s: Session;
+    onClose: () => void;
+    dialogKey?: string | number;
+  }) => ReactNode;
 }
 
 export interface ConversationRowMenuDeps {
-  /** Optional scope partition (value or getter); switching it resets delete confirmation and fences stale callbacks. */
+  /** Optional scope partition (value or getter); switching it resets dialogs and fences stale callbacks. */
   scopeKey?: string | (() => string);
   /** Subscribe to scope changes when `scopeKey` is a getter. */
   subscribeScopeKey?: (listener: () => void) => () => void;
@@ -44,10 +75,18 @@ export interface ConversationRowMenuDeps {
   canDelete?: boolean | ((s: Session, options: { main: boolean; builtIn?: boolean }) => boolean);
   /** Subscribe to delete eligibility updates when `canDelete` is a reader. */
   subscribeCanDelete?: (listener: () => void) => () => void;
+  /** Controlled main-chat capabilities or reader (bypasses `useStore` when supplied). */
+  mainCapabilities?: Partial<MainCapabilities> | ((s: Session, options: { main: boolean; builtIn?: boolean }) => Partial<MainCapabilities>);
+  /** Subscribe to main-chat capability updates when `mainCapabilities` is a reader. */
+  subscribeMainCapabilities?: (listener: () => void) => () => void;
   /** Controlled delete-confirmation mode. */
   deleting?: boolean;
   /** Invoked when delete-confirmation mode toggles or resets on scope change. */
   onDeletingChange?: (deleting: boolean) => void;
+  /** Controlled new-main confirmation mode. */
+  startingNewMain?: boolean;
+  /** Invoked when new-main confirmation mode toggles or resets on scope change. */
+  onStartingNewMainChange?: (starting: boolean) => void;
   /** Partial or full overrides for `ConversationMenuDeps` passed to `conversationMenuItems`. */
   menuDeps?: Partial<ConversationMenuDeps>;
   /** Controlled pre-built base menu items or reader (bypasses `conversationMenuItems` when supplied). */
@@ -57,17 +96,20 @@ export interface ConversationRowMenuDeps {
   /** Custom menu item builder (replaces `conversationMenuItems` when `items` is omitted). */
   buildItems?: (
     s: Session,
-    options: { main: boolean; leader?: boolean; builtIn?: boolean; canDelete: boolean; onDelete: () => void },
+    options: ConversationMenuOptions & { canDelete: boolean; onDelete: () => void },
     deps: ConversationMenuDeps,
   ) => MenuItem[];
   /** Navigate to another route (defaults to `router.navigate`). */
   navigate?: (to: Route) => void;
   /** Controlled dependencies forwarded to `DeleteConversationDialog` when confirming deletion. */
   deleteDialogDeps?: DeleteConversationDialogDeps;
+  /** Controlled dependencies forwarded to `NewMainDialog` when confirming a new main chat. */
+  newMainDialogDeps?: NewMainDialogDeps;
   /** Custom outer view renderer (defaults to `<ConversationRowMenuView>`). */
   renderView?: (props: ConversationRowMenuViewProps) => ReactNode;
   renderMenu?: ConversationRowMenuViewProps["renderMenu"];
   renderDeleteConfirmation?: ConversationRowMenuViewProps["renderDeleteConfirmation"];
+  renderNewMainDialog?: ConversationRowMenuViewProps["renderNewMainDialog"];
 }
 
 export interface ConversationRowMenuProps {
@@ -79,6 +121,7 @@ export interface ConversationRowMenuProps {
   at?: MenuAt;
   onClose: () => void;
   onArrange?: () => void;
+  onNavigate?: () => void;
   deps?: ConversationRowMenuDeps;
 }
 
@@ -236,18 +279,25 @@ function fenceMenuItems(
   return items.map((item) => fenceMenuItem(item, epoch, pending, isMenuCurrent, isOpCurrent));
 }
 
-/** Pure presentational view for a sidebar conversation row menu and its delete confirmation. */
+/** Pure presentational view for a sidebar conversation row menu and its confirmation dialogs. */
 export function ConversationRowMenuView({
   s,
   at,
   items,
   deleting,
+  startingNewMain,
   onClose,
+  onNewMainClose,
+  onNavigate,
   menuKey,
   dialogKey,
+  newMainDialogKey,
+  newMainScopeKey,
   deleteDialogDeps,
+  newMainDialogDeps,
   renderMenu,
   renderDeleteConfirmation,
+  renderNewMainDialog,
 }: ConversationRowMenuViewProps) {
   if (deleting) {
     if (renderDeleteConfirmation) {
@@ -261,6 +311,23 @@ export function ConversationRowMenuView({
       );
     }
     return <ConversationDeleteConfirmation key={dialogKey} s={s} onClose={onClose} />;
+  }
+  if (startingNewMain) {
+    const closeNewMain = onNewMainClose ?? onClose;
+    if (renderNewMainDialog) {
+      return <>{renderNewMainDialog({ s, onClose: closeNewMain, dialogKey: newMainDialogKey })}</>;
+    }
+    return (
+      <LazyNewMainDialog
+        key={newMainDialogKey}
+        open
+        onClose={closeNewMain}
+        onNavigate={onNavigate}
+        session={s}
+        scopeKey={newMainScopeKey}
+        deps={newMainDialogDeps}
+      />
+    );
   }
   if (renderMenu) {
     return <>{renderMenu({ anchor: at.anchor ?? null, point: at.point, onClose, items, menuKey })}</>;
@@ -283,6 +350,20 @@ function DefaultCanDeleteBridge({
   return <>{render(canDelete)}</>;
 }
 
+function DefaultMainCapabilitiesBridge({
+  s,
+  render,
+}: {
+  s: Session;
+  render: (caps: MainCapabilities) => ReactNode;
+}) {
+  const canCompact = useStore((st) => hubHas(st.features, COMPACT_FEATURE));
+  const canClearMain = useStore((st) => hubHas(st.features, CLEAR_MAIN_FEATURE));
+  const canNewMain = useStore((st) => hubHas(st.features, NEW_MAIN_FEATURE));
+  const clearingMain = useMainClearing(s.session_id);
+  return <>{render({ canCompact, canClearMain, canNewMain, clearingMain })}</>;
+}
+
 interface ConversationRowMenuBodyProps {
   s: Session;
   main: boolean;
@@ -290,21 +371,30 @@ interface ConversationRowMenuBodyProps {
   builtIn?: boolean;
   at: MenuAt;
   canDelete: boolean;
+  mainCaps: MainCapabilities;
   deleting: boolean;
+  startingNewMain: boolean;
   hasCustomItems: boolean;
   controlledItems?: readonly MenuItem[];
   hasArrange: boolean;
   effectiveEpoch: number;
   deletingGen: number;
+  newMainGen: number;
   deps?: ConversationRowMenuDeps;
   depsRef: { current?: ConversationRowMenuDeps };
   onCloseRef: { current: () => void };
   onArrangeRef: { current?: () => void };
+  onNavigateRef: { current?: () => void };
   canDeleteRef: { current: boolean };
+  mainCapsRef: { current: MainCapabilities };
   pendingActionsRef: { current: Set<string> };
   isMenuCurrent: () => boolean;
   isOpCurrent: () => boolean;
+  isScopeCurrent: () => boolean;
+  scopeToken: string;
   openDelete: () => void;
+  openNewMain: () => void;
+  canSubmitNewMain: () => boolean;
 }
 
 function ConversationRowMenuBody({
@@ -314,25 +404,36 @@ function ConversationRowMenuBody({
   builtIn,
   at,
   canDelete,
+  mainCaps,
   deleting,
+  startingNewMain,
   hasCustomItems,
   controlledItems,
   hasArrange,
   effectiveEpoch,
   deletingGen,
+  newMainGen,
   deps,
   depsRef,
   onCloseRef,
   onArrangeRef,
+  onNavigateRef,
   canDeleteRef,
+  mainCapsRef,
   pendingActionsRef,
   isMenuCurrent,
   isOpCurrent,
+  isScopeCurrent,
+  scopeToken,
   openDelete,
+  openNewMain,
+  canSubmitNewMain,
 }: ConversationRowMenuBodyProps) {
   useLayoutEffect(() => {
     canDeleteRef.current = canDelete;
-  }, [canDelete, canDeleteRef]);
+    mainCapsRef.current = mainCaps;
+    if (startingNewMain && !mainCaps.canNewMain) onCloseRef.current();
+  }, [canDelete, canDeleteRef, mainCaps, mainCapsRef, onCloseRef, startingNewMain]);
 
   const menuDeps: ConversationMenuDeps = {
     rename: (session, title) =>
@@ -357,6 +458,29 @@ function ConversationRowMenuBody({
       fenceAsync(isOpCurrent, () => Promise.resolve((depsRef.current?.menuDeps?.refresh ?? conversationMenuDeps.refresh)()), undefined),
     lead: (session, on) =>
       fenceAsync(isOpCurrent, () => Promise.resolve((depsRef.current?.menuDeps?.lead ?? conversationMenuDeps.lead)(session, on)), undefined),
+    compact: (session) =>
+      fenceAsync(isOpCurrent, () => Promise.resolve((depsRef.current?.menuDeps?.compact ?? conversationMenuDeps.compact!)(session)), undefined),
+    clearMain: (session) =>
+      fenceAsync(
+        isOpCurrent,
+        () => {
+          const override = depsRef.current?.menuDeps?.clearMain;
+          if (override) return Promise.resolve(override(session));
+          const customNav = depsRef.current?.navigate;
+          const route = routeAt(location.href);
+          const viewingMain = route?.name === "persona" && (!route.sid || route.sid === session.session_id);
+          return clearMainContext(session.session_id, {
+            home: (changedElsewhere) => {
+              if (viewingMain || changedElsewhere) {
+                (customNav ?? navigate)({ name: "persona" });
+              }
+            },
+            afterHome: () => onNavigateRef.current?.(),
+            isScopeCurrent,
+          });
+        },
+        undefined,
+      ),
     copy: (text) => {
       if (!isMenuCurrent()) return undefined;
       return (depsRef.current?.menuDeps?.copy ?? conversationMenuDeps.copy)(text);
@@ -379,7 +503,22 @@ function ConversationRowMenuBody({
 
   const baseItems: MenuItem[] = hasCustomItems
     ? [...(controlledItems ?? [])]
-    : (deps?.buildItems ?? conversationMenuItems)(s, { main, leader, builtIn, canDelete, onDelete: openDelete }, menuDeps);
+    : (deps?.buildItems ?? conversationMenuItems)(
+        s,
+        {
+          main,
+          leader,
+          builtIn,
+          canDelete,
+          onDelete: openDelete,
+          canCompact: mainCaps.canCompact,
+          canClearMain: mainCaps.canClearMain,
+          canNewMain: mainCaps.canNewMain,
+          clearingMain: mainCaps.clearingMain,
+          onNewMain: openNewMain,
+        },
+        menuDeps,
+      );
 
   if (leader && !main && !builtIn) {
     baseItems.unshift({
@@ -410,21 +549,32 @@ function ConversationRowMenuBody({
     at,
     items,
     deleting,
+    startingNewMain: startingNewMain && mainCaps.canNewMain,
     onClose: () => {
       if (isMenuCurrent()) onCloseRef.current();
     },
+    onNewMainClose: () => {
+      if (isScopeCurrent()) onCloseRef.current();
+    },
+    onNavigate: () => {
+      if (isScopeCurrent()) onNavigateRef.current?.();
+    },
     menuKey: effectiveEpoch,
     dialogKey: `${effectiveEpoch}:${deletingGen}`,
+    newMainDialogKey: `${effectiveEpoch}:${newMainGen}`,
+    newMainScopeKey: scopeToken,
     deleteDialogDeps: deps?.deleteDialogDeps,
+    newMainDialogDeps: { ...deps?.newMainDialogDeps, canStart: canSubmitNewMain },
     renderMenu: deps?.renderMenu,
     renderDeleteConfirmation: deps?.renderDeleteConfirmation,
+    renderNewMainDialog: deps?.renderNewMainDialog,
   };
   if (deps?.renderView) return <>{deps.renderView(viewProps)}</>;
   return <ConversationRowMenuView {...viewProps} />;
 }
 
 /** The menu of a row (`at`: where a right click opened it; without it, beside `anchor`). */
-export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onClose, onArrange, deps }: ConversationRowMenuProps) {
+export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onClose, onArrange, onNavigate, deps }: ConversationRowMenuProps) {
   const trackedScope = useTrackedScope(deps?.scopeKey, deps?.subscribeScopeKey);
   const rowScope = JSON.stringify([trackedScope.token, s.machine_id, s.session_id, s.manager ?? "", main, Boolean(builtIn)]);
   const [scope, setScope] = useState<{ key: string; epoch: number }>(() => ({ key: rowScope, epoch: 1 }));
@@ -454,6 +604,27 @@ export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onCl
     ? Boolean(deps?.deleting)
     : (localDeletingState.epoch === effectiveEpoch && localDeletingState.gen === deletingGen && localDeletingState.deleting);
 
+  const controlledNewMainMode = deps?.startingNewMain !== undefined;
+  const [newMainSource, setNewMainSource] = useState<{ epoch: number; controlled: boolean; gen: number }>(() => ({
+    epoch: effectiveEpoch,
+    controlled: controlledNewMainMode,
+    gen: 1,
+  }));
+  const newMainSourceChanged = newMainSource.epoch !== effectiveEpoch || newMainSource.controlled !== controlledNewMainMode;
+  const newMainGen = newMainSourceChanged ? newMainSource.gen + 1 : newMainSource.gen;
+  if (newMainSourceChanged) {
+    setNewMainSource({ epoch: effectiveEpoch, controlled: controlledNewMainMode, gen: newMainGen });
+  }
+
+  const [localNewMainState, setLocalNewMainState] = useState<{ epoch: number; gen: number; open: boolean }>(() => ({
+    epoch: effectiveEpoch,
+    gen: newMainGen,
+    open: false,
+  }));
+  const startingNewMain = controlledNewMainMode
+    ? Boolean(deps?.startingNewMain)
+    : (localNewMainState.epoch === effectiveEpoch && localNewMainState.gen === newMainGen && localNewMainState.open);
+
   const canDeleteDep = deps?.canDelete;
   const readControlledCanDelete = useCallback((): boolean | undefined => {
     if (canDeleteDep === undefined) return undefined;
@@ -463,16 +634,35 @@ export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onCl
   const canDeleteSub = typeof canDeleteDep === "function" ? (deps?.subscribeCanDelete ?? noopSubscribe) : noopSubscribe;
   const controlledCanDelete = useSyncExternalStore(canDeleteSub, readControlledCanDelete, readControlledCanDelete);
 
+  const mainCapsDep = deps?.mainCapabilities;
+  const readControlledMainCaps = useCallback((): MainCapabilities | undefined => {
+    if (mainCapsDep === undefined) return undefined;
+    const raw = typeof mainCapsDep === "function" ? mainCapsDep(s, { main, builtIn }) : mainCapsDep;
+    return {
+      canCompact: Boolean(raw.canCompact),
+      canClearMain: Boolean(raw.canClearMain),
+      canNewMain: Boolean(raw.canNewMain),
+      clearingMain: Boolean(raw.clearingMain),
+    };
+  }, [mainCapsDep, s, main, builtIn]);
+  const controlledMainCaps = useCachedExternalValue(
+    mainCapsDep !== undefined ? readControlledMainCaps : undefined,
+    typeof mainCapsDep === "function" ? deps?.subscribeMainCapabilities : undefined,
+  );
+
   const controlledItems = useCachedExternalValue(deps?.items, deps?.subscribeItems);
 
   const activeEpochRef = useRef(effectiveEpoch);
   const minValidEpochRef = useRef(effectiveEpoch);
   const prevCommittedEpochRef = useRef(0);
   const activeDeletingGenRef = useRef(deletingGen);
+  const activeNewMainGenRef = useRef(newMainGen);
   const depsRef = useRef(deps);
   const onCloseRef = useRef(onClose);
   const onArrangeRef = useRef(onArrange);
+  const onNavigateRef = useRef(onNavigate);
   const canDeleteRef = useRef(controlledCanDelete ?? false);
+  const mainCapsRef = useRef<MainCapabilities>(controlledMainCaps ?? NO_MAIN_CAPABILITIES);
   const readScopeTokenRef = useRef(trackedScope.readToken);
   const pendingActionsRef = useRef(new Set<string>());
 
@@ -484,10 +674,12 @@ export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onCl
     depsRef.current = deps;
     onCloseRef.current = onClose;
     onArrangeRef.current = onArrange;
+    onNavigateRef.current = onNavigate;
     sRef.current = s;
     mainRef.current = main;
     builtInRef.current = builtIn;
     activeDeletingGenRef.current = deletingGen;
+    activeNewMainGenRef.current = newMainGen;
     readScopeTokenRef.current = trackedScope.readToken;
   });
 
@@ -500,6 +692,7 @@ export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onCl
     }
     if (previous !== 0 && previous !== effectiveEpoch) {
       depsRef.current?.onDeletingChange?.(false);
+      depsRef.current?.onStartingNewMainChange?.(false);
     }
     const pending = pendingActionsRef.current;
     const prefix = `${effectiveEpoch}:`;
@@ -513,14 +706,16 @@ export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onCl
 
   const capturedEpoch = effectiveEpoch;
   const capturedGen = deletingGen;
+  const capturedNewMainGen = newMainGen;
   const capturedScopeToken = trackedScope.token;
 
+  const isScopeCurrent = () => readScopeTokenRef.current() === capturedScopeToken;
   const isMenuCurrent = () =>
-    activeEpochRef.current === capturedEpoch && readScopeTokenRef.current() === capturedScopeToken;
+    activeEpochRef.current === capturedEpoch && isScopeCurrent();
   const isOpCurrent = () =>
     capturedEpoch >= minValidEpochRef.current
     && (activeEpochRef.current === 0 || activeEpochRef.current === capturedEpoch)
-    && readScopeTokenRef.current() === capturedScopeToken;
+    && isScopeCurrent();
 
   const liveCanDelete = () => {
     const dep = depsRef.current?.canDelete;
@@ -528,6 +723,15 @@ export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onCl
       return typeof dep === "function" ? Boolean(dep(sRef.current, { main: mainRef.current, builtIn: builtInRef.current })) : Boolean(dep);
     }
     return canDeleteRef.current;
+  };
+
+  const liveCanNewMain = () => {
+    const dep = depsRef.current?.mainCapabilities;
+    if (dep !== undefined) {
+      const raw = typeof dep === "function" ? dep(sRef.current, { main: mainRef.current, builtIn: builtInRef.current }) : dep;
+      return Boolean(raw.canNewMain);
+    }
+    return hubHas(getState().features, NEW_MAIN_FEATURE) && getState().assistant?.main === sRef.current.session_id;
   };
 
   const openDelete = () => {
@@ -538,10 +742,18 @@ export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onCl
     depsRef.current?.onDeletingChange?.(true);
   };
 
+  const openNewMain = () => {
+    if (!isMenuCurrent() || !liveCanNewMain() || !mainRef.current || builtInRef.current) return;
+    if (depsRef.current?.startingNewMain === undefined) {
+      setLocalNewMainState({ epoch: capturedEpoch, gen: activeNewMainGenRef.current, open: true });
+    }
+    depsRef.current?.onStartingNewMainChange?.(true);
+  };
+
   const p = at ?? { anchor };
   const hasCustomItems = deps?.items !== undefined;
   const hasArrange = Boolean(onArrange);
-  const renderBody = (canDelete: boolean) => (
+  const renderBody = (canDelete: boolean, mainCaps: MainCapabilities) => (
     <ConversationRowMenuBody
       s={s}
       main={main}
@@ -549,28 +761,44 @@ export function ConversationRowMenu({ s, main, leader, builtIn, anchor, at, onCl
       builtIn={builtIn}
       at={p}
       canDelete={canDelete}
+      mainCaps={mainCaps}
       deleting={deleting}
+      startingNewMain={startingNewMain}
       hasCustomItems={hasCustomItems}
       controlledItems={controlledItems}
       hasArrange={hasArrange}
       effectiveEpoch={effectiveEpoch}
       deletingGen={capturedGen}
+      newMainGen={capturedNewMainGen}
       deps={deps}
       depsRef={depsRef}
       onCloseRef={onCloseRef}
       onArrangeRef={onArrangeRef}
+      onNavigateRef={onNavigateRef}
       canDeleteRef={canDeleteRef}
+      mainCapsRef={mainCapsRef}
       pendingActionsRef={pendingActionsRef}
       isMenuCurrent={isMenuCurrent}
       isOpCurrent={isOpCurrent}
+      isScopeCurrent={isScopeCurrent}
+      scopeToken={trackedScope.token}
       openDelete={openDelete}
+      openNewMain={openNewMain}
+      canSubmitNewMain={() => isMenuCurrent() && mainRef.current && liveCanNewMain()}
     />
   );
 
+  const withMainCaps = (canDelete: boolean) => {
+    if (main && !builtIn && !hasCustomItems && mainCapsDep === undefined) {
+      return <DefaultMainCapabilitiesBridge s={s} render={(caps) => renderBody(canDelete, caps)} />;
+    }
+    return renderBody(canDelete, controlledMainCaps ?? NO_MAIN_CAPABILITIES);
+  };
+
   if (canDeleteDep === undefined && !hasCustomItems) {
-    return <DefaultCanDeleteBridge s={s} main={main} builtIn={builtIn} render={renderBody} />;
+    return <DefaultCanDeleteBridge s={s} main={main} builtIn={builtIn} render={withMainCaps} />;
   }
-  return renderBody(Boolean(controlledCanDelete));
+  return withMainCaps(Boolean(controlledCanDelete));
 }
 
 export default ConversationRowMenu;

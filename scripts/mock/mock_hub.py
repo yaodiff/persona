@@ -63,7 +63,7 @@ def features():
                 (["sessions_list", "sessions_lookup"] + (["sessions_hierarchy"] if NET["hierarchy"] else []) + ["sessions_todo", "sessions_quick_filters", "sessions_just_finished", "sessions_agents_only"]) if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["sessions_side_fold"] if SIDE_FOLD else []) + (
-                ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
+                mock_preview.features() if globals().get("preview_route") else (["preview"] if os.environ.get("MOCK_PREVIEW") else [])) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
                 ([] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else
@@ -2213,7 +2213,10 @@ LN = {"on": bool(os.environ.get("MOCK_LN"))}
 SESSION_DELETED = []
 PINS = {"spaces": ["macbook/weather"], "sessions": []}  # GET / PUT /api/v1/pins: what the Agents list keeps on top
 # GET / PUT /api/v1/agents/display-settings (server/internal/assistant/agents_display.go): both new switches are off by default
-AGENTS_DISPLAY = {"show_botmux": True, "configured": False, "use_herdr_tab_name": False, "sort_by_activity": False, "show_filter": False}
+AGENTS_DISPLAY = {"show_botmux": True, "configured": False, "use_herdr_tab_name": False, "sort_by_activity": False, "show_filter": False,
+                  "botmux_owner_union_id": ""}
+# GET /api/v1/agents/botmux-owner-candidates (server/internal/assistant/agents_botmux_owner.go): made-up union_ids only
+BOTMUX_OWNER_CANDIDATES = [{"union_id": "on_0123456789abcdef0123456789abcdef", "bots": 3, "sole": 3, "machines": 1}]
 
 
 def mark_seen(sid):
@@ -11532,7 +11535,8 @@ WORKSPACE_LINEAGE = {}  # (machine, workspace) -> parent source id for Orca-crea
 
 
 def mock_panes(mid):
-    sessions = [s for s in SESSIONS if s.get("machine_id") == mid and s.get("pane_id")][:2]
+    # Orca's Agents are in its own host's list (mock_orca_panes), not herdr's
+    sessions = [s for s in SESSIONS if s.get("machine_id") == mid and s.get("pane_id") and s.get("space_kind") != "orca"][:2]
     if mid == "studio":
         return {"hosts": []}
     if os.environ.get("MOCK_PANES_NO_WORKSPACE") and not PANES_NEW.get(mid):
@@ -11574,7 +11578,33 @@ def mock_panes(mid):
             tabs.append({"id": f"w12:t{i}", "workspace_id": "w12", "label": f"agent-{i}", "number": i})
             panes.append({"pane": f"w12:p{i}", "terminal": f"pane:w12:p{i}", "tab_id": f"w12:t{i}", "workspace_id": "w12", "agent": agent,
                           "status": status, "title": title, "cwd": "/home/me/code/marks", "session_id": sid})
-    return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]}
+    hosts = [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]
+    if os.environ.get("MOCK_ORCA_CHILDREN") and mid == "macbook":
+        hosts.append(mock_orca_panes(mid))
+    return {"hosts": hosts}
+
+
+def mock_orca_panes(mid):
+    """MOCK_ORCA_CHILDREN=1 with MOCK_TERMINAL_PANES=1: the MacBook's Orca host (#17053), its worktrees as workspaces, each
+    Orca Agent's terminal tab and a plain shell beside the first. Its `abilities` are what a node reports for an Orca
+    without split and close tab."""
+    ws, tabs, panes = [], [], []
+    for s in SESSIONS:
+        if s.get("machine_id") != mid or s.get("space_kind") != "orca" or not s.get("pane_id"):
+            continue
+        if not any(w["id"] == s["space_id"] for w in ws):
+            ws.append({"id": s["space_id"], "label": s["space_name"], "number": s.get("space_index", 1), "cwd": s["cwd"],
+                       "branch": s["space_name"]})
+        tabs.append({"id": s["tab_id"], "workspace_id": s["space_id"], "label": s.get("slot_name") or "claude", "number": 1})
+        panes.append({"pane": s["pane_id"], "terminal": "pane:" + s["pane_id"], "tab_id": s["tab_id"], "workspace_id": s["space_id"],
+                      "agent": "claude", "status": s.get("status", "idle"), "title": s.get("title"), "cwd": s["cwd"], "session_id": s["session_id"]})
+    if ws:
+        first = ws[0]
+        tabs.append({"id": "tab-shell", "workspace_id": first["id"], "label": "zsh", "number": 2})
+        panes.append({"pane": "orca:tab-shell:leaf1", "terminal": "pane:orca:tab-shell:leaf1", "tab_id": "tab-shell",
+                      "workspace_id": first["id"], "title": "zsh", "cwd": first["cwd"], "foreground": "zsh"})
+    return {"kind": "orca", "stream": False, "control": False, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes,
+            "abilities": {"rename": True, "close_pane": True, "split": False, "close_tab": False, "git": True, "run_here": False}}
 
 
 def mock_panes_file(mid):
@@ -12150,6 +12180,22 @@ if os.environ.get("MOCK_BOT") == "pairing":
     FEISHU_BOT.update(owner=None, agents=[], target="", pairing={"code": "482913", "expires_at": int(time.time()) + 540})
 elif os.environ.get("MOCK_BOT") == "off":
     FEISHU_BOT.update(enabled=False, app_id="", has_secret=False, connected=False, bot_name=None, owner=None, agents=[], target="")
+# Group access for the Lark bot (GET/PUT /api/v1/bots/feishu/group-access, #16848): the whole policy, written back at the
+# revision it was read at. MOCK_BOT_GROUP=allowlist preloads an allowlist with one recent request and one tool, =absent
+# answers 404 as a hub from before the route does.
+FEISHU_GROUP_ACCESS = {"revision": 3, "paired": FEISHU_BOT.get("owner") is not None,
+    "policy": {"mode": "owner_only", "allowed_users": [], "allowed_chats": [], "blocked_users": [], "blocked_chats": [],
+               "guest_tools": [], "per_chat_hourly": 20},
+    "available_tools": [], "recent_requests": [],
+    "limits": {"list_max": 200, "guest_tools_max": 8, "per_chat_hourly_min": 1, "per_chat_hourly_max": 120, "per_chat_hourly_default": 20}}
+if os.environ.get("MOCK_BOT_GROUP") == "allowlist":
+    FEISHU_GROUP_ACCESS["policy"] = {"mode": "allowlist",
+        "allowed_users": [{"open_id": "ou_example1", "name": "Teammate A"}],
+        "allowed_chats": [{"chat_id": "oc_example1", "name": "Project group"}],
+        "blocked_users": [], "blocked_chats": [], "guest_tools": ["wiki_search"], "per_chat_hourly": 20}
+    FEISHU_GROUP_ACCESS["available_tools"] = [{"name": "wiki_search", "connector": "Wiki"}]
+    FEISHU_GROUP_ACCESS["recent_requests"] = [{"open_id": "ou_example2", "name": "Teammate B", "chat_id": "oc_example1",
+                                               "chat_name": "Project group", "at": 1795000000}]
 # Phone tools (docs/apple/phone-tools.md): what each connected phone declared (register_phone) and the tool_result messages it
 # sent back. GET /mock/tool_call?name=phone_…&args=<JSON> sends a tool_call to the phones that declared the tool, as the
 # hub does when Claude calls it; GET /mock/phone shows the registrations and results.
@@ -18600,8 +18646,15 @@ if os.environ.get("MOCK_REPLY_BLOCKS") == "1":
 # another port (PortForwardTests). GET /mock/ports lists the connects.
 LANDING = "a1f3c2d4-0000-4000-8000-00000000000d"
 PORT_LOG = []
+MOCK_PORT_INFO = {}
+MOCK_FAIL_PORTS = set()
 if os.environ.get("MOCK_PORTS") == "1":
+    import atexit
+    import shutil
     import socket
+    import ssl
+    import subprocess
+    import tempfile
     from http.server import SimpleHTTPRequestHandler
 
     _page = """<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>天气 · 落地页</title>
@@ -18631,14 +18684,137 @@ header{padding:56px 24px 24px}h1{font-size:34px;margin:0 0 8px}p{color:var(--mut
     _dev = ThreadingHTTPServer(("127.0.0.1", 0), _Dev)
     threading.Thread(target=_dev.serve_forever, daemon=True).start()
     DEV_PORT = _dev.server_address[1]
+
+    # Multi-module SPA dev server: 12 external ES modules/CSS + 1 HMR WebSocket over HTTP/1.1 keep-alive.
+    # Reproduces URLSession's 4-connection-per-host blank screen when PortForwarder does not raise the pool limit.
+    _spa_html = """<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>天气 · 多模块 SPA</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/style1.css"><link rel="stylesheet" href="/style2.css">
+</head><body><main id="root"></main>
+<script>
+window.__hmr = new Promise((resolve) => {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/hmr");
+  window.__hmrWS = ws;
+  ws.onmessage = (ev) => { if (ev.data === "hmr-ok") resolve("open"); };
+});
+</script>
+<script type="module" src="/main.js"></script>
+</body></html>""".encode()
+    _spa_main = (
+        "\n".join("import { v as v%d } from '/mod%d.js';" % (i, i) for i in range(1, 11))
+        + "\nconst checksum = " + " + ".join("v%d" % i for i in range(1, 11)) + ";\n"
+        + "const total = 10 + document.styleSheets.length;\n"
+        + "window.__hmr.then((s) => {\n"
+        + "  if (s === 'open' && checksum === 55) {\n"
+        + "    document.getElementById('root').innerHTML = '<h1>SPA 已挂载</h1><p id=\"status\">modules=' + total + ' hmr=' + s + '</p>';\n"
+        + "  }\n"
+        + "});\n"
+    ).encode()
+    _spa_css1 = b":root{color-scheme:light dark}body{margin:0;padding:24px;font:17px -apple-system,system-ui}"
+    _spa_css2 = b"h1{font-size:28px;margin:0 0 8px}#status{color:#555}"
+
+    class _SPADev(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            if path == "/hmr" and self.headers.get("Sec-WebSocket-Key"):
+                key = self.headers["Sec-WebSocket-Key"]
+                accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+                self.send_response(101, "Switching Protocols")
+                self.send_header("Upgrade", "websocket"); self.send_header("Connection", "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", accept); self.end_headers(); self.wfile.flush()
+                payload = b"hmr-ok"
+                try:
+                    self.wfile.write(bytes([0x81, len(payload)]) + payload); self.wfile.flush()
+                    while self.rfile.read(1):
+                        pass
+                except OSError:
+                    pass
+                self.close_connection = True
+                return
+            if path == "/":
+                body, ctype, delay = _spa_html, "text/html; charset=utf-8", 0.0
+            elif path == "/style1.css":
+                body, ctype, delay = _spa_css1, "text/css; charset=utf-8", 0.10
+            elif path == "/style2.css":
+                body, ctype, delay = _spa_css2, "text/css; charset=utf-8", 0.10
+            elif path == "/main.js":
+                body, ctype, delay = _spa_main, "application/javascript; charset=utf-8", 0.05
+            elif path.startswith("/mod") and path.endswith(".js") and path[4:-3].isdigit() and 1 <= int(path[4:-3]) <= 10:
+                n = int(path[4:-3])
+                body, ctype, delay = ("export const v = %d;\n" % n).encode(), "application/javascript; charset=utf-8", 0.12
+            else:
+                body, ctype, delay = b"not found", "text/plain", 0.0
+                self.send_response(404); self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body))); self.send_header("Connection", "keep-alive")
+                self.end_headers(); self.wfile.write(body); return
+            if delay > 0:
+                time.sleep(delay)
+            self.send_response(200); self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body))); self.send_header("Connection", "keep-alive")
+            self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
+
+        def log_message(self, *a): pass
+
+    _spa = ThreadingHTTPServer(("127.0.0.1", 0), _SPADev)
+    threading.Thread(target=_spa.serve_forever, daemon=True).start()
+    SPA_PORT = _spa.server_address[1]
+
+    # Self-signed HTTPS dev server for loopback TLS trust prompt tests and screenshots.
+    _tls_page = """<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>本地 HTTPS 服务</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><style>
+:root{color-scheme:light dark}body{margin:0;padding:24px;font:17px -apple-system,system-ui}
+</style></head><body><h1>本地 HTTPS 服务已连接</h1><p>已信任本次会话的自签证书。</p></body></html>""".encode()
+
+    class _TLSDev(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(_tls_page))); self.end_headers(); self.wfile.write(_tls_page)
+
+        def log_message(self, *a): pass
+
+    TLS_PORT = 0
+    _tls_dir = tempfile.mkdtemp(prefix="persona-mock-tls-")
+    atexit.register(lambda d=_tls_dir: shutil.rmtree(d, ignore_errors=True))
+    _cert_file, _key_file = os.path.join(_tls_dir, "cert.pem"), os.path.join(_tls_dir, "key.pem")
+    if subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", _key_file, "-out", _cert_file,
+         "-days", "1", "-nodes", "-subj", "/CN=localhost",
+         "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode == 0:
+        _tls_srv = ThreadingHTTPServer(("127.0.0.1", 0), _TLSDev)
+        _tls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        _tls_ctx.load_cert_chain(_cert_file, _key_file)
+        _tls_srv.socket = _tls_ctx.wrap_socket(_tls_srv.socket, server_side=True)
+        threading.Thread(target=_tls_srv.serve_forever, daemon=True).start()
+        TLS_PORT = _tls_srv.server_address[1]
+
     _s = socket.socket(); _s.bind(("127.0.0.1", 0)); GONE_PORT = _s.getsockname()[1]; _s.close()
+    _s2 = socket.socket(); _s2.bind(("127.0.0.1", 0)); FAIL_PORT = _s2.getsockname()[1]; _s2.close()
+    # Keep stopped/failing ports explicitly unreachable even when the iOS simulator shares this Mac's loopback.
+    MOCK_FAIL_PORTS.update((GONE_PORT, FAIL_PORT))
+    MOCK_PORT_INFO.update(dev_port=DEV_PORT, spa_port=SPA_PORT, fail_port=FAIL_PORT, gone_port=GONE_PORT, tls_port=TLS_PORT)
+
+    _listed_ports = [
+        {"port": DEV_PORT, "addr": "127.0.0.1", "pid": 4242, "process": "node", "title": "天气 · 落地页"},
+        {"port": SPA_PORT, "addr": "127.0.0.1", "pid": 4243, "process": "vite", "title": "天气 · 多模块 SPA"},
+        {"port": FAIL_PORT, "addr": "127.0.0.1", "pid": 4244, "process": "node", "title": "已断开的预览"},
+    ]
+    if TLS_PORT:
+        _listed_ports.append({"port": TLS_PORT, "addr": "127.0.0.1", "pid": 4245, "process": "vite", "title": "本地 HTTPS 服务"})
     SESSIONS.insert(0, sess("macbook", LANDING, "天气 App 的落地页", "/Users/me/code/weather-site", "idle", "unread", "weather", 1,
                             "site", 6, 1, "落地页起好了，在 :%d。" % DEV_PORT,
-                            ports=[{"port": DEV_PORT, "addr": "127.0.0.1", "pid": 4242, "process": "node", "title": "天气 · 落地页"}]))
+                            ports=_listed_ports))
+    _extra_links = "多模块 SPA：http://localhost:%d/ · 失效预览：http://localhost:%d/" % (SPA_PORT, FAIL_PORT)
+    if TLS_PORT:
+        _extra_links += " · HTTPS：https://localhost:%d/" % TLS_PORT
     ITEMS[LANDING] = [it("user", "text", 6, text="把落地页跑起来给我看看"),
                       it("assistant", "text", 1, text=(
                           "落地页起好了：http://localhost:%d/ ，改动会热更新。\n\n"
-                          "之前那版预览（http://127.0.0.1:%d/preview）已经停掉了。" % (DEV_PORT, GONE_PORT)))]
+                          "之前那版预览（http://127.0.0.1:%d/preview）已经停掉了。\n\n"
+                          "%s" % (DEV_PORT, GONE_PORT, _extra_links)))]
 
 # MOCK_HUB_LINKS=1: an agent's reply linking this hub's own pages (#2696): another agent's chat at one of its early
 # messages, a task, and an outside page. The app opens the first two natively (HubPageLinkTests), the third as a web page.
@@ -18667,6 +18843,8 @@ if os.environ.get("MOCK_HUB_LINKS") == "1":
 
 
 def port_listening(port):
+    if port in MOCK_FAIL_PORTS:
+        return False
     import socket
     try:
         socket.create_connection(("127.0.0.1", port), timeout=1).close()
@@ -22160,7 +22338,7 @@ def mock_files(p, q):
                     {"path": "WeatherWidget/WidgetView.swift", "index": "A", "worktree": ".",
                      **diff_counts(MOCK_DIFFS["WeatherWidget/WidgetView.swift"]), "binary": False},
                     {"path": "docs/icon.png", "index": "?", "worktree": "?", "added": 0, "deleted": 0, "binary": True}]
-                + [{"path": rel, "index": ".", "worktree": "M", "added": 0, "deleted": 0, "binary": True} for rel in COMPARE_BLOBS]
+                + [{"path": rel, "index": "A" if rel == COMPARE_PICTURE else ".", "worktree": "M", "added": 0, "deleted": 0, "binary": True} for rel in COMPARE_BLOBS]
                 + [{"path": "Sources/App/Models/Forecast.swift", "index": ".", "worktree": "M", "added": 3, "deleted": 0, "binary": False}
                    for _ in range(min(FS_STATE["dirty"], 1))]}, 200
     if what == "git/diff":
@@ -22170,9 +22348,12 @@ def mock_files(p, q):
         return {"commits": MOCK_COMMITS[skip:skip + limit], "has_more": skip + limit < len(MOCK_COMMITS)}, 200
     c = next((c for c in MOCK_COMMITS if c["hash"] == arg("hash")), None)
     if not c: return {"error": "unknown revision"}, 502
+    deleted_picture = []
+    if COMPARE_PICTURE in COMPARE_BLOBS and c == MOCK_COMMITS[0]:
+        deleted_picture.append({"path": COMPARE_PICTURE, "index": "D", "worktree": ".", "added": 0, "deleted": 0, "binary": True})
     return {"commit": dict(c, body="Made-up commit for the mock hub."),
             "files": [{"path": "Sources/App/main.swift", "index": "M", "worktree": ".", "added": 2, "deleted": 1, "binary": False},
-                      {"path": "README.md", "index": "M", "worktree": ".", "added": 2, "deleted": 0, "binary": False}],
+                      {"path": "README.md", "index": "M", "worktree": ".", "added": 2, "deleted": 0, "binary": False}] + deleted_picture,
             "diff": MOCK_DIFFS["Sources/App/main.swift"] + "\n" + MOCK_DIFFS["README.md"], "truncated": False}, 200
 # --- end of Files & Git ---
 
@@ -22365,6 +22546,8 @@ if os.environ.get("MOCK_MEDIA"):  # the web's media (#1422): a sound, an SVG, a 
         MOCK_TREE[MOCK_REPO + "/media/preview.mp4"] = ("video/mp4", "")
 # MOCK_COMPARE=1 (with MOCK_FILES): a changed Word file, deck and picture in the repository's status, and git/blob
 # answering their staged (INDEX) / HEAD versions from the node's "cache", for the web's comparing (#1437).
+# The last commit removed the banner. It was added back to the index and edited in the working tree.
+COMPARE_PICTURE = "assets/banner.png"
 COMPARE_BLOBS = {}
 if os.environ.get("MOCK_COMPARE"):
     import io as _io, zipfile as _zf
@@ -22378,7 +22561,7 @@ if os.environ.get("MOCK_COMPARE"):
     _docx_old = _zip_edit(_docx_new, "word/document.xml", lambda x: x.replace("+10.2%", "+9.8%").replace("6 个百分点", "4 个百分点").replace("海外区域接入本地天气数据源。", "海外区域先观望。"))
     _pptx_old = _zip_edit(_pptx_new, "ppt/slides/slide2.xml", lambda x: x.replace("日活提高 18%", "日活提高 12%").replace("锁屏小组件适配深色壁纸", "锁屏小组件"))
     for _rel, _new, _old in (("reports/季度报告.docx", _docx_new, _docx_old), ("reports/季度回顾.pptx", _pptx_new, _pptx_old),
-                             ("assets/banner.png", _bar_png(480, 200), _bar_png(480, 200, (0.3, 0.5, 0.55, 0.7)))):
+                             (COMPARE_PICTURE, _bar_png(480, 200), _bar_png(480, 200, (0.3, 0.5, 0.55, 0.7)))):
         FILES["/Users/me/code/weather/" + _rel] = _new
         _blob = _cache + hashlib.sha1(_old).hexdigest() + os.path.splitext(_rel)[1]
         FILES[_blob] = _old
@@ -27249,7 +27432,7 @@ class H(BaseHTTPRequestHandler):
         if pins_route(self, p): return
         if chat_pins_route(self, p, parse_qs(urlparse(self.path).query)): return
         if history_route(self, p, parse_qs(urlparse(self.path).query)): return
-        if p == "/mock/ports": return self.send_json({"connects": PORT_LOG})
+        if p == "/mock/ports": return self.send_json({"connects": PORT_LOG, **MOCK_PORT_INFO})
         if p == "/mock/lark/uploads": return self.send_json(LARK_UPLOAD_REPLIES)  # #1035: what each attachment quoted
         if MOCK_WEB and (p.startswith("/screen/") or p.startswith("/assets/")): return self.web_file(p)
         if p == "/mock/screen-video": return screen_video_control(self, parse_qs(urlparse(self.path).query))
@@ -27614,6 +27797,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(PREFS)
         if p == "/api/v1/pins": return self.send_json(PINS)
         if p == "/api/v1/agents/display-settings": return self.send_json(AGENTS_DISPLAY)
+        if p == "/api/v1/agents/botmux-owner-candidates": return self.send_json({"candidates": BOTMUX_OWNER_CANDIDATES})
         if p == "/api/v1/mutes": return self.send_json({"spaces": [], "sessions": TREE_MUTED, "allowed": []})
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
@@ -27672,8 +27856,10 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "LibreOffice is not installed on this machine", "code": "no_converter"}, 404)
             return self.send_json({"path": "/Users/me/Library/Caches/persona/convert/mock.pdf", "size": len(FILES.get("/Users/me/Library/Caches/persona/convert/mock.pdf", b"")), "mime": "application/pdf"})
         if p.startswith("/api/v1/machines/") and p.endswith("/git/blob"):  # node git.blob: a version written into the cache
-            blob = COMPARE_BLOBS.get(q.get("path", [""])[0])
-            return self.send_json({"path": blob, "size": len(FILES[blob])} if blob and q.get("rev", [""])[0] in ("HEAD", "INDEX") else {"missing": True})
+            path = q.get("path", [""])[0]
+            blob = COMPARE_BLOBS.get(path)
+            revisions = ("INDEX", MOCK_COMMITS[0]["hash"] + "^") if path == COMPARE_PICTURE else ("HEAD", "INDEX")
+            return self.send_json({"path": blob, "size": len(FILES[blob])} if blob and q.get("rev", [""])[0] in revisions else {"missing": True})
         if p.startswith("/api/v1/machines/") and p.endswith("/file/thumb"):  # node file.thumb: a drawn stand-in for a HEIC
             if not q.get("path", [""])[0].lower().endswith((".heic", ".heif")):
                 return self.file_thumb(p, q)  # the rest drawn by Quick Look, as a Mac node does (the Files tab's thumbnails)
@@ -27890,6 +28076,10 @@ class H(BaseHTTPRequestHandler):
             listed += [wechat_connector()] if WECHAT_MODE else []
             listed += [larkcli_connector()] if LARKCLI_MODE else []
             return self.send_json({"connectors": (LEGACY_CONNECTORS if q.get("all") == ["1"] else []) + listed})
+        if p == "/api/v1/bots/feishu/group-access":  # Settings › Lark bot › Group Access (#16848)
+            if os.environ.get("MOCK_BOT_GROUP") == "absent":
+                return self.send_json({"error": "not found"}, 404)
+            return self.send_json(FEISHU_GROUP_ACCESS)
         if p == "/api/v1/bots/feishu":  # Settings › Connectors › Lark bot
             st = dict(FEISHU_BOT, last_event_at=int(time.time()) - 40 if FEISHU_BOT["connected"] else None)
             if LARKCLI_MODE:
@@ -29652,7 +29842,14 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/agents/display-settings" and self.command == "PUT":  # exactly one boolean per request
             body = json.loads(self.last_body or b"{}")
             sent = [k for k in ("show_botmux", "use_herdr_tab_name", "sort_by_activity", "show_filter") if isinstance(body.get(k), bool)]
+            if isinstance(body.get("botmux_owner_union_id"), str): sent.append("botmux_owner_union_id")
             if len(sent) != 1: return self.send_json({"error": "send exactly one switch"}, 400)
+            if sent[0] == "botmux_owner_union_id":
+                owner = body["botmux_owner_union_id"].strip()
+                if owner and not re.fullmatch(r"on_[A-Za-z0-9_-]{1,125}", owner):
+                    return self.send_json({"error": "botmux_owner_union_id must be a Feishu union_id (on_…) or empty"}, 400)
+                AGENTS_DISPLAY["botmux_owner_union_id"] = owner
+                return self.send_json(AGENTS_DISPLAY)
             AGENTS_DISPLAY[sent[0]] = body[sent[0]]
             if sent[0] == "show_botmux": AGENTS_DISPLAY["configured"] = True
             return self.send_json(AGENTS_DISPLAY)
@@ -29918,6 +30115,18 @@ class H(BaseHTTPRequestHandler):
             FEISHU_BOT.update(owner=None, agents=[], target="", pairing=None)
             return self.send_json({k: v for k, v in FEISHU_BOT.items() if v is not None})
         if p == "/api/v1/bots/feishu/test": return self.send_json({"ok": True})
+        if p == "/api/v1/bots/feishu/group-access" and self.command == "PUT":  # the whole policy, at the revision read (#16848)
+            if os.environ.get("MOCK_BOT_GROUP") == "absent":
+                return self.send_json({"error": "not found"}, 404)
+            body = json.loads(self.last_body or b"{}")
+            if body.get("revision") != FEISHU_GROUP_ACCESS["revision"]:
+                return self.send_json({"code": "group_access_conflict", "error": "changed elsewhere"}, 409)
+            policy = body.get("policy") or {}
+            for key in ("allowed_users", "allowed_chats", "blocked_users", "blocked_chats", "guest_tools"):
+                policy.setdefault(key, [])
+            FEISHU_GROUP_ACCESS["policy"] = policy
+            FEISHU_GROUP_ACCESS["revision"] += 1
+            return self.send_json(FEISHU_GROUP_ACCESS)
         if p.startswith("/api/v1/interactions/") and p.endswith("/reanswer") and p.count("/") == 5:
             return self.send_json(*mock_reanswer(p.split("/")[4], json.loads(self.last_body or b"{}")))
         review_match = AGENT_REVIEW and re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/review", p)
@@ -30149,6 +30358,8 @@ class H(BaseHTTPRequestHandler):
         preview_to = mock_preview.forward(port) if preview_route else None
         listed = listed or preview_to is not None
         if not listed: return self.send_json({"error": "port %d is not an agent's and was not opened" % port}, 403)
+        if port in MOCK_FAIL_PORTS:
+            return self.send_json({"error": "nothing is listening on port %d" % port}, 404)
         try:
             to = preview_to or (FAKE_SCREEN["port"] if port == 5900 and FAKE_SCREEN["port"] else port)
             tcp = socket.create_connection(("127.0.0.1", to), timeout=3)

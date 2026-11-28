@@ -76,6 +76,9 @@ type storedLauncher struct {
 	ViaMachine string    `json:"via_machine,omitempty"`
 	Created    time.Time `json:"created"`
 	Updated    time.Time `json:"updated"`
+	// channelAlias is the channel the launcher is an alias of (execution_channels.go): made on every read, never
+	// stored.
+	channelAlias string
 }
 
 // LauncherView is one launcher for the app: where it comes from, which machines have it; never the key.
@@ -276,10 +279,17 @@ func (s *Service) storedLaunchersKnown(ctx context.Context) ([]storedLauncher, b
 	if _, err := memoSetting(ctx, st, launchersManagedKey, &list); err != nil {
 		return nil, false
 	}
-	return list, true
+	catalog, ok := s.channelCatalog(ctx)
+	if !ok {
+		return list, false
+	}
+	return withChannelAliases(list, catalog), true
 }
 
 var errManagedLaunchersRead = errors.New("managed provider configuration unavailable")
+
+// errChannelsRead: the managed channels, whose aliases are managed launchers too, could not be read.
+var errChannelsRead = errors.New("managed channels unavailable")
 
 // readStoredLaunchers preserves every raw sealed record for mutation decisions. A missing setting is empty;
 // storage and JSON failures abort the operation. Decryption belongs to consumers that need credentials,
@@ -297,7 +307,11 @@ func (s *Service) readStoredLaunchers(ctx context.Context) (list []storedLaunche
 	if _, err := st.Setting(ctx, launchersManagedKey, &list); err != nil {
 		return nil, err
 	}
-	return list, nil
+	catalog, ok := s.channelCatalog(ctx) // what a channel change made is there at once (execChannelBook)
+	if !ok {
+		return nil, errChannelsRead
+	}
+	return withChannelAliases(list, catalog), nil
 }
 
 // readHiddenLaunchers reads launchers.hidden from the store itself (never a request's memo) for a change to it, made

@@ -181,9 +181,9 @@ func (s *Service) auditedMessage(ctx context.Context, source, target, text, send
 	if saveErr := st.SetSentAsUserOutcome(saveCtx, id, outcome); saveErr != nil {
 		return false, fmt.Errorf("delivery may have occurred; audit %d is pending; inspect before retrying: %w", id, saveErr)
 	}
-	state = "delivered"
+	state = db.SendStateDelivered
 	if err != nil {
-		state = "unknown" // even a known failure needs a deliberate, manual retry
+		state = db.SendStateUnknown // even a known failure needs a deliberate, manual retry
 	}
 	if settleErr := st.SettleSend(saveCtx, attempt, state); settleErr != nil {
 		return false, fmt.Errorf("delivery may have occurred; inspect audit %d before retrying: %w", id, settleErr)

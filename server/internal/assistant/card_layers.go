@@ -235,7 +235,12 @@ func ownCardSource(ix proto.Interaction) string {
 	case secretOrForm(ix):
 		return cardSecretForm
 	case ix.ToolName == "ask_user":
+		if src := questionOwnerSource(ix); src != "" {
+			return src
+		}
 		return cardAskUser
+	case hubCardSource(ix) != "":
+		return hubCardSource(ix)
 	case ix.Kind == proto.IxPermission:
 		return cardToolPermission
 	}
@@ -288,6 +293,9 @@ func (s *Service) inputCardSourceWithWhy(ix proto.Interaction, escalated bool, w
 		return v.(string)
 	}
 	if ix.ToolName == "ask_user" { // ask_user with wait false (ask_later.go) does not go through ask
+		if src := questionOwnerSource(ix); src != "" {
+			return src
+		}
 		return cardAskUser
 	}
 	if src := hubCardSource(ix); src != "" { // before the form check: persona_settings may carry fields

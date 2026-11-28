@@ -745,6 +745,76 @@ else: raise SystemExit(3)
         else:
             self.fail("writer did not resume paired writes")
 
+    def test_snapshot_excludes_hub_meeting_audio_from_knowledge_bases(self):
+        rec_id = "0f8fad5b-d9cb-469f-a165-70867728950e"
+        for layout in ("default", "external-kb", "extra-manager"):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory(dir=self.root) as directory:
+                previous_root = self.root
+                self.root = Path(directory)
+                try:
+                    request = self.history_fixture()
+                    runtime = Path(request["runtime"])
+                    if layout == "default":
+                        kb = runtime / "data"
+                        root_prefix = "root-0/data"
+                    elif layout == "external-kb":
+                        kb = self.root / "external-kb"
+                        kb.mkdir()
+                        manager_dir = runtime / "managers/assistant"
+                        manager_dir.mkdir(parents=True)
+                        (manager_dir / "manager.json").write_text(json.dumps({"kb_dir": str(kb)}))
+                        root_prefix = None
+                    else:
+                        extra_mgr = runtime / "managers/m-extra"
+                        extra_mgr.mkdir(parents=True)
+                        (extra_mgr / "manager.json").write_text(json.dumps({"database_url": "extra-db"}))
+                        kb = extra_mgr / "data"
+                        root_prefix = "root-0/managers/m-extra/data"
+
+                    audio_files = [
+                        kb / f"recordings/{rec_id}/attachments/audio/0.pcm",
+                        kb / f"recordings/{rec_id}/attachments/audio/index.json",
+                        kb / "recordings/sample-meeting/attachments/audio/marker.bin",
+                    ]
+                    for path in audio_files:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(b"ephemeral-audio-" + path.name.encode())
+
+                    kept_files = {
+                        f"recordings/{rec_id}/meta.json": b'{"id":"' + rec_id.encode() + b'"}',
+                        f"recordings/{rec_id}/hub_segments.json": b'{"rev":1}',
+                        f"recordings/{rec_id}/attachments/p1.jpg": b"meeting-photo",
+                        f"recordings/{rec_id}/attachments/audio.jpg": b"photo-named-audio",
+                        "chats/c1/attachments/audio/note.ogg": b"chat-audio-attachment",
+                    }
+                    for rel, body in kept_files.items():
+                        target = kb / rel
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(body)
+
+                    receipt = webdev.snapshot(request)
+                    snapshot = runtime / "update/development-backups" / receipt["id"]
+                    with tarfile.open(snapshot / "files.tar.gz") as archive:
+                        names = archive.getnames()
+                    if root_prefix is None:
+                        manifest = json.loads((snapshot / "manifest.json").read_text())
+                        root_prefix = f"root-{manifest['roots'].index(str(kb.resolve()))}"
+                    for name in names:
+                        if f"{root_prefix}/recordings/" in name and ("/attachments/audio/" in name or name.endswith("/attachments/audio")):
+                            self.fail(f"development snapshot contains hub meeting audio member {name}")
+                    for rel in kept_files:
+                        self.assertIn(f"{root_prefix}/{rel}", names)
+
+                    destination = self.root / "extracted"
+                    webdev.extract_history(snapshot, destination)
+                    restored_kb = destination / root_prefix
+                    for rel, body in kept_files.items():
+                        self.assertEqual((restored_kb / rel).read_bytes(), body)
+                    self.assertFalse((restored_kb / f"recordings/{rec_id}/attachments/audio").exists())
+                    self.assertFalse((restored_kb / "recordings/sample-meeting/attachments/audio").exists())
+                finally:
+                    self.root = previous_root
+
 
 if __name__ == "__main__":
     unittest.main()

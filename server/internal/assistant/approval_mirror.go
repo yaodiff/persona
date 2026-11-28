@@ -19,7 +19,7 @@ import (
 // fallbacks.
 var defaultApprovalMirrorTools = []string{
 	"Write", "Edit", "MultiEdit", "NotebookEdit",
-	"agent_archive", "agent_autoname", "agent_interrupt", "agent_send", "agent_start", "agent_supervise",
+	"agent_archive", "agent_autoname", "agent_interrupt", "agent_modes", "agent_send", "agent_start", "agent_supervise",
 	"cancel_followup", "conversation_new", "conversation_send", "direction_name", "kb_update", "mail_send", "notify_user",
 	"persona_settings", "repository_add", "schedule_followup", "schedule_routine", "skill_import", "supervision_finish",
 	"task_plan", "task_review", "task_scope", "todo_complete", "todo_create", "todo_delete", "todo_reopen", "todo_update",

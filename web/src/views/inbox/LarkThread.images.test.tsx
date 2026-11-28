@@ -151,4 +151,42 @@ describe("chat pictures load eagerly with a reserved box", () => {
     // the reply strip still names the quoted sender
     expect(row.textContent).toContain("Example B");
   });
+
+  it("blocks mailto:, cross-origin blob:, and traversal URLs in images/quotes and rejects malformed mailto: links", async () => {
+    const sameOriginBlob = `blob:${location.origin}/local-preview`;
+    page = {
+      messages: [
+        {
+          id: "om_sec",
+          position: "3",
+          sender_name: "Example A",
+          sender_id: "u1",
+          reply_to: {
+            id: "om_q",
+            sender_name: "Example B",
+            text: "[Image]",
+            parts: [{ kind: "image", url: "mailto:team@example.com" }],
+          },
+          parts: [
+            { kind: "image", url: "mailto:team@example.com" },
+            { kind: "image", url: "blob:https://evil.example/x" },
+            { kind: "image", url: "/api/v1/lark/media/../../admin" },
+            { kind: "image", url: sameOriginBlob },
+            { kind: "link", text: "bad-slash", url: "mailto://evil.example" },
+            { kind: "link", text: "bad-backslash", url: "mailto:\\evil.example" },
+            { kind: "link", text: "good-mail", url: "mailto:team@example.com" },
+          ],
+        },
+      ],
+    };
+    await open();
+
+    const row = host.querySelector('[data-mid="om_sec"]')!;
+    const imgs = [...row.querySelectorAll("img")];
+    expect(imgs.map((img) => img.getAttribute("src"))).toEqual([sameOriginBlob]);
+    const anchors = [...row.querySelectorAll("a")];
+    expect(anchors.map((a) => a.getAttribute("href"))).toEqual(["mailto:team@example.com"]);
+    expect(row.textContent).toContain("bad-slash");
+    expect(row.textContent).toContain("bad-backslash");
+  });
 });

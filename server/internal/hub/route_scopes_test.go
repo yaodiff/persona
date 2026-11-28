@@ -94,6 +94,15 @@ func patternOf(e ast.Expr) (string, bool) {
 // Every route and the scope an extension's token needs for it (extwire.RouteScopes, the manager's to check).
 func TestRouteScopes(t *testing.T) {
 	patterns := routePatterns(t)
+	t.Run("input_resolution_requires_full_credentials", func(t *testing.T) {
+		const pattern = "POST /api/v1/assistant/conversations/{id}/inputs/resolve"
+		if !slices.Contains(patterns, pattern) {
+			t.Fatalf("missing input resolution route: %s", pattern)
+		}
+		if scope := extwire.RouteScopes[pattern]; scope != "" {
+			t.Fatalf("an extension token must not authorize input settlement or replay: %s has scope %s", pattern, scope)
+		}
+	})
 	for p := range extwire.RouteScopes {
 		if !slices.Contains(patterns, p) {
 			t.Errorf("RouteScopes names %q, which neither the hub nor the manager registers", p)

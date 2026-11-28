@@ -31,6 +31,33 @@ import (
 // maxBinary bounds what an upload may write.
 const maxBinary = 512 << 20
 
+// maxHeaderBytes bounds a single JSON header or reply line on the upload connection.
+const maxHeaderBytes = 16 << 10
+
+var errLineTooLong = errors.New("line exceeds limit")
+
+// readLineLimited reads one '\n'-terminated line from r without buffering more than maxBytes.
+// Unlike wrapping r in io.LimitReader, any bytes following '\n' remain unread in r.
+func readLineLimited(r *bufio.Reader, maxBytes int) ([]byte, error) {
+	var line []byte
+	for {
+		frag, err := r.ReadSlice('\n')
+		if len(line)+len(frag) > maxBytes {
+			return nil, errLineTooLong
+		}
+		line = append(line, frag...)
+		if err == nil {
+			return line, nil
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return nil, err
+		}
+		if len(line) >= maxBytes {
+			return nil, errLineTooLong
+		}
+	}
+}
+
 type uploadHeader struct {
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
@@ -118,7 +145,7 @@ func writeReply(c net.Conn, err error) {
 }
 
 func install(r *bufio.Reader, exe string) error {
-	line, err := r.ReadBytes('\n')
+	line, err := readLineLimited(r, maxHeaderBytes)
 	if err != nil {
 		return fmt.Errorf("read header: %w", err)
 	}
@@ -137,6 +164,7 @@ func install(r *bufio.Reader, exe string) error {
 	if err != nil {
 		return fmt.Errorf("gzip: %w", err)
 	}
+	defer zr.Close()
 	zr.Multistream(false) // stop at the end of the binary: the connection stays open for the answer
 	tmp := exe + ".new"
 	_ = os.Remove(tmp)
@@ -196,32 +224,59 @@ func Upload(ctx context.Context, c net.Conn, path string) error {
 	// rest of the send fails with a broken pipe or a reset that says nothing of why.
 	answers := make(chan answer, 1)
 	go func() {
-		line, err := bufio.NewReader(c).ReadBytes('\n')
-		if err == nil {
-			_ = c.SetWriteDeadline(time.Now()) // an answer before the binary is all sent is a refusal: stop sending
+		line, err := readLineLimited(bufio.NewReader(c), maxHeaderBytes)
+		if err == nil || errors.Is(err, errLineTooLong) {
+			_ = c.SetWriteDeadline(time.Now()) // stop sending on early refusal or malformed oversized reply
 		}
 		answers <- answer{line, err}
 	}()
-	defer func() { _ = c.SetReadDeadline(time.Now()) }() // ends that read when no answer came
+	// Ensure the reader goroutine exits before Upload returns so it never races with caller conn cleanup.
+	waitAnswer := func() {
+		_ = c.SetReadDeadline(time.Now())
+		<-answers
+	}
 	if err := send(c, uploadHeader{Size: size, SHA256: hex.EncodeToString(sum.Sum(nil))}, f); err != nil {
+		timer := time.NewTimer(answerWait)
+		defer timer.Stop()
 		select {
 		case a := <-answers:
 			if a.err == nil {
 				return parseReply(a.line)
 			}
-		case <-time.After(answerWait):
+			if errors.Is(a.err, errLineTooLong) {
+				return fmt.Errorf("no answer from the node: %w", a.err)
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+		case <-ctx.Done():
+			waitAnswer()
+			return ctx.Err()
+		case <-timer.C:
+			waitAnswer()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 		}
 		return err
 	}
-	a := <-answers
-	if a.err != nil {
-		return fmt.Errorf("no answer from the node: %w", a.err)
+	select {
+	case a := <-answers:
+		if a.err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("no answer from the node: %w", a.err)
+		}
+		return parseReply(a.line)
+	case <-ctx.Done():
+		waitAnswer()
+		return ctx.Err()
 	}
-	return parseReply(a.line)
 }
 
 // answerWait: how long a failed send still waits for the node's answer, which says why.
-const answerWait = 5 * time.Second
+var answerWait = 5 * time.Second
 
 type answer struct {
 	line []byte

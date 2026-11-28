@@ -27,13 +27,19 @@ import (
 // what is asked there, the commands, pushes and the sync mirror — is the assistant's (internal/assistant, feishu*.go):
 // the owner's messages and card presses go to it over the bus (assistant_channels.go), and it posts through the hub.
 // Only the paired user is answered: in the bot's private chat, and in the topics of the group chats the owner has
-// opted in (TopicChats, bots_topics.go). Everything is off until switched on in the app (Settings › Connectors › Lark bot).
+// opted in (TopicChats, bots_topics.go). A group message from anyone else is answered only when group access allows it,
+// and then by a guest that never reaches the owner's conversations (bots_group_access.go, bots_guest.go). Everything is
+// off until switched on in the app (Settings › Connectors › Lark bot).
 
 // BotsConfig is hub.json "bots".
 type BotsConfig struct {
 	Feishu FeishuBotConfig `json:"feishu,omitempty"`
-	// Endpoints are the explicit Agents → Bots registrations; no structured session is inferred to be a bot.
+	// Endpoints are the explicit Agents → Bots registrations; no structured session is inferred to be a bot. An entry
+	// binds an exact Orca session (session_id) or an Orca bot (bot_id, followed to each new Home Chat).
 	Endpoints []agents.BotRegistration `json:"endpoints,omitempty"`
+	// Discovery is "off" to find no Orca bots on the computers (orcabots.go); anything else, or nothing, finds them
+	// through each computer's local Orca (bots.roster). Endpoints registered by hand are kept either way.
+	Discovery string `json:"discovery,omitempty"`
 }
 
 // FeishuBotConfig: the app's credentials, for those who would rather keep them in manager.json (0600) than enter them in
@@ -80,6 +86,10 @@ type FeishuBotSettings struct {
 	SourceReportFullReply    bool `json:"source_report_full_reply,omitempty"`
 	// Handoff is the proxy-reply policy (bots_handoff.go). The owner's: it goes when the owner does.
 	Handoff *botHandoffPolicy `json:"handoff,omitempty"`
+	// GroupAccess is who else may @ the bot in a group (bots_group_access.go). nil is owner_only.
+	GroupAccess *botGroupAccess `json:"group_access,omitempty"`
+	// GuestSources are the non-owner @bot messages the hub took (bots_guest.go): each may get one reply.
+	GuestSources []botGuestSource `json:"guest_sources,omitempty"`
 }
 
 // BotFeatures are the parts that can be switched on one by one: kept here with the credentials, acted on by the
@@ -195,6 +205,10 @@ type botHub struct {
 	// Recent source evidence distinguishes local cancellation from handoff.
 	recentMessages     map[botMessageRef]botMessageState
 	recentMessageOrder []botMessageRef
+	// guestTold is the chat a rate-limit note was last posted in, so a busy group hears it once per botGuestNoteEvery.
+	guestTold map[string]time.Time
+	// guestAsks are the recent refused @bot requests, memory only, newest last, at most botGuestAsksKeep.
+	guestAsks []botGuestAsk
 	// answerFiles keeps prepared long replies across retries and hub restarts.
 	answerFiles botAnswerFiles
 	// line is closed once the last message taken has been handed to the assistant (botMessage): they go in the
@@ -453,6 +467,8 @@ func (s FeishuBotSettings) copy() FeishuBotSettings {
 		h.BlockedChats = slices.Clone(h.BlockedChats)
 		s.Handoff = &h
 	}
+	s.GroupAccess = s.GroupAccess.copy()
+	s.GuestSources = slices.Clone(s.GuestSources)
 	return s
 }
 
@@ -776,6 +792,9 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 	})
 	// handoffs: an authorized caller hands a group question to the bot (bots_handoff.go).
 	api.HandleFunc("POST /api/v1/bots/feishu/handoffs", h.postHandoff)
+	// group-access: who besides the owner may @ the bot in a group (bots_group_access.go).
+	api.HandleFunc("GET /api/v1/bots/feishu/group-access", h.getGroupAccess)
+	api.HandleFunc("PUT /api/v1/bots/feishu/group-access", h.putGroupAccess)
 	h.larkSyncRoutes(api) // the user sync: /api/v1/bots/feishu/sync…
 }
 
@@ -796,6 +815,7 @@ func (h *Manager) unpairBot(ctx context.Context) error {
 	previous := b.set.copy()
 	had := b.set.Owner != nil
 	b.set.Owner, b.set.Pairing, b.set.TopicChats, b.set.AISources, b.set.Handoff = nil, nil, nil, nil, nil // the topic chats, the /ai sources and the handoff policy were the owner's
+	b.set.GroupAccess, b.set.GuestSources = nil, nil                                                       // the group access and the guest sources were the owner's too
 	b.set.Configure = nil
 	if err := h.saveBotSettingsLocked(); err != nil {
 		b.set = previous
@@ -946,7 +966,7 @@ func (h *Manager) applyBotUpdateWithReceipt(ctx context.Context, enabled *bool, 
 			records = append(records, botRecord{auditBotCredentials, d})
 		}
 		if next.AppID != cur.AppID {
-			cur.Owner, cur.Pairing, cur.TopicChats, cur.AISources, cur.Handoff = nil, nil, nil, nil, nil
+			cur.Owner, cur.Pairing, cur.TopicChats, cur.AISources, cur.Handoff, cur.GroupAccess, cur.GuestSources = nil, nil, nil, nil, nil, nil, nil
 		}
 		h.clearBotConfigureOnChangeLocked(next)
 		cur.AppID, cur.SecretEnc, cur.Domain = next.AppID, next.SecretEnc, next.Domain

@@ -23,5 +23,8 @@
   "not_told_yet": "暂时无法确认这个待办，请稍后再试。",
   "machine_not_found": "这台电脑不在 hub 的电脑里。",
   "machine_offline": "这台电脑现在没有连上，等它回来后再试。",
-  "images_forbidden": "此设备无法读取待办图片"
+  "images_forbidden": "此设备无法读取待办图片",
+  "reorganize_requires_v2": "请先在实验室中开启「新版待办与任务」，再重新整理待办。",
+  "topology_changed": "待办有更新。请刷新待办列表后重试。",
+  "split_children_changed": "这次拆分生成的部分待办已移动或删除。请刷新待办列表，再尝试拆分。"
 }

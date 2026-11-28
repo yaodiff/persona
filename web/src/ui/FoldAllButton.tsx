@@ -13,7 +13,7 @@ const TIP =
 export function FoldAllButton({ label, expand, onClick, className, testId }: { label: string; expand: boolean; onClick: () => void; className?: string; testId?: string }) {
   return (
     <>
-      <button type="button" aria-label={label} data-testid={testId} onClick={onClick} className={cx("peer/fold", className)}>
+      <button type="button" aria-label={label} aria-expanded={!expand} data-testid={testId} onClick={onClick} className={cx("peer/fold", className)}>
         <Icon name={expand ? "unfoldToggle" : "foldToggle"} size={12} stroke={2} />
       </button>
       {/* the button's own name, already spoken through aria-label */}

@@ -776,6 +776,7 @@ func TestSupervisionSignalAllowedByMode(t *testing.T) {
 		{Kind: sigEscalated}, {Kind: sigDecisionReply}, {Kind: sigUndecidable}, {Kind: sigDeliveryHold},
 		{Kind: sigOwnerCannot}, {Kind: sigCardlessWait}, {Kind: sigNeedsUserExternalInfo}, {Kind: sigParkDecided},
 		{Kind: sigParkedDue}, {Kind: sigRecheck}, {Kind: sigOwnerPresent}, {Kind: sigOutageRecovery}, {Kind: sigTodoReady},
+		{Kind: sigBlockersUnblocked}, {Kind: sigMergeTrainTurn}, {Kind: sigWriteConflict},
 		{Kind: sigReport, Report: upReportDone}, {Kind: sigReport, Report: upReportBlocked},
 		{Kind: sigReport, Report: upReportQuestion}, {Kind: sigCheck, Report: checkDecidedReport},
 	}

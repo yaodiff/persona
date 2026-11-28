@@ -16,6 +16,7 @@
   "debate_outcome": "Outcome: ",
   "decided": "Decided: ",
   "who": " ({who})",
+  "speaker": "Speaker {n}",
   "owner": "{who}: ",
   "by": " ({by})",
   "photo": " (photo {n})",

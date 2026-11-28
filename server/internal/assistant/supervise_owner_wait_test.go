@@ -221,7 +221,7 @@ func TestOwnerWaitSurvivesAnUnconfiguredJudge(t *testing.T) {
 	s.superviseTodo(ctx, todo.ID, "conv1", nil, 0)
 	todo = todoNow(s, todo.ID)
 	check, judgeErr := judgeTaskDoneWith(ctx, s.purposeModel("inbox.judge"), taskDoneInput{
-		Replies: []prompts.TaskDoneReply{{Text: "Spec 已完成，下一步由你发起实现。"}},
+		Replies: []taskDoneReply{{TaskDoneReply: prompts.TaskDoneReply{Text: "Spec 已完成，下一步由你发起实现。"}}},
 	})
 	if !ai.IsNotConfigured(judgeErr) || check.Verdict != verdictNeedsUser {
 		t.Fatalf("the deterministic owner action was not kept before apply: %+v, %v", check, judgeErr)

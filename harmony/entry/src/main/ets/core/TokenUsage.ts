@@ -149,6 +149,27 @@ export interface RankedUsagePart {
   readonly sharePercent: number;
 }
 
+export interface RankedUsagePlace {
+  readonly place: UsagePlace;
+  readonly progressFraction: number;
+  readonly sharePercent: number;
+}
+
+export interface ActivityBarItem {
+  readonly id: string;
+  readonly label: string;
+  readonly shortLabel: string;
+  readonly tokens: UsageTokens;
+  readonly fraction: number;
+  readonly isPeak: boolean;
+}
+
+export interface HourlyActivitySummary {
+  readonly bars: ActivityBarItem[];
+  readonly peakId: string;
+  readonly totalTokens: number;
+}
+
 const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function trimmedDecimal(raw: string): string {
@@ -667,4 +688,162 @@ export function formatSharePercent(percent: number): string {
   if (percent > 0 && percent < 0.1) return '<0.1%';
   if (percent >= 10) return `${Math.round(percent)}%`;
   return `${Number(percent.toFixed(1))}%`;
+}
+
+export function formatHourLabel(hour: number): string {
+  const h = Math.max(0, Math.min(23, Math.trunc(hour)));
+  return String(h).padStart(2, '0') + ':00';
+}
+
+export function buildRecentHourlyActivity(hours: readonly UsageHour[], maxBars: number = 24): HourlyActivitySummary {
+  if (!hours.length || maxBars <= 0) {
+    return { bars: [], peakId: '', totalTokens: 0 };
+  }
+  const sorted = hours.slice().sort((a: UsageHour, b: UsageHour) => {
+    if (a.t !== b.t) return a.t - b.t;
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    return a.hour - b.hour;
+  });
+  const sliced = sorted.slice(Math.max(0, sorted.length - maxBars));
+  let peak = 0;
+  let peakId = '';
+  let totalTokens = 0;
+  for (let i = 0; i < sliced.length; i++) {
+    const t = sliced[i].tokens.total;
+    totalTokens += t;
+    if (t >= peak) {
+      peak = t;
+      peakId = (sliced[i].date || String(sliced[i].t)) + ':' + String(sliced[i].hour);
+    }
+  }
+  const denom = Math.max(1, peak);
+  const bars: ActivityBarItem[] = sliced.map((entry: UsageHour): ActivityBarItem => {
+    const id = (entry.date || String(entry.t)) + ':' + String(entry.hour);
+    const shortClock = formatHourLabel(entry.hour);
+    const shortDate = entry.date ? entry.date.slice(5) : '';
+    return {
+      id,
+      label: shortDate ? shortDate + ' ' + shortClock : shortClock,
+      shortLabel: shortClock,
+      tokens: entry.tokens,
+      fraction: entry.tokens.total > 0 ? Math.max(0.06, Math.min(1, entry.tokens.total / denom)) : 0,
+      isPeak: id === peakId && peak > 0
+    };
+  });
+  return { bars, peakId, totalTokens };
+}
+
+export function buildProjectActivityBars(
+  detail: UsageProjectDetailResponse,
+  range: UsageProjectRangeKey
+): HourlyActivitySummary {
+  if (range === 'today') {
+    const rawHours = detail.hours;
+    if (!rawHours.length) return { bars: [], peakId: '', totalTokens: 0 };
+    const sorted = rawHours.slice().sort((a, b) => a.hour - b.hour);
+    let peak = 0;
+    let peakId = '';
+    let totalTokens = 0;
+    for (const h of sorted) {
+      totalTokens += h.tokens.total;
+      if (h.tokens.total >= peak) {
+        peak = h.tokens.total;
+        peakId = 'h:' + String(h.hour);
+      }
+    }
+    const denom = Math.max(1, peak);
+    const bars: ActivityBarItem[] = sorted.map((h): ActivityBarItem => {
+      const id = 'h:' + String(h.hour);
+      const lbl = formatHourLabel(h.hour);
+      return {
+        id,
+        label: lbl,
+        shortLabel: lbl,
+        tokens: h.tokens,
+        fraction: h.tokens.total > 0 ? Math.max(0.06, Math.min(1, h.tokens.total / denom)) : 0,
+        isPeak: id === peakId && peak > 0
+      };
+    });
+    return { bars, peakId, totalTokens };
+  }
+  const count = rangeDaysForKey(range);
+  const sliced = detail.days.slice(Math.max(0, detail.days.length - count));
+  if (!sliced.length) return { bars: [], peakId: '', totalTokens: 0 };
+  let peak = 0;
+  let peakId = '';
+  let totalTokens = 0;
+  for (const d of sliced) {
+    totalTokens += d.tokens.total;
+    if (d.tokens.total >= peak) {
+      peak = d.tokens.total;
+      peakId = d.date;
+    }
+  }
+  const denom = Math.max(1, peak);
+  const bars: ActivityBarItem[] = sliced.map((d: UsageDay): ActivityBarItem => ({
+    id: d.date,
+    label: d.date,
+    shortLabel: d.date.slice(5),
+    tokens: d.tokens,
+    fraction: d.tokens.total > 0 ? Math.max(0.06, Math.min(1, d.tokens.total / denom)) : 0,
+    isPeak: d.date === peakId && peak > 0
+  }));
+  return { bars, peakId, totalTokens };
+}
+
+export function rankMachineShares(machines: readonly UsageMachineShare[]): RankedUsagePart[] {
+  const parts: UsagePart[] = machines.map((m: UsageMachineShare): UsagePart => ({
+    key: m.id || m.name,
+    name: m.name || m.id,
+    tokens: m.tokens
+  }));
+  return rankUsageParts(parts);
+}
+
+export function rankAgentShares(agents: readonly UsageAgentShare[]): RankedUsagePart[] {
+  const parts: UsagePart[] = agents.map((a: UsageAgentShare): UsagePart => ({
+    key: a.agent,
+    name: a.agent,
+    tokens: a.tokens
+  }));
+  return rankUsageParts(parts);
+}
+
+export function rankUsagePlaces(places: readonly UsagePlace[]): RankedUsagePlace[] {
+  const nonZero = places.filter((p: UsagePlace) => p.tokens.total > 0);
+  if (!nonZero.length) return [];
+  const sorted = nonZero.slice().sort((a: UsagePlace, b: UsagePlace) => {
+    if (b.tokens.total !== a.tokens.total) return b.tokens.total - a.tokens.total;
+    return a.place.localeCompare(b.place);
+  });
+  const top = Math.max(1, sorted[0].tokens.total);
+  const sum = Math.max(1, sorted.reduce((acc: number, item: UsagePlace) => acc + item.tokens.total, 0));
+  return sorted.map((place: UsagePlace): RankedUsagePlace => ({
+    place,
+    progressFraction: Math.max(0, Math.min(1, place.tokens.total / top)),
+    sharePercent: Math.round((place.tokens.total / sum) * 1000) / 10
+  }));
+}
+
+export function formatAgentDisplayName(key: string, notSplitLabel: string): string {
+  const clean = key.trim().toLowerCase();
+  if (!clean) return notSplitLabel;
+  if (clean === 'claude') return 'Claude';
+  if (clean === 'codex') return 'Codex';
+  if (clean === 'gemini') return 'Gemini';
+  if (clean === 'antigravity' || clean === 'agy') return 'Antigravity';
+  if (clean === 'opencode') return 'OpenCode';
+  return key.trim();
+}
+
+export function formatLauncherDisplayName(
+  key: string,
+  terminalLabel: string,
+  names?: Record<string, string>
+): string {
+  const clean = key.trim();
+  if (!clean) return terminalLabel;
+  const named = names ? names[clean] : undefined;
+  if (named && named.trim()) return named.trim();
+  return clean;
 }

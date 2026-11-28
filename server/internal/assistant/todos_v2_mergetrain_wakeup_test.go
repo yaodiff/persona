@@ -23,17 +23,15 @@ func getMergeTrainHTTP(t *testing.T, s *Service, role string) *httptest.Response
 	return w
 }
 
-func pendingTodoReady(s *Service, todoID string) (superviseSignal, bool) {
+func pendingMergeTrainTurn(s *Service, todoID string) (superviseSignal, bool) {
 	s.supervise.mu.Lock()
 	defer s.supervise.mu.Unlock()
-	g, ok := s.supervise.pending[todoID+"|"+sigTodoReady]
-	return g, ok
-}
-
-func clearPendingTodoReady(s *Service, todoID string) {
-	s.supervise.mu.Lock()
-	defer s.supervise.mu.Unlock()
-	delete(s.supervise.pending, todoID+"|"+sigTodoReady)
+	for _, g := range s.supervise.pending {
+		if g.Todo == todoID && g.Kind == sigMergeTrainTurn {
+			return g, true
+		}
+	}
+	return superviseSignal{}, false
 }
 
 func TestTodosV2MergeTrainFollowerWakeupOnHeadMergeAndDedup(t *testing.T) {
@@ -79,8 +77,8 @@ func TestTodosV2MergeTrainFollowerWakeupOnHeadMergeAndDedup(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if g, ok := pendingTodoReady(s, task1.ID); ok {
-		t.Fatalf("closing non-head queued PR unexpectedly emitted sigTodoReady for head: %+v", g)
+	if g, ok := pendingMergeTrainTurn(s, task1.ID); ok {
+		t.Fatalf("closing non-head queued PR unexpectedly emitted mergetrain_turn for head: %+v", g)
 	}
 
 	// Verify queue snapshot before head merges: task1 is position 1, task2 is position 2 behind task1.
@@ -102,7 +100,7 @@ func TestTodosV2MergeTrainFollowerWakeupOnHeadMergeAndDedup(t *testing.T) {
 		t.Fatalf("by_todo[task2] before merge = %+v", badge)
 	}
 
-	// Merging head task1 promotes task2 to head (position 1) and emits exactly one deduplicated sigTodoReady.
+	// Merging head task1 promotes task2 to head (position 1) and emits exactly one deduplicated mergetrain_turn.
 	if err := s.applyPRStatus(ctx, task1, TodoPRStatus{
 		URL:       task1.PRURL,
 		State:     "merged",
@@ -112,10 +110,10 @@ func TestTodosV2MergeTrainFollowerWakeupOnHeadMergeAndDedup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantKey := "mergetrain_turn:github.com/example/wakeup-repo:" + task2.ID + ":" + task1.PRURL
-	sig, ok := pendingTodoReady(s, task2.ID)
+	wantKey := task1.PRURL + "@merged@" + now.Add(6*time.Second).Format(time.RFC3339Nano)
+	sig, ok := pendingMergeTrainTurn(s, task2.ID)
 	if !ok {
-		t.Fatalf("expected sigTodoReady wakeup for promoted follower %s", task2.ID)
+		t.Fatalf("expected mergetrain_turn wakeup for promoted follower %s", task2.ID)
 	}
 	if sig.Key != wantKey {
 		t.Fatalf("wakeup Key = %q, want %q", sig.Key, wantKey)
@@ -123,12 +121,15 @@ func TestTodosV2MergeTrainFollowerWakeupOnHeadMergeAndDedup(t *testing.T) {
 	if sig.To != "conv1" {
 		t.Fatalf("wakeup To = %q, want conv1", sig.To)
 	}
-	if !strings.Contains(sig.Detail, task1.PRURL) || !strings.Contains(sig.Detail, "github.com/example/wakeup-repo") || !strings.Contains(sig.Detail, "position 1") {
-		t.Fatalf("wakeup Detail missing expected context: %q", sig.Detail)
+	if sig.MergeTrainTurn == nil || sig.MergeTrainTurn.PreviousPRURL != task1.PRURL ||
+		sig.MergeTrainTurn.RepoKey != "github.com/example/wakeup-repo" || sig.PRURL != task2.PRURL {
+		t.Fatalf("wakeup missing promotion context: %+v", sig)
 	}
 
 	// Repeated polls after task1 merged must NOT re-emit duplicate wakeup signals.
-	clearPendingTodoReady(s, task2.ID)
+	s.supervise.mu.Lock()
+	delete(s.supervise.pending, sig.id())
+	s.supervise.mu.Unlock()
 	for i := range 3 {
 		out := s.onPRStatusMergeTrain(ctx, task1, TodoPRStatus{
 			URL:       task1.PRURL,
@@ -136,12 +137,12 @@ func TestTodosV2MergeTrainFollowerWakeupOnHeadMergeAndDedup(t *testing.T) {
 			HeadOID:   "sha-101",
 			CheckedAt: now.Add(time.Duration(7+i) * time.Second),
 		})
-		if out.emitTurnWakeup {
+		if out.turnWakeup.Todo != "" {
 			t.Fatalf("repeat poll %d unexpectedly re-emitted turn wakeup: %+v", i, out)
 		}
 	}
-	if g, dup := pendingTodoReady(s, task2.ID); dup {
-		t.Fatalf("repeat polls re-queued duplicate sigTodoReady: %+v", g)
+	if g, dup := pendingMergeTrainTurn(s, task2.ID); dup {
+		t.Fatalf("repeat polls re-queued duplicate mergetrain_turn: %+v", g)
 	}
 
 	// Closing head task2 promotes task3 and emits a deduplicated wakeup mentioning task2's PR URL.
@@ -153,18 +154,19 @@ func TestTodosV2MergeTrainFollowerWakeupOnHeadMergeAndDedup(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	sig3, ok3 := pendingTodoReady(s, task3.ID)
+	sig3, ok3 := pendingMergeTrainTurn(s, task3.ID)
 	if !ok3 {
-		t.Fatalf("expected sigTodoReady wakeup for promoted follower %s after head closed", task3.ID)
+		t.Fatalf("expected mergetrain_turn wakeup for promoted follower %s after head closed", task3.ID)
 	}
-	wantKey3 := "mergetrain_turn:github.com/example/wakeup-repo:" + task3.ID + ":" + task2.PRURL
-	if sig3.Key != wantKey3 || !strings.Contains(sig3.Detail, task2.PRURL) || !strings.Contains(sig3.Detail, "closed") {
+	wantKey3 := task2.PRURL + "@closed@" + now.Add(11*time.Second).Format(time.RFC3339Nano)
+	if sig3.Key != wantKey3 || sig3.MergeTrainTurn == nil || sig3.MergeTrainTurn.PreviousState != "closed" {
 		t.Fatalf("unexpected wakeup for task3 after head closed: %+v", sig3)
 	}
 }
 
 func TestTodosV2MergeTrainHumanReviewFollowerNotifiedWithoutAutoMerge(t *testing.T) {
-	s, _ := newQuietServiceOn(t, nil)
+	s, f := newQuietServiceOn(t, nil)
+	f.setHello(func(h *Hello) { h.Locale = "en" })
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	setMergeTrainTodosV2Flag(t, s, true, false)
 
@@ -192,12 +194,13 @@ func TestTodosV2MergeTrainHumanReviewFollowerNotifiedWithoutAutoMerge(t *testing
 		t.Fatal(err)
 	}
 
-	sig, ok := pendingTodoReady(s, task2.ID)
+	sig, ok := pendingMergeTrainTurn(s, task2.ID)
 	if !ok {
-		t.Fatalf("expected sigTodoReady for PolicyHumanReviewRequired follower %s", task2.ID)
+		t.Fatalf("expected mergetrain_turn for PolicyHumanReviewRequired follower %s", task2.ID)
 	}
-	if !strings.Contains(sig.Detail, task1.PRURL) || !strings.Contains(strings.ToLower(sig.Detail), "human review") {
-		t.Fatalf("expected human review notice in wakeup detail, got %q", sig.Detail)
+	entry, ok := s.digestEntry(ctx, sig, "")
+	if !ok || !strings.Contains(entry.Detail, task1.PRURL) || !strings.Contains(entry.Detail, "Human approval is still required") {
+		t.Fatalf("expected human approval notice in wakeup detail, got %q", entry.Detail)
 	}
 
 	// Evaluating promoted task2 with green checks but unapproved review must NEVER auto-merge.

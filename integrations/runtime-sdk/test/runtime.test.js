@@ -1135,6 +1135,18 @@ test('a runtime running several agents: launchers in hello and when they change,
   assert.deepEqual(n.last('runtime.launchers').launchers, [{ name: 'paseo-codex', agent: 'paseo' }])
 })
 
+test('session.modes forwards optional settled permission_mode returned by the driver (#17239)', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal({
+    modes: async (p) => (p.permission_mode === 'auto' ? { permission_mode: 'bypassPermissions' } : undefined),
+  }), { runtime: 'agy', socketPath: n.path, retryMs: 20 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  assert.deepEqual(await n.peer.call('session.modes', { session_id: 's1', permission_mode: 'auto' }), { ok: true, permission_mode: 'bypassPermissions' })
+  assert.deepEqual(await n.peer.call('session.modes', { session_id: 's1', permission_mode: 'plan' }), { ok: true })
+})
+
 test('archive: caps.archive only with both ways, calls reach the driver, one way alone is not offered', async (t) => {
   const n = await startFakeNode(t)
   const got = []

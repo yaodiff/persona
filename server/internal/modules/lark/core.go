@@ -33,6 +33,8 @@ type turns struct {
 	book feishuBook
 	// handoff is the proxy replies the module has taken (handoff.go), with its own lock.
 	handoff *handoffBook
+	// guest is the group guest conversations the module runs (guest.go), with its own lock.
+	guest *guestBook
 	// detached are the cards closed when their node went away (asks.go).
 	detached detachedCards
 	// held are the /read answers held for the owner (read_held.go).
@@ -136,8 +138,6 @@ func (s core) setRunExt(r *channel.Run, key, value string) { s.h.SetRunExt(r, ke
 
 func (s core) runSteps(id string) []string { return s.h.RunSteps(id) }
 
-func (s core) runTo(ext map[string]string) feishuTarget { return s.h.RunTo(ext) }
-
 func (s core) unreachable(err error) bool { return s.h.Unreachable(err) }
 
 func (s core) botStepParts(l i18n.Lang, it proto.Item) (string, string) { return s.h.StepParts(l, it) }
@@ -161,12 +161,6 @@ type botAnswerCard struct {
 
 // feishuTarget is where a post goes (the outbound port's target).
 type feishuTarget = assistantwire.ChannelTarget
-
-// readChatKey is the run's channel value a "/read" in a group is answered by (the core's feishu_route.go).
-const readChatKey = "read_chat"
-
-// readRun: the run answers a "/read" in a group.
-func readRun(ext map[string]string) bool { return ext[readChatKey] != "" }
 
 // readDirectKey is set ("1") on a /read's run asked with the read_group_direct switch on: its answer goes straight
 // into the group. Without it the answer is held for the owner (read_held.go, #14437).

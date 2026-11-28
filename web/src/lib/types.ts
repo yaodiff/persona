@@ -7,13 +7,16 @@ import type { RuleSuggestion } from "./rule-suggestion";
 export type AgentState = NonNullable<Session["state"]>;
 export type StatusMarkState = AgentPhase | AgentState;
 
-/** An engine as the machine's node found it (docs/integrations/engines.md): `note` says why one that is there cannot be used. */
+/** An engine as the machine's node found it (docs/integrations/engines.md): `note` says why one that is there cannot be used.
+ *  `state` (Orca's row only, #17037; proto.EngineState) tells installed-and-stopped from not there; read it through
+ *  engines.ts `engineState`, which turns a state this client does not know into "unknown". */
 export interface DetectedEngine {
   id: string;
   name: string;
   available: boolean;
   version?: string;
   note?: string;
+  state?: string;
 }
 
 export interface Machine {
@@ -47,6 +50,10 @@ export interface Machine {
   engine_suggested?: { hosts: string[]; default: string };
   /** The node is too old for sets and runs `engine` alone until it is updated. */
   engine_sets_unsupported?: boolean;
+  /** "Start new Agents as Orca chats" (#17650): the switch, on or off, present only while Orca is in its engine set (where
+   *  it applies); absent elsewhere and from older hubs, which then offer no switch. A value this client does not know reads
+   *  as absent (lib/orca-chat.ts orcaChatSwitch). Changed with PUT …/orca-chat-starts {"on"}. */
+  orca_chat_starts?: OrcaChatStarts;
   kind?: string;
   arch?: string;
   home?: string;
@@ -73,6 +80,9 @@ export interface Machine {
    *  hour after a switch ended; absent from older hubs, which then offer nothing. */
   link_switch?: MachineLinkSwitch;
 }
+
+/** `Machine.orca_chat_starts` (#17650, `proto.OrcaChatStarts`): a closed set; a later value reads as absent. */
+export type OrcaChatStarts = "on" | "off";
 
 /** Where switching an ssh computer to Persona Link stands (`proto.MachineLinkSwitch`): `available`, a switch can start
  *  now, else `reason` says why not; `phase`, the current or last switch's ("" none), and a failed one's `error`, with
@@ -137,6 +147,9 @@ export interface ModelPick {
   launcher: string;
   model?: string;
   effort?: string;
+  /** The four dimensions' runtime and channel (lib/execution.ts); the hub projects them from the launcher, and back. */
+  runtime?: string;
+  channel?: string;
 }
 
 /** Session.pending_switch (#5035). `agent` is set on a switch to the other engine (feature `engine_switch`, #5054):
@@ -329,9 +342,12 @@ export interface Session {
    *  once its turn is over, resuming the same conversation (#6476, node/mode_restart.go); `permission_mode` is the mode
    *  it still runs in until then. */
   bypass_pending?: boolean;
-  /** On a botmux session whose botmux instance does not advertise ownerActor, sends go through the untrusted
-   *  external-event trigger; the composer shows a one-line notice. */
+  /** On a botmux session whose sends go through the untrusted external-event trigger (botmux does not advertise
+   *  ownerActor, or no BotMux Owner Union ID is set), the composer shows a one-line notice. */
   botmux_external_trigger?: boolean;
+  /** Why, when `botmux_external_trigger` is set: `upgrade` (botmux before 3.59.23) or `owner_unset` (Settings › Agents
+   *  has no BotMux Owner Union ID). Absent from an older node: the upgrade notice. */
+  botmux_external_trigger_reason?: "upgrade" | "owner_unset";
   /** What the model saw in the latest reply and the model's window, in tokens (#2430); omitted while the node cannot tell. */
   context_tokens?: number;
   context_restart_recommended?: boolean;
@@ -1244,4 +1260,20 @@ export interface UndeliveredMessage {
   /** Held for an Agent while its computer was away (#10661): that computer's name. `error` is then the whole line to
    *  show under the bubble, and Retry / Delete go to the session's held routes (lib/undelivered-actions.ts). */
   computer?: string;
+  /** Set on an input of a logical conversation's delivery queue (docs/operations/logical-input-reconciliation.md
+   *  "Delivery deadline"): why it has not gone in yet. `error` is still the server's line for it. */
+  reason?: UndeliveredReason;
+  /** When the current wait began (the dispatch, the queueing, or the expiry). */
+  since?: string;
+  /** awaiting_receipt: when it stops waiting for its receipt and expires. Nothing is sent twice. */
+  deadline?: string;
+  /** How many inputs wait before this one / after the one awaiting its receipt. */
+  ahead?: number;
+  behind?: number;
+  /** The client_msg_id of the input a queued one waits behind. */
+  blocked_by?: string;
 }
+
+/** Why a logical conversation's input has not gone in (proto.UndeliveredReason). receipt_expired is `failed`: it may
+ *  have gone in, so the owner looks and picks Retry (sent once more, last in the queue) or Ignore; the rest wait. */
+export type UndeliveredReason = "awaiting_receipt" | "behind_unconfirmed" | "switch_pending" | "queued" | "receipt_expired";

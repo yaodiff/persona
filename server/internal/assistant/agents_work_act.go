@@ -83,6 +83,9 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 			}
 			break
 		}
+		if w.Closeout != nil {
+			return // A closeout records the dependency without assigning an automatic next step.
+		}
 		if w.Wait == "" && w.Agent == nil {
 			return // a background task or a /loop: it wakes itself
 		}

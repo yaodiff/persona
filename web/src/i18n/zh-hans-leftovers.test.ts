@@ -11,8 +11,9 @@ describe("zh-Hans words that were English", () => {
     expect(t("work-session.harness_changed")).not.toMatch(/harness/i);
   });
 
-  it("names the rename dialog's tab field in Chinese, herdr kept as the engine's name", () => {
-    expect(t("chat-sessiondialogs.tab_name")).toBe("herdr 标签名");
+  it("names the rename dialog's tab field in Chinese, the session's engine kept by its name", () => {
+    expect(t("chat-sessiondialogs.tab_name", { engine: "herdr" })).toBe("herdr 标签名");
+    expect(t("chat-sessiondialogs.tab_name", { engine: "Orca" })).toBe("Orca 标签名");
   });
 
   it("heads the palette's node commands in the menus' words", () => {

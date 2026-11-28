@@ -12,10 +12,13 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
@@ -143,6 +146,20 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				return nil, planInvalid{err}
 			}
 		}
+		if task.scratchWorkspace() && task.Cwd != "" && (task.WorkspaceResolved == nil || (!task.WorkspaceResolved.Created && !task.WorkspaceResolved.Reused)) {
+			if identity.IsAssistantDir(task.Cwd) {
+				return nil, planInvalid{i18n.Err("rpc-errors.agent_assistant_workspace")}
+			}
+			if task.Machine != "" {
+				if m, ok := s.machineByName(ctx, task.Machine); ok && assistantWorkspace(m, proto.ExpandHome(task.Cwd, m.Home)) {
+					return nil, planInvalid{i18n.Err("rpc-errors.agent_assistant_workspace")}
+				}
+			}
+			return nil, planInvalid{fmt.Errorf("workspace %q cannot be combined with cwd; omit cwd to use a managed scratch directory", workspaceScratch)}
+		}
+		if strings.TrimSpace(task.Cwd) == "" && !task.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *task) && !task.scratchWorkspace() {
+			return nil, planInvalid{errors.New("title, prompt and cwd are required")}
+		}
 		if p.Tasks[i].Machine != "" {
 			if err := s.resolveTaskWorkspace(ctx, &p.Tasks[i]); err != nil {
 				return nil, planInvalid{err}
@@ -163,6 +180,10 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if supervisors[i], err = s.planTaskSupervisor(ctx, p.Conversation, *task); err != nil {
 			return nil, err
 		}
+	}
+	// Waiting cards may have changed, or gained a conflicting association, since planning.
+	if err := s.checkPlanRepositoryDuplicates(ctx, p.Tasks); err != nil {
+		return nil, planInvalid{err}
 	}
 	p.State = planStarted
 	for i := range p.Tasks {
@@ -296,12 +317,8 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			continue
 		}
 		t.TodoID = todo.ID
+		s.saveApprovedPRBlockers(ctx, todo.ID, t.BlockedByPR, true)
 		if s.settings(ctx).todosV2On() {
-			if len(t.BlockedByPR) > 0 {
-				if err := s.persistExternalPRBlockers(ctx, todo.ID, t.BlockedByPR); err != nil {
-					s.logf("task %s: persist external_pr blockers: %v", todo.ID, err)
-				}
-			}
 			afterIDs := cleanIDs(slices.Concat(t.After, todo.After))
 			if len(afterIDs) > 0 {
 				s.syncAfterBlockers(ctx, todo.ID, afterIDs, t.UnlockStage, t.UnlockContracts)
@@ -315,10 +332,6 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			q := s.pendingPlacementQueueEntry(ctx, p.ID, pendingPlacementBatchSize, pendingPlacementBatchIdx, s.placementNow())
 			pendingPlacementBatchIdx++
 			t.Queue = &q
-		} else if s.settings(ctx).todosV2On() && len(t.BlockedByPR) > 0 {
-			if refs := s.activeTodoBlockerRefs(ctx, todo.ID); len(refs) > 0 {
-				t.Queue = s.blockerWaitQueue(refs)
-			}
 		}
 		if t.Queue == nil && t.Workspace != nil && t.Workspace.Mode == workspaceExisting && (!t.WorkspaceInferred || t.Workspace.Queue) && t.WorkspaceResolved != nil {
 			effMachine := s.effectiveBoardMachine(t.Machine)
@@ -337,6 +350,15 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				planQueuedKeys[wsKey] = true
 			} else if owner == nil {
 				planOwners[wsKey] = Todo{ID: todo.ID, Title: todo.Title}
+			}
+		}
+		if t.Queue == nil {
+			readiness, err := s.taskTodoReadiness(ctx, todo, *t)
+			if err != nil {
+				s.logf("task %s: approved start: read prerequisites: %v", todo.ID, err)
+			}
+			if err != nil || !readiness.ready() {
+				t.Queue = s.blockerWaitQueue(ctx, readiness.refs())
 			}
 		}
 		if t.Queue != nil {
@@ -377,6 +399,8 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 			return nil, err
 		}
+	} else {
+		s.rememberPlannedWriteScopes(ctx, p)
 	}
 	s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, p)})
 	// Pre-claim workspaces that have a later queued sibling in this same plan so deterministic FIFO order holds
@@ -1124,6 +1148,26 @@ func (s *Service) releaseTakenTodo(id string) {
 // (node's claudeStartWait, #1396).
 var taskStartTimeout = 5 * time.Minute
 
+func (t *PlanTask) planStartTimeout() time.Duration {
+	repositories := 0
+	if w := t.WorkspaceResolved; w != nil {
+		repositories = len(w.Repositories)
+	}
+	if t.containerWorkspace() {
+		repositories = max(repositories, len(t.Workspace.Container.SelectedRepoIDs))
+	}
+	if repositories == 0 && t.WorkspaceResolved == nil && t.backendOperationID() != "" {
+		// Admission loads an unresolved operation's frozen repository set after the start deadline is set.
+		repositories = repositorywire.MaxTaskRepositories
+	}
+	if repositories == 0 {
+		return taskStartTimeout
+	}
+	// Leave room for an old workspace's cancellation and the new workspace's acquisition,
+	// in addition to mirror preparation, direct checkout, and launching the agent.
+	return taskStartTimeout + assistantwire.BackendWorkspacePrepareTimeout(repositories) + 2*assistantwire.BackendWorkspaceRPCTimeout
+}
+
 // taskFailTimeout bounds recording a failed start (the todo, the plan, the receipt), after the start's own time.
 const taskFailTimeout = 30 * time.Second
 
@@ -1186,53 +1230,34 @@ func (s *Service) closeDeferredTaskStart(ctx context.Context, t *PlanTask, mid, 
 	}
 }
 
-// parkActiveTodoBlockers checks whether t currently has active persistent blockers under todos_v2.
-// When blocked, it re-parks the plan task into blockerWaitQueueKey (clearing any prior Claimed/Gateway/Workspace
-// queue state while keeping t.Machine and t.Cwd intact) and returns true so runPlanTaskStart aborts launch cleanly
-// without marking the to-do failed. When todos_v2 is off, this is a zero-overhead no-op returning false.
-func (s *Service) parkActiveTodoBlockers(ctx context.Context, planID string, i int, t PlanTask, retry bool) bool {
-	if !s.settings(ctx).todosV2On() {
-		return false
+// deferBlockedTaskStart returns a known-unsent start to a retryable queue.
+func (s *Service) deferBlockedTaskStart(ctx context.Context, t PlanTask, blocked *todoStartBlocked, retry bool) {
+	if blocked.err != nil {
+		s.logf("task %s: defer start: read prerequisites: %v", t.TodoID, blocked.err)
 	}
-	refs := s.activeTodoBlockerRefs(ctx, t.TodoID)
-	if len(refs) == 0 {
-		return false
-	}
-	q := s.blockerWaitQueue(refs)
+	q := s.blockerWaitQueue(ctx, blocked.refs)
 	q.Retry = retry
-	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
-	defer cancel()
+	policy := queueCAS
 	switch {
 	case t.RequestGate != "" && t.Queue != nil:
-		s.replaceTaskQueue(pctx, t, q, queueOwnerStart)
+		policy = queueOwnerStart
 	case t.claimedGatewayStart():
-		s.replaceTaskQueue(pctx, t, q, queueQuotaStart)
-	case t.Queue != nil && t.Queue.Claimed:
-		s.replaceTaskQueue(pctx, t, q, queueCAS)
-	default:
-		var savedPlacement *placement
-		if err := s.patchPlanTask(pctx, planID, i, func(pt *PlanTask) {
-			if pt.TodoID != t.TodoID {
-				return
-			}
-			pt.Queue = q
-			pt.Placement = queuedPlacement(*pt, q)
-			savedPlacement = pt.Placement
-			pt.Error, pt.ErrorCode, pt.ErrorArgs = "", "", nil
-		}); err != nil {
-			s.logf("task %s: park active todo blockers: %v", t.TodoID, err)
-		} else if savedPlacement != nil {
-			s.savePlacement(pctx, savedPlacement)
+		policy = queueQuotaStart
+	}
+	if t.Queue != nil && (blocked.err != nil || blocked.after && t.Queue.Workspace != nil) {
+		*q = *t.Queue
+		q.Claimed, q.NextAt = false, time.Now().UTC()
+		if ws := t.Queue.Workspace; ws != nil && len(blocked.refs) > 0 {
+			*q = s.workspaceAfterWaitEntry(ctx, ws.Machine, ws.Path, blocked.refs, t.Queue)
 		}
 	}
-	s.logf("task %s: deferred start until active todo blockers clear (%d active)", t.TodoID, len(refs))
-	return true
+	s.replaceTaskQueue(ctx, t, q, policy)
 }
 
 // runPlanTaskStart is the shared start body; its caller owns the idle reservation through every return path.
 func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTask, retry bool) {
 	t.planID, t.planIndex = planID, i
-	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), t.planStartTimeout())
 	defer cancel()
 	if t.RequestGate != "" {
 		queued := t.Queue
@@ -1257,9 +1282,6 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			t.admissionRelease = nil
 		}
 	}()
-	if s.parkActiveTodoBlockers(ctx, planID, i, t, retry) {
-		return
-	}
 	placed, placedWhy, placedPermission := t.Machine, t.Why, t.Permission
 	if t.Role == roleLeader { // legacy one-shot tool discovery may wait for this link (task_leader.go)
 		s.leaderStarts.Add(1)
@@ -1267,6 +1289,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	}
 	t.Permission = strings.TrimSpace(t.Permission)
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
+	var blocked *todoStartBlocked
 	var lost startLinkLost
 	var quota *gatewayQuotaWaitError
 	var wsWait *workspaceBusyQueueError
@@ -1275,11 +1298,12 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		// a whole start's time of its own (the first may have spent its own on the dead link). Not counted against
 		// the launcher (#7511).
 		s.logf("task %s: start: %v; the link to %s dropped and came back without the agent; starting once more", t.TodoID, err, t.Machine)
-		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartTimeout)
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), t.planStartTimeout())
 		defer rcancel()
 		ctx = rctx
 		mid, sid, err = s.startTaskAgent(ctx, &t, retry)
-	} else if !t.startWithoutReplay() && err != nil && ctx.Err() == nil && !startStalled(err) && !errors.As(err, &quota) && !errors.As(err, &wsWait) {
+	} else if !t.startWithoutReplay() && err != nil && ctx.Err() == nil && !startStalled(err) &&
+		!errors.As(err, &quota) && !errors.As(err, &wsWait) && !errors.As(err, &blocked) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
 		// launcher failure may move a flexible task, after verifying its directory on the destination.
 		// An unknown result (the wait ran out or the link dropped while the answer was out) already went through
@@ -1313,6 +1337,10 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			case <-ctx.Done():
 			}
 		}
+	}
+	if errors.As(err, &blocked) {
+		s.deferBlockedTaskStart(ctx, t, blocked, retry)
+		return
 	}
 	if errors.As(err, &quota) {
 		if saveErr := s.persistGatewayWait(ctx, t, quota.queue); saveErr != nil {

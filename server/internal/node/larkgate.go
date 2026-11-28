@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -452,17 +453,25 @@ func (n *Node) confirmLark(ctx context.Context, session string, ix proto.Interac
 		return larkCheckOutcome{}, err
 	}
 	if !ok || res.Allow == nil || !*res.Allow {
-		msg := res.Message
-		if msg == "" && title != "" {
-			msg = "用户没有同意这个" + title + "写操作，没有执行。"
-		} else if msg == "" {
-			msg = "用户没有同意执行这条命令，没有执行。"
+		dismissed := res.Dismiss || res.Cancel || res.Allow == nil || !ok
+		msg := strings.TrimSpace(res.Message)
+		if msg == "" {
+			switch {
+			case res.Pending:
+				msg = approvalops.WaitingText + " The command was not executed."
+			case dismissed:
+				msg = "审批已取消或未完成，没有执行，请勿自动重试。"
+			case title != "":
+				msg = "用户没有同意这个" + title + "写操作，没有执行。"
+			default:
+				msg = "用户没有同意执行这条命令，没有执行。"
+			}
 		}
 		out := larkCheckOutcome{
 			decision:   "deny",
 			reason:     msg,
 			pending:    res.Pending,
-			dismiss:    res.Dismiss || !ok,
+			dismiss:    dismissed,
 			approvalID: res.ApprovalID,
 		}
 		if ok && res.UserDenied() && !res.Pending {

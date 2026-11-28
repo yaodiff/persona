@@ -354,9 +354,20 @@ func (n *Node) codexHeldThreads() codexHeld {
 	held.ok = listed && read
 	for _, p := range tuis {
 		home := canonicalCodexHome(firstNonEmpty(p.home, n.codexHome()), n.home)
-		pane := ""
-		if p.pane != "" {
-			pane = n.herdrPaneIn(p.pane, p.herdrSession)
+		var pane string
+		switch {
+		case p.pane != "":
+			if n.hosts != nil {
+				pane = n.herdrPaneIn(p.pane, p.herdrSession)
+			} else {
+				pane = p.pane
+			}
+		case p.herdrCore != "":
+			pane = host.PaneRef{Kind: host.HerdrCore, ID: p.herdrCore}.String()
+		case p.ternPane != "":
+			pane = host.PaneRef{Kind: host.Tern, ID: p.ternPane}.String()
+		case p.orcaPane != "":
+			pane = host.PaneRef{Kind: host.Orca, ID: p.orcaPane}.String()
 		}
 		for _, path := range open[p.pid] {
 			if !pathWithin(path, home) {

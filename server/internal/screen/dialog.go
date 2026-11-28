@@ -395,6 +395,7 @@ func describe(d *Dialog, lines []string, first int) {
 	var quoted, plain []string
 	var box command // the rows between the dashed rules around a command (╌╌╌)
 	above := -1     // how many plain rows were above that box (-1: no box)
+	afterCommand := 0
 	rows := lines[top:first]
 	for i := 0; i < len(rows); i++ {
 		l := rows[i]
@@ -445,12 +446,21 @@ func describe(d *Dialog, lines []string, first int) {
 			quoted = append(quoted, strings.TrimSpace(strings.TrimLeft(t, "│|")))
 		default:
 			plain = append(plain, t)
+			if len(plain) == 1 && commandPromptRE.MatchString(t) {
+				if cmd, n := borderlessCommand(rows[i+1:]); len(cmd) > 0 {
+					d.Command = strings.Join(cmd, "\n")
+					plain = append(plain, cmd...)
+					afterCommand = len(plain)
+					i += n
+				}
+			}
 		}
 	}
 	asks := len(plain) > 0 && strings.ContainsAny(plain[len(plain)-1], "?？")
 	// What is asked, in the order it is on screen, for Rev: which wrapped row holds the question mark moves with the
 	// pane's width, so Question and Detail are cut differently at another width (#5538).
 	asked := strings.Join(append(slices.Clone(quoted), plain...), "\n")
+	var detail []string
 	switch {
 	case len(quoted) > 0 && asks:
 		// A boxed note above a question that is asked in plain words (a permission prompt's warning): the note is
@@ -458,29 +468,32 @@ func describe(d *Dialog, lines []string, first int) {
 		d.Warning = joinWrapped(quoted)
 		asked = strings.Join(plain, "\n") // the warning is not in Rev
 		d.Question = plain[len(plain)-1]
-		d.Detail = strings.Join(plain[:len(plain)-1], "\n")
+		detail = plain[:len(plain)-1]
 	case len(quoted) > 0:
 		d.Question = joinWrapped(quoted)
-		d.Detail = strings.Join(plain, "\n")
+		detail = plain
 	case len(plain) > 0:
 		// The last line that asks something (a trust prompt ends in a "Security guide" link), else the last line.
 		q := len(plain) - 1
-		for i := len(plain) - 1; i >= 0; i-- {
+		for i := q; i >= afterCommand; i-- {
 			if strings.ContainsAny(plain[i], "?？") {
 				q = i
 				break
 			}
 		}
 		d.Question = plain[q]
-		d.Detail = strings.Join(append(slices.Clone(plain[:q]), plain[q+1:]...), "\n")
+		detail = append(slices.Clone(plain[:q]), plain[q+1:]...)
 	default:
 		d.Question, d.Header = d.Header, ""
 		asked = d.Question
 	}
-	// A shell command's permission prompt: "Bash command", the agent's words for it, the command in its box.
+	d.Detail = strings.Join(detail, "\n")
+	// A shell permission prompt puts its description before the dashed box or after the borderless command.
 	if above > 0 && commandPromptRE.MatchString(plain[0]) {
 		d.Command = box.text()
 		d.Description = joinWrapped(plain[1:above])
+	} else if afterCommand > 0 && afterCommand <= len(detail) {
+		d.Description = joinWrapped(detail[afterCommand:])
 	}
 	if strings.HasPrefix(d.Warning, "Dangerous rm operation") {
 		d.Risk = RiskDelete
@@ -490,6 +503,29 @@ func describe(d *Dialog, lines []string, first int) {
 
 // commandPromptRE is the first row of a permission prompt for a shell command.
 var commandPromptRE = lazyre.New(`^(Bash|PowerShell) command\b`)
+
+// borderlessCommand reads the consecutive pipe rows immediately under the heading. A blank or description row
+// separates them from any warning. Dashed prompts use their rules to delimit the command.
+func borderlessCommand(rows []string) (cmd []string, n int) {
+	for ; n < len(rows); n++ {
+		t := strings.TrimSpace(rows[n])
+		if t == "" && len(cmd) == 0 {
+			continue
+		}
+		row, ok := strings.CutPrefix(t, "│")
+		if !ok {
+			row, ok = strings.CutPrefix(t, "|")
+		}
+		if !ok {
+			break
+		}
+		cmd = append(cmd, strings.TrimPrefix(row, " "))
+	}
+	if len(cmd) > 0 && slices.ContainsFunc(rows[n:], func(l string) bool { return dashedRE.MatchString(strings.TrimSpace(l)) }) {
+		return nil, 0
+	}
+	return cmd, n
+}
 
 // command is the box a permission prompt draws a command in: its rows, and the width of the rules around it (the
 // pane's).

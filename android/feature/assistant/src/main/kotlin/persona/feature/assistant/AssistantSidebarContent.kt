@@ -100,11 +100,17 @@ fun AssistantSidebarContent(
     onFoldColumn: (() -> Unit)? = null,
     merged: MergedSidebarContent? = null,
     onSchedule: (() -> Unit)? = null,
+    /**
+     * The selected hub group's management, scoped to the shown manager here. The shell draws this sidebar outside
+     * `AssistantAppHost`, so [LocalAssistantHost] is null there; without this the conversation menu keeps only the two
+     * copy actions (#17123). Null: the composition local, as an assistant-hosted page has it.
+     */
+    management: AssistantManagement? = LocalAssistantHost.current?.management,
 ) {
     val choice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val received = snapshot.takeIf { it.managerId == choice.shown }
         ?: AssistantSnapshot(manager = choice.manager, managerId = choice.shown)
-    val base = LocalAssistantHost.current?.management
+    val base = management ?: LocalAssistantHost.current?.management
     val management = remember(base, choice.hubId, choice.shown) { base?.forManager(choice.shown) }
     // The domain spaces (#13500): the page opens them, so they show only where the page is the real assistant's.
     val sidebarHost = LocalAssistantSidebarHost.current

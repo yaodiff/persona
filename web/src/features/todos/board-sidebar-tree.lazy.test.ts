@@ -1,10 +1,7 @@
 /// <reference types="node" />
-// The sidebar's By-to-do tree (Sidebar.tsx, on every first screen) needs only consumeBoardSidebarTree. Importing it from
-// board-consumer.ts put the Todos page's status and direction consumers (a lazy page's code) there too.
+// Keep the Lab's By-to-do implementation separate from both the cold sidebar and the To-dos page.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import * as consumer from "./board-consumer";
-import * as tree from "./board-sidebar-tree";
 
 const read = (file: string) => readFileSync(new URL(file, import.meta.url), "utf8");
 
@@ -14,7 +11,14 @@ describe("board-sidebar-tree", () => {
     expect(read("./board-sidebar-tree.ts")).not.toMatch(/^import\s+(?!type\b)[^;]*from\s+["']\.\/board-consumer["']/m);
   });
 
-  it("is the one tree board-consumer.ts still exports", () => {
-    expect(consumer.consumeBoardSidebarTree).toBe(tree.consumeBoardSidebarTree);
+  it("keeps the v2 board adapter and goal folding behind the sidebar's dynamic import", () => {
+    const sidebar = read("../../views/Sidebar.tsx");
+    expect(/^import\s+(?!type\b)[^;]*from\s+["'](\.\.\/)+features\/todos\/board-sidebar-tree["']/m.test(sidebar)).toBe(false);
+    expect(sidebar).toMatch(/import\(["']\.\.\/features\/todos\/board-sidebar-tree["']\)/);
+    expect(read("../../lib/todo-tree.ts")).not.toContain("foldTreeGoals");
+  });
+
+  it("keeps opening To-dos from loading the sidebar chunk", () => {
+    expect(read("./board-consumer.ts")).not.toContain("./board-sidebar-tree");
   });
 });

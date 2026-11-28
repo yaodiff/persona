@@ -57,15 +57,17 @@ const mount = async (at: string) => {
   await act(async () => root.render(<Page />));
   await settle();
 };
-const row = (id: string) => host.querySelector<HTMLElement>(`[data-todo="${id}"]`)!;
+const row = (id: string) => host.querySelector<HTMLButtonElement>(`[data-todo="${id}"] [data-testid="todo-row-open"]`)!;
 const back = () => host.querySelector<HTMLElement>("[data-testid=todos-back] button");
 const key = async (el: Element, k: string) => {
   await act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })));
   await settle();
 };
 const openWithEnter = async (id: string) => {
-  row(id).focus();
-  await key(row(id), "Enter");
+  const trigger = row(id);
+  trigger.focus();
+  await act(async () => trigger.click());
+  await settle();
 };
 
 beforeEach(() => {

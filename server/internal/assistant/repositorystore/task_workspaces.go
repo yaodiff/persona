@@ -63,7 +63,7 @@ func lockWorkspaceTodo(ctx context.Context, tx pgx.Tx, todo string) (bool, error
 
 // BeginTaskWorkspace atomically adopts the saved T2 plan and selected T1 inputs.
 // Business associations remain editable after this operation is registered.
-func (d *Store) BeginTaskWorkspace(ctx context.Context, todo, op, manager string) (*taskworkspace.Record, error) {
+func (d *Store) BeginTaskWorkspace(ctx context.Context, todo, op, manager string, replacing ...*taskworkspace.Record) (*taskworkspace.Record, error) {
 	if !workspacenaming.ValidOperationID(op) {
 		return nil, workspaceProblem("invalid_input", op)
 	}
@@ -108,6 +108,21 @@ func (d *Store) BeginTaskWorkspace(ctx context.Context, todo, op, manager string
 		current, err := readTaskWorkspace(ctx, tx, todo, "")
 		if err != nil {
 			return err
+		}
+		if len(replacing) > 0 {
+			prior := replacing[0]
+			if current == nil || current.OperationID != prior.OperationID || current.Revision != prior.Revision ||
+				(current.State != "failed" && current.State != "ready") || current.Plan.Source.Manager != manager ||
+				len(current.Uses) != 0 || current.Plan.RootPath == plan.RootPath {
+				return workspaceProblem("operation_conflict", op)
+			}
+			// Retire admissions to the old operation in the same transaction that
+			// installs the new head. Its receipt remains available for inspection and cleanup.
+			current.State, current.Revision = "cancelled", current.Revision+1
+			if err := writeTaskWorkspace(ctx, tx, current); err != nil {
+				return err
+			}
+			current = nil
 		}
 		if current != nil && current.State != "cancelled" && current.State != "removed" {
 			if current.InputDigest == taskworkspace.InputKey(plan) {

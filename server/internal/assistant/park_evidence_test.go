@@ -270,3 +270,38 @@ func TestParkEvidenceMechanicalWaitDoesNotInventReceipt(t *testing.T) {
 		t.Fatalf("a PR alone silently parked the task without a contact receipt: handled=%v retry=%v ledger=%+v", handled, retry, v)
 	}
 }
+
+func TestParkSelfTodoURLRefusesOwnTaskURL(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{"task page", "https://hub.example.com/todos/todo_abc", true},
+		{"task page with query and fragment", "https://hub.example.com/todos/todo_abc?tab=reviews#top", true},
+		{"task api path", "https://hub.example.com/api/v1/todos/todo_abc", true},
+		{"different task page", "https://hub.example.com/todos/todo_other", false},
+		{"worker session page", "https://hub.example.com/s/box/sess_1", false},
+		{"external run", "https://github.com/org/repo/actions/runs/123", false},
+	} {
+		if got := parkSelfTodoURL("todo_abc", tc.url); got != tc.want {
+			t.Fatalf("%s: parkSelfTodoURL(%q) = %v, want %v", tc.name, tc.url, got, tc.want)
+		}
+	}
+
+	s, f, todo := newSupervisedService(t)
+	before := todoNow(s, todo.ID).Supervision
+	pushes, notices, sends := len(f.pushed()), len(f.notices()), len(sentToAgent(f))
+	a := parkEvidenceArgs("external_event")
+	a["evidence"].(map[string]any)["url"] = "https://hub.example.com/todos/" + todo.ID
+	_, err := reviewErr(s, todo.ID, a)
+	if err == nil || !strings.Contains(err.Error(), "own page") {
+		t.Fatalf("self-referencing external_event URL was not refused: %v", err)
+	}
+	if after := todoNow(s, todo.ID).Supervision; !reflect.DeepEqual(before, after) {
+		t.Fatalf("refused self-URL parking changed supervision state\nbefore: %+v\nafter: %+v", before, after)
+	}
+	if len(f.pushed()) != pushes || len(f.notices()) != notices || len(sentToAgent(f)) != sends {
+		t.Fatal("refused self-URL parking notified someone or sent the Agent an instruction")
+	}
+}

@@ -244,6 +244,7 @@ internal fun mergedMachineManagement(
         routes.on(machineId) { it.setEngineHosts(machineId, hosts, default) }
     override suspend fun botmux(machineId: String) = routes.on(machineId) { it.botmux(machineId) }
     override suspend fun setBotmux(machineId: String, on: Boolean) = routes.on(machineId) { it.setBotmux(machineId, on) }
+    override suspend fun setOrcaChatStarts(machineId: String, on: Boolean) = routes.on(machineId) { it.setOrcaChatStarts(machineId, on) }
     override suspend fun claudeSettings(machineId: String) = routes.on(machineId) { it.claudeSettings(machineId) }
     override suspend fun setClaudeSetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) =
         routes.on(machineId) { it.setClaudeSetting(machineId, key, value) }
@@ -509,6 +510,10 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         // A computer's catalog workspaces come from the hub that owns it; none when no hub does.
         override suspend fun workspaces(machineId: String) = of(machineId)?.let { creations[it] }?.workspaces(machineId).orEmpty()
         override suspend fun workspaceCatalog(machineId: String) = creation(of(machineId)).workspaceCatalog(machineId)
+        // A computer's worktrees are changed through the hub that owns it.
+        override val worktrees = if (creations.none { it?.worktrees != null }) null else routedWorktreeManagement { machine ->
+            (creation(of(machine)).worktrees ?: throw HubFailure(HubError.NoNetwork)) to machine
+        }
     }
     return AgentsWiringState(
         scope = scope,

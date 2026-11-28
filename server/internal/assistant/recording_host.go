@@ -165,6 +165,7 @@ func (h recordingHost) KBOff(err error) bool                       { return erro
 func (h recordingHost) KBWake()                                    { h.s.kbWake() }
 func (h recordingHost) KBReadOnly(ctx context.Context) bool        { return h.s.kbReadOnly(ctx) }
 func (h recordingHost) KBConnected() bool                          { return h.s.kbConnected() }
+func (h recordingHost) SpeakerTurnsImport() bool                   { return h.s.speakerTurnsImport.Load() }
 
 // Setting and PutSetting read and write the manager's settings rows; without a store none is read or written.
 func (h recordingHost) Setting(ctx context.Context, key string, out any) (bool, error) {

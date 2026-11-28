@@ -226,7 +226,7 @@
     <string name="designsystem_core_session_read_only">このセッションは表示のみです</string>
     <string name="designsystem_core_engine_herdr">ターミナルのherdr</string>
     <string name="designsystem_core_engine_herdr_app">デスクトップアプリで開いたターミナル</string>
-    <string name="designsystem_core_engine_orca">Orcaのターミナル</string>
+    <string name="designsystem_core_engine_orca">Orcaのターミナルとチャット</string>
     <string name="designsystem_core_engine_tern">Ternのターミナル</string>
     <string name="designsystem_core_engine_rex">Rexのターミナル</string>
     <string name="designsystem_core_engine_paseo">Paseoのエージェント</string>
@@ -239,6 +239,9 @@
     <string name="designsystem_core_engine_found">利用可能</string>
     <string name="designsystem_core_engine_found_version">利用可能、バージョン%1$s</string>
     <string name="designsystem_core_engine_missing">検出されません</string>
+    <string name="designsystem_core_engine_stopped">インストール済み・未起動</string>
+    <string name="designsystem_core_engine_stopped_version">インストール済み・未起動、バージョン%1$s</string>
+    <string name="designsystem_core_engine_incompatible_version">互換性なし、バージョン%1$s</string>
     <string name="designsystem_core_engine_footer">選んだエンジンのセッションだけを表示します。Agentsのマシン監視でいつでも変更できます。</string>
     <string name="designsystem_core_engine_footer_offline">マシンはオフラインです。選択は接続後に反映されます。選んだエンジンのセッションだけを表示します。</string>
     <string name="designsystem_core_engine_footer_none">デスクトップアプリのセッションを表示します。スマートフォンからのセッションの開始や再開はできません。Agentsのマシン監視でいつでも変更できます。</string>

@@ -1,15 +1,21 @@
 // Channel state and unified sections (Account & Connection binding + Chat & Delivery routing) for IntegrationDetail (#14847).
-import { useRef } from "react";
+import { useEffect } from "react";
 import { t } from "../../../i18n";
-import { settingsTarget, type ChannelDetail } from "../../../lib/channels";
+import { settingsTarget } from "../../../lib/channels";
 import { Loading } from "../../../ui/atoms";
 import { ChannelBindingBlock, ChannelDeliveryControls, ChannelTargetControls, ChannelStateInline } from "../Channels";
-import { ConfigurationForm } from "../configuration/ConfigurationForm";
+import { ConfigurationFormView } from "../configuration/ConfigurationForm";
 import { Group, Row, SettingsHint } from "../SettingsParts";
-import { useChannelController, type ChannelController } from "../useChannelController";
-import { channelRoutingSource, type IntegrationTarget } from "./model";
+import type { ChannelController } from "../useChannelController";
+import type { IntegrationTarget } from "./model";
 
-export { ChannelBindingBlock, ChannelStateInline, useChannelController, type ChannelController };
+export { ChannelBindingBlock, ChannelStateInline, type ChannelController };
+export { useChannelController } from "../useChannelController";
+
+function ChannelRoutingForm({ routing }: { routing: NonNullable<ChannelController["routing"]> }) {
+  useEffect(routing.start, [routing]);
+  return <ConfigurationFormView ctl={routing.form} onReload={() => void routing.reload()} />;
+}
 
 /** Chat & Delivery controls: enable, target, thread_mode & thread_idle_hours, features, capabilities, test message. */
 export function ChannelDeliveryBlock({ ctl, target, targetOnly, onSettings }: {
@@ -18,18 +24,14 @@ export function ChannelDeliveryBlock({ ctl, target, targetOnly, onSettings }: {
   targetOnly?: boolean;
   onSettings?: (url: string) => void;
 }) {
-  const detailRef = useRef<ChannelDetail | null>(ctl.detail);
-  detailRef.current = ctl.detail;
-
   const d = ctl.detail;
+  const loadError = ctl.error && (
+    <Group>
+      <SettingsHint alert>{t("settings-integrations.channel_unavailable", { error: ctl.error })}</SettingsHint>
+    </Group>
+  );
   if (!d) {
-    if (ctl.error) {
-      return (
-        <Group>
-          <SettingsHint alert>{t("settings-integrations.channel_unavailable", { error: ctl.error })}</SettingsHint>
-        </Group>
-      );
-    }
+    if (loadError) return loadError;
     if (ctl.loading) {
       return (
         <Group>
@@ -51,9 +53,9 @@ export function ChannelDeliveryBlock({ ctl, target, targetOnly, onSettings }: {
       ctl={ctl}
       onSettings={openSettings}
       afterTarget={
-        showRouting ? (
+        showRouting && ctl.routing ? (
           <fieldset className="mb-6 min-w-0" data-channel-routing disabled={!!ctl.busy && ctl.busy !== "routing"}>
-            <ConfigurationForm source={channelRoutingSource(d.id, ctl.reloadKey, () => detailRef.current ?? d, ctl.updateRouting)} />
+            <ChannelRoutingForm key={ctl.routing.form.source.key} routing={ctl.routing} />
           </fieldset>
         ) : undefined
       }
@@ -61,6 +63,7 @@ export function ChannelDeliveryBlock({ ctl, target, targetOnly, onSettings }: {
   );
   return (
     <>
+      {loadError}
       {controls}
       {d.read_only && settingsUrl && openSettings && (
         <Group footer={t("settings-channels.settings_elsewhere")}>

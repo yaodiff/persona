@@ -38,7 +38,7 @@ import (
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
 var toolNames = []string{"resource_status", "ask_user", "ask_user_withdraw", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "schedule_state_set", "delete_routine", "list_followups",
-	"cancel_followup", "list_places", "save_place", "machines_list", "machine_redeploy", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_transfer", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
+	"cancel_followup", "list_places", "save_place", "machines_list", "machine_redeploy", "agents_list", "agent_read", "agent_send", "agent_modes", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_transfer", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
 	"inbox_folders", "inbox_move", "inbox_post", "inbox_replay", "message_send", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run", "skill_import",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback", "model_profile_capture",
 	"model_profile_deactivate", "model_profile_clear", "model_probe", "launcher_import",
@@ -206,7 +206,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "task_retry":
 		return s.toolTaskRetry(ctx, self, args)
 	case "task_scope":
-		return s.toolTaskScope(ctx, self, args) // task_brief_scope.go
+		return s.toolTaskScope(ctx, machine, self, args) // task_brief_scope.go
 	case "task_decided":
 		return s.toolTaskDecided(ctx, machine, self, args) // task_decided.go
 	case "task_review":
@@ -434,6 +434,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Machine   string `json:"machine"`
 			SessionID string `json:"session_id"`
 			Text      string `json:"text"`
+			InboxItem string `json:"inbox_item"`
 			// DismissNotice: close a notice that Enter only closes (no options) before sending; any other dialog
 			// still refuses the send.
 			DismissNotice bool `json:"dismiss_notice"`
@@ -456,6 +457,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("arguments: %w", err)
 		}
 		a.Task = givenTask(a.RawTask)
+		var review resumeReview
+		if a.Resume && self != "" && s.ensureTodosLoaded(ctx) == nil {
+			review = beginResumeReview(self)
+		}
 		space := s.agentCallerSpace(ctx, machine, self)
 		am, c, err := s.findAgentInSpace(ctx, a.Machine, a.SessionID, &space)
 		if err != nil {
@@ -509,7 +514,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				}
 				resumeTodo = todo.ID
 			}
-			if err := s.resumeAllowed(ctx, self, am, c, resume, a.Task); err != nil {
+			if err := s.resumeAllowed(ctx, self, am, c, resume, a.Task, review); err != nil {
 				if resumeTodo != "" {
 					s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
 				}
@@ -535,6 +540,25 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		} else if err := s.exitAllowed(ctx, self, am, c, a.Text, len(atts)); err != nil {
 			return "", err
 		}
+		source := PlanTask{InboxItem: strings.TrimSpace(a.InboxItem)}
+		if err := s.ensureTodosLoaded(ctx); err != nil {
+			return "", err
+		}
+		var inboxTodo Todo
+		if source.InboxItem != "" {
+			var onTask bool
+			inboxTodo, onTask = s.openTodoOfAgent(am.ID, c.SessionID)
+			mayLink := a.Task != nil || onTask && othersTask(c, inboxTodo, self) == nil
+			if handoff != nil {
+				inboxTodo, mayLink = s.todoNow(handoff.origin)
+			}
+			if exitText(a.Text) || !mayLink {
+				return "", fmt.Errorf("inbox_item requires work on your own open task; nothing was sent")
+			}
+			if err := s.planExistingTaskInbox(ctx, machine, self, &source, inboxTodo); err != nil {
+				return "", err
+			}
+		}
 		summary := agentLabel(c) + " · " + am.Name + "\n\n" + a.Text
 		if resume != "" { // the phone says it resumes the agent, and why
 			summary = s.resumeNote(ctx, c, am, resume) + "\n\n" + a.Text
@@ -543,7 +567,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Task != nil {
 			words = strings.Join(append([]string{a.Task.Title, a.Text}, a.Task.DoneWhen...), "\n\n")
 		}
-		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
+		// Bind approval to the resolved address, even when the caller used a prefix or machine alias.
+		var proposal map[string]json.RawMessage
+		if err := json.Unmarshal(args, &proposal); err != nil {
+			return "", err
+		}
+		proposal["machine"], _ = json.Marshal(am.ID)
+		proposal["session_id"], _ = json.Marshal(c.SessionID)
+		approvalInput, err := json.Marshal(proposal)
+		if err != nil {
+			return "", err
+		}
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, approvalInput); err != nil {
 			if resumeTodo != "" {
 				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
 			}
@@ -554,14 +589,59 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			return outboundNotDone(outcome, "The user declined on the phone: nothing was sent to that agent.", "nothing was sent to that agent"), nil
 		}
+		// Approval may have waited while the target moved to another privacy space or runtime.
+		am, c, err = s.findAgentInSpace(ctx, am.ID, c.SessionID, &space)
+		if err != nil {
+			return "", err
+		}
+		if c.Assistant || c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Send) && !stoppedAgent(c) {
+			return "", errors.New("the Agent changed while permission was pending; nothing was sent")
+		}
 		if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
 			return "", err
+		}
+		if source.InboxItem != "" {
+			if err := s.checkExistingTaskInbox(self, source, inboxTodo); err != nil {
+				return "", fmt.Errorf("%w; nothing was sent", err)
+			}
 		}
 		var task *handedTask
 		if a.Task != nil {
 			if task, err = s.handTask(ctx, self, am, c, *a.Task, a.Text); err != nil {
 				return "", err
 			}
+			if source.InboxItem != "" {
+				if err := s.checkExistingTaskInbox(self, source, task.todo); err != nil {
+					return "", task.sendFailed(ctx, s, fmt.Errorf("%w; nothing was sent", err))
+				}
+			}
+		}
+		persistInbox := func(ctx context.Context, result string) (string, error) {
+			if source.InboxItem == "" {
+				return result, nil
+			}
+			// Delivery succeeded; ending the send's wait must not discard its durable Inbox link.
+			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			id := inboxTodo.ID
+			if task != nil {
+				id = task.todo.ID
+			}
+			agentTodo := id
+			if handoff != nil {
+				agentTodo = handoff.Target.TodoID
+			}
+			if err := s.linkExistingTaskInbox(sctx, self, source, id, agentTodo, []SessionRef{{MachineID: am.ID, SessionID: c.SessionID}}); err != nil {
+				if task != nil && task.made && errors.Is(err, errInboxTaskClaimed) {
+					// Delivery cannot be undone, but a refused claim must not leave a duplicate task.
+					if undoErr := s.removeTodo(sctx, task.todo.ID); undoErr != nil {
+						return "", fmt.Errorf("message delivered to the Agent, but its Inbox link was not saved: %w; newly created task %s remains because rollback failed: %v; do not resend the message", err, task.todo.ID, undoErr)
+					}
+					return "", fmt.Errorf("message delivered to the Agent, but its Inbox link was not saved: %w; newly created task %s was removed without stopping the Agent; do not resend the message", err, task.todo.ID)
+				}
+				return "", fmt.Errorf("message delivered to the Agent, but its Inbox link was not saved: %w; do not resend the message", err)
+			}
+			return result + fmt.Sprintf(" Inbox item %s now links to task %s and this Agent.", source.InboxItem, id), nil
 		}
 		text := a.Text
 		if a.Task == nil {
@@ -596,8 +676,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			inputID = "wait_" + randomHex(16)
 			params["client_msg_id"] = inputID
 		}
-		finish := func(receipt string) string {
-			return s.waitAgentReply(ctx, receipt, inputID, wait, fixedWaitTarget(am.ID, c.SessionID))
+		finish := func(sendCtx context.Context, receipt string) (string, error) {
+			s.clearSpawnedDone(am.ID, c.SessionID)
+			receipt, err := persistInbox(sendCtx, receipt)
+			if err != nil {
+				return receipt, err
+			}
+			return s.waitAgentReply(ctx, receipt, inputID, wait, fixedWaitTarget(am.ID, c.SessionID)), nil
 		}
 		var handed handedAttachments
 		if mentioned := s.mentionedAttachments(ctx, machine, self, a.Text, atts); len(atts)+len(mentioned) > 0 {
@@ -607,18 +692,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sending, _ := params["text"].(string)
 		// A resume goes through the user's Resume's node call, the text as its first message (agent_resume.go).
 		if resume != "" {
-			receipt, err := s.resumeAndSend(ctx, self, am, c, params, resume, a.Text, handed.said(), task)
+			result, err := s.resumeAndSend(ctx, self, am, c, params, resume, a.Text, handed.said(), task)
 			if err != nil {
 				if resumeTodo != "" && startResultUnknown(err) {
 					// The node may still start the session: keep the link so its next turn stays supervised.
-					return "", err
+					return result, err
 				}
 				if resumeTodo != "" {
 					s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
 				}
-				return "", err
+				return result, err
 			}
-			return finish(receipt), nil
+			return finish(ctx, result)
 		}
 		if c.Status != proto.StatusOffline {
 			// A running agent takes it at once. A send of more for an accepted task holds a turn of the agent that
@@ -659,23 +744,23 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				return "", task.sendFailed(ctx, s, err)
 			}
 			if handoff != nil {
-				return finish(fmt.Sprintf("Handoff %s confirmed for %s. It is waiting for %s to report the result.",
-					handoff.ID, handoff.origin, handoff.Target.Title) + handed.said()), nil
+				return finish(lctx, fmt.Sprintf("Handoff %s confirmed for %s. It is waiting for %s to report the result.",
+					handoff.ID, handoff.origin, handoff.Target.Title)+handed.said())
 			}
 			if sent.CompactAfterTurn {
-				return finish(fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and its context is nearly full, so once "+
-					"the turn ends it is compacted with its own /compact and then reads the message.", agentLabel(c), am.Name) +
-					handed.said() + task.sent(ctx, s, a.Text)), nil
+				return finish(lctx, fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and its context is nearly full, so once "+
+					"the turn ends it is compacted with its own /compact and then reads the message.", agentLabel(c), am.Name)+
+					handed.said()+task.sent(ctx, s, a.Text))
 			}
 			if sent.Compacted {
-				return finish(fmt.Sprintf("Sent to %s on %s after compacting its nearly full context with its own /compact.",
-					agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text)), nil
+				return finish(lctx, fmt.Sprintf("Sent to %s on %s after compacting its nearly full context with its own /compact.",
+					agentLabel(c), am.Name)+handed.said()+task.sent(ctx, s, a.Text))
 			}
 			if sent.Queued {
-				return finish(fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and reads the message once what it is doing now ends.",
-					agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text)), nil
+				return finish(lctx, fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and reads the message once what it is doing now ends.",
+					agentLabel(c), am.Name)+handed.said()+task.sent(ctx, s, a.Text))
 			}
-			return finish(fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text)), nil
+			return finish(lctx, fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name)+handed.said()+task.sent(ctx, s, a.Text))
 		}
 		// Not running and not read-only: a branch nothing has started yet (node fork.go), or a node from before #4754
 		// that still resumes a stopped agent. Its node starts it first, which can take minutes and goes on if this call
@@ -691,7 +776,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err != nil {
 			return "", task.sendFailed(sctx, s, err)
 		}
-		return finish(fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + handed.said() + task.sent(sctx, s, a.Text)), nil
+		return finish(sctx, fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name)+handed.said()+task.sent(sctx, s, a.Text))
+	case "agent_modes": // adjusts a running agent's model, effort, or permission mode (agent_modes.go, #17863)
+		return s.toolAgentModes(ctx, machine, self, args)
 	case "agent_switch": // moves a running agent to another launcher and goes on with it (agent_switch.go, #5973)
 		return s.toolAgentSwitch(ctx, machine, self, args)
 	case "agents_switch": // moves many running agents to another launcher at once (agents_switch.go, #6008)
@@ -786,6 +873,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				tier = "" // a launcher of its own: the tier gives it nothing
 			} else {
 				tierChoice = &pick
+				a.Host = cmp.Or(a.Host, t.startHost())
 				if a.Speed == "" && (model == "" || model == t.Model) {
 					a.Speed = t.Speed
 				}
@@ -869,7 +957,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += " · " + swapped
 		case tier != "":
 			selected := pickOf(run)
-			runs = ModelTier{Launcher: selected.launcher, Model: selected.model, Effort: selected.effort, Speed: selected.speed, PermissionMode: selected.permission}.runs()
+			runs = ModelTier{Launcher: selected.launcher, Model: selected.model, Effort: selected.effort, Speed: selected.speed, PermissionMode: selected.permission, Host: &a.Host}.runs()
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
@@ -1403,10 +1491,19 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 			Options     []proto.QuestionOption `json:"options"`
 		} `json:"questions"`
 		// Wait false: the card goes up and the tool returns at once (ask_later.go). Unset is true.
-		Wait *bool `json:"wait"`
+		Wait          *bool  `json:"wait"`
+		DecisionScope string `json:"decision_scope"`
+		WhyOwner      string `json:"why_owner"`
+		OwnerAction   string `json:"owner_action"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil || len(a.Questions) == 0 {
 		return "", fmt.Errorf("questions are required")
+	}
+	if a.WhyOwner != "" && !slices.Contains(whyOwners, a.WhyOwner) {
+		return "", fmt.Errorf("why_owner is one of %s", strings.Join(whyOwners, ", "))
+	}
+	if a.OwnerAction != "" && !slices.Contains([]string{"personal_unlock", "login", "second_factor", "experience_check", "spending"}, a.OwnerAction) {
+		return "", errors.New("owner_action must name a personal unlock, login, second factor, experience check or spending")
 	}
 	var da askDeadlineArgs
 	if err := json.Unmarshal(args, &da); err != nil {
@@ -1416,6 +1513,15 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	deadline, err := readAskDeadline(da, now)
 	if err != nil {
 		return "", err
+	}
+	if a.DecisionScope != "" && a.DecisionScope != "internal" && a.DecisionScope != "owner" {
+		return "", errors.New("decision_scope must be internal or owner")
+	}
+	if a.WhyOwner == "" && a.OwnerAction == "" && a.DecisionScope != "internal" {
+		return "", errors.New("say decision_scope=internal for execution questions, or supply why_owner/owner_action for an owner decision; personal unlocks must use owner_action=personal_unlock, never provide a private key")
+	}
+	if a.DecisionScope == "internal" && (a.WhyOwner != "" || a.OwnerAction != "") {
+		return "", errors.New("an owner reason or personal action cannot be labelled internal")
 	}
 	expires := now.Add(askUserWait)
 	if !deadline.At.IsZero() {
@@ -1448,13 +1554,18 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 			Recommend: askRecommend(da, i, q.Options)})
 	}
 	keepAskDecision(&ix, da, deadline)
+	if !deadline.At.IsZero() && deadline.Reversible && (a.OwnerAction != "" || a.WhyOwner == whyVisible || a.WhyOwner == whyIrreversible) {
+		return "", errors.New("personal actions, outward writes, spending and irreversible decisions cannot take a default")
+	}
 	markRecommended(s.lang(ctx), s.location(ctx), ix.Questions, deadline)
 	// Answers come back keyed by question text: two questions with the same text would lose one answer.
 	if proto.HasDuplicateQuestionText(ix.Questions) {
 		return "", i18n.Err("hub-hub.duplicate_question")
 	}
-	if err := s.promoteSupervision(sessionID); err != nil {
-		return "", err
+	if questionOwnerSource(ix) != "" {
+		if err := s.promoteSupervision(sessionID); err != nil {
+			return "", err
+		}
 	}
 	if a.Wait != nil && !*a.Wait {
 		return s.askLaterStart(ctx, ix)
@@ -1474,7 +1585,13 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		return "", err
 	}
 	if r.Cancel {
+		if questionOwnerSource(ix) == "" {
+			return "The internal question was cancelled. Nothing was authorized.", nil
+		}
 		return prompts.RenderQuestionCancelled(), nil
+	}
+	if s.askExpiredResolution(ix, r) && questionOwnerSource(ix) == "" {
+		return "The internal question expired without a supervisor answer. Nothing was authorized; ask again if still needed.", nil
 	}
 	if s.askExpiredResolution(ix, r) { // nobody answered in time: it waits as a to-do (ask_todo.go)
 		t, err := s.askExpired(context.WithoutCancel(ctx), ix)
@@ -1484,10 +1601,17 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		s.logf("ask_user %s: expired, and no to-do could be made: %v", ix.ID, err)
 	}
 	if r.Dismiss || len(r.Answers) == 0 {
+		if questionOwnerSource(ix) == "" {
+			return "The internal question ended without a supervisor answer. Nothing was authorized; ask again if still needed.", nil
+		}
 		return "The user did not answer (dismissed or timed out). Don't go ahead with what you asked about; say what is waiting for them.", nil
 	}
 	var b strings.Builder
-	b.WriteString("The user answered:\n")
+	if r.AnsweredBy == proto.AnsweredByAssistant {
+		b.WriteString("The designated supervisor answered as the assistant:\n")
+	} else {
+		b.WriteString("The user answered:\n")
+	}
 	for _, q := range a.Questions {
 		if ans, ok := r.Answers[q.Question]; ok {
 			fmt.Fprintf(&b, "- %s → %s\n", q.Question, ans)

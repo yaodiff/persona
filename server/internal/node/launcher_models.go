@@ -253,10 +253,10 @@ func (n *Node) launcherModelsAgent(ctx context.Context, name, agentType string) 
 	return "claude" // a probe that failed: as claude, like every other start
 }
 
-// agentModelsCommand asks the launcher for its agent's models in dir. Managed Claude launchers skip the shell when
-// the executable and its interpreter are already available. Custom Claude launchers use the shell for aliases.
+// agentModelsCommand asks the launcher for its agent's models in dir. Managed Claude and Codex launchers skip the
+// shell when the executable and its interpreter are already available.
 func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string, traexArgs ...string) (*exec.Cmd, error) {
-	_, managed := n.managedLauncher(name)
+	m, managed := n.managedLauncher(name)
 	var args []string
 	if agent == "claude" {
 		// No hooks: this claude is no session of the user's (Persona's own, or a hook of theirs, would see one start).
@@ -267,10 +267,20 @@ func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string, 
 		args = []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 			"--settings", n.claudeSettings(ctx, name, ours, dir)}
 	}
-	if managed && agent == "claude" && canProbeManagedClaudeDirectly() {
+	if managed && (agent == "claude" && canProbeManagedClaudeDirectly() || agent == "codex" && canProbeManagedCodexDirectly()) {
+		if agent == "codex" {
+			args = []string{"app-server"}
+		}
 		cmd := exec.CommandContext(ctx, n.bin, append([]string{"launch", name}, args...)...)
 		cmd.Dir = dir
 		cmd.Env = append(cmd.Environ(), managedModelProbeEnv+"=1")
+		if agent == "codex" && m.BaseURL != "" && !slices.Contains(envNames(managedEnv(m)), "CODEX_HOME") {
+			codexHome := filepath.Join(dir, "codex-home")
+			if err := os.Mkdir(codexHome, 0o700); err != nil {
+				return nil, fmt.Errorf("create temporary Codex home: %w", err)
+			}
+			cmd.Env = append(withoutEnv(cmd.Env, []string{"CODEX_HOME"}), "CODEX_HOME="+codexHome)
+		}
 		return cmd, nil
 	}
 	shell, err := interactiveShell()

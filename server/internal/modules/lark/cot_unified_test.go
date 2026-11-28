@@ -265,7 +265,7 @@ func TestFeishuTopicStopClosesAgentMessageWithComplete(t *testing.T) {
 func TestCotEndReason(t *testing.T) {
 	for _, tc := range []struct {
 		end  channel.End
-		want cotReason
+		want string
 	}{
 		{channel.EndDone, cotReasonDone},
 		{channel.EndStopped, cotReasonDone},

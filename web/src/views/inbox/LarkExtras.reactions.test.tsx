@@ -5,7 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Reactions } from "./LarkExtras";
+import { CardButtons, Reactions } from "./LarkExtras";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -68,5 +68,33 @@ describe("reaction pills while the emoji catalogue loads", () => {
     // the loaded catalogue has no MYSTERY emoji: the text fallback stays
     expect(host.textContent).toContain("[MYSTERY]");
     expect(host.textContent).not.toContain("[FACEPALM]");
+  });
+
+  it("blocks unsafe schemes and credentialed URLs on CardButtons while opening safe https links", async () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    try {
+      await act(async () =>
+        root.render(
+          <CardButtons
+            buttons={[
+              { label: "BadJS", kind: "default", disabled: false, url: "javascript:alert(1)" },
+              { label: "BadAuth", kind: "default", disabled: false, url: "https://feishu.example@evil.example/doc" },
+              { label: "GoodLink", kind: "default", disabled: false, url: "https://open.feishu.cn/app" },
+            ]}
+          />,
+        ),
+      );
+      const btns = [...host.querySelectorAll<HTMLButtonElement>("button")];
+      expect(btns.map((b) => [b.textContent, b.disabled])).toEqual([
+        ["BadJS", true],
+        ["BadAuth", true],
+        ["GoodLink", false],
+      ]);
+      for (const b of btns) await act(async () => { b.click(); });
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy).toHaveBeenCalledWith("https://open.feishu.cn/app", "_blank", "noopener,noreferrer");
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 });

@@ -184,21 +184,72 @@ func (b *relayBook) holdLocked(to string, msg relayMsg, now time.Time) time.Dura
 	return max(until.Sub(now), 0)
 }
 
+// recordMsgFailedLocked records when msg in conversation to failed with a retryable error (b.mu held).
+func (b *relayBook) recordMsgFailedLocked(to string, msg relayMsg, at time.Time) {
+	if b.msgFailedAt == nil {
+		b.msgFailedAt = map[string]map[string]time.Time{}
+	}
+	per := b.msgFailedAt[to]
+	if per == nil {
+		per = map[string]time.Time{}
+		b.msgFailedAt[to] = per
+	}
+	per[relayMsgID(to, msg)] = at
+}
+
+// clearMsgFailedLocked removes msgID's per-message failure backoff from conversation to (b.mu held).
+func (b *relayBook) clearMsgFailedLocked(to, msgID string) {
+	if per := b.msgFailedAt[to]; per != nil {
+		delete(per, msgID)
+		if len(per) == 0 {
+			delete(b.msgFailedAt, to)
+		}
+	}
+}
+
+// msgBackoffLocked returns how long msg in conversation to still waits under relayRetryGap before it may be retried
+// (0: eligible now). For the last-failed message (b.stuck), b.failedAt takes precedence when set so clearing or
+// adjusting failedAt stays authoritative; other previously failed messages honor their own msgFailedAt timestamp so
+// multi-message queues cannot ping-pong past relayRetryGap (#17592). b.mu is held.
+func (b *relayBook) msgBackoffLocked(to string, msg relayMsg, now time.Time) time.Duration {
+	if relayRetryGap <= 0 {
+		return 0
+	}
+	if last, stuck := b.stuck[to]; stuck && msg == last {
+		if at, ok := b.failedAt[to]; ok && !at.IsZero() {
+			if gap := relayRetryGap - now.Sub(at); gap > 0 {
+				return gap
+			}
+			return 0
+		}
+	}
+	if at, ok := b.msgFailedAt[to][relayMsgID(to, msg)]; ok && !at.IsZero() {
+		if gap := relayRetryGap - now.Sub(at); gap > 0 {
+			return gap
+		}
+	}
+	return 0
+}
+
 // pickLocked is the index of the message of conversation to's queue that goes in next: the best rank among those not
 // held for the owner, the one that queued first within it (lead: to is a direction's lead, rankIn). The message that
 // could not go in last time (b.stuck: its agent's computer unreachable, a delivery that failed) is passed over while
-// another may go, so it holds up nothing but itself. None may go (-1): wait is how long until the first may. b.mu is
-// held.
+// another may go, so it holds up nothing but itself. Messages still inside their relayRetryGap backoff are held so
+// multi-message queues do not alternate past the gap (#17592); a withdrawn one is not, since it is never sent again.
+// None may go (-1): wait is how long until the first may.
+// b.mu is held.
 func (b *relayBook) pickLocked(to string, lead bool, now time.Time) (i int, wait time.Duration) {
 	i = -1
 	stuck := -1
 	q := b.st.Queue[to]
 	for j, m := range q {
-		lookAfter := m.LookAfter.Sub(now)
+		lookAfter, backoff := m.LookAfter.Sub(now), b.msgBackoffLocked(to, m, now)
 		if m.Withdrawn {
-			lookAfter = 0 // no retry is sent: only check whether the original in-flight text landed
+			// No retry is sent: only check whether the original in-flight text landed. Neither its retry time nor its
+			// failure backoff holds it.
+			lookAfter, backoff = 0, 0
 		}
-		if h := max(b.holdLocked(to, m, now), lookAfter); h > 0 {
+		if h := max(b.holdLocked(to, m, now), lookAfter, backoff); h > 0 {
 			if wait == 0 || h < wait {
 				wait = h
 			}

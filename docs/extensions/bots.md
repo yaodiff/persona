@@ -367,7 +367,7 @@ Defaults (when first turned on) are `main`, `cards`, `reports` and `topic_cot` (
 
 ## How a message flows
 
-1. `im.message.receive_v1` → de-dup → stop if it's not the owner / not a DM (a group's message goes by the gate in "Topic group chats"; up to here it's the hub; the owner's message is handed to the assistant, which de-dups again by message_id and stores it). Anything starting with `/` is first treated as a command (below); unknown commands are passed through as is (they may be the Agent's own, e.g. `/compact`); to a Persona conversation, a bare one that looks like a slipped bot command (a letter dropped or two adjacent letters swapped, e.g. `/stpo`, `/stp`) is not sent: the bot replies "Did you mean /stop?". With words after it (`/news 今天有什么新闻`), real words (`/news`, `/now`) and Claude Code / Codex commands (`/stats`) it goes on, and nothing to an Agent is held back. To send such a command itself, double the slash (`//stpo` sends `/stpo`); a doubled slash is only taken off before a bot command or a slip of one, outside an Agent, so other text starting with `//` (`// TODO`, `//example.com`) goes as written (#5005).
+1. `im.message.receive_v1` → de-dup → stop if it's not the owner / not a DM (a group's message goes by the gate in "Topic group chats"; a group message from someone who is not the owner is dropped unless "Group access for teammates" lets it through; up to here it's the hub; the owner's message is handed to the assistant, which de-dups again by message_id and stores it). Anything starting with `/` is first treated as a command (below); unknown commands are passed through as is (they may be the Agent's own, e.g. `/compact`); to a Persona conversation, a bare one that looks like a slipped bot command (a letter dropped or two adjacent letters swapped, e.g. `/stpo`, `/stp`) is not sent: the bot replies "Did you mean /stop?". With words after it (`/news 今天有什么新闻`), real words (`/news`, `/now`) and Claude Code / Codex commands (`/stats`) it goes on, and nothing to an Agent is held back. To send such a command itself, double the slash (`//stpo` sends `/stpo`); a doubled slash is only taken off before a bot command or a slip of one, outside an Agent, so other text starting with `//` (`// TODO`, `//example.com`) goes as written (#5005).
 2. Target: if it's a reply to a message the bot sent (or in its thread), it goes to the chat / Agent bound to that message (`threads`, kept for 30 days, up to 500 entries, so replying to a card from several days ago still goes back to the original place, #4779); otherwise it goes to the current target (`current`: `main` / a Persona chat / an Agent).
 3. Content: text (rich text converted to Markdown, @ mentions turned back into names); images (up to 4) as image attachments; files, voice, video and extra images are downloaded and stored via the node's
    `file.upload.*` in that computer's temp directory, with the path written into the message (a file over 50 MB is skipped: the rest of the message still goes, and a line says which file was too large, #4824); quoted messages and merged-forward chat histories (read out one per line) go into `<persona-context>`; images and files in quoted messages are handed over by the same rules (up to 4 together with the message's own images; if they can't be read, only the quoted text is included, without blocking the send, #4728). A private reply omits a parent marked deleted in the message readback, including its text and media, while the reply's own content and attachments continue normally;
@@ -537,7 +537,7 @@ An authorized extension, or the owner from their own app, can hand the bot a que
 
 A hub from before this change answers 404, which a caller treats as "not available". `chat_blocked`, `handoff_off`, `bot_off` and 429 are not retried; a 503 is retried once with the same `ref`.
 
-**Policy.** Kept under `handoff` in `bots.feishu` and set with `PUT /api/v1/bots/feishu` (no client draws it). A chat on `blocked_chats` is refused (`chat_blocked`) and that always wins; `off: true` refuses every handoff (`handoff_off`); a chat on `direct_chats` is answered without asking; every other chat needs the owner's confirmation. The default, when `handoff` was never set, confirms every chat, so an install that never receives a handoff changes nothing. Unpairing or changing the App ID clears the policy. `launcher` names the launcher of the guest run (empty uses the assistant's default; guest runs are Claude Code only).
+**Policy.** Kept under `handoff` in `bots.feishu` and set with `PUT /api/v1/bots/feishu` (no client draws it). A chat on `blocked_chats`, or on `group_access.blocked_chats` ("Group access for teammates"), is refused (`chat_blocked`) and that always wins; `off: true` refuses every handoff (`handoff_off`); a chat on `direct_chats` is answered without asking; every other chat needs the owner's confirmation. The default, when `handoff` was never set, confirms every chat, so an install that never receives a handoff changes nothing. Unpairing or changing the App ID clears the policy. `launcher` names the launcher of the guest run (empty uses the assistant's default; guest runs are Claude Code only).
 
 **Confirm and direct.** In direct mode the guest's one reply is posted at once. In confirm mode the draft is held and the owner is asked with the ordinary decision card (Needs you, a push, every client): one option posts exactly the stored draft, the other drops it. A typed answer or any other option drops it too, and it is never taken by default. The draft is at most 400 characters; a direct reply may be 2000.
 
@@ -546,6 +546,36 @@ A hub from before this change answers 404, which a caller treats as "not availab
 **Limits and audit.** Six handoffs an hour per chat, sixty a day, three running at once; a handoff nobody finished is dropped after six hours. The audit records the policy change, a handoff taken, one refused, one posted and one ended, with the chat id and the handoff id only. The question, the context, the draft, the reply and the caller's names are never stored and never audited.
 
 **Known limitations.** Without an anchor, a topic group gets the reply as a new topic. The chat and sender names in the confirmation come from the caller; only `chat_id` is checked against the owner's lists. The confirmation shows the draft on one line. A live process bubble in the group (a native agent message) is not part of this: the default is to ask the owner before anything is posted.
+
+
+## Group access for teammates
+
+A teammate in a group can ask the bot a question and get one answer, without ever reaching the owner's conversations. It is off until the owner turns it on (`server/internal/extmgr/bots_group_access.go`, `bots_guest.go`).
+
+**What triggers it.** A message in a group, from a sender whose `sender_type` is `user` and who is not the owner, that carries a structured mention of the bot in `mentions[]`. Text that only looks like a mention does not count, and a message that starts with `/` is a command, which stays the owner's. The hub lets the next message through before it does anything with this one, so a stranger cannot slow the owner's messages down.
+
+**Modes.** `owner_only` (the default, and what every existing install keeps: nothing changes), `allowlist` (only the listed people, and only in the listed chats) and `everyone_in_allowed_chats` (anyone in the listed chats). The first match wins:
+
+| Check, in order | Result |
+| --- | --- |
+| The sender is on `blocked_users` | refused, `blocked_user` |
+| The chat is on `blocked_chats` | refused, `blocked_chat`; this also silences the owner's own messages in that chat, and a proxy reply into it |
+| The mode is `owner_only`, or there is no policy | refused, `owner_only` |
+| The chat is not on `allowed_chats` | refused, `chat_not_allowed` |
+| The mode is `allowlist` and the sender is not on `allowed_users` | refused, `user_not_allowed` |
+| Otherwise | the guest answers |
+
+**The guest.** The assistant runs the question as a guest conversation of its own (`bot_group`, `docs/assistant/assistant.md` "Guest conversations"), one per chat and thread, kept apart from the owner's chats. It lists only `bot_group_reply` and the connector tools the owner named in `guest_tools` (read-only connector tools, at most 8; a name that fails the guest check is dropped, never added). It gets no snapshot, no memory, no skills and none of the owner's files, and it never runs on a work machine. A follow-up in the same thread continues the same conversation; a thread nobody finished is dropped.
+
+**What is posted.** One plain-text reply, anchored under the message that triggered it, in the owner's language, through `feishu.text` with the turn's id so a retry lands once. Paths and private hub links in the answer are replaced before it goes out. While the guest works, the group sees a guest chain of thought whose tool titles are sanitized the same way; the owner's own progress card is never used.
+
+**Limits.** A question is at most 2000 characters. Each sender gets 10 questions an hour, each chat 20 an hour (the owner sets another number with `per_chat_hourly`), and the bot 200 a day, with at most 3 running at once. Past a limit the chat gets one short note, and at most one every ten minutes. The last 20 refused @-mentions are remembered, in memory only, so the settings page can offer to allow or block that person.
+
+**Audit.** The audit records the policy change (`bot_group_policy`), a guest triggered, one refused, one posted and one ended, with the chat id and the guest id only. The question and the answer are never stored and never audited.
+
+**What stays the owner's.** Cards, approvals, commands (`/topics`, `/ai`, `/read`, `/stop` and the rest), the private chat, pushes and the workbench are unchanged: a guest cannot reach any of them, and a teammate's tap on a card left in the group does nothing.
+
+**Known limitations.** The reply is one text message; a topic group gets it as a reply in the triggering topic, and a thread the platform does not anchor falls back to the chat. A node too old for guest conversations refuses the start, and the turn ends quietly. A work machine never hosts the guest, so a hub whose only machine is a work machine answers no guest.
 
 ## Commands
 
@@ -611,6 +641,8 @@ These routes belong to the hub; `target` and `agents` in the response are querie
 | PUT | `/api/v1/bots/feishu` | Changes only supplied fields: `enabled`, `app_id` + `app_secret` (validated first) + `domain`, `features` (merged over the current ones), `topic_chats` (the opted-in group chats, replaced as a whole, "Topic group chats"), `nudge_after` (minutes before the ordinary nudge under an unanswered card, 0 turns both ordinary and deadline nudges off, "Nudging a card nobody answered"), `larkcli_profile` (empty for automatic selection, or an existing `lark-cli profile list` name). A non-empty choice is rejected with 400 when it does not exist and with 409 when `manager.json` fixes `lark.cli.profile`; changing it rebuilds the lark-cli connector while retaining its feed switches. `app_id: ""` clears the credentials saved in the App (falls back to manager.json). `handoff` sets the proxy-reply policy (`{off?, direct_chats?, blocked_chats?, launcher?}`, an absent key leaves it and `[]` clears a list; "Proxy replies handed off from a group"). The source reply settings are `source_report_delay_minutes` (whole minutes from 0 to 60) and `source_report_full_reply` (boolean). |
 | GET | `/api/v1/bots/feishu/identity` | The bot's public identity (`bots.feishu.identity`): `{enabled, paired, ready, app_id?, bot_open_id?, bot_name?, domain?, capabilities}`. No secrets. |
 | POST | `/api/v1/bots/feishu/handoffs` | Hand a group question to the bot (`bots.feishu.handoff`): "Proxy replies handed off from a group". |
+| GET | `/api/v1/bots/feishu/group-access` | The group-access policy (`server/internal/extmgr/bots_group_access.go`): mode, the allow and block lists, `guest_tools`, `per_chat_hourly`, and the revision. Full credentials only. |
+| PUT | `/api/v1/bots/feishu/group-access` | Replace the whole policy; the body carries the revision it read, and a stale one is a 409. Unpairing or changing the App ID clears it. |
 | POST | `/api/v1/bots/feishu/pair` | Generate a pairing code |
 | DELETE | `/api/v1/bots/feishu/owner` | Unpair (also clears chat state and the opted-in group chats) |
 | POST | `/api/v1/bots/feishu/test` | Send the owner a test message |
@@ -633,6 +665,7 @@ Nothing, when the app is created in one authorization ("Pairing and permissions"
 - Card callback tokens (two further updates allowed within 30 minutes) aren't used: after an answer, cards are edited through the update-message endpoint.
 - One hub connects one Lark bot and one owner.
 - A proxy reply has no live process bubble in the group; the answer is one text message, after the owner confirms it unless the chat is listed for direct replies ("Proxy replies handed off from a group").
+- Group access ("Group access for teammates") answers a teammate with one text message and a sanitized chain of thought; it never posts a card, runs a command or starts an Agent, and a chat on its blocklist is silent for everyone.
 
 ## Verification
 

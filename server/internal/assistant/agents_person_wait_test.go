@@ -22,15 +22,16 @@ func TestBackgroundDoesNotHideAPersonWait(t *testing.T) {
 	f.setSessions("box", c)
 	triage(t, s, "s1")
 	w := entryOf(t, s, "s1").Work
-	if w.By != "model" || w.Closeout == nil || w.Closeout.Unblock != unblockOther || w.Wait == "" {
+	if w.By != "rule" || w.Closeout == nil || w.Closeout.Unblock != unblockOther || w.On != proto.WaitExternal ||
+		w.Wait != w.Closeout.Waiting || w.WakeAt != nil {
 		t.Fatalf("a person wait with background work read as %+v", w)
 	}
 	c.Work = &w
 	if !taskAgentSettled(c) {
 		t.Fatal("its turn does not settle past the background work")
 	}
-	if len(f.triageAsked) != 1 {
-		t.Fatalf("the model was asked %d times", len(f.triageAsked))
+	if n := len(triageCalls(f)); n != 0 {
+		t.Fatalf("the model was asked %d times", n)
 	}
 }
 
@@ -58,25 +59,30 @@ func TestBackgroundStillWaitsOnItsOwnWork(t *testing.T) {
 	}
 }
 
-// A closeout that says done but names the owner to unblock what it waits for asks the owner something: the model reads
-// it, and the agent's "done" no longer settles it. A delivery hold the owner unblocks stays done: its hold reaches the
-// owner as a delivery (#14899).
-func TestDoneCloseoutAskingTheOwnerIsRead(t *testing.T) {
+// An owner wait comes directly from the closeout. A delivery hold reaches the owner through delivery (#14899).
+func TestTriageCloseoutUsesStructuredOwnerWait(t *testing.T) {
 	s, f := workService(t)
-	f.triage = `{"phase":"blocked","on":"user","line":"Upgrade the driver?","questions":[{"question":"Please confirm: upgrade the sandbox driver now?","options":[{"label":"Upgrade"},{"label":"Not now"}]}]}`
+	setTriageAnswer(f, `{"phase":"blocked","on":"user","line":"Upgrade the driver?","questions":[{"question":"Please confirm: upgrade the sandbox driver now?"}]}`)
+	const wait = "the owner agrees to upgrade the sandbox driver"
 	f.setSessions("box", stopped("s1", "Please confirm: upgrade the sandbox driver now?\n<closeout status=\"done\">\ndelivery: none\nunblock: user\n"+
-		"waiting: the owner agrees to upgrade the sandbox driver\n</closeout>"))
+		"waiting: "+wait+"\n</closeout>"))
 	triage(t, s, "s1")
-	if w := entryOf(t, s, "s1").Work; w.By != "model" || w.On != proto.WaitUser || len(w.Questions) != 1 {
+	if w := entryOf(t, s, "s1").Work; w.By != "rule" || w.Phase != proto.WorkBlocked || w.On != proto.WaitUser {
 		t.Fatalf("a done closeout asking the owner read as %+v", w)
+	}
+	cards := s.workCards()
+	if len(cards) != 1 || len(cards[0].Questions) != 1 || cards[0].Questions[0].Question != wait {
+		t.Fatalf("cards = %+v, want one with the closeout's wait", cards)
 	}
 
 	f.setSessions("box", stopped("s2", "Opened the PR.\n<closeout status=\"done\" merged=\"no\">\ndelivery: pr\nunblock: user\n"+
 		"waiting: the owner merges the PR\n</closeout>"))
-	asked := len(f.triageAsked)
 	triage(t, s, "s2")
-	if w := entryOf(t, s, "s2").Work; w.Phase != proto.WorkDone || w.By != "rule" || len(f.triageAsked) != asked {
-		t.Fatalf("a delivery hold read as %+v (model asked %d more)", w, len(f.triageAsked)-asked)
+	if w := entryOf(t, s, "s2").Work; w.Phase != proto.WorkDone || w.By != "rule" || len(w.Questions) != 0 {
+		t.Fatalf("a delivery hold read as %+v", w)
+	}
+	if n := len(triageCalls(f)); n != 0 {
+		t.Fatalf("closeouts triggered %d model calls", n)
 	}
 }
 

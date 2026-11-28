@@ -103,11 +103,11 @@ def row_more_menu_stays_open(t):
     keeps working."""
     at_list(t, row_in_view=True)
     t.c.longpress(**ROW)
-    t.see("the row's menu", label="关闭 Agent…", trait="button", timeout=5)
+    t.see("the row's menu", label="关闭 Agent", trait="button", timeout=5)
     churn(t)
-    t.true(t.find(label="关闭 Agent…", trait="button"), "the menu is still open")
+    t.true(t.find(label="关闭 Agent", trait="button"), "the menu is still open")
     t.c._idb("tap", 201, 70)  # outside the menu
-    t.gone("the menu closes", label="关闭 Agent…", timeout=5)
+    t.gone("the menu closes", label="关闭 Agent", timeout=5)
 
 
 def search_keeps_typed(t):

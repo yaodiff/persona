@@ -35,3 +35,26 @@ func TestDispatchRefusesAssistantWorkspace(t *testing.T) {
 		}
 	}
 }
+
+func TestAutoTaskRefusesAssistantWorkspaceBeforeQueue(t *testing.T) {
+	for _, cwd := range []string{"/home/me/.persona/assistant", "/state/assistant", "~/.persona/assistant"} {
+		t.Run(cwd, func(t *testing.T) {
+			s, f := newTaskService(t)
+			f.devices = []Device{{ID: "box", Home: "/home/me", DataDir: "/state", Reachable: true}}
+			args, err := json.Marshal(map[string]any{"tasks": []map[string]any{
+				{"title": "Read the source", "prompt": "Read the source", "goal": "Summarize the source", "readonly": true, "cwd": cwd},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.toolTaskPlan(t.Context(), "conv9", args)
+			var message *i18n.Message
+			if !errors.As(err, &message) || message.Key != "rpc-errors.agent_assistant_workspace" {
+				t.Fatalf("expected a submission error, got %v", err)
+			}
+			if got := feedKinds(s, "conv9"); got != "" || len(s.todosOf(t.Context(), "conv9")) != 0 {
+				t.Fatalf("invalid plan created a feed item or to-do: %s", got)
+			}
+		})
+	}
+}

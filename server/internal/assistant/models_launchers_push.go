@@ -17,9 +17,9 @@ import (
 // ---- the nodes ----
 
 // nodeConnectCalls is the new-connection configuration callback (devices.Options.NodeCalls): the node's own settings
-// (node.configure: Antigravity idle compaction and the sessions with cards waiting, agyNodeConfigureCall), then its
-// providers (managedNodeCalls). A provider read that fails holds back only the providers. A computer waiting to be
-// confirmed gets nothing.
+// (node.configure: Antigravity idle compaction and the sessions with cards waiting, agyNodeConfigureCall; the BotMux
+// Owner Union ID, botmuxOwnerNodeCall), then its providers (managedNodeCalls). A read that fails holds back only its
+// own call. A computer waiting to be confirmed gets nothing.
 func (s *Service) nodeConnectCalls(ctx context.Context, machine string) []devicewire.NodeCall {
 	providers := s.managedNodeCalls(ctx, machine)
 	if len(providers) == 0 && s.machinePending(ctx, machine) {
@@ -28,6 +28,9 @@ func (s *Service) nodeConnectCalls(ctx context.Context, machine string) []device
 	var calls []devicewire.NodeCall
 	if cfgCall, ok := s.agyNodeConfigureCall(ctx, machine); ok {
 		calls = append(calls, cfgCall)
+	}
+	if ownerCall, ok := s.botmuxOwnerNodeCall(ctx, machine); ok {
+		calls = append(calls, ownerCall)
 	}
 	return append(calls, providers...)
 }

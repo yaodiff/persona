@@ -486,10 +486,11 @@ func todoStageGateSatisfiedReason(dep Todo, delivery []string, node stagegate.No
 	return "stage_ready"
 }
 
-// checkTodoAfterReadyStageGate evaluates candidate's after prerequisites using the pure stagegate package when
+// evaluateTodoAfterStageGate evaluates candidate's after prerequisites using the pure stagegate package when
 // todos_v2=true. It captures the transitive after subgraph for cycle detection and fails closed on missing
 // prerequisites, cancelled prerequisites, dependency cycles, or transient repository-store read errors.
-func (s *Service) checkTodoAfterReadyStageGate(ctx context.Context, candidate Todo, afterIDs []string) ([]prompts.SupervisePrerequisite, bool, error) {
+func (s *Service) evaluateTodoAfterStageGate(ctx context.Context, candidate Todo, rule *todoStageUnlockRule) (todoReadiness, error) {
+	afterIDs := candidate.After
 	reachable := map[string]Todo{candidate.ID: candidate}
 	reqAcceptedByID := map[string]bool{}
 
@@ -525,7 +526,7 @@ func (s *Service) checkTodoAfterReadyStageGate(ctx context.Context, candidate To
 		}
 		delivery, deliveryErr := s.todoDeliveryPRs(ctx, dep)
 		if deliveryErr != nil && dep.DoneAt == nil && !dep.Cancelled() && dep.StartError == "" {
-			return nil, false, deliveryErr
+			return todoReadiness{}, deliveryErr
 		}
 		deliveryByID[id] = delivery
 	}
@@ -536,19 +537,12 @@ func (s *Service) checkTodoAfterReadyStageGate(ctx context.Context, candidate To
 	}
 	slices.Sort(ids)
 
-	var candidateUnlockRule *todoStageUnlockRule
-	if _, hasNotesRule := parseTodoStageUnlockRule(candidate); !hasNotesRule {
-		if rule, ok := s.todoStageUnlockRuleFromBlockers(ctx, candidate.ID); ok {
-			candidateUnlockRule = &rule
-		}
-	}
-
 	nodes := make([]stagegate.Node, 0, len(ids))
 	nodeByID := make(map[string]stagegate.Node, len(ids))
 	for _, id := range ids {
 		var ruleOverride *todoStageUnlockRule
 		if id == candidate.ID {
-			ruleOverride = candidateUnlockRule
+			ruleOverride = rule
 		}
 		n := todoStageGateNodeWithRule(reachable[id], reqAcceptedByID[id], deliveryByID[id], ruleOverride)
 		nodes = append(nodes, n)
@@ -556,22 +550,28 @@ func (s *Service) checkTodoAfterReadyStageGate(ctx context.Context, candidate To
 	}
 
 	ev := stagegate.Evaluate(nodes, candidate.ID, true)
-	if ev.Status != stagegate.StatusReady || !ev.Ready {
-		return nil, false, nil
+	if ev.Status == stagegate.StatusCycleDetected {
+		return todoReadiness{after: afterIDs}, nil
 	}
 
-	out := make([]prompts.SupervisePrerequisite, 0, len(afterIDs))
+	var result todoReadiness
+	for _, dep := range ev.Unsatisfied {
+		result.after = append(result.after, dep.PrereqID)
+	}
 	for _, id := range afterIDs {
+		if slices.Contains(result.after, id) {
+			continue
+		}
 		dep := reachable[id]
 		delivery := deliveryByID[id]
-		out = append(out, prompts.SupervisePrerequisite{
+		result.prerequisites = append(result.prerequisites, prompts.SupervisePrerequisite{
 			ID:        dep.ID,
 			Title:     dep.Title,
 			Reason:    todoStageGateSatisfiedReason(dep, delivery, nodeByID[id]),
 			MergedPRs: todoObservedMergedPRs(dep, delivery),
 		})
 	}
-	return out, true, nil
+	return result, nil
 }
 
 // checkTodoAfterReady checks whether candidate is an open, unstarted dependent to-do whose after prerequisites are
@@ -581,47 +581,18 @@ func (s *Service) checkTodoAfterReady(ctx context.Context, candidate Todo) ([]pr
 		candidate.isConcern() || isAskTodo(candidate.ID) {
 		return nil, false, nil
 	}
-	afterIDs := cleanIDs(candidate.After)
-	if len(afterIDs) == 0 {
+	if todoHasActiveAgent(candidate) || len(cleanIDs(candidate.After)) == 0 {
 		return nil, false, nil
 	}
-	if todoHasActiveAgent(candidate) || s.requestStartPending(ctx, candidate) || s.workspaceQueuePending(ctx, candidate) {
-		return nil, false, nil
+	task, err := s.readinessPlan(ctx, candidate)
+	if err != nil || task.Queue != nil && (task.RequestGate != "" || task.Queue.Workspace != nil) {
+		return nil, false, err
 	}
-
-	if s.settings(ctx).todosV2On() {
-		return s.checkTodoAfterReadyStageGate(ctx, candidate, afterIDs)
+	result, err := s.readTodoReadiness(ctx, candidate, task, false)
+	if err != nil || !result.ready() {
+		return nil, false, err
 	}
-
-	s.todos.mu.RLock()
-	requireAccepted := candidate.PartOf != "" && s.hasRequestGateLocked(candidate.PartOf)
-	deps := make([]Todo, 0, len(afterIDs))
-	missing := false
-	for _, id := range afterIDs {
-		dep, ok := s.todos.todos[id]
-		if !ok {
-			missing = true
-			break
-		}
-		deps = append(deps, copyTodoLocked(dep))
-	}
-	s.todos.mu.RUnlock()
-	if missing || len(deps) == 0 {
-		return nil, false, nil
-	}
-
-	out := make([]prompts.SupervisePrerequisite, 0, len(deps))
-	for _, dep := range deps {
-		p, ok, err := s.prerequisiteSatisfied(ctx, dep, requireAccepted)
-		if err != nil {
-			return nil, false, err
-		}
-		if !ok {
-			return nil, false, nil
-		}
-		out = append(out, p)
-	}
-	return out, true, nil
+	return result.prerequisites, true, nil
 }
 
 // todoAfterReadyState is checkTodoAfterReady when callers only need a boolean readiness verdict.

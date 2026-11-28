@@ -339,9 +339,14 @@ func TestAgentChatReplyOnLeaderTaskKeepsLegacyRouting(t *testing.T) {
 // restart. The persisted reply records its supervisor origin; the recovery sweep rebuilds the
 // explicit leader destination instead of the shared no-To signal that would escalate a
 // needs_user card back to Main.
+//
+// Both managers hold their digest (heldSuperviseTimings): the restart comes while the hand-back
+// is still untold, and the test reads what the sweep queued. With a 20 ms gather, a loaded
+// machine let the first manager's digest tell it before the restart, so the sweep rightly had
+// nothing to recover, or let the new manager's digest take the queued signal first (#17829).
 func TestSupervisorHandBackRoutingSurvivesRestart(t *testing.T) {
 	st := &memStore{}
-	first, f := newQuietServiceOn(t, st)
+	first, f := newQuietServiceTimed(t, st, heldSuperviseTimings())
 	setSettings(t, first, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	first.accept.mu.Lock()
 	if !first.loadAcceptLocked(context.Background()) {
@@ -358,7 +363,7 @@ func TestSupervisorHandBackRoutingSurvivesRestart(t *testing.T) {
 		t.Fatalf("the supervisor origin was not recorded on the persisted reply: %+v", got)
 	}
 	// A brand-new manager over the same store: nothing is carried in memory.
-	reloaded, _ := newQuietServiceOn(t, st)
+	reloaded, _ := newQuietServiceTimed(t, st, heldSuperviseTimings())
 	setSettings(t, reloaded, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	putTodo(reloaded, Todo{ID: leader.ID, Title: leader.Title, Origin: "lead1",
 		Supervision: &Supervision{Supervisor: "lead1", State: reviewNeedsUser, Round: 1}})

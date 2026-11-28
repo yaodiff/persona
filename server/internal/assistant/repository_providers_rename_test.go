@@ -110,7 +110,8 @@ func TestRepositoriesSavedBeforeAnExtensionRename(t *testing.T) {
 	if _, err := s.toolTodoRepositoryLinksAdd(t.Context(), "", "", "todo_repository_links_add", args); err != nil {
 		t.Fatal(err)
 	}
-	s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", "Opened https://code.acme.test/team/app/reviews/13")
+	const reportedPR = "https://code.acme.test/team/app/reviews/13"
+	repositoryReporter(t, s, todo.ID)("<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\nartifact: pr "+reportedPR+"\n</closeout>", reportedPR)
 	s.reportedLinks.runs.Wait()
 	set := todoRepositoriesOf(t, s, todo.ID)
 	if len(set.Repositories) != 1 || set.Repositories[0].RepoID != repo.ID || set.Repositories[0].CatalogState != "current" ||

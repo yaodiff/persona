@@ -83,9 +83,10 @@ export struct HealthToday {
     const value = this.portion(kind);
     return value ? tr('intake_ratio').replace('{today}', this.words(value.today)).replace('{goal}', this.words(value.goal)).replace('{unit}', this.unit(kind)) : '';
   }
-  private tint(kind:string): string { return kind==='water' ? (this.env.dark?'#719BFF':'#2457D6') : (this.env.dark?'#F6B650':'#9A5900'); }
+  private tint(kind:string): ResourceColor { return kind==='water' ? Colors.healthWater : Colors.healthProtein; }
+  private tintWash(kind:string): ResourceColor { return kind==='water' ? Colors.healthWaterWash : Colors.healthProteinWash; }
   private primaryNumberInk(): ResourceColor {
-    return Colors.systemControls && Colors.styleID==='glass' ? (this.env.dark ? '#FFFFFF' : '#000000') : Colors.ink;
+    return Colors.systemControls && Colors.styleID==='glass' ? $r('app.color.persona_switcher_ink') : Colors.ink;
   }
   private openRing(kind:string): void {
     const client=this.intake.currentClient();if (!client || this.intake.busy) return;
@@ -132,8 +133,8 @@ export struct HealthToday {
         Button(tr('intake_log')).layoutWeight(1).buttonStyle(ButtonStyleMode.TEXTUAL).enabled(intakeAmount(this.kind,this.amount)!==undefined && (this.model.demo || !this.intake.busy))
           .onClick(() => this.submit()).id('health.intake.submit')
       }.width('100%')
-    }.width('84%').constraintSize({maxWidth:360}).padding(20).backgroundColor(Colors.surface).borderRadius(24)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:24})
+    }.width('84%').constraintSize({maxWidth:360}).padding(20).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:Tokens.radiusPanel})
       .shadow(PhoneStyle.cardElevation(this.env.dark))
   }
   @Builder detailPage() {
@@ -157,15 +158,15 @@ export struct HealthToday {
         Stack() {
           Progress({value:this.progressRatio(kind),total:1,type:ProgressType.Ring})
             .width(this.metric(105,135.3)).height(this.metric(105,135.3)).color(this.tint(kind))
-            .backgroundColor('#24'+this.tint(kind).slice(1)).style({strokeWidth:9,enableSmoothEffect:!this.env.reduceMotion}).accessibilityLevel('no')
+            .backgroundColor(this.tintWash(kind)).style({strokeWidth:9,enableSmoothEffect:!this.env.reduceMotion}).accessibilityLevel('no')
           Column() {
-            Text(this.amountLabel(kind)).fontSize(22).maxFontScale(Tokens.interfaceScaleFor(22)).fontWeight(FontWeight.Bold).fontFeature('tnum 1').fontColor(this.primaryNumberInk())
-              .maxLines(1).minFontSize('13vp').maxFontSize(Tokens.interfaceFontVp(22,this.env.fontScale)).textAlign(TextAlign.Center)
-            Text(this.unit(kind)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor($r('sys.color.font_tertiary')).maxLines(1)
+            Text(this.amountLabel(kind)).fontSize(Tokens.typeTitle).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeTitle)).fontWeight(FontWeight.Bold).fontFeature('tnum 1').fontColor(this.primaryNumberInk())
+              .maxLines(1).minFontSize('13vp').maxFontSize(Tokens.interfaceFontVp(Tokens.typeTitle,this.env.fontScale)).textAlign(TextAlign.Center)
+            Text(this.unit(kind)).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontColor($r('sys.color.font_tertiary')).maxLines(1)
           }.width(this.metric(69.1,91)).alignItems(HorizontalAlign.Center)
         }
-        Text(this.title(kind)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(600).fontColor(Colors.ink).maxLines(1).margin({top:6})
-        Text(this.goal(kind)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+        Text(this.title(kind)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontWeight(600).fontColor(Colors.ink).maxLines(1).margin({top:6})
+        Text(this.goal(kind)).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontColor(Colors.secondary)
           .width(this.goalWidth(this.goal(kind))).textAlign(TextAlign.Start).margin({top:3})
       }.alignItems(HorizontalAlign.Center)
     }.padding(0).backgroundColor(Color.Transparent).buttonStyle(ButtonStyleMode.TEXTUAL)
@@ -174,10 +175,10 @@ export struct HealthToday {
   }
   @Builder action(kind:string,key:string,id:string) {
     Button({type:ButtonType.Capsule}) {
-      Text(tr(key)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Medium).fontColor(Colors.link)
-        .maxLines(1).minFontSize('8vp').maxFontSize(Tokens.interfaceFontVp(12,this.env.fontScale)).textAlign(TextAlign.Center)
+      Text(tr(key)).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontWeight(FontWeight.Medium).fontColor(Colors.link)
+        .maxLines(1).minFontSize('8vp').maxFontSize(Tokens.interfaceFontVp(Tokens.typeLabel,this.env.fontScale)).textAlign(TextAlign.Center)
     }.layoutWeight(1).width('100%').height(this.metric(58,71.7)).padding({left:4,right:4})
-      .backgroundColor(this.env.dark?'#38383A':'#FAFAFA').border({width:0.6,color:this.env.dark?'#25FFFFFF':'#13000000'})
+      .backgroundColor(Colors.healthActionSurface).border({width:0.6,color:Colors.hairlineGlass})
       .onClick(() => {
         if (id==='water') {
           Haptics.success();
@@ -198,8 +199,8 @@ export struct HealthToday {
         this.action('water','intake_other','water-amount')
       }.width('100%')
     }.width('100%').alignItems(HorizontalAlign.Center).padding({left:12,right:12,top:16,bottom:14})
-      .backgroundColor(Colors.surface).borderRadius(22)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:22})
+      .backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:Tokens.radiusPanel})
       .shadow(PhoneStyle.cardElevation(this.env.dark))
   }
   @Builder protein() {
@@ -207,8 +208,8 @@ export struct HealthToday {
       this.ring('protein')
       Row() { this.action('protein','intake_log_grams','protein') }.width('100%')
     }.width('100%').alignItems(HorizontalAlign.Center).padding({left:12,right:12,top:16,bottom:14})
-      .backgroundColor(Colors.surface).borderRadius(22)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:22})
+      .backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:Tokens.radiusPanel})
       .shadow(PhoneStyle.cardElevation(this.env.dark))
   }
   @Builder totals() {
@@ -248,8 +249,8 @@ export struct HealthToday {
           else if (!this.intake.available && !this.resolving) Text(tr(this.unavailable || 'health_default_manager_unavailable')).fontSize(15).fontColor(Colors.secondary)
           else LoadingProgress().width(30).height(30)
         }.width('100%').alignItems(HorizontalAlign.Start).padding({left:20,right:20,top:20,bottom:16})
-          .backgroundColor(Colors.surface).borderRadius(22)
-          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:22})
+          .backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:Tokens.radiusPanel})
           .shadow(PhoneStyle.cardElevation(this.env.dark))
       } else if (this.intake.data) {
         this.totals()

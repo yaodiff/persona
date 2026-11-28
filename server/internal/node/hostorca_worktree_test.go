@@ -226,9 +226,15 @@ func TestOrcaWorktreeRefusesABranchInUse(t *testing.T) {
 	w := orcaWorktreeNode(t)
 	runPullGit(t, w.repo, "worktree", "add", "--", filepath.Join(w.home, "busy"), "spare")
 	for _, b := range []string{"dev", "spare"} {
-		if _, err := w.create(t, b); err == nil || !strings.Contains(err.Error(), "已经在") {
+		if _, err := w.create(t, b); err == nil || !strings.Contains(err.Error(), "已在") {
 			t.Errorf("branch %s in use: err = %v", b, err)
 		}
+	}
+	// in the request's language (the hub sends it, #17057)
+	_, err := request(t, w.n, "worktree.create", map[string]any{"workspace_id": w.src, "branch": "spare",
+		"path": filepath.Join(w.dir, "spare"), "locale": "en"})
+	if err == nil || !strings.Contains(err.Error(), "Branch spare is already checked out at") {
+		t.Errorf("branch in use, in English: err = %v", err)
 	}
 	if n := w.o.Count("worktree.create"); n != 0 {
 		t.Errorf("Orca was asked %d times", n)

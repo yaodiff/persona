@@ -466,11 +466,16 @@ internal fun ChatLineContent(
                     source != null -> SourceMessage(item, source, showSourceLabel, textUpdates[item.id],
                         images = userPictures(userImages, session, loader), hidePrompt = hideTaskPrompts)
                     line.row.item?.injected != null -> InjectedLine(line.row.id, line.row.item!!.injected!!, showDetail = !hideTaskPrompts)
+                    // A BotMux message: as written in Lark while the chat decodes (BotmuxMessages.kt)
+                    item.botmux != null -> BotmuxUserMessage(item, userImages.isNotEmpty()) { shown ->
+                        MergedUserBubble(listOf(shown), if (shown === item) textUpdates else emptyMap(), onLastLine.takeIf { line.row.id == lastUserId },
+                            images = userPictures(userImages, session, loader), openingSource = openingSource)
+                    }
                     else -> MergedUserBubble(listOf(item), textUpdates, onLastLine.takeIf { line.row.id == lastUserId },
                         images = userPictures(userImages, session, loader), openingSource = openingSource)
                 }
             }
-            "reply" -> line.row.item?.item?.let { item ->
+            "reply" -> line.row.item?.item?.takeUnless { botmuxSentinelHidden(it, agentSession) }?.let { item ->
                 WithLiveText(item, textUpdates[item.id], liveText[item.id], item.id in streamingItemIds) { update ->
                     val hideCloseout = closeoutReply == line.row.id && update?.streaming != true
                     // only the block goes; a reply that said nothing else is not drawn at all
@@ -494,6 +499,7 @@ internal fun ChatLineContent(
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
         is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
+        is ChatLine.BotmuxReplies -> BotmuxRepliesLine(line)
         is ChatLine.ModeChange -> ModeChangeDivider(line.change, agentSession)
         is ChatLine.EngineChanged -> EngineChangeDivider(line.change)
         // Glass: where the replies' model changed (#5055, ModelChanges.mark), as the transcript names both.

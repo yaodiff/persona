@@ -497,6 +497,32 @@ describe("Feishu bot dialog", () => {
     open.mockRestore();
   });
 
+  it("ignores unsafe guide_url and falls back to safe https permission_url, or hides button when both are unsafe", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    try {
+      const larkcli: HubConnector = {
+        id: "larkcli",
+        name: "Lark via lark-cli",
+        status: "no_permission",
+        missing_scopes: ["im:chat:read"],
+        guide_url: "https:/admin",
+        permission_url: "https://open.feishu.cn/app/permissions",
+      };
+      act(() => root.render(<FeishuBot larkcli={larkcli} />));
+      await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+      await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+      const permission = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_open_platform")))!;
+      await act(async () => permission.click());
+      expect(open).toHaveBeenCalledWith("https://open.feishu.cn/app/permissions", "_blank", "noopener,noreferrer");
+
+      act(() => root.render(<FeishuBot larkcli={{ ...larkcli, guide_url: "javascript:alert(1)", permission_url: "https://user:pw@evil.example/p" }} />));
+      expect([...document.querySelectorAll<HTMLButtonElement>("button")].some((button) => button.textContent?.includes(t("settings-feishubot.read_open_platform")))).toBe(false);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it("lists lark-cli profiles and saves the selected choice", async () => {
     const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
     connectorList.value = [larkcli];

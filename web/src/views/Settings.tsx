@@ -19,10 +19,11 @@ import { useHasUnseenLabs } from "../lib/labs-seen";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
-import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
+import { Group, Row, Pill, RowConfirm, SettingsHint, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
 import { FontRows, PhoneNavRow, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, SurfaceStyleRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
+import { setNeedsYouAutoOpen, useNeedsYouAutoOpen } from "../lib/needs-you-auto-open";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
@@ -32,6 +33,9 @@ import { KnowledgeSelection } from "./settings/KnowledgeSelection";
 import { SavedPrompts } from "./settings/SavedPrompts";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
+import { RuntimesCard } from "./settings/RuntimesCard";
+import { ExecutionChannelsCard } from "./settings/ExecutionChannelsCard";
+import { ChannelAliasNote, ChannelAliasPill, launcherWriteFailed } from "./settings/ChannelAliasNote";
 import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
 import { HerdrSessions } from "./settings/HerdrSessions";
 import { AgentSettings } from "./settings/AgentSettings";
@@ -50,8 +54,8 @@ import { DevModeRows } from "./settings/DevModeSettings";
 import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
-import { extensionsRoute, routeSub } from "../lib/extension-market";
-import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../lib/manager-choice";
+import { routeSub } from "../lib/extension-market";
+import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
 import { RecoverySettings } from "./settings/RecoverySettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
@@ -70,8 +74,9 @@ import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type La
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
 import { SeenRowsRow } from "./settings/SeenRowsSetting";
-import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
-import { formatIntegrationsSub, isIntegrationDetailRoute, isLegacyIntegrationTab, parseIntegrationsSub } from "./settings/integrations-route";
+import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, INTEGRATIONS_SETTINGS_REGISTRATION, integrationChildState, integrationParent, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { decodeIntegrationsRoute, integrationHref, integrationManager, integrationScope, isIntegrationDetailRoute, isIntegrationTab, isLegacyIntegrationTab, readIntegrationsAddress, type IntegrationsRoute, type IntegrationView } from "./settings/integrations-route";
+import { useOtherIntegrationsMode } from "./settings/integrations-mode";
 import { moduleFeaturesSource } from "../core/module-features";
 import { useModuleStates } from "../core/module-host";
 import { ModuleSettingsPage } from "../core/ModuleSettingsPage";
@@ -106,6 +111,8 @@ interface LauncherView extends ProviderView {
   agent?: "claude" | "codex" | "agy" | string;
   /** Managed: pi can use it too on the computers in its scope (docs/integrations/pi.md "Persona's model providers"). */
   pi?: boolean;
+  /** A managed channel's read-only alias (docs/assistant/execution-spec.md): edited on the Channels card. */
+  channel?: string;
   machines?: string[];
   hidden?: boolean;
   /** zshrc: the rc files it was found in; absent from older hubs (all ~/.zshrc). */
@@ -169,10 +176,14 @@ const TAB_PAGES: Partial<Record<Tab, { preload: () => Promise<unknown> }>> = { e
 // a failed load is not kept (lazyPage): opening the page asks again, and PageBoundary shows the failure then
 const preloadTab = (k: Tab) => void TAB_PAGES[k]?.preload().catch(() => {});
 
-function readSettingsLocation(integrationsV2: boolean | "loading") {
-  const redirect = redirectLegacySettings(location.search, location.hash, stripBase(location.pathname), integrationsV2);
-  if (redirect) history.replaceState(history.state, "", BASE + redirect);
-  return settingsAt(location.search, location.hash);
+function readSettingsLocation() {
+  return { path: stripBase(location.pathname), search: location.search, hash: location.hash, state: history.state as unknown };
+}
+
+function popSettingsItem() {
+  if (!takeOverlayEntry()) return history.back();
+  history.replaceState(null, "", location.href);
+  history.go(-2);
 }
 
 export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
@@ -190,34 +201,47 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     s.assistant && sameManager(s.assistant.manager, targetManager) ? s.assistant.integrations_v2 === true : "loading",
   );
   const integrationsV2 = integrationsMode === true;
-  const integrationsModeRef = useRef<boolean | "loading">(integrationsMode);
-  integrationsModeRef.current = integrationsMode;
-  // The category (null: none named, the phone's list) and the purpose (model configuration) or extension ("Extensions") it has open.
-  const [at, setAt] = useState(() => readSettingsLocation(integrationsMode));
-  // Reconcile bidirectional redirects whenever integrations_v2 flips or hub assistant state finishes loading.
+  const [address, setAddress] = useState(readSettingsLocation);
+  const integrationAddress = useMemo(() => readIntegrationsAddress(address.search, address.path), [address.search, address.path]);
+  const integration = integrationAddress?.route;
+  const namedManager = integration && integrationManager(integration.scope);
+  const other = namedManager && namedManager !== targetManager ? namedManager : undefined;
+  const otherMode = useOtherIntegrationsMode(other);
+  const mode = other ? otherMode : integrationsMode;
+  const unavailable = integration?.view.kind === "unavailable" || mode === "unavailable";
+  const redirect = redirectLegacySettings(address.search, address.hash, address.path, mode === "unavailable" ? "loading" : mode, integrationAddress);
   useLayoutEffect(() => {
-    if (integrationsMode === "loading") return;
-    const redirect = redirectLegacySettings(location.search, location.hash, stripBase(location.pathname), integrationsMode);
     if (!redirect) return;
     history.replaceState(history.state, "", BASE + redirect);
-    const now = settingsAt(location.search, location.hash);
-    setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
-  }, [integrationsMode, at.tab, at.sub]);
+    setAddress(readSettingsLocation());
+  }, [redirect]);
   // External in-app navigation to /settings (e.g. "Change in Settings" from the sidebar while Settings is already open).
   useEffect(() => subscribeRoute(() => {
     const path = stripBase(location.pathname);
     if (path === "/settings" || path.startsWith("/settings/")) {
-      setAt(readSettingsLocation(integrationsModeRef.current));
+      setAddress(readSettingsLocation());
     }
   }), []);
+  const canonical = redirect ? new URL(redirect, location.origin) : address;
+  const at = unavailable ? { tab: "integrations" as const, sub: null, section: null } : settingsAt(canonical.search, canonical.hash);
   const listed = phone && !at.tab;
   const tab: Tab = at.tab ?? "general";
+  const linkedManager = at.section === "repositories" || at.section === "knowledge-items"
+    ? new URLSearchParams(canonical.search).get("manager") ?? undefined : undefined;
+  const manager = namedManager ?? linkedManager ?? otherManager(picked ?? undefined);
+  const loadingIntegration = mode === "loading" && (tab === "integrations" || Boolean(namedManager));
+  const canShowIntegration = !unavailable && !loadingIntegration;
+  const parent = integration ? integrationParent(address.state) : null;
   // one scroller shows the list and every page: each keeps its own spot, and Back to the list lands where it was (#5133).
   // An item that opens in a dialog over its category's page (a model purpose) is not a page: the key leaves it out, so
   // opening and closing it leave the page where it was (#4282).
   const scroller = useRef<HTMLDivElement>(null);
-  useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
+  useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${namedManager ? `${namedManager}/` : ""}${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
   const { sub } = at;
+  const view = integration?.view;
+  const legacyChannel = view?.kind === "channel" || view?.kind === "builtin"
+    ? view.id === "feishu-bot" ? "feishu" : view.id
+    : undefined;
   // The host excludes both the Settings navigation and the app sidebar (including a resized sidebar).
   const [wideIntegrations, setWideIntegrations] = useState(false);
   useLayoutEffect(() => {
@@ -231,20 +255,20 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     observer.observe(host);
     return () => observer.disconnect();
   }, [tab, phone]);
-  const sourcesManager = tab === "sources" ? new URLSearchParams(location.search).get("manager") ?? picked ?? undefined : undefined;
-  const extensionPrefill = tab === "extensions" ? settingsPrefill(location.search) : undefined;
-  useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
+  const extensionPrefill = tab === "extensions" || tab === "integrations" ? settingsPrefill(canonical.search) : undefined;
+  useLayoutEffect(() => (
+    ASSISTANT_TABS.has(tab) && canShowIntegration ? pinManagerAt(ASSISTANT_PREFIXES, manager) : undefined
+  ), [tab, manager, canShowIntegration]);
   // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
   // purpose): that item is the last assistant's, so the page goes back to its list, which then lists the new one's.
-  const [pickSeen, setPickSeen] = useState(picked);
-  if (pickSeen !== picked) {
-    setPickSeen(picked);
-    if (ASSISTANT_TABS.has(tab) && sub) setAt({ tab, sub: null, section: null });
-  }
-  // the address follows an item closed so
+  const pickSeen = useRef(picked);
   useLayoutEffect(() => {
-    if (ASSISTANT_TABS.has(tab) && !sub && settingsAt(location.search, location.hash).sub) history.replaceState(categoryState(history.state), "", BASE + settingsHref(tab, null, phone));
-  }, [tab, sub, phone]);
+    if (pickSeen.current === picked) return;
+    pickSeen.current = picked;
+    if (!ASSISTANT_TABS.has(tab) || !sub || namedManager) return;
+    history.replaceState(categoryState(history.state), "", BASE + settingsHref(tab, null, phone));
+    setAddress(readSettingsLocation());
+  }, [tab, sub, phone, picked, namedManager]);
   useEffect(() => {
     if (!at.section || listed) return;
     const section = document.getElementById(`settings-${at.section}`);
@@ -266,66 +290,106 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Inbox Sources (#5278) only with a manager that draws them; a link to it still opens it
   const hasSources = useInboxSourcesShown();
   const shown = (k: Tab) => {
-    if (integrationsV2) return !isLegacyIntegrationTab(k);
-    if (k === "integrations") return false;
-    return (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels") &&
-      (k !== "sources" || hasSources || tab === "sources");
+    const visibility = { integrationsV2, activeTab: tab, hasChannels, hasExtensions, hasSources };
+    if (k === INTEGRATIONS_SETTINGS_REGISTRATION.id) return INTEGRATIONS_SETTINGS_REGISTRATION.isVisible(visibility);
+    if (isLegacyIntegrationTab(k)) return INTEGRATIONS_SETTINGS_REGISTRATION.isLegacyTabVisible(k, visibility);
+    return true;
   };
   const contentId = useId();
   const configurationOwner = useRef<string | null>(new URLSearchParams(location.search).get("manager"));
-  const pick = (rawTab: Tab, rawId: string | null = null, section?: SettingsSection, options?: { anchor?: string; drillDown?: boolean }) => {
+  const openIntegration = (
+    next: IntegrationsRoute,
+    action: "push" | "replace" | "root" = "push",
+    legacyHref?: string,
+    anchor?: string,
+  ) => {
+    const owner = integrationManager(next.scope);
+    const nextMode = !owner || owner === targetManager ? integrationsMode : owner === namedManager ? mode : "loading";
+    const useUnified = typeof nextMode === "boolean" ? nextMode : tab === "integrations" || !legacyHref;
+    let to = useUnified || !legacyHref ? integrationHref(next, useUnified) : legacyHref;
+    if (anchor) to += `#${anchor}`;
+    const state: unknown = history.state;
+    if (action !== "root" && to === stripBase(location.pathname) + location.search + location.hash) return;
+    if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
+    else if (action === "push" && integration && integration.view.kind !== "unavailable") {
+      const child = integrationChildState(state, integration);
+      if (takeOverlayEntry()) history.replaceState(child, "", BASE + to);
+      else history.pushState(child, "", BASE + to);
+    } else {
+      history.replaceState(action === "replace" ? state : categoryState(state), "", BASE + to);
+    }
+    setAddress(readSettingsLocation());
+  };
+  const pick = (k: Tab, id: string | null = null, section?: SettingsSection, options?: { anchor?: string; manager?: string }) => {
     configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
-    const resolved = resolveSettingsTarget(rawTab, rawId, integrationsV2);
-    const k = resolved.tab;
-    const id = resolved.sub;
+    if (isIntegrationTab(k)) {
+      if (k === tab && !id && parent?.view.kind === "list" && parent.scope.kind === "current") return popSettingsItem();
+      return openIntegration(decodeIntegrationsRoute(k, id), id ? "push" : "root", settingsHref(k, id, phone), options?.anchor);
+    }
     const state: unknown = history.state;
     // Out of an item's page opened on its category's page: back to that page's entry, as Back does, so neither a copy of
     // it nor the item is left to go back to. A sheet open over the item has an entry of its own on top: off with both,
     // its marker taken first so its close does not go back once more.
     if (k === tab && sub && !id && openedFromSub(state)) {
-      setAt({ tab: k, sub: null, section: section ?? null });
-      if (!takeOverlayEntry()) return history.back();
-      history.replaceState(null, "", location.href);
-      return history.go(-2);
+      return popSettingsItem();
     }
-    setAt({ tab: k, sub: id, section: section ?? null });
     // the hub's page keeps its own choice of manager (the download mirrors); the current assistant's pages follow the pick
-    let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : (resolved.manager ?? null), section);
+    let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : options?.manager, section);
     if (options?.anchor) to += `#${options.anchor}`;
-    const filter = resolved.filter ?? (k === "integrations" && tab === k && id ? new URLSearchParams(location.search).get("filter") : null);
-    if (k === "integrations" && filter && filter !== "all") {
-      to += `${to.includes("?") ? "&" : "?"}filter=${encodeURIComponent(filter)}`;
-    }
     // from the phone's list the category goes on top of it, and an item's page on top of its category's page, so Back
     // returns to each; another item of the category keeps the entry's way back, another category only the way to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
-    else if (phone && options?.drillDown && sub && id && sub !== id) {
-      const child = { ...itemState(state), integrationParent: sub };
-      if (takeOverlayEntry()) history.replaceState(child, "", BASE + to);
-      else history.pushState(child, "", BASE + to);
-    } else if (k === tab && !sub && id && itemIsPage(k)) {
+    else if (k === tab && !sub && id && itemIsPage(k)) {
       if (takeOverlayEntry()) history.replaceState(itemState(state), "", BASE + to);
       else history.pushState(itemState(state), "", BASE + to);
-    } else history.replaceState(k === tab && sub && id && openedFromSub(state) ? state : categoryState(state), "", BASE + to);
+    } else {
+      const nextState = k === tab && sub && id && openedFromSub(state) ? state : categoryState(state);
+      history.replaceState(nextState, "", BASE + to);
+    }
+    setAddress(readSettingsLocation());
+  };
+  const openLegacyIntegration = (k: "extensions" | "channels" | "connectors", id: string, fromList = false) => {
+    const next = decodeIntegrationsRoute(k, id);
+    if (next.scope.kind === "current" && integration) next.scope = integration.scope;
+    if (integration && new URLSearchParams(address.search).has("filter")) next.filter = integration.filter;
+    // The old pages own their item spellings, including the legacy Feishu channel.
+    let to = settingsHref(k, id, phone, integrationManager(next.scope));
+    if (next.filter !== "all") to += `&filter=${next.filter}`;
+    const sibling = fromList && sub && isIntegrationDetailRoute(next.view);
+    return openIntegration(next, sibling ? "replace" : "push", to);
+  };
+  const openLegacyItem = (k: "extensions" | "channels" | "connectors", id: string | null) => {
+    if (!id) return backIntegration();
+    openLegacyIntegration(k, id, true);
   };
   const toList = () => {
     configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
     const steps = stepsToList(history.state);
     if (steps) return steps === 1 ? history.back() : history.go(-steps);
     history.replaceState(null, "", href({ name: "settings" }));
-    setAt({ tab: null, sub: null, section: null });
+    setAddress(readSettingsLocation());
   };
   // On a phone the top bar's Back steps out of an item's page (a connector, a channel, an extension) to where the page's
   // own Back went, so that page draws none (audit item 64): its category's page, or, from a page inside an extension's
   // or the market's, that page; from a category it goes to the list. The Lark bot's settings are a dialog over the
   // Connectors list, not a page, so its address leaves the top bar going to the list.
   const itemOpen = phone && !!sub && itemIsPage(tab) && !(tab === "connectors" && sub === "feishu-bot");
-  const parent = tab === "integrations" ? history.state?.integrationParent : null;
-  const up = itemOpen && sub ? itemParent(tab, sub, parent) : null;
+  const integrationUp = integration && (parent || integration.view.kind !== "list") && !(tab === "sources" && !sub && !parent)
+    && !(tab === "connectors" && sub === "feishu-bot" && !parent);
+  const up = integrationUp ? { label: integrationBackLabel(tab, parent?.view) }
+    : itemOpen ? { label: t("settings.back_to", { name: tabInfo(tab).label }) } : null;
+  const backIntegration = () => {
+    if (!integration) return;
+    if (parent) return popSettingsItem();
+    const scope = unavailable ? integrationScope() : integration.scope;
+    const filter = integration.filter === "all" && tab === "channels" ? "channels"
+      : integration.filter === "all" && tab === "connectors" ? "data" : integration.filter;
+    openIntegration({ scope, view: { kind: tab === "sources" ? "data-flow" : "list" }, filter }, "root");
+  };
   const goBack = () => {
-    if (!up) toList();
-    else if (parent) history.back();
-    else pick(tab, up.sub);
+    if (integrationUp) backIntegration();
+    else if (itemOpen) pick(tab);
+    else toList();
   };
   // Settings search: filters the sidebar categories, and jumps to a group or a setting's row inside a page (scroll +
   // brief highlight).
@@ -397,22 +461,28 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     pick(g.tab, g.sub ?? null, agent);
     setScrollAnchor(g.anchor);
   };
-  const openSettingsUrl = (url: string) => {
+  const openSettingsUrl = (url: string, manager?: string) => {
     const target = settingsTarget(url);
     if (!target || !(isCoreTab(target.tab) || isModuleTab(target.tab))) return;
-    pick(target.tab as Tab, target.sub, undefined, { anchor: target.anchor });
+    const owner = manager ?? namedManager;
+    if (owner && isIntegrationTab(target.tab)) {
+      const next = decodeIntegrationsRoute(target.tab, target.sub);
+      if (next.scope.kind === "current") next.scope = integrationScope(owner);
+      if (integration) next.filter = integration.filter;
+      openIntegration(next, "push", undefined, target.anchor);
+    } else {
+      pick(target.tab as Tab, target.sub, undefined, { anchor: target.anchor, manager: owner });
+    }
     if (target.anchor) setScrollAnchor(target.anchor);
   };
-  const onExtensionPage =
-    (tab === "extensions" && extensionsRoute(sub).kind === "page") ||
-    (tab === "integrations" && parseIntegrationsSub(sub).kind === "page");
+  const onExtensionPage = view?.kind === "page";
   const integrationsSplit =
     !listed &&
     !phone &&
     wideIntegrations &&
     tab === "integrations" &&
-    integrationsV2 &&
-    isIntegrationDetailRoute(parseIntegrationsSub(sub));
+    canShowIntegration &&
+    Boolean(integration && isIntegrationDetailRoute(integration.view));
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
@@ -450,7 +520,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             </div>
           ) : (
             <div
-              key={ASSISTANT_TABS.has(tab) ? `${tab}@${picked ?? ""}` : tab}
+              key={ASSISTANT_TABS.has(tab) ? `${tab}@${namedManager ?? linkedManager ?? targetManager}` : tab}
               className={
                 integrationsSplit
                   ? "flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
@@ -467,18 +537,24 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             >
               {tab === "general" && <General onModel={() => pick("models", "translate", "model-config")} />}
               {tab === "advanced" && <Advanced />}
-              {tab === "persona" && <AssistantProfile onTriageModel={() => pick("models", "agent.triage", "model-config")} />}
+              {tab === "persona" && <AssistantProfile manager={linkedManager} onTriageModel={() => pick("models", "agent.triage", "model-config")} />}
               {tab === "avatar" && (
                 <Group title={t("settings.avatar")} footer={t("settings.avatar_footer")} anchor="avatar">
                   <PersonaPicker onExtensions={() => pick("extensions")} />
                 </Group>
               )}
               {tab === "notifications" && <NotificationSettings />}
-              {tab === "knowledge" && <KnowledgeSelection />}
+              {tab === "knowledge" && <KnowledgeSelection manager={linkedManager} />}
               {tab === "prompts" && <SavedPrompts />}
-              {tab === "sources" && (
+              {tab === "sources" && canShowIntegration && (
                 <Suspense fallback={<Loading />}>
-                  <SourcesUI key={sourcesManager} manager={sourcesManager} title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
+                  {sub && !phone && (
+                    <Button tone="quiet" icon="chevronLeft" onClick={backIntegration} className="-ml-2 mb-3">
+                      {integrationBackLabel(tab, parent?.view)}
+                    </Button>
+                  )}
+                  <SourcesUI key={manager} manager={manager} title={TAB_INFO.sources.label}
+                    state={integration?.view.kind === "source" ? integration.view.state : undefined} onGraph={setSourcesGraph} />
                 </Suspense>
               )}
               {tab === "models" && <>
@@ -486,6 +562,9 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
                   <Models />
                 </section>
+                {/* the four dimensions (docs/assistant/execution-spec.md): the engines, then the channels they run on */}
+                <section id="settings-runtimes" className="scroll-mt-4"><RuntimesCard /></section>
+                <section id="settings-execution-channels" className="scroll-mt-4"><ExecutionChannelsCard /></section>
                 <section id="settings-model-config" className="scroll-mt-4">
                   {/* no section: the row is on the page in view, which stays where it is (#4282) */}
                   <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
@@ -495,45 +574,55 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <Group title={t("settings.agent_preferences")} anchor="agents-display"><AgentsDisplayRow /></Group>
                 <AgentSections section={at.section} />
               </>}
-              {tab === "integrations" && (integrationsMode !== "loading" ? (
+              {unavailable && (
+                <Group>
+                  <div className="px-4 py-3">
+                    {!phone && <Button tone="quiet" icon="chevronLeft" onClick={backIntegration} className="-ml-2">{integrationBackLabel(tab, parent?.view)}</Button>}
+                    <SettingsHint>{t(integration?.view.kind === "unavailable" ? "settings-integrations.link_conflict" : "settings.start_page_unavailable")}</SettingsHint>
+                  </div>
+                </Group>
+              )}
+              {loadingIntegration && !unavailable && <Loading />}
+              {tab === "integrations" && integration && canShowIntegration && (
                 <Suspense fallback={integrationsSplit ? <div className="p-6"><Loading /></div> : <Loading />}>
                   <Integrations
-                    open={sub}
+                    route={integration}
+                    prefill={extensionPrefill}
                     twoCol={integrationsSplit}
                     headerBack={phone}
-                    onOpen={(id, drillDown) => pick("integrations", id, undefined, { drillDown })}
+                    parentView={parent?.view}
+                    onBack={backIntegration}
+                    onOpen={openIntegration}
                     onPageWide={setExtensionPageWide}
                     onSettings={openSettingsUrl}
                   />
                 </Suspense>
-              ) : (
-                <Loading />
-              ))}
-              {tab === "channels" && (sub ? (twoCol ? (
+              )}
+              {tab === "channels" && canShowIntegration && (legacyChannel ? (twoCol ? (
                 <div className="flex gap-6">
-                  <div className="w-[300px] shrink-0"><ChannelList openBeside={sub} onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
-                  <div className="min-w-0 flex-1"><ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={openSettingsUrl} /></div>
+                  <div className="w-[300px] shrink-0"><ChannelList manager={namedManager} openBeside={sub} onOpen={(id) => openLegacyItem("channels", id)} onMarketItem={(market, id) => openLegacyIntegration("extensions", routeSub({ kind: "item", market, id })!)} /></div>
+                  <div className="min-w-0 flex-1"><ChannelPage key={sub} id={legacyChannel} manager={manager} onBack={backIntegration} onSettings={openSettingsUrl} /></div>
                 </div>
               ) : (
-                <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} headerBack={phone} onSettings={openSettingsUrl} />
+                <ChannelPage key={sub} id={legacyChannel} manager={manager} onBack={backIntegration} headerBack={phone} onSettings={openSettingsUrl} />
               )) : (
-                <ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} />
+                <ChannelList manager={namedManager} onOpen={(id) => openLegacyItem("channels", id)} onMarketItem={(market, id) => openLegacyIntegration("extensions", routeSub({ kind: "item", market, id })!)} />
               ))}
-              {tab === "connectors" && <Suspense fallback={<Loading />}>{sub && sub !== SENT_SUB && sub !== "feishu-bot" && twoCol ? (
+              {tab === "connectors" && canShowIntegration && <Suspense fallback={<Loading />}>{sub && sub !== SENT_SUB && sub !== "feishu-bot" && twoCol ? (
                 <div className="flex gap-6">
-                  <div className="w-[300px] shrink-0"><Connectors open={null} openBeside={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} /></div>
-                  <div className="min-w-0 flex-1"><Connectors open={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} /></div>
+                  <div className="w-[300px] shrink-0"><Connectors manager={namedManager} open={null} openBeside={sub} onOpen={(id) => openLegacyItem("connectors", id)} onChannel={(id, owner) => openLegacyIntegration("channels", ownedSub(id, owner))} /></div>
+                  <div className="min-w-0 flex-1"><Connectors manager={namedManager} open={sub} onOpen={(id) => openLegacyItem("connectors", id)} onChannel={(id, owner) => openLegacyIntegration("channels", ownedSub(id, owner))} /></div>
                 </div>
               ) : (
-                <Connectors open={sub} headerBack={phone} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} />
+                <Connectors manager={namedManager} open={sub} headerBack={phone} onOpen={(id) => openLegacyItem("connectors", id)} onChannel={(id, owner) => openLegacyIntegration("channels", ownedSub(id, owner))} />
               )}</Suspense>}
-              {tab === "extensions" && <Suspense fallback={<Loading />}>{extensionsRoute(sub).kind === "extension" && twoCol ? (
+              {tab === "extensions" && canShowIntegration && <Suspense fallback={<Loading />}>{view?.kind === "extension" && twoCol ? (
                 <div className="flex gap-6">
-                  <div className="w-[300px] shrink-0"><Extensions open={null} openBeside={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} prefill={extensionPrefill} /></div>
-                  <div className="min-w-0 flex-1"><Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} prefill={extensionPrefill} /></div>
+                  <div className="w-[300px] shrink-0"><Extensions manager={namedManager} open={null} openBeside={sub} onOpen={(id) => openLegacyItem("extensions", id)} onBack={backIntegration} onChannel={(id, owner) => openLegacyIntegration("channels", ownedSub(id, owner))} onConnector={(id, owner) => openLegacyIntegration("connectors", ownedSub(id, owner))} prefill={extensionPrefill} /></div>
+                  <div className="min-w-0 flex-1"><Extensions manager={namedManager} open={sub} onOpen={(id) => openLegacyItem("extensions", id)} onBack={backIntegration} onChannel={(id, owner) => openLegacyIntegration("channels", ownedSub(id, owner))} onConnector={(id, owner) => openLegacyIntegration("connectors", ownedSub(id, owner))} prefill={extensionPrefill} /></div>
                 </div>
               ) : (
-                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} onPageWide={setExtensionPageWide} prefill={extensionPrefill} />
+                <Extensions manager={namedManager} open={sub} headerBack={phone} onOpen={(id) => openLegacyItem("extensions", id)} onBack={backIntegration} onChannel={(id, owner) => openLegacyIntegration("channels", ownedSub(id, owner))} onConnector={(id, owner) => openLegacyIntegration("connectors", ownedSub(id, owner))} onPageWide={setExtensionPageWide} prefill={extensionPrefill} />
               )}</Suspense>}
               {tab === "shortcuts" && <ShortcutSettings />}
               {tab === "labs" && <Suspense fallback={<Loading />}><LabsSettings /></Suspense>}
@@ -552,26 +641,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   );
 }
 
-/** Where the phone's top bar's Back goes from an item's page `sub` of `tab`, and its label: what the page's own Back did.
- *  An extension's own page (one it draws) goes back to the extension, and a market's extension or the list of markets to
- *  the catalog, unless the market's extension was opened as another assistant's upgrade (MarketItem's Back); any other
- *  item's page goes to its category's page. */
-function itemParent(tab: Tab, sub: string, parent: unknown): { sub: string | null; label: string } {
-  if (tab === "extensions") {
-    const r = extensionsRoute(sub);
-    if (r.kind === "page" || (r.kind === "item" && r.manager)) return { sub: routeSub({ kind: "extension", id: r.id, manager: r.manager }), label: t("settings-extensionview.back") };
-    if (r.kind === "item" || r.kind === "markets") return { sub: routeSub({ kind: "catalog" }), label: t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) };
-  }
-  if (tab === "integrations") {
-    if (typeof parent === "string") {
-      const fromGraph = parseIntegrationsSub(parent).kind === "sources";
-      return { sub: parent, label: fromGraph ? t("settings.back_to", { name: t("subscriptions.view_graph") }) : t("settings-extensionview.back") };
-    }
-    const r = parseIntegrationsSub(sub);
-    if (r.kind === "page" || (r.kind === "item" && r.manager)) return { sub: formatIntegrationsSub({ kind: "extension", id: r.id, manager: r.manager }), label: t("settings-extensionview.back") };
-    if (r.kind === "item" || r.kind === "markets") return { sub: formatIntegrationsSub({ kind: "catalog" }), label: t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) };
-  }
-  return { sub: null, label: t("settings.back_to", { name: tabInfo(tab).label }) };
+function integrationBackLabel(tab: Tab, parent?: IntegrationView): string {
+  if (parent?.kind === "data-flow") return t("settings.back_to", { name: t("subscriptions.view_graph") });
+  if (parent?.kind === "catalog") return t("settings.back_to", { name: t("settings-extensionmarket.market_title") });
+  if (parent && parent.kind !== "list") return t("settings-extensionview.back");
+  return t("settings.back_to", { name: tabInfo(tab).label });
 }
 
 const AGENT_LABEL: Record<AgentTab, string> = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", omp: "omp", grok: "Grok" };
@@ -775,6 +849,7 @@ function General({ onModel }: { onModel: () => void }) {
   const theme = useTheme();
   const replyMotion = useReplyMotionSetting();
   const starred = useStarredSetting();
+  const autoOpenNeedsYou = useNeedsYouAutoOpen();
   const features = moduleFeaturesSource();
 
   const themes: { k: Theme; label: string; icon: IconName }[] = [
@@ -813,6 +888,9 @@ function General({ onModel }: { onModel: () => void }) {
           <Switch on={starred} onChange={setStarredEnabled} label={t("settings.starred_messages")} />
         </Row>
         <SidebarUsageRow />
+        <Row label={t("settings.needs_you_auto_open")} hint={t("settings.needs_you_auto_open_hint")} wrapHint stackOnNarrow anchor="needs-you-auto-open">
+          <Switch on={autoOpenNeedsYou} onChange={setNeedsYouAutoOpen} label={t("settings.needs_you_auto_open")} />
+        </Row>
       </Group>
 
       <DesktopSettings />
@@ -862,10 +940,10 @@ function Advanced() {
 
 /** The assistant's profile (the current assistant's): About me, memory, skills, scheduled tasks and where it runs, then
  *  session triage. Its avatar is the hub's (the Avatar page), and what was about this browser is under General. */
-function AssistantProfile({ onTriageModel }: { onTriageModel: () => void }) {
+function AssistantProfile({ onTriageModel, manager }: { onTriageModel: () => void; manager?: string }) {
   return (
     <>
-      <AssistantSettings bare />
+      <AssistantSettings bare manager={manager} />
       <TriageSettings onModel={onTriageModel} />
     </>
   );
@@ -1068,6 +1146,7 @@ function Models() {
         <div className="flex items-center gap-2">
           <span className={cx("truncate text-[13px] font-medium text-ink", !l.display_name && providerTitle(l) === l.name && "font-mono")}>{providerTitle(l)}</span>
           {managedProvider(l.source) && <Pill tone="accent">Persona</Pill>}
+          {l.channel && <ChannelAliasPill channel={l.channel} />}
           {managedProvider(l.source) && l.pi && <span title={t("settings.pi_too_title")}><Pill>{t("settings.pi_too")}</Pill></span>}
           {l.source === "agy" && <Pill>Antigravity Runtime</Pill>}
           {l.kind === "api" && <Pill>{t("settings.direct_api")}</Pill>}
@@ -1277,7 +1356,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       onChanged();
       onClose();
     } catch (e) {
-      toast(errorText(e), "error");
+      launcherWriteFailed(e, l.channel);
     }
   };
   const restore = async () => {
@@ -1303,7 +1382,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       footer={
         l && (
           <>
-            {l.hidden ? (
+            {l.channel ? null : l.hidden ? (
               <Button tone="secondary" onClick={() => void restore()}>
                 {t("settings.restore")}
               </Button>
@@ -1333,7 +1412,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
                 )}
               </>
             )}
-            {managedProvider(l.source) && (
+            {managedProvider(l.source) && !l.channel && (
               <Button tone="secondary" onClick={() => onEdit(l)}>
                 {t("settings.edit")}
               </Button>
@@ -1349,6 +1428,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       {error && <p className="text-[13px] text-red">{error}</p>}
       {l && (
         <div className="flex max-h-[62vh] flex-col gap-4 overflow-y-auto pr-1">
+          {l.channel && <ChannelAliasNote channel={l.channel} onLeave={onClose} />}
           <div className="flex flex-wrap items-center gap-1.5">
             <Pill tone={managedProvider(l.source) ? "accent" : undefined}>{managedProvider(l.source) ? t("settings.managed") : l.source === "agy" ? "Antigravity Runtime (agy acp)" : l.source === "path" ? t("settings.path_script") : t("settings.zshrc_function", { file: rcFilesOf(l).join(" / ") })}</Pill>
             {(l.machines ?? []).map((id) => (

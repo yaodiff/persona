@@ -1,11 +1,21 @@
 // The default Knowledge panel's read-only view of a recording that already exists. It stays available when the
 // recording module is off; the enabled module supplies the full interactive detail instead. Only Core read endpoints
 // are used here, and this file never imports the recording module.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ModuleKBDetailProps } from "../../core/module-host";
 import { t } from "../../i18n";
 import { api, apiBlob, enc, isAbort } from "../../lib/api";
 import { knownZone, recordingPaused, wallClock, type KBSegment, type RecordingPhoto } from "../../lib/kb";
+import {
+  decodeSpeakers,
+  groupLinesBySpeaker,
+  hasVisibleSpeakers,
+  speakerAvatarGlyph,
+  speakerLabel,
+  waitingSpeakerMinutes,
+  type DetailSpeakers,
+  type SpeakerFailReason,
+} from "../../lib/recording-speakers";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { Card, Marked, SectionTitle } from "./KBParts";
@@ -13,9 +23,10 @@ import { Card, Marked, SectionTitle } from "./KBParts";
 type Props = ModuleKBDetailProps;
 type Auth = Props["auth"];
 
-/** Stored content only: no record, upload, rename, transcription, regeneration, live view or handoff actions. */
+/** Stored content only: no record, upload, rename, transcription, regeneration, live view, speaker edit or handoff actions. */
 export function RecordingReadOnlyDetail({ detail: d, query, auth, current, children }: Props) {
   const paused = d ? recordingPaused(d.paused) : null;
+  const speakers = useMemo(() => decodeSpeakers(d?.speakers), [d?.speakers]);
   return <>{children({
     hideProfile: !!d?.recap,
     lead: paused === "module_off" ? (
@@ -31,7 +42,7 @@ export function RecordingReadOnlyDetail({ detail: d, query, auth, current, child
         <StoredPhotos id={d.id} kind={d.meta?.kind} auth={auth} current={current} />
       </>
     ),
-    tail: d && <Transcript meta={d.meta} segments={d.segments} query={query} />,
+    tail: d && <Transcript meta={d.meta} segments={d.segments} speakers={speakers} query={query} />,
   })}</>;
 }
 
@@ -49,22 +60,155 @@ function StoredMarkdown({ title, markdown }: { title: string; markdown?: string 
   );
 }
 
-/** The transcript already stored on the hub, including its saved clock times; no live lines are read or added. */
-function Transcript({ meta, segments, query }: { meta?: Record<string, unknown> | null; segments?: KBSegment[] | null; query?: string }) {
+function readOnlyFailText(reason: SpeakerFailReason): string {
+  switch (reason) {
+    case "too_long":
+      return t("knowledge-kbdetail.recording_speakers_failed_too_long");
+    case "timeout":
+      return t("knowledge-kbdetail.recording_speakers_failed_timeout");
+    case "engine_unavailable":
+      return t("knowledge-kbdetail.recording_speakers_failed_engine_unavailable");
+    case "no_audio":
+      return t("knowledge-kbdetail.recording_speakers_failed_no_audio");
+    case "gave_up":
+    case "audio_gone":
+    case "error":
+      return t("knowledge-kbdetail.recording_speakers_failed_other");
+    case "unknown":
+      return "";
+  }
+}
+
+/** Read-only speaker summary/status strip (zero edit buttons) shown when the recording module is off. */
+function ReadOnlySpeakersBar({ speakers }: { speakers: DetailSpeakers }) {
+  if (speakers.state === "waiting") {
+    const progress = waitingSpeakerMinutes(speakers.done, speakers.end);
+    const label = !progress
+      ? t("knowledge-kbdetail.recording_speakers_waiting")
+      : progress.total !== undefined
+        ? t("knowledge-kbdetail.recording_speakers_waiting_progress", { done: progress.done, total: progress.total })
+        : t("knowledge-kbdetail.recording_speakers_waiting_done", { done: progress.done });
+    return (
+      <div role="status" data-readonly-speakers="waiting" className="flex items-start gap-2 px-4 py-2.5 text-label leading-relaxed text-ink-2">
+        <Icon name="info" size={13} className="mt-0.5 shrink-0 text-ink-3" />
+        <span className="min-w-0 break-words">{label}</span>
+      </div>
+    );
+  }
+  if (speakers.state === "failed") {
+    const msg = readOnlyFailText(speakers.reason);
+    if (!msg) return null;
+    return (
+      <div role="status" data-readonly-speakers="failed" className="flex items-start gap-2 px-4 py-2.5 text-label leading-relaxed text-ink-2">
+        <Icon name="info" size={13} className="mt-0.5 shrink-0 text-ink-3" />
+        <span className="min-w-0 break-words">{msg}</span>
+      </div>
+    );
+  }
+  const formatNum = (n: number) => t("knowledge-kbdetail.recording_speaker_n", { n });
+  const unmerged = speakers.people.filter((p) => !p.merged_into);
+  const main = unmerged.filter((p) => !p.minor);
+  const listed = main.length ? main : unmerged;
+  const names = listed.map((p) => speakerLabel(p, formatNum)).filter(Boolean);
+  return (
+    <div data-readonly-speakers="ready" data-speakers-quality={speakers.quality}>
+      {names.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
+          <Icon name="users" size={14} className="shrink-0 text-ink-3" />
+          <span className="shrink-0 whitespace-nowrap text-meta font-medium text-ink">
+            {t("knowledge-kbdetail.recording_speakers")}
+          </span>
+          <span className="min-w-0 flex-1 break-words text-label text-ink-2">
+            {names.join(" · ")}
+          </span>
+        </div>
+      )}
+      {speakers.quality === "low" && (
+        <p role="note" data-speakers-low-quality className="flex items-start gap-2 border-t border-line bg-inset px-4 py-2 text-label leading-relaxed text-ink-2">
+          <Icon name="info" size={13} className="mt-0.5 shrink-0 text-ink-3" />
+          <span className="min-w-0 break-words">{t("knowledge-kbdetail.recording_speakers_low_quality")}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The transcript already stored on the hub, including its saved clock times and any stored speakers; no live lines
+ *  are read or added and no edit controls are shown. */
+function Transcript({ meta, segments, speakers, query }: { meta?: Record<string, unknown> | null; segments?: KBSegment[] | null; speakers: DetailSpeakers | null; query?: string }) {
   const lines = (segments ?? []).filter((s) => s?.echo !== true && typeof s?.text === "string" && s.text.trim());
-  if (!lines.length) return null;
+  const visibleSpeakers = hasVisibleSpeakers(speakers) ? speakers : null;
+  if (!lines.length && !visibleSpeakers) return null;
+  const formatNum = (n: number) => t("knowledge-kbdetail.recording_speaker_n", { n });
+  const rows = lines.map((line, i) => ({
+    key: i,
+    start: line.start,
+    text: line.text.trim(),
+    speaker: line.speaker,
+    speakerUnsure: line.speaker_unsure,
+  }));
+  const grouped = visibleSpeakers?.state === "ready" && rows.length > 0
+    ? (() => {
+        const g = groupLinesBySpeaker(rows, visibleSpeakers);
+        return g.some((part) => part.kind === "speaker") ? g : null;
+      })()
+    : null;
+
+  const renderLine = (line: typeof rows[number]) => (
+    <li key={line.key} className="flex gap-3 py-1.5 text-meta leading-relaxed">
+      <span className="w-14 shrink-0 pt-px text-ink-3 tabular-nums">{transcriptClock(meta, line.start)}</span>
+      <span className="min-w-0 flex-1 break-words text-ink select-text">{query ? <Marked text={line.text} query={query} /> : line.text}</span>
+    </li>
+  );
+
   return (
     <section>
-      <SectionTitle title={t("knowledge-kbdetail.recording_transcript")} count={lines.length} />
+      <SectionTitle title={t("knowledge-kbdetail.recording_transcript")} count={lines.length || undefined} />
       <Card>
-        <ol className="px-4 py-1.5">
-          {lines.map((line, i) => (
-            <li key={i} className="flex gap-3 py-1.5 text-meta leading-relaxed">
-              <span className="w-14 shrink-0 pt-px text-ink-3 tabular-nums">{transcriptClock(meta, line.start)}</span>
-              <span className="min-w-0 flex-1 break-words text-ink select-text">{query ? <Marked text={line.text.trim()} query={query} /> : line.text.trim()}</span>
-            </li>
-          ))}
-        </ol>
+        {visibleSpeakers && <ReadOnlySpeakersBar speakers={visibleSpeakers} />}
+        {grouped ? (
+          <div data-readonly-transcript-speakers className="space-y-2 px-4 py-2">
+            {grouped.map((group, gi) =>
+              group.kind === "speaker" ? (
+                <div
+                  key={`${group.speakerId}-${gi}`}
+                  data-speaker-group={group.speakerId}
+                  data-speaker-unsure={group.unsure ? "true" : undefined}
+                  className="pt-1 first:pt-0"
+                >
+                  <div className="mb-0.5 flex items-center gap-2 text-label font-medium text-ink-2">
+                    <span
+                      aria-hidden="true"
+                      data-speaker-avatar
+                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-field text-submeta font-semibold text-ink-2 select-none"
+                    >
+                      {speakerAvatarGlyph(group.person ?? { id: group.speakerId })}
+                    </span>
+                    <span className="min-w-0 truncate text-ink">
+                      {speakerLabel(group.person ?? { id: group.speakerId }, formatNum)}
+                    </span>
+                    {group.unsure && (
+                      <span
+                        data-speaker-unsure-mark
+                        role="img"
+                        aria-label={t("knowledge-kbdetail.recording_speaker_possibly")}
+                        title={t("knowledge-kbdetail.recording_speaker_possibly")}
+                        className="shrink-0 font-normal text-ink-3"
+                      >
+                        ?
+                      </span>
+                    )}
+                  </div>
+                  <ol>{group.rows.map(renderLine)}</ol>
+                </div>
+              ) : (
+                <ol key={`plain-${gi}`}>{group.rows.map(renderLine)}</ol>
+              ),
+            )}
+          </div>
+        ) : lines.length > 0 ? (
+          <ol className="px-4 py-1.5">{rows.map(renderLine)}</ol>
+        ) : null}
       </Card>
     </section>
   );

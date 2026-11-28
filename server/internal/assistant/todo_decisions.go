@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -102,7 +103,7 @@ func (s *Service) todoDecisionRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		if fullRole(r) && row.Source == db.DecisionManual &&
+		if ownerFindingDropRequest(r) && row.Source == db.DecisionManual && row.SourceMachine == "" &&
 			strings.HasPrefix(row.Question, findingDropQuestionPrefix) && row.Choice == "Drop" {
 			// A model can relay an answer and write a manual decision, but this
 			// provenance is minted only for a direct owner-app decision.
@@ -211,16 +212,25 @@ func decisionErr(w http.ResponseWriter, err error) {
 // decisionRefMax bounds an extension's ref.
 const decisionRefMax = 200
 
+// ownerFindingDropRequest reports whether r is a validated non-extension owner-app
+// request allowed to mint owner-finding-drop provenance.
+func ownerFindingDropRequest(r *http.Request) bool {
+	return r.Header.Get(RoleHeader) == roleFull &&
+		strings.TrimSpace(r.Header.Get(ExtensionHeader)) == "" &&
+		r.Header.Get(assistantwire.PersonHeader) == "1"
+}
+
 // decisionOrigin sets row's source and provenance from who asks: a device's source is manual (the default) or outcome;
 // an extension's is outcome only, its machine "extension:<id>", and with a ref its message "ext:<id>:<ref>" (the key
 // that keeps a replay from writing twice). An extension may not supersede.
 func decisionOrigin(r *http.Request, row *db.TodoDecisionRow, source, ref string) error {
-	ext := ""
+	ext := strings.TrimSpace(r.Header.Get(ExtensionHeader))
 	if r.Header.Get(RoleHeader) == roleExtension {
-		ext = r.Header.Get(ExtensionHeader)
 		if ext == "" {
 			return errors.New("extension unknown")
 		}
+	} else if ext != "" {
+		return errors.New("extension identity requires extension role")
 	}
 	switch {
 	case source == "" && ext != "", source == db.DecisionOutcome:

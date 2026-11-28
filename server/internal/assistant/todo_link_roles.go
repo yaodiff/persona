@@ -103,6 +103,33 @@ func reportBindingsBlockLegacy(rows []repository.TaskRepository, pr string) bool
 	return false
 }
 
+// reportBindingsBlockAcceptedLegacy checks bindings at stage write time, after ownership verification has saved
+// pr itself as a delivery link: another delivery link, an unlinked target repository, or a reference for pr still blocks.
+func reportBindingsBlockAcceptedLegacy(rows []repository.TaskRepository, pr string) bool {
+	key := reportLinkKey(pr)
+	if key == "" {
+		return reportBindingsBlockLegacy(rows, pr)
+	}
+	for _, row := range rows {
+		if len(row.Links) == 0 {
+			return true
+		}
+		for _, link := range row.Links {
+			linkKey := reportLinkKey(link.CanonicalURL)
+			if link.Role == repository.LinkRoleReference {
+				if linkKey == key {
+					return true
+				}
+				continue
+			}
+			if linkKey != key {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // reportLinkRoles preserves stored roles and treats new incidental links as references. Keep an unlinked target
 // empty until its first explicit delivery so the presence of reference links cannot turn it into a reference repo.
 func reportLinkRoles(raws, deliveries []string, rows []repository.TaskRepository) (links []string, roles map[string]string) {

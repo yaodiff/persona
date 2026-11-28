@@ -13,7 +13,7 @@ Failed ADB commands and unusable frame counts stop the current scenario before i
 from functools import partial
 import json, os, re, statistics, sys, time
 
-from android_perf_capture import adb_command, frame_counts
+from android_perf_capture import adb_command, frame_counts, write_report
 
 serial, package, out = sys.argv[1:4]
 styles = sys.argv[4:] or ["glass", "brief", "board"]
@@ -132,6 +132,5 @@ if __name__ == "__main__":
                 "gfx_p90_ms_per_run": stats([r["p90"] for r in runs]),
                 "runs": [{k: v for k, v in r.items() if k != "frames"} for r in runs],
             }
-            with open(out, "w") as output:
-                json.dump(result, output, ensure_ascii=False, indent=1)
+            write_report(out, result)
     print(json.dumps({k: {"frame_ms": v["frame_ms"], "janky_total": v["janky_percent_total"]} for k, v in result.items()}, ensure_ascii=False, indent=1))

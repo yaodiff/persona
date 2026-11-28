@@ -353,20 +353,23 @@ func (n *Node) agyInputCard(p agyInputPane, w agyWaitingTask, now time.Time) pro
 	if title.Title == "" && p.cwd != "" {
 		title.Title = filepath.Base(p.cwd)
 	}
-	input, _ := json.Marshal(proto.CommandInput{Command: n.agyTaskCommand(w.conversation, w.task), Task: w.task,
-		Prompt: w.prompt, Output: w.output, Masked: w.secret})
-	ix := proto.Interaction{
-		ID: id, SessionID: p.id, SessionTitle: title.Title, Cwd: p.cwd, Kind: proto.IxPermission,
-		CreatedAt: now.UTC(), ExpiresAt: now.Add(agyInputMaxAge).UTC(), ToolName: proto.CommandInputTool, ToolInput: input,
-		// The manager says these in the owner's language (fleet_ix_command.go); a manager that predates the card shows
-		// them as they are.
-		Summary: i18n.T(i18n.Default, "command-input.summary", i18n.Args{"prompt": w.prompt}),
-		Fields: []proto.Field{{Key: proto.CommandInputField, Label: w.prompt, Secret: true,
-			Placeholder: i18n.T(i18n.Default, "command-input.placeholder")}},
-		Agent: agyAgent, AgentLabel: agyLabel,
-	}
+	ix := newCommandInputCard(id, p.id, title.Title, p.cwd, agyAgent, agyLabel, now, proto.CommandInput{
+		Command: n.agyTaskCommand(w.conversation, w.task), Task: w.task, Prompt: w.prompt, Output: w.output, Masked: w.secret,
+	})
 	n.cx.input.keepCard(id, ix, now)
 	return ix
+}
+
+func newCommandInputCard(id, session, title, cwd, agent, label string, now time.Time, in proto.CommandInput) proto.Interaction {
+	input, _ := json.Marshal(in)
+	return proto.Interaction{
+		ID: id, SessionID: session, SessionTitle: title, Cwd: cwd, Kind: proto.IxPermission,
+		CreatedAt: now.UTC(), ExpiresAt: now.Add(agyInputMaxAge).UTC(), ToolName: proto.CommandInputTool, ToolInput: input,
+		Summary: i18n.T(i18n.Default, "command-input.summary", i18n.Args{"prompt": in.Prompt}),
+		Fields: []proto.Field{{Key: proto.CommandInputField, Label: in.Prompt, Secret: true,
+			Placeholder: i18n.T(i18n.Default, "command-input.placeholder")}},
+		Agent: agent, AgentLabel: label,
+	}
 }
 
 // agyLabel is what the apps call agy on a card that is not Claude Code's.

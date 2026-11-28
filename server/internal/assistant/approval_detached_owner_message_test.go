@@ -109,7 +109,7 @@ func TestOwnerMessageLeavesNonDetachableAndOtherSessionsUntouched(t *testing.T) 
 		// 2. Ordinary non-detachable hook permission card in (mac, s1).
 		ordinaryIx := proto.Interaction{
 			ID: "ix_non_detachable_ordinary", MachineID: "mac", SessionID: "s1",
-			Cwd: "/home/u/work", Kind: proto.IxPermission, ToolName: "Bash",
+			Cwd: "/home/u/work", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 			ToolInput: json.RawMessage(`{"command":"ls"}`),
 			CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC(),
 		}

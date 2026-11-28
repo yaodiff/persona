@@ -992,3 +992,43 @@ test('permission cards forward always_label, honor always responses, and never s
     assert.equal(prompts().length, 2, 'stale refusal note must never fire after pendingDetach')
   })
 })
+
+test('interrupt refuses with turn_over_background when only background work remains, and still cancels an active turn', async (t) => {
+  let agyDir = ''
+  const { n, record, start, refresh } = await agyRuntime(t, { beforeStart: (dir) => { agyDir = dir } })
+  const pid = await start('reply')
+  await n.peer.call('session.watch', { session_id: pid })
+  await until('initial reply finished', () => n.last('runtime.sessions')?.sessions.find((s) => s.session_id === pid)?.last_text === 'Finished.', SLOW)
+
+  const logsDir = join(agyDir, 'brain', SESSION, '.system_generated', 'logs')
+  mkdirSync(logsDir, { recursive: true })
+  const startedAt = new Date().toISOString()
+  writeFileSync(join(logsDir, 'transcript.jsonl'), [
+    JSON.stringify({ step_index: 0, type: 'USER_INPUT', created_at: startedAt, content: 'reply' }),
+    JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', created_at: startedAt, tool_calls: [{ name: 'run_command', args: { CommandLine: '"sleep 60"' } }] }),
+    JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'RUNNING', created_at: startedAt,
+      content: `Created At: ${startedAt}\nTool is running as a background task with task id: ${SESSION}/task-1\nTask Description: Watch build` }),
+  ].join('\n') + '\n')
+  await refresh(pid)
+
+  await until('background task appears on runtime session row', () =>
+    n.last('runtime.sessions')?.sessions.find((s) => s.session_id === pid)?.background?.length === 1, SLOW)
+
+  await assert.rejects(
+    n.peer.call('session.interrupt', { session_id: pid }),
+    (err) => err?.code === 'turn_over_background' && err?.data?.delivered === 'none',
+  )
+
+  // Starting a real foreground turn again allows interrupt to cancel normally.
+  await n.peer.call('session.send', { session_id: pid, text: 'hold' })
+  await until('foreground prompt is active', () => received(record).filter((m) => m.method === 'session/prompt').length === 2, SLOW)
+  const res = await n.peer.call('session.interrupt', { session_id: pid })
+  assert.equal(res?.settled, true)
+
+  // A native foreground turn (outside Persona's activeTurns/queuedTurns/autonomousTurns) with
+  // background work still running is cancelled rather than refused as turn_over_background.
+  nativeSummary(agyDir, 'CASCADE_RUN_STATUS_RUNNING', 2)
+  assert.equal(await refresh(pid), 'working')
+  await n.peer.call('session.interrupt', { session_id: pid })
+  assert.ok(received(record).filter((m) => m.method === 'session/cancel').length >= 2)
+})

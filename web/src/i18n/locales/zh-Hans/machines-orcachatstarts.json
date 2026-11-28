@@ -1,0 +1,5 @@
+{
+  "title": "新建 Agent 以 Orca 聊天打开",
+  "detail": "新建 Agent 时，Claude Code 和 Codex 在 Orca 的聊天视图里打开，而不是终端。你手动选的启动器仍在终端打开，助手启动的 Agent 也一直用终端。",
+  "save_failed": "保存失败：{error}"
+}

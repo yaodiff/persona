@@ -19,7 +19,6 @@ docs/apple/recording.md	protocol.md	Recording synchronization
 docs/extensions/connectors.md	docs/assistant/inbox.md	Who owns what
 docs/extensions/extensions.md	docs/protocol/protocol.md	Personal Agents
 docs/integrations/codex.md	docs/operations/testing.md	Codex integration testing
-docs/integrations/engines.md	docs/plans/plan-orca-support.md	Side-by-side engines
 docs/operations/admin.md	extensions.md	Admin console: extensions
 docs/operations/admin.md	mesh.md	One computer, multiple routes
 docs/operations/docker.md	docs/operations/hub-update.md	Taking skills out of the binary

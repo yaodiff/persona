@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -74,6 +75,23 @@ func deadlineText(l i18n.Lang, loc *time.Location, deadline time.Time, reversibl
 	return i18n.T(l, "assistant-reports.deadline_overdue", args)
 }
 
+// Older task decisions may recommend an action only the owner can perform. Outside decisions deliver
+// the option to its source, so the source's label does not make it a hub terminal action.
+func (a *acceptAsk) manualTerminalRecommendation(agents []TodoAgent) bool {
+	return a.OutsideID == "" && decideAsk(a) && terminalResumeLabel(a.Recommend, agents)
+}
+
+func (a *acceptAsk) deadlineText(l i18n.Lang, loc *time.Location, now time.Time, agents []TodoAgent) string {
+	if !a.Deadline.IsZero() && a.manualTerminalRecommendation(agents) {
+		args := i18n.Args{"when": a.Deadline.In(loc).Format("01-02 15:04")}
+		if now.Before(a.Deadline) {
+			return i18n.T(l, "assistant-reports.deadline_manual_resume", args)
+		}
+		return i18n.T(l, "assistant-reports.deadline_manual_resume_overdue", args)
+	}
+	return deadlineText(l, loc, a.Deadline, a.Reversible, now)
+}
+
 // defaultReason is the reason a decision taken by default at deadline records, in the owner's language.
 func defaultReason(l i18n.Lang, loc *time.Location, deadline time.Time) string {
 	return i18n.T(l, "assistant-reports.deadline_taken_reason", i18n.Args{"when": deadline.In(loc).Format("01-02 15:04")})
@@ -105,111 +123,93 @@ func (s *Service) goSweepDecisionDeadlines(now time.Time) {
 
 // taskDeadlineDue: decision a waits past its deadline and was not handled yet.
 func taskDeadlineDue(a *acceptAsk, now time.Time) bool {
-	return a != nil && decideAsk(a) && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero() && !a.Deadline.IsZero() && a.DueAt.IsZero() &&
+	return a != nil && decideAsk(a) && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero() && a.AgentReply == nil && !a.Deadline.IsZero() && a.DueAt.IsZero() &&
 		a.RecheckAt.IsZero() && !now.Before(a.Deadline)
 }
 
 // sweepTaskDeadlines: a reversible decision past its deadline takes its recommendation (acceptTryAs, by default); one that
-// cannot be undone is marked handled and reminded once (remindOverdue).
+// cannot be taken by the hub is marked handled and reminded once (remindOverdue).
 func (s *Service) sweepTaskDeadlines(now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		s.logf("decision deadlines: load tasks: %v", err)
+		return
+	}
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {
 		b.mu.Unlock()
 		return
 	}
-	var due []string
+	due := map[string]time.Time{}
 	for id, a := range b.asks {
-		// A reversible default may fire at its deadline before the age sweep. A stale irreversible/outward decision,
-		// however, must go back for fresh facts before any reminder reaches the owner.
-		if taskDeadlineDue(a, now) && (a.Reversible || !decisionRecheckDue(a, now)) {
-			due = append(due, id)
+		if taskDeadlineDue(a, now) {
+			due[id] = a.AskedAt
 		}
 	}
 	b.mu.Unlock()
-	slices.Sort(due)
-	for _, id := range due {
+	for _, id := range slices.Sorted(maps.Keys(due)) {
 		if s.supervisorSettlePending(id, now) {
 			continue // the owner's exact choice is on its way (decision_supervisor_reply.go): no default meanwhile
-		}
-		if t, ok := s.todoNow(id); ok {
-			if t.Supervision.legacyOwnerPriorityReview() != nil {
-				continue // an old park never authorizes replaying its superseded recommendation
-			}
-			dismissed, err := s.decisionDismissed(ctx, t)
-			if err != nil || dismissed {
-				continue // Hidden is not answered: neither take its default nor remind it.
-			}
-		}
-		a, ok := s.askCopy(id)
-		if !ok || !taskDeadlineDue(&a, now) {
-			continue
 		}
 		if f := s.deadlineDefaultHook; f != nil {
 			f(id)
 		}
-		if a.Reversible && a.Recommend != "" {
-			result, err := s.acceptDefault(ctx, id, now)
-			switch {
-			case err != nil:
-				// Not retried (acceptTryAs keeps the deadline handled): the owner decides instead.
-				s.logf("task %s: deadline passed, the recommendation did not reach the agent: %v; the owner is reminded", id, err)
-				if cur, ok := s.askCopy(id); ok {
-					s.remindOverdue(ctx, id, cur)
-				}
-			case result.taken:
-				s.logf("task %s: deadline passed unanswered: recommendation taken by default", id)
-			}
-			continue
-		}
-		cp, ok := s.deadlineHandled(ctx, id, a.AskedAt, now)
-		if !ok {
-			continue
-		}
-		s.logf("task %s: deadline passed on a decision that cannot be undone: reminded, not taken", id)
-		s.remindOverdue(ctx, id, cp)
+		s.handleTaskDeadline(ctx, id, due[id], now)
 	}
 }
 
-// acceptDefault takes decision id's recommendation because its deadline passed unanswered (acceptTryAs, by default),
-// unless the owner's exact choice is on its way. The sweep's own look at that (supervisorSettlePending) is taken
-// before this lock; the choice is registered under the card's action lock (holdSupervisorChoice), so the look is
-// repeated here under the same lock, where one that came in between is seen and none can come before the default
-// is recorded.
-func (s *Service) acceptDefault(ctx context.Context, id string, now time.Time) (acceptResult, error) {
+// handleTaskDeadline rechecks the to-do and the selected round under the same action lock as a card answer. Keep the
+// lock through delivery so an answer or replacement review cannot slip between recording a deadline and its reminder.
+func (s *Service) handleTaskDeadline(ctx context.Context, id string, asked, now time.Time) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
 	if s.supervisorSettlePending(id, now) {
-		return acceptResult{}, nil
+		return
 	}
-	return s.acceptTryAsDismissalLocked(ctx, id, "", time.Time{}, true)
-}
-
-// deadlineHandled marks the deadline of task id's decision asked at handled, for the reminder of one that cannot be
-// undone; false when the round moved on, the mark could not be saved, or the owner's exact choice is on its way
-// (looked at under the card's action lock, as acceptDefault does).
-func (s *Service) deadlineHandled(ctx context.Context, id string, asked, now time.Time) (acceptAsk, bool) {
-	s.reviewDismissals.actions.acquire(id)
-	defer s.reviewDismissals.actions.release(id)
-	if s.supervisorSettlePending(id, now) {
-		return acceptAsk{}, false
+	t, ok := s.todoNow(id)
+	if !ok {
+		return
 	}
 	b := &s.accept
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	cur := b.asks[id]
-	if cur == nil || !cur.AskedAt.Equal(asked) || !taskDeadlineDue(cur, now) {
-		return acceptAsk{}, false
+	a := b.asks[id]
+	if !taskDeadlineDue(a, now) || !a.AskedAt.Equal(asked) || acceptAskEnded(a, t) || acceptAskStale(a, t) || ownerDecisionReturned(t.Supervision) {
+		b.mu.Unlock()
+		return
 	}
-	cur.DueAt = now.UTC()
+	if a.Reversible && a.Recommend != "" && !a.manualTerminalRecommendation(t.Agents) {
+		b.mu.Unlock()
+		result, err := s.acceptTryAsDismissalLocked(ctx, id, "", asked, true)
+		switch {
+		case err != nil:
+			// A failed delivery keeps the deadline handled: the owner decides instead.
+			s.logf("task %s: deadline passed, the recommendation did not reach the agent: %v", id, err)
+			s.remindOverdue(ctx, id, asked)
+		case result.taken:
+			s.logf("task %s: deadline passed unanswered: recommendation taken by default", id)
+		}
+		return
+	}
+	if decisionRecheckDue(a, now) { // non-executable defaults wait for fresh facts before reminding the owner
+		b.mu.Unlock()
+		return
+	}
+	if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
+		b.mu.Unlock()
+		return // Don't handle silences this reminder, too.
+	}
+	a.DueAt = now.UTC()
 	if err := s.saveAcceptErrLocked(ctx); err != nil {
-		cur.DueAt = time.Time{}
+		a.DueAt = time.Time{}
+		b.mu.Unlock()
 		s.logf("task %s: deadline: save: %v", id, err)
-		return acceptAsk{}, false
+		return
 	}
-	return *cur, true
+	b.mu.Unlock()
+	s.logf("task %s: deadline passed without an executable default: reminded, not taken", id)
+	s.remindOverdue(ctx, id, asked)
 }
 
 // deadlineAnswered marks the deadline of task id's decision asked at handled, because the owner answered it with a
@@ -226,19 +226,20 @@ func (s *Service) deadlineAnswered(ctx context.Context, id string, asked time.Ti
 
 // remindOverdue reminds the owner of task id's decision that cannot be undone and is past its deadline: the decision
 // push again (it says it is overdue), and its card again when it had one.
-func (s *Service) remindOverdue(ctx context.Context, id string, a acceptAsk) {
-	if !a.RecheckAt.IsZero() {
-		return
-	}
-	_, _ = s.pushDecisionAbout(ctx, id, assistantwire.TodoPushDecideOverdue)
-	t, ok := s.todoNow(id)
-	if !ok || a.MessageID == "" {
+func (s *Service) remindOverdue(ctx context.Context, id string, asked time.Time) {
+	_, _ = s.pushDecisionAbout(ctx, id, asked)
+	a, err := s.askRound(id, asked.Format(timeKeyLayout))
+	if err != nil || a == nil || a.MessageID == "" || a.DueAt.IsZero() || a.AgentReply != nil {
 		return
 	}
 	if f, ready := s.chat().Features(ctx); !ready || !f.Reports {
 		return
 	}
-	mid, err := s.chat().Post(ctx, larkhost.Target{}, "", s.acceptCard(ctx, t, a, true), askSummary(s.botLang(ctx), &a), "")
+	t, ok := s.todoNow(id)
+	if !ok || acceptAskEnded(a, t) || acceptAskStale(a, t) || ownerDecisionReturned(t.Supervision) {
+		return
+	}
+	mid, err := s.chat().Post(ctx, larkhost.Target{}, "", s.acceptCard(ctx, t, *a, true), askSummary(s.botLang(ctx), a), "")
 	if err != nil {
 		s.logf("task %s: deadline reminder: %v", id, err)
 		return

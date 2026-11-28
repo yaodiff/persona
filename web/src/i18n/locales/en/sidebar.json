@@ -186,5 +186,9 @@
   "subagents_need_you": "{count} need you",
   "sort_activity": "Sort by recent activity",
   "show_list_filter": "Show filter",
-  "show_empty_workspaces": "Show empty workspaces"
+  "show_empty_workspaces": "Show empty workspaces",
+  "undelivered_waiting_one": "{count} message not delivered yet",
+  "undelivered_waiting_other": "{count} messages not delivered yet",
+  "undelivered_expired_one": "{count} message not delivered: needs you",
+  "undelivered_expired_other": "{count} messages not delivered: needs you"
 }

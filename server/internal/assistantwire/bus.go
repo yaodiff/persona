@@ -103,6 +103,8 @@ const (
 	// stream of its own instead of inside the bus message (#6574). The hub sends a large body that way only to a
 	// manager that names it; any other gets MethodHTTP as before.
 	CapabilityHTTPBodyStream = "http_body_stream"
+	// CapabilityExtensionInfoAccessScoped: the manager includes its own trust verdict with recognized extension tokens.
+	CapabilityExtensionInfoAccessScoped = "extension_info_access_scoped"
 	// CapabilityMCPWait: the manager accepts enum-only mcp.wait updates through devices.notify for an explicitly
 	// opted-in MCP call. The hub sends them only when this capability and the call's opaque id are both present.
 	CapabilityMCPWait = "mcp_wait_v1"
@@ -279,9 +281,10 @@ type HTTPResponse struct {
 }
 
 const (
-	StarredImportPath        = "/api/v1/assistant/starred/import"
-	StarredImportPreviewPath = StarredImportPath + "/preview"
-	StarredImportBodyMax     = 8 << 20
+	StarredImportPath            = "/api/v1/assistant/starred/import"
+	StarredImportPreviewPath     = StarredImportPath + "/preview"
+	StarredImportBodyMax         = 8 << 20
+	RouteBackendWorkspacePrepare = "POST /api/v1/todos/{id}/backend-workspace/prepare"
 )
 
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
@@ -396,7 +399,7 @@ var Routes = []string{
 	"GET /api/v1/todos/{id}/repositories",
 	"GET /api/v1/todos/{id}/backend-workspace",
 	"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}",
-	"POST /api/v1/todos/{id}/backend-workspace/prepare",
+	RouteBackendWorkspacePrepare,
 	"POST /api/v1/todos/{id}/backend-workspace/start",
 	"POST /api/v1/todos/{id}/backend-workspace/cancel",
 	"POST /api/v1/todos/{id}/backend-workspace/cleanup",

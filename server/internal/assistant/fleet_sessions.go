@@ -431,8 +431,9 @@ func (s *Service) decoratedApart(machine string, mark uint64) ([]proto.Session, 
 		s.logf("load agent archives: %v", err)
 	}
 	shown, archived := a.apart()
-	// The archived rows are not listed in a fold (foldSessions): the visible ones fold as in the whole list.
-	s.foldInventory(machine, shown)
+	// The archived rows are not listed in a fold (foldSessions): the visible ones fold as in the whole list,
+	// while archived stays in the subagent negative-cache retention set.
+	s.foldInventoryWithRetained(machine, shown, archived)
 	s.foldSubset(machine, archived.rows)
 	return shown, archived
 }
@@ -660,6 +661,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			list[i].StartError = startErrorText(lang, cmp.Or(m.Name, machine), list[i])
 		}
 		list[i].State, list[i].BackgroundWorking = stateWithBackground(agentState(list[i], list[i].SeenAt), list[i])
+		list[i].State = logicalDeliveryState(list[i]) // never idle while its input has not gone in (logical_undelivered.go)
 		list[i].BackgroundWaiting = backgroundWaiting(list[i])
 		if !list[i].BackgroundWorking && !stalledAfterTurn(list[i]) || backgroundIsWork(list[i]) {
 			list[i].BackgroundStalledSince = 0 // only background commands that are all there is to the work can have stalled

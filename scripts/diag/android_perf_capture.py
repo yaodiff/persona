@@ -1,6 +1,9 @@
-"""Capture commands and parse frame counts for the Android performance scripts."""
+"""Capture commands, parse frame counts, and save Android performance reports."""
+import json
+from pathlib import Path
 import re
 import subprocess
+from tempfile import NamedTemporaryFile
 
 
 def adb_command(serial, *args, timeout, capture=False):
@@ -24,3 +27,18 @@ def frame_counts(text):
         if 0 < frames and janky_frames <= frames:
             return frames, janky_frames
     raise SystemExit('gfxinfo did not report a usable frame sample')
+
+
+def write_report(path, report):
+    """Keep the previous capture until a complete JSON update has closed."""
+    # Follow an existing output symlink, as opening the report directly did.
+    path = Path(path).resolve()
+    pending = None
+    try:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, prefix=".android-perf-", delete=False) as stream:
+            pending = Path(stream.name)
+            json.dump(report, stream, ensure_ascii=False, indent=1)
+        pending.replace(path)
+    finally:
+        if pending is not None:
+            pending.unlink(missing_ok=True)

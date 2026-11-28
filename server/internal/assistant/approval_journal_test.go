@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func storedApprovalJournal(t *testing.T, ft *fleetTest) []approvalJournalEntry {
@@ -105,6 +106,31 @@ func TestApprovalResultJournalStopsRetryingDeletedConversation(t *testing.T) {
 	ft.f.mu.Unlock()
 	if sends != 0 {
 		t.Fatalf("a result for a deleted conversation was delivered %d times", sends)
+	}
+}
+
+func TestApprovalResultJournalStopsRetryingNotFoundConversation(t *testing.T) {
+	ft := newFleetTest(t)
+	conv := proto.Session{MachineID: "mac", SessionID: "unreadable", Assistant: true, Agent: "antigravity", Status: proto.StatusIdle}
+	ft.f.setSessions("mac", conv)
+	ft.d.setSessions("mac", []proto.Session{conv})
+	ft.f.mu.Lock()
+	ft.f.failAssistant = &rpc.Error{Code: "not_found", Message: "session unreadable"}
+	ft.f.mu.Unlock()
+
+	entry := approvalJournalEntry{ID: "ix_journal_not_found", MachineID: "mac", SessionID: "unreadable",
+		Result: "Approval ix_journal_not_found is approved.", UpdatedAt: time.Now().UTC()}
+	putApprovalJournal(t, ft, entry)
+
+	if err := ft.s.deliverApprovalResult(entry); !errors.Is(err, errApprovalConversationGone) {
+		t.Fatalf("not_found originating conversation error = %v, want errApprovalConversationGone", err)
+	}
+	ft.s.deliverApprovalResults()
+	if got := storedApprovalJournal(t, ft); len(got) != 0 {
+		t.Fatalf("permanently undeliverable not_found result was retained: %+v", got)
+	}
+	if got := ft.s.queuedFor("unreadable"); got != 0 {
+		t.Fatalf("not_found approval result was queued (%d), want 0", got)
 	}
 }
 

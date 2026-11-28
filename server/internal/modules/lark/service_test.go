@@ -131,7 +131,7 @@ func feishuHub(owner string, pairedAt time.Time) (*fakeHub, *[]map[string]any) {
 	f := newFakeHub()
 	var posts []map[string]any
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
-		return FeishuStatus{Ready: owner != "", Enabled: true, Owner: owner, PairedAt: pairedAt, Features: FeishuFeatures{Main: true, Cards: true, TopicCot: true}}, nil
+		return FeishuStatus{Ready: owner != "", Enabled: true, Owner: owner, PairedAt: pairedAt, PublicURL: "http://hub.example:18660", Features: FeishuFeatures{Main: true, Cards: true, TopicCot: true}}, nil
 	})
 	f.answerApp(AppFeishu, FeishuPost, func(p json.RawMessage) (any, error) {
 		var m map[string]any
@@ -198,13 +198,15 @@ type Service struct {
 	save    func(runs []*channel.Run) error
 	tmu     sync.Mutex
 	timings map[string]time.Duration
-	lists   map[string][]time.Duration
-	ctx     context.Context
-	logs    []string
-	wbd     *wbData      // the workbench's data (wb)
-	thd     *threadData  // the to-do threads (th)
-	chd     *chatData    // the chat side (ch)
-	hod     *handoffFake // a proxy reply's asks of the core (chat_fake_test.go)
+	// lang is the language the core answers in ("" is the default, Chinese). A test sets it.
+	lang  string
+	lists map[string][]time.Duration
+	ctx   context.Context
+	logs  []string
+	wbd   *wbData      // the workbench's data (wb)
+	thd   *threadData  // the to-do threads (th)
+	chd   *chatData    // the chat side (ch)
+	hod   *handoffFake // a proxy reply's asks of the core (chat_fake_test.go)
 }
 
 func newTestService(t testing.TB, f Hub) *Service {
@@ -511,7 +513,7 @@ func (s *Service) setLarkTimingList(name string, l []time.Duration) {
 	s.lists[name] = l
 }
 
-func (s *Service) Lang(context.Context) i18n.Lang { return "" }
+func (s *Service) Lang(context.Context) i18n.Lang { return i18n.Lang(s.lang) }
 
 func (s *Service) SendAs(ctx context.Context, _, _, _ string) context.Context { return ctx }
 
@@ -602,16 +604,6 @@ func (s *Service) SetLiveRunExt(r *channel.Run, key, value string) {
 		s.SetRunExt(real, key, value)
 	}
 	s.SetRunExt(r, key, value)
-}
-
-func (s *Service) RunTo(ext map[string]string) assistantwire.ChannelTarget {
-	if ext[readChatKey] != "" {
-		return assistantwire.ChannelTarget{ChatID: ext[readChatKey], InThread: ext["read_thread"] != "", NoDetour: true, Read: true}
-	}
-	if ext["chat"] == "" || ext["thread"] == "" {
-		return assistantwire.ChannelTarget{}
-	}
-	return assistantwire.ChannelTarget{ChatID: ext["chat"], InThread: true}
 }
 
 func (s *Service) RunState(id string, kept bool, make func() any) (any, <-chan struct{}, bool) {

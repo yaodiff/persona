@@ -9671,6 +9671,578 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "ナレッジページ"
+    },
+    {
+      "name": "todo_stage_plan",
+      "value": "計画"
+    },
+    {
+      "name": "todo_stage_develop",
+      "value": "開発"
+    },
+    {
+      "name": "todo_stage_review",
+      "value": "レビュー"
+    },
+    {
+      "name": "todo_stage_merge",
+      "value": "マージ"
+    },
+    {
+      "name": "todo_stage_deploy",
+      "value": "デプロイ"
+    },
+    {
+      "name": "todo_stage_verify",
+      "value": "検証済み"
+    },
+    {
+      "name": "todo_stage_done",
+      "value": "完了"
+    },
+    {
+      "name": "todo_stage_state_done",
+      "value": "完了"
+    },
+    {
+      "name": "todo_stage_state_current",
+      "value": "現在のステップ"
+    },
+    {
+      "name": "todo_stage_state_ahead",
+      "value": "未着手"
+    },
+    {
+      "name": "todo_stage_step_of",
+      "value": "{total} ステップ中 {current} 番目"
+    },
+    {
+      "name": "todo_stage_step_summary",
+      "value": "ステップ {current}/{total} · {stage}"
+    },
+    {
+      "name": "todo_decisions_title",
+      "value": "決定事項"
+    },
+    {
+      "name": "todo_decisions_loading",
+      "value": "決定事項を読み込み中…"
+    },
+    {
+      "name": "todo_decisions_load_failed",
+      "value": "決定事項を読み込めませんでした。"
+    },
+    {
+      "name": "todo_decisions_empty",
+      "value": "このTo-Doでの決定がここに記録されます。エージェントへの回答や完了結果が自動で記録されるほか、手動でも追加できます。"
+    },
+    {
+      "name": "todo_decisions_show_all",
+      "value": "全 {count} 件を表示"
+    },
+    {
+      "name": "todo_decisions_show_first",
+      "value": "最初の {count} 件を表示"
+    },
+    {
+      "name": "todo_decisions_full_history",
+      "value": "すべての履歴（改訂 {count} 件）"
+    },
+    {
+      "name": "todo_decisions_current_only",
+      "value": "現在の有効分のみ"
+    },
+    {
+      "name": "todo_decision_chose",
+      "value": "決定："
+    },
+    {
+      "name": "todo_decision_reason_prefix",
+      "value": "理由："
+    },
+    {
+      "name": "todo_decision_revise",
+      "value": "改訂"
+    },
+    {
+      "name": "todo_decision_revised_badge",
+      "value": "改訂済み"
+    },
+    {
+      "name": "todo_decision_revises",
+      "value": "「{choice}」を改訂"
+    },
+    {
+      "name": "todo_decision_revises_item",
+      "value": "「{question} → {choice}」の改訂にする"
+    },
+    {
+      "name": "todo_decision_undo_revision",
+      "value": "改訂の関連付けを解除"
+    },
+    {
+      "name": "todo_decision_record_title",
+      "value": "決定を記録"
+    },
+    {
+      "name": "todo_decision_save",
+      "value": "記録"
+    },
+    {
+      "name": "todo_decision_revise_note",
+      "value": "以前の選択「{choice}」は取り消し線付きで履歴に残り、新しい選択のみがエージェントに渡されます。"
+    },
+    {
+      "name": "todo_decision_question_label",
+      "value": "質問"
+    },
+    {
+      "name": "todo_decision_question_placeholder",
+      "value": "何を決める必要がありますか…"
+    },
+    {
+      "name": "todo_decision_choice_label",
+      "value": "選択"
+    },
+    {
+      "name": "todo_decision_choice_placeholder",
+      "value": "決まった内容…"
+    },
+    {
+      "name": "todo_decision_reason_label",
+      "value": "理由（任意）"
+    },
+    {
+      "name": "todo_decision_reason_placeholder",
+      "value": "その理由や除外した選択肢…"
+    },
+    {
+      "name": "todo_decision_source_manual",
+      "value": "手動で追加"
+    },
+    {
+      "name": "todo_decision_source_outcome",
+      "value": "エージェント完了時に記録"
+    },
+    {
+      "name": "todo_decision_source_agent",
+      "value": "エージェント作業中に記録"
+    },
+    {
+      "name": "todo_decision_source_thread",
+      "value": "Lark トピックで発言"
+    },
+    {
+      "name": "todo_decision_source_card",
+      "value": "エージェントの質問に回答"
+    },
+    {
+      "name": "todo_decision_recorded_toast",
+      "value": "決定を記録しました"
+    },
+    {
+      "name": "todo_decision_revised_toast",
+      "value": "決定を改訂しました"
+    },
+    {
+      "name": "todo_decision_marked_revised",
+      "value": "改訂としてマークしました"
+    },
+    {
+      "name": "todo_decision_revision_undone",
+      "value": "改訂マークを解除しました"
+    },
+    {
+      "name": "expand_all",
+      "value": "すべて展開"
+    },
+    {
+      "name": "collapse_all",
+      "value": "すべて折りたたむ"
+    },
+    {
+      "name": "saving",
+      "value": "保存中…"
+    },
+    {
+      "name": "token_usage_recent_hourly",
+      "value": "最近の時間別利用量"
+    },
+    {
+      "name": "token_usage_by_machine_7d",
+      "value": "コンピュータ別 · 過去7日間"
+    },
+    {
+      "name": "token_usage_by_agent_7d",
+      "value": "エージェント別 · 過去7日間"
+    },
+    {
+      "name": "token_usage_by_agent",
+      "value": "エージェント別"
+    },
+    {
+      "name": "token_usage_by_launcher",
+      "value": "ランチャー別"
+    },
+    {
+      "name": "token_usage_by_place",
+      "value": "フォルダとワークツリー"
+    },
+    {
+      "name": "token_usage_requests",
+      "value": "リクエスト"
+    },
+    {
+      "name": "token_usage_worktree",
+      "value": "リンクされたワークツリー"
+    },
+    {
+      "name": "token_usage_removed_computer",
+      "value": "削除されたコンピュータ"
+    },
+    {
+      "name": "token_usage_not_split",
+      "value": "未分類（更新前）"
+    },
+    {
+      "name": "token_usage_launcher_terminal",
+      "value": "ターミナルで開始"
+    },
+    {
+      "name": "token_usage_project_by_hour",
+      "value": "時間別"
+    },
+    {
+      "name": "token_usage_project_each_day",
+      "value": "日別"
+    },
+    {
+      "name": "next_suggestions_title",
+      "value": "次のメッセージを提案"
+    },
+    {
+      "name": "next_suggestions_note",
+      "value": "開いているチャットで返信があった後、空の入力欄の上に次のメッセージ候補を提案します。"
+    },
+    {
+      "name": "suggestion_use",
+      "value": "使う"
+    },
+    {
+      "name": "suggestion_fill_in",
+      "value": "入力欄に入れる"
+    },
+    {
+      "name": "suggestion_send_now",
+      "value": "今すぐ送信"
+    },
+    {
+      "name": "suggestion_hint_safe",
+      "value": "タップで入力、長押しですぐに送信できます。"
+    },
+    {
+      "name": "suggestion_hint_risky",
+      "value": "タップして入力欄で確認してください。"
+    },
+    {
+      "name": "rule_suggestion_always",
+      "value": "常に実行"
+    },
+    {
+      "name": "rule_suggestion_not_now",
+      "value": "今はしない"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust",
+      "value": "「常に実行」はこの種類のタスクを自動開始に追加し、次回から確認なしで開始します。"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust_scoped",
+      "value": "「常に実行」はルールを追加します：{machine} の {directory} でファイルを変更するタスクを確認なしで開始します。"
+    },
+    {
+      "name": "rule_suggestion_creates_standing",
+      "value": "「常に実行」は {machine} の {directory} での「{action}」に常時許可を作成します。"
+    },
+    {
+      "name": "rule_suggestion_creates_setting",
+      "value": "「常に実行」はルールを保存せず、この提案を30日間非表示にします。"
+    },
+    {
+      "name": "rule_suggestion_made_task_trust",
+      "value": "ルールを追加しました：次回から確認なしで開始します。"
+    },
+    {
+      "name": "rule_suggestion_made_standing",
+      "value": "常時許可を追加しました。"
+    },
+    {
+      "name": "rule_suggestion_made_setting",
+      "value": "この提案（{setting}）を非表示にしました。"
+    },
+    {
+      "name": "rule_suggestion_made_none",
+      "value": "完了しました。ルールは保存されませんでした。"
+    },
+    {
+      "name": "rule_suggestion_conflict",
+      "value": "常時許可が変更されました。もう一度お試しください。"
+    },
+    {
+      "name": "rule_suggestion_failed",
+      "value": "回答を保存できませんでした。"
+    },
+    {
+      "name": "recording_bookmark",
+      "value": "ブックマーク"
+    },
+    {
+      "name": "recording_transcript_review",
+      "value": "文字起こしを検索"
+    },
+    {
+      "name": "recording_transcript_find",
+      "value": "文字起こし内を検索…"
+    },
+    {
+      "name": "recording_transcript_previous",
+      "value": "前の一致"
+    },
+    {
+      "name": "recording_transcript_next",
+      "value": "次の一致"
+    },
+    {
+      "name": "recording_transcript_bookmarks",
+      "value": "ブックマーク"
+    },
+    {
+      "name": "recording_transcript_copy",
+      "value": "テキストをコピー"
+    },
+    {
+      "name": "recording_transcript_copied",
+      "value": "文字起こしをコピーしました"
+    },
+    {
+      "name": "recording_transcript_no_matches",
+      "value": "一致なし"
+    },
+    {
+      "name": "recording_transcript_matches",
+      "value": "件一致"
+    },
+    {
+      "name": "recording_transcript_expired",
+      "value": "音声の文字起こしは期限切れとなり、ブックマークのみ保持されています。"
+    },
+    {
+      "name": "recording_transcript_empty",
+      "value": "保持されている文字起こしはありません。"
+    },
+    {
+      "name": "standing_auth_title",
+      "value": "常時許可"
+    },
+    {
+      "name": "standing_tab_standing",
+      "value": "常時許可"
+    },
+    {
+      "name": "standing_tab_session",
+      "value": "セッション許可"
+    },
+    {
+      "name": "standing_action_merge",
+      "value": "変更をマージ"
+    },
+    {
+      "name": "standing_action_push",
+      "value": "変更をプッシュ"
+    },
+    {
+      "name": "standing_action_deploy_test",
+      "value": "テスト環境へデプロイ"
+    },
+    {
+      "name": "standing_action_deploy_production",
+      "value": "本番環境へデプロイ"
+    },
+    {
+      "name": "standing_action_send",
+      "value": "メッセージを送信"
+    },
+    {
+      "name": "standing_action_delete",
+      "value": "データを削除"
+    },
+    {
+      "name": "standing_action_spend",
+      "value": "費用を支出"
+    },
+    {
+      "name": "standing_no_actions",
+      "value": "記録された操作はありません"
+    },
+    {
+      "name": "standing_condition_ci_green",
+      "value": "すべてのチェックが通過"
+    },
+    {
+      "name": "standing_condition_no_conflicts",
+      "value": "マージ競合なし"
+    },
+    {
+      "name": "standing_only_when",
+      "value": "条件"
+    },
+    {
+      "name": "standing_place_format",
+      "value": "{machine} の {folder}"
+    },
+    {
+      "name": "standing_reversible_yes",
+      "value": "取り消し可能"
+    },
+    {
+      "name": "standing_reversible_no",
+      "value": "取り消し不可"
+    },
+    {
+      "name": "standing_since",
+      "value": "{date} から"
+    },
+    {
+      "name": "standing_source_chat",
+      "value": "チャット"
+    },
+    {
+      "name": "standing_source_suggested_rule",
+      "value": "提案されたルール：14 日間に同じ回答が {count} 回あり、「常に」で確認されました。"
+    },
+    {
+      "name": "standing_show_details",
+      "value": "詳細"
+    },
+    {
+      "name": "standing_hide_details",
+      "value": "詳細を隠す"
+    },
+    {
+      "name": "standing_revoke",
+      "value": "取り消す"
+    },
+    {
+      "name": "standing_revoke_action",
+      "value": "許可を取り消す"
+    },
+    {
+      "name": "standing_revoke_confirm_title",
+      "value": "この許可を取り消しますか？"
+    },
+    {
+      "name": "standing_revoke_confirm_message",
+      "value": "取り消すと、{machine} の {folder} で {actions} を実行する前に Persona が再度確認します。完了済みの作業には影響しません。再び許可するにはメインチャットで指示してください。"
+    },
+    {
+      "name": "standing_revoked_toast",
+      "value": "許可を取り消しました"
+    },
+    {
+      "name": "standing_revoke_failed_toast",
+      "value": "この許可を取り消せませんでした。現在も有効です。接続を確認して再試行してください。"
+    },
+    {
+      "name": "standing_empty_title",
+      "value": "許可はまだありません"
+    },
+    {
+      "name": "standing_empty_message",
+      "value": "マージ、プッシュ、デプロイ、メッセージ送信、データ削除、支出の前に Persona が確認します。チャットで常に許可するとここに表示されます。"
+    },
+    {
+      "name": "standing_forbidden_title",
+      "value": "フルアクセスが必要です"
+    },
+    {
+      "name": "standing_forbidden_message",
+      "value": "常時許可の表示と取り消しができるのは、フルアクセス権のあるデバイスのみです。"
+    },
+    {
+      "name": "standing_failed_title",
+      "value": "常時許可を読み込めませんでした"
+    },
+    {
+      "name": "standing_footer_note",
+      "value": "取り消されるまで、Persona は確認なしでこれらを実行します。"
+    },
+    {
+      "name": "standing_select_conversation",
+      "value": "会話"
+    },
+    {
+      "name": "phone_search_alias_standing_authorizations",
+      "value": "常時許可 セッション許可 権限 取り消し standing authorizations always allow"
+    },
+    {
+      "name": "always_grants_heading",
+      "value": "この会話で常に許可"
+    },
+    {
+      "name": "always_grants_empty",
+      "value": "保存された許可はありません。"
+    },
+    {
+      "name": "always_grants_restart_needed",
+      "value": "保存された許可は取り消されましたが、実行中の会話をリセットできませんでした。取り消しを有効にするにはこの会話を再開してください。"
+    },
+    {
+      "name": "always_grants_scope_footer",
+      "value": "これらの保存された許可はこの会話のみに適用されます。記録にはツール名のみが保存され、詳細なディレクトリやコマンド範囲は保存されません。"
+    },
+    {
+      "name": "always_grant_unnamed",
+      "value": "名前のない許可"
+    },
+    {
+      "name": "always_grant_revoke_title",
+      "value": "この許可を取り消しますか？"
+    },
+    {
+      "name": "always_grant_revoke_message",
+      "value": "取り消すと許可をクリアするため現在の応答を停止します。次のメッセージを送信すると続行できます。"
+    },
+    {
+      "name": "always_grant_revoked_toast",
+      "value": "許可を取り消しました"
+    },
+    {
+      "name": "assistant_full_search_title",
+      "value": "チャットとエージェントを検索"
+    },
+    {
+      "name": "assistant_search_scope_chats",
+      "value": "チャット"
+    },
+    {
+      "name": "archived_agents_empty_title",
+      "value": "アーカイブ済みのエージェントはありません"
+    },
+    {
+      "name": "archived_agents_empty_message",
+      "value": "アーカイブされたエージェントセッションは復元するまでここに表示されます。"
+    },
+    {
+      "name": "agent_auto_rename",
+      "value": "自動名前変更"
+    },
+    {
+      "name": "agent_renaming",
+      "value": "名前を変更中…"
+    },
+    {
+      "name": "assistant_session",
+      "value": "アシスタントチャットはここで自動名前変更できません"
     }
   ]
 }

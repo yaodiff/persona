@@ -63,6 +63,7 @@ const render = async ({
     { machine_id: "m1", session_id: "dir-growth", title: "Growth Direction" },
   ],
   grouping = "status",
+  foldChildren,
   selectedId,
 }: {
   todos: Todo[];
@@ -71,6 +72,7 @@ const render = async ({
   leaders?: string[];
   conversations?: unknown[];
   grouping?: "status" | "folder" | "direction";
+  foldChildren?: boolean;
   selectedId?: string;
 }) => {
   localStorage.setItem("persona.todos.grouping", grouping);
@@ -91,6 +93,7 @@ const render = async ({
       conversations,
       leaders,
       todos_v2: todosV2,
+      todos_v2_fold_children: foldChildren,
     },
   });
   await act(async () => root.render(<TodosView selectedId={selectedId} />));
@@ -107,8 +110,8 @@ beforeEach(async () => {
     if (path.includes("/kb")) {
       return {
         items: [
-          { slug: "core", name: "Core Project" },
-          { slug: "web", name: "Web Project" },
+          { id: "core", slug: "core", name: "Core Project" },
+          { id: "web", slug: "web", name: "Web Project" },
         ],
       };
     }
@@ -382,5 +385,14 @@ describe("TodosView effective direction, unified detail hierarchy, and grouping 
     await flush();
     expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-goal-children]")).toBeNull();
+  });
+
+  it.each(["status", "folder", "direction"] as const)("keeps children as separate rows in %s when folding is off", async (grouping) => {
+    await render({ todos, todoBoard: grouping === "direction" ? board : null, grouping, foldChildren: false });
+    const children = host.querySelector('[data-todo="personal_child"]');
+    expect(children).not.toBeNull();
+    expect(children?.closest("[data-testid=todo-goal-children]")).toBeNull();
+    expect(host.querySelector('[data-todo="goal_parent"] [data-testid=todo-goal-toggle]')).toBeNull();
+    expect(children?.querySelector("[data-testid=todo-parent-goal]")?.textContent).toContain("Unify hierarchy UX");
   });
 });

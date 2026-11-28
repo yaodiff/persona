@@ -77,7 +77,7 @@ func (s core) openFromElsewhere(ctx context.Context, src Source) (string, error)
 	if !st.Ready || st.Owner == "" {
 		return "", errors.New(i18n.T(l, "assistant-feishu.elsewhere_not_ready"))
 	}
-	if _, _, why := s.h.OpenTarget(ctx, st); why != "" {
+	if _, _, why := s.openTarget(ctx, st); why != "" {
 		return "", errors.New(why) // before anything is posted: no stray topic when there is no one to take it
 	}
 

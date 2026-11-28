@@ -51,9 +51,8 @@ func closeoutDone(c proto.Closeout, artifacts []proto.WorkArtifact, lang i18n.La
 	return w
 }
 
-// closeoutAsksOwner: a closeout that says done yet names the owner as the one to unblock what it waits for or lacks,
-// with no delivery behind it (a delivery's own hold reaches the owner as one, delivery.go). Its turn is no finished
-// work: it asks the owner something, so the model reads it as any unfinished turn is read (#14899).
+// closeoutAsksOwner identifies a done report with an outstanding owner decision (#14899).
+// Delivery holds reach the owner through delivery.go.
 func closeoutAsksOwner(c proto.Closeout) bool {
 	return c.Status == proto.CloseoutDone && c.Unblock == unblockUser && (c.Waiting != "" || c.Missing != "") &&
 		(c.Delivery == "" || c.Delivery == deliveryNone)
@@ -71,16 +70,34 @@ func closeoutWaitsOnPerson(c proto.Closeout) bool {
 	return false
 }
 
-// withCloseout lays a closeout that is not "done" over what the model read from the same reply. The agent's own word
-// that it is not finished wins over a model that read the reply as done: the state is then unsure, as for any turn
-// nobody can call finished, with the closeout kept for whoever looks.
-func withCloseout(w *proto.WorkState, c proto.Closeout, artifacts []proto.WorkArtifact) *proto.WorkState {
-	if w.Phase == proto.WorkDone {
-		w = &proto.WorkState{Artifacts: w.Artifacts}
+// closeoutWork uses the report's status, responsible party and dependency to settle the turn.
+func closeoutWork(c proto.Closeout, artifacts []proto.WorkArtifact, lang i18n.Lang) *proto.WorkState {
+	disproved := closeoutDisproved(c)
+	if !disproved && c.Status == proto.CloseoutDone && !closeoutAsksOwner(c) {
+		return closeoutDone(c, artifacts, lang)
 	}
-	w.Closeout = &c
-	if len(w.Artifacts) == 0 {
-		w.Artifacts = workArtifacts(artifacts)
+	w := &proto.WorkState{Closeout: &c, Artifacts: workArtifacts(artifacts), By: "rule"}
+	if disproved {
+		return unfinished(w, lang)
+	}
+	var wait string
+	switch {
+	case closeoutWaitsOnPerson(c):
+		wait = cmpOr(c.Waiting, c.Missing)
+	case c.Status == proto.CloseoutBlocked:
+		wait = c.Waiting
+	}
+	if wait == "" {
+		return unfinished(w, lang)
+	}
+	w.Phase, w.Line = proto.WorkBlocked, clip(wait, 60)
+	if c.Unblock == unblockUser {
+		w.On = proto.WaitUser
+		w.Questions = []proto.Question{{Question: wait, Options: []proto.QuestionOption{
+			{Label: answerLabel(lang, answerOK)}, {Label: answerLabel(lang, answerSkip)},
+		}}}
+	} else {
+		w.On, w.Wait = proto.WaitExternal, clip(wait, 80)
 	}
 	return w
 }

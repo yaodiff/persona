@@ -7,7 +7,7 @@ import (
 
 // Orca's chats as tabs: worktree.ps lists a chat only once it has a turn (an agent row Orca's status feed reports), so
 // a chat opened and not yet written to is found among the tabs (session.tabs.listAll), where every chat has one.
-// Checked on Orca 1.4.277 (docs/plans/plan-orca-support.md "Structured sessions").
+// Checked on Orca 1.4.277 (docs/integrations/orca.md "Structured sessions").
 
 // chatTabLeaf ends the pane key ChatTabs gives the agent row of a chat found among the tabs, after the chat's own tab
 // ("structured-agent-session-<session id>"), so SessionOf reads the chat out of it as out of a worktree.ps row's.

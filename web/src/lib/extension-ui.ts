@@ -265,17 +265,8 @@ export interface UIGraphNodeLink {
   url: string;
 }
 
-/** Only a credential-free https url opens from a node's inspector. Unlike isHttps it also refuses a url carrying
- *  username and password, which would otherwise be shown in the page and leaked to the site. */
-export function isGraphLink(url?: string): boolean {
-  if (!url) return false;
-  try {
-    const u = new URL(url);
-    return u.protocol === "https:" && u.hostname !== "" && u.username === "" && u.password === "";
-  } catch {
-    return false;
-  }
-}
+/** Only a credential-free https url opens from a node's inspector. */
+export const isGraphLink = isHttps;
 
 /** One node of a graph (UI version 10, #9727): a box with a title, a state line, a badge, an icon and a progress bar. */
 export interface UIGraphNode {

@@ -23,5 +23,8 @@
   "not_told_yet": "This to-do can't be checked right now. Try again in a moment.",
   "machine_not_found": "This computer isn't one of the hub's computers.",
   "machine_offline": "This computer is off right now. Try again once it's back.",
-  "images_forbidden": "This device can’t read to-do images"
+  "images_forbidden": "This device can’t read to-do images",
+  "reorganize_requires_v2": "Turn on New To-dos & Tasks in Labs to reorganize to-dos.",
+  "topology_changed": "The to-do changed. Refresh your to-dos and try again.",
+  "split_children_changed": "Some to-dos from this split were moved or removed. Refresh your to-dos before splitting again."
 }

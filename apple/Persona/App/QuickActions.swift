@@ -92,6 +92,23 @@ enum QuickAction: String, CaseIterable {
         }
     }
 
+    /// Message Persona (#17789): the main conversation with its composer's keyboard up (`composerFocus`), from the
+    /// Action button, the control or Shortcuts. A cold launch waits (at most 8 s) for the hub's main conversation, as
+    /// Call Persona does; with none (a fresh install), the new conversation page, whose first message starts it.
+    func openMainAssistantForTyping(waits: Int = 32) async {
+        shellSettings = false
+        selectedTab = .assistant
+        for _ in 0..<waits where assistantMain == nil {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard let main = assistantMain else {
+            openNewAssistant()
+            return
+        }
+        openAssistantConversation(main)
+        composerFocus = main
+    }
+
     /// Clear the old conversation before the first view can run, so a cold launch keeps the control's new conversation.
     func openNewAssistantForDictation() {
         assistantCurrent = nil

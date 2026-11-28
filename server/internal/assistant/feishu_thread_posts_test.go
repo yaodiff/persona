@@ -314,7 +314,7 @@ func (p *fleetPost) askKind(t *testing.T, id, kind, summary string) {
 	t.Helper()
 	decided := make(chan struct{}, 4)
 	p.ft.s.tposts.asked = func() { decided <- struct{}{} }
-	ix := proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: kind, Summary: summary, SessionTitle: "修登录"}
+	ix := proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: kind, OutwardWrite: kind == proto.IxPermission, Summary: summary, SessionTitle: "修登录"}
 	go func() { _, _ = p.ft.s.waitInteraction(context.Background(), ix) }()
 	p.ft.waitPending(1)
 	select {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -164,23 +165,27 @@ func taskAgentsSettled(t Todo, agents []proto.Session) bool {
 // it, so another agent linked to t cannot inherit it.
 func taskAgentSettledIn(t Todo, agents []proto.Session, c proto.Session) bool {
 	reportAt, ok := taskReportedDone(t, c)
-	return taskAgentSettledReported(c, ok && len(agents) > 0, reportAt)
+	wait := len(agents) == 1 && t.Phase == assistantwire.TaskPhaseWaiting && t.WaitState != nil &&
+		t.WaitState.WaitingOn.Valid() && (c.BackgroundWorking || c.State != proto.StateWorking)
+	return taskAgentSettledReported(c, ok && len(agents) > 0, reportAt, wait)
 }
 
 // taskAgentSettled: c's turn is over and nothing of it goes on: no question or card waits, no background work runs
 // (stalled background commands alone do not count, #16418), and no "Continue" is due by itself.
-func taskAgentSettled(c proto.Session) bool { return taskAgentSettledReported(c, false, time.Time{}) }
+func taskAgentSettled(c proto.Session) bool {
+	return taskAgentSettledReported(c, false, time.Time{}, false)
+}
 
 // taskAgentSettledReported is taskAgentSettled; reportedDone/reportAt: c reported its task done in this round at
 // reportAt, so background commands left behind from before that report that only wait, were moved from the foreground
 // or stalled do not hold it (backgroundLeftOver). A turn that stopped on a person also settles with its background
-// work left running (#14899).
-func taskAgentSettledReported(c proto.Session, reportedDone bool, reportAt time.Time) bool {
+// work left running (#14899). A structured wait on a single-worker task serves the same purpose.
+func taskAgentSettledReported(c proto.Session, reportedDone bool, reportAt time.Time, reportedWait bool) bool {
 	if c.Status != proto.StatusDone && c.Status != proto.StatusIdle || c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
 		return false
 	}
 	if (c.State == proto.StateWorking || backgroundRunning(c)) &&
-		!backgroundLeftOver(c, reportedDone, reportAt) && !stoppedOnPerson(c) {
+		!backgroundLeftOver(c, reportedDone, reportAt) && !reportedWait && !stoppedOnPerson(c) {
 		return false
 	}
 	w := c.Work
@@ -246,6 +251,9 @@ func backgroundLeftOver(c proto.Session, reportedDone bool, reportAt time.Time) 
 // supervision last changed (a review, a rework, the task opened again), as freshTaskDoneReport counts a round.
 func taskReportedDone(t Todo, c proto.Session) (time.Time, bool) {
 	v := t.Supervision
+	if t.Phase == assistantwire.TaskPhaseWaiting && t.WaitState != nil {
+		return time.Time{}, false
+	}
 	if v == nil || v.Progress == nil || v.Progress.Kind != upReportDone || v.Progress.At.IsZero() || v.Progress.At.Before(v.UpdatedAt) {
 		return time.Time{}, false
 	}

@@ -8,6 +8,7 @@ import { loadPages } from "../lib/lazy-page";
 import { chooseManager, resetManagerChoice, setRosterDefault } from "../lib/manager-choice";
 import { acceptLabsSeen, getState, patchAssistant, refresh, refreshAssistant, reset } from "../lib/store";
 import { Settings } from "./Settings";
+import type { IntegrationsRoute } from "./settings/integrations-route";
 
 vi.hoisted(() => {
   window.matchMedia = (media) => ({
@@ -15,9 +16,12 @@ vi.hoisted(() => {
     addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false,
   });
 });
-vi.mock("./settings/Integrations", () => ({
-  Integrations: ({ open }: { open: string | null }) => <div data-integration={open ?? ""} />,
-}));
+vi.mock("./settings/Integrations", async () => {
+  const { integrationQuery } = await import("./settings/integrations-route");
+  return {
+    Integrations: ({ route }: { route: IntegrationsRoute }) => <div data-integration={integrationQuery(route, true).get("integration") ?? ""} />,
+  };
+});
 vi.mock("./settings/Extensions", () => ({ Extensions: () => null }));
 
 const detail = "?tab=integrations&integration=builtin%3Amail";

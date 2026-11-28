@@ -14,6 +14,9 @@ nonisolated func assistantModelOption(_ id: String?, in models: [AgentModelOptio
 /// the name pill shows the spinner and Waiting for Network / Connecting… / Updating….
 struct AssistantTopBar: View {
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    @Environment(\.replySpeechContext) private var replySpeechContext
+    #endif
     /// In the shell (docs/apple/ios.md「New shell」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
     @Environment(\.shell) private var shell
     /// The system's bars down the side (iPhone Duo): the shell's bar is the side rail there.
@@ -79,6 +82,10 @@ struct AssistantTopBar: View {
         let _ = PerfTrace.body("AssistantTopBar")
         #endif
         bar
+            #if os(iOS)
+            .onChange(of: showInfo || showDefaultPermissions || showBackgroundActivity || showLink || typingFor != nil,
+                      initial: true) { _, open in replySpeechContext?.titleSheetOpen = open }
+            #endif
             // Session Info is a sheet, like the Agents chat's (SessionInfoSheet).
             .sheet(isPresented: Binding(get: { showInfo && key != nil }, set: { showInfo = $0 })) {
                 if let key {
@@ -516,6 +523,9 @@ struct AssistantTopBar: View {
             Button(action: openKnowledge) { Label("Knowledge", systemImage: Theme.Icon.knowledge) }
             Button(action: openProfile) { Label("Details [Assistant Top Bar 1932da]", systemImage: Theme.Icon.person) }
             if key != nil, key == model.assistantMain {
+                #if os(iOS)
+                if UIDevice.current.userInterfaceIdiom == .phone { ReplySpeechMenuToggle() }
+                #endif
                 Button { showBackgroundActivity = true } label: {
                     Label("Background activity", systemImage: Theme.Icon.recent)
                 }

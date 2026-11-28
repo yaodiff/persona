@@ -45,6 +45,31 @@ class AndroidScrollPerfTest(unittest.TestCase):
             self.assertEqual((row['frames_total'], row['janky_percent_total']), (10, 20.0))
             self.assertEqual(row['gfx_p90_ms_per_run']['p90'], 19)
 
+    def test_report_output_symlink_keeps_pointing_to_the_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / 'report.json'
+            output = Path(directory) / 'out.json'
+            output.symlink_to(report.name)
+            self.run_scroll(output)
+            self.assertTrue(output.is_symlink())
+            self.assertEqual(json.loads(report.read_bytes())['glass/agents']['frames_total'], 10)
+            self.assertCountEqual(output.parent.iterdir(), [output, report])
+
+    def test_interrupted_report_write_preserves_existing_report(self):
+        def interrupted(_report, stream, **_kwargs):
+            stream.write('{"partial":')
+            raise OSError("synthetic write failure")
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'out.json'
+            original = b'{"completed":true}\n'
+            output.write_bytes(original)
+            with patch.object(json, 'dump', side_effect=interrupted):
+                with self.assertRaisesRegex(OSError, 'synthetic write failure'):
+                    self.run_scroll(output)
+            self.assertEqual(output.read_bytes(), original)
+            self.assertEqual(list(output.parent.iterdir()), [output])
+
     def test_unusable_optional_detail_preserves_the_aggregate_report(self):
         for detail in ('', 'Flags,IntendedVsync\n0,1000000\n'):
             with self.subTest(detail=detail), tempfile.TemporaryDirectory() as directory:

@@ -317,7 +317,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	errTodosV2Changed := errors.New("todos_v2 setting changed")
 	errIntegrationsV2Changed := errors.New("integrations_v2 setting changed")
 	var labsSeenChanged bool
+	var beforeTodoPrefs todoRevisionPrefs
 	saved, err := s.updateSettings(ctx, func(v *Settings) error {
+		beforeTodoPrefs = todoRevisionPrefsOf(*v)
 		var err error
 		if labsSeenChanged, err = applyLabsSeen(v, labsSeen); err != nil {
 			return err
@@ -556,6 +558,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.SupervisionBatchMinutes != nil {
 			v.SupervisionBatchMinutes = in.SupervisionBatchMinutes
 		}
+		if in.SupervisionTriage != nil {
+			v.SupervisionTriage = in.SupervisionTriage
+		}
 		if in.AutoSupervisionMode != "" {
 			// The mode wins over the older switch in the same body, and keeps it in step for older readers.
 			on := in.AutoSupervisionMode != supervisionModeOff
@@ -605,6 +610,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if guideChanged {
 		s.mcpChanges.notify()
 	}
+	if todoRevisionPrefsOf(saved) != beforeTodoPrefs {
+		s.todoRevisionChanged()
+	}
 	s.settingsChanged(ctx)
 	// Revoke already captured requests as part of a policy edit. Forwarding stays
 	// available; only a subsequent genuine request can rearm the snapshot.
@@ -617,13 +625,6 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.SupervisionBatchMinutes != nil && supervisionBatchMinutesOf(s.settings(ctx)) != supervisionBatchMinutesOf(before) {
 		s.rescheduleSupervision()
-	}
-	afterTodosV2 := s.settings(ctx)
-	if (in.TodosV2 != nil && afterTodosV2.todosV2On() != before.todosV2On()) ||
-		(afterTodosV2.todosV2On() && (afterTodosV2.todosV2PendingReviewSLAHours() != before.todosV2PendingReviewSLAHours() ||
-			afterTodosV2.todosV2CanWaitSLAHours() != before.todosV2CanWaitSLAHours() ||
-			afterTodosV2.todosV2FoldChildrenOn() != before.todosV2FoldChildrenOn())) {
-		s.todosPushSoon()
 	}
 	if in.MeetingTranscriptionExtension != nil {
 		s.transcriptionReadinessChanged() // named again: probed again (the answer stands meanwhile)

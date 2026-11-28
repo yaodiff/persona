@@ -612,7 +612,12 @@ Not tested on real herdr: these changes don't touch protocol.
 Computer-changing actions in terminal/sidebar-tree node menus (`docs/web/web.md`, "Node menu"). Hub routes are **`full`-device-only** (`nodeAction` in `hub/panes.go`: `answer` devices and extension tokens 403, `route_scopes.txt` `-`),
 with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / `tabs.close` / `tabs.rename` (`node/panes_actions.go`). Common rules: only host-listed panes/tabs/workspaces (refresh snapshot once if missing), directory comes from the pane, no request field for arbitrary directory or command.
 
-- **Host capability**: `host.SlotCloser` (whole tab), `host.Splitter` (split), implemented only by herdr. Orca, herdr-core, botmux return `unsupported`, and web hides actions. herdr uses `tab close` / `pane split` / `tab rename` / `pane close` (socket `pane.split` etc., CLI fallback `herdr pane split <pane> --direction right --no-focus --cwd …`).
+- **Host capability**: `host.Organizer` (rename a workspace or tab, close a pane), `host.SlotCloser` (whole tab), `host.Splitter` (split); herdr, Rex and Orca (#17043) split and close tabs. A host without one returns `unsupported`.
+  `panes.list` reports what each host does as `abilities` (#17053, `paneAbilities` in `node/panes.go`): `rename` and `close_pane` from `host.Organizer`, `split` and `close_tab` from the other two (an Orca that lacks the call reports false: `canSplit` / `canCloseTab`),
+  `git` for every host whose terminals the node drives (not botmux), and `run_here` for the default engine's host when it can name a pane's foreground programs.
+  The web's menus follow it (`web/src/lib/host-abilities.ts`), so a host that gains an interface gets its items with no client change; for an older node
+  that sends none they keep a table of what it did: herdr everything, Orca rename, close pane and Git, Tern and Rex rename. herdr uses `tab close` / `pane split` / `tab rename` / `pane close` (socket `pane.split` etc., CLI fallback `herdr pane split <pane> --direction right --no-focus --cwd …`).
+- **On Orca** (`node/hostorca_panes.go`, checked on an isolated Orca 1.4.277): a split is `terminal.split` on the pane's terminal, `right` as Orca's `vertical` and `down` as its `horizontal`. The local socket's split takes no folder, so the new shell starts in the worktree and a pane working elsewhere gets `cd <folder>` as the new shell's first command. Close tab is `terminal.closeTab` on one of the tab's terminals. Orca 1.4.277 does not hold `expectedIncarnationId` on either call (it is sent all the same), so the node looks the terminal up afresh just before. An Orca that answers `method_not_found` is refused as `unsupported` with nothing done, and its `abilities` stop offering that action until Orca starts again. Renaming a tab is `terminal.rename`. On a runtime with no window the layouts keep the tab's first title, so the node takes a tab's name from Orca's phone tab model (`session.tabs.list`, its custom name) whenever it reads the layouts (after a rename of its own at once), and the assistant's guarded rename (#15674) checks the name there before renaming; an Orca without that model keeps the layouts' titles.
 - **Close pane**: Agent pane through `session.close` (^C twice to request exit, then close); shell via host `Close`—close tab if last pane, otherwise only pane. **Close tab** directly closes entire tab.
 - **New pane**: `pane split <pane> --direction right|down`, no computer focus stealing, in source pane's directory; returns `pane:<id>`.
 - **Rename tab**: 1–80 characters, whitespace collapsed to single spaces. Agent tabs use existing `session.rename`; others `tabs.rename`.
@@ -629,7 +634,9 @@ with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / 
   All timeout after 60 seconds, don't prompt for passwords (`GIT_TERMINAL_PROMPT=0`, askpass `false`), retain only last 2 KB output.
 - **iOS / Mac** (#3098): Agent-row long-press menus add Split, Git, Close Tab; space ⋯ adds Run Agent Here…, Git, same routes (`docs/apple/ios.md`, "Information architecture"). No standalone terminal; shell pane chosen in Run Agent Here… sheet.
 - **Apple errors** (#3586): an uncoded node refusal reaches the hub as 502 `internal`. `APIClient.nodeAction` marks that call so the existing sheet / toast keeps the node's actionable reason; other `internal` 5xx responses stay generic instead of exposing private exceptions.
+- **Coded since #17057**: the node's refusals and failures here are coded (`tab_gone`, `pane_gone`, `tab_close_failed`, `pane_close_failed`, `pane_split_failed`, `tab_name_invalid`, Run Agent Here's `pane_has_agent`, `pane_not_at_prompt`, `pane_foreground_unknown`, `pane_directory_unknown`, a host's `unsupported`), so the hub answers a 409 worded in the client's language with the engine's own words as `detail` (`docs/integrations/engines.md`, "Refusals in the reader's language"); an older node's still reach it as 502 `internal`.
 - **Measured** (herdr 0.9.5, local temporary tab): `go test -tags herdrlive -run TestLiveMenuActions ./internal/herdr/` (`HERDR_LIVE_WORKSPACE=<workspace id>`) creates/renames tab, splits twice, closes pane/tab, matching fake herdr node tests.
+  On Orca, the `orcaiso` tests split a pane and close it, rename a tab and close one whole against an isolated Orca server (`node/hostorca_iso_test.go`, `docs/operations/testing.md`, "Isolated Orca runtime (#17058)").
 - **Tests**: `node/panes_actions_test.go` (fake herdr close/rename/split calls, rejection doesn't touch herdr, run in shell pane, rejection/failure preserves pane; real Git fetch/pull/push, force-push config ineffective, reject nonrepo/dirty/detached HEAD),
   `hub/panes_test.go` (every route denies `answer`/extension tokens before node receives it, forwards only named fields, absent from `answer` allowlist, route scopes `-`).
 
@@ -747,6 +754,16 @@ A new agent can start in a Git worktree of its own, so agents on the same reposi
   worktree workspace Paseo made (#6297); `worktree/remove` then archives that workspace through Paseo, which removes the folder, with Delete
   worktree's guards (below): refused while a session in the workspace still runs (the closed agent has stopped by then; the clients try again for
   a few seconds) or an agent of another engine runs in the folder, and for uncommitted changes or an unmerged branch unless `force`; the branch goes after the folder only with `delete_branch`.
+- **Orca** (#17050, `node/hostorca_agentworktree.go`): where the engine is Orca and the folder's checkout is one of Orca's local git worktrees,
+  Orca makes the worktree as a child of that one (`worktree.create` with `parentWorktree`, same branch and folder name, from that worktree's
+  branch), so Orca's sidebar lists it under its parent; `worktree/add` answers its `workspace_id`. A main checkout Orca does not hold yet is
+  registered first (`repo.add`), under the rules a start in it follows (not the home, the root or a temporary folder); a folder Orca can't
+  hold, or an Orca that isn't running, keeps the plain `git worktree add`. The terminal Orca opens in the new worktree is Persona's first shell:
+  it closes once the Agent's tab opens there, whether the start names the workspace or only the folder. `worktree/status` calls a worktree
+  Persona's (`ours`) when it is under the checkouts directory or Orca lists it as one of its own linked worktrees (not the main checkout, not
+  an SSH target's), wherever Orca's workspace folder is; `worktree/remove` then has Orca remove it (`worktree.rm`, Orca's archive hooks run,
+  the branch kept unless `delete_branch`), after the guards above. An Orca without `worktree.remove-branch-policy.v1` leaves it to git, as
+  before. New Agent on the web and Android offers the switch for a picked Orca workspace too, and the start goes into the worktree Orca made.
 - All three are full-device routes like section 23's, and extension tokens never reach them. The body is read field by field, plus the two switches (`flags`, booleans only).
 
 ## 24. Full herdr UI: a PTY client, switchable beside Single pane (#2357)

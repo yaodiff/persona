@@ -29,6 +29,10 @@ import workletURL from "./capture.worklet.ts?worker&url";
 
 /** How far ahead of now the first chunk after a gap is scheduled, so it does not start late and click. */
 const LEAD_S = 0.05;
+/** How much audio to gather before starting (or restarting after a gap) inside a protocol-2 reply. */
+export const REPLY_CUSHION_S = 0.1;
+/** Longest the first held chunk inside a reply waits for the cushion to fill before playing anyway. */
+export const REPLY_HOLD_TIMEOUT_MS = 250;
 /** How long after the last chunk ends "playing" turns off (a chunk arriving just after does not flicker it). */
 const DRAIN_GRACE_MS = 120;
 /** What the capture context outputs instead of silence: 2^-26 (about -156 dBFS), under half a step of a 24-bit
@@ -63,6 +67,11 @@ export class BrowserVoiceAudio implements VoiceAudio {
   private spans: { start: number; end: number; level: number }[] = [];
   private playing = false;
   private drainTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Inside a protocol-2 `reply` span (`reply{start}`..`reply{end}`): buffer a small cushion when idle or after a gap. */
+  private inReply = false;
+  private held: { samples: Float32Array<ArrayBuffer>; rate: number }[] = [];
+  private heldSeconds = 0;
+  private holdTimer: ReturnType<typeof setTimeout> | undefined;
   cancelsEcho: boolean | undefined;
 
   /** `contexts`: the ones the click made while this code was still loading (calls.ts); else made here, in the click. */
@@ -152,28 +161,47 @@ export class BrowserVoiceAudio implements VoiceAudio {
     if (this.stopped) return;
     const samples = pcmFloats(pcm);
     if (!samples.length) return;
-    const buffer = this.player.createBuffer(1, samples.length, rate);
-    buffer.copyToChannel(samples, 0);
-    const node = this.player.createBufferSource();
-    node.buffer = buffer;
-    node.connect(this.player.destination);
-    const now = this.player.currentTime;
-    const at = Math.max(now + (this.next > now ? 0 : LEAD_S), this.next);
-    node.start(at);
-    this.next = at + buffer.duration;
-    this.sources.add(node);
-    node.onended = () => this.sources.delete(node);
-    this.spans.push({ start: at, end: this.next, level: meterLevel(rmsOf(samples)) });
-    if (this.spans.length > 400) this.spans.splice(0, this.spans.length - 400);
-    if (!this.playing) {
-      this.playing = true;
-      this.onEvent({ kind: "playing", on: true });
+    if (!this.inReply) {
+      this.enqueue(samples, rate);
+      this.watchDrain();
+      return;
     }
-    this.watchDrain();
+    // Inside an open reply: while audio is still playing and nothing is waiting, append straight behind it with no gap.
+    // Once the player is idle (start of the reply, or after a gap between sentences), gather a small cushion first.
+    if (this.held.length === 0 && this.next > this.player.currentTime) {
+      this.enqueue(samples, rate);
+      this.watchDrain();
+      return;
+    }
+    this.held.push({ samples, rate });
+    this.heldSeconds += samples.length / rate;
+    if (this.heldSeconds + 1e-6 >= REPLY_CUSHION_S) {
+      this.flushHeld();
+    } else if (this.holdTimer === undefined) {
+      const generation = this.generation;
+      this.holdTimer = setTimeout(() => {
+        this.holdTimer = undefined;
+        if (generation !== this.generation || this.stopped) return;
+        this.flushHeld();
+      }, REPLY_HOLD_TIMEOUT_MS);
+    }
+  }
+
+  /** Marks a protocol-2 reply boundary (`reply{start}` / `reply{end}`): opens jitter buffering, or drains held audio at once. */
+  reply(open: boolean): void {
+    if (this.stopped) return;
+    if (open) {
+      if (this.held.length > 0) this.flushHeld();
+      this.inReply = true;
+    } else {
+      this.inReply = false;
+      this.flushHeld();
+    }
   }
 
   clear(): void {
     this.generation++;
+    this.dropHeld();
     for (const s of this.sources) {
       try {
         s.stop();
@@ -237,6 +265,45 @@ export class BrowserVoiceAudio implements VoiceAudio {
     if (!lag) return;
     console.debug(`[voice] microphone frames fell behind: ${lag.frames} in ${lag.seconds.toFixed(1)} s, ${lag.expected} expected; ` +
       `the capture context's clock moved ${lag.contextSeconds.toFixed(1)} s (${this.capture.state})`);
+  }
+
+  private enqueue(samples: Float32Array<ArrayBuffer>, rate: number): void {
+    const buffer = this.player.createBuffer(1, samples.length, rate);
+    buffer.copyToChannel(samples, 0);
+    const node = this.player.createBufferSource();
+    node.buffer = buffer;
+    node.connect(this.player.destination);
+    const now = this.player.currentTime;
+    const at = Math.max(now + (this.next > now ? 0 : LEAD_S), this.next);
+    node.start(at);
+    this.next = at + buffer.duration;
+    this.sources.add(node);
+    node.onended = () => this.sources.delete(node);
+    this.spans.push({ start: at, end: this.next, level: meterLevel(rmsOf(samples)) });
+    if (this.spans.length > 400) this.spans.splice(0, this.spans.length - 400);
+    if (!this.playing) {
+      this.playing = true;
+      this.onEvent({ kind: "playing", on: true });
+    }
+  }
+
+  private flushHeld(): void {
+    clearTimeout(this.holdTimer);
+    this.holdTimer = undefined;
+    if (!this.held.length) return;
+    const chunks = this.held;
+    this.held = [];
+    this.heldSeconds = 0;
+    for (const chunk of chunks) this.enqueue(chunk.samples, chunk.rate);
+    this.watchDrain();
+  }
+
+  private dropHeld(): void {
+    clearTimeout(this.holdTimer);
+    this.holdTimer = undefined;
+    this.held = [];
+    this.heldSeconds = 0;
+    this.inReply = false;
   }
 
   /** "playing" off once the queue has played out. */

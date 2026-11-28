@@ -482,12 +482,15 @@ func TestOrcaBridgeSendsInterruptsAndSetsModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	set := o.writes("agentSession.setOption")
-	if len(set) != 2 || set[0]["key"] != "permissionMode" || set[0]["value"] != "full-access" || set[1]["key"] != "effort" ||
-		set[1]["value"] != "max" {
+	if len(set) != 2 || set[0]["key"] != "effort" || set[0]["value"] != "max" || set[1]["key"] != "permissionMode" ||
+		set[1]["value"] != "full-access" {
 		t.Fatalf("options %v", set)
 	}
-	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": orcaChatUUID, "permission_mode": "plan"}); err == nil {
-		t.Error("plan mode taken: Orca has none")
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": orcaChatUUID, "permission_mode": "plan"}); err != nil {
+		t.Fatal(err) // Orca's interaction mode (orcabridge_controls_test.go)
+	}
+	if set = o.writes("agentSession.setOption"); len(set) != 3 || set[2]["key"] != "interactionMode" || set[2]["value"] != "plan" {
+		t.Fatalf("options %v", set)
 	}
 }
 

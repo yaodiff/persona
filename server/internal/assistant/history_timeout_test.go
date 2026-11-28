@@ -88,7 +88,7 @@ func (ft *fleetTest) waitShown(id string, within time.Duration) {
 }
 
 func permission(id string) proto.Interaction {
-	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 		ExpiresAt: time.Now().Add(time.Hour)}
 }
 

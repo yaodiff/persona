@@ -49,6 +49,9 @@ func TestPermissionNoHandBackIsTheManagersWord(t *testing.T) {
 
 	askNode := func(ix proto.Interaction) proto.Interaction {
 		t.Helper()
+		if ix.Kind == proto.IxPermission {
+			ix.Secret = true // require the owner without forcing the connector-only NoHandBack rule
+		}
 		if ix.CreatedAt.IsZero() {
 			ix.CreatedAt = time.Now().UTC()
 		}
@@ -211,7 +214,7 @@ func TestPermissionNoHandBackIsTheManagersWord(t *testing.T) {
 		t.Fatal("codexPending must clear NoHandBack for terminal TUI cards")
 	}
 	listCodex(s, proto.Interaction{
-		ID: "cx_sync_forged", MachineID: "mac", SessionID: "cx", Kind: proto.IxPermission,
+		ID: "cx_sync_forged", MachineID: "mac", SessionID: "cx", Kind: proto.IxPermission, Secret: true,
 		ToolName: "Bash", Summary: "ls", NoHandBack: true,
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC(),
 	})
@@ -240,7 +243,7 @@ func TestPermissionNoHandBackIsTheManagersWord(t *testing.T) {
 		defer close(ownDone)
 		_, _ = s.AskCard(ctx, proto.Interaction{
 			ID: "ix_own_hub", MachineID: "mac", SessionID: "asst-codex", Kind: proto.IxPermission,
-			ToolName: "iphone_do", ExpiresAt: time.Now().Add(time.Hour),
+			ToolName: "iphone_do", SessionTitle: "Persona", ExpiresAt: time.Now().Add(time.Hour),
 		})
 	}()
 	gotOwn := ft.waitPending(1)[0]
@@ -289,11 +292,11 @@ func TestPermissionNoHandBackIsTheManagersWord(t *testing.T) {
 	// Rolling-upgrade restoreStoredInteractions backfills NoHandBack via permissionNoHandBack and preserves terminal cards.
 	exp := time.Now().Add(time.Hour).UTC()
 	resumable := []proto.Interaction{
-		{ID: "ix_restore_grok", MachineID: "mac", SessionID: "grok-chat-agent", Cwd: "/work/repo", Kind: proto.IxPermission, ToolName: "Bash", Agent: "grok", Resumable: true, ExpiresAt: exp},
-		{ID: "ix_restore_opencode_acp", MachineID: "mac", SessionID: "opencode-acp", Cwd: "/work/repo", Kind: proto.IxPermission, ToolName: "Bash", Agent: "opencode", Resumable: true, ExpiresAt: exp},
-		{ID: "ix_restore_asst", MachineID: "mac", SessionID: "conv-claude", Cwd: m.assistantCwd(), Kind: proto.IxPermission, ToolName: "Bash", Resumable: true, ExpiresAt: exp},
-		{ID: "ix_restore_term", MachineID: "mac", SessionID: "term-claude", Cwd: "/work/repo", Kind: proto.IxPermission, ToolName: "Bash", Resumable: true, ExpiresAt: exp},
-		{ID: "ix_restore_opencode_tui", MachineID: "mac", SessionID: "opencode-tui", Cwd: "/work/repo", Kind: proto.IxPermission, ToolName: "Bash", Agent: "opencode", Resumable: true, ExpiresAt: exp},
+		{ID: "ix_restore_grok", MachineID: "mac", SessionID: "grok-chat-agent", Cwd: "/work/repo", Kind: proto.IxPermission, Secret: true, ToolName: "Bash", Agent: "grok", Resumable: true, ExpiresAt: exp},
+		{ID: "ix_restore_opencode_acp", MachineID: "mac", SessionID: "opencode-acp", Cwd: "/work/repo", Kind: proto.IxPermission, Secret: true, ToolName: "Bash", Agent: "opencode", Resumable: true, ExpiresAt: exp},
+		{ID: "ix_restore_asst", MachineID: "mac", SessionID: "conv-claude", Cwd: m.assistantCwd(), Kind: proto.IxPermission, Secret: true, ToolName: "Bash", Resumable: true, ExpiresAt: exp},
+		{ID: "ix_restore_term", MachineID: "mac", SessionID: "term-claude", Cwd: "/work/repo", Kind: proto.IxPermission, Secret: true, ToolName: "Bash", Resumable: true, ExpiresAt: exp},
+		{ID: "ix_restore_opencode_tui", MachineID: "mac", SessionID: "opencode-tui", Cwd: "/work/repo", Kind: proto.IxPermission, Secret: true, ToolName: "Bash", Agent: "opencode", Resumable: true, ExpiresAt: exp},
 	}
 	for _, ix := range resumable {
 		if err := ft.st.InsertInteraction(ctx, ix); err != nil {
@@ -326,7 +329,7 @@ func TestPermissionNoHandBackIsTheManagersWord(t *testing.T) {
 	s.ixMapLocked()["ix_reclaim_hb"] = &pending{
 		ix: proto.Interaction{
 			ID: "ix_reclaim_hb", MachineID: "mac", SessionID: "agy-custom", Cwd: "/work/repo",
-			Kind: proto.IxPermission, ToolName: "Bash", Agent: "agy", Resumable: true,
+			Kind: proto.IxPermission, ToolName: "Bash", Agent: "agy", Resumable: true, Secret: true,
 			NoHandBack: false, CreatedAt: reclaimCreatedAt, ExpiresAt: exp,
 		},
 		done: make(chan proto.Resolution, 1),
@@ -338,7 +341,7 @@ func TestPermissionNoHandBackIsTheManagersWord(t *testing.T) {
 		defer close(reclaimedDone)
 		_, _ = s.waitInteractionReady(ctx, proto.Interaction{
 			ID: "ix_reclaim_hb", MachineID: "mac", SessionID: "agy-custom", Cwd: "/work/repo",
-			Kind: proto.IxPermission, ToolName: "Bash", Agent: "agy", Resumable: true,
+			Kind: proto.IxPermission, ToolName: "Bash", Agent: "agy", Resumable: true, Secret: true,
 			NoHandBack: true, CreatedAt: reclaimCreatedAt, ExpiresAt: exp,
 		}, nil, reclaimedReady)
 	}()

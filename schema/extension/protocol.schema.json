@@ -643,7 +643,8 @@
       "properties": {
         "contribution": {"type": "string"},
         "reference": {"type": "string", "maxLength": 1024},
-        "purpose": {"$ref": "#/$defs/SecretPurpose"}
+        "purpose": {"$ref": "#/$defs/SecretPurpose"},
+        "quiet": {"type": "boolean", "description": "The manager still holds an earlier value of the reference and uses it if this fails: the provider must not ask the user (no authorization prompt), and answers not_signed_in at once when it cannot answer without them."}
       },
       "required": ["contribution", "reference", "purpose"]
     },

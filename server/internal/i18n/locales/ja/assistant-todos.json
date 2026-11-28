@@ -23,5 +23,8 @@
   "not_told_yet": "このToDoは今は確認できません。少し待ってからもう一度お試しください。",
   "machine_not_found": "このコンピュータはハブのコンピュータではありません。",
   "machine_offline": "このコンピュータは現在オフラインです。戻ってからもう一度お試しください。",
-  "images_forbidden": "このデバイスではToDoの画像を読み込めません"
+  "images_forbidden": "このデバイスではToDoの画像を読み込めません",
+  "reorganize_requires_v2": "ToDoを整理するには、Labsで「新しい To-do とタスク」を有効にしてください。",
+  "topology_changed": "ToDoが変更されました。ToDo一覧を更新してから、もう一度お試しください。",
+  "split_children_changed": "分割で作成されたToDoの一部が移動または削除されました。ToDo一覧を更新してから、もう一度お試しください。"
 }

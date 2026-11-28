@@ -11,18 +11,19 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// A supervisor's accepted closes a task. The three-tier delivery gate (assistant.delivery_gate, default "merged";
-// legacy assistant.done_needs_delivery maps true -> "live" and explicit false -> "off") controls how far a
-// PR/Issue-backed task must go before task_review accepted can close it:
+// A supervisor's accepted closes a task. Draft and ready completion use the task's acceptance criteria.
+// Landed and verified completion select the merged and live gates respectively. An inherited or omitted
+// completion mode uses assistant.delivery_gate (defaults to merged).
 //
 //   - off: close strictly on done_when with no delivery gate.
 //   - merged (default): tasks with linked PR(s) (t.PRURL, review link, or repository pull_request links) or linked
 //     issue(s) (repository issue links) stay open until every PR is merged and every linked issue is closed, unless
-//     outcome is "cannot", the task is read-only, or the brief explicitly scopes it as PR-only/draft-only.
+//     outcome is "cannot". A brief without a completion mode keeps the legacy read-only and PR-only exceptions.
 //   - live (legacy done_needs_delivery=true): in addition to merged + linked issue closure, a GitHub PR must also be
 //     contained in the running hub (the deploy check, deploy_check.go), or at least merged where the running hub cannot
 //     be checked against. PR-only criteria do not override live (#6428).
@@ -37,20 +38,34 @@ var (
 	mergeCloseCriterionRe = lazyre.New(`(?i)\b(?:merged?|close[sd]?\s+(?:the\s+)?(?:linked\s+)?issue|issue\s+closed)\b|合入|合并|关闭\s*(?:关联\s*)?issue|issue\s*(?:已)?关闭`)                                                                                                                            // i18n-ignore: matches merge/issue criteria text
 )
 
+func (s *Service) deliveryGateForMode(ctx context.Context, mode assistantwire.CompletionMode) string {
+	switch mode {
+	case assistantwire.CompletionModeDraft, assistantwire.CompletionModeReady:
+		return deliveryGateOff
+	case assistantwire.CompletionModeLanded:
+		return deliveryGateMerged
+	case assistantwire.CompletionModeVerified:
+		return deliveryGateLive
+	default:
+		return s.deliveryGate(ctx)
+	}
+}
+
 // acceptedDeliveryError refuses accepting task t while its delivery gate (off / merged / live) is not satisfied;
 // nil when nothing holds it. note, when set, is what the reply adds about a delivery that could not be checked.
 func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outcome string) (note string, err error) {
 	if outcome == outcomeCannot || t.DoneAt != nil {
 		return "", nil
 	}
-	gate := s.deliveryGate(ctx)
+	brief, hasBrief := s.committedBriefOfTodo(t.ID)
+	gate := s.deliveryGateForMode(ctx, brief.CompletionModeNow)
 	if gate == deliveryGateOff {
 		return "", nil
 	}
-	if gate == deliveryGateMerged {
+	if gate == deliveryGateMerged && brief.CompletionModeNow == "" {
 		var briefPtr *TaskBrief
-		if b, ok := s.briefOfTodo(t.ID); ok {
-			briefPtr = &b
+		if hasBrief {
+			briefPtr = &brief
 		}
 		if s.taskIsReadonly(ctx, t) && !hasMergeCloseCriterion(briefPtr, t) {
 			return "", nil
@@ -61,11 +76,18 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 	}
 
 	pr := t.PRURL
-	explicitLinkPR := false
-	if ciPRURL.MatchString(link) || otherReviewLink(link) {
+	explicitLinkPR := ciPRURL.MatchString(link) || otherReviewLink(link)
+	if explicitLinkPR {
 		pr = link
-		explicitLinkPR = true
-	} else {
+	}
+	repoPRs, repoIssues, referencePRs, err := s.todoLinkedDeliveryRefs(ctx, t.ID, pr)
+	if err != nil {
+		return "", err
+	}
+	// Saved delivery bindings precede closeout recovery, including bindings for a PR that the stage also names.
+	legacyPR := !explicitLinkPR && len(repoIssues) == 0 &&
+		!slices.ContainsFunc(repoPRs, func(link repository.TaskLink) bool { return !stageMirrorsLink(t.PRURL, t.PRs, link) })
+	if legacyPR {
 		replacement, noPR, err := s.reportedTaskPR(ctx, t, pr)
 		if err != nil {
 			return "", err
@@ -82,20 +104,19 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 				return "", fmt.Errorf("task %s: its delivery record changed during verification; retry the review", t.ID)
 			}
 			t, pr = current, current.PRURL
+			// Recovery can import a delivery binding or remove a stale reference.
+			repoPRs, repoIssues, referencePRs, err = s.todoLinkedDeliveryRefs(ctx, t.ID, pr)
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 
-	repoPRs, repoIssues, referencePRs, err := s.todoLinkedDeliveryRefs(ctx, t.ID)
-	if err != nil {
-		s.logf("task %s: linked repository delivery status temporarily unverifiable: %v", t.ID, err)
-		return "", fmt.Errorf("%s", i18n.T(s.lang(ctx), "assistant-reports.delivery_verification_unavailable",
-			i18n.Args{"task": t.ID, "pr": cmp.Or(pr, t.ID), "reason": fmt.Sprint(err)}))
-	}
 	prs := make([]string, 0, 1+len(repoPRs))
 	seenPR := map[string]bool{}
 	addPR := func(u string) {
 		u = strings.TrimSpace(u)
-		if u == "" || referencePRs[normalizePRKey(u)] {
+		if u == "" {
 			return
 		}
 		key := u
@@ -108,14 +129,22 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		seenPR[key] = true
 		prs = append(prs, u)
 	}
-	addPR(pr)
-	for _, u := range repoPRs {
-		addPR(u)
+	if legacyPR && !referencePRs[normalizePRKey(pr)] {
+		addPR(pr) // the recovered stage PR first, so a disproved PR's leftover mirror cannot answer for it
+	}
+	for _, link := range repoPRs {
+		addPR(link.CanonicalURL)
+	}
+	if explicitLinkPR && !referencePRs[normalizePRKey(pr)] {
+		addPR(pr)
 	}
 
 	var notes []string
-	for i, curPR := range prs {
-		allowNonPRCleanup := i == 0 && !explicitLinkPR && curPR == t.PRURL
+	allowLegacyCleanup := legacyPR && !slices.ContainsFunc(repoPRs, func(link repository.TaskLink) bool {
+		return link.Provenance == repository.LinkProvenanceExplicit
+	})
+	for _, curPR := range prs {
+		allowNonPRCleanup := allowLegacyCleanup && curPR == t.PRURL
 		var n string
 		if ciPRURL.MatchString(curPR) {
 			n, err = s.checkGitHubPRDelivery(ctx, t, curPR, gate, outcome, allowNonPRCleanup)
@@ -140,6 +169,9 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		}
 	}
 
+	if current, _ := s.committedBriefOfTodo(t.ID); current.CompletionModeNow != brief.CompletionModeNow {
+		return "", fmt.Errorf("task %s changed its completion mode during delivery verification. Read its current brief and retry the review", t.ID)
+	}
 	return strings.Join(notes, ""), nil
 }
 
@@ -321,18 +353,17 @@ func (s *Service) otherHostIssueDelivery(ctx context.Context, t Todo, issueURL s
 	return "", issueOpenError(s, t, issueURL, d.State)
 }
 
-// todoLinkedDeliveryRefs reads saved repository pull_request and issue links for task id. Only delivery-role links,
-// issues included (#14050), are returned for gate verification; reference links are display-only. referencePRs carries
-// their normalized keys too, so acceptance cannot re-add a reference PR from legacy stage tracking. A pull_request still
-// stored with the default delivery role that the forge can prove was opened by someone else is downgraded to reference first, so a merely
-// referenced foreign PR no longer blocks acceptance.
-func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, issues []string, referencePRs map[string]bool, err error) {
+// todoLinkedDeliveryRefs reads saved delivery PRs with their provenance and delivery issue URLs (#14050).
+// referencePRs carries normalized keys so legacy stage tracking cannot re-add a reference PR to the gate.
+func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id, pr string) (prs []repository.TaskLink, issues []string, referencePRs map[string]bool, err error) {
 	if _, ok := s.store().(todoRepositoryStore); !ok {
 		return nil, nil, nil, nil
 	}
 	set, err := s.savedTodoRepositories(ctx, id)
 	if err != nil {
-		return nil, nil, nil, err
+		s.logf("task %s: linked repository delivery status temporarily unverifiable: %v", id, err)
+		return nil, nil, nil, fmt.Errorf("%s", i18n.T(s.lang(ctx), "assistant-reports.delivery_verification_unavailable",
+			i18n.Args{"task": id, "pr": cmp.Or(pr, id), "reason": fmt.Sprint(err)}))
 	}
 	referencePRs = map[string]bool{}
 	seenIssue := map[string]bool{}
@@ -344,21 +375,11 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 			}
 			switch l.Kind {
 			case "pull_request":
-				role := l.Role
-				if role == "" {
-					role = repository.LinkRoleDelivery
-				}
-				if role == repository.LinkRoleDelivery && s.provenForeignPR(ctx, u) {
-					if err := s.setTodoLinkRole(ctx, id, u, repository.LinkRoleReference); err != nil {
-						s.logf("task %s: reference role for %s not saved: %v", id, u, err)
-					} else {
-						role = repository.LinkRoleReference
-					}
-				}
+				role, _ := repository.NormalizeLinkRole(l.Role)
 				if role == repository.LinkRoleReference {
 					referencePRs[normalizePRKey(u)] = true
 				} else if role == repository.LinkRoleDelivery {
-					prs = append(prs, u)
+					prs = append(prs, l)
 				}
 			case "issue":
 				// A reference issue is related work, never this task's delivery: only a delivery (or role-less) issue
@@ -375,41 +396,6 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 		}
 	}
 	return prs, issues, referencePRs, nil
-}
-
-// provenForeignPR reports whether u is a GitHub PR the forge can prove was opened by someone other than the
-// authenticated viewer. False covers every non-provable case (non-GitHub host, unconnected forge, unknown author):
-// the delivery default must stay conservative.
-func (s *Service) provenForeignPR(ctx context.Context, u string) bool {
-	m := ciPRURL.FindStringSubmatch(u)
-	if m == nil {
-		return false
-	}
-	own, ok := s.forge().(prOwnershipForge)
-	if !ok {
-		return false
-	}
-	number, _ := strconv.Atoi(m[2])
-	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	owned, known, err := own.PROwnedByViewer(cctx, m[1], number)
-	if err != nil {
-		s.logf("PR %s ownership not checked: %v", u, err)
-		return false
-	}
-	return known && !owned
-}
-
-// setTodoLinkRole rewrites the role of one saved link (by canonical URL) in a single store transaction, so a
-// concurrent edit to another link cannot be reverted. It is the supported alternative to deleting a misattributed
-// link.
-func (s *Service) setTodoLinkRole(ctx context.Context, id, canonicalURL, role string) error {
-	linksStore, ok := s.store().(todoRepositoryRoleStore)
-	if !ok {
-		return repository.Problem("store_unavailable")
-	}
-	_, err := linksStore.SetTodoRepositoryLinkRole(ctx, id, canonicalURL, role)
-	return err
 }
 
 // taskIsReadonly reports whether task t was planned as a read-only task.
@@ -467,8 +453,12 @@ func prOnlyScoped(brief *TaskBrief, t Todo) bool {
 		}
 	}
 	for _, text := range texts {
-		if prOnlyScopeRe.MatchString(text) {
-			return true
+		for _, sentence := range kindSentences(text) {
+			for _, clause := range kindClauses(sentence) {
+				if firstUnnegated(prOnlyScopeRe, clause) >= 0 {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -477,7 +467,7 @@ func prOnlyScoped(brief *TaskBrief, t Todo) bool {
 // notMergedError refuses accepting t under delivery_gate=merged while its PR is not merged yet.
 func notMergedError(s *Service, t Todo, pr string) error {
 	s.logf("task %s: accepted refused (merged gate): %s: unmerged", t.ID, pr)
-	return fmt.Errorf("task %s is not accepted: %s is not merged yet, and the delivery gate (delivery_gate=merged) "+
+	return fmt.Errorf("task %s is not accepted: %s is not merged yet, and this task's delivery gate "+
 		"keeps PR/Issue tasks open until the PR is merged and linked issues are closed. Keep it open: park it with "+
 		"waiting_on external_event (evidence.kind=external_event, url=%s, pr_event=terminal) or waiting_on someone_else "+
 		"(evidence.kind=merge_review) until merge, send what is missing to its agent (rework / agent_send), or cancel it "+
@@ -509,8 +499,8 @@ func notLiveError(s *Service, t Todo, pr string, r deployResult) error {
 		why += " (" + r.Err.Error() + ")"
 	}
 	s.logf("task %s: accepted refused: %s: %s", t.ID, pr, cmp.Or(r.State, "held"))
-	return fmt.Errorf("task %s is not accepted: %s is not live: %s, and the user's to-dos close only once their work is "+
-		"live (done_needs_delivery). Keep it open: send what is missing to its agent (rework, or agent_send to merge and "+
+	return fmt.Errorf("task %s is not accepted: %s is not live: %s. This task's delivery gate requires a live result. "+
+		"Keep it open: send what is missing to its agent (rework, or agent_send to merge and "+
 		"deploy), park it with waiting_on external_event until the merge or deploy, or cancel it if the work is dropped. "+
 		"If nothing could be delivered at all, accept it with outcome cannot", t.ID, pr, why)
 }

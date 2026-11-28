@@ -45,14 +45,22 @@ var errBotmuxTurnsTooLarge = fmt.Errorf("botmux: turns response exceeds %d bytes
 
 // botmuxCaps caches what a BotMux dashboard instance supports, keyed by its loopback URL, token, and CLI file stamp.
 // A dashboard restart (new URL/token) or CLI upgrade (new stamp) invalidates the cache automatically.
+// ownerUnionID: its /api/trigger also takes actorUnionId (never set without ownerActor).
 type botmuxCaps struct {
-	known      bool
-	turnsAPI   bool
-	ownerActor bool
-	base       string
-	token      string
-	stamp      string
-	at         time.Time
+	known        bool
+	turnsAPI     bool
+	ownerActor   bool
+	ownerUnionID bool
+	base         string
+	token        string
+	stamp        string
+	at           time.Time
+}
+
+// botmuxCapsOf is what a 200 answer's capabilities advertise.
+func botmuxCapsOf(capabilities []string) (ownerActor, ownerUnionID bool) {
+	ownerActor = slices.Contains(capabilities, transcript.BotmuxCapOwnerActor)
+	return ownerActor, ownerActor && slices.Contains(capabilities, transcript.BotmuxCapOwnerUnionID)
 }
 
 func (c botmuxCaps) valid(base, token, stamp string, now time.Time) bool {
@@ -140,11 +148,42 @@ func (c *botmuxSessionTurnsCache) trimTurnsLocked() {
 	}
 }
 
-func (h *botmuxHost) externalTriggerNotice() bool {
+// externalTriggerNotice is why this instance's sends go as the plain external-event trigger, "" while they do not or
+// it was not probed: botmux needs an upgrade, or it takes actor "owner" but no BotMux Owner Union ID is set.
+func (h *botmuxHost) externalTriggerNotice() proto.BotmuxExternalTriggerReason {
 	stamp := botmuxStamp(h.bin)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.caps.matches(h.base, h.token, stamp) && !h.caps.ownerActor
+	if !h.caps.matches(h.base, h.token, stamp) {
+		return ""
+	}
+	return h.caps.notice(h.owner)
+}
+
+// notice is the external-trigger reason these capabilities give with owner as the BotMux Owner Union ID.
+func (c botmuxCaps) notice(owner proto.BotmuxOwnerUnionID) proto.BotmuxExternalTriggerReason {
+	switch {
+	case !c.known:
+		return ""
+	case !c.ownerActor:
+		return proto.BotmuxTriggerUpgrade
+	case owner == "":
+		return proto.BotmuxTriggerOwnerUnset
+	}
+	return ""
+}
+
+// setOwnerUnionID is the BotMux Owner Union ID the hub handed (node.configure botmux_owner_union_id), "" for none.
+func (h *botmuxHost) setOwnerUnionID(id proto.BotmuxOwnerUnionID) {
+	h.mu.Lock()
+	h.owner = id
+	h.mu.Unlock()
+}
+
+func (h *botmuxHost) ownerUnionID() proto.BotmuxOwnerUnionID {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.owner
 }
 
 func (h *botmuxHost) refreshCapsAsync(sessionID string) {
@@ -185,12 +224,12 @@ func (h *botmuxHost) refreshCapsAsync(sessionID string) {
 func (h *botmuxHost) setCapsLocked(next botmuxCaps) (noticeChanged bool) {
 	if !h.ownerUnechoed.at.IsZero() {
 		if h.ownerUnechoed.active(next.base, next.token, next.stamp, next.at) {
-			next.ownerActor = false
+			next.ownerActor, next.ownerUnionID = false, false
 		} else {
 			h.ownerUnechoed = botmuxOwnerUnechoed{}
 		}
 	}
-	prevNotice := h.caps.known && !h.caps.ownerActor
+	prevNotice := h.caps.notice(h.owner)
 	h.caps = next
 	if !next.turnsAPI {
 		for _, cached := range h.turnsCache {
@@ -199,8 +238,7 @@ func (h *botmuxHost) setCapsLocked(next botmuxCaps) (noticeChanged bool) {
 			}
 		}
 	}
-	nextNotice := h.caps.known && !h.caps.ownerActor
-	return prevNotice != nextNotice
+	return prevNotice != h.caps.notice(h.owner)
 }
 
 func (h *botmuxHost) noteOwnerActorUnechoed(base, token, stamp string) {
@@ -217,13 +255,12 @@ func (h *botmuxHost) noteOwnerActorUnechoed(base, token, stamp string) {
 		at:    now,
 	}
 	h.setCapsLocked(botmuxCaps{
-		known:      true,
-		turnsAPI:   h.caps.turnsAPI,
-		ownerActor: false,
-		base:       base,
-		token:      token,
-		stamp:      stamp,
-		at:         now,
+		known:    true,
+		turnsAPI: h.caps.turnsAPI,
+		base:     base,
+		token:    token,
+		stamp:    stamp,
+		at:       now,
 	})
 }
 
@@ -295,14 +332,9 @@ func (h *botmuxHost) probeCaps(ctx context.Context, sessionID string) botmuxCaps
 			return c
 		case http.StatusOK:
 			supported := res.OK && res.Schema == transcript.BotmuxTurnsSchema
-			c := botmuxCaps{
-				known:      true,
-				turnsAPI:   supported,
-				ownerActor: supported && slices.Contains(res.Capabilities, transcript.BotmuxCapOwnerActor),
-				base:       base,
-				token:      token,
-				stamp:      stamp,
-				at:         time.Now(),
+			c := botmuxCaps{known: true, turnsAPI: supported, base: base, token: token, stamp: stamp, at: time.Now()}
+			if supported {
+				c.ownerActor, c.ownerUnionID = botmuxCapsOf(res.Capabilities)
 			}
 			h.mu.Lock()
 			h.setCapsLocked(c)
@@ -519,14 +551,16 @@ func (h *botmuxHost) sessionTurns(ctx context.Context, sessionID string) ([]tran
 		}
 		h.turnsBackoffUntil = time.Time{}
 		delete(h.unknownBackoff, sessionID)
+		ownerActor, ownerUnionID := botmuxCapsOf(res.Capabilities)
 		if h.setCapsLocked(botmuxCaps{
-			known:      true,
-			turnsAPI:   true,
-			ownerActor: slices.Contains(res.Capabilities, transcript.BotmuxCapOwnerActor),
-			base:       base,
-			token:      token,
-			stamp:      stamp,
-			at:         time.Now(),
+			known:        true,
+			turnsAPI:     true,
+			ownerActor:   ownerActor,
+			ownerUnionID: ownerUnionID,
+			base:         base,
+			token:        token,
+			stamp:        stamp,
+			at:           time.Now(),
 		}) {
 			noticeChanged = true
 		}

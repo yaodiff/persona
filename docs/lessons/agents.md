@@ -1,5 +1,34 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A stopped Agent's row is a contract beyond the node (#17809)
+
+- `send` missing from a stopped row is what the assistant's `stoppedAgent` reads. Making stopped Codex rows sendable,
+  so that a message resumes them, also let a plain `agent_send` and automatic relays wake them past the explicit
+  resume (#8099, #8214). A stopped Agent stays read-only on every engine (#4754); changing that rule takes the owner's
+  decision and every gate changing with it, not one runtime's send path.
+- Widening a glob (`rollout-*.jsonl*` for compressed rollouts, #17768) breaks tests that match the old pattern by
+  string, and turns misses into hits: check that the hit cache survives the minute listing as the miss cache does.
+
+## Codex dialog hints do not identify the active dialog (#17406)
+
+Codex 0.172 shares submit/cancel hints between approvals and questions; match the active title and options, and
+ignore approval titles above a composer or a newer question. PlainScreen drops dim styling: compare complete known
+placeholders after joining wrapped rows, and preserve text that only starts with a placeholder.
+
+## A missing queue receipt leaves delivery unknown (#17444)
+
+Fall back to steering after an explicit queue rejection. A lost or incomplete receipt may follow a persisted submission, so steering then can deliver a duplicate.
+
+## A held Codex rollout needs its engine's pane identity (#17406)
+
+- A no-daemon Codex in herdr-core, Tern or Orca holds its own rollout. Resolve the process's engine-specific pane
+  through `host.PaneRef` before recording ownership; an empty owner rejects even the waiting pane's own thread as
+  another writer's. Exercise both direct held-rollout selection and new-thread filtering, including a different pane
+  that must still be refused. Open-file fixture paths may be canonicalized by the OS; resolve symlinks in assertions.
+
+## Shared Codex app-server snapshots can lag events (#17428)
+
+Keep pending requests and same-turn blocked state across metadata refreshes. When waiting for an interrupt, read the current thread on each poll.
 ## A delivery label does not prove a disabled feature (#16936)
 
 - A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require
@@ -496,7 +525,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - Codex image generation (`scripts/assets/make_persona.py generate`): `codex exec`'s built-in `image_gen` can create transparent PNGs using Codex's own ChatGPT login,
   but its HTTP client doesn't accept `socks5h://` proxies (chat requests do); use an HTTP CONNECT proxy. `-i` takes multiple values, prompts come from stdin; ChatGPT login supports only some models.
   If generation hangs (over ten minutes per image, all parallel work stopped), measure proxy tunnel throughput before blaming rate limits: on 2026-10-31 the hub machine's outbound bandwidth was only 11 KB/s; opening `ssh -D` on a faster internet machine produced four avatars in 6 minutes (`docs/apple/persona.md`).
-- Orca host (`docs/plans/plan-orca-support.md` ("Orca source")): `terminal.send`'s `client` requires `id`; providing only `type` returns `invalid_argument` on every send
+- Orca host (`docs/integrations/orca.md` ("Orca source")): `terminal.send`'s `client` requires `id`; providing only `type` returns `invalid_argument` on every send
   (the first version did this; fake runtime didn't validate parameters, so all tests passed; `orcarttest` now validates Orca's schema). If Orca can't recognize the foreground Agent, it types the "prompt" straight into
   the shell and presses Enter; `accepted:false` exists only with `requireAgentStatus`. Before sending, verify the Agent is foreground using the process table + `terminal.agentStatus`;
   Orca's `agentPrompt` pastes only for Agents it has seen working; newly started claude receives raw text, and multiline input submits at the first newline. Persona sends bracketed paste itself, then Enter separately;
@@ -507,6 +536,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   An Orca pane key is not a terminal's identity (#5547): a terminal made in a worktree Orca's window is not showing is not adopted by the UI, and about 2 s after `terminal.create` it turns `orphaned` with `tabId` / `leafId` rewritten to `pty:<worktreeId>@@…`, the same handle and incarnation. Starts from a directory in no worktree went to the first worktree listed, so the node lost the pane it had just typed into: `Run` said "replaced", the readiness wait said "is the machine busy?" for 3 minutes while claude had started in 2 s, and the empty tab was never closed. Fall back to the active worktree, and find a terminal the host made by handle + incarnation under the key creation gave (`orcaHost.made`); the opposite case, a new handle under the same key (#972), stays refused. `orcarttest.Fake.Orphan` reproduces it.
   Claude with background tasks (#5463): Orca's `terminal.agentStatus` says `isRunningAgent: false` while Claude Code has background Bash tasks, though its input box takes text; requiring it refused every send to such a session with nothing logged. The process scan is the foreground gate. A `tmux new-session -d` an agent runs inherits the pane's `ORCA_PANE_KEY`, and each process in it is "in front" of tmux's own pty: a `claude -p` worker with a lower pid took the pane and its manager dropped to interrupted. Without Orca's check, "in front" must mean in front of the pane's own pty: a candidate whose pty owner (first ancestor on another terminal) carries the same pane key is nested (tmux, zellij, script…) and not the pane's. Not by `TMUX=`: Orca's agent teams set it in a real pane. A refusal and a pane changing sessions are logged since.
   A pane variable is not ownership (2026-11-08): a claude whose environment carried `ORCA_PANE_KEY` was skipped as "its engine lists it" even on a node that did not enable Orca, or when the macOS scan missed it, so every running claude in Orca's terminals showed as offline. The outside-claude list now defers to an engine only when an engine in use lists that pane with a claude in it.
+  An agent Orca finds installed is not a chat it can open (#17684): on a fresh Orca 1.4.277 `preflight.installedAgents` named Claude Code and Codex, yet `agent.launch` refused both chats (`agent_launch_surface_unavailable`, "its chat runtime isn't installed on this host"), while `agentSession.create` took the chat and it failed at its first turn ("Claude wasn't found on the computer running this chat"). Orca resolves a chat's program apart from the installed-agent scan (its own runtime under its data folder, or the CLI where it launches chats), and reports the result only on streaming methods the local socket refuses (`agentSession.subscribeAvailability`); `agentSession.agents`' `managedRuntime` reads the same before and after the install. Learn it from the launch refusal and stop offering that chat; never retry through `agentSession.create`. An isolated runtime (empty HOME) reproduces it, and `managedRuntime.install {agent: "claude"}` there (a 400 MB download) makes the launch succeed.
 - Launchers (`docs/integrations/launchers.md`, 2026-11-01): discovery once only read `_claude_launchers` helper output; a machine with all aliases in `~/.zshrc` (41 for one user)
   listed only `claude`. Let zsh tokenize aliases (`${(@Q)${(z)value}}`), not Go quote parsing. Aliases defined by a script in `zsh -c` don't expand within that
   script (it is parsed all at once); tests must use `zsh -ic` like node and write definitions to temporary `$ZDOTDIR/.zshrc`. With `alias claude=…` in `~/.zshrc`,
@@ -563,7 +593,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   alongside `herdr remote-client-bridge` and `peers.json`; terminal tabs live in `doc.get("herdr-app")`. It and terminal `herdr server`
   (`~/.config/herdr/herdr.sock`) can't see each other. If "sessions opened locally through App remote aren't found", check herdr-core `terminal.list` first, not only the classic socket.
   When using both on a computer, select engine `herdr-both`: node refreshes both hosts in parallel, isolates events per host (`watcherSignals`), and always creates / resumes sessions through classic herdr
-  (`docs/integrations/engines.md` ("Host sets"), `docs/plans/plan-orca-support.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
+  (`docs/integrations/engines.md` ("Host sets"), `docs/integrations/herdr-core.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
 
 ## Starting a headless conversation clean without changing its id (2026-11-14, #7315, Claude Code 2.1.322)
 
@@ -1502,6 +1532,13 @@ compare by process generation rather than wall-clock time. Pending requests do n
 between two requests, or a native read over HTTP, has none. Hold a lease for each call, turn and read, replace only when
 no other lease is held, with no await between that check and the replacement, and make new users wait for it. Retry once,
 and test with a fake whose ACP side reads the account once at startup.
+
+Signals that only cover a sign-out or a missing model miss the common case (#17860): the user signs in with a second
+account because the first one ran out of quota, discovery never fails, and every turn fails with `RESOURCE_EXHAUSTED`.
+A caller that retries every few minutes keeps the stale process from ever idling out. On macOS the sign-in lives in the
+login keychain, so a check on `antigravity-oauth-token` never fires there. Stamp where the CLI keeps its sign-in by
+metadata only (file stat, keychain item dates), compare it per process, treat quota and sign-in errors as a reason to
+replace, rate-limit that, and remember that terminal `agy` sessions on the old account write it back too.
 
 ## Codex speed has separate native metadata (#3865)
 

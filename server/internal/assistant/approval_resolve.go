@@ -61,6 +61,14 @@ func (s *Service) resolvePreparedAnswerAt(ctx context.Context, p *pending, r pro
 		<-a.done
 		return s.resolvePreparedAnswerAt(ctx, p, r, remember, authorization, expected)
 	}
+	if detachedWaitElapsedLocked(p) {
+		// The original deadline can elapse while a stored row is being read.
+		// A delayed timer must not extend the owner's execution authority.
+		gen := p.prepared.decisionGen
+		s.fleet.mu.Unlock()
+		s.expirePreparedGen(p, gen)
+		return fmt.Errorf("interaction %s is %w", p.ix.ID, errNotPending)
+	}
 	p.claimed = true
 	p.resolution = &r
 	p.endedBy = cmpOr(endedByOf("", &r), db.EndedBy(ctx)) // for the history: who answered (recordEndBy)

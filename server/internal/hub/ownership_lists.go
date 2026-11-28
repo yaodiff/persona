@@ -345,7 +345,7 @@ func (h *Hub) pagedTodoList(w http.ResponseWriter, r *http.Request, key string, 
 // Its bytes are those of decoding each answer and encoding it again (writeDecoded), written from one scan of each
 // (writeScanned, merged_scan.go): 400 inbox items took 13 ms and 6.9 MB that way, about 3.5 ms and 0.5 MB this way.
 func writeMerged(w http.ResponseWriter, key string, answers []listAnswer) {
-	writeMergedSet(w, key, answers, nil)
+	writeMergedSet(w, key, answers, inboxStoredSourceMerge(key, answers))
 }
 
 // writeMergedSet is writeMerged with the top-level members of set (a JSON value by key, never key itself) written

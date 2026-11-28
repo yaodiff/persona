@@ -50,15 +50,16 @@ function world(
   let holdSubmit = false
   let settleSubmit: ((outcome: 'reject' | 'drop') => void) | undefined
   let abortError: string | undefined
+  let sessionId = SESSION
   let sessionModel = 'claude-sonnet-5-5'
   let permCalls = 0
   mock.env(on, env)
   const clock = mock.clock(on, { now: 1_000 })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
-  on('session.id', () => ({ value: SESSION }))
+  on('session.id', () => ({ value: sessionId }))
   on('session.model', () => ({ value: sessionModel }))
   on('session.version', () => ({ value: { version: '2.1.330', base: '2.1.330' } }))
-  on('fs.read', () => ({ value: '{"name":"persona","version":"0.3.1"}' }))
+  on('fs.read', () => ({ value: '{"name":"persona","version":"0.3.2"}' }))
   on('ui.log', () => ({ value: undefined }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: 'done' }))
@@ -131,6 +132,9 @@ function world(
     setAbortError(err: string | undefined) {
       abortError = err
     },
+    setSessionId(id: string) {
+      sessionId = id
+    },
     setSessionModel(m: string) {
       sessionModel = m
     },
@@ -169,7 +173,8 @@ describe('persona plugin', () => {
     expect(poll?.socketPath).toBe('/home/me/.persona/node.sock')
     expect(poll?.body).toEqual({
       session_id: SESSION,
-      plugin_version: '0.3.1',
+      plugin_version: '0.3.2',
+      observed_effort: { at_ms: 1000, reset: true },
       engine_version: '2.1.330',
       capabilities: ['busy_input', 'interrupt', 'settings', 'permissions'],
       wait_ms: 25_000,
@@ -254,10 +259,65 @@ describe('persona plugin', () => {
       { model: 'claude-haiku-5-5', agentId: 'sub-1' },
     ])
 
+    await w.clock.advance(2_000)
+    await w.clock.settle()
+    expect(w.requests.at(-1)?.body.observed_effort).toEqual({ level: 'xhigh', at_ms: 1000 })
+
     // Changing model in Claude Desktop UI supersedes Persona's earlier pick.
     w.setSessionModel('claude-opus-5-5')
     await runStep({ turnId: 't2', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })
     expect(w.steps.at(-1)).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
+  })
+
+  test('keeps an explicit auto choice and an active turn across a missing session id', async ($, on) => {
+    const w = world(on, [
+      { status: 200, body: { messages: [], settings: { id: 's1', effort: 'auto' }, retry_ms: 100 } },
+      { status: 200, body: { messages: [], interrupt: { id: 'stop', deadline_ms: 9_000 } } },
+    ])
+    await $.session.start(start)
+    await w.clock.settle()
+    await $.turn.start({ text: 'task', turnId: 't1' })
+    w.setSessionId('')
+    const gen = $.turn.step({ turnId: 't1', index: 0, model: 'sonnet', effort: 'high', messageCount: 1 })
+    while (!(await gen.next()).done) { /* drain the step */ }
+    w.setSessionId(SESSION)
+    await w.clock.advance(100)
+    await w.clock.settle()
+    expect(w.steps.at(-1)?.effort).toBeUndefined()
+    expect(w.requests.filter(r => r.url.endsWith('/poll'))[1]?.body.observed_effort).toEqual({ level: 'auto', at_ms: 1000 })
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('polls with the effective main-loop effort only for the session that ran the step', async ($, on) => {
+    const reply = { status: 200, body: { messages: [], retry_ms: 100 } }
+    const w = world(on, Array(10).fill(reply))
+    await $.session.start(start)
+    await w.clock.settle()
+
+    const step = async (effort?: 'low' | 'high' | number, agentId?: string) => {
+      const gen = $.turn.step({ turnId: 'main', index: 0, model: 'sonnet', messageCount: 1, effort, agentId })
+      while (!(await gen.next()).done) { /* drain the step */ }
+    }
+    const poll = async () => {
+      await w.clock.advance(100)
+      await w.clock.settle()
+      return w.requests.at(-1)?.body
+    }
+    await step('high')
+    expect((await poll())?.observed_effort).toEqual({ level: 'high', at_ms: 1000 })
+    await step('low', 'sub-1')
+    expect((await poll())?.observed_effort).toEqual({ level: 'high', at_ms: 1000 })
+    await step('low')
+    expect((await poll())?.observed_effort).toEqual({ level: 'low', at_ms: 1200 })
+    await step(4096)
+    expect((await poll())?.observed_effort).toEqual({ at_ms: 1300 })
+    await step()
+    expect((await poll())?.observed_effort).toEqual({ at_ms: 1400 })
+    await step('high')
+    w.setSessionId('22222222-2222-3333-4444-555555555555')
+    const cleared = await poll()
+    expect(cleared?.session_id).toBe('22222222-2222-3333-4444-555555555555')
+    expect(cleared?.observed_effort).toEqual({ at_ms: 1600, reset: true })
   })
 
   test('submits nothing late, empty or a slash command, and tells the node why', async ($, on) => {

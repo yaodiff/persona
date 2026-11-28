@@ -5,6 +5,7 @@ import { t } from "../i18n";
 import { baseName, sessionTitle, shortPath, activityOf } from "./format";
 import { agentSurface, type AgentSurface } from "./agent-kind";
 import type { AgentState, Session } from "./types";
+import { abilitiesOf, type HostAbilities, type PaneAbilitiesDTO } from "./host-abilities";
 
 // ── what the hub sends (proto/panes.go) ──────────────────
 
@@ -48,6 +49,8 @@ export interface PaneHostDTO {
   new_tab: boolean;
   /** The host can make a Git worktree of a workspace's repository (an older node does not say). */
   worktree?: boolean;
+  /** What the node's menu methods do on this host (#17053); an older node does not say (lib/host-abilities.ts). */
+  abilities?: PaneAbilitiesDTO;
   workspaces: PaneSpaceDTO[];
   tabs: PaneTabDTO[];
   panes: PaneDTO[];
@@ -104,6 +107,8 @@ export interface TermSpace {
   canOpen: boolean;
   /** "New worktree…" can be offered on this workspace (#2431). */
   canWorktree?: boolean;
+  /** What the menus may do with the workspace, its tabs and panes: the host's abilities (lib/host-abilities.ts). */
+  abilities?: HostAbilities;
   tabs: TermTab[];
 }
 
@@ -190,7 +195,7 @@ export function buildTerminalTree(res: PanesResponse | undefined, sessions: read
         }))
         .filter((t) => t.panes.length > 0);
       if (tabs.length === 0 && !host.new_tab) continue;
-      out.push({ id: w.id, host: host.kind, label: w.label || w.id, branch: w.branch ?? "", cwd: w.cwd ?? "", canOpen: host.new_tab, canWorktree: host.worktree === true, tabs });
+      out.push({ id: w.id, host: host.kind, label: w.label || w.id, branch: w.branch ?? "", cwd: w.cwd ?? "", canOpen: host.new_tab, canWorktree: host.worktree === true, abilities: abilitiesOf(host), tabs });
     }
   }
   return out;

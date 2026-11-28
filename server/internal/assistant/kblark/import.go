@@ -2,6 +2,7 @@ package kblark
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
 
@@ -57,13 +58,14 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 		if ctx.Err() != nil {
 			return res, ctx.Err()
 		}
-		if m.Token == "" {
+		tok := strings.TrimSpace(m.Token)
+		if tok == "" {
 			continue
 		}
-		id := minutesPrefix + m.Token
+		id := minutesPrefix + tok
 		// Read the detail only while the note is missing: an imported minute keeps it, a user's edit included.
 		if old, ok := e.Store.Item(kb.KindMeeting, id); !ok || old.Note == "" {
-			d, derr := r.MinuteDetail(ctx, m.Token)
+			d, derr := r.MinuteDetail(ctx, tok)
 			if derr != nil {
 				if logf != nil {
 					logf("kb: lark minutes: reading a minute's detail: %v", derr)
@@ -96,6 +98,9 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 	if failedTitles > 0 && logf != nil {
 		logf("kb: lark minutes: %d document title(s) could not be read", failedTitles)
 	}
+	if ctx.Err() != nil {
+		return res, ctx.Err()
+	}
 	for _, q := range cfg.DocSearch {
 		if ctx.Err() != nil {
 			return res, ctx.Err()
@@ -105,13 +110,20 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 		}
 		docs, err := r.SearchDocs(ctx, q)
 		if err != nil {
+			if ctx.Err() != nil {
+				return res, ctx.Err()
+			}
 			if logf != nil {
 				logf("kb: lark minutes: searching documents: %v", err)
 			}
 			continue
 		}
 		for _, d := range docs {
-			it := kb.Item{Kind: kb.KindDoc, Source: Source, ID: d.Token, Title: d.Title, URL: d.URL, At: d.At, Where: Where}
+			tok := strings.TrimSpace(d.Token)
+			if tok == "" {
+				continue
+			}
+			it := kb.Item{Kind: kb.KindDoc, Source: Source, ID: tok, Title: d.Title, URL: d.URL, At: d.At, Where: Where}
 			changed, err := e.PutCollectedItem(&it)
 			if err != nil {
 				return res, err
@@ -120,6 +132,9 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 				res.Docs++
 			}
 		}
+	}
+	if ctx.Err() != nil {
+		return res, ctx.Err()
 	}
 	return res, nil
 }
@@ -168,8 +183,53 @@ func clip(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// isLarkLink: a document URL lark-cli can inspect; another source's links are left to it.
+func validDNSName(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isLarkLink: an HTTPS Feishu/Lark document URL lark-cli can inspect; foreign or non-HTTPS links are left alone.
 func isLarkLink(it *kb.Item) bool {
-	u := strings.ToLower(it.URL)
-	return strings.Contains(u, "lark") || strings.Contains(u, "feishu")
+	if it == nil {
+		return false
+	}
+	raw := it.URL
+	if raw == "" || strings.TrimSpace(raw) != raw || strings.ContainsRune(raw, '\\') {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < 0x20 || raw[i] == 0x7f {
+			return false
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || strings.HasSuffix(u.Host, ":") {
+		return false
+	}
+	if port := u.Port(); port != "" && port != "443" {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if !validDNSName(host) {
+		return false
+	}
+	for _, domain := range []string{"feishu.cn", "larksuite.com", "larkoffice.com"} {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
 }

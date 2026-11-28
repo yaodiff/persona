@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -136,23 +135,18 @@ func (s *Service) todoBlockersRoutes() {
 			apierr.Write(w, http.StatusNotFound, errors.New("blocker not found"))
 			return
 		}
-		wasActive := matched.State == db.TodoBlockerStateActive
-		if _, err := s.cancelTodoBlocker(ctx, blockerID); err != nil {
+		cancelled, err := s.cancelTodoBlocker(ctx, blockerID)
+		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
-		if matched.Kind == todoBlockerKindMergeTrain {
-			s.clearMergeTrainBlocker(todoID, matched.TargetRef, matched.ConditionJSON)
-		}
-		s.todosChanged(ctx)
-		if wasActive && !s.hasActiveTodoBlockers(ctx, todoID) {
-			var onUnblocked func(ctx context.Context, todoID string)
-			if h := s.todoBlockerHooks(false); h != nil {
-				h.mu.RLock()
-				onUnblocked = h.onUnblocked
-				h.mu.RUnlock()
+		if cancelled != nil {
+			s.todosChanged(ctx)
+			ready, err := s.blockerUnblockStillHolds(ctx, superviseSignal{Todo: todoID, Key: blockerResolutionKey(*cancelled)})
+			if ready || err != nil {
+				s.emitTodoBlockerWake(ctx, todoBlockerWake{last: *cancelled})
 			}
-			s.notifyTodoBlockerUnblocked(ctx, todoID, onUnblocked)
+			s.sweepAdmissionQueue(ctx)
 		}
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})

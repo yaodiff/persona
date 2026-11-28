@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// orcaHost is the Orca desktop app (docs/plans/plan-orca-support.md "Orca source"), through its runtime's unix socket. A pane
+// orcaHost is the Orca desktop app (docs/integrations/orca.md "Orca source"), through its runtime's unix socket. A pane
 // is one of Orca's terminals, its id Orca's pane key "<tabId>:<leafId>" — what worktree.ps names agents by and what
 // Orca puts in the terminal's processes as ORCA_PANE_KEY; the terminal's handle and incarnation (what the runtime's
 // terminal.* calls take) are looked up from it. Spaces are worktrees, slots their tabs.
@@ -61,6 +61,12 @@ type orcaHost struct {
 	made      map[string]orcart.Terminal
 	rekeyed   map[string]string
 	agentTabs map[string]orcaStartTerminal
+	// missing are the methods the runtime missingIn (its id) answered method_not_found to (hostorca_panes.go).
+	missing   map[string]bool
+	missingIn string
+	// listSeq / listApplied keep delayed older terminal.list responses from clobbering newer cached terminals (#2133).
+	listSeq     uint64
+	listApplied uint64
 }
 
 // track remembers a terminal this host created (h.mu held), to find it by handle if Orca re-keys it.
@@ -178,6 +184,8 @@ func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Term
 	}
 	// Taken before the list: a terminal created while it is asked for is not taken for gone.
 	made := maps.Clone(h.made)
+	h.listSeq++
+	seq := h.listSeq
 	h.mu.Unlock()
 	layouts := fresh
 	l, err := h.c.Terminals(ctx, layouts)
@@ -203,9 +211,13 @@ func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Term
 	if fresh && l.Truncated {
 		return nil, nil, orcart.ErrPartial // a terminal left out could be an agent's
 	}
-	h.mu.Lock()
+	var named []orcart.Tab
 	if layouts {
-		h.tabs, h.tabsAt, h.topology = l.Tabs, time.Now(), orcaTopology(l)
+		named = h.namedTabs(ctx, l.Tabs) // the names renames gave them (hostorca_panes.go)
+	}
+	h.mu.Lock()
+	if layouts && seq >= h.listApplied {
+		h.tabs, h.tabsAt, h.topology = named, time.Now(), orcaTopology(l)
 	}
 	tabs := h.tabs
 	h.mu.Unlock()
@@ -234,6 +246,10 @@ func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Term
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if seq < h.listApplied {
+		return terms, tabs, nil
+	}
+	h.listApplied = seq
 	for key := range made {
 		if !listed[key] {
 			delete(h.made, key) // gone
@@ -377,9 +393,13 @@ func (v *orcaView) layout() *host.Layout {
 		l.Spaces = append(l.Spaces, host.Space{ID: id, Label: orcaSpaceLabel(branch, path), Number: len(l.Spaces) + 1,
 			Cwd: path, Branch: strings.TrimPrefix(branch, "refs/heads/"), ParentID: orcaParent(id, parent)})
 	}
-	// Orca's sidebar order (worktree.ps), then any worktree only the terminals name.
+	// Orca's sidebar order (worktree.ps), then any worktree only the terminals name. A worktree on an SSH target is not
+	// this computer's (its terminals are left out too): every action here needs a local one, and that computer's node
+	// lists it (#17050).
 	for _, w := range v.trees {
-		addSpace(w.WorktreeID, w.Path, w.Branch, w.ParentWorktreeID)
+		if localComposerWorkspace(w) {
+			addSpace(w.WorktreeID, w.Path, w.Branch, w.ParentWorktreeID)
+		}
 	}
 	for _, t := range v.terms {
 		addSpace(t.WorktreeID, t.WorktreePath, t.Branch, "")
@@ -435,7 +455,7 @@ func (h *orcaHost) Spaces(ctx context.Context) ([]host.Space, error) {
 		}
 	}
 	for _, w := range trees {
-		if w.WorktreeID != "" {
+		if w.WorktreeID != "" && localComposerWorkspace(w) { // an SSH target's is that computer's (#17050)
 			out = append(out, host.Space{ID: w.WorktreeID, Label: orcaSpaceLabel(w.Branch, w.Path),
 				Number: len(out) + 1, Cwd: w.Path, Branch: strings.TrimPrefix(w.Branch, "refs/heads/"), ParentID: orcaParent(w.WorktreeID, w.ParentWorktreeID), DisplayName: w.DisplayName,
 				ProjectID: orcaProjectID(w), ProjectName: w.Repo, ProjectPath: projectPaths[orcaProjectID(w)], IsMain: w.IsMain,

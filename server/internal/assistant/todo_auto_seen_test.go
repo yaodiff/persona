@@ -245,22 +245,12 @@ func TestTodosV2AutoSeenUndoProtectionAndRollback(t *testing.T) {
 		t.Fatalf("after manual Undo: seen_at=%v auto_seen_undone=%t", got.SeenAt, got.AutoSeenUndone)
 	}
 
-	// 3. Re-acceptance (directly or after reopen) must NEVER silently overwrite manual Undo.
+	// 3. Re-acceptance in the same completion round respects manual Undo.
 	acceptReviewForTest(t, s, todo.ID, nil)
 	got, _ = s.todoNow(todo.ID)
 	if got.SeenAt != nil || !got.AutoSeenUndone {
 		t.Fatalf("re-accept overwrote manual Undo: seen_at=%v auto_seen_undone=%t", got.SeenAt, got.AutoSeenUndone)
 	}
-	open := false
-	if _, err := s.editTodo(context.Background(), todo.ID, db.TodoEdit{Done: &open}); err != nil {
-		t.Fatalf("reopen todo: %v", err)
-	}
-	acceptReviewForTest(t, s, todo.ID, nil)
-	got, _ = s.todoNow(todo.ID)
-	if got.SeenAt != nil || !got.AutoSeenUndone {
-		t.Fatalf("reopen + re-accept overwrote manual Undo: seen_at=%v auto_seen_undone=%t", got.SeenAt, got.AutoSeenUndone)
-	}
-
 	// 4. Manual PUT /seen works normally without clearing AutoSeenUndone.
 	w = doTodoHTTP(s, "PUT", "/api/v1/todos/"+todo.ID+"/seen", "")
 	if w.Code != http.StatusOK {
@@ -288,6 +278,24 @@ func TestTodosV2AutoSeenUndoProtectionAndRollback(t *testing.T) {
 	got, _ = s.todoNow(todo.ID)
 	if got.SeenAt != nil || !got.AutoSeenUndone {
 		t.Fatalf("after todos_v2 re-enable, re-accept overwrote Undo: seen_at=%v auto_seen_undone=%t", got.SeenAt, got.AutoSeenUndone)
+	}
+
+	// 7. Reopening ends the Undo-protected round. A late callback for it must leave the open to-do unseen.
+	prior := got
+	ctx := t.Context()
+	got, err := s.editTodo(ctx, todo.ID, todoDoneEdit(false))
+	if err != nil || got.DoneAt != nil || got.SeenAt != nil || got.AutoSeenUndone {
+		t.Fatalf("reopen did not clear completion marks: todo=%+v err=%v", got, err)
+	}
+	s.autoSeeAcceptedTodo(ctx, completionOf(prior), outcomeDone, false)
+	got, _ = s.todoNow(todo.ID)
+	if got.SeenAt != nil {
+		t.Fatalf("late auto-seen marked an open to-do: %v", got.SeenAt)
+	}
+	acceptReviewForTest(t, s, todo.ID, nil)
+	got, _ = s.todoNow(todo.ID)
+	if got.SeenAt == nil || got.AutoSeenUndone {
+		t.Fatalf("new completion round was not auto-seen: seen_at=%v auto_seen_undone=%t", got.SeenAt, got.AutoSeenUndone)
 	}
 }
 
@@ -328,7 +336,7 @@ func TestTodosV2AutoSeenUndoSurvivesRestart(t *testing.T) {
 	}
 
 	// Re-acceptance after restart still respects persisted AutoSeenUndone.
-	reloaded.autoSeeAcceptedTodo(context.Background(), todo.ID, outcomeDone, false)
+	reloaded.autoSeeAcceptedTodo(context.Background(), completionOf(got), outcomeDone, false)
 	got, _ = reloaded.todoNow(todo.ID)
 	if got.SeenAt != nil {
 		t.Fatalf("autoSeeAcceptedTodo after restart overwrote Undo: seen_at=%v", got.SeenAt)

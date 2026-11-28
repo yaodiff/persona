@@ -185,6 +185,7 @@ func (f filters) matches(r *record) bool {
 		(f.Under == "" || v.matchesUnder(f.UnderMachine, f.Under)) &&
 		(f.State == "" || f.State == stateOf(v, f.Roots, f.CrossMachineHierarchy)) &&
 		(f.Machine == "" || f.Machine == v.Machine) &&
+		(f.AllowedMachines == "" || inAllowedMachines(f.AllowedMachines, v.Machine)) &&
 		(f.Project == "" || f.Project == v.Project) &&
 		(f.Places == "" || inPlaces(f.Places, v.Machine, v.Project)) &&
 		(f.Spaces == "" || inPlaces(f.Spaces, v.Machine, v.Group)) &&

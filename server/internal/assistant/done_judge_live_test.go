@@ -44,7 +44,7 @@ type taskDoneScenario struct {
 func (sc taskDoneScenario) input() taskDoneInput {
 	in := taskDoneInput{Owner: "Alex", Delivery: sc.Delivery, Title: sc.Title, Notes: sc.Notes, Criteria: sc.DoneWhen}
 	for _, r := range sc.Replies {
-		in.Replies = append(in.Replies, prompts.TaskDoneReply{Machine: r.Machine, Ask: r.Ask, Text: r.Text, From: r.From, Source: r.Source})
+		in.Replies = append(in.Replies, taskDoneReply{TaskDoneReply: prompts.TaskDoneReply{Machine: r.Machine, Ask: r.Ask, Text: r.Text, From: r.From, Source: r.Source}})
 	}
 	return in
 }

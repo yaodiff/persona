@@ -174,22 +174,34 @@ func (s *Service) taskCloseActivityError(ctx context.Context, t Todo, now time.T
 }
 
 func (s *Service) taskCloseSnapshotError(t Todo, now time.Time) error {
+	return s.taskCloseSnapshotErrorExcept(t, now, SessionRef{})
+}
+
+func (s *Service) taskCloseSnapshotErrorExcept(t Todo, now time.Time, untouched SessionRef) error {
 	if work := s.taskCloseWorkSnapshot(t, now); work != nil {
 		return &taskCloseHoldError{todo: t.ID, work: work}
 	}
-	return s.taskCloseActivitySnapshotError(t, now)
+	return s.taskCloseActivitySnapshotErrorExcept(t, now, untouched)
 }
 
 // taskCloseActivitySnapshotError is safe inside a database transaction: cache reads only, with no storage lock or I/O.
 func (s *Service) taskCloseActivitySnapshotError(t Todo, now time.Time) error {
+	return s.taskCloseActivitySnapshotErrorExcept(t, now, SessionRef{})
+}
+
+func (s *Service) taskCloseActivitySnapshotErrorExcept(t Todo, now time.Time, untouched SessionRef) error {
 	if t.DoneAt != nil {
 		return nil
+	}
+	// Revalidate the same dispatch and its current review/delivery state at the write boundary.
+	if untouched.SessionID != "" && s.freshDispatchAgent(t, now) != untouched {
+		untouched = SessionRef{}
 	}
 	for _, a := range t.Agents {
 		if a.ReleasedAt != nil || a.DismissedAt != nil || a.SessionID == "" {
 			continue
 		}
-		if why := s.sessionActivitySnapshotReason(a.MachineID, a.SessionID, now); why != "" {
+		if why := s.sessionActivitySnapshotReasonExcept(a.MachineID, a.SessionID, now, untouched.SessionID == a.SessionID && untouched.MachineID == a.MachineID); why != "" {
 			return &taskCloseHoldError{todo: t.ID, why: why}
 		}
 	}
@@ -244,18 +256,25 @@ func (s *Service) sessionActivityReason(ctx context.Context, machine, session st
 }
 
 func (s *Service) sessionActivitySnapshotReason(machine, session string, now time.Time) string {
+	return s.sessionActivitySnapshotReasonExcept(machine, session, now, false)
+}
+
+func (s *Service) sessionActivitySnapshotReasonExcept(machine, session string, now time.Time, untouched bool) string {
 	activity, read, activityLoaded := s.taskUserActivityAt(machine, session)
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	for _, ref := range s.fleet.clients.Viewing {
 		if ref.MachineID == machine && ref.SessionID == session {
+			if untouched && activityLoaded && activity.IsZero() {
+				return "" // this is only a passive viewer; actual activity still wins
+			}
 			return fmt.Sprintf("the user is viewing Agent %s", short(session))
 		}
 	}
 	if !activityLoaded {
 		return activityUnknown
 	}
-	if read.After(activity) {
+	if !untouched && read.After(activity) {
 		activity = read
 	}
 	if !activity.IsZero() && now.Sub(activity) < taskUserIdle {

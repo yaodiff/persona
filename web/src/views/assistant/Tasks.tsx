@@ -38,7 +38,7 @@ import {
   type TodayBody,
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
-import { acceptedAtRest, awaitsReview, dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, personalVerificationAsk, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, updateTodo, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { acceptedAtRest, awaitsReview, dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, personalVerificationAsk, stoppedReason, taskNow, todoStatus, todoSupervisorLabel, TODO_STATUS_INFO, updateTodo, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { hasActiveAgentWork } from "../../lib/todo-triage";
 import { errorText } from "../../lib/api";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -69,7 +69,7 @@ const NeedsYouPart = lazy(() => import("./TaskDecision"));
 const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)) && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
-import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
+import { feedWake, HandoffCard, HandoffCards, itemPlan, planTaskTodo, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
 import { acceptanceStands, latestReview, parkedLine, progressLine, reviewState } from "../../lib/supervision";
 import { isLegacyCodexRouteNotice } from "../../lib/compatibility";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
@@ -122,11 +122,11 @@ export function useTaskLookup() {
 function taskNowIn(s: State, todo: Todo, plans: Record<string, TaskPlan>): TaskNow {
   const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   const status = statusOf(todo, lookup, plans);
-  return { status, lead: mostUrgentAgent(todo, lookup)?.session, wait: waitOf(todo, status, lookup), active: hasActiveAgentWork(todo, lookup) };
+  return { status, lead: mostUrgentAgent(todo, lookup)?.session, wait: waitOf(todo, status, lookup), active: hasActiveAgentWork(todo, lookup), supervisorLabel: todoSupervisorLabel(todo, status, lookup) };
 }
 
 /** A task's status, lead agent and, while it waits, what it waits on (#11090, lib/todo-wait-reason.ts waitOf). */
-type TaskNow = { status: TodoStatus; lead?: Session; wait?: WaitReason; active: boolean };
+type TaskNow = { status: TodoStatus; lead?: Session; wait?: WaitReason; active: boolean; supervisorLabel?: string };
 
 /** A task's status and lead agent (undefined without the task). */
 export function useTaskNow(todo: Todo | undefined): TaskNow | undefined {
@@ -202,12 +202,15 @@ export function progressOf(lead: Session | undefined) {
   return now && { text: now.kind === "words" ? plainMarkdown(now.text) : now.text, for: now.kind === "step" ? since(now.since) : undefined };
 }
 
-/** The card a task's agents wait on: its lead agent's first, else any of its other active agents'. */
+/** The user card a task's agents wait on: its lead agent's first, else any of its other active agents'. */
 export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: Session): Interaction | undefined {
-  // a card of a child session one of its agents started is that agent's (#5120)
-  const mine = (ix: Interaction) => (todo.agents ?? []).some((a) => !a.released_at && a.machine_id === requestHomeMachine(ix) && a.session_id === requestHome(ix));
-  return (lead && (interactions.find((ix) => ix.machine_id === lead.machine_id && ix.session_id === lead.session_id)
-    ?? interactions.find((ix) => requestHomeMachine(ix) === lead.machine_id && requestHome(ix) === lead.session_id))) ?? interactions.find(mine);
+  // A card of a folded child belongs to its parent too (#5120).
+  const direct = (ix: Interaction, mid: string, sid: string) => ix.machine_id === mid && ix.session_id === sid;
+  const folded = (ix: Interaction, mid: string, sid: string) => requestHomeMachine(ix) === mid && requestHome(ix) === sid;
+  const owned = interactions.filter((ix) => !ix.delegating && !ix.mirror_of);
+  return (lead && (owned.find((ix) => direct(ix, lead.machine_id, lead.session_id))
+    ?? owned.find((ix) => folded(ix, lead.machine_id, lead.session_id)))) ??
+    owned.find((ix) => todo.agents?.some((a) => !a.released_at && (direct(ix, a.machine_id, a.session_id) || folded(ix, a.machine_id, a.session_id))));
 }
 
 /** What a waiting task needs, in a line (#3301): "Has a question: which framework?", "Waiting for your approval: swift test", "Plan awaiting approval", the words
@@ -459,12 +462,6 @@ function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; t
 
 // ── the hub's lines ──
 
-/** The plan a `plan` item carries in its body (the hub writes it there with the item), when it is one of this item's. */
-function itemPlan(item: FeedItem): TaskPlan | undefined {
-  const p = item.body?.plan as TaskPlan | undefined;
-  return p && typeof p === "object" && p.id === item.ref && Array.isArray(p.tasks) ? p : undefined;
-}
-
 // Memoized: the chat re-renders on every streamed item and session push, while an item keeps its identity until its body
 // changes (mergeInto); the plan, todo and "Later" it shows come through its own selectors.
 export const FeedLineView = memo(function FeedLineView({ item, simplified = false }: { item: FeedItem; simplified?: boolean }) {
@@ -487,7 +484,7 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
     if (item.kind === "plan") {
       const shown = plan ?? itemPlan(item);
       if (!shown) return null;
-      return shown.state === "started" ? <PlanHandoffs plan={shown} since={item.at} /> : <PlanCard plan={shown} />;
+      return shown.state === "started" ? <PlanHandoffs plan={shown} since={item.at} groupKey={item.id} /> : <PlanCard plan={shown} />;
     }
     if (item.kind === "task") return planned ? null : <TaskHandoffs item={item} />;
     if (item.kind === "message" && !cardSent(item) && !cardFiled(item)) return null;
@@ -766,7 +763,7 @@ export const DOCK_CAPSULE = "inline-flex h-8 shrink-0 items-center whitespace-no
 const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, waiting: 1, not_started: 1, unread: 2 };
 
 /** The dock's task pills, waiting first: each task going on, its status and what it waits on (#3463). */
-function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>, manager?: string): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
+function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>, manager?: string): { t: Todo; st: TodoStatus; ask?: string; limit?: string; supervisorLabel?: string }[] {
   const interactions = manager ? s.interactions.filter((ix) => sameManager(ix.manager, manager)) : s.interactions;
   const lookup = answeredLookup(taskSessionLookup(s), interactions, s.answered);
   return s.todos
@@ -780,6 +777,7 @@ function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskP
       return {
         t: todo,
         st,
+        supervisorLabel: todoSupervisorLabel(todo, st, lookup),
         ask: st === "needs_you" ? taskAsk(taskInteraction(todo, interactions, lead)) : undefined,
         limit: todo.wait != null ? waitSummary(todo.wait) : st === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined,
       };
@@ -797,7 +795,7 @@ const EMPTY_CARDS: TaskCardMetadata[] = [];
 /** A started plan's tasks in the conversation (#3700, #5096): a hand-off card for each Agent they started (one per task
  *  while its Agent is starting, or says why it did not start), in plan order; live to-do titles over the plan's. `since`:
  *  the plan line's time, so each card keeps the Agents this plan started (#11854). */
-function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
+function PlanHandoffs({ plan, since, groupKey }: { plan: TaskPlan; since?: string; groupKey?: string }) {
   const plans = useFeed((s) => s.plans);
   const handoffs = useStoreRows((s) =>
     plan.tasks.flatMap((task, i) => {
@@ -807,22 +805,7 @@ function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
       return taskHandoffs(id ? s.todos.find((x) => x.id === id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: id, superseded }, task.continues ? "continuation" : "created", plans, s.todosLoaded, since);
     }),
   );
-  return <HandoffCards handoffs={handoffs} />;
-}
-
-/** The to-do plan task i ran on: its todo_id, or, once a later plan continued that to-do and cleared it (#11854), the
- *  one it continued or reused, else the one only this task can have made (the to-do keeps the plan it came from). A
- *  task that failed to start keeps none: its card says why. */
-function planTaskTodo(plan: TaskPlan, i: number, todos: Todo[]): string | undefined {
-  const task = plan.tasks[i];
-  if (!task) return undefined;
-  if (task.todo_id) return task.todo_id;
-  if (task.error || plan.state !== "started") return undefined;
-  if (task.continues || task.reuse_todo) return task.continues || task.reuse_todo;
-  const bare = plan.tasks.filter((x) => !x.todo_id && !x.error && !x.continues && !x.reuse_todo);
-  const held = new Set(plan.tasks.map((x) => x.todo_id || x.continues || x.reuse_todo).filter(Boolean));
-  const made = todos.filter((x) => x.plan_id === plan.id && !held.has(x.id));
-  return bare.length === 1 && made.length === 1 ? made[0]!.id : undefined;
+  return <HandoffCards handoffs={handoffs} groupKey={groupKey ?? plan.id} />;
 }
 
 /** A task the conversation dispatched on its own (agent_start), or one made of an Agent already running
@@ -831,7 +814,7 @@ function TaskHandoffs({ item }: { item: FeedItem }) {
   const plans = useFeed((s) => s.plans);
   const wake = feedWake(field(item, "wake"));
   const handoffs = useStoreRows((s) => (item.ref ? taskHandoffs(s.todos.find((x) => x.id === item.ref), { key: item.id, title: "", todoId: item.ref }, wake, plans, s.todosLoaded, item.at, TASK_LINE_SLACK_MS) : []));
-  return <HandoffCards handoffs={handoffs} />;
+  return <HandoffCards handoffs={handoffs} groupKey={item.id} />;
 }
 
 /** One slot, one row: live task/session state wins over historical feed metadata. `fresh`: a Finished row the owner has
@@ -929,7 +912,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
       {/* the status in its own right-aligned column (the rows' states scan down it), then the row's end: › where it opens
           something, ✓ once finished, ⓘ for a usage limit (#5569) */}
       <span data-task-status={isNew ? "just_finished" : rowIsFinished ? "done" : reviewing ? "review" : agentKey} data-task-wait={!isNew && agentKey === "waiting" ? task?.wait ?? "unknown" : undefined} className={cx("max-w-[40%] shrink-0 truncate text-right text-xs", isNew ? "text-green" : rowIsFinished || reviewing ? "text-ink-2" : agentRowTone(agentKey, task?.wait))}>
-        {isNew ? stateName("just_finished") : rowIsFinished ? (accepted ? t("assistant-tasks.review_accepted") : TODO_STATUS_INFO.done.label) : reviewing ? t("assistant-tasks.review_supervisor") : agentKey === "not_started" && todo ? todoLook(todo, "not_started", task?.wait).label : agentRowLabel(agentKey, task?.wait)}
+        {isNew ? stateName("just_finished") : rowIsFinished ? (accepted ? t("assistant-tasks.review_accepted") : TODO_STATUS_INFO.done.label) : reviewing ? t("assistant-tasks.review_supervisor") : task?.supervisorLabel ?? (agentKey === "not_started" && todo ? todoLook(todo, "not_started", task?.wait).label : agentRowLabel(agentKey, task?.wait))}
       </span>
       <span className="flex w-4 shrink-0 justify-center">
         {finished ? <Icon name="check" className="text-green" /> : state === "usage_limit" ? <Icon name="info" className="text-orange" /> : <Icon name="chevronRight" className="text-ink-3" />}
@@ -1241,8 +1224,8 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   // over it (theirs), and not from a field being typed in or a waiting card in the tray: a card's Esc goes back to the
   // composer (lib/card-keys.ts) and closing the tray under it would throw away an answer being written.
   const onTrayKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Escape" || !tray || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node)) return;
-    if (document.querySelector("[role=dialog],[role=menu]")) return;
+    if (e.key !== "Escape" || !tray || e.defaultPrevented || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229 || !e.currentTarget.contains(e.target as Node)) return;
+    if ([...document.querySelectorAll("[role=dialog],[role=menu],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]"))) return;
     const target = e.target instanceof HTMLElement ? e.target : null;
     if (target && (target.isContentEditable || target.closest(`${EDITABLE}, [data-card-keys]`))) return;
     e.preventDefault();
@@ -1347,7 +1330,7 @@ export const TaskDock = memo(function TaskDock({ conversation }: { conversation:
         // The scroller pads by the focus ring's width and takes it back, so the ring is not clipped and the row
         // stays a pill high.
         <div className="scrollbar-none -my-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-1">
-          {going.map(({ t: todo, st, ask, limit }) => {
+          {going.map(({ t: todo, st, ask, limit, supervisorLabel }) => {
             // a waiting task says what it waits on when hovered or read out (#3463)
             const label = ask ? t("assistant-tasks.dock_task_asks", { title: todo.title, ask }) : limit ? `${todo.title} · ${limit}` : undefined;
             return (
@@ -1367,6 +1350,7 @@ export const TaskDock = memo(function TaskDock({ conversation }: { conversation:
               <TaskMark status={st} size={8} />
               <span className="truncate">{todo.title}</span>
               {st === "needs_you" && <span className="shrink-0">{stateName("needs_you")}</span>}
+              {supervisorLabel && <span className="shrink-0">{supervisorLabel}</span>}
               {st === "interrupted" && <span className="shrink-0">{stateName("interrupted")}</span>}
               {st === "usage_limit" && <span className="shrink-0">{t("lib-usage-limit.short")}</span>}
             </button>

@@ -5,7 +5,9 @@
   "takeover_title": "接管 Codex",
   "takeover_confirm": "确认接管",
   "takeover_running_confirm": "此操作将中止终端中正在运行的当前轮次。",
+  "takeover_app_confirm": "这会从电脑端的 Codex App 接管该会话。",
   "takeover_done": "已接管",
   "reason_encrypted_context": "加密的对话上下文无法在此会话中恢复，请在新会话中继续。",
+  "reason_app_running": "电脑上的 Codex App 正在运行。请在新会话中继续，或在电脑端操作。",
   "reason_unavailable": "此对话无法在当前会话中恢复，请在新会话中继续。"
 }

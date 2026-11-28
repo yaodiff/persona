@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -73,7 +74,14 @@ func get(ctx context.Context, client *http.Client, url string, limit int64) ([]b
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s: response exceeds %d bytes", url, limit)
+	}
+	return data, nil
 }
 
 // Download fetches f from base into dir and unpacks it to dir/<name without .gz>: the .gz must match the manifest's
@@ -90,6 +98,9 @@ func Download(ctx context.Context, client *http.Client, base string, f File, dir
 		}
 		remotes = []string{f.Served} // an edition's own name: no older name stands in for it
 	}
+	if err := validateDownloadSize(f); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -97,10 +108,12 @@ func Download(ctx context.Context, client *http.Client, base string, f File, dir
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
+			t := time.NewTimer(time.Duration(attempt) * 2 * time.Second)
 			select {
 			case <-ctx.Done():
+				t.Stop()
 				return "", ctx.Err()
-			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			case <-t.C:
 			}
 		}
 		for _, name := range remotes {
@@ -138,6 +151,9 @@ func DownloadBinary(ctx context.Context, client *http.Client, base string, f Fil
 		f.SHA256 == "" || f.SHA256 != f.BinarySHA256 {
 		return "", errors.New("invalid published package")
 	}
+	if limit := unpackedBinaryLimit(); f.Size > limit {
+		return "", fmt.Errorf("%w: %s size %d exceeds %d bytes", errMismatch, f.Name, f.Size, limit)
+	}
 	bin := filepath.Join(dir, f.Name)
 	if err := fetchFile(ctx, client, strings.TrimSuffix(base, "/")+"/"+f.Name, bin, f); err != nil {
 		return "", err
@@ -163,7 +179,42 @@ type shortError struct{ error }
 
 func (e shortError) Unwrap() error { return e.error }
 
+const (
+	defaultMaxDownloadSize   int64 = 512 << 20
+	defaultMaxUnpackedBinary int64 = 512 << 20
+)
+
+var (
+	maxDownloadSizeOverride   atomic.Int64
+	maxUnpackedBinaryOverride atomic.Int64
+)
+
+func downloadSizeLimit() int64 {
+	if v := maxDownloadSizeOverride.Load(); v > 0 {
+		return v
+	}
+	return defaultMaxDownloadSize
+}
+
+func unpackedBinaryLimit() int64 {
+	if v := maxUnpackedBinaryOverride.Load(); v > 0 {
+		return v
+	}
+	return defaultMaxUnpackedBinary
+}
+
+func validateDownloadSize(f File) error {
+	limit := downloadSizeLimit()
+	if f.Size <= 0 || f.Size > limit {
+		return fmt.Errorf("%w: %s invalid size %d (max %d)", errMismatch, f.Name, f.Size, limit)
+	}
+	return nil
+}
+
 func fetchFile(ctx context.Context, client *http.Client, url, path string, f File) error {
+	if err := validateDownloadSize(f); err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -212,6 +263,7 @@ func unpack(gz, bin, want string) error {
 	if err != nil {
 		return err
 	}
+	defer zr.Close()
 	tmp := bin + ".part"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
@@ -219,8 +271,15 @@ func unpack(gz, bin, want string) error {
 	}
 	defer os.Remove(tmp)
 	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(out, h), zr)
+	limit := unpackedBinaryLimit()
+	n, err := io.Copy(io.MultiWriter(out, h), io.LimitReader(zr, limit+1))
 	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && n > limit {
+		err = fmt.Errorf("%w: %s unpacked exceeds %d bytes", errMismatch, filepath.Base(gz), limit)
+	}
+	if cerr := zr.Close(); err == nil {
 		err = cerr
 	}
 	if err == nil && hex.EncodeToString(h.Sum(nil)) != want {

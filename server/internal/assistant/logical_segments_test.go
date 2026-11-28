@@ -1623,3 +1623,105 @@ func TestSegmentReadExposesEpochWithoutPhysicalIdsOrStartingAnything(t *testing.
 		t.Fatal("snapshot read sent model input")
 	}
 }
+
+func TestLogicalHistoryFoldRangeSkipsPriorFrozenSegmentsAndBoundsMore(t *testing.T) {
+	s, f, d, _ := logicalPair(t, "claude")
+	ctx := t.Context()
+	// Persist segment 1 through seq 6 (frozen) and advance segment 2's live revision past durable history
+	// so fold reads miss the Postgres cache and read through the node.
+	if err := d.PutConversationPage(ctx, db.ConversationPage{
+		MachineID: "server", SessionID: "side-chat", History: "h1", Revision: 100, ThroughSeq: 6, Tail: true,
+		Items: []proto.Item{
+			{ID: "u1#0", Seq: 1, Role: "user", Kind: proto.KindText, Text: "start"},
+			{ID: "t2#0", Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "c1", ToolName: "Bash"},
+			{ID: "r3#0", Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "c1", Text: "ok"},
+			{ID: "t4#0", Seq: 4, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "c2", ToolName: "Read"},
+			{ID: "a6#0", Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "done"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := activatePair(t, d)
+	f.setSessions("server",
+		proto.Session{SessionID: "side-chat", Assistant: true, Agent: "claude", Rev: 100},
+		proto.Session{SessionID: "target-chat", Assistant: true, Agent: "claude", Rev: 101},
+	)
+	var called []string
+	f.answerNode(DeviceSessionItems, func(_ string, raw json.RawMessage) (any, error) {
+		var p historyParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, err
+		}
+		called = append(called, p.SessionID)
+		if p.SessionID != "target-chat" {
+			t.Fatalf("retired prior segment %q should not be queried for a fold in segment 2: %s", p.SessionID, raw)
+		}
+		if intValue(p.From) != 2 || intValue(p.Through) != 4 {
+			t.Fatalf("segment 2 fold range = (%v..%v), want 2..4", p.From, p.Through)
+		}
+		fromSeq, toSeq := 1, 4
+		return historyPage{
+			History: "h2",
+			FromSeq: &fromSeq,
+			ToSeq:   &toSeq,
+			Items: []proto.Item{
+				{ID: "b2#0", Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "c3", ToolName: "Bash"},
+				{ID: "b3#0", Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "c3", Text: "ran"},
+				{ID: "b4#0", Seq: 4, Role: "assistant", Kind: proto.KindThinking, Text: "checking"},
+			},
+		}, nil
+	})
+	from, through := 8, 10
+	page, err := s.logicalHistoryPage(ctx, d, c, historyParams{From: &from, Through: &through, LazyImages: true})
+	if err != nil {
+		t.Fatalf("segment 2 fold read failed: %v", err)
+	}
+	if !slices.Equal(called, []string{"target-chat"}) {
+		t.Fatalf("called segments = %v, want [target-chat]", called)
+	}
+	if len(page.Items) != 3 || page.Items[0].ID != "segment:two:b2#0" || page.Items[0].Seq != 8 || page.Items[2].Seq != 10 || page.More || page.Partial {
+		t.Fatalf("segment 2 fold page = %+v", page)
+	}
+	// Expanding a fold strictly inside retired segment 1 (2..4 within FrozenEnd=6) must not report more=true.
+	called = nil
+	seg1From, seg1Through := 2, 4
+	seg1Page, err := s.logicalHistoryPage(ctx, d, c, historyParams{From: &seg1From, Through: &seg1Through, LazyImages: true})
+	if err != nil {
+		t.Fatalf("segment 1 fold read failed: %v", err)
+	}
+	if len(called) != 0 {
+		t.Fatalf("cached retired segment fold read hit node: %v", called)
+	}
+	if len(seg1Page.Items) != 3 || seg1Page.Items[0].Seq != 2 || seg1Page.Items[2].Seq != 4 || seg1Page.More || seg1Page.Partial {
+		t.Fatalf("segment 1 fold page = %+v", seg1Page)
+	}
+}
+
+func TestLogicalHistoryFoldRangeFinishesFrozenSegmentBeforeSuccessor(t *testing.T) {
+	service, fleet, store, _ := logicalPair(t, "claude")
+	conversation := activatePair(t, store)
+	var called []string
+	fleet.answerNode(DeviceSessionItems, func(_ string, raw json.RawMessage) (any, error) {
+		var params historyParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
+		called = append(called, params.SessionID)
+		if params.SessionID != "side-chat" {
+			t.Fatalf("successor queried before frozen segment completed: %s", raw)
+		}
+		fromSeq, toSeq := 1, 6
+		return historyPage{
+			History: "h1", FromSeq: &fromSeq, ToSeq: &toSeq, More: true,
+			Items: []proto.Item{{ID: "step#0", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "progress"}},
+		}, nil
+	})
+	from, through := 2, 9
+	page, err := service.logicalHistoryPage(t.Context(), store, conversation, historyParams{From: &from, Through: &through, LazyImages: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(called, []string{"side-chat"}) || len(page.Items) != 1 || page.Items[0].Seq != 2 || !page.More {
+		t.Fatalf("incomplete frozen fold page = %+v, calls = %v", page, called)
+	}
+}

@@ -261,8 +261,9 @@ func (s *Service) usageAccounts(ctx context.Context) []proto.UsageAccount {
 
 // candidateHeadroomAt is the headroom of launcher + model on machine, given the accounts read once for a dispatch. The
 // usage provider is the launcher's (docs/assistant/model-profiles.md "Choosing a candidate"): a launcher in an
-// admission group with a gateway quota_pool reads that pool's provider; any other the agent it runs (launcherProvider:
-// claude, codex, agy → antigravity); "" is unknown.
+// admission group with a gateway quota_pool reads that pool's provider, else an alias of a channel that declares its
+// quota source (execution_channels.go) the channel's, the model counted under the pool the channel names for it; any
+// other the agent it runs (launcherProvider: claude, codex, agy → antigravity); "" is unknown.
 //
 // A launcher with a gateway quota_pool counts only that gateway's accounts (poolAccounts), never a computer's own
 // subscription of the same provider (#17011). When the usage windows say nothing fresh about the provider (a gateway
@@ -280,6 +281,7 @@ func (s *Service) candidateHeadroomAt(ctx context.Context, accounts []proto.Usag
 	}
 	if pooled {
 		accounts = poolAccounts(accounts, pool.Source)
+		model = s.channelPoolModel(ctx, launcher, model)
 	}
 	h := headroomOf(accounts, provider, model, now)
 	if h.Known || h.Stale || s.devs == nil {

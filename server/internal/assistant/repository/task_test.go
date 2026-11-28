@@ -148,7 +148,7 @@ func TestTaskRepositorySameNumberAcrossRepositories(t *testing.T) {
 }
 
 func TestTaskLinkReportsPreserveSourcesAndNormalizeReferences(t *testing.T) {
-	urls := []string{"https://GitHub.com/Example/Web/pull/7", "https://github.com/example/web/pull/7", "https://github.com/example/api/pull/7", "https://gitlab.example.com/Team/Api/merge_requests/7"}
+	urls := []string{"https://GitHub.com/Example/Web/pull/7", "https://github.com/example/web/pull/7", "https://github.com/example/api/pull/7", "https://gitlab.example.com/Team/Api/-/merge_requests/7"}
 	rows, err := MergeTaskLinks(nil, urls, Catalog{})
 	if err != nil || len(rows) != 3 || len(rows[0].Links) != 1 || rows[2].Links[0].CanonicalURL != "https://gitlab.example.com/team/api/-/merge_requests/7" {
 		t.Fatal(rows, err)
@@ -189,13 +189,16 @@ func TestTaskLinkTitlesSurviveOlderEditsAndURLReports(t *testing.T) {
 	if err != nil || kept[0].Links[0].Title != rows[0].Links[0].Title || kept[0].Links[1].Title != "Fix sign in" {
 		t.Fatal(kept, err)
 	}
-	updated, err := MergeTaskLinkDetails(kept, []LinkInput{{URL: identity.CanonicalURL + "/pull/7", Title: "Updated review title"}}, catalog)
+	updated, err := MergeTaskLinkDetails(kept, []LinkInput{{URL: identity.CanonicalURL + "/pull/7", Title: "Updated review title"}}, catalog, LinkProvenanceUnbound)
 	if err != nil || len(updated[0].Links) != 2 || updated[0].Links[0].Title != "Updated review title" || kept[0].Links[0].Title != rows[0].Links[0].Title {
 		t.Fatal(updated, kept, err)
 	}
 	reported, err := MergeTaskLinks(updated, []string{identity.CanonicalURL + "/pull/7"}, catalog)
 	if err != nil || reported[0].Links[0].Title != "Updated review title" {
 		t.Fatal(reported, err)
+	}
+	if got := reported[0].Links[0].Provenance; got != LinkProvenanceExplicit {
+		t.Fatalf("a URL-only report changed the saved delivery binding to %q", got)
 	}
 	cleared, err := Bind(rows, []TaskInput{{RepoID: "web", Links: []LinkInput{}}}, catalog)
 	if err != nil || len(cleared[0].Links) != 0 {
@@ -204,6 +207,26 @@ func TestTaskLinkTitlesSurviveOlderEditsAndURLReports(t *testing.T) {
 	for _, title := range []string{"bad\x00title", "bad\ntitle", strings.Repeat("a", 1025), string([]byte{0xff})} {
 		if _, err := NormalizeLink(identity, LinkInput{Kind: "issue", Number: "7", Title: title}); err == nil {
 			t.Fatal("accepted invalid title")
+		}
+	}
+}
+
+func TestTaskLinkLegacyMergeRequestRequiresGitLab(t *testing.T) {
+	for _, raw := range []string{
+		"https://code.example.com/team/app/merge_requests/7",
+		"https://code.example.com/group/team/app/merge_requests/7",
+	} {
+		if identity, link, err := ParseTaskLink(raw); err == nil {
+			t.Fatalf("inferred a built-in provider for an unknown legacy MR path: %s -> %+v %+v", raw, identity, link)
+		}
+	}
+	for _, tc := range []struct{ raw, want string }{
+		{"https://gitlab.com/Team/Api/merge_requests/7", "https://gitlab.com/team/api/-/merge_requests/7"},
+		{"https://git.example.com/Team/Api/-/merge_requests/7", "https://git.example.com/team/api/-/merge_requests/7"},
+	} {
+		identity, link, err := ParseTaskLink(tc.raw)
+		if err != nil || identity.Provider != GitLab || link.CanonicalURL != tc.want {
+			t.Fatalf("GitLab MR lost its canonical URL: %s -> %+v %+v %v", tc.raw, identity, link, err)
 		}
 	}
 }

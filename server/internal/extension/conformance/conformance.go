@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/serve"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -211,8 +213,8 @@ func Check(t T, m *extension.Manifest, run Run, init extension.InitializeParams)
 				if k == imageRefsChecked {
 					break
 				}
-				var img wire.UIImage
-				err := hub.Call(ctx, "ui.image", wire.UIImageParams{Contribution: u.ID, Ref: ref, Width: 640, Placement: u.Placement}, &img)
+				img, err := buswire.Call(ctx, hub, extwire.UIImageMethod,
+					wire.UIImageParams{Contribution: u.ID, Ref: ref, Width: 640, Placement: u.Placement})
 				switch c := code(err); {
 				case c == extension.CodeUnknownMethod || c == extension.CodeNoContribution:
 					t.Fatalf("ui %s: it draws ref %q, and ui.image answered %v", u.ID, ref, err)
@@ -247,12 +249,10 @@ func Check(t T, m *extension.Manifest, run Run, init extension.InitializeParams)
 
 	// Each shortcut runs (shortcut.run): it may refuse the empty values in words, never not know the method.
 	for _, s := range m.Shortcuts() {
-		var res struct {
-			Text string          `json:"text"`
-			View *extension.View `json:"view"`
-		}
-		err := hub.Call(ctx, "shortcut.run", map[string]any{"contribution": s.ID, "values": map[string]string{},
-			"ui_version": extension.UIVersion, "tz": "Asia/Shanghai", "locale": "zh-Hans-CN", "platform": "ios"}, &res)
+		res, err := buswire.Call(ctx, hub, extwire.ShortcutRunMethod, wire.ShortcutRunParams{
+			Contribution: s.ID, Values: map[string]string{}, UIVersion: extension.UIVersion,
+			TZ: "Asia/Shanghai", Locale: "zh-Hans-CN", Platform: "ios",
+		})
 		switch c := code(err); {
 		case c == extension.CodeUnknownMethod || c == extension.CodeNoContribution:
 			t.Fatalf("shortcut %s: shortcut.run answered %v", s.ID, err)

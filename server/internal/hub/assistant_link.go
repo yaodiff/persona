@@ -260,6 +260,7 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 					HomeReal: info.HomeReal, DataDir: info.DataDir, Online: online, Reachable: m.reachable(), Version: info.Version,
 					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion, Engine: startEngine(info),
 					TaskInstructions:  info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.TaskInstructions),
+					ScratchWorkspace:  info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.ScratchWorkspace),
 					ExternalInventory: info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.ExternalLauncherInventory)})
 			}
 			d := &h.devices
@@ -424,9 +425,10 @@ func (h *Hub) appTool(ctx context.Context, from, app string, params json.RawMess
 	return json.Marshal(proto.TextResult(res, false))
 }
 
-// snapshotFrom keeps what manager from reported (manager.snapshot) for the hub's own features.
-func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
+// keepSnapshot keeps what a manager reported (manager.snapshot) for the hub's own features.
+func (l assistantLink) keepSnapshot(c *busConn, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
 	h := l.h
+	from := c.managerID()
 	a := h.assistantOf(from)
 	views := make(map[string]assistantwire.SessionView, len(s.Sessions))
 	for _, v := range s.Sessions {
@@ -442,6 +444,7 @@ func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantw
 	if s.Profile != nil {
 		a.profile = s.Profile
 	}
+	c.extensionOwnerProfile.Store(s.Profile)
 	a.mu.Unlock()
 	// The hub keeps one profile as its own (assistant_profile.go): the assistant it starts.
 	if s.Profile != nil && !jsonSame(oldProfile, s.Profile) && from == assistantwire.AssistantID {
@@ -457,28 +460,22 @@ func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantw
 // ---- on the bus: what the assistant calls ----
 
 func init() {
-	for _, method := range []string{assistantwire.MethodDevice, assistantwire.MethodDeviceRetire} {
-		handleBus(method, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-			var p assistantwire.DeviceCall
-			if err := json.Unmarshal(params, &p); err != nil {
-				return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
-			}
-			if method == assistantwire.MethodDeviceRetire && p.Method != nodeproto.StopIfIdle {
-				return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "device.retire requires session.stop_if_idle"}
-			}
-			// A manager acts only on its own machines (ownership.go deviceCallAllowed); the list of them is its own too.
-			if err := h.deviceCallAllowed(c.managerID(), p); err != nil {
-				return nil, err
-			}
-			out, err := assistantLink{h}.deviceCallFrom(ctx, c.managerID(), p)
-			return out, busCodedError(err)
-		})
-	}
-	handleBus(assistantwire.MethodApp, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p assistantwire.AppCall
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodApp + ": " + err.Error()}
+	deviceCall := func(h *Hub, ctx context.Context, c *busConn, p assistantwire.DeviceCall) (json.RawMessage, error) {
+		// A manager acts only on its own machines (ownership.go deviceCallAllowed); the list of them is its own too.
+		if err := h.deviceCallAllowed(c.managerID(), p); err != nil {
+			return nil, err
 		}
+		out, err := assistantLink{h}.deviceCallFrom(ctx, c.managerID(), p)
+		return out, busCodedError(err)
+	}
+	handleTypedBus(assistantwire.DeviceMethod, assistantwire.MethodDevice+": ", deviceCall)
+	handleTypedBus(assistantwire.DeviceRetireMethod, assistantwire.MethodDeviceRetire+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.DeviceCall) (json.RawMessage, error) {
+		if p.Method != nodeproto.StopIfIdle {
+			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "device.retire requires session.stop_if_idle"}
+		}
+		return deviceCall(h, ctx, c, p)
+	})
+	handleTypedBus(assistantwire.AppMethod, assistantwire.MethodApp+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.AppCall) (json.RawMessage, error) {
 		if p.TimeoutMS > 0 { // the assistant stops waiting then: so does the hub (a model call)
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, time.Duration(p.TimeoutMS)*time.Millisecond)
@@ -513,8 +510,8 @@ func init() {
 		}
 		return notifyAnswer(out), nil
 	})
-	handleTypedBus(assistantwire.SnapshotMethod, assistantwire.MethodSnapshot+": ", func(h *Hub, ctx context.Context, c *busConn, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
-		res, err := assistantLink{h}.snapshotFrom(ctx, c.managerID(), s)
+	handleTypedBus(assistantwire.SnapshotMethod, assistantwire.MethodSnapshot+": ", func(h *Hub, _ context.Context, c *busConn, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
+		res, err := assistantLink{h}.keepSnapshot(c, s)
 		return res, busCodedError(err)
 	})
 	// ws.broadcast is relayBroadcastFrom's (bus_forward.go).

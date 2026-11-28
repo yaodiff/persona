@@ -2,6 +2,7 @@
 // The hub tags the list (ETag W/"t1-…", #9590); the page sends the tag back and a 304 applies the list it kept.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "./api";
+import { todosV2LabsSource } from "./labs-todos-v2";
 import { getState, refreshTodos, reset } from "./store";
 
 const todo = (id: string, title: string) => ({ id, title, created_at: "", updated_at: "", spaces: [] });
@@ -27,6 +28,9 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", storage());
   setToken("tok-a");
   vi.stubGlobal("fetch", vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+    if (new URL(url, "http://hub").pathname.endsWith("/assistant") && init?.method === "PUT") {
+      return Response.json({ manager: "assistant", todos_v2: JSON.parse(String(init.body)).todos_v2 });
+    }
     if (!new URL(url, "http://hub").pathname.endsWith("/todos")) return new Response("{}", { status: 200 });
     sent.push(new Headers(init?.headers).get("If-None-Match"));
     const a = answers.shift();
@@ -43,6 +47,22 @@ afterEach(() => {
 });
 
 describe("the to-do list's validator", () => {
+  it("refreshes without the previous validator when the Labs switch changes in either direction", async () => {
+    answers.push({ status: 200, etag: 'W/"standard"', todos: [todo("t1", "Standard")] });
+    await refreshTodos();
+    const source = todosV2LabsSource("assistant");
+    const update = { schema_version: 1 as const, id: "assistant-todos-v2" };
+
+    answers.push({ status: 200, etag: 'W/"trial"', todos: [todo("t1", "Trial")] });
+    await source.update({ ...update, revision: "false", changes: { todos_v2: true } });
+    await vi.waitFor(() => expect(getState().todos[0]?.title).toBe("Trial"));
+
+    answers.push({ status: 200, etag: 'W/"rolled-back"', todos: [todo("t1", "Rolled back")] });
+    await source.update({ ...update, revision: "true", reset: ["todos_v2"] });
+    await vi.waitFor(() => expect(getState().todos[0]?.title).toBe("Rolled back"));
+    expect(sent).toEqual([null, null, null]);
+  });
+
   it("sends the last tag back and keeps the list it has on a 304", async () => {
     answers.push({ status: 200, etag: 'W/"t1-aaa"', todos: [todo("t1", "first")] });
     await refreshTodos();

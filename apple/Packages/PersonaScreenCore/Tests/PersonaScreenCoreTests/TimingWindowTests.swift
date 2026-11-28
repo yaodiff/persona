@@ -94,4 +94,15 @@ final class TimingWindowTests: XCTestCase {
         XCTAssertEqual(t?.fps, 2)
         XCTAssertEqual(t?.kbps, 16)
     }
+
+    func testExtremeBytesAndTinyWindowDoNotTrap() {
+        var w = TimingWindow()
+        w.sent(number: 1, at: 1_000, captureMicros: 0, encodeMicros: 1_000, bytes: Int.max, blockedMicros: Int64.max)
+        w.sent(number: 2, at: 1_000, captureMicros: 0, encodeMicros: 1_000, bytes: Int.max, blockedMicros: Int64.max)
+        w.sent(number: 3, at: 1_000, captureMicros: 0, encodeMicros: 1_000, bytes: -50, refinement: true)
+        let t = w.take(now: 1_001, targetKbps: 1_000)
+        XCTAssertEqual(t?.kbps, Int.max)
+        XCTAssertEqual(t?.fps, 2_000_000)
+        XCTAssertNotNil(t?.blockedMs)
+    }
 }

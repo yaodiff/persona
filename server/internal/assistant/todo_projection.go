@@ -3,7 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
-	"fmt"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/wireids"
@@ -37,160 +39,169 @@ type todoProjection struct {
 // to-dos the projection reads as open (a failed start included, whose runs still date its last activity), each
 // computer asked once (todoRunSessions), and with them the pending cards of those runs (todoFactsOf).
 func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now time.Time) todoProjection {
-	facts := s.todoFactsOf(ctx, list)
-	if len(facts) > 0 && facts[0].TodosV2 {
+	return s.projectTodoRows(ctx, list, now, nil)
+}
+
+// projectTodoRows is shared by list reads and view rechecks. For a subset, superseded supplies failed-start
+// relationships from the whole list that the subset might not contain.
+func (s *Service) projectTodoRows(ctx context.Context, list []listedTodo, now time.Time, superseded map[string]bool) todoProjection {
+	cfg := s.settings(ctx)
+	if cfg.todosV2On() {
 		reposByTodo := s.populateTodoRepoGates(ctx, list)
 		populateTodoItemTypes(list, reposByTodo)
-		s.populateTodoActiveBlockers(ctx, list)
 	}
+	s.populateTodoReadiness(ctx, list, cfg.todosV2On())
+	facts := s.todoFactsOf(ctx, list)
+	b := &s.tbriefs
+	b.mu.Lock()
+	for i := range facts {
+		f := &facts[i]
+		applyTodosV2FactsConfig(f, cfg)
+		f.Superseded = superseded[f.ID]
+		if brief := b.briefs[b.links[f.ID].Brief]; brief != nil {
+			contract := brief.contract()
+			f.WorkModeNow, f.CompletionModeNow = contract.WorkMode, contract.CompletionMode
+		}
+	}
+	b.mu.Unlock()
 	views, waits := projection.ViewsAndWaits(facts, now)
-	if len(facts) > 0 && facts[0].TodosV2 {
-		applyRepoGateToViews(list, views, waits)
-		applyActiveBlockersToViews(list, views, waits)
+	if cfg.todosV2On() {
+		for i := range views {
+			if views[i].Phase == assistantwire.TodoPhaseDone {
+				list[i].ActiveBlockers = nil
+			}
+		}
 		populateTodoChildSummaries(list, views)
 	}
 	return todoProjection{facts: facts, views: views, waits: waits}
 }
 
-// populateTodoActiveBlockers loads all active persistent blockers in a single DB query and
-// attaches them to each matching listedTodo. Callers must invoke this only when todos_v2 is enabled.
+// populateTodoActiveBlockers uses the same gate as dispatch, with one bulk read of blocker rows.
+// Callers invoke it for the v2 projection.
 func (s *Service) populateTodoActiveBlockers(ctx context.Context, list []listedTodo) {
-	if len(list) == 0 {
-		return
+	s.populateTodoReadiness(ctx, list, true)
+}
+
+func (s *Service) populateTodoReadiness(ctx context.Context, list []listedTodo, v2 bool) {
+	type planRead struct {
+		plan *TaskPlan
+		err  error
 	}
-	st := s.todoBlockerDB()
-	if st == nil {
-		return
+	type candidateRead struct {
+		index int
+		task  *PlanTask
+		err   error
 	}
-	rows, err := st.ListActiveTodoBlockers(ctx)
-	if err != nil {
-		s.logf("todo_blockers: list active: %v", err)
-		return
-	}
-	if len(rows) == 0 {
-		return
-	}
-	byTodo := make(map[string][]todoActiveBlockerView)
-	for _, r := range rows {
-		if r.TodoID == "" {
+	var ids []string
+	plans := make(map[string]planRead)
+	var queued map[string]*PlanTask
+	var queuedErr error
+	loadedQueued := false
+	var candidates []candidateRead
+	for i := range list {
+		row := &list[i]
+		row.ActiveBlockers, row.readinessWaits = nil, nil
+		if row.DoneAt != nil && row.StartError == "" {
 			continue
 		}
-		byTodo[r.TodoID] = append(byTodo[r.TodoID], todoActiveBlockerView{
-			ID:        r.ID,
-			Kind:      r.Kind,
-			TargetRef: r.TargetRef,
-			State:     r.State,
-			Attempts:  r.Attempts,
+		candidate := candidateRead{index: i}
+		if !todoHasActiveAgent(row.Todo) {
+			if !loadedQueued {
+				queued, queuedErr = s.queuedTodoTasks(ctx)
+				loadedQueued = true
+			}
+			candidate.task, candidate.err = queued[row.ID], queuedErr
+			if v2 && candidate.task == nil && candidate.err == nil && row.PlanID != "" {
+				r, cached := plans[row.PlanID]
+				if !cached {
+					r.plan, r.err = s.loadPlan(ctx, row.PlanID)
+					plans[row.PlanID] = r
+				}
+				switch {
+				case r.err != nil && !errors.Is(r.err, errPlanNotFound):
+					candidate.err = r.err
+				case r.plan != nil && r.plan.State == planStarted:
+					for index := range r.plan.Tasks {
+						task := &r.plan.Tasks[index]
+						if task.TodoID == row.ID {
+							candidate.task = task
+							break
+						}
+					}
+				}
+			}
+		}
+		task := candidate.task
+		if !v2 && (task == nil || task.Queue == nil || len(task.BlockedByPR) == 0 && task.Queue.Key != blockerWaitQueueKey) {
+			continue
+		}
+		ids = append(ids, row.ID)
+		candidates = append(candidates, candidate)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	var rows []db.TodoBlockerRow
+	var readErr error
+	if st := s.todoBlockerDB(); st != nil {
+		rows, readErr = st.ListTodoReadinessBlockers(ctx, ids)
+		if readErr != nil {
+			s.logf("todo projection: read prerequisites: %v", readErr)
+		}
+	}
+	byTodo := make(map[string][]db.TodoBlockerRow)
+	for _, row := range rows {
+		byTodo[row.TodoID] = append(byTodo[row.TodoID], row)
+	}
+	for _, candidate := range candidates {
+		row := &list[candidate.index]
+		err := errors.Join(candidate.err, readErr)
+		var readiness todoReadiness
+		if err == nil {
+			var task PlanTask
+			if candidate.task != nil {
+				task = *candidate.task
+			}
+			readiness, err = s.evaluateTodoReadiness(ctx, row.Todo, task, byTodo[row.ID], v2)
+		}
+		if err != nil {
+			row.readinessWaits = []assistantwire.TodoWait{{Kind: assistantwire.TodoWaitKindExternalEvent,
+				WaitingOn: i18n.T(s.lang(ctx), "assistant-tasks.checking_prerequisites")}}
+			continue
+		}
+		slices.SortFunc(readiness.active, func(a, b db.TodoBlockerRow) int {
+			return strings.Compare(a.ID, b.ID)
 		})
-	}
-	for todoID := range byTodo {
-		slices.SortFunc(byTodo[todoID], func(a, b todoActiveBlockerView) int {
-			return cmp.Or(
-				strings.Compare(a.ID, b.ID),
-				strings.Compare(a.Kind, b.Kind),
-				strings.Compare(a.TargetRef, b.TargetRef),
-			)
-		})
-	}
-	for i := range list {
-		if blockers := byTodo[list[i].ID]; len(blockers) > 0 {
-			list[i].ActiveBlockers = blockers
+		for _, b := range readiness.active {
+			view := todoActiveBlockerView{ID: b.ID, Kind: b.Kind, TargetRef: b.TargetRef, State: b.State, Attempts: b.Attempts}
+			if v2 {
+				row.ActiveBlockers = append(row.ActiveBlockers, view)
+			}
+			if !slices.Contains(readiness.after, b.TargetRef) {
+				row.readinessWaits = append(row.readinessWaits, activeBlockerWait(view))
+			}
+		}
+		for _, ref := range readiness.missingPRs {
+			row.readinessWaits = append(row.readinessWaits, activeBlockerWait(todoActiveBlockerView{Kind: todoBlockerKindExternalPR, TargetRef: ref}))
+		}
+		for _, depID := range readiness.after {
+			dep, _ := s.todoNow(depID)
+			title := dep.Title
+			if title == "" {
+				title = i18n.T(s.lang(ctx), "assistant-tasks.waiting_for_linked_task")
+			}
+			row.readinessWaits = append(row.readinessWaits, assistantwire.TodoWait{Kind: assistantwire.TodoWaitKindExternalEvent, WaitingOn: title})
 		}
 	}
 }
 
-// applyRepoGateToViews projects open to-dos with bound non-draft open delivery PRs into waiting (pr_open)
-// when they are still in TodoListSectionTodo (no active run, owner ask, park, or fresh pr_status observation).
-func applyRepoGateToViews(list []listedTodo, views []assistantwire.TodoSummary, waits []*assistantwire.TodoWait) {
-	for i := range list {
-		if i >= len(views) || !repoGateOpenNonDraftPR(list[i].RepoGate) {
-			continue
-		}
-		if list[i].DoneAt != nil && list[i].StartError == "" {
-			continue
-		}
-		if views[i].Section != assistantwire.TodoListSectionTodo {
-			continue
-		}
-		views[i].Phase = assistantwire.TodoPhaseWaiting
-		views[i].Section = assistantwire.TodoListSectionWaiting
-		views[i].Reason = assistantwire.TodoReasonPrOpen
-		views[i].Line = &assistantwire.TodoLine{Key: assistantwire.TodoLineKeyPrOpen}
-		if i < len(waits) {
-			waits[i] = repoGatePRWait(list[i].RepoGate)
-		}
-	}
-}
-
-// applyActiveBlockersToViews projects open to-dos with active persistent blockers into waiting
-// when they are not already in needs_you, can_wait, working, waiting, just_finished, someday, or done.
-func applyActiveBlockersToViews(list []listedTodo, views []assistantwire.TodoSummary, waits []*assistantwire.TodoWait) {
-	for i := range list {
-		if i >= len(views) || len(list[i].ActiveBlockers) == 0 {
-			continue
-		}
-		if list[i].DoneAt != nil && list[i].StartError == "" {
-			continue
-		}
-		if views[i].Section != assistantwire.TodoListSectionTodo {
-			continue
-		}
-		views[i].Phase = assistantwire.TodoPhaseWaiting
-		views[i].Section = assistantwire.TodoListSectionWaiting
-		views[i].Reason = assistantwire.TodoReasonParked
-		views[i].Line = &assistantwire.TodoLine{
-			Key: assistantwire.TodoLineKeyParked,
-			Args: map[string]string{
-				assistantwire.TodoLineArgReason: activeBlockerWaitReason(list[i].ActiveBlockers),
-			},
-		}
-		if i < len(waits) {
-			waits[i] = activeBlockerWait(list[i].ActiveBlockers)
-		}
-	}
-}
-
-func activeBlockerWait(blockers []todoActiveBlockerView) *assistantwire.TodoWait {
-	if len(blockers) == 0 {
-		return nil
-	}
-	first := blockers[0]
-	_, _, label, canonicalURL := normalizePersistedBlockerKey(first.TargetRef)
-	if label == "" {
-		label = strings.TrimSpace(first.TargetRef)
-	}
-	target := label
-	if len(blockers) > 1 {
-		target = fmt.Sprintf("%s (+%d more)", label, len(blockers)-1)
-	}
+func activeBlockerWait(b todoActiveBlockerView) assistantwire.TodoWait {
+	_, _, label, u := normalizePersistedBlockerKey(b.TargetRef)
 	kind := assistantwire.TodoWaitKindExternalEvent
-	if first.Kind == todoBlockerKindExternalPR {
+	if b.Kind == todoBlockerKindExternalPR {
 		kind = assistantwire.TodoWaitKindPrMerge
 	}
-	return &assistantwire.TodoWait{
-		Kind:      kind,
-		WaitingOn: target,
-		URL:       canonicalURL,
-	}
-}
-
-func activeBlockerWaitReason(blockers []todoActiveBlockerView) string {
-	if len(blockers) == 0 {
-		return ""
-	}
-	first := blockers[0]
-	_, _, label, _ := normalizePersistedBlockerKey(first.TargetRef)
-	if label == "" {
-		label = strings.TrimSpace(first.TargetRef)
-	}
-	prefix := "Waiting on "
-	if first.Kind == todoBlockerKindExternalPR {
-		prefix = "Waiting on PR "
-	}
-	if len(blockers) == 1 {
-		return prefix + label
-	}
-	return fmt.Sprintf("%s%s (+%d more)", prefix, label, len(blockers)-1)
+	return assistantwire.TodoWait{Kind: kind, WaitingOn: label, URL: u}
 }
 
 // mergePersistedSharedBlockers merges persistent active todo_blockers shared by 2+ open to-dos
@@ -558,8 +569,7 @@ func hasParkInteractionLink(v *Supervision) bool {
 }
 
 // todoFactsOf are the rows of list as the projection reads them, with their active runs' sessions and those runs'
-// pending cards (todoRunCards), which say what a run that asks is asking (todoProjectionOf; todo_view_push.go works
-// out the views of a part of the list from them).
+// pending cards (todoRunCards), which say what a run that asks is asking.
 func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projection.Facts {
 	want := map[string]map[string]bool{} // by computer, the session ids of the open to-dos' active runs
 	for i := range list {
@@ -592,13 +602,11 @@ func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projecti
 	}
 	cards := s.todoRunCards(want)
 	loc := s.location(ctx)
-	cfg := s.settings(ctx)
 	facts := make([]projection.Facts, len(list))
 	for i := range list {
 		t := &list[i]
 		linked := hasParkInteractionLink(t.Supervision)
 		facts[i] = projectionFacts(*t, sessions, loc)
-		applyTodosV2FactsConfig(&facts[i], cfg)
 		if t.DoneAt != nil && t.StartError == "" {
 			continue
 		}
@@ -736,8 +744,16 @@ func projectionFacts(t listedTodo, sessions map[[2]string]proto.Session, loc *ti
 	f := projection.Facts{ID: t.ID, Title: t.Title, DoneAt: t.DoneAt, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
 		Origin: t.Origin, PlanID: t.PlanID, StartError: t.StartError, DoneBy: t.DoneBy, ReopenedAt: t.ReopenedAt,
 		CancelledAt: t.CancelledAt, CancelledReason: t.CancelledReason, Quiet: t.Quiet, PRURL: t.PRURL,
+		Phase: t.Phase, WaitState: t.WaitState, RuntimeAt: t.runtimeAt, ObservedWait: t.runtimeObservedWait,
 		DueAt: t.DueAt, DueDate: t.DueDate, Priority: t.Priority, Project: t.Project, Kind: t.Kind, SeenAt: t.SeenAt,
 		PartOf: t.PartOf, After: slices.Clone(t.After), Loc: loc}
+	f.RepoGate = repoGateProjection(t.RepoGate)
+	f.ActiveBlockers = t.readinessWaits
+	if f.ActiveBlockers == nil {
+		for _, b := range t.ActiveBlockers {
+			f.ActiveBlockers = append(f.ActiveBlockers, activeBlockerWait(b))
+		}
+	}
 	f.RestoredAt, f.SomedayUntil = t.RestoredAt, t.SomedayUntil // the owner's marks on the hub (todo_marks.go)
 	if t.Agents != nil {
 		f.Agents = make([]projection.Agent, len(t.Agents))

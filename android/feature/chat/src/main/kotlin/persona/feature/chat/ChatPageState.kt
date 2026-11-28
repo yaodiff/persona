@@ -39,6 +39,7 @@ import persona.core.designsystem.*
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
+import persona.core.domain.shownUndelivered
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.models.AgentModelPanel
 import persona.core.domain.lines.isLiveStatus
@@ -892,7 +893,8 @@ internal fun rememberChatPageListKeys(chrome: ChatChromeBindings, snapshot: pers
     writtenAt: Map<String, Long>, session: Session?, connection: ConnectionState?, chromeOverlay: Boolean,
     requests: List<Interaction>, messages: List<OutboxMessage>, statusSheet: Boolean, overlay: Boolean, terminalHelp: Boolean,
     taskPageVisible: Boolean, fullText: String?, linkVisible: Boolean, chatList: ChatListState, search: ChatSearchState,
-    foldsHeader: Boolean, headerFold: ChatHeaderFold, lines: List<ChatLine>, lifecycle: Lifecycle.State, lastUserId: String?): ChatPageListKeys {
+    foldsHeader: Boolean, headerFold: ChatHeaderFold, lines: List<ChatLine>, lifecycle: Lifecycle.State, lastUserId: String?,
+    personaGlass: Boolean, heldRows: List<HeldAgentMessage>, tailRows: List<String>, earlierKeys: List<String>): ChatPageListKeys {
     val requestIds = remember(requests) { requests.map { it.id }.toSet() }
     LaunchedEffect(headerFold, requestIds) { if (foldsHeader) headerFold.requests(requestIds) }
     LaunchedEffect(headerFold, chrome.covered) { if (!chrome.covered) headerFold.open() }
@@ -906,11 +908,258 @@ internal fun rememberChatPageListKeys(chrome: ChatChromeBindings, snapshot: pers
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
     val placed = remember(lines, messages, writtenAt) { placeFailed(lines.asReversed(), messages, writtenAt) }
-    return ChatPageListKeys(unreadEntry, placed)
+    // Persona's first message, not in the transcript yet: its day stands over it on Glass, as the transcript's will once it
+    // is there (iOS `DayLine`, #1911), so the line does not appear above it later. The day it was written, else today.
+    val pendingDay = if (personaGlass && lines.isEmpty() && placed.rest.isNotEmpty())
+        placed.rest.mapNotNull { it.createdAt }.minOrNull()?.let { java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault()).toLocalDate() }
+            ?: java.time.LocalDate.now()
+        else null
+    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, that day,
+    // then the lines, each with the failed sends written before it just above it (#2769).
+    val listKeys = remember(lines, placed, heldRows, tailRows, pendingDay != null, earlierKeys) {
+        buildList {
+            addAll(tailRows)
+            heldRows.asReversed().forEach { add("held-${it.id}") }
+            placed.rest.asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            if (pendingDay != null) add(PENDING_DAY_ROW)
+            for (line in lines) {
+                add(line.contentKey)
+                placed.before[line.id].orEmpty().asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            }
+            addAll(earlierKeys)
+        }
+    }
+    return ChatPageListKeys(unreadEntry, placed, pendingDay, listKeys)
 }
 
 /** What [rememberChatPageListKeys] hands back to ChatPage: plain values, and the state objects ChatPage reads and writes. */
 internal class ChatPageListKeys(
     val unreadEntry: ChatListEntry?,
     val placed: persona.core.domain.lines.PlacedMessages,
+    val pendingDay: java.time.LocalDate?,
+    val listKeys: List<String>,
 )
+
+/** "Branch to new chat" (#2137) from a reply, "Rewind to here" (#2436) on your message: the menu's session-wide extras
+ * (web ⋯), with their busy flags in [flags] (moved as is, #17578). */
+@Composable
+internal fun rememberChatPageForkRewind(key: SessionKey, chrome: ChatChromeBindings, renderStyle: ChatRenderStyle,
+    session: Session?, readOnly: Boolean, historyReadOnly: Boolean, managerOffline: Boolean, ownPage: Boolean,
+    canSend: Boolean, sending: Boolean, messages: List<OutboxMessage>, items: List<Item>, composer: ChatComposerState,
+    flags: ChatPageFlags, notice: MutableState<String?>, res: android.content.res.Resources,
+    scope: kotlinx.coroutines.CoroutineScope, sessions: SessionsRepository): ChatPageForkRewind {
+    var forking by flags.forking
+    var rewindBusy by flags.rewindBusy
+    var shownNotice by notice
+    val actionsService = chrome.actions
+    val forkService = actionsService ?: chrome.forkActions
+    val openFork = chrome.forkOpener(renderStyle)
+    val canForkHere = !readOnly || (historyReadOnly && !managerOffline && ownPage && !key.sessionId.contains('@'))
+    val onFork: ((String) -> Unit)? = if (forkService != null && openFork != null && session?.canFork == true && !session.archived && canForkHere) { itemId ->
+        val from = session
+        if (!forking) {
+            forking = true
+            scope.launch {
+                try {
+                    val id = forkService.fork(from, itemId)
+                    shownNotice = res.getString(R.string.chat_menu_forked)
+                    try { sessions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                    openFork(SessionKey(from.machineId, id))
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { shownNotice = res.getString(R.string.chat_menu_fork_failed, operationFeedback(e).text.resolve(res)) }
+                finally { forking = false }
+            }
+        }
+    } else null
+    val rewindBlock = Rewind.block(session, busy = sending || Rewind.outgoing(messages.map { it.state }) || rewindBusy)
+    val rewindMenu = if (actionsService != null && canSend && !readOnly && renderStyle != ChatRenderStyle.Assistant) RewindMenu(
+        block = rewindBlock?.let { res.getString(when (it) {
+            Rewind.Block.ClaudeOnly -> R.string.chat_rewind_block_claude_only
+            Rewind.Block.Unsupported -> R.string.chat_rewind_block_unsupported
+            Rewind.Block.Offline -> R.string.chat_rewind_block_offline
+            Rewind.Block.NeedsYou -> R.string.chat_rewind_block_needs_you
+            Rewind.Block.Working -> R.string.chat_rewind_block_working
+        }) },
+        // "Code and conversation" only where the node says it puts files back too (#6294), or says nothing (a Claude terminal).
+        code = Rewind.restoresCode(session),
+        run = { target, restore ->
+            val at = Rewind.target(items, target.id)
+            val on = session
+            if (at == null) shownNotice = res.getString(R.string.chat_rewind_no_text)
+            else if (on != null && !rewindBusy) {
+                rewindBusy = true
+                shownNotice = res.getString(R.string.chat_rewind_running)
+                scope.launch {
+                    try {
+                        val done = actionsService.rewind(on, at, restore)
+                        // The message goes back into the composer, as Claude's own /rewind puts it back in its box.
+                        if (done.inputCleared) composer.edit(target.editText)
+                        shownNotice = res.getString(when {
+                            // Claude's own box on the computer: only Claude's /rewind in its terminal (a session whose node
+                            // declares no rewind of its own) has one to say this of; a runtime or Codex goes back itself (#6294).
+                            !done.inputCleared && on.capabilities?.rewind != true -> R.string.chat_rewind_input_kept
+                            restore == RewindRestore.CodeAndConversation && !done.codeRestored -> R.string.chat_rewind_done_no_code_changes
+                            done.codeRestored -> R.string.chat_rewind_done_code_and_conversation
+                            else -> R.string.chat_rewind_done_conversation
+                        })
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: RewindFailure) {
+                        shownNotice = when (e.reason) {
+                            RewindFailure.Reason.HubUnsupported -> res.getString(R.string.chat_rewind_hub_unsupported)
+                            RewindFailure.Reason.NeedsFullDevice -> res.getString(R.string.chat_rewind_needs_full_device)
+                            RewindFailure.Reason.Refused -> res.getString(R.string.chat_rewind_failed,
+                                e.hubMessage ?: operationFeedback(e.cause ?: e).text.resolve(res))
+                        }
+                    }
+                    catch (e: Exception) { shownNotice = res.getString(R.string.chat_rewind_failed, operationFeedback(e).text.resolve(res)) }
+                    finally {
+                        rewindBusy = false
+                        try { sessions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                    }
+                }
+            }
+        }) else null
+    return ChatPageForkRewind(onFork, rewindMenu)
+}
+
+/** What [rememberChatPageForkRewind] hands back to ChatPage. */
+internal class ChatPageForkRewind(val onFork: ((String) -> Unit)?, val rewindMenu: RewindMenu?)
+
+/** The model-route fixes a turn error offers: open the picker or the setup, or drop the kept pick (moved as is, #17578). */
+@Composable
+internal fun rememberChatPageModelActions(chrome: ChatChromeBindings, session: Session?, switches: Boolean,
+    glass: Boolean, readOnly: Boolean, canSend: Boolean, turnFix: TurnErrorFix?, flags: ChatPageFlags,
+    notice: MutableState<String?>, res: android.content.res.Resources, scope: kotlinx.coroutines.CoroutineScope,
+    sessions: SessionsRepository): ChatPageModelActions {
+    val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
+    val ownModelPicker = switches && chrome.assistantManagement != null &&
+        (glass || (!readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)))
+    val clearModelAction: (() -> Unit)? = session?.takeIf {
+        it.modelPick != null && persona.core.domain.models.PersonaModelPanel.MODEL_PICK in persona.core.designsystem.LocalHubFeatures.current &&
+            chrome.assistantManagement != null
+    }?.let { current ->
+        {
+            if (glass && ownModelPicker) flags.clearModelPick.value = true
+            else scope.launch {
+                try {
+                    chrome.assistantManagement?.clearModelPick(current.key)
+                    sessions.refresh()
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { notice.value = operationFeedback(error).text.resolve(res) }
+            }
+        }
+    }
+    val turnModelActions = if (turnFix != TurnErrorFix.ModelRoute) null else when {
+        ownModelPicker -> TurnErrorModelActions(openPicker = { flags.openModelRoutePicker.value = true }, clearPick = clearModelAction,
+            clearLabel = if (session != null && (session.sessionId == chrome.mainConversation ||
+                session.sessionId in chrome.leaderConversations || session.origin == "task")) {
+                R.string.chat_modelpill_follow_default
+            } else R.string.chat_modelpill_undo_pick)
+        fixModel != null -> TurnErrorModelActions(
+            openPicker = { fixModel(persona.core.designsystem.ReadinessActionId.PickModel) }, clearPick = clearModelAction)
+        else -> null
+    }
+    return ChatPageModelActions(fixModel, turnModelActions)
+}
+
+/** What [rememberChatPageModelActions] hands back to ChatPage. */
+internal class ChatPageModelActions(
+    val fixModel: ((persona.core.designsystem.ReadinessActionId) -> Unit)?,
+    val turnModelActions: TurnErrorModelActions?,
+)
+
+/** The lines the page draws, built off the main thread from the timeline, and what the header reads of them: the turn
+ * that runs now and its open work lines (moved as is, #17578). [projectedFrom] records which items the lines were last
+ * built from: until the first build finishes, the page is still loading, not empty. */
+@Composable
+internal fun rememberChatPageProjection(items: List<Item>, live: Boolean, openWork: Set<String>, timeline: ChatTimeline,
+    projectionVersion: Int, projectedFrom: MutableState<List<Item>?>): ChatPageProjection {
+    val projection by produceState(persona.core.domain.lines.ChatSnapshot(emptyList(), emptyList(), persona.core.domain.lines.TaskIndex()),
+        items, live, openWork, projectionVersion) {
+        value = withContext(Dispatchers.Default) {
+            timeline.lines(items, live, openWork.toSet())
+        }
+        projectedFrom.value = items
+    }
+    // Where the header counts "Working 22 min" from: the start of the turn that runs now (iOS `Turn.startedAt`).
+    val runningSince = remember(projection) { projection.liveTurnId?.let { id -> projection.turns.firstOrNull { it.id == id }?.start } }
+    val liveWorkLines = remember(projection) { liveWorkIds(projection.lines) }
+    return ChatPageProjection(projection, runningSince, liveWorkLines)
+}
+
+/** What [rememberChatPageProjection] hands back to ChatPage. */
+internal class ChatPageProjection(
+    val projection: persona.core.domain.lines.ChatSnapshot,
+    val runningSince: java.time.Instant?,
+    val liveWorkLines: Set<String>,
+)
+
+/** This conversation's feed, task plans and task cards from the tasks store, empty without one (moved as is, #17578). */
+@Composable
+internal fun rememberChatPageTaskFeeds(tasks: persona.core.domain.tasks.TasksStore?, key: SessionKey): ChatPageTaskFeeds {
+    val feeds by (tasks?.feeds ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, List<persona.core.contracts.FeedItem>>()) })
+        .collectAsStateWithLifecycle()
+    val taskPlans by (tasks?.plans ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, TaskPlan>()) })
+        .collectAsStateWithLifecycle()
+    val taskCardProjection by (tasks?.taskCards ?: remember {
+        kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, List<AssistantTaskCard>>())
+    }).collectAsStateWithLifecycle()
+    return ChatPageTaskFeeds(feeds[key.sessionId].orEmpty(), taskPlans, taskCardProjection)
+}
+
+/** What [rememberChatPageTaskFeeds] hands back to ChatPage. */
+internal class ChatPageTaskFeeds(
+    val feed: List<persona.core.contracts.FeedItem>,
+    val plans: Map<String, TaskPlan>,
+    val cards: Map<String, List<AssistantTaskCard>>,
+)
+
+/** The permission mode changes the transcript shows, and up to when while the timeline is frozen (moved as is, #17578). */
+@Composable
+internal fun rememberChatPageModeChanges(key: SessionKey, repository: ChatRepository,
+    scope: kotlinx.coroutines.CoroutineScope, session: Session?, renderStyle: ChatRenderStyle, timeline: ChatTimeline,
+    timelineVersion: MutableIntState, projection: persona.core.domain.lines.ChatSnapshot): ChatPageModeChanges {
+    val modeChangeStore = remember(key, repository, scope) { ModeChangeStore(scope) { repository.modeChanges(it) } }
+    DisposableEffect(modeChangeStore) { onDispose(modeChangeStore::close) }
+    LaunchedEffect(key, repository, renderStyle, session != null, session?.permissionMode, session?.bypassPending) {
+        session?.let { modeChangeStore.watch(key, it, agentChat = renderStyle != ChatRenderStyle.Assistant) }
+    }
+    val modeChanges = modeChangeStore.changes
+    val modeChangesUntil = if (renderStyle == ChatRenderStyle.Assistant || modeChanges.isEmpty()) {
+        null
+    } else {
+        val frozenVersion = timelineVersion.intValue
+        remember(frozenVersion, projection) { modeChangesCutoff(timeline.isFrozen(), projection.lines) }
+    }
+    return ChatPageModeChanges(modeChanges, modeChangesUntil)
+}
+
+/** What [rememberChatPageModeChanges] hands back to ChatPage. */
+internal class ChatPageModeChanges(val changes: List<persona.core.contracts.ModeChange>, val until: java.time.Instant?)
+
+/** Persona's kept messages that have not gone out, each shown as the last successful action here left it while the row
+ * is unchanged; any newer authoritative value replaces it (moved as is, #17578). */
+@Composable
+internal fun rememberChatPageKeptMessages(session: Session?, renderStyle: ChatRenderStyle, items: List<Item>,
+    messages: List<OutboxMessage>, edits: MutableState<Map<String, UndeliveredEdit>>): List<UndeliveredMessage> {
+    val keptSession = session.takeIf { renderStyle == ChatRenderStyle.Assistant || session?.assistant == true }
+    var undeliveredEdits by edits
+    val keptMessages = remember(keptSession, items, messages, undeliveredEdits) {
+        shownUndelivered(keptSession, items, messages).mapNotNull { message ->
+            val edit = undeliveredEdits[message.id]
+            when {
+                edit == null -> message
+                edit.before == message -> edit.shown
+                else -> message
+            }
+        }
+    }
+    // A successful action is visible while the row is unchanged; any newer authoritative value replaces it.
+    LaunchedEffect(session?.undelivered) {
+        val current = session?.undelivered.orEmpty()
+        undeliveredEdits = undeliveredEdits.filter { (id, edit) ->
+            current.firstOrNull { it.id == id } == edit.before
+        }
+    }
+    return keptMessages
+}

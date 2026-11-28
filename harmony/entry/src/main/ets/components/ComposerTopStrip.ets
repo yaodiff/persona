@@ -272,9 +272,11 @@ export struct ComposerTopStrip {
 
                 if (canMutateQueueIndex(this.queue.ownCount, index) && !item.relayed) {
                   Button({ type: ButtonType.Circle }) {
-                    SymbolGlyph($r('sys.symbol.more'))
-                      .fontSize('14vp')
-                      .fontColor([Colors.secondary])
+                    Row({ space: 3 }) {
+                      ForEach([0, 1, 2], (_dot: number) => {
+                        Circle().width(3.5).height(3.5).fill(Colors.secondary)
+                      }, (dot: number) => String(dot))
+                    }
                   }
                   .width(28)
                   .height(28)

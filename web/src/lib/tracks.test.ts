@@ -12,7 +12,9 @@ vi.mock("./api", async (orig) => ({
   },
 }));
 
-import { ApiError } from "./api";
+import { api, ApiError } from "./api";
+import type { ScopedAssistantClient } from "./scoped-assistant-api";
+import { listScopedExtensionTrust, setScopedExtensionTrust } from "./scoped-extension-trust";
 import { MODULES } from "../modules";
 import { sidebarActiveKey } from "./persona-nav";
 import { href, parse } from "./router";
@@ -166,8 +168,16 @@ describe("the client", () => {
   });
 
   it("reads an extension's trust, a third party's with no grant without a row", async () => {
-    const items = (await listExtensionTrust())!;
+    const client: ScopedAssistantClient = { managerId: "assistant", key: "notes", request: api, subscribe: () => () => {} };
+    const items = (await listScopedExtensionTrust(client))!;
+    expect(await listExtensionTrust()).toEqual(items);
     expect(trustOf(items, "notes")).toEqual({ trust: "owner", categories: [] });
     expect(trustOf(items, "weather")).toEqual({ trust: "third_party", categories: [] });
+    await setScopedExtensionTrust(client, "notes", { trust: "third_party", categories: ["finance"] });
+    expect(calls.map(({ path, init }) => [path, init?.method ?? "GET", init?.json])).toEqual([
+      ["/assistant/extension-trust", "GET", undefined],
+      ["/assistant/extension-trust", "GET", undefined],
+      ["/assistant/extension-trust/notes", "PUT", { trust: "third_party", categories: ["finance"] }],
+    ]);
   });
 });

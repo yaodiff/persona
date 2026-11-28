@@ -166,6 +166,7 @@ func TestTaskReceipt(t *testing.T) {
 	s, f := newTaskService(t)
 	todo := startedTask(t, s, f)
 	ctx := context.Background()
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor", "fix/login", "fix/login", "abc", "abc")
 	turn := func(status, text string) {
 		f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status, LastText: text,
 			UpdatedAt: time.Now()})

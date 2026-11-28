@@ -234,7 +234,7 @@ Publishing and approving are separate actions. A reader may retrieve a published
 | `internal/rpc` | Bidirectional hub↔node JSON-lines RPC |
 | `internal/transcript` | Claude Code JSONL → `proto.Item`, incremental reading and pagination |
 | `internal/herdr` | Herdr socket API client (CLI fallback) and event subscription |
-| `internal/herdrcore` | JSON-RPC client and events for herdr-core (hc behind Herdr desktop), `docs/plans/plan-orca-support.md`, “herdr-core host” |
+| `internal/herdrcore` | JSON-RPC client and events for herdr-core (hc behind Herdr desktop), `docs/integrations/herdr-core.md`, “herdr-core host” |
 | `internal/node` | Sessions, launch, send, screen sampling, hook / MCP Unix sockets, `runtime.sock` (`runtimes.go`, `docs/integrations/runtimes.md`) |
 | `internal/hub` | HTTP / WebSocket, machine connections, interaction queue, phone-tool forwarding, APNs |
 | `internal/assistant` | personad assistant for Persona tab; separate process connected through bus, hub child by default; `docs/assistant/assistant.md`, “Process” |
@@ -362,15 +362,15 @@ App hop guarded by UI tests: `ScreenTruthTests.testWhatNeedsTheUserShowsUnderThe
 
 ## Connecting to herdr-core
 
-Each machine's node uses one engine (`node/engine.go`): herdr default, herdr-core (`node/hostherdrcore.go`), or Orca (`node/hostorca.go` below). User chooses per machine in app; hub sends `engine.use` on connection (`docs/protocol/protocol.md`, “Engines”). Herdr mode is unchanged and does not touch herdr-core, except `node.info` checks availability once. Selected but stopped herdr-core returns No Terminal immediately, without dialing / logging. Socket, methods, mapping, and first-phase omissions: `docs/plans/plan-orca-support.md` (“herdr-core host”).
+Each machine's node uses one engine (`node/engine.go`): herdr default, herdr-core (`node/hostherdrcore.go`), or Orca (`node/hostorca.go` below). User chooses per machine in app; hub sends `engine.use` on connection (`docs/protocol/protocol.md`, “Engines”). Herdr mode is unchanged and does not touch herdr-core, except `node.info` checks availability once. Selected but stopped herdr-core returns No Terminal immediately, without dialing / logging. Socket, methods, mapping, and first-phase omissions: `docs/integrations/herdr-core.md` (“herdr-core host”).
 Integration: `go test -tags hclive -run HerdrCoreLive ./internal/node/ -v`, own isolated herdr-core plus read-only default-instance listing.
 
 ## Connecting to Orca
 
 For Orca machines, node controls terminals through desktop runtime Unix socket (`internal/orcart` client, `node/hostorca.go` host). Read `orca-runtime.json` for socket / token; Orca changes token on every launch, so reread on connection failure / unauthorized; `status.get` checks protocol version first.
 No socket push: node polls `terminal.list` + `worktree.ps` each second, mapping Claude panes via `ORCA_PANE_KEY` in process environment.
-Stopped Orca returns No Terminal immediately, no log. Mapping / first-phase omissions: `docs/plans/plan-orca-support.md` (“Orca source”).
-Read-only integration: `go test -tags orcalive -run OrcaLive ./internal/node/ -v`.
+Stopped Orca returns No Terminal immediately, no log. Mapping / first-phase omissions: `docs/integrations/orca.md` (“Orca source”).
+Read-only integration: `go test -tags orcalive -run OrcaLive ./internal/node/ -v`; writes against an isolated Orca server: `-tags orcaiso` (`docs/operations/testing.md`, "Isolated Orca runtime (#17058)").
 
 ## Deployment
 
@@ -560,7 +560,7 @@ Script steps:
 
 ### Whole-install backup (`personad backup`)
 
-`personad backup create|verify|restore` backs up the hub and the built-in manager together: both databases, `secret.key` files, the hub's TLS identity (`tls/`, so certificate pins saved by managers and clients still match after a restore), runtime files and the knowledge base (`personad backup <command> -h`). A bundle therefore holds private keys: keep it private. Stop the hub and the built-in manager first (`--writes-quiesced`).
+`personad backup create|verify|restore` backs up the hub and the built-in manager together: both databases, `secret.key` files, the hub's TLS identity (`tls/`, so certificate pins saved by managers and clients still match after a restore), runtime files and the knowledge base (`personad backup <command> -h`). Ephemeral hub-transcribed meeting audio under `<kb>/recordings/<id>/attachments/audio/` is excluded from the bundle so a backup taken during or shortly after a meeting never retains hub audio past its post-minutes deletion (`docs/assistant/meeting-minutes.md`, "Gaps and the final pass"); recording metadata, transcripts (`segments.json`, `hub_segments.json`, `transcript.md`), minutes, meeting photos under `recordings/<id>/attachments/`, and non-recording attachments remain included. A bundle therefore holds private keys: keep it private. Stop the hub and the built-in manager first (`--writes-quiesced`).
 
 - **The writes-stopped check must see every session.** With `--writes-quiesced`, `create` and `restore` refuse while another client session is connected to either database. PostgreSQL hides the kind of another role's session from a role without `pg_read_all_stats`, so such a session counts as a possible writer: if the database role in `hub.json` is not a superuser and other roles connect to the databases, the check fails and says so; stop those sessions, or grant the role `pg_read_all_stats` (`GRANT pg_read_all_stats TO <role>`). Background processes with no role (autovacuum) are not counted; a subscription's apply worker is not counted when the role can see it (with `pg_read_all_stats`, as a superuser, or as its owner), and blocks the check otherwise. A logical-replication walsender (the hub database as a publisher, under a replication role) likewise blocks an unprivileged role's check: it fails closed.
 - **It needs `pg_dump` and `pg_restore` of the server's major version**, on `PATH` where `personad backup` runs. They connect as Persona does: every host of a multi-host URL, in order with its own port, and an encrypted TLS client key's `sslpassword` (which libpq takes from no environment variable) through a private libpq service file deleted when they exit, never their arguments. A query parameter given twice counts once, with its first value, as for pgx. The service file is mode 0600 in a mode-0700 directory of its own under `TMPDIR`; if `personad backup` is killed (SIGKILL, power loss) while a client runs it stays there, still private: delete the `persona-backup-libpq-*` directory. An `sslpassword` with trailing white space or a line break is refused (a service file cannot hold it). The encrypted key must be in traditional PEM form (`-----BEGIN RSA PRIVATE KEY-----` with `Proc-Type: 4,ENCRYPTED`, as `openssl rsa -aes256 -traditional` writes it): pgx cannot open an encrypted PKCS#8 key (`BEGIN ENCRYPTED PRIVATE KEY`). Without them, it falls back to `docker exec` into `persona-postgres` only when the database host is a loopback address (the native Docker deployment); `--hub-docker-container` / `--manager-docker-container` name another container. The clients inside a container connect over its own loopback without TLS, so they are given no `sslpassword` or other TLS settings.

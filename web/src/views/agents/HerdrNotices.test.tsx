@@ -71,3 +71,26 @@ it("asks once a minute while shown, and at once when the tab comes back", async 
   await act(async () => document.dispatchEvent(new Event("visibilitychange")));
   expect(read).toHaveBeenCalledTimes(3);
 });
+
+it("shows the Orca row while the node says Orca is installed and stopped, and drops it when it runs (#17037)", async () => {
+  const read = vi.fn(async () => ({ autostart: false, running: true, known: true }));
+  const watch = new HerdrWatch({ read, start: read });
+  const orca = (state: string, available = false): Machine => ({
+    ...machine, engine: "orca", engine_hosts: ["orca"], engine_default: "orca",
+    engines: [{ id: "orca", name: "Orca", available, state }],
+  });
+  await act(async () => applyMachine(orca("stopped")));
+  await act(async () => root.render(<Notices watch={watch} />));
+  const row = host.querySelector('[data-testid="orca-notice"]');
+  expect(row?.textContent).toContain("Laptop");
+  expect(row?.textContent).toContain("Orca");
+  expect(row?.querySelector("button")).toBeNull(); // Orca is opened on the computer, not from here
+  expect(read).not.toHaveBeenCalled(); // no herdr in the set: herdr is not asked
+
+  await act(async () => applyMachine(orca("running", true)));
+  expect(host.querySelector('[data-testid="orca-notice"]')).toBeNull();
+  await act(async () => applyMachine(orca("missing")));
+  expect(host.querySelector('[data-testid="orca-notice"]')).toBeNull();
+  await act(async () => applyMachine({ ...orca("stopped"), online: false }));
+  expect(host.querySelector('[data-testid="orca-notice"]')).toBeNull();
+});

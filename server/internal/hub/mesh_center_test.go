@@ -210,7 +210,7 @@ func TestCenterMemberForwardsEverything(t *testing.T) {
 	go func() {
 		var res proto.Resolution
 		_ = lap.current().p.Call(context.Background(), "interaction.create", map[string]any{"interaction": proto.Interaction{
-			ID: "ix-lap", SessionID: "s2", Kind: proto.IxPermission, ToolName: "Bash", Summary: "ls",
+			ID: "ix-lap", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", Summary: "Send the project update",
 			CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Minute).UTC()}}, &res)
 		ixDone <- res
 	}()

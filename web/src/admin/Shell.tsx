@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { glideStyle } from "../lib/glide";
-import { macChromeMode, useMacChrome } from "../lib/mac-chrome";
+import { useMacChromeMode } from "../lib/mac-chrome";
 import { Button, cx, Dialog, EASE, toast } from "../ui/atoms";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
 import { setTheme, useTheme, type Theme } from "../views/theme";
@@ -28,7 +28,7 @@ export function Shell({ hubName, onLogout }: { hubName: string; onLogout: () => 
   const name = shared.hubName || hubName;
   // Under the desktop's macOS unified titlebar the window controls sit over the sidebar's top: it keeps the main app's
   // inset and drag strip there (styles.css, #16992). Full screen has no controls to clear.
-  const chrome = useMacChrome();
+  const chromeMode = useMacChromeMode();
 
   // The banner and TLS state are needed on every page: one overview fetch when the shell opens.
   useEffect(() => {
@@ -57,7 +57,7 @@ export function Shell({ hubName, onLogout }: { hubName: string; onLogout: () => 
   };
 
   return (
-    <div data-admin-shell data-mac-chrome={macChromeMode(chrome)} className="flex h-full flex-col bg-page lg:flex-row">
+    <div data-admin-shell data-mac-chrome={chromeMode} className="flex h-full flex-col bg-page lg:flex-row">
       <aside data-admin-sidebar className="hidden w-[232px] shrink-0 flex-col border-r border-line bg-canvas lg:flex">
         <Brand name={name} />
         <SideNav page={page} />

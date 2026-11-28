@@ -163,6 +163,7 @@ object AgentModelPanel {
             engine == "claude" -> CLAUDE_EFFORTS
             else -> emptyList()
         },
+        sessionEffortOnly = current && s.sourceKind == "claude_desktop",
         defaultEffort = m.defaultEffort?.takeIf(String::isNotBlank), custom = m.custom, providerDefault = m.isDefault,
     )
 

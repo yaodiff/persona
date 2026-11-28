@@ -407,6 +407,11 @@ function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, onCompactAn
               {fix.back.label}
             </Button>
           )}
+          {fix?.restore && (
+            <Button size="sm" icon="undo" className="touch-hit" testId="restore-last-good" onClick={fix.restore.run}>
+              {fix.restore.label}
+            </Button>
+          )}
           {onRetry && (
             <Button icon="retry" size="sm" className="touch-hit" title={t("chat-lines.retry_title")} onClick={onRetry}>
               {t("chat-lines.retry")}

@@ -1,5 +1,6 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
 import { Component, createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode, type RefObject } from "react";
+import { api, ApiError, enc } from "../../lib/api";
 import { answerCard, usePendingLine, type AnswerFrom } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { composing } from "../../lib/send-history";
@@ -756,19 +757,35 @@ export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" |
  */
 const ownerCardsSeenSent = new Set<string>();
 
-/** Report once when an unseen owner-only timed card is displayed so the server can start its post-view countdown. */
-function useOwnerCardSeen(ix: Interaction) {
+/** Report once when an unseen owner-only timed card is displayed in a visible tab so the server can start its post-view countdown. */
+function useOwnerCardSeen(ix: Interaction, active: boolean) {
+  const conn = useStore((s) => s.conn);
   useEffect(() => {
-    if (!ix.seen_ttl_seconds || ix.seen_at || ownerCardsSeenSent.has(ix.id)) return;
-    ownerCardsSeenSent.add(ix.id);
-    void fetch(`/api/v1/interactions/${encodeURIComponent(ix.id)}/seen`, { method: "POST" }).catch(() => {
-      ownerCardsSeenSent.delete(ix.id);
-    });
-  }, [ix.id, ix.seen_at, ix.seen_ttl_seconds]);
+    if (!active || !ix.seen_ttl_seconds || ix.seen_at || conn === "offline" || ownerCardsSeenSent.has(ix.id)) return;
+    const send = () => {
+      if (ownerCardsSeenSent.has(ix.id)) return;
+      ownerCardsSeenSent.add(ix.id);
+      void api(`/interactions/${enc(ix.id)}/seen`, { method: "POST" }).catch((err) => {
+        if (!(err instanceof ApiError) || err.status === 401 || err.status === 408 || err.status === 429 || err.status >= 500) {
+          ownerCardsSeenSent.delete(ix.id);
+        }
+      });
+    };
+    if (typeof document === "undefined" || document.visibilityState !== "hidden") {
+      send();
+      return;
+    }
+    const onVisible = () => {
+      if (document.visibilityState === "hidden") return;
+      document.removeEventListener("visibilitychange", onVisible);
+      send();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [active, ix.id, ix.seen_at, ix.seen_ttl_seconds, conn]);
 }
 
 function SecretRunCard({ ix }: { ix: Interaction }) {
-  useOwnerCardSeen(ix);
   const [busy, setBusy] = useState<"run" | "decline" | null>(null);
   const [password, setPassword] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -870,7 +887,6 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
  * each variable with the item it comes from, the Agent and its computer, where it runs and what it is asked.
  */
 function SecretHandoffCard({ ix }: { ix: Interaction }) {
-  useOwnerCardSeen(ix);
   const [busy, setBusy] = useState<"allow" | "always" | "deny" | null>(null);
   const keys = useCardKeys();
   const tapGuard = useChatCardTapGuard(ix);
@@ -1556,6 +1572,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   const { pending, line } = usePendingLine(ix);
   // a card a task's supervisor holds is not the user's yet: what it asks, read-only, never its answers
   const held = supervisorHeld(ix);
+  useOwnerCardSeen(ix, !held);
   const renderer = useCardRenderer(ix.kind);
   const decision = useContext(DecisionCardContext);
   const card = held ? <SupervisorHeldCard key={ix.id} ix={ix} />

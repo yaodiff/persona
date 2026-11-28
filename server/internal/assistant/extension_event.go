@@ -225,11 +225,14 @@ func (s *Service) queueExtensionEvent(machine, to string, msg relayMsg, replace,
 				wait = relayLookGap
 				delete(b.stuck, to)
 				delete(b.failedAt, to)
+				delete(b.msgFailedAt, to)
 				delete(b.roleChange, to)
 			} else {
+				now := time.Now()
 				if b.failedAt != nil {
-					b.failedAt[to] = time.Now()
+					b.failedAt[to] = now
 				}
+				b.recordMsgFailedLocked(to, queuedCopy, now)
 				if b.stuck != nil {
 					b.stuck[to] = queuedCopy
 				}

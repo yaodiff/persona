@@ -193,5 +193,8 @@
   "handoff_decision_drop_leads": "Nothing is posted and the question is dropped.",
   "handoff_decision_cost": "{sender} keeps waiting for an answer.",
   "handoff_reply_header": "{sender} asked: {question}",
-  "handoff_reply_footer": "Answered by {owner}'s AI assistant, for reference."
+  "handoff_reply_footer": "Answered by {owner}'s AI assistant, for reference.",
+  "guest_cot_step": "Using {tool}",
+  "guest_cot_done": "Done",
+  "guest_cot_failed": "Failed"
 }

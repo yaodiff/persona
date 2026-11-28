@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/wireids"
 )
 
@@ -306,14 +307,22 @@ func (s *Service) devicePassesPlacementHardConstraints(ctx context.Context, pt P
 		pl.hit(d.ID, hitKey, hitArgs)
 		return false, false
 	}
-	if strings.HasPrefix(pt.Cwd, "~") && d.Home == "" {
-		pl.hit(d.ID, "directory_missing", nil)
-		return false, false
-	}
-	dir := proto.ExpandHome(pt.Cwd, d.Home)
-	if assistantWorkspace(d, dir) {
-		pl.hit(d.ID, "assistant_workspace", nil)
-		return false, false
+	var dir string
+	if pt.scratchWorkspace() {
+		if !d.ScratchWorkspace {
+			pl.hit(d.ID, "scratch_unsupported", nil)
+			return false, false
+		}
+	} else {
+		if strings.HasPrefix(pt.Cwd, "~") && d.Home == "" {
+			pl.hit(d.ID, "directory_missing", nil)
+			return false, false
+		}
+		dir = proto.ExpandHome(pt.Cwd, d.Home)
+		if assistantWorkspace(d, dir) {
+			pl.hit(d.ID, "assistant_workspace", nil)
+			return false, false
+		}
 	}
 	// Resolve the effective launcher on this computer even when the task names no launcher: a default- or
 	// tier-launcher task otherwise skips both checks here and gets rejected by assignPendingPlacement on every
@@ -332,7 +341,7 @@ func (s *Service) devicePassesPlacementHardConstraints(ctx context.Context, pt P
 		pl.hit(d.ID, "launcher_missing", i18n.Args{"launcher": resolved})
 		return false, false
 	}
-	if dir != "" && !pt.backendWorkspace() && !s.taskDirectoryExists(checkCtx, d.ID, dir) {
+	if dir != "" && !pt.backendWorkspace() && !pt.scratchWorkspace() && !s.taskDirectoryExists(checkCtx, d.ID, dir) {
 		return false, false
 	}
 	// The same on-the-spot probe assignPendingPlacement runs: a stale failing record clears here too instead
@@ -421,6 +430,8 @@ func placementHitText(lang i18n.Lang, h placementHit) string {
 		return i18n.T(lang, "assistant-tasks.placement_hit_directory_missing")
 	case "directory_unknown":
 		return i18n.T(lang, "assistant-tasks.placement_hit_directory_unknown")
+	case "scratch_unsupported":
+		return i18n.T(lang, "assistant-tasks.placement_hit_scratch_unsupported")
 	case "launcher_missing":
 		return i18n.T(lang, "assistant-tasks.placement_hit_launcher_missing", i18n.Args{
 			"launcher": placementArg(h.Args, "launcher", "unknown"),
@@ -932,18 +943,25 @@ func (s *Service) assignPendingPlacementWith(
 
 	candidate := pt
 	candidate.Machine = m.ID
-	if strings.HasPrefix(candidate.Cwd, "~") && m.Home == "" {
-		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "directory_missing",
-			err: fmt.Errorf("computer %q has not reported a home directory to expand %q", firstNonEmpty(m.Name, m.ID), candidate.Cwd)}
-	}
-	candidate.Cwd = proto.ExpandHome(candidate.Cwd, m.Home)
-	if assistantWorkspace(m, candidate.Cwd) {
-		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "agent_assistant_workspace",
-			err: i18n.Err("rpc-errors.agent_assistant_workspace")}
-	}
-	if candidate.Cwd != "" && !candidate.backendWorkspace() && !s.taskDirectoryExists(ctx, m.ID, candidate.Cwd) {
-		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "directory_missing",
-			err: fmt.Errorf("directory %q does not exist on %s", candidate.Cwd, firstNonEmpty(m.Name, m.ID))}
+	if candidate.scratchWorkspace() {
+		if !m.ScratchWorkspace {
+			return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "scratch_unsupported",
+				err: scratchUnsupportedError(ctx, s.lang(ctx), firstNonEmpty(m.Name, m.ID))}
+		}
+	} else {
+		if strings.HasPrefix(candidate.Cwd, "~") && m.Home == "" {
+			return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "directory_missing",
+				err: fmt.Errorf("computer %q has not reported a home directory to expand %q", firstNonEmpty(m.Name, m.ID), candidate.Cwd)}
+		}
+		candidate.Cwd = proto.ExpandHome(candidate.Cwd, m.Home)
+		if assistantWorkspace(m, candidate.Cwd) {
+			return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "agent_assistant_workspace",
+				err: i18n.Err("rpc-errors.agent_assistant_workspace")}
+		}
+		if candidate.Cwd != "" && !candidate.backendWorkspace() && !s.taskDirectoryExists(ctx, m.ID, candidate.Cwd) {
+			return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "directory_missing",
+				err: fmt.Errorf("directory %q does not exist on %s", candidate.Cwd, firstNonEmpty(m.Name, m.ID))}
+		}
 	}
 
 	// Launcher fitting, speed/readonly/mode checks, and launcher health verification on the chosen computer.
@@ -1014,7 +1032,12 @@ func (s *Service) assignPendingPlacementWith(
 			})}
 	}
 	if err := s.resolveTaskWorkspace(ctx, &candidate); err != nil {
-		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "workspace_unavailable", err: err}
+		code := "workspace_unavailable"
+		var re *rpc.Error
+		if errors.As(err, &re) && re.Code == "scratch_unsupported" {
+			code = "scratch_unsupported"
+		}
+		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: code, err: err}
 	}
 	s.resolveTaskRepo(ctx, &candidate)
 
@@ -1064,10 +1087,12 @@ func (s *Service) assignPendingPlacementWith(
 	}
 	candidate.Placement = pl
 
-	var blockerRefs []string
-	if s.settings(ctx).todosV2On() {
-		blockerRefs = s.activeTodoBlockerRefs(ctx, pt.TodoID)
+	todo, _ := s.todoNow(pt.TodoID)
+	readiness, readinessErr := s.taskTodoReadiness(ctx, todo, pt)
+	if readinessErr != nil {
+		s.logf("task %s: placement queue: read prerequisites: %v", pt.TodoID, readinessErr)
 	}
+	blocked := readinessErr != nil || !readiness.ready()
 
 	wasRetry := false
 	casResult := "not_pending"
@@ -1107,8 +1132,8 @@ func (s *Service) assignPendingPlacementWith(
 		live.Permission = candidate.Permission
 		live.Why = candidate.Why
 		live.Placement = pl
-		if len(blockerRefs) > 0 {
-			q := s.blockerWaitQueue(blockerRefs)
+		if blocked {
+			q := s.blockerWaitQueue(ctx, readiness.refs())
 			q.Retry = wasRetry
 			live.Queue = q
 			live.Placement = queuedPlacement(*live, q)
@@ -1136,13 +1161,17 @@ func (s *Service) assignPendingPlacementWith(
 	}
 
 	s.savePlacement(ctx, pl)
-	if len(blockerRefs) > 0 {
-		s.logf("task %s: placed on %s but deferred until active todo blockers clear (%d active)", pt.TodoID, m.ID, len(blockerRefs))
+	if blocked {
+		s.logf("task %s: placed on %s and waiting for prerequisites", pt.TodoID, m.ID)
+		assignedCwd := candidate.Cwd
+		if assignedCwd == "" && candidate.WorkspaceResolved != nil {
+			assignedCwd = candidate.WorkspaceResolved.Path
+		}
 		return &placementAssignResult{
 			PlanID:      planID,
 			TodoID:      pt.TodoID,
 			Machine:     m.ID,
-			Cwd:         candidate.Cwd,
+			Cwd:         assignedCwd,
 			PlacementID: pl.ID,
 		}, nil
 	}
@@ -1153,11 +1182,15 @@ func (s *Service) assignPendingPlacementWith(
 	releaseTransferred = true
 	s.startPlanTaskAsync(planID, conversation, idx, candidate, wasRetry, nil)
 
+	assignedCwd := candidate.Cwd
+	if assignedCwd == "" && candidate.WorkspaceResolved != nil {
+		assignedCwd = candidate.WorkspaceResolved.Path
+	}
 	return &placementAssignResult{
 		PlanID:      planID,
 		TodoID:      pt.TodoID,
 		Machine:     m.ID,
-		Cwd:         candidate.Cwd,
+		Cwd:         assignedCwd,
 		PlacementID: pl.ID,
 	}, nil
 }

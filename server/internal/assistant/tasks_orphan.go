@@ -20,7 +20,8 @@ import (
 // to-do is orphaned, with why. GET /api/v1/todos carries it (`orphaned`), the snapshot's task line says it, and a
 // supervised task's supervisor is told once (the signal `orphaned`, supervise_signals.go).
 //
-// Not orphaned: a done to-do; one with no agent yet (it has not started, or its start failed: start_remedy.go); a
+// A start still waiting for a computer or workspace can also be orphaned after a grace period.
+// Not orphaned: a done to-do; one with no agent or queued start; a
 // supervised task waiting for its review or for the user's decision (it waits on them, not on an agent); one with an
 // agent that is an assistant conversation (a message always reaches it).
 
@@ -29,7 +30,10 @@ const (
 	orphanError   = "error"   // its agent ended on a model error nothing retries, and is closed
 	orphanClosed  = "closed"  // its agent's tab was closed (by the user, or for being idle) and nothing brings it back
 	orphanOffline = "offline" // its agent's computer is not connected
+	orphanQueued  = "queued"  // no agent has started and placement or a workspace remains queued
 )
+
+const orphanQueuedAfter = 10 * time.Minute
 
 // orphanOfflineAfter is how long a computer must have been away before its tasks count as orphaned: a dropped link or
 // a restart of its node comes back within minutes.
@@ -101,7 +105,7 @@ func taskOrphan(t Todo, agents []orphanAgent, now time.Time) (TodoOrphan, bool) 
 	if t.DoneAt != nil || len(agents) == 0 {
 		return TodoOrphan{}, false
 	}
-	if st := t.Supervision.state(t); st == reviewPending || st == reviewNeedsUser || st == reviewParked || st == reviewTimedOut || st == reviewClosing {
+	if orphanWaitsOnDecision(t) {
 		return TodoOrphan{}, false // a parked or timed-out task waits on purpose: nobody is meant to work on it
 	}
 	rank := map[string]int{orphanError: 3, orphanOffline: 2, orphanClosed: 1}
@@ -247,18 +251,28 @@ func (s *Service) orphanWatch(ctx context.Context, now time.Time) {
 	workers := completedWorkerSets(s.todos.todos)
 	var open []Todo
 	for _, t := range s.todos.todos {
-		if t.DoneAt == nil && len(t.Agents) > 0 {
+		if t.DoneAt == nil && (len(t.Agents) > 0 || t.Origin != "") {
 			open = append(open, copyTodoLocked(t))
 		}
 	}
 	s.todos.mu.RUnlock()
 
+	queued := map[string]TodoOrphan{}
+	if len(open) > 0 {
+		for _, p := range s.queueCandidatePlans(ctx) {
+			if p.State != planStarted {
+				continue
+			}
+			for _, t := range p.Tasks {
+				if q, ok := queuedTaskOrphan(p.ID, t, now); ok {
+					queued[t.TodoID] = q
+				}
+			}
+		}
+	}
 	reachable := map[string]bool{}
 	if len(open) > 0 {
 		devices := s.devices(ctx)
-		if len(devices) == 0 {
-			return // the computers could not be listed: that says nothing of the agents
-		}
 		for _, d := range devices {
 			reachable[d.ID] = d.Reachable
 		}
@@ -267,13 +281,21 @@ func (s *Service) orphanWatch(ctx context.Context, now time.Time) {
 	found, unknown := map[string]TodoOrphan{}, map[string]bool{}
 	listed := map[string][]orphanAgent{}
 	for _, t := range open {
+		if len(reachable) == 0 && slices.ContainsFunc(t.Agents, func(a TodoAgent) bool { return a.active() }) {
+			unknown[t.ID] = true // an unavailable inventory says nothing about linked agents
+			continue
+		}
 		agents, known := s.orphanAgents(ctx, t, reachable, lists, failed)
 		if !known {
 			unknown[t.ID] = true
 			continue
 		}
 		listed[t.ID] = agents
-		if o, ok := taskOrphan(t, agents, now); ok {
+		o, orphaned := taskOrphan(t, agents, now)
+		if q, ok := queued[t.ID]; ok && len(agents) == 0 &&
+			!queuedStartWaits(t) && !s.taskStartOnWay(t.ID) {
+			found[t.ID] = q
+		} else if orphaned {
 			if group := workers[t.ID]; !group.incomplete && len(group.accepted) > 0 && slices.ContainsFunc(t.Agents, func(a TodoAgent) bool {
 				return a.active() && a.Source == sourceLeader
 			}) {
@@ -341,15 +363,17 @@ func (s *Service) orphanWatch(ctx context.Context, now time.Time) {
 		if o.Reason == orphanOffline && !was && now.Sub(since) < orphanOfflineAfter {
 			continue // its computer may be back in a moment
 		}
-		o.Since = since.UTC()
-		if was {
-			o.Since = prev.Since
+		if o.Since.IsZero() {
+			o.Since = since.UTC()
+			if was && prev.Reason != orphanQueued {
+				o.Since = prev.Since
+			}
 		}
 		next[id] = o
 	}
 	changed := len(next) != len(b.now)
 	for id, o := range next {
-		if prev, ok := b.now[id]; !ok || prev.Reason != o.Reason {
+		if prev, ok := b.now[id]; !ok || prev.Reason != o.Reason || o.Reason == orphanQueued && o.key != prev.key {
 			changed = true
 		}
 	}
@@ -360,6 +384,35 @@ func (s *Service) orphanWatch(ctx context.Context, now time.Time) {
 		s.todosPushSoon()
 		s.boardChanged()
 	}
+}
+
+// orphanWaitsOnDecision says whether supervised task t waits on purpose, for its review or for the owner, so that
+// nobody is meant to work on it and an agent it no longer has is no orphan. The owner's check is not such a wait for
+// its agents: a worker gone during it is still an orphan, so the supervisor hears of it and can review findings that
+// went stale meanwhile (#15578).
+func orphanWaitsOnDecision(t Todo) bool {
+	switch t.Supervision.state(t) {
+	case reviewPending, reviewNeedsUser, reviewParked, reviewTimedOut, reviewClosing:
+		return true
+	}
+	return false
+}
+
+// queuedStartWaits says whether a start still queued for t waits on purpose: as orphanWaitsOnDecision, and also while
+// the owner checks the result, when no start is due (#17090).
+func queuedStartWaits(t Todo) bool {
+	return orphanWaitsOnDecision(t) || t.Supervision.state(t) == reviewUserCheck
+}
+
+func queuedTaskOrphan(planID string, t PlanTask, now time.Time) (TodoOrphan, bool) {
+	q := t.Queue
+	if t.TodoID == "" || q == nil || q.Claimed || q.QueuedAt.IsZero() || len(q.Blockers) != 0 ||
+		q.Key != pendingPlacementQueueKey && q.Key != workspaceQueueKey || now.Sub(q.QueuedAt) < orphanQueuedAfter {
+		return TodoOrphan{}, false
+	}
+	return TodoOrphan{Reason: orphanQueued, Since: q.QueuedAt,
+		key:     "orphaned:queued:" + planID + "@" + q.QueuedAt.UTC().Format(time.RFC3339Nano),
+		machine: t.Machine, detail: clip(oneLine(t.queueReason()), 160)}, true
 }
 
 // orphanSignal is the supervisor's signal for supervised task t while nobody works on it: one per stretch (its key).

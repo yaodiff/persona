@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
-	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -104,12 +103,17 @@ func (h *Hub) nodeUpdateRelay(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// nodeUpdateCommitLimit bounds a relayed node.update.commit: nodeupdate.CommitWait (4 min 40 s) and 10 s more. The
+// hub's program does not link the node's update code (depguard), so TestNodeUpdateRelayWaitsForCommit holds this
+// above CommitWait instead.
+const nodeUpdateCommitLimit = 4*time.Minute + 50*time.Second
+
 // nodeUpdateRelayLimit bounds one relayed call. The node answers node.update.commit once the upload passed its
 // self-checks, which a scan of a new file can hold for a minute each (nodeupdate.CommitWait): cut off sooner, the
 // manager takes a slow answer for a lost one.
 func nodeUpdateRelayLimit(method string) time.Duration {
 	if method == "node.update.commit" {
-		return nodeupdate.CommitWait() + 10*time.Second
+		return nodeUpdateCommitLimit
 	}
 	return 45 * time.Second
 }

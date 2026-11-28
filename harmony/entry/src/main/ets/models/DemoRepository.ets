@@ -39,6 +39,7 @@ interface DemoPath {
 export class DemoRoster {
   features: string[] = [];
   mainId: string = '';
+  leaders: string[] = [];
   machines: ResourceRow[] = [];
   sessions: ResourceRow[] = [];
   conversations: ResourceRow[] = [];
@@ -133,7 +134,7 @@ function lower(value: string): string { return value.toLowerCase(); }
  * its call override never reaches HubTransport, and its rows use only synthetic identities/paths.
  */
 export class DemoRepository extends HubRepository {
-  readonly features: string[] = ['managers', 'messaging', 'starred_messages'];
+  readonly features: string[] = ['managers', 'messaging', 'starred_messages', 'assistant_search', 'conversation_origin', 'agent_autoname'];
   private sessionsData: DemoRecord[] = [];
   private conversationsData: DemoRecord[] = [];
   private todosData: DemoRecord[] = [];
@@ -142,6 +143,10 @@ export class DemoRepository extends HubRepository {
   private mailData: DemoRecord[] = [];
   private larkMessages: DemoRecord[] = [];
   private starredData: DemoRecord[] = [];
+  private standingRevision: number = 0;
+  private standingData: DemoRecord[] = [];
+  private alwaysGrantsByConversation: Map<string, DemoRecord[]> = new Map();
+  private leaderIds: string[] = [];
   private transcripts: Map<string, DemoRecord[]> = new Map();
   private pinsData: DemoRecord = {};
   private mutesData: DemoRecord = {};
@@ -149,6 +154,9 @@ export class DemoRepository extends HubRepository {
   private inboxModelBinding:DemoRecord={};
   private inboxModelRevision:number=0;
   private interactionsData: DemoRecord[] = [];
+  private todoDecisionsData: Map<string, DemoRecord[]> = new Map();
+  private nextSuggestionsEnabled: boolean = true;
+  private settledRuleSuggestions: Set<string> = new Set();
   private operationResults: Map<string, DemoRecord> = new Map();
   private operationOrder: string[] = [];
   private counter: number = 0;
@@ -165,8 +173,28 @@ export class DemoRepository extends HubRepository {
   /** Reset only the synthetic in-memory world; no user or real-Hub storage is touched. */
   reset(): void {
     this.defaultChatPermission='default';this.inboxModelBinding={};this.inboxModelRevision=0;
+    this.nextSuggestionsEnabled = true; this.settledRuleSuggestions = new Set(); this.todoDecisionsData = new Map();
     this.counter = 0; this.messageSequence = 0; this.transcripts = new Map(); this.operationResults = new Map(); this.operationOrder = [];
     this.starredData = [];
+    this.leaderIds = [];
+    this.standingRevision = 1;
+    this.standingData = [
+      demoRecord(
+        ['id', 'machine_id', 'directory', 'actions', 'conditions', 'quote', 'source', 'granted_at', 'reversible'],
+        ['sa_demo_release', DEMO_MACHINE, '/demo/ReleaseDesk', ['merge', 'push'], ['ci_green', 'no_conflicts'],
+          'Always merge and push ReleaseDesk when all checks are green.', 'Main conversation', '2026-11-26T10:15:00Z', true]
+      ),
+      demoRecord(
+        ['id', 'machine_id', 'directory', 'actions', 'conditions', 'quote', 'source', 'granted_at', 'reversible'],
+        ['sa_demo_deploy', DEMO_MACHINE, '/demo/Notes', ['deploy-test', 'send'], [],
+          'Deploy Notes to test and send summary updates.',
+          'Suggested rule: the same answer 3 times in 14 days, confirmed with Always.', '2026-11-25T14:20:00Z', false]
+      )
+    ];
+    this.alwaysGrantsByConversation = new Map();
+    this.alwaysGrantsByConversation.set(this.mainId, [
+      demoRecord(['key_hash', 'tool_name', 'created_at'], ['a'.repeat(64), 'Bash', '2026-11-27T08:50:00Z'])
+    ]);
     this.pinsData = demoRecord(['spaces', 'sessions'], [[], []]);
     this.mutesData = demoRecord(['spaces', 'sessions', 'allowed'], [[], [], []]);
     const capabilities: DemoRecord = demoRecord(['read', 'send', 'approve', 'interrupt', 'terminal', 'close', 'rename'],
@@ -183,20 +211,29 @@ export class DemoRepository extends HubRepository {
     changelog['capabilities'] = changelogCaps;
     changelog['queued'] = ['Include Mate XT 2 tri-fold notes', 'Double-check zh_CN strings'];
     changelog['queued_relayed'] = 0;
+    const archivedAgent = session('demo-agent-archived', 'Audit Q4 release tags', 'idle', 'offline', '/demo/ReleaseDesk', 'release/q4', 'claude', 'claude-sonnet-4-6', 'Archived release audit session from last week.');
+    archivedAgent['archived'] = true;
+    archivedAgent['updated_at'] = '2026-11-24T17:15:00Z';
     this.sessionsData = [
       session('demo-agent-review', 'Review release checks', 'needs_you', 'idle', '/demo/ReleaseDesk', 'main', 'claude', 'claude-sonnet-4-6', 'Release audit ready · Awaiting plan approval'),
       changelog,
-      session('demo-agent-notes', 'Organize project notes', 'unread', 'done', '/demo/Notes', 'main', 'claude', 'claude-opus-4-6', 'Grouped 14 architecture notes by milestone.')
+      session('demo-agent-notes', 'Organize project notes', 'unread', 'done', '/demo/Notes', 'main', 'claude', 'claude-opus-4-6', 'Grouped 14 architecture notes by milestone.'),
+      archivedAgent
+    ];
+    const mainSuggestions: DemoRecord[] = [
+      demoRecord(['text', 'risky'], ['Summarize open release blockers', false]),
+      demoRecord(['text', 'risky'], ['Show recent token usage', false]),
+      demoRecord(['text', 'risky'], ['Run git push origin main', true])
     ];
     this.conversationsData = [
-      demoRecord(['id', 'session_id', 'machine_id', 'manager', 'title', 'main', 'kind', 'archived', 'can_fork', 'updated_at'],
-        [this.mainId, this.mainId, DEMO_MACHINE, DEMO_MANAGER, 'Main conversation', true, 'main', false, false, '2026-11-27T09:00:00Z']),
-      demoRecord(['id', 'session_id', 'machine_id', 'manager', 'title', 'main', 'kind', 'archived', 'can_fork', 'updated_at'],
-        ['demo-recent-review', 'demo-recent-review', DEMO_MACHINE, DEMO_MANAGER, 'Release checklist', false, 'recent', false, true, '2026-11-27T08:40:00Z']),
-      demoRecord(['id', 'session_id', 'machine_id', 'manager', 'title', 'main', 'kind', 'automatic', 'archived', 'can_fork', 'updated_at'],
-        ['demo-auto-summary', 'demo-auto-summary', DEMO_MACHINE, DEMO_MANAGER, 'Daily summary', false, 'automatic', true, false, true, '2026-11-27T07:30:00Z']),
-      demoRecord(['id', 'session_id', 'machine_id', 'manager', 'title', 'main', 'kind', 'archived', 'can_fork', 'updated_at'],
-        ['demo-archived-notes', 'demo-archived-notes', DEMO_MACHINE, DEMO_MANAGER, 'Q4 design review notes', false, 'recent', true, true, '2026-11-25T16:30:00Z'])
+      demoRecord(['id', 'session_id', 'machine_id', 'manager', 'title', 'main', 'kind', 'origin', 'archived', 'can_fork', 'suggestions', 'updated_at', 'last_text'],
+        [this.mainId, this.mainId, DEMO_MACHINE, DEMO_MANAGER, 'Main conversation', true, 'main', 'user', false, false, mainSuggestions, '2026-11-27T09:00:00Z', 'Ready to explore the local Persona demo.']),
+      demoRecord(['id', 'session_id', 'machine_id', 'manager', 'title', 'main', 'kind', 'origin', 'archived', 'can_fork', 'updated_at', 'last_text'],
+        ['demo-recent-review', 'demo-recent-review', DEMO_MACHINE, DEMO_MANAGER, 'Release checklist', false, 'recent', 'user', false, true, '2026-11-27T08:40:00Z', 'Start with the release checks, then confirm the changelog and open issues.']),
+      demoRecord(['id', 'session_id', 'machine_id', 'manager', 'title', 'main', 'kind', 'origin', 'automatic', 'archived', 'can_fork', 'updated_at', 'last_text'],
+        ['demo-auto-summary', 'demo-auto-summary', DEMO_MACHINE, DEMO_MANAGER, 'Daily summary', false, 'automatic', 'task', true, false, true, '2026-11-27T07:30:00Z', 'Three sample tasks are ready to inspect in this local demo.']),
+      demoRecord(['id', 'session_id', 'machine_id', 'manager', 'title', 'main', 'kind', 'origin', 'archived', 'can_fork', 'updated_at', 'last_text'],
+        ['demo-archived-notes', 'demo-archived-notes', DEMO_MACHINE, DEMO_MANAGER, 'Q4 design review notes', false, 'recent', 'user', true, true, '2026-11-25T16:30:00Z', 'Summarized the Q4 Liquid Glass token alignment across iOS and HarmonyOS.'])
     ];
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, this.mainId), [
       this.item('assistant', 'Ready to explore the local Persona demo. Messages stay on this device and do not reach an agent or service.'),
@@ -238,6 +275,10 @@ export class DemoRepository extends HubRepository {
       this.item('user', 'Capture the Q4 design system alignment decisions.'),
       this.item('assistant', 'Summarized the Q4 Liquid Glass token alignment across iOS and HarmonyOS, including 44vp touch targets and semantic status washes.')
     ]);
+    this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-agent-archived'), [
+      this.item('user', 'Audit the Q4 release tags and archive when done.'),
+      this.item('assistant', 'Tagged and verified Q4 release artifacts. Ready for archive.')
+    ]);
     const recentItems = this.transcripts.get(this.transcriptKey(DEMO_MACHINE, 'demo-recent-review')) || [];
     const reviewItems = this.transcripts.get(this.transcriptKey(DEMO_MACHINE, 'demo-agent-review')) || [];
     if (recentItems.length >= 2) {
@@ -254,21 +295,32 @@ export class DemoRepository extends HubRepository {
           'Review release checks', 'Claude', '2026-11-27T08:50:00Z', '2026-11-27T08:52:00Z', Wire.text(reviewItems[3], 'text')]
       ));
     }
-    this.interactionsData = [demoRecord(['id', 'machine_id', 'session_id', 'manager', 'status', 'revision', 'interaction'], [
-      'demo-plan-review', DEMO_MACHINE, 'demo-agent-review', DEMO_MANAGER, 'open', 'demo-rev-1',
-      demoRecord(['id', 'kind', 'plan', 'status'], ['demo-plan-review', 'plan', 'Run the sample release checklist in this local demo?', 'open'])
+    const demoRuleSuggestion = demoRecord(
+      ['id', 'kind', 'text', 'creates', 'count', 'scope'],
+      [
+        'demo-rule-suggest-1',
+        'task_trust',
+        'Always start ReleaseDesk review tasks directly?',
+        'tasks.trust',
+        3,
+        demoRecord(['machine_id', 'machine', 'directory'], [DEMO_MACHINE, 'My Mac', '/demo/ReleaseDesk'])
+      ]
+    );
+    this.interactionsData = [demoRecord(['id', 'machine_id', 'session_id', 'manager', 'status', 'revision', 'suggestion', 'interaction'], [
+      'demo-plan-review', DEMO_MACHINE, 'demo-agent-review', DEMO_MANAGER, 'open', 'demo-rev-1', cloneRecord(demoRuleSuggestion),
+      demoRecord(['id', 'kind', 'plan', 'status', 'suggestion'], ['demo-plan-review', 'plan', 'Run the sample release checklist in this local demo?', 'open', cloneRecord(demoRuleSuggestion)])
     ])];
     this.todosData = [
-      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'origin', 'created_at', 'updated_at', 'supervision', 'agents', 'spaces'], [
+      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'stage', 'origin', 'created_at', 'updated_at', 'supervision', 'agents', 'spaces'], [
         'demo-todo-release', DEMO_MANAGER, 'Review the release checklist', 'Check the sample release notes and confirm the open plan.',
-        'needs_you', 'needs_you', this.mainId, '2026-11-10T08:00:00Z', '2026-11-27T08:50:00Z',
+        'needs_you', 'needs_you', 'review', this.mainId, '2026-11-10T08:00:00Z', '2026-11-27T08:50:00Z',
         demoRecord(['state', 'pending_since'], ['user_check', '2026-11-27T08:50:00Z']),
         [demoRecord(
           ['machine_id', 'session_id', 'title', 'cwd', 'agent', 'source', 'linked_at'],
           [DEMO_MACHINE, 'demo-agent-review', 'Review release checks', '/demo/ReleaseDesk', '', 'manual', '2026-11-11T09:00:00Z'])], []]),
-      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'origin', 'created_at', 'updated_at', 'agents', 'spaces', 'pr_url', 'wait'], [
+      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'stage', 'origin', 'created_at', 'updated_at', 'agents', 'spaces', 'pr_url', 'wait'], [
         'demo-todo-docs', DEMO_MANAGER, 'Prepare release notes', 'Collect the sample changes in one concise note.',
-        'working', 'working', this.mainId, '2026-11-10T09:00:00Z', '2026-11-27T08:55:00Z', [demoRecord(
+        'working', 'working', 'develop', this.mainId, '2026-11-10T09:00:00Z', '2026-11-27T08:55:00Z', [demoRecord(
           ['machine_id', 'session_id', 'title', 'cwd', 'agent', 'source', 'linked_at'],
           [DEMO_MACHINE, 'demo-agent-changelog', 'Prepare the changelog', '/demo/ReleaseDesk', 'codex', 'manual', '2026-11-27T08:55:00Z'])], [],
         'https://github.com/example/releasedesk/pull/142',
@@ -280,9 +332,45 @@ export class DemoRepository extends HubRepository {
         'demo-todo-done', DEMO_MANAGER, 'Check the example project', 'This sample task is complete.', 'done', 'done',
         this.mainId, '2026-11-10T10:00:00Z', '2026-11-09T10:00:00Z', '2026-11-10T10:00:00Z', [], []])
     ];
+    this.todoDecisionsData.set('demo-todo-release', [
+      demoRecord(
+        ['id', 'todo_id', 'question', 'choice', 'reason', 'source', 'source_machine', 'source_session', 'source_message', 'supersedes_id', 'superseded_by', 'created_at'],
+        ['demo-dec-release-1', 'demo-todo-release', 'Rollout cadence for Wave 7?', 'Split across two builds', 'Keep initial diff smaller', 'manual', '', '', '', '', 'demo-dec-release-2', '2026-11-26T10:00:00Z']
+      ),
+      demoRecord(
+        ['id', 'todo_id', 'question', 'choice', 'reason', 'source', 'source_machine', 'source_session', 'source_message', 'supersedes_id', 'superseded_by', 'created_at'],
+        ['demo-dec-release-2', 'demo-todo-release', 'Rollout cadence for Wave 7?', 'Ship full parity pack together', 'All 5 features verified end-to-end', 'manual', '', '', '', 'demo-dec-release-1', '', '2026-11-27T08:20:00Z']
+      ),
+      demoRecord(
+        ['id', 'todo_id', 'question', 'choice', 'reason', 'source', 'source_machine', 'source_session', 'source_message', 'supersedes_id', 'superseded_by', 'created_at'],
+        ['demo-dec-release-3', 'demo-todo-release', 'Require zero hardcoded hex literals?', 'Enforce Colors.* and Tokens.*', 'Match Design System Wave 5 rules', 'card', DEMO_MACHINE, 'demo-agent-review', 'demo-item-card', '', '', '2026-11-27T08:45:00Z']
+      )
+    ]);
+    this.todoDecisionsData.set('demo-todo-docs', [
+      demoRecord(
+        ['id', 'todo_id', 'question', 'choice', 'reason', 'source', 'source_machine', 'source_session', 'source_message', 'supersedes_id', 'superseded_by', 'created_at'],
+        ['demo-dec-docs-1', 'demo-todo-docs', 'Target devices for changelog notes?', 'Phone, Foldable, and Mate XT 2', 'Cover all adaptive breakpoints', 'outcome', '', '', '', '', '', '2026-11-27T08:50:00Z']
+      )
+    ]);
     const demoChatNotes = this.knowledgeEntry('chats', 'demo-chat-notes', 'Planning discussion', 'A synthetic discussion about the sample release.', 'The team agreed to review the plan before preparing the release notes.', ['demo', 'planning']);
     demoChatNotes['recent'] = '## 2026-11-11\n- 08:15 Mina Example: Can someone review the sample release checklist?\n- 08:20 Demo user: Checking now.';
     const demoRecordingNotes = this.knowledgeEntry('recordings', 'demo-recording-notes', 'Planning notes', 'A synthetic recording entry.', 'No audio file or personal recording is stored in the local demo.', ['demo', 'planning']);
+    const recMeta = Wire.object(demoRecordingNotes, 'meta');
+    recMeta['started_at'] = '2026-11-27T08:00:00Z';
+    recMeta['duration'] = 420;
+    recMeta['complete'] = true;
+    recMeta['bookmarks'] = [
+      demoRecord(['at', 'label'], [140, 'Ship parity pack together']),
+      demoRecord(['at', 'label'], [320, 'Heatmap window decision'])
+    ];
+    demoRecordingNotes['meta'] = recMeta;
+    demoRecordingNotes['segments'] = [
+      demoRecord(['start', 'speaker', 'text'], [18, 'Mina', 'Let us review the release checklist and confirm all verification gates before tagging.']),
+      demoRecord(['start', 'speaker', 'text'], [140, 'Alex', 'Should we ship Token Usage and Workspace parity together in one parity pack?']),
+      demoRecord(['start', 'speaker', 'text'], [235, 'Mina', 'Yes, ship together in one parity pack after full verification passes on HarmonyOS.']),
+      demoRecord(['start', 'speaker', 'text'], [320, 'Alex', 'On compact phones, keep the 12-week heatmap compact so Usage by Project stays visible.']),
+      demoRecord(['start', 'speaker', 'text'], [390, 'Mina', 'Agreed. Let us record the decision on the release checklist to-do.'])
+    ];
     demoRecordingNotes['minutes'] = demoRecord(['version', 'markdown', 'actions', 'debates'], [
       1,
       '### Summary\nReviewed the release checklist and agreed on staged rollout timing.',
@@ -356,7 +444,7 @@ export class DemoRepository extends HubRepository {
   seed(): DemoRoster { this.reset(); return this.roster(); }
 
   roster(): DemoRoster {
-    const roster = new DemoRoster(); roster.features = this.features.slice(); roster.mainId = this.mainId;
+    const roster = new DemoRoster(); roster.features = this.features.slice(); roster.mainId = this.mainId; roster.leaders = this.leaderIds.slice();
     roster.machines = copyRows([this.machineData()], 'machine'); roster.sessions = copyRows(this.activeSessions(), 'session');
     roster.conversations = copyRows(this.conversationsData, 'conversation'); roster.todos = copyRows(this.todosData, 'todo');
     roster.knowledge = copyRows(this.knowledgeData.filter((item: DemoRecord) => Wire.text(item, 'kind') === 'projects'), 'knowledge');
@@ -608,13 +696,93 @@ export class DemoRepository extends HubRepository {
       this.starredData = this.starredData.filter((_: DemoRecord, i: number) => i !== idx);
       return demoRecord(['removed'], [removed]);
     }
-    if (parts.length===1 && method==='PUT') {
-      const mode=Wire.text(body,'default_permission_mode');
-      if (Object.keys(body).length!==1 || !['default','acceptEdits','plan','auto','bypassPermissions'].includes(mode)) throw new HttpFailure(400,'demo_invalid_input');
-      this.defaultChatPermission=mode;
+    if (parts.length === 4 && parts[1] === 'rule-suggestions' && ['always', 'not-now'].includes(parts[3]) && method === 'POST') {
+      const suggestionId = parts[2];
+      if (!suggestionId || this.settledRuleSuggestions.has(suggestionId)) {
+        throw new HttpFailure(404, 'rule_suggestion_gone');
+      }
+      this.settledRuleSuggestions.add(suggestionId);
+      for (const req of this.interactionsData) {
+        const inner = Wire.object(req, 'interaction');
+        if (Wire.text(Wire.object(req, 'suggestion'), 'id') === suggestionId) {
+          req['suggestion'] = demoRecord([], []);
+        }
+        if (Wire.text(Wire.object(inner, 'suggestion'), 'id') === suggestionId) {
+          inner['suggestion'] = demoRecord([], []);
+          req['interaction'] = inner;
+        }
+      }
+      if (parts[3] === 'always') {
+        return demoRecord(['kind', 'creates'], ['task_trust', 'tasks.trust']);
+      }
+      return demoRecord(['ok'], [true]);
     }
-    if (parts.length === 1 && (method === 'GET' || method==='PUT')) return demoRecord(['main', 'machine_id','manager','default_permission_mode','conversations'],
-      [this.mainId, DEMO_MACHINE,DEMO_MANAGER,this.defaultChatPermission,cloneRecords(this.conversationsData)]);
+    if (parts.length===1 && method==='PUT') {
+      const keys = Object.keys(body);
+      if (!keys.length || keys.some((k: string) => !['default_permission_mode', 'next_suggestions'].includes(k))) {
+        throw new HttpFailure(400, 'demo_invalid_input');
+      }
+      if (Wire.has(body, 'default_permission_mode')) {
+        const mode=Wire.text(body,'default_permission_mode');
+        if (!['default','acceptEdits','plan','auto','bypassPermissions'].includes(mode)) throw new HttpFailure(400,'demo_invalid_input');
+        this.defaultChatPermission=mode;
+      }
+      if (Wire.has(body, 'next_suggestions')) {
+        if (typeof body['next_suggestions'] !== 'boolean') throw new HttpFailure(400, 'demo_invalid_input');
+        this.nextSuggestionsEnabled = body['next_suggestions'] === true;
+        const mainConv = this.conversationsData.find((c: DemoRecord) => Wire.text(c, 'id') === this.mainId);
+        if (mainConv) {
+          mainConv['suggestions'] = this.nextSuggestionsEnabled
+            ? [
+              demoRecord(['text', 'risky'], ['Summarize open release blockers', false]),
+              demoRecord(['text', 'risky'], ['Show recent token usage', false]),
+              demoRecord(['text', 'risky'], ['Run git push origin main', true])
+            ]
+            : [];
+        }
+      }
+    }
+    if (parts.length === 1 && (method === 'GET' || method==='PUT')) return demoRecord(['main', 'machine_id','manager','default_permission_mode','next_suggestions','leaders','conversations'],
+      [this.mainId, DEMO_MACHINE,DEMO_MANAGER,this.defaultChatPermission,this.nextSuggestionsEnabled,this.leaderIds.slice(),cloneRecords(this.conversationsData)]);
+    if (parts.length === 2 && parts[1] === 'standing-authorizations' && method === 'GET') {
+      return demoRecord(['revision', 'authorizations'], [this.standingRevision, cloneRecords(this.standingData)]);
+    }
+    if (parts.length === 3 && parts[1] === 'standing-authorizations' && method === 'DELETE') {
+      const targetId = parts[2];
+      const exists = this.standingData.some((item: DemoRecord) => Wire.text(item, 'id') === targetId);
+      if (exists) {
+        this.standingData = this.standingData.filter((item: DemoRecord) => Wire.text(item, 'id') !== targetId);
+        this.standingRevision++;
+      }
+      return demoRecord(['ok', 'revision'], [true, this.standingRevision]);
+    }
+    if (parts.length === 2 && parts[1] === 'search' && method === 'GET') {
+      return this.searchAssistantConversations(query);
+    }
+    if (parts.length === 4 && parts[1] === 'directions' && (parts[3] === 'make' || parts[3] === 'end') && method === 'POST') {
+      const id = parts[2];
+      const conv = this.conversationsData.find((item: DemoRecord) => (Wire.text(item, 'session_id') || Wire.text(item, 'id')) === id);
+      if (!conv) throw new HttpFailure(404, 'demo_chat_not_found');
+      if (Wire.bool(conv, 'main')) throw new HttpFailure(400, 'cannot_pin_main');
+      const next = this.leaderIds.filter((entry: string) => entry !== id);
+      if (parts[3] === 'make') next.push(id);
+      this.leaderIds = next;
+      return demoRecord(['ok', 'leaders'], [true, this.leaderIds.slice()]);
+    }
+    if (parts.length === 4 && parts[1] === 'conversations' && parts[3] === 'always' && method === 'GET') {
+      const id = parts[2];
+      const conv = this.conversationsData.find((item: DemoRecord) => (Wire.text(item, 'session_id') || Wire.text(item, 'id')) === id);
+      if (!conv) throw new HttpFailure(404, 'demo_chat_not_found');
+      return demoRecord(['grants'], [cloneRecords(this.alwaysGrantsByConversation.get(id) || [])]);
+    }
+    if (parts.length === 5 && parts[1] === 'conversations' && parts[3] === 'always' && method === 'DELETE') {
+      const id = parts[2], keyHash = parts[4];
+      const conv = this.conversationsData.find((item: DemoRecord) => (Wire.text(item, 'session_id') || Wire.text(item, 'id')) === id);
+      if (!conv) throw new HttpFailure(404, 'demo_chat_not_found');
+      const current = this.alwaysGrantsByConversation.get(id) || [];
+      this.alwaysGrantsByConversation.set(id, current.filter((item: DemoRecord) => Wire.text(item, 'key_hash') !== keyHash));
+      return demoRecord(['ok', 'restart_required'], [true, false]);
+    }
     if (parts.length === 2 && parts[1] === 'conversations' && method === 'POST') {
       if (Wire.bool(body, 'main')) {
         const main = this.conversationsData.find((item: DemoRecord) => Wire.bool(item, 'main'));
@@ -653,6 +821,49 @@ export class DemoRepository extends HubRepository {
       return demoRecord(['items'], [[]]);
     }
     throw new HttpFailure(404, 'demo_unsupported');
+  }
+
+  private searchAssistantConversations(query: Record<string, string>): DemoRecord {
+    const rawQ = (query['q'] || '').trim();
+    if (!rawQ) return demoRecord(['results', 'partial'], [[], false]);
+    const needle = rawQ.toLowerCase();
+    const limitRaw = Number(query['limit'] || '30');
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(100, Math.floor(limitRaw)) : 30;
+    const results: DemoRecord[] = [];
+    for (const conv of this.conversationsData) {
+      const sid = Wire.text(conv, 'session_id') || Wire.text(conv, 'id');
+      const machineId = Wire.text(conv, 'machine_id', DEMO_MACHINE);
+      const title = Wire.text(conv, 'title');
+      const archived = Wire.bool(conv, 'archived');
+      const items = this.transcripts.get(this.transcriptKey(machineId, sid)) || [];
+      const hits: DemoRecord[] = [];
+      for (let i = items.length - 1; i >= 0; i--) {
+        const item = items[i];
+        const text = Wire.text(item, 'text').replace(/\r\n?|\n/g, ' ');
+        const at = text.toLowerCase().indexOf(needle);
+        if (at < 0) continue;
+        const winStart = Math.max(0, at - 36);
+        const winEnd = Math.min(text.length, at + rawQ.length + 84);
+        const prefix = winStart > 0 ? '…' : '';
+        const snippet = prefix + text.slice(winStart, winEnd) + (winEnd < text.length ? '…' : '');
+        const matchStart = at - winStart + prefix.length;
+        hits.push(demoRecord(
+          ['item_id', 'seq', 'role', 'snippet', 'ranges'],
+          [Wire.text(item, 'id'), Wire.number(item, 'seq', i + 1), Wire.text(item, 'role', 'assistant'), snippet,
+            [[matchStart, matchStart + rawQ.length]]]
+        ));
+        if (hits.length >= 3) break;
+      }
+      const titleMatch = title.toLowerCase().includes(needle);
+      if (hits.length > 0 || titleMatch) {
+        results.push(demoRecord(
+          ['session_id', 'machine_id', 'title', 'archived', 'title_match', 'hits'],
+          [sid, machineId, title, archived, hits.length === 0 && titleMatch, hits]
+        ));
+      }
+      if (results.length >= limit) break;
+    }
+    return demoRecord(['results', 'partial'], [results, false]);
   }
 
   private modelConfig(parts:string[],method:string,body:DemoRecord):DemoRecord {
@@ -788,12 +999,28 @@ export class DemoRepository extends HubRepository {
     }
     if (parts.length === 2 && parts[1] === 'hours' && method === 'GET') {
       const total = this.demoUsageTokens(408000, 201000, 4860000, 170000, 151);
-      const machines = [demoRecord(['id', 'name', 'in', 'cache_write', 'cache_read', 'out', 'req'], [DEMO_MACHINE, 'My Mac', 408000, 201000, 4860000, 170000, 151])];
+      const machines = [
+        demoRecord(['id', 'name', 'in', 'cache_write', 'cache_read', 'out', 'req'], [DEMO_MACHINE, 'My Mac', 298000, 146000, 3540000, 124000, 109]),
+        demoRecord(['id', 'name', 'in', 'cache_write', 'cache_read', 'out', 'req'], ['demo-linux-box', 'Build Linux', 110000, 55000, 1320000, 46000, 42])
+      ];
       const agents = [
         demoRecord(['agent', 'in', 'cache_write', 'cache_read', 'out', 'req'], ['claude', 280000, 140000, 3400000, 115000, 102]),
         demoRecord(['agent', 'in', 'cache_write', 'cache_read', 'out', 'req'], ['codex', 128000, 61000, 1460000, 55000, 49])
       ];
-      return demoRecord(['usage'], [demoRecord(['zone', 'stored', 'hours', 'machines', 'agents', 'total'], ['UTC', true, [], machines, agents, total])]);
+      const hours: DemoRecord[] = [];
+      const baseMs = Date.UTC(2026, 10, 27, 0, 0, 0);
+      for (let h = 0; h < 24; h++) {
+        const ts = Math.floor((baseMs + h * 3600000) / 1000);
+        const wave = h >= 8 && h <= 22 ? 1 + ((h * 5 + 2) % 7) : (h % 3 === 0 ? 1 : 0);
+        const input = wave * 8500;
+        const cw = wave * 4200;
+        const cr = wave * 95000;
+        const output = wave * 3400;
+        const req = wave * 4;
+        hours.push(demoRecord(['t', 'date', 'hour', 'in', 'cache_write', 'cache_read', 'out', 'req'], ['2026-11-27', '2026-11-27', h, input, cw, cr, output, req]));
+        hours[hours.length - 1]['t'] = ts;
+      }
+      return demoRecord(['usage'], [demoRecord(['zone', 'stored', 'hours', 'machines', 'agents', 'total'], ['UTC', true, hours, machines, agents, total])]);
     }
     if (parts.length === 2 && parts[1] === 'projects' && method === 'GET') {
       const projects7 = this.demoUsageProjectsList();
@@ -811,6 +1038,29 @@ export class DemoRepository extends HubRepository {
       const projects = this.demoUsageProjectsList();
       const match = projects.find((p: DemoRecord) => Wire.text(p, 'key') === key) || projects[0];
       const tok = Wire.object(match, 'tokens');
+      const primaryTok = this.demoUsageTokens(
+        Math.round(Wire.number(tok, 'in', 100000) * 0.72),
+        Math.round(Wire.number(tok, 'cache_write', 50000) * 0.72),
+        Math.round(Wire.number(tok, 'cache_read', 1000000) * 0.72),
+        Math.round(Wire.number(tok, 'out', 40000) * 0.72),
+        Math.max(1, Math.round(Wire.number(tok, 'req', 30) * 0.72))
+      );
+      const secondaryTok = this.demoUsageTokens(
+        Math.max(0, Wire.number(tok, 'in', 100000) - Wire.number(primaryTok, 'in', 0)),
+        Math.max(0, Wire.number(tok, 'cache_write', 50000) - Wire.number(primaryTok, 'cache_write', 0)),
+        Math.max(0, Wire.number(tok, 'cache_read', 1000000) - Wire.number(primaryTok, 'cache_read', 0)),
+        Math.max(0, Wire.number(tok, 'out', 40000) - Wire.number(primaryTok, 'out', 0)),
+        Math.max(1, Wire.number(tok, 'req', 30) - Wire.number(primaryTok, 'req', 0))
+      );
+      const projectHours: DemoRecord[] = [];
+      const baseMs = Date.UTC(2026, 10, 27, 0, 0, 0);
+      for (let h = 0; h < 24; h++) {
+        const ts = Math.floor((baseMs + h * 3600000) / 1000);
+        const weight = h >= 9 && h <= 21 ? ((h * 3 + 1) % 5) + 1 : 0;
+        projectHours.push(demoRecord(['t', 'hour', 'tokens'], [
+          ts, h, this.demoUsageTokens(weight * 4200, weight * 2100, weight * 52000, weight * 1800, weight * 2)
+        ]));
+      }
       const breakdown = (days: number): DemoRecord => demoRecord(
         ['days', 'total', 'share', 'cache_hit', 'machines', 'agents', 'models', 'launchers', 'places'],
         [
@@ -818,15 +1068,30 @@ export class DemoRepository extends HubRepository {
           cloneRecord(tok),
           Wire.number(match, 'share', 0.5),
           0.88,
-          [demoRecord(['key', 'name', 'tokens'], [DEMO_MACHINE, 'My Mac', cloneRecord(tok)])],
-          [demoRecord(['key', 'name', 'tokens'], ['claude', '', cloneRecord(tok)])],
-          [demoRecord(['key', 'name', 'tokens'], ['claude-sonnet-4-6', '', cloneRecord(tok)])],
-          [demoRecord(['key', 'name', 'tokens'], ['claude', '', cloneRecord(tok)])],
-          [demoRecord(['machine', 'machine_name', 'place', 'worktree', 'tokens'], [DEMO_MACHINE, 'My Mac', '/demo/ReleaseDesk', false, cloneRecord(tok)])]
+          [
+            demoRecord(['key', 'name', 'tokens'], [DEMO_MACHINE, 'My Mac', cloneRecord(primaryTok)]),
+            demoRecord(['key', 'name', 'tokens'], ['demo-linux-box', 'Build Linux', cloneRecord(secondaryTok)])
+          ],
+          [
+            demoRecord(['key', 'name', 'tokens'], ['claude', 'Claude', cloneRecord(primaryTok)]),
+            demoRecord(['key', 'name', 'tokens'], ['codex', 'Codex', cloneRecord(secondaryTok)])
+          ],
+          [
+            demoRecord(['key', 'name', 'tokens'], ['claude-sonnet-4-6', 'Claude Sonnet 4.6', cloneRecord(primaryTok)]),
+            demoRecord(['key', 'name', 'tokens'], ['gpt-5.3-codex', 'GPT-5.3 Codex', cloneRecord(secondaryTok)])
+          ],
+          [
+            demoRecord(['key', 'name', 'tokens'], ['claude', 'Claude Code', cloneRecord(primaryTok)]),
+            demoRecord(['key', 'name', 'tokens'], ['', '', cloneRecord(secondaryTok)])
+          ],
+          [
+            demoRecord(['machine', 'machine_name', 'place', 'worktree', 'tokens'], [DEMO_MACHINE, 'My Mac', '/demo/ReleaseDesk', false, cloneRecord(primaryTok)]),
+            demoRecord(['machine', 'machine_name', 'place', 'worktree', 'tokens'], ['demo-linux-box', 'Build Linux', '/demo/ReleaseDesk/.worktrees/perf', true, cloneRecord(secondaryTok)])
+          ]
         ]
       );
       return demoRecord(['usage'], [demoRecord(['zone', 'stored', 'project', 'ranges', 'days', 'hours'], [
-        'UTC', true, cloneRecord(match), [breakdown(1), breakdown(3), breakdown(7)], this.demoUsageDaysList(7), []
+        'UTC', true, cloneRecord(match), [breakdown(1), breakdown(3), breakdown(7)], this.demoUsageDaysList(7), projectHours
       ])]);
     }
     throw new HttpFailure(404, 'demo_unsupported');
@@ -931,10 +1196,37 @@ export class DemoRepository extends HubRepository {
       const title = Wire.text(body, 'title'), tab = Wire.text(body, 'tab_name');
       if (!title.trim() && !tab.trim()) throw new HttpFailure(400, 'demo_invalid_input');
       const next = cloneRecord(record);
-      if (title.trim()) next['title'] = nonEmpty(title);
+      if (title.trim()) {
+        next['title'] = nonEmpty(title);
+        next['title_source'] = 'manual';
+        next['title_manual'] = true;
+      }
       if (tab.trim()) next['slot_name'] = nonEmpty(tab);
       this.replaceChatRecord(record, next);
       return demoRecord(['session'], [cloneRecord(next)]);
+    }
+    if (action === 'autoname' && method === 'POST') {
+      if (!session || Wire.bool(record, 'assistant')) throw new HttpFailure(400, 'assistant_session');
+      const prevTitle = Wire.text(record, 'title');
+      const autoMap: Record<string, string> = {
+        'Review release checks': 'Release audit & plan sign-off',
+        'Prepare the changelog': 'v2.4 changelog & diff check',
+        'Organize project notes': 'Notes architecture milestone summary'
+      };
+      const generated = autoMap[prevTitle] || (prevTitle.startsWith('Summary: ') ? prevTitle : 'Summary: ' + (prevTitle || 'Agent session'));
+      const next = cloneRecord(record);
+      next['title'] = generated;
+      next['title_source'] = 'auto';
+      next['title_manual'] = false;
+      this.replaceChatRecord(record, next);
+      return demoRecord(['ok', 'title', 'title_source', 'changed'], [true, generated, 'auto', generated !== prevTitle]);
+    }
+    if ((action === 'unarchive' || action === 'archive') && method === 'POST') {
+      if (!session || Wire.bool(record, 'assistant')) throw new HttpFailure(400, 'demo_unsupported');
+      const archived = action === 'archive';
+      record['archived'] = archived;
+      record['updated_at'] = '2026-11-27T09:15:00Z';
+      return demoRecord(['ok'], [true]);
     }
     if (action === 'seen' && method === 'POST') {
       record['state'] = 'idle'; record['unread'] = false;
@@ -1176,6 +1468,57 @@ export class DemoRepository extends HubRepository {
     }
     if (parts.length === 2 && method === 'DELETE') {
       this.todosData = this.todosData.filter((item: DemoRecord) => item !== todo); return demoRecord(['deleted'], [true]);
+    }
+    if (parts.length === 3 && parts[2] === 'decisions') {
+      const list = this.todoDecisionsData.get(id) || [];
+      if (method === 'GET') {
+        const includeAll = query['all'] === '1' || query['all'] === 'true';
+        const filtered = includeAll ? list : list.filter((d: DemoRecord) => !Wire.text(d, 'superseded_by'));
+        return demoRecord(['decisions'], [cloneRecords(filtered)]);
+      }
+      if (method === 'POST') {
+        const question = nonEmpty(Wire.text(body, 'question'), 1000);
+        const choice = nonEmpty(Wire.text(body, 'choice'), 1000);
+        const reason = textWithin(Wire.text(body, 'reason').trim(), 4000);
+        const supersedesId = Wire.text(body, 'supersedes_id').trim();
+        const nextId = 'demo-dec-' + (++this.counter);
+        const nextList = list.map((entry: DemoRecord) => cloneRecord(entry));
+        if (supersedesId) {
+          const target = nextList.find((entry: DemoRecord) => Wire.text(entry, 'id') === supersedesId);
+          if (!target) throw new HttpFailure(404, 'decision_not_found');
+          target['superseded_by'] = nextId;
+        }
+        const created = demoRecord(
+          ['id', 'todo_id', 'question', 'choice', 'reason', 'source', 'source_machine', 'source_session', 'source_message', 'supersedes_id', 'superseded_by', 'created_at'],
+          [nextId, id, question, choice, reason, 'manual', '', '', '', supersedesId, '', '2026-11-27T09:15:00Z']
+        );
+        nextList.push(created);
+        this.todoDecisionsData.set(id, nextList);
+        return demoRecord(['decision', 'inserted'], [cloneRecord(created), true]);
+      }
+    }
+    if (parts.length === 4 && parts[2] === 'decisions' && method === 'PATCH') {
+      const decisionId = parts[3];
+      const list = (this.todoDecisionsData.get(id) || []).map((entry: DemoRecord) => cloneRecord(entry));
+      const row = list.find((entry: DemoRecord) => Wire.text(entry, 'id') === decisionId);
+      if (!row) throw new HttpFailure(404, 'decision_not_found');
+      if (!Wire.has(body, 'supersedes_id') || typeof body['supersedes_id'] !== 'string') {
+        throw new HttpFailure(400, 'demo_invalid_input');
+      }
+      const nextSup = Wire.text(body, 'supersedes_id').trim();
+      const prevSup = Wire.text(row, 'supersedes_id');
+      if (prevSup) {
+        const oldTarget = list.find((entry: DemoRecord) => Wire.text(entry, 'id') === prevSup);
+        if (oldTarget && Wire.text(oldTarget, 'superseded_by') === decisionId) oldTarget['superseded_by'] = '';
+      }
+      if (nextSup) {
+        const newTarget = list.find((entry: DemoRecord) => Wire.text(entry, 'id') === nextSup);
+        if (!newTarget || nextSup === decisionId) throw new HttpFailure(400, 'demo_invalid_input');
+        newTarget['superseded_by'] = decisionId;
+      }
+      row['supersedes_id'] = nextSup;
+      this.todoDecisionsData.set(id, list);
+      return demoRecord(['decision'], [cloneRecord(row)]);
     }
     if (parts.length === 5 && parts[2] === 'agents' && ['PUT', 'DELETE'].includes(method)) {
       const machine = parts[3], sessionId = parts[4];

@@ -66,11 +66,12 @@ func (s *Service) supervisionBatchInterval(ctx context.Context) time.Duration {
 	return time.Duration(supervisionBatchMinutesOf(s.settings(ctx))) * time.Minute
 }
 
-// supervisionBatchImmediate bypasses the optional per-recipient batch and the routine cooldown. The legacy 15-second
-// gather still applies.
+// supervisionBatchImmediate bypasses the optional per-recipient batch and the routine cooldown.
 // A recipient's whole digest goes together when any signal in it is immediate.
 func supervisionBatchImmediate(g superviseSignal) bool {
 	switch g.Kind {
+	case sigIdle:
+		return g.Handoff
 	case sigNeedsYou, sigAsk, sigEscalated, sigDecide, sigDecisionReply, sigParkDecided, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigCardlessWait,
 		sigParkedDue, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery, sigOwnerPresent: // a parked task whose time came (#11614), unblocked dependent (#12606), merge/parent closeout (#13100), external info during needs_user (#13112), outage recovery (#13158; still gated by NotBefore), or owner returned while waiting on owner action (#15087)
 		return true
@@ -79,7 +80,7 @@ func supervisionBatchImmediate(g superviseSignal) bool {
 	case sigReport:
 		return g.Report == upReportQuestion || g.Report == upReportBlocked
 	}
-	return false
+	return g.todoV2Wake()
 }
 
 // digestWaitWithBatch is digestWait while optional batching is off. With it on, recipient batch deadlines replace the
@@ -91,7 +92,7 @@ func digestWaitWithBatch(now, last time.Time, pending []superviseSignal, p super
 	}
 	var due time.Time
 	for _, g := range pending {
-		at := g.At.Add(p.gather)
+		at := superviseGatherAt(g, p.gather)
 		if g.NotBefore.After(at) {
 			at = g.NotBefore
 		}

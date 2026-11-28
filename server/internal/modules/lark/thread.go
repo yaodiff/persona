@@ -49,7 +49,7 @@ func (s core) threadMessage(ctx context.Context, ev botcard.MessageEvent, st Fei
 	if !content.Forward && s.h.NoReplyCommand(openingCommandWords(ev, content)) {
 		// "Don't report back": a command of its own, also for a todo that is done and not yet reported, and never passed on
 		// as words (the core's todo_source.go).
-		s.h.ThreadNoReply(ctx, ev, t.ID, topic.Chat, topic.Thread)
+		s.h.ThreadNoReply(ctx, msg.MessageID, t.ID, to)
 		return
 	}
 	if t.Done {
@@ -65,7 +65,7 @@ func (s core) threadMessage(ctx context.Context, ev botcard.MessageEvent, st Fei
 		return
 	}
 	// Who gets it is settled before anything is written; with no one, the words are still recorded and the user is told so.
-	routes, routeErr := s.h.ThreadRoutes(ctx, t.ID, st.Features)
+	routes, routeErr := s.threadRoutes(ctx, t.ID, st.Features)
 	recorded := false
 	if text != "" {
 		// Noted as the to-do's decision (the core's ledger; a failure there is only logged: the words still go to the

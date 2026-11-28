@@ -63,8 +63,13 @@ func (s *Service) Run(ctx context.Context) {
 	if s.o.Clock.Sleep(ctx, rand.N(startJitter)) != nil {
 		return
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	for {
-		s.startDue(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		s.startDueInto(ctx, &wg)
 		t := time.NewTimer(tickEvery)
 		select {
 		case <-ctx.Done():
@@ -86,10 +91,15 @@ func (s *Service) RunDue(ctx context.Context) {
 // connector's due subscriptions one by one.
 func (s *Service) startDue(ctx context.Context) *sync.WaitGroup {
 	var wg sync.WaitGroup
+	s.startDueInto(ctx, &wg)
+	return &wg
+}
+
+func (s *Service) startDueInto(ctx context.Context, wg *sync.WaitGroup) {
 	all, err := s.o.Store.ListSubscriptions(ctx)
 	if err != nil {
 		s.o.Logf("subscriptions: list: %v", err)
-		return &wg
+		return
 	}
 	now := s.now()
 	due := map[string][]Subscription{}
@@ -118,7 +128,15 @@ func (s *Service) startDue(ctx context.Context) *sync.WaitGroup {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		if s.busy[id] || s.running >= maxRunning {
+		if s.busy[id] {
+			if s.retryBusy == nil {
+				s.retryBusy = map[string]bool{}
+			}
+			s.retryBusy[id] = true
+			continue
+		}
+		if s.running >= maxRunning {
+			s.retryCap = true
 			continue
 		}
 		subs := due[id]
@@ -129,27 +147,39 @@ func (s *Service) startDue(ctx context.Context) *sync.WaitGroup {
 			}
 			return before(subs[i].NextRunAt, subs[j].NextRunAt)
 		})
+		delete(s.retryBusy, id)
 		s.busy[id] = true
 		s.running++
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			progressed := false
 			defer func() {
 				s.mu.Lock()
 				delete(s.busy, id)
 				s.running--
+				recheck := false
+				if progressed {
+					recheck = s.retryBusy[id] || s.retryCap
+					s.retryCap = false
+				}
+				delete(s.retryBusy, id)
 				s.mu.Unlock()
+				if recheck && ctx.Err() == nil {
+					s.poke()
+				}
 			}()
 			for _, sub := range subs {
 				if ctx.Err() != nil {
 					return
 				}
-				s.runOne(ctx, sub.ID)
+				if s.runOne(ctx, sub.ID) {
+					progressed = true
+				}
 			}
 		}()
 	}
 	s.mu.Unlock()
-	return &wg
 }
 
 func before(a, b *time.Time) bool {
@@ -175,10 +205,15 @@ func (s *Service) kickDue(id string, now time.Time) bool {
 }
 
 // runOne runs a subscription once, if it is still due and no other run holds it.
-func (s *Service) runOne(ctx context.Context, id string) {
+// It returns false when storage or cancellation prevented making progress, so a storage outage
+// does not trigger a tight re-wake loop.
+func (s *Service) runOne(ctx context.Context, id string) bool {
 	sub, err := s.o.Store.GetSubscription(ctx, id)
-	if err != nil || sub == nil {
-		return
+	if err != nil {
+		return false
+	}
+	if sub == nil {
+		return true
 	}
 	s.mu.Lock()
 	g := s.gateOf(sub.Connector)
@@ -205,7 +240,7 @@ func (s *Service) runOne(ctx context.Context, id string) {
 			delete(s.kicked, id) // switched off since (a kick not due yet stays)
 		}
 		s.mu.Unlock()
-		return
+		return true
 	}
 	if paused || full {
 		var resume, pausedUntil time.Time
@@ -244,16 +279,20 @@ func (s *Service) runOne(ctx context.Context, id string) {
 				}
 			}
 		}
-		s.commit(ctx, *sub, next, nil, nil, now, false)
-		return
+		_, ok := s.commit(ctx, *sub, next, nil, nil, now, false)
+		return ok
 	}
 	s.mu.Unlock()
 	if wait > 0 && s.o.Clock.Sleep(ctx, wait) != nil {
-		return
+		return false
 	}
 	now = s.now()
-	if ok, err := s.o.Store.LeaseSubscription(ctx, id, now, now.Add(leaseLength)); err != nil || !ok {
-		return
+	ok, err := s.o.Store.LeaseSubscription(ctx, id, now, now.Add(leaseLength))
+	if err != nil {
+		return false
+	}
+	if !ok {
+		return true
 	}
 	s.mu.Lock()
 	if asked {
@@ -263,11 +302,11 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	}
 	delete(s.kicked, id)
 	s.mu.Unlock()
-	s.execute(ctx, *sub, asked, now)
+	return s.execute(ctx, *sub, asked, now)
 }
 
 // execute is one run of sub, holding its lease: check the connector and the tool, call it, keep what is new.
-func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, start time.Time) {
+func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, start time.Time) bool {
 	next := sub
 	next.PausedUntil = nil
 	trigger := TriggerSchedule
@@ -283,8 +322,8 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 		next.RunState, next.Error = StateNotConnected, &Problem{CodeNotConnected, "The source is paused by private-chat visibility."}
 		n := s.nextRun(next, start, false)
 		next.NextRunAt = &n
-		s.commit(ctx, sub, next, nil, nil, start, false)
-		return
+		_, ok := s.commit(ctx, sub, next, nil, nil, start, false)
+		return ok
 	}
 	c, ok := s.o.Connectors.Find(ctx, sub.Connector)
 	if !ok || !c.ready() {
@@ -292,8 +331,8 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 		next.RunState, next.Error = StateNotConnected, &Problem{CodeNotConnected, "The connector cannot be reached now."}
 		n := s.nextRun(next, start, false)
 		next.NextRunAt = &n
-		s.commit(ctx, sub, next, nil, nil, start, false)
-		return
+		_, ok := s.commit(ctx, sub, next, nil, nil, start, false)
+		return ok
 	}
 	sources, err := s.catalog(ctx, c, catalogFresh)
 	if err != nil {
@@ -302,16 +341,14 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 			next.RunState, next.Error = StateNotConnected, p
 			n := s.nextRun(next, start, false)
 			next.NextRunAt = &n
-			s.commit(ctx, sub, next, nil, nil, start, false)
-			return
+			_, ok := s.commit(ctx, sub, next, nil, nil, start, false)
+			return ok
 		}
-		s.failed(ctx, sub, next, p, trigger, start, 0)
-		return
+		return s.failed(ctx, sub, next, p, trigger, start, 0)
 	}
 	src, tool, refused := admit(sources, sub.Source, sub.Tool)
 	if refused != nil {
-		s.needsRecipe(ctx, sub, next, refused, trigger, start)
-		return
+		return s.needsRecipe(ctx, sub, next, refused, trigger, start)
 	}
 	next.SourceName, next.Icon, next.Service = src.Name, src.Icon, src.Service
 	next.SourceMin, next.MaxCallsPerHour = intOr(src.MinIntervalSeconds), intOr(src.MaxCallsPerHour)
@@ -322,8 +359,7 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 			err = checkArgs(tool.InputSchema, args)
 		}
 		if err != nil {
-			s.needsRecipe(ctx, sub, next, &Problem{CodeToolChanged, "The tool changed and no longer takes the recipe's arguments."}, trigger, start)
-			return
+			return s.needsRecipe(ctx, sub, next, &Problem{CodeToolChanged, "The tool changed and no longer takes the recipe's arguments."}, trigger, start)
 		}
 		s.o.Logf("subscription %s: its tool's description changed; the recipe still fits", sub.ID)
 		next.ToolFingerprint = fp
@@ -357,34 +393,34 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 			}
 			s.mu.Unlock()
 			next.RunState, next.Error, next.PausedUntil, next.NextRunAt = StateRateLimited, pl.problem, &until, &until
-			s.commit(ctx, sub, next, nil, &Run{At: start, MS: ms, Trigger: trigger, Error: pl.problem}, start, true)
+			_, ok := s.commit(ctx, sub, next, nil, &Run{At: start, MS: ms, Trigger: trigger, Error: pl.problem}, start, true)
+			return ok
 		case pl.connError:
 			next.RunState, next.Error = StateNotConnected, pl.problem
 			n := s.nextRun(next, start, false)
 			next.NextRunAt = &n
-			s.commit(ctx, sub, next, nil, nil, start, false)
+			_, ok := s.commit(ctx, sub, next, nil, nil, start, false)
+			return ok
 		case pl.problem.Code == CodeNoList && restart:
 			// Not counted as a shape miss: a refused page says nothing of the recipe; the fresh pull will.
-			s.failed(ctx, sub, s.restarted(next), pl.problem, trigger, start, ms)
+			return s.failed(ctx, sub, s.restarted(next), pl.problem, trigger, start, ms)
 		case pl.problem.Code == CodeNoList:
-			s.shapeMiss(ctx, sub, next, pl.problem, trigger, start, ms)
+			return s.shapeMiss(ctx, sub, next, pl.problem, trigger, start, ms)
 		case pl.problem.Code == CodeNotReadOnly || pl.problem.Code == CodePagination:
-			s.needsRecipe(ctx, sub, next, pl.problem, trigger, start)
+			return s.needsRecipe(ctx, sub, next, pl.problem, trigger, start)
 		default:
 			if restart {
 				next = s.restarted(next)
 			}
 			s.connFailed(sub.Connector)
-			s.failed(ctx, sub, next, pl.problem, trigger, start, ms)
+			return s.failed(ctx, sub, next, pl.problem, trigger, start, ms)
 		}
-		return
 	}
 	s.mu.Lock()
 	g.fails = 0
 	s.mu.Unlock()
 	if pl.noTitle {
-		s.shapeMiss(ctx, sub, next, &Problem{CodeShapeChanged, "The items no longer have a title where the recipe reads it."}, trigger, start, ms)
-		return
+		return s.shapeMiss(ctx, sub, next, &Problem{CodeShapeChanged, "The items no longer have a title where the recipe reads it."}, trigger, start, ms)
 	}
 	run := Run{At: start, MS: ms, Trigger: trigger}
 	var seen []Seen
@@ -408,8 +444,7 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 		known, err := s.o.Store.SeenKeys(ctx, sub.ID, uids(pl.items))
 		if err != nil {
 			s.o.Logf("subscription %s: seen keys: %v", sub.ID, err)
-			s.failed(ctx, sub, next, &Problem{CodeCallFailed, "The subscription's seen items could not be read."}, trigger, start, ms)
-			return
+			return s.failed(ctx, sub, next, &Problem{CodeCallFailed, "The subscription's seen items could not be read."}, trigger, start, ms)
 		}
 		newest := sub.SinceAt
 		sawItems, sawTimed := false, false
@@ -479,7 +514,7 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 	}
 	committed, ok := s.commit(ctx, sub, next, &commitData{seen: seen, items: items, read: read, baseline: baselineCommit}, &run, start, true)
 	if !ok {
-		return
+		return false
 	}
 	next, items = committed.Sub, committed.Items
 	if len(next.Runs) > 0 {
@@ -498,6 +533,7 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 		s.o.Delivered(next)
 	}
 	s.prune(ctx, next, start)
+	return true
 }
 
 // Held items are kept past their destinations: the Inbox's window and a day more, and while the knowledge base takes
@@ -547,7 +583,7 @@ func (s *Service) restarted(next Subscription) Subscription {
 }
 
 // failed records a failed run: retried after interval × 2^failures, at most backoffMax, never stopped.
-func (s *Service) failed(ctx context.Context, sub, next Subscription, p *Problem, trigger string, start time.Time, ms int64) {
+func (s *Service) failed(ctx context.Context, sub, next Subscription, p *Problem, trigger string, start time.Time, ms int64) bool {
 	next.RunState, next.Error = StateFailing, p
 	next.FailCount = sub.FailCount + 1
 	if sub.FailingSince == nil {
@@ -556,7 +592,8 @@ func (s *Service) failed(ctx context.Context, sub, next Subscription, p *Problem
 	n := start.Add(backoff(time.Duration(max(sub.IntervalSeconds, minInterval))*time.Second, next.FailCount))
 	next.NextRunAt = &n
 	s.o.Logf("subscription %s: run failed (%s), %d in a row", sub.ID, p.Code, next.FailCount)
-	s.commit(ctx, sub, next, nil, &Run{At: start, MS: ms, Trigger: trigger, Error: p}, start, true)
+	_, ok := s.commit(ctx, sub, next, nil, &Run{At: start, MS: ms, Trigger: trigger, Error: p}, start, true)
+	return ok
 }
 
 func backoff(base time.Duration, failures int) time.Duration {
@@ -569,20 +606,20 @@ func backoff(base time.Duration, failures int) time.Duration {
 
 // shapeMiss is a run whose result the recipe can no longer read: a failure, and after shapeMissesMax in a row the
 // recipe needs redoing.
-func (s *Service) shapeMiss(ctx context.Context, sub, next Subscription, p *Problem, trigger string, start time.Time, ms int64) {
+func (s *Service) shapeMiss(ctx context.Context, sub, next Subscription, p *Problem, trigger string, start time.Time, ms int64) bool {
 	next.ShapeMisses = sub.ShapeMisses + 1
 	if next.ShapeMisses >= shapeMissesMax {
-		s.needsRecipe(ctx, sub, next, &Problem{CodeShapeChanged, p.Message}, trigger, start)
-		return
+		return s.needsRecipe(ctx, sub, next, &Problem{CodeShapeChanged, p.Message}, trigger, start)
 	}
-	s.failed(ctx, sub, next, p, trigger, start, ms)
+	return s.failed(ctx, sub, next, p, trigger, start, ms)
 }
 
 // needsRecipe pauses sub until its recipe is changed: it is not run again by itself.
-func (s *Service) needsRecipe(ctx context.Context, sub, next Subscription, p *Problem, trigger string, start time.Time) {
+func (s *Service) needsRecipe(ctx context.Context, sub, next Subscription, p *Problem, trigger string, start time.Time) bool {
 	next.RunState, next.Error, next.NextRunAt = StateNeedsRecipe, p, nil
 	s.o.Logf("subscription %s: needs a new recipe (%s)", sub.ID, p.Code)
-	s.commit(ctx, sub, next, nil, &Run{At: start, Trigger: trigger, Error: p}, start, true)
+	_, ok := s.commit(ctx, sub, next, nil, &Run{At: start, Trigger: trigger, Error: p}, start, true)
+	return ok
 }
 
 type commitData struct {

@@ -147,7 +147,15 @@ While the assistant process is restarting or disconnected from hub, **receivers 
    In a thread of an extension channel with `threads`, `/new` starts the thread over (its next message opens a new chat) and `/stop` and `/status` act on the thread's chat; none of them moves the channel's `target`.
 4. **Answer a question**: if this channel has a pending text question (`asks: text`) still in hub's pending list (`interactions.list`), this message is its answer. Drop questions already answered elsewhere and treat this as an ordinary message.
 5. **Target**: if replying to a target-bound message (`threads`), send to that target; otherwise send to the channel's `target`. If main chat doesn't exist yet, create a chat and set it as main chat; a chat created by `new` becomes the target afterward.
-   An extension channel with `threads` keeps a chat per thread: a message carrying `thread` goes to that thread's chat, and the thread's first message starts a new one (never the main chat; the channel's `target` stays as it is). A thread whose chat is gone, or that went quiet for 30 days, starts a new chat; at most 500 threads are kept per channel (`channels` setting, `threads`). A message without `thread`, or from a channel without `threads`, goes to the `target`.
+   With legacy thread routing, a message carrying `thread` goes to that thread's chat, and the thread's first message
+   starts a new one. A message without `thread`, or from a channel without `threads`, goes to the `target`. With
+   `integrations_v2` on, `thread_mode` selects the routing key and `thread_idle_hours` can override the 30-day inactivity
+   timeout. When a topic message carries both a structured topic and a legacy thread, a missing or expired primary
+   binding falls back to an active binding under the other key. Successful delivery refreshes both known bindings,
+   and `/new` clears the conversation's known bindings even if the command carries a single key. A routed
+   conversation that is gone or has timed out starts fresh. Up to 500 routing keys are kept per channel in the
+   `channels` setting. A message keeps its routing keys from admission through delivery, including if Labs changes
+   while it waits.
 6. **Assemble content**: prepend a `<persona-context>` explaining which channel this came from, that the answer goes back there, and the format to use (prompt `prompts/channel/message.md`; the Lark bot keeps its own `bot/message.md`);
    put quoted messages and merged-forward chat records in separate `<persona-context>` blocks; images become attachments; files follow `files_in`. A mention uses `prompts/channel/mention_message.md` instead: its chat, topic and gathered context are data blocks, and the turn is explicitly public. The prompt does not disclose private context from other chats, sessions, mail or health unless the owner's request explicitly asks for the specific information. The internal per-message `public` marker also suppresses the owner's live snapshot for that input only; it never changes the main conversation's origin or later private turns.
 7. **Send**: Persona chats use `session.send` (main chat follows the model selected in Settings), `client_msg_id = <channel>-<message id>`.

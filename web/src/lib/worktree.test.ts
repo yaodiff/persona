@@ -105,6 +105,10 @@ describe("errors", () => {
     expect(worktreeProblem(new ApiError(502, "unknown method worktree.prepare", { code: "internal" }), WORKTREE_COPY.readFailed).needsUpdate).toBe(true);
     expect(worktreeProblem(new ApiError(409, "unsupported: herdr cannot do this", {}), WORKTREE_COPY.failed).needsUpdate).toBe(true);
     expect(worktreeProblem(new ApiError(500, "unsupported: herdr cannot do this", {}), WORKTREE_COPY.failed)).toEqual({ text: WORKTREE_COPY.needsUpdate, needsUpdate: true });
+    // the same refusal worded by a newer hub in the reader's language (#17057)
+    const worded = new ApiError(409, "Orca on this computer can’t do this. Updating it may help.", { code: "unsupported", reason: "engine_unsupported", engine: "orca" });
+    expect(worktreeProblem(worded, WORKTREE_COPY.failed)).toEqual({ text: WORKTREE_COPY.needsUpdate, needsUpdate: true });
+    expect(worktreeProblem(new ApiError(409, "This Orca chat can’t do that.", { code: "unsupported", reason: "orca_unsupported" }), WORKTREE_COPY.failed).needsUpdate).toBe(false);
   });
   it("keeps other failures' readable detail without asking for an update", () => {
     const failed = new ApiError(502, "新建 worktree 失败：'x' is already used by worktree", {});

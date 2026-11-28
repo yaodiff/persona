@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -114,8 +115,14 @@ func (s *Service) recordTaskOutcome(t Todo, doneAt time.Time) {
 	if s.outcomeRecorded(rctx, t.ID, key) {
 		return // another assistant on the same store got there first
 	}
-	agents := s.outcomeAgents(rctx, t)
+	agents, unlinked := s.outcomeAgents(rctx, t)
 	if len(agents) == 0 {
+		if len(unlinked) > 0 {
+			recipient := cmp.Or(supervisorOf(t), t.Origin)
+			machine := s.conversationMachine(rctx, recipient, "")
+			s.logf("task %s: outcome: no agent reply to read: agy_unlinked %s", t.ID, s.agyUnlinkedDetail(rctx, t, unlinked, machine, recipient))
+			return
+		}
 		s.logf("task %s: outcome: no agent reply to read", t.ID)
 		return
 	}
@@ -174,8 +181,8 @@ func (s *Service) outcomeRecorded(ctx context.Context, todoID, key string) bool 
 
 // outcomeAgents are t's agents that said something last, the most recently linked first: their whole last reply
 // from the transcript, else the session list's clipped last_text.
-func (s *Service) outcomeAgents(ctx context.Context, t Todo) []outcomeAgent {
-	var out []outcomeAgent
+func (s *Service) outcomeAgents(ctx context.Context, t Todo) (out []outcomeAgent, unlinked []unlinkedPane) {
+	awaitingAnswer := false
 	for i := len(t.Agents) - 1; i >= 0; i-- {
 		a := t.Agents[i]
 		if a.ReleasedAt != nil || a.DismissedAt != nil {
@@ -186,7 +193,13 @@ func (s *Service) outcomeAgents(ctx context.Context, t Todo) []outcomeAgent {
 			name = m.Name
 		}
 		resolved, sid, listed := s.resolveTaskSession(ctx, a.MachineID, a.SessionID)
-		_, text := s.lastTurn(ctx, a.MachineID, sid)
+		items, _ := s.lastTurnItems(ctx, a.MachineID, sid)
+		if listed && isUnlinkedAgyPane(resolved, items) {
+			unlinked = append(unlinked, unlinkedPane{MachineID: a.MachineID, SessionID: a.SessionID, LinkedAt: a.LinkedAt})
+			continue
+		}
+		awaitingAnswer = awaitingAnswer || taskTurnAwaitingAnswer(items)
+		_, text := turnExchange(items)
 		cwd := a.Cwd
 		if listed {
 			if text == "" {
@@ -201,7 +214,10 @@ func (s *Service) outcomeAgents(ctx context.Context, t Todo) []outcomeAgent {
 		}
 		out = append(out, outcomeAgent{MachineID: a.MachineID, Machine: name, SessionID: a.SessionID, Cwd: cwd, Text: text})
 	}
-	return out
+	if awaitingAnswer {
+		unlinked = nil // an unfinished turn also explains why the task has no outcome yet
+	}
+	return out, unlinked
 }
 
 // pullOutcome asks the model what the task came to (the kb.project purpose: it writes the projects' timelines).

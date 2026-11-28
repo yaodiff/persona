@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_botmux_via">%1$s から送信</string>
+    <string name="chat_botmux_triggered">トリガー送信</string>
+    <string name="chat_botmux_sent">Lark に送信済み</string>
+    <string name="chat_botmux_sent_final">Lark の最終返信</string>
+    <string name="chat_botmux_bot">%1$s（ボット）</string>
+    <string name="chat_botmux_quoted">メッセージを引用</string>
+    <string name="chat_botmux_topic">トピックに以前のメッセージあり</string>
+    <plurals name="chat_botmux_attachments">
+        <item quantity="other">添付 %1$d 件</item>
+    </plurals>
+    <string name="chat_botmux_voice">音声</string>
+    <string name="chat_botmux_truncated">途中まで</string>
+    <string name="chat_botmux_original">原文</string>
+    <string name="chat_botmux_hide_original">原文を隠す</string>
+    <string name="chat_botmux_card_reply">Lark のカードで返信しました。本文は記録されていません。</string>
+    <string name="chat_botmux_decode">Lark での表示に整形</string>
+    <string name="chat_botmux_decode_note">メッセージと返信を Lark での表示どおりに表示します。オフにすると、エージェントが受け取ったままの原文を表示します。</string>
+</resources>

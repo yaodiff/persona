@@ -100,6 +100,9 @@ const (
 	// A feishu.text with handoff set is a proxy reply (bots_handoff.go) and skips the usual path: handoff is the
 	// hub's id, confirmed says the owner approved the draft, and the text goes under the handoff's anchor or,
 	// with none, into its chat. The chat does not become one the bot may send into.
+	// A feishu.text with guest set is a guest's one reply (bots_guest.go) and skips the usual path too: guest is the
+	// hub's id, and the text goes under the trigger that started it, in its thread when it has one, or not at all. The
+	// chat does not become one the bot may send into.
 	FeishuText = "feishu.text"
 	// FeishuUpdateCard: {message_id, card} → {}.
 	FeishuUpdateCard = "feishu.update_card"
@@ -121,6 +124,8 @@ const (
 	FeishuRecall = "feishu.recall"
 	// FeishuCotCreate: {reply_to?, chat_id?, in_thread?} → {cot_id, message_id}: an agent message (the open
 	// platform's message_cot, a collapsible process) under the message replied to, in its topic when in_thread is set.
+	// With guest set it is the guest turn's one agent message, under its trigger (bots_guest.go); a second one, or one
+	// for a turn that has ended, is refused.
 	FeishuCotCreate = "feishu.cot_create"
 	// FeishuCotAppend: {cot_id, message_id, events: [botcard.CotEvent]} → {}.
 	FeishuCotAppend = "feishu.cot_append"
@@ -148,6 +153,14 @@ const (
 	FeishuTest = "feishu.test"
 	// FeishuHandoffEnd: {handoff, outcome} → {}: a handoff is over without a post (declined, expired, no_reply, failed).
 	FeishuHandoffEnd = "feishu.handoff_end"
+	// MethodFeishuGuest: FeishuGuestTurn → {}: a non-owner's @bot the policy let through, accepted (not its run).
+	// An assistant that does not know it answers "unknown method", so an older one never treats the payload as one of
+	// the owner's messages.
+	MethodFeishuGuest = "feishu.guest"
+	// FeishuGuestEnd: {guest, outcome} → {}: a guest turn is over without a post (failed, no_reply, expired).
+	FeishuGuestEnd = "feishu.guest_end"
+	// CodeGuestBusy: the conversation still answers its last question.
+	CodeGuestBusy = "guest_busy"
 
 	// AppChannels is the plugins' channel programs, and the list of every channel as the transport has it.
 	AppChannels = "channels"

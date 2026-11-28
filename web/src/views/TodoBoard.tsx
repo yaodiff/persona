@@ -5,14 +5,16 @@ import { plainMarkdown } from "../lib/plain-markdown";
 import { waitName } from "../lib/state-labels";
 import { progressLine } from "../lib/supervision";
 import type { EffectiveDirection } from "../lib/todo-effective-direction";
-import { waitsOnOwner, type Triage } from "../lib/todo-triage";
-import { mostUrgentAgent, openAsk, responsibleOf, taskNow, type SessionLookup, type Todo, type TodoChildSummary } from "../lib/todos";
+import { waitsOnOwner, type OwnerNeed, type Triage } from "../lib/todo-triage";
+import { mostUrgentAgent, openAsk, responsibleOf, taskNow, type SessionLookup, type Todo, type TodoBoardProjection, type TodoChildSummary } from "../lib/todos";
+import { pref, setPref, useTodoPreference } from "../features/todos/preferences";
 import { cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { fieldClass, Tag } from "./assistant/parts";
 
 const HOUR_MS = 3_600_000;
 export const TODO_BOARD_HOURS_KEY = "persona.todos.board.staleHours";
+const GROUPING_KEY = "persona.todos.board.grouping";
 
 type BoardGrouping = "project" | "direction";
 type Progress = { at: string; text: string };
@@ -27,29 +29,7 @@ type BoardRow = {
   parentGoal?: ParentGoalRef;
   childSummary?: TodoChildSummary;
 };
-type BoardGroup = { key: string; name: string; rows: BoardRow[]; waiting: number; stale: number };
-
-function resolveBoardDirection(
-  todo: Todo,
-  effectiveDirectionOf?: (todo: Todo) => EffectiveDirection | undefined,
-): EffectiveDirection | undefined {
-  const resolved = effectiveDirectionOf?.(todo);
-  if (resolved) return resolved;
-  const effId = todo.effective_direction_id?.trim() ?? "";
-  const effName = todo.effective_direction_name?.trim() ?? "";
-  if (effId || effName) {
-    return {
-      id: effId || effName,
-      label: effName || effId,
-      inherited: !todo.direction_id?.trim(),
-    };
-  }
-  const dirId = todo.direction_id?.trim() ?? "";
-  if (dirId) {
-    return { id: dirId, label: dirId, inherited: false };
-  }
-  return undefined;
-}
+type BoardGroup = { key: string; name: string; rows: BoardRow[]; open: number; waiting: number; stale: number };
 
 function isFallbackChildDone(todo: Todo): boolean {
   if (todo.done_at || todo.cancelled_at) return true;
@@ -156,19 +136,7 @@ function hoursValue(raw: string): number | undefined {
 }
 
 function storedHours(): number {
-  try {
-    return hoursValue(localStorage.getItem(TODO_BOARD_HOURS_KEY) ?? "") ?? 72;
-  } catch {
-    return 72;
-  }
-}
-
-function saveHours(value: number) {
-  try {
-    localStorage.setItem(TODO_BOARD_HOURS_KEY, String(value));
-  } catch {
-    // Storage can be unavailable or full; the valid choice still applies to this page.
-  }
+  return hoursValue(pref(TODO_BOARD_HOURS_KEY) ?? "") ?? 72;
 }
 
 /** A read-only projection of the To-dos already read by the page. It starts no requests of its own. */
@@ -176,6 +144,8 @@ export function TodoBoard({
   todos,
   lookup,
   triages,
+  serverBoard,
+  projectedNeeds,
   projectName,
   tick,
   onOpen,
@@ -185,7 +155,9 @@ export function TodoBoard({
 }: {
   todos: readonly Todo[];
   lookup: SessionLookup;
-  triages: ReadonlyMap<string, Triage>;
+  triages?: ReadonlyMap<string, Triage>;
+  serverBoard?: TodoBoardProjection | null;
+  projectedNeeds?: ReadonlyMap<string, OwnerNeed>;
   projectName: (slug: string) => string;
   tick: number;
   onOpen: (id: string) => void;
@@ -197,12 +169,7 @@ export function TodoBoard({
   const [hours, setHours] = useState(storedHours);
   const [draft, setDraft] = useState(() => String(storedHours()));
   const [invalid, setInvalid] = useState(false);
-  const [boardGrouping, setBoardGrouping] = useState<BoardGrouping>("project");
-  const [prevV2, setPrevV2] = useState(isV2);
-  if (prevV2 !== isV2) {
-    setPrevV2(isV2);
-    if (!isV2) setBoardGrouping("project");
-  }
+  const [boardGrouping, setBoardGrouping] = useTodoPreference<BoardGrouping>(GROUPING_KEY, (value) => value === "direction" ? "direction" : "project");
   const activeGrouping: BoardGrouping = isV2 ? boardGrouping : "project";
 
   const groups = useMemo(() => {
@@ -217,7 +184,7 @@ export function TodoBoard({
       for (const td of todos) {
         if (!byId.has(td.id)) byId.set(td.id, td);
       }
-      for (const td of byId.values()) {
+      for (const td of serverBoard ? [] : byId.values()) {
         const parentId = td.part_of?.trim();
         if (!parentId || parentId === td.id) continue;
         const list = directChildren.get(parentId);
@@ -229,12 +196,12 @@ export function TodoBoard({
     const rows: BoardRow[] = todos.map((todo) => {
       const progress = latestProgress(todo, lookup);
       const baseline = Date.parse(progress?.at ?? todo.created_at);
-      const triage = triages.get(todo.id);
+      const triage = triages?.get(todo.id);
       let direction: EffectiveDirection | undefined;
       let parentGoal: ParentGoalRef | undefined;
       let childSummary: TodoChildSummary | undefined;
       if (isV2) {
-        direction = resolveBoardDirection(todo, effectiveDirectionOf);
+        direction = effectiveDirectionOf?.(todo);
         const parentId = todo.part_of?.trim();
         if (parentId && parentId !== todo.id) {
           const parent = byId.get(parentId);
@@ -244,12 +211,12 @@ export function TodoBoard({
             loaded: Boolean(parent),
           };
         }
-        childSummary = resolveChildSummary(todo, directChildren.get(todo.id), triages, lookup);
+        childSummary = triages ? resolveChildSummary(todo, directChildren.get(todo.id), triages, lookup) : todo.child_summary;
       }
       return {
         todo,
         progress,
-        waiting: triage ? waitsOnOwner(todo, triage) === "owner_decides" : false,
+        waiting: projectedNeeds ? projectedNeeds.has(todo.id) : Boolean(triage && waitsOnOwner(todo, triage) === "owner_decides"),
         stale: Number.isFinite(baseline) && now - baseline > hours * HOUR_MS,
         responsible: responsible(todo, lookup),
         ...(direction ? { direction } : {}),
@@ -258,43 +225,44 @@ export function TodoBoard({
       };
     });
 
-    const buckets = new Map<string, BoardRow[]>();
-    if (activeGrouping === "direction") {
-      const labels = new Map<string, string>();
+    const group = (key: string, name: string, rows: BoardRow[], waiting?: number): BoardGroup => ({
+      key, name, rows, waiting: waiting ?? rows.filter((row) => row.waiting).length,
+      open: rows.length, stale: rows.filter((row) => row.stale).length,
+    });
+    let groups: BoardGroup[];
+    if (activeGrouping === "direction" && serverBoard) {
+      const rowsById = new Map(rows.map((row) => [row.todo.id, row]));
+      groups = serverBoard.direction_groups.flatMap(({ direction_id: id, label, todo_ids, counts }) => {
+        const members = todo_ids.flatMap((id) => {
+          const row = rowsById.get(id);
+          return row ? [row] : [];
+        });
+        if (!members.length) return [];
+        const name = id ? label || members[0].direction?.label || id : t("todos.direction_uncategorized");
+        return [group(id, name, members, counts.needs_you)];
+      });
+    } else {
+      const buckets = new Map<string, BoardRow[]>();
       for (const row of rows) {
-        const key = row.direction?.id ?? "";
-        if (key && row.direction?.label && !labels.has(key)) {
-          labels.set(key, row.direction.label);
-        }
+        const key = (activeGrouping === "direction" ? row.direction?.id : row.todo.project?.trim()) ?? "";
         const list = buckets.get(key);
         if (list) list.push(row);
         else buckets.set(key, [row]);
       }
-      const named: BoardGroup[] = [...buckets].map(([key, bucketRows]) => ({
-        key,
-        name: key ? (labels.get(key) ?? key) : t("todos.direction_uncategorized"),
-        rows: bucketRows,
-        waiting: bucketRows.filter((row) => row.waiting).length,
-        stale: bucketRows.filter((row) => row.stale).length,
-      }));
-      return named.sort((a, b) => !a.key ? 1 : !b.key ? -1 : a.name.localeCompare(b.name));
+      groups = [...buckets].map(([key, bucketRows]) => {
+        const name = activeGrouping === "direction"
+          ? bucketRows[0].direction?.label || t("todos.direction_uncategorized")
+          : key ? projectName(key) : t("todos.board_no_project");
+        return group(key, name, bucketRows);
+      }).sort((a, b) => !a.key ? 1 : !b.key ? -1 : a.name.localeCompare(b.name));
     }
 
-    for (const row of rows) {
-      const project = row.todo.project?.trim() ?? "";
-      const list = buckets.get(project);
-      if (list) list.push(row);
-      else buckets.set(project, [row]);
+    if (serverBoard && groups.length === 1 && groups[0].rows.length === rows.length) {
+      groups[0].open = serverBoard.counts.open_total;
+      groups[0].waiting = serverBoard.counts.needs_you;
     }
-    const named: BoardGroup[] = [...buckets].map(([project, bucketRows]) => ({
-      key: project,
-      name: project ? projectName(project) : t("todos.board_no_project"),
-      rows: bucketRows,
-      waiting: bucketRows.filter((row) => row.waiting).length,
-      stale: bucketRows.filter((row) => row.stale).length,
-    }));
-    return named.sort((a, b) => !a.key ? 1 : !b.key ? -1 : a.name.localeCompare(b.name));
-  }, [todos, allTodos, lookup, triages, projectName, effectiveDirectionOf, isV2, activeGrouping, hours, tick]);
+    return groups;
+  }, [todos, allTodos, lookup, triages, serverBoard, projectedNeeds, projectName, effectiveDirectionOf, isV2, activeGrouping, hours, tick]);
 
   const changeHours = (raw: string) => {
     setDraft(raw);
@@ -305,7 +273,7 @@ export function TodoBoard({
     }
     setInvalid(false);
     setHours(value);
-    saveHours(value);
+    setPref(TODO_BOARD_HOURS_KEY, String(value));
   };
 
   const staleHoursControl = (
@@ -327,7 +295,7 @@ export function TodoBoard({
   );
 
   return (
-    <div data-testid="todos-board" className="flex flex-col gap-3 p-1">
+    <div data-testid="todos-board" data-open-count={serverBoard?.counts.open_total} data-needs-you-count={serverBoard?.counts.needs_you} className="flex flex-col gap-3 p-1">
       <div className="flex flex-wrap items-end justify-between gap-2 px-1">
         <p className="max-w-prose text-meta text-ink-3">{t("todos.board_stale_explanation")}</p>
         {isV2 ? (
@@ -376,7 +344,7 @@ export function TodoBoard({
           key={group.key}
           data-testid="todo-board-group"
           {...(activeGrouping === "direction" ? { "data-direction": group.key } : { "data-project": group.key })}
-          data-open-count={group.rows.length}
+          data-open-count={group.open}
           data-waiting-count={group.waiting}
           data-stale-count={group.stale}
           className="overflow-hidden rounded-card border border-line bg-surface"
@@ -391,99 +359,121 @@ export function TodoBoard({
               <span className="truncate">{group.name}</span>
             </span>
             <span className="flex flex-wrap gap-x-2 text-label text-ink-3 tabular-nums">
-              <span>{t("todos.board_open_count", { count: group.rows.length })}</span>
+              <span>{t("todos.board_open_count", { count: group.open })}</span>
               <span>{t("todos.board_waiting_count", { count: group.waiting, state: waitName("owner") })}</span>
               <span>{t("todos.board_stale_count", { count: group.stale })}</span>
             </span>
           </header>
           <div className="divide-y divide-line">
-            {group.rows.map((row) => (
-              <div
-                key={row.todo.id}
-                role="button"
-                tabIndex={0}
-                data-todo={row.todo.id}
-                onClick={() => onOpen(row.todo.id)}
-                onKeyDown={(event) => {
-                  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-                  event.preventDefault();
-                  onOpen(row.todo.id);
-                }}
-                className="flex cursor-pointer flex-col gap-1.5 px-3 py-2.5 transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
-              >
-                <span className="flex flex-wrap items-center gap-1.5">
-                  <span className="min-w-0 flex-1 truncate text-card-title font-semibold text-ink">{row.todo.title}</span>
-                  {isV2 && row.childSummary && (
-                    <span
-                      data-testid="board-child-summary"
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-chip bg-field px-1.5 py-0.5 text-submeta font-medium whitespace-nowrap text-ink-2 tabular-nums"
-                    >
-                      <span>{t("todos.goal_progress", { done: row.childSummary.done, total: row.childSummary.total })}</span>
-                      {row.childSummary.working > 0 && (
-                        <span data-testid="board-child-summary-working" className="font-normal text-ink-3">
-                          {t("todos.child_summary_working", { count: row.childSummary.working })}
-                        </span>
-                      )}
-                      {row.childSummary.needs_you > 0 && (
-                        <span data-testid="board-child-summary-blocked" className="font-medium text-attention">
-                          {t("todos.goal_blocked", { count: row.childSummary.needs_you })}
-                        </span>
-                      )}
-                    </span>
+            {group.rows.map((row) => {
+              const hasInteractiveParent = isV2 && Boolean(row.parentGoal?.loaded);
+              return (
+                <div
+                  key={row.todo.id}
+                  role={hasInteractiveParent ? undefined : "button"}
+                  tabIndex={hasInteractiveParent ? undefined : 0}
+                  data-todo={row.todo.id}
+                  onClick={(event) => {
+                    if (hasInteractiveParent && (event.target as HTMLElement).closest("button, a")) return;
+                    onOpen(row.todo.id);
+                  }}
+                  onKeyDown={
+                    hasInteractiveParent
+                      ? undefined
+                      : (event) => {
+                          if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                          event.preventDefault();
+                          onOpen(row.todo.id);
+                        }
+                  }
+                  className={cx(
+                    "relative flex cursor-pointer flex-col gap-1.5 px-3 py-2.5 transition-colors hover:bg-hover",
+                    !hasInteractiveParent && "focus-visible:outline-2 focus-visible:outline-accent",
                   )}
-                  {isV2 && row.direction && (activeGrouping !== "direction" || row.direction.id !== group.key) && (
-                    <span
-                      data-testid="board-direction-tag"
-                      data-direction-id={row.direction.id}
-                      data-direction-inherited={row.direction.inherited ? "true" : "false"}
-                      title={row.direction.inherited ? t("todos.detail_direction_inherited_hint", { name: row.direction.label }) : row.direction.label}
-                      className="max-w-36 shrink-0 truncate rounded-chip bg-field px-1.5 py-0.5 text-submeta text-ink-2 whitespace-nowrap"
-                    >
-                      {row.direction.label}
-                    </span>
+                >
+                  {hasInteractiveParent && (
+                    <button
+                      type="button"
+                      data-testid="board-row-open"
+                      aria-label={row.todo.title}
+                      onClick={() => onOpen(row.todo.id)}
+                      className="absolute inset-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent"
+                    />
                   )}
-                  {row.waiting && <Tag tone="accent"><span data-testid="board-owner">{waitName("owner")}</span></Tag>}
-                  {row.stale && <Tag tone="orange"><span data-testid="board-stale">{t("todos.board_stale")}</span></Tag>}
-                </span>
-                {isV2 && row.parentGoal && (
-                  <div className="flex min-w-0 items-center">
-                    {row.parentGoal.loaded ? (
-                      <button
-                        type="button"
-                        data-testid="board-parent-goal"
-                        data-parent-id={row.parentGoal.id}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onOpen(row.parentGoal!.id);
-                        }}
-                        className="touch-hit inline-flex min-w-0 max-w-full items-center gap-1 rounded-chip text-submeta font-medium text-accent-ink whitespace-nowrap hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-                      >
-                        <Icon name="target" size={11} stroke={2} className="shrink-0" />
-                        <span className="truncate">{t("todos.goal_parent_hint", { title: row.parentGoal.title })}</span>
-                      </button>
-                    ) : (
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="min-w-0 flex-1 truncate text-card-title font-semibold text-ink">{row.todo.title}</span>
+                    {isV2 && row.childSummary && (
                       <span
-                        data-testid="board-parent-goal"
-                        data-parent-id={row.parentGoal.id}
-                        className="inline-flex min-w-0 max-w-full items-center gap-1 text-submeta text-ink-3 whitespace-nowrap"
+                        data-testid="board-child-summary"
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-chip bg-field px-1.5 py-0.5 text-submeta font-medium whitespace-nowrap text-ink-2 tabular-nums"
                       >
-                        <Icon name="target" size={11} stroke={2} className="shrink-0" />
-                        <span className="truncate">{t("todos.goal_parent_hint", { title: row.parentGoal.title })}</span>
+                        <span>{t("todos.goal_progress", { done: row.childSummary.done, total: row.childSummary.total })}</span>
+                        {row.childSummary.working > 0 && (
+                          <span data-testid="board-child-summary-working" className="font-normal text-ink-3">
+                            {t("todos.child_summary_working", { count: row.childSummary.working })}
+                          </span>
+                        )}
+                        {row.childSummary.needs_you > 0 && (
+                          <span data-testid="board-child-summary-blocked" className="font-medium text-attention">
+                            {t("todos.goal_blocked", { count: row.childSummary.needs_you })}
+                          </span>
+                        )}
                       </span>
                     )}
-                  </div>
-                )}
-                <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-label text-ink-2">
-                  <span data-testid="board-responsible">{row.responsible}</span>
-                  {row.progress ? (
-                    <time className="text-ink-3" dateTime={row.progress.at}>{formatDate(row.progress.at, { dateStyle: "medium", timeStyle: "short" })}</time>
-                  ) : null}
-                </span>
-                <span data-testid="board-progress" className="truncate text-meta text-ink-3">
-                  {row.progress?.text ?? t("todos.board_no_progress")}
-                </span>
-              </div>
-            ))}
+                    {isV2 && row.direction && (activeGrouping !== "direction" || row.direction.id !== group.key) && (
+                      <span
+                        data-testid="board-direction-tag"
+                        data-direction-id={row.direction.id}
+                        data-direction-inherited={row.direction.inherited ? "true" : "false"}
+                        title={row.direction.inherited ? t("todos.detail_direction_inherited_hint", { name: row.direction.label }) : row.direction.label}
+                        className="max-w-36 shrink-0 truncate rounded-chip bg-field px-1.5 py-0.5 text-submeta text-ink-2 whitespace-nowrap"
+                      >
+                        {row.direction.label}
+                      </span>
+                    )}
+                    {row.waiting && <Tag tone="accent"><span data-testid="board-owner">{waitName("owner")}</span></Tag>}
+                    {row.stale && <Tag tone="orange"><span data-testid="board-stale">{t("todos.board_stale")}</span></Tag>}
+                  </span>
+                  {isV2 && row.parentGoal && (
+                    <div className="flex min-w-0 items-center">
+                      {row.parentGoal.loaded ? (
+                        <button
+                          type="button"
+                          data-testid="board-parent-goal"
+                          data-parent-id={row.parentGoal.id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onOpen(row.parentGoal!.id);
+                          }}
+                          className="touch-hit relative z-10 inline-flex min-w-0 max-w-full items-center gap-1 rounded-chip text-submeta font-medium text-accent-ink whitespace-nowrap hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          <Icon name="target" size={11} stroke={2} className="shrink-0" />
+                          <span className="truncate">{t("todos.goal_parent_hint", { title: row.parentGoal.title })}</span>
+                        </button>
+                      ) : (
+                        <span
+                          data-testid="board-parent-goal"
+                          data-parent-id={row.parentGoal.id}
+                          className="inline-flex min-w-0 max-w-full items-center gap-1 text-submeta text-ink-3 whitespace-nowrap"
+                        >
+                          <Icon name="target" size={11} stroke={2} className="shrink-0" />
+                          <span className="truncate">{t("todos.goal_parent_hint", { title: row.parentGoal.title })}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-label text-ink-2">
+                    <span data-testid="board-responsible">{row.responsible}</span>
+                    {row.progress ? (
+                      <time className="text-ink-3" dateTime={row.progress.at}>{formatDate(row.progress.at, { dateStyle: "medium", timeStyle: "short" })}</time>
+                    ) : null}
+                  </span>
+                  <span data-testid="board-progress" className="truncate text-meta text-ink-3">
+                    {row.progress?.text ?? t("todos.board_no_progress")}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </section>
       ))}

@@ -121,6 +121,8 @@ data class PersonaPalette(
     fun source(kind: SourceKind): StatusColors = when (kind) {
         SourceKind.Feishu -> sourceFeishu
         SourceKind.Terminal -> sourceTerminal
+        // an app's own chat (an Orca chat, #17054): the neutral idle tint, the colour of a quiet row's marks
+        SourceKind.Desktop -> idle
     }
 
     fun status(status: Status): StatusColors = when (status) {
@@ -326,7 +328,7 @@ internal fun PersonaPalette.legacy() = PersonaColors(
 enum class Tone { Neutral, Positive, Caution, Danger }
 
 /** Where an agent was opened, each on its own tint ([PersonaPalette.source]): a Feishu group's topic or a terminal pane. */
-enum class SourceKind { Feishu, Terminal }
+enum class SourceKind { Feishu, Terminal, Desktop }
 
 /** [tone]'s colours: positive is the done green, caution the needs-you amber, danger red, neutral the idle grey. */
 fun PersonaPalette.tone(tone: Tone): StatusColors = when (tone) {

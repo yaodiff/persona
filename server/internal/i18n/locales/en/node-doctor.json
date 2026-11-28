@@ -165,5 +165,10 @@
   "agy_hooks_stale": "Persona's Antigravity CLI hooks run another program than this one",
   "agy_hooks_hint": "Run personad node doctor --fix (agy panes then show their conversation under any engine)",
   "agy_hooks_off": "Persona's Antigravity CLI hooks were removed on purpose (personad node agy-hooks install puts them back)",
-  "agy_hooks_unreadable": "Cannot read the Antigravity CLI hooks file ({error})"
+  "agy_hooks_unreadable": "Cannot read the Antigravity CLI hooks file ({error})",
+  "orca_ok": "Orca {version} is running",
+  "orca_stopped": "Orca is installed but not running",
+  "orca_stopped_hint": "Open Orca first if it is this computer's engine; ignore this when using another engine",
+  "orca_incompatible": "Orca {version} is running but doesn't work with this version of Persona",
+  "orca_incompatible_hint": "Update Orca and Persona to the latest version"
 }

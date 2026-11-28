@@ -9,8 +9,9 @@ import { api, ApiError, enc } from "./api";
 import { parseAPIError, retryable, unrecoverableError } from "./api-errors";
 import { activityOf, stateOf } from "./format";
 import { foldedState } from "./child-sessions";
-import { foldRows } from "./folded-rows";
+import { foldRows, homeKey } from "./folded-rows";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
+import { supervisorHeld } from "./supervisor-held";
 import type { AgentState, Interaction, Machine, Question, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
@@ -84,7 +85,7 @@ export interface TodoCreateOptions {
 }
 
 /** What the hub last read of a PR on GitHub (pr_status.go). */
-export interface PRFacts { url: string; title?: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
+export interface PRFacts { url: string; title?: string; head_oid?: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
 
 /** Server-computed weakest-link ("barrel rule") Target Repo delivery gate summary under todos_v2 (#15699). */
 export interface TodoRepoGate {
@@ -127,11 +128,14 @@ export interface TodoChildSummary {
 /** Server-owned board projection section keys returned under todos_v2 (#15774, #15800). */
 export type TodoBoardSectionKey =
   | "needs_you"
+  | "can_wait"
   | "in_progress"
   | "pending_review"
   | "waiting"
+  | "todo"
   | "someday"
   | "done"
+  | "cancelled"
   | (string & {});
 
 /** One top-level entry in a server-computed status group, with optional folded/surfaced child IDs (#15774). */
@@ -184,11 +188,14 @@ export interface TodoBoardSidebarNode {
 /** Global section and open totals in `board.counts` (#15774). */
 export interface TodoBoardCounts {
   needs_you: number;
+  can_wait?: number;
   in_progress: number;
   pending_review: number;
   waiting: number;
+  todo?: number;
   someday: number;
   done: number;
+  cancelled?: number;
   open_total: number;
 }
 
@@ -320,6 +327,11 @@ export interface Todo {
 /** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
 export function isCancelled(todo: Pick<Todo, "cancelled_at" | "done_at" | "done_by" | "supervision">): boolean {
   return Boolean(todo.cancelled_at) || todo.done_by === "cancelled" || (todo.done_by === "review" && reviewState(todo) === "cancelled");
+}
+
+/** Match the hub's closed cursor window, where a failed start is still open for retry. */
+export function isClosedForHistory(todo: Todo): boolean {
+  return Boolean(todo.done_at) && (!todo.start_error || isCancelled(todo));
 }
 
 /** "Nobody is working on this" and why ("closed after an error"), for an open to-do the hub found orphaned; undefined
@@ -548,6 +560,8 @@ export function isRemovable(status: TodoStatus): boolean {
 export type SessionLookup = ((mid: string, sid: string) => Session | undefined) & {
   /** Exact pending-card lookup, present when the caller supplied its current interaction list. */
   interaction?: (id: string) => Interaction | undefined;
+  /** A run's own pending cards and any folded under it. */
+  pendingCards?: (mid: string, sid: string) => readonly Interaction[] | undefined;
 };
 
 /** The hub closed it because its task's work was judged finished; reopening undoes it (docs/assistant/todos.md "Automatic completion"). */
@@ -633,43 +647,24 @@ function openPRFactsLook(prs: readonly PRFacts[]): { label: string; tone: TodoTo
   return { label: t("todos.status_pr_waiting_merge"), tone: "idle" };
 }
 
-function repoGatePRLook(gate: TodoRepoGate | undefined): { label: string; tone: TodoTone } | undefined {
-  if (!gate || gate.target_count <= 0 || gate.reason === "draft_pr") return undefined;
-  switch (gate.state) {
-    case "blocked_conflict":
-      return { label: t("todos.status_pr_conflicts"), tone: "red" };
-    case "blocked_changes":
-      return { label: t("todos.status_pr_changes_requested"), tone: "amber" };
-    case "blocked_ci":
-      return { label: t("todos.status_pr_checks_failed"), tone: "red" };
-    case "awaiting_review":
-      return { label: t("todos.status_pr_in_review"), tone: "idle" };
-    case "checks_pending":
-      return {
-        label: gate.reason === "checks_pending" ? t("todos.status_pr_checks_pending") : t("todos.status_pr_waiting_merge"),
-        tone: "idle",
-      };
-    default:
-      return undefined;
-  }
-}
+export type TodoRepoGateLook = (gate: TodoRepoGate | undefined) => { label: string; tone: TodoTone } | undefined;
 
 /** Accurate label and tone for an open to-do with a non-draft open PR (projected wait, fresh PR facts, or target repo gate). */
-export function openPRLook(todo: Todo, now = Date.now()): { label: string; tone: TodoTone } | undefined {
+export function openPRLook(todo: Todo, now = Date.now(), repoGateLook?: TodoRepoGateLook): { label: string; tone: TodoTone } | undefined {
   if (todo.done_at) return undefined;
   if (todo.wait?.kind === "pr_merge") {
     return prBlockerLook(todo.wait.pr_blockers) ?? openPRFactsLook(openMergePRs(todo, now)) ?? { label: t("todos.status_pr_waiting_merge"), tone: "idle" };
   }
-  return openPRFactsLook(openMergePRs(todo, now)) ?? repoGatePRLook(todo.repo_gate);
+  return openPRFactsLook(openMergePRs(todo, now)) ?? repoGateLook?.(todo.repo_gate);
 }
 
 /** Display label and tone when an open to-do has no active agent handling it: open non-draft PR state, parked hold,
  *  or an open main-chat concern ("Tracking") instead of a misleading "Not started". */
-export function todoRestLook(todo: Todo, status: TodoStatus, now = Date.now()): { label: string; tone: TodoTone } | undefined {
+export function todoRestLook(todo: Todo, status: TodoStatus, now = Date.now(), repoGateLook?: TodoRepoGateLook): { label: string; tone: TodoTone } | undefined {
   if (todo.done_at || isCancelled(todo)) return undefined;
   if (todo.supervision?.state === "user_check" || acceptedAtRest(todo, status) || waitsForOwner(todo) || awaitsReview(todo, status)) return undefined;
   if (status !== "not_started" && status !== "follow_up") return undefined;
-  const pr = openPRLook(todo, now);
+  const pr = openPRLook(todo, now, repoGateLook);
   if (pr) return pr;
   if (todo.supervision?.state === "parked" && !openAsk(todo)) {
     if (todo.supervision.parked?.handoff) return { label: TODO_STATUS_INFO.waiting.label, tone: "idle" };
@@ -686,7 +681,7 @@ export function todoRestLook(todo: Todo, status: TodoStatus, now = Date.now()): 
 
 /** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did
  *  (or accepted and nothing runs again), open PR / parked state, or "Tracking" for an open concern with no active agent. */
-export function todoStatusLabel(todo: Todo, status: TodoStatus, now = Date.now()): string {
+export function todoStatusLabel(todo: Todo, status: TodoStatus, now = Date.now(), repoGateLook?: TodoRepoGateLook): string {
   if (isCancelled(todo)) return t("lib-todos.review_cancelled");
   if (!todo.done_at && todo.supervision?.state === "user_check") return t("assistant-tasks.review_user_check");
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
@@ -694,18 +689,41 @@ export function todoStatusLabel(todo: Todo, status: TodoStatus, now = Date.now()
   if (awaitsReview(todo, status)) return t("assistant-tasks.review_pending");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
   if (!todo.done_at && todo.wait != null && (status === "not_started" || status === "follow_up")) {
-    if (todo.wait.kind === "pr_merge") return openPRLook(todo, now)?.label ?? t("todos.status_pr_waiting_merge");
+    if (todo.wait.kind === "pr_merge") return openPRLook(todo, now, repoGateLook)?.label ?? t("todos.status_pr_waiting_merge");
     return waitName(serverWaitReason(todo.wait));
   }
-  const rest = todoRestLook(todo, status, now);
+  const rest = todoRestLook(todo, status, now, repoGateLook);
   if (rest) return rest.label;
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
 
+const pendingCardsByRun = new WeakMap<readonly Interaction[], Map<string, Interaction[]>>();
+
+function runCardIndex(interactions: readonly Interaction[]): Map<string, Interaction[]> {
+  const cached = pendingCardsByRun.get(interactions);
+  if (cached) return cached;
+  const runs = new Map<string, Interaction[]>();
+  const add = (key: string, ix: Interaction) => {
+    const cards = runs.get(key);
+    if (cards) cards.push(ix);
+    else runs.set(key, [ix]);
+  };
+  for (const ix of interactions) {
+    if (ix.mirror_of) continue;
+    const origin = `${ix.machine_id}/${ix.session_id}`;
+    const home = homeKey(ix);
+    add(origin, ix);
+    if (home !== origin) add(home, ix);
+  }
+  pendingCardsByRun.set(interactions, runs);
+  return runs;
+}
+
 export function withInteractionLookup(base: SessionLookup, interactions: readonly Interaction[]): SessionLookup {
   const lookup: SessionLookup = (mid: string, sid: string) => base(mid, sid);
-  // Resolve only when a park carries an explicit ID; ordinary status reads do not scan the pending cards.
+  // Resolve an explicit park by ID. Share the run index across lookups of the same pending list.
   lookup.interaction = (id) => interactions.find((ix) => ix.id === id);
+  lookup.pendingCards = (mid, sid) => runCardIndex(interactions).get(`${mid}/${sid}`);
   return lookup;
 }
 
@@ -721,11 +739,42 @@ export function makeSessionLookup(sessions: Session[] | Record<string, Session[]
   return interactions ? withInteractionLookup(base, interactions) : base;
 }
 
+function cardOwner(agent: TodoAgent, lookup?: SessionLookup): "user" | "supervisor" | "assistant" | undefined {
+  const cards = lookup?.pendingCards?.(agent.machine_id, agent.session_id);
+  if (!cards?.length) return undefined;
+  if (cards.some((ix) => !ix.delegating)) return "user";
+  return cards.every(supervisorHeld) ? "supervisor" : "assistant";
+}
+
+/** A run as shown in its task. Pending cards can move before the run's next state update. */
+export function todoAgentState(agent: TodoAgent, session: Session | undefined, lookup?: SessionLookup): AgentState {
+  const owner = cardOwner(agent, lookup);
+  if (owner === "user") return "needs_you";
+  if (owner === "supervisor") return "working";
+  return session ? foldedState(session) : "offline";
+}
+
+/** The more specific label for Working when every pending card on the task belongs to its supervisor. */
+export function todoSupervisorLabel(todo: Todo, status: TodoStatus, lookup?: SessionLookup): string | undefined {
+  if (status !== "working" || todo.wait != null || todo.view?.section === "needs_you" ||
+      waitsForOwner(todo) || reviewState(todo) === "user_check" || heldDelivery(todo)?.unblock === "user") return undefined;
+  let held = false;
+  for (const a of todo.agents ?? []) {
+    if (a.released_at || a.start_error) continue;
+    const owner = cardOwner(a, lookup);
+    if (owner === undefined) continue;
+    if (owner !== "supervisor") return undefined;
+    held = true;
+  }
+  return held ? t("lib-todos.supervisor_processing") : undefined;
+}
+
 /**
  * Todo status rules (the first that holds wins):
  * 0. Didn't start: a task agent opened from a conversation never started and the hub ended it (start_error, #1077)
  * 1. Done: the user marked it done (done_at != null)
  * 2. Needs you: an attached agent needs you (a question, an approval)
+ * 2.1 Working: an attached agent has only cards held by its supervisor
  * 2.5 Interrupted: an attached agent's turn ended on a model API error (turn_error, #1516), unfinished, waiting for you to continue it.
  *     A subscription usage limit is not this (usage_limit, below).
  * 2.6 Usage limit: an attached agent is stopped on a subscription usage limit that has not reset yet
@@ -749,7 +798,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   const active = (todo.agents ?? []).filter((a) => !a.released_at);
   if (active.length === 0) return responsibleOf(todo) ? "follow_up" : "not_started";
 
-  let hasNeedsYou = false;
+  let hasSupervisorWork = false;
   let hasInterrupted = false;
   let hasLimit = false;
   let hasUnread = false;
@@ -762,6 +811,12 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
       continue;
     }
     const s = lookup?.(a.machine_id, a.session_id);
+    const owner = cardOwner(a, lookup);
+    if (owner === "user") return "needs_you";
+    if (owner === "supervisor") {
+      hasSupervisorWork = true;
+      continue;
+    }
     // its child sessions' state folded in (#5120): one waiting on the user makes the task wait, one working works
     const st: AgentState = s ? foldedState(s) : "offline";
     if (st === "needs_you") {
@@ -769,8 +824,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
         // The exact linked card is gone; this is its stale session state, not a new owner question.
         continue;
       }
-      hasNeedsYou = true;
-      break;
+      return "needs_you";
     }
     if (usageLimitAgent(s)) hasLimit = true;
     else if (interruptedAgent(s) && (s?.turn_error_kind === "unrecoverable" || s?.turn_error_code === "compaction_sealed" ||
@@ -782,7 +836,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
     else if (st === "working" || s?.starting) hasWorking = true;
   }
 
-  if (hasNeedsYou) return "needs_you";
+  if (hasSupervisorWork) return "working";
   if (hasInterrupted && !hasWorking && !hasWaiting && todo.supervision?.state !== "parked") return "interrupted";
   if (hasLimit) return "usage_limit";
   if (hasUnread) return "unread";
@@ -917,11 +971,10 @@ export function mostUrgentAgent(
   if (active.length === 0) return null;
 
   const score = (st: AgentState | "failed", s?: Session) => {
+    if (st === "needs_you") return 4;
     if (interruptedAgent(s)) return 3.5; // after one waiting on the user, before one done
     if (usageLimitAgent(s)) return 3.4;
     switch (st) {
-      case "needs_you":
-        return 4;
       case "unread":
         return 3;
       case "working":
@@ -938,7 +991,7 @@ export function mostUrgentAgent(
 
   for (const a of active) {
     const s = lookup?.(a.machine_id, a.session_id);
-    const st: AgentState | "failed" = a.start_error ? "failed" : s ? foldedState(s) : "offline";
+    const st: AgentState | "failed" = a.start_error ? "failed" : todoAgentState(a, s, lookup);
     const sc = score(st, s);
     if (sc > bestScore || !best) {
       bestScore = sc;

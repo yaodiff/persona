@@ -129,9 +129,54 @@ func (h *orcaHost) Read(ctx context.Context, pane host.PaneRef, o host.ReadOpts)
 	return text, nil
 }
 
-// SendText types text as is (terminal.send without enter writes the bytes), once the agent is in front.
-func (h *orcaHost) SendText(ctx context.Context, pane host.PaneRef, text string) error {
+// typeGate makes sure text may go into the pane's terminal before a write that types it (#17040), and returns that
+// terminal. Text goes in when:
+//   - a supported agent is in front (front);
+//   - the node answers the question a failed start's kept tab stopped on (withStartTyping: start.continue,
+//     start.answer, start.keys), and the terminal is one this host opened, still running the same process;
+//   - Orca names a program other than a shell in front (terminal.inspectProcess): pi, opencode, an editor, any CLI
+//     the text is for.
+//
+// Anything else refuses with nothing typed: a shell in front of an Agent's tab (its agent exited: the shell would run
+// the text as a command) or of any other terminal, an answer Orca cannot verify, and on an Orca without
+// terminal.inspectProcess anything but an agent in front. Every write after it stays fenced to the terminal's
+// incarnation (onTerminal), so none reaches a process that replaced it. (A plain shell is typed into from the phone
+// only through a live terminal, which Orca does not offer over its local socket.)
+func (h *orcaHost) typeGate(ctx context.Context, pane host.PaneRef) (orcart.Terminal, error) {
 	t, err := h.front(ctx, pane.ID, false)
+	if err == nil || !errors.Is(err, errNotInFront) {
+		return t, err
+	}
+	if startTypingOf(ctx) == pane.String() && h.openedHere(t) {
+		return t, nil
+	}
+	if fg, ok := h.programInFront(ctx, pane.ID); ok && !shellProgram(fg) {
+		return t, nil
+	}
+	return t, err
+}
+
+// openedHere: t is a terminal this host opened, still running the process it was opened with.
+func (h *orcaHost) openedHere(t orcart.Terminal) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	m, ok := h.made[t.PaneKey()]
+	return ok && m.Handle == t.Handle && m.IncarnationID != "" && m.IncarnationID == t.IncarnationID
+}
+
+// programInFront is the program Orca names in front of the pane's terminal's shell (terminal.inspectProcess), ok false
+// when it names none (the shell itself is in front), cannot tell, or has no such call.
+func (h *orcaHost) programInFront(ctx context.Context, paneKey string) (string, bool) {
+	p, supported, err := h.inspect(ctx, paneKey)
+	if err != nil || !supported || !p.Known() || p.Foreground() == "" {
+		return "", false
+	}
+	return p.Foreground(), true
+}
+
+// SendText types text as is (terminal.send without enter writes the bytes), once typeGate lets it in.
+func (h *orcaHost) SendText(ctx context.Context, pane host.PaneRef, text string) error {
+	t, err := h.typeGate(ctx, pane)
 	if err != nil {
 		return err
 	}
@@ -143,8 +188,8 @@ func (h *orcaHost) SendText(ctx context.Context, pane host.PaneRef, text string)
 const orcaKeyGap = 40 * time.Millisecond
 
 // SendKeys presses the keys one by one (their bytes, orcaKeyBytes); a key with no bytes fails before anything is
-// pressed. Keys that type text (letters, digits, space) need the agent in front, as SendText does; the others (enter,
-// esc, arrows, ctrl+c…) go to whatever is there, so a stuck pane can still be interrupted and closed.
+// pressed. Keys that type text (letters, digits, space) go in only where SendText's would (typeGate); the others
+// (enter, esc, arrows, ctrl+c…) go to whatever is there, so a stuck pane can still be interrupted and closed.
 func (h *orcaHost) SendKeys(ctx context.Context, pane host.PaneRef, keys ...string) error {
 	seq := make([]string, 0, len(keys))
 	typing := false
@@ -159,7 +204,7 @@ func (h *orcaHost) SendKeys(ctx context.Context, pane host.PaneRef, keys ...stri
 	var t orcart.Terminal
 	var err error
 	if typing {
-		t, err = h.front(ctx, pane.ID, false)
+		t, err = h.typeGate(ctx, pane)
 	} else {
 		t, err = h.terminal(ctx, pane.ID, false)
 	}
@@ -209,9 +254,17 @@ var orcaSubmitGap = 150 * time.Millisecond
 //
 // The agent must be in front (front) before each write: Orca writes whatever it is sent into whatever is there. A
 // refusal before the paste typed nothing (host.ErrNotDelivered); anything failing after it leaves the text possibly
-// sitting in the input (not marked: delivered unknown).
+// sitting in the input (not marked: delivered unknown). With no supported agent in front but another program Orca
+// names (a CLI Persona does not recognize: pi, opencode…) the refusal is also host.ErrNoAgent, as herdr's is for an
+// agent it does not detect: the node types the message instead, while that program is still in front (send.go
+// typeable, typeGate). A shell in front stays refused.
 func (h *orcaHost) Prompt(ctx context.Context, pane host.PaneRef, text string) error {
 	t, err := h.front(ctx, pane.ID, true)
+	if errors.Is(err, errNotInFront) {
+		if fg, ok := h.programInFront(ctx, pane.ID); ok && !shellProgram(fg) {
+			return host.Mark(err, host.ErrNoAgent)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -278,6 +331,7 @@ func (h *orcaHost) RenameSlot(ctx context.Context, slot, name string) error {
 	for _, term := range terms {
 		// An orphaned terminal this host made, listed under its own tab (#5547), is renamed as any other.
 		if term.TabID == slot && term.IsLocal() && term.Writable && (!term.Orphaned || h.rekeyedKey(term.PaneKey())) {
+			defer h.renamedTab() // the next listing reads the new name (namedTabs)
 			return orcaErr(h.onTerminal(ctx, term, true, func(target orcart.Target) error {
 				return h.c.RenameTerminal(ctx, target, name)
 			}))

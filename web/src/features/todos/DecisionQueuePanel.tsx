@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
+import { safeWebURL } from "../../lib/format";
 import {
   fetchTodoDecisionGroups,
   openAsk,
@@ -79,9 +80,7 @@ interface ClusteredDecisionGroup {
 }
 
 function safeExternalUrl(raw?: string): string | undefined {
-  const s = raw?.trim();
-  if (!s) return undefined;
-  return /^https?:\/\//i.test(s) ? s : undefined;
+  return safeWebURL(raw);
 }
 
 function causeKindLabel(kind: string): string | null {

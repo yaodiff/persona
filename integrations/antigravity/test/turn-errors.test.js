@@ -199,6 +199,10 @@ async function fixture(t, options = {}) {
     promptPlan: options.promptPlan,
     stepsRequireLoad: options.stepsRequireLoad,
     stepsUnavailable: options.stepsUnavailable,
+    stepsTimeout: options.stepsTimeout,
+    stepsNotFoundUnlessLoaded: options.stepsNotFoundUnlessLoaded,
+    stepsNotFoundAlways: options.stepsNotFoundAlways,
+    resumeError: options.resumeError,
   }
   writeFileSync(nativeFile, JSON.stringify(snapshot))
   const db = new DatabaseSync(join(config, 'conversation_summaries.db'))
@@ -640,4 +644,59 @@ test('prepareTranscript refreshes the exported transcript after awaiting a nativ
     page.items.some((item) => item.text === 'Fresh reply during error probe'),
     'session.items must include steps written while awaiting errFlight',
   )
+})
+
+test('native read reloads via session/resume when GetCascadeTrajectorySteps returns 404 not_found for an unloaded session', async (t) => {
+  const { row, calls, items } = await fixture(t, { stepsNotFoundUnlessLoaded: true, nativeErrorRetryMs: 0 })
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => [item.seq, item.text]), [[1, input.content], [2, `API Error: ${MESSAGE}`]])
+  await until('recovered native error published', () => row()?.turn_error === MESSAGE)
+  assert.equal(calls().filter((call) => call.method === 'session/resume').length, 1)
+  assert.equal(calls().filter((call) => call.method === 'GetCascadeTrajectorySteps').length, 2)
+})
+
+test('permanent trajectory not_found after reload stops retrying immediately and omits API Error prefix', async (t) => {
+  const { row, calls, items } = await fixture(t, { stepsNotFoundAlways: true, nativeErrorRetryMs: 0 })
+  const failure = 'Antigravity no longer has this turn\'s history. Start a new conversation if you cannot continue.'
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => [item.seq, item.text]), [[1, input.content], [2, failure]])
+  await until('permanent failure published', () => row()?.turn_error === failure)
+  assert.equal(row().turn_error_kind, 'user')
+  for (let i = 0; i < 4; i++) await items()
+  assert.equal(calls().filter((call) => call.method === 'session/resume').length, 1)
+  assert.equal(calls().filter((call) => call.method === 'GetCascadeTrajectorySteps').length, 2)
+})
+
+test('unreadable session on reload during native read stops retrying immediately and omits API Error prefix', async (t) => {
+  const { row, calls, items } = await fixture(t, {
+    stepsNotFoundUnlessLoaded: true,
+    resumeError: `Failed to read session ${RAW}; retry, or load it with session/load`,
+    nativeErrorRetryMs: 0,
+  })
+  const failure = 'Antigravity no longer has this turn\'s history. Start a new conversation if you cannot continue.'
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => [item.seq, item.text]), [[1, input.content], [2, failure]])
+  await until('permanent reload failure published', () => row()?.turn_error === failure)
+  assert.equal(row().turn_error_kind, 'user')
+  for (let i = 0; i < 4; i++) await items()
+  assert.equal(calls().filter((call) => call.method === 'session/resume').length, 1)
+  assert.equal(calls().filter((call) => call.method === 'GetCascadeTrajectorySteps').length, 1)
+})
+
+test('local native read timeout uses a distinct non-API timeout message and still retries up to twice', async (t) => {
+  const { row, calls, items, nativeFile } = await fixture(t, { stepsTimeout: true, nativeErrorRetryMs: 0 })
+  const timeoutText = 'Timed out reading this turn\'s result from Antigravity.'
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => [item.seq, item.text]), [[1, input.content], [2, timeoutText]])
+  await until('timeout notice published', () => row()?.turn_error === timeoutText)
+  assert.equal(row().turn_error_kind, undefined)
+  // Second attempt still times out; third attempt recovers once timeout clears.
+  await items()
+  assert.equal(calls().filter((call) => call.method === 'GetCascadeTrajectorySteps').length, 2)
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  delete snapshot.stepsTimeout
+  writeFileSync(nativeFile, JSON.stringify(snapshot))
+  const recovered = await items()
+  assert.deepEqual(recovered.items.map((item) => [item.seq, item.text]), [[1, input.content], [2, `API Error: ${MESSAGE}`]])
+  await until('recovered after timeout', () => row()?.turn_error === MESSAGE)
 })

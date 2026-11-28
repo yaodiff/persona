@@ -41,4 +41,29 @@ struct InteractionMutedCodingTests {
         let mutedAgain = try JSON.decoder.decode(Interaction.self, from: JSON.encoder.encode(ix))
         #expect(mutedAgain == ix && mutedAgain.muted)
     }
+
+    @Test func occurrenceTextSurvivesCodingAndDirectDatesClearIt() throws {
+        let wire = "2026-11-15T10:20:30.000000001Z"
+        let input = #"{"id":"occurrence","machine_id":"m","session_id":"s","kind":"question","created_at":""# + wire + #""}"#
+        let ix = try JSON.decoder.decode(Interaction.self, from: Data(input.utf8))
+        #expect(ix.createdAtWire == wire)
+        let object = try #require(try JSONSerialization.jsonObject(with: JSON.encoder.encode(ix)) as? [String: Any])
+        #expect(object["created_at"] as? String == wire)
+        let again = try JSON.decoder.decode(Interaction.self, from: JSON.encoder.encode(ix))
+        #expect(again == ix && again.createdAtWire == wire)
+
+        var assigned = ix
+        assigned.createdAt = Date(timeIntervalSince1970: 1)
+        #expect(assigned.createdAtWire == nil)
+        let made = Interaction(id: "made", machineID: "m", sessionID: "s", kind: .question, createdAt: Date(timeIntervalSince1970: 1))
+        #expect(made.createdAtWire == nil)
+
+        for json in [
+            #"{"id":"missing","machine_id":"m","session_id":"s","kind":"question"}"#,
+            #"{"id":"null","machine_id":"m","session_id":"s","kind":"question","created_at":null}"#,
+        ] {
+            let decoded = try JSON.decoder.decode(Interaction.self, from: Data(json.utf8))
+            #expect(decoded.createdAt == nil && decoded.createdAtWire == nil)
+        }
+    }
 }

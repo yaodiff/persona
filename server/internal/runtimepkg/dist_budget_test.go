@@ -99,9 +99,31 @@ import (
 // Preserving delivered replies across live Antigravity background wakes, in-place RUNNING->DONE updates, and runtime-sdk catch-up/batch delta ordering (#14920) adds 1,015 B over main (304,262 B -> 305,277 B).
 // Keeping Antigravity summary-db connection() atomic and closing on probe() error adds 48 B (305,277 B -> 305,325 B).
 // Persisting the model after the first turn and restoring older Antigravity sessions from their transcript adds 100 B (#16458).
+// Targeted Antigravity stepsToItems lookup (targetItemId), per-session sentMsgVersions, and lazy transcriptOf projection (#16152) add 567 B (305,425 B -> 305,992 B).
+// Antigravity unavailable-Auto permission-mode fallback, restricted permission_modes advertisement, and runtime-sdk session.modes permission_mode forwarding (#17239) add 703 B (305,992 B -> 306,695 B).
+// Hardening dsh assistant memoryWrite against relative-path, clipInput truncation, and symlink escapes (#17339) adds 739 B (306,695 B -> 307,434 B).
+// Isolating managed Antigravity channel model catalogs, stripping ambient/extension provider env across channels, preserving Assistant channel and extension env snapshots across respawns, and rotating warm idle Assistant channels add 181 B (307,434 B -> 307,615 B).
+// Routing dsh assistant shell gates through runtime-sdk shell-gates with fail-closed hubReady/disconnect/phoneTools=false guards adds 794 B (307,615 B -> 308,409 B).
+// Guarding Antigravity ACP stdout/nativeRequest against JSON null/non-object payloads and rejecting stale _start() after stop/process replacement add 107 B (308,409 B -> 308,516 B).
+// Hardening opencode companion & plugin assistant isMemoryWrite with symlink/namei/multi-resource/allowlisted-rawInput/diff/metadata containment (opencode/lib/memory-write.js) adds 2,064 B (308,516 B -> 310,580 B).
+// Persona-owned prepared identity persistence, scoped marker validation, lazy restoration and fail-closed
+// supervision-policy recovery (#17348) measured 310,620 B against the 308,516 B ACP main: +2,104 B.
+// Its Antigravity part is unchanged by the separately packed OpenCode change above, giving a 312,684 B union.
+// Fixing Antigravity supervision policy >24KB early-newline split fallback and hardening policyRoot/session/file symlink + O_NOFOLLOW checks add 337 B (312,684 B -> 313,021 B).
+// Hardening Paseo read-only (plan) start and takeover (withholding initialPrompt until verified, active-receiver resolution, pre-mutation pendingReadonly eviction, 0..callWait op/send coordination, and zombie inFlight cleanup) adds 2,516 B (313,021 B -> 315,537 B).
+// Refreshing expired native Antigravity OAuth through bounded ACP authentication (#17537) brought main to 317,692 B (+2,155 B); Antigravity readNativeError reload-on-not_found, fail-fast permanent loss, and non-API local notice / timeout formatting (#17577) add 271 B (317,692 B -> 317,963 B).
+// Hardening Antigravity Desktop hub discovery/RPC/context wrapping, workspacePathOf UNC/NUL/host checks, and custom-channel fork/rewind isolation with rollback adds 1,012 B (317,963 B -> 318,975 B).
+// Anchoring Antigravity one-shot timer heartbeat detection and returning turn_over_background when interrupting background-only sessions (#17619) add 222 B (318,975 B -> 319,197 B).
+// Preserving active native Antigravity interrupts alongside running background tasks (#17652) adds 15 B (319,197 B -> 319,212 B).
+// Runtime command input (#14573) adds 2,657 B to the runtime SDK package
+// on top of the 319,212 B upstream total (321,869 B combined).
+// Reaping idle assistant ACP workers independently of coding agents and storing compact background summaries instead of full exported.steps in listedTranscriptCache add 8 B (321,869 B -> 321,877 B).
+// Replacing resident Antigravity ACP processes after a new agy sign-in (metadata-only sign-in stamp, lib/sign-in.js) or a
+// quota or sign-in error (#17860) adds 1,809 B (321,877 B -> 323,686 B).
+// Reconciling Antigravity silent background task terminations (TimerCondition cancellation, JSON-array manage_task(list), manage_task(status), one-shot timer expiry with cache invalidation/refresh, schedule MaxIterations, and manage_subagents; #17891) adds 2,393 B (323,686 B -> 326,079 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 305_425
+	const budget = 326_079
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

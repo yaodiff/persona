@@ -61,25 +61,6 @@ var (
 	short     = textfmt.Short
 )
 
-// feishuTopic is the chat and thread a message was said in (the core's feishu_route.go names it too).
-type feishuTopic struct {
-	Chat, Thread string
-	UnboundMode  assistantwire.TopicTodoMode
-	Pairing      string
-}
-
-// target is where what is sent for that topic goes: its chat, as a reply into the thread. The zero topic (nil) is the
-// private chat, where nothing changes.
-func (t *feishuTopic) target() feishuTarget {
-	if t == nil {
-		return feishuTarget{}
-	}
-	return feishuTarget{ChatID: t.Chat, InThread: true}
-}
-
-// readThreadKey is the run's channel value of the thread a "/read" was asked in (the core's feishu_route.go).
-const readThreadKey = "read_thread"
-
 // endedAskFor is how long a question card that ended elsewhere is remembered for an option typed for it late: the
 // channels' own (the core's channels_plugin.go).
 const endedAskFor = 10 * time.Minute

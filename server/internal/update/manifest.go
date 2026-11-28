@@ -307,8 +307,17 @@ func describe(gz string) (File, error) {
 	if err != nil {
 		return File{}, fmt.Errorf("%s: %w", gz, err)
 	}
+	defer zr.Close()
 	inner := sha256.New()
-	if _, err := io.Copy(inner, zr); err != nil {
+	limit := unpackedBinaryLimit()
+	unpacked, err := io.Copy(inner, io.LimitReader(zr, limit+1))
+	if err != nil {
+		return File{}, fmt.Errorf("%s: %w", gz, err)
+	}
+	if unpacked > limit {
+		return File{}, fmt.Errorf("%s: unpacked binary exceeds %d bytes", gz, limit)
+	}
+	if err := zr.Close(); err != nil {
 		return File{}, fmt.Errorf("%s: %w", gz, err)
 	}
 	return File{Name: filepath.Base(gz), Size: n, SHA256: hex.EncodeToString(outer.Sum(nil)), BinarySHA256: hex.EncodeToString(inner.Sum(nil))}, nil

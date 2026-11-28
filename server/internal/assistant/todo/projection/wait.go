@@ -1,13 +1,17 @@
 package projection
 
 import (
+	"cmp"
 	"fmt"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // Wait is the strongly-typed waiting reason of to-do f at now (#16168): non-nil exactly when the projection places f
@@ -107,6 +111,76 @@ func parkedWaitKind(pk *Parked) assistantwire.TodoWaitKind {
 	default:
 		return assistantwire.TodoWaitKindParked
 	}
+}
+
+// runtimeWait reads the structured wait of an open task. A leftover provider deploy wait from before the
+// completion mode was honored has already met a landed contract once its delivery is merged.
+func (r *reading) runtimeWait() *assistantwire.TaskWaitState {
+	f, w := r.f, r.f.WaitState
+	if f.Phase != assistantwire.TaskPhaseWaiting || w == nil || !w.WaitingOn.Valid() ||
+		acceptanceStands(f) || reviewState(f) == reviewPending || reviewState(f) == reviewUserCheck {
+		return nil
+	}
+	if f.ObservedWait && f.CompletionModeNow == assistantwire.CompletionModeLanded &&
+		w.WaitingOn == assistantwire.WaitExternal && w.Target.Kind == assistantwire.WaitTargetPR &&
+		f.Delivery != nil && f.Delivery.State == deliveryMerged {
+		return nil
+	}
+	return w
+}
+
+func buildRuntimeWait(w *assistantwire.TaskWaitState, at time.Time) *assistantwire.TodoWait {
+	ref := strings.TrimSpace(w.Target.Ref)
+	out := &assistantwire.TodoWait{
+		Kind:      assistantwire.TodoWaitKindExternalEvent,
+		WaitingOn: cmp.Or(firstLine(w.Target.Summary), ref),
+		Reason:    firstLine(w.Reason),
+		Until:     utc(w.Until),
+		Since:     utc(at),
+	}
+	switch w.WaitingOn {
+	case assistantwire.WaitUser:
+		out.Kind = assistantwire.TodoWaitKindPersonReply
+	case assistantwire.WaitDate:
+		out.Kind = assistantwire.TodoWaitKindDate
+		out.WakeAt = out.Until
+	case assistantwire.WaitDependency:
+		if w.Target.Kind == assistantwire.WaitTargetTodo {
+			out.Kind = assistantwire.TodoWaitKindTodoHandoff
+			out.HandoffTodoID = wireids.TodoID(ref)
+			out.WaitingOn = firstLine(w.Target.Summary)
+		}
+	}
+	switch w.Target.Kind {
+	case assistantwire.WaitTargetPR, assistantwire.WaitTargetIssue, assistantwire.WaitTargetChat, assistantwire.WaitTargetURL:
+		if u, err := url.Parse(ref); err == nil && u.Host != "" && u.User == nil && (u.Scheme == "https" || u.Scheme == "http") {
+			out.URL = ref
+		}
+	}
+	if w.Target.Kind == assistantwire.WaitTargetPR {
+		out.WaitingOn = cmp.Or(firstLine(w.Target.Summary), shortPRLabel(out.URL), ref)
+	}
+	return out
+}
+
+// RepoGateWait is Facts.RepoGate for the open delivery PR at prURL holding repository's gate, blocked by blocker ("" when
+// it names none).
+func RepoGateWait(repository, prURL string, blocker assistantwire.TodoWaitPRBlocker) *assistantwire.TodoWait {
+	w := &assistantwire.TodoWait{
+		Kind:      assistantwire.TodoWaitKindPrMerge,
+		WaitingOn: cmp.Or(shortPRLabel(prURL), repository),
+		URL:       prURL,
+	}
+	if blocker != "" {
+		w.PrBlockers = []assistantwire.TodoWaitPRBlocker{blocker}
+	}
+	return w
+}
+
+// copyWait is a row's own copy of a wait the facts carry, so the row never shares the facts' value.
+func copyWait(w assistantwire.TodoWait) *assistantwire.TodoWait {
+	w.PrBlockers = slices.Clone(w.PrBlockers)
+	return &w
 }
 
 func buildPRWait(pr PRStatus) *assistantwire.TodoWait {

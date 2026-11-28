@@ -407,7 +407,7 @@ export struct ProjectsPage {
   }
   @Builder icon(symbol: Resource, tint: ResourceColor) {
     Stack() { SymbolGlyph(symbol).fontSize('18vp').fontColor([tint]) }
-      .width(32).height(32).borderRadius(8).backgroundColor(Colors.control)
+      .width(32).height(32).borderRadius(Tokens.radiusControl).backgroundColor(Colors.control)
   }
   @Builder detailRow(title: string, detail: string, symbol: Resource, color: ResourceColor, identity: string, action: () => void) {
     Row({ space: 11 }) {
@@ -562,7 +562,7 @@ export struct ProjectsPage {
           .cancelButton(this.compact ? {style:CancelButtonStyle.INPUT,icon:{
             size:PhoneStyle.formSize(24,32,nativeEnvironment.fontScale),color:$r('app.color.persona_switcher_ink'),src:$r('app.media.phone_search_clear')
           }} : undefined)
-          .searchButton('').borderRadius(22).fontColor(Colors.ink)
+          .searchButton('').borderRadius(Tokens.radiusPanel).fontColor(Colors.ink)
           .backgroundColor(this.compact && Colors.styleID === 'glass' ? $r('app.color.phone_project_search_field') : Colors.surface)
           .onFocus(() => this.setSearchMode(true)).onClick(() => this.setSearchMode(true)).onChange((value:string) => this.search(value))
           .onSubmit(() => this.searchField.stopEditing()).id('projects.search')
@@ -585,7 +585,7 @@ export struct ProjectsPage {
                     .fontColor((this.quick || 'all') === key ? Colors.link : Colors.ink).maxLines(1)
                   if (key !== 'all') Text(String(Wire.number(this.queryResult.counts,key)))
                     .fontSize(Tokens.interfaceFontVp(15,nativeEnvironment.fontScale)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
-                }.padding({left:8,right:8,top:4,bottom:4}).borderRadius(40)
+                }.padding({left:8,right:8,top:4,bottom:4}).borderRadius(Tokens.radiusCapsule)
                   .backgroundColor((this.quick || 'all') === key ? Colors.selection : Color.Transparent)
               }.height(this.quickHeight()).constraintSize({minWidth:this.quickHeight()}).padding(0).backgroundColor(Color.Transparent)
                 .accessibilitySelected((this.quick || 'all') === key).accessibilityText(tr(projectQuickLabels[key]) +
@@ -596,8 +596,8 @@ export struct ProjectsPage {
         }.layoutWeight(1).height(this.quickHeight()).align(Alignment.Start).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).id('projects.quick')
         Divider().vertical(true).strokeWidth(0.5).height(22*this.quickHeight()/44).color(Colors.divider)
         this.searchGrouping()
-      }.width('100%').height(this.quickHeight()).backgroundColor(Colors.grouped).borderRadius(44).clip(true)
-        .outlineWidth(0.5).outlineColor(Colors.divider).outlineRadius(44)
+      }.width('100%').height(this.quickHeight()).backgroundColor(Colors.grouped).borderRadius(Tokens.radiusCapsule).clip(true)
+        .outlineWidth(0.5).outlineColor(Colors.divider).outlineRadius(Tokens.radiusCapsule)
     }.width('100%').padding({bottom:8})
   }
   @Builder projectMenu(key: string) {
@@ -692,7 +692,7 @@ export struct ProjectsPage {
   @Builder headerLine(line:ProjectLine) {
     Row({space:8}) {
       if (line.kind === 'host') {
-        Stack() { SymbolGlyph(Symbols.device).fontSize('17vp').fontColor([Colors.ink]) }.width(29).height(29).backgroundColor(Colors.surface).borderRadius(8)
+        Stack() { SymbolGlyph(Symbols.device).fontSize('17vp').fontColor([Colors.ink]) }.width(29).height(29).backgroundColor(Colors.surface).borderRadius(Tokens.radiusControl)
         Column({ space: 3 }) {
           Text(line.project.machine).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
             .maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis}).id('projects.host_name')
@@ -742,7 +742,7 @@ export struct ProjectsPage {
           if (line.tree!.pinnedAt > 0) SymbolGlyph($r('sys.symbol.pin')).fontSize('12vp').fontColor([Colors.link])
           if (line.tree!.main) Text(tr('project_checkout_primary')).fontSize(11).maxFontScale(Tokens.interfaceScaleFor(11))
             .fontWeight(FontWeight.Medium).fontColor(Colors.link)
-            .backgroundColor(Colors.selection).borderRadius(8).padding({left:6,right:6,top:2,bottom:2}).maxLines(1)
+            .backgroundColor(Colors.selection).borderRadius(Tokens.radiusBadge).padding({left:6,right:6,top:2,bottom:2}).maxLines(1)
           if (this.treeDetail(line.tree!)) {
             Row() {
               Text(this.treeDetail(line.tree!)).fontSize(11).maxFontScale(Tokens.interfaceScaleFor(11))
@@ -949,11 +949,11 @@ export struct ProjectsPage {
       Row({space:5}) {
         Text(this.spaceSlotTitle(agent,paneName))
           .fontSize(12*this.spaceCardScale()).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Medium).fontColor(agent.active ? this.tint(agent) : $r('app.color.project_card_secondary'))
-          .padding({left:7,right:7,top:2,bottom:2}).backgroundColor(Colors.subtle).borderRadius(12)
+          .padding({left:7,right:7,top:2,bottom:2}).backgroundColor(Colors.subtle).borderRadius(Tokens.radiusCapsule)
           .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).flexShrink(1).constraintSize({maxWidth:'100%'})
         if (this.fitsRuntimeChip(agent,paneName)) Text(agent.runtime)
           .fontSize(12*this.spaceCardScale()).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor($r('app.color.project_card_secondary')).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
-          .padding({left:6,right:6,top:1,bottom:1}).border({width:0.5,color:Colors.divider,radius:12}).flexShrink(1)
+          .padding({left:6,right:6,top:1,bottom:1}).border({width:0.5,color:Colors.divider,radius:Tokens.radiusCapsule}).flexShrink(1)
       }.layoutWeight(1).clip(true)
       this.spaceStatus(agent)
     }.width('100%').id('projects.space_slot.'+agent.row.id)

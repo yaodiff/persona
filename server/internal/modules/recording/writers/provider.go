@@ -20,6 +20,9 @@ type Writers struct {
 	state *storeState
 	// liveChanged is told of a recording whose live log or stored upload changed (OnLive): the attending feeder.
 	liveChanged func(id string)
+	// speakersChanged is told after a speaker timeline import or speaker edit succeeds (OnSpeakersChanged): hook point
+	// for minutes attribution re-render and waking the minutes round (PR 2-4).
+	speakersChanged func(id string)
 	// minutesWritten is told when a recording's minutes for its current revision are written: the assistant pushes
 	// them. Not for minutes made again only because a photo was added or deleted. Called from the round, outside the
 	// store's locks. dayRecapWritten is told once a day (Recording.Day, across the day's parts) of the recap the day's
@@ -53,6 +56,10 @@ func (w *Writers) OnWritten(minutes func(ctx context.Context, r Recording, m Min
 // OnLive sets what is told of a recording whose live log or stored upload changed, before the knowledge base is used.
 func (w *Writers) OnLive(changed func(id string)) { w.liveChanged = changed }
 
+// OnSpeakersChanged sets the post-commit hook called after a speaker timeline is imported or speaker edits are saved
+// (hook point for PR 2-4 minutes re-render and minutes wake).
+func (w *Writers) OnSpeakersChanged(changed func(id string)) { w.speakersChanged = changed }
+
 // Of is the Writers a knowledge base was given as its provider; nil when p is another provider (no module).
 func Of(p recordingwire.Provider) *Writers {
 	w, _ := p.(*Writers)
@@ -64,7 +71,7 @@ func Of(p recordingwire.Provider) *Writers {
 func (w *Writers) engine() *engine {
 	e := &engine{Store: w.store(), MinutesWritten: w.minutesWritten, DayRecapWritten: w.dayRecapWritten,
 		jobLeft: w.jobLeft, minutesCall: w.minutesCall, minutesPart: w.minutesPart,
-		LiveChanged: w.liveChanged, TranscriptionReady: w.core.TranscriptionReady, EarlierMeetingsInAnswers: w.core.EarlierMeetings()}
+		LiveChanged: w.liveChanged, SpeakersChanged: w.speakersChanged, TranscriptionReady: w.core.TranscriptionReady, EarlierMeetingsInAnswers: w.core.EarlierMeetings()}
 	if w.core.HasModel() {
 		e.ModelFor = func(purpose string) Model { return w.core.Model(known(recordingwire.Purpose(purpose))) }
 	}
@@ -175,6 +182,15 @@ func (w *Writers) TranscriptionUpdate(rawID string, fn func(t *MeetingTranscript
 func (w *Writers) HubRecordings() ([]string, error) { return w.engine().HubRecordings() }
 func (w *Writers) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (rev int64, err error) {
 	return w.engine().HubTranscriptPut(rawID, pass, segs)
+}
+func (w *Writers) HubTranscriptPutWithTiming(rawID, pass string, timing TranscriptTiming, segs []RecordingSegment) (rev int64, err error) {
+	return w.engine().HubTranscriptPutWithTiming(rawID, pass, timing, segs)
+}
+func (w *Writers) EditSpeakers(rawID string, rev int64, ops []SpeakerEditOp, ownerName string) ([]SpeakerEditOp, error) {
+	return w.engine().EditSpeakers(rawID, rev, ops, ownerName)
+}
+func (w *Writers) ImportSpeakerTurns(rawID string, req SpeakerTurnsImportRequest, now time.Time) (bool, error) {
+	return w.engine().ImportSpeakerTurns(rawID, req, now)
 }
 func (w *Writers) RecordOf(rawID string) ([]RecordingSegment, error) {
 	return w.engine().RecordOf(rawID)

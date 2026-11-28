@@ -92,7 +92,7 @@ func TestTaskAgentSettledWithLeftOverShells(t *testing.T) {
 			if got := taskAgentSettled(tc.c); got != tc.plain {
 				t.Errorf("without a done report: settled %v, want %v", got, tc.plain)
 			}
-			if got := taskAgentSettledReported(tc.c, true, time.Time{}); got != tc.onEarly {
+			if got := taskAgentSettledReported(tc.c, true, time.Time{}, false); got != tc.onEarly {
 				t.Errorf("after a done report: settled %v, want %v", got, tc.onEarly)
 			}
 		})

@@ -403,6 +403,7 @@ func earliest(a, b time.Time) time.Time {
 // session (docs/assistant/todo-status-sop.md "Principle: real signals only").
 func lastActivity(f *Facts, now time.Time) time.Time {
 	last := later(f.UpdatedAt, &f.CreatedAt)
+	last = later(last, &f.RuntimeAt)
 	last = later(last, f.ReopenedAt)
 	last = later(last, f.DoneAt)
 	if v := f.Supervision; v != nil {

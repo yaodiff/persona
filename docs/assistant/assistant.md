@@ -410,7 +410,7 @@ The current mechanisms are generic; specific commands, routes, and variables are
     For a gate without `Auth` in default mode, an `@file` body never selects a body-scoped `allow` (and cannot silently clear an earlier body-scoped restriction): the call is confirmed or denied by fallback rules because no proxy can verify the eventual request body at send time. Inline bodies, body-independent rules without an earlier body-scoped restriction, authenticated proxy gates (where the proxy enforces rules on the received body), and bypass mode are unchanged (#8413).
     `@file` body and `--url-query @file` reads pin the resolved parent directory with `os.OpenRoot`, open without blocking or following a final symlink, accept only regular files up to 1 MiB (with `os.DevNull` kept as an empty `--url-query` sentinel), reject lexical and resolved `/proc`, `/dev` and `/sys` paths, and keep the 4000-character whole-character clip for bodies.
     `sort -o` / `--output` / `--compress-program`, `date -s` / `--set` / positional clock-setting operands, and `uniq` with a second output-file operand are not treated as output-only filters.
-    On Claude Code and local `assistant_environment` runtimes (such as Antigravity), one static authenticated send/reply with a top-level text body declares `editable_text`: the web may replace that text on a plain Allow or attach a denial note. When the text changes, the node skips granting the original call, validates the edited body against the current gate and rules, and grants only the edited call once with all other fields and call identity unchanged (rebuilding `updatedInput.command` on Claude Code, or rewriting the JSON body inside `gateProxy` on local `assistant_environment` runtimes). Codex, remote/non-`assistant_environment` runtimes, lark-cli, dynamic/file bodies and other routes keep ordinary Allow/Deny.
+    On Claude Code, local `assistant_environment` runtimes (such as Antigravity), and the node's MCP command-gate tool (`assistantGateTool`), one static authenticated send/reply with a top-level text body declares `editable_text`: the web may replace that text on a plain Allow or attach a denial note. When the text changes, the node skips granting the original call, validates the edited body against the current gate and rules, and grants only the edited call once with all other fields and call identity unchanged (rebuilding `updatedInput.command` on Claude Code, or rewriting the JSON body inside `gateProxy` on local `assistant_environment` runtimes and `assistantGateTool`). Codex, remote/non-`assistant_environment` Bash runtimes, lark-cli, dynamic/file bodies and other routes keep ordinary Allow/Deny.
   - A write that went out through the proxy (the API answered 2xx) is kept in the sent-as-user ledger (`docs/extensions/connectors.md` "Sent as the user"): the node tells the manager (`lark.sent`) how the gate let it through. Not in it: lark-cli writes and gates without `auth`.
   - A health conversation's writes are confirmed each time, rules' allow included (`docs/assistant/health.md` "Outbound"), at both entrances: `larkCheck` turns an allow into a card, and the proxy address opened for a process started in the health space
     lets a write through only by taking the grant that card left (a conversation's own: a new Codex conversation's addresses are given its id once its thread starts, and take nothing before). Both decide the space from a record made when
@@ -563,6 +563,14 @@ With over ten Agents running, most mid-task questions concern internal choices t
 - **Client UI**: web has "Assistant is looking", the `delegate` context and "Change answer", plus the delegated answers in **Session info** (#544, `docs/web/web.md` "Pages"); iOS / Mac have the same (`docs/apple/ios.md`, "Information architecture"). Android has the same pending-card looking/context presentation (#544, `docs/android/android.md` "Session controls, session origin and capabilities") and already has Change Answer.
 
 ## Asking without holding the turn (#4928)
+
+Decision rights apply before either wait mode publishes a card. Internal execution questions name
+`decision_scope: "internal"` and actively wake their designated supervisor. Owner-only questions supply `why_owner`
+or `owner_action`; a personal unlock uses `owner_action: "personal_unlock"`, without asking for the credential itself.
+Calls with no decision-right metadata are rejected for clarification. Both modes keep that metadata in `ToolInput`;
+asynchronous records restore the same routing after restart. Supervisor answers are attributed to the assistant in
+the receipt, never to the owner. An internal cancellation or expiry returns unanswered and takes no default or
+owner to-do. The owner-card lifecycle below applies to questions explicitly addressed to the owner.
 
 `ask_user` takes `wait`, a boolean that defaults to true (hold the turn until the answer, as described under "Ask on the phone" above). With `wait: false` the card is raised and the tool returns at once; the turn ends, and whatever ends the card reaches the asking conversation as one message. Step Q1 of `docs/design/proposals/main-chat-availability.md` (3c); code in `assistant/ask_later.go`.
 
@@ -1056,8 +1064,8 @@ Long assistant chats can grow to hundreds of thousands of tokens. After the prom
 
 The main chat can receive supervision, scheduled follow-ups and messages from other conversations while the user is
 away. Before delivering one of these non-user messages, a Claude node can compact the existing conversation in place
-(#8658). This does not change the launcher's window or replace the model's automatic compaction or the idle-process
-reclamation rule above. Other conversations, Codex and external runtimes keep their existing behavior.
+(#8658). This path leaves the launcher's window, the model's automatic compaction and the idle-process reclamation
+rule above in place. Antigravity uses the same idle settings for its assistant chats, as described below.
 
 Three advanced assistant settings are available through `persona_settings` (changes need the usual user approval),
 and through the assistant settings API:
@@ -1129,6 +1137,31 @@ finished or failed and preserves Claude Code's reason when available. Both relea
   and 75% of the window; a process with background tasks is still kept up to 12 hours; supervision rounds are still
   never compacted. A Codex main chat follows the release time but, as before, is not compacted before release. An
   older node ignores both fields; an older manager sends neither. Both must be updated to use it.
+
+### Antigravity idle compaction (#16604, #17260)
+
+The node checks Persona-managed Antigravity sessions (`server/internal/node/agy_idle_compact.go`) on its periodic sweep
+and before delivering a new message. Compaction requires both a large enough context and enough idle time. A turn,
+background work, a queued message, a question, or an attached terminal can keep the session from being idle.
+
+| Session | Switch | Idle time | Context |
+| --- | --- | --- | --- |
+| Task agent | `assistant.agy_idle_auto_compact` | `assistant.agy_idle_auto_compact_minutes`, 10 by default | `assistant.agy_idle_auto_compact_tokens`, 200,000 by default |
+| Assistant conversation (main, leader, scheduled or other chats) | `assistant.agy_idle_auto_compact` and `assistant.idle_auto_compact` | `assistant.idle_auto_compact_minutes`, 30 by default | `assistant.idle_auto_compact_tokens`, 300,000 by default |
+
+The prior defaults could compact the main chat during an ordinary pause after the prompt cache had already expired
+(#17260). Turning off `assistant.agy_idle_auto_compact` stops both groups. The node records which chats it runs as
+assistant conversations so that a restart preserves their policy even when they run from a project directory.
+
+The manager sends `agy_idle_compaction` in `node.configure` on connect and when policy changes. The `enabled` switch
+applies to both groups. `idle_minutes` and `context_tokens` carry the task agent thresholds. The optional
+`assistant_off`, `assistant_idle_minutes` and `assistant_context_tokens` carry the assistant settings. A new node uses
+the assistant defaults for missing assistant fields from an older manager. An older node reads the original fields
+for every session.
+
+After a failed attempt the node waits 5 minutes before retrying. The delay doubles after each consecutive failure,
+up to 4 hours. This also covers historical sessions the runtime can no longer load. New activity or context falling
+below the threshold clears the failure count and cooldown.
 
 ### Impossible gateway usage (2026-11-06, #3300)
 
@@ -1802,6 +1835,11 @@ answer reached Persona through the Inbox alone, and none of the Inbox's routes l
 
 ## Messages that could not go in (#10194)
 
+A logical (segmented) conversation's own delivery queue uses the same row field and bubbles: each of its inputs that
+has not gone in is listed with why (`reason`), an attempt whose receipt stays unknown expires after a bounded deadline
+instead of fencing the queue, and its owner picks Retry or Delete (#17431, docs/operations/logical-input-reconciliation.md
+"Delivery deadline").
+
 The owner's own message must never vanish. When the owner writes to one of the assistant's conversations while it
 cannot take the message (its process did not start, as a cold start killed on a loaded computer, #10192; its computer is
 away), nothing was typed. The hub used to answer the app with the failure and forget the message; a replay of the app's
@@ -2393,6 +2431,8 @@ Requested: "Generate titles after starting new chats; standardize as ‘MMDD | T
 ## Guest conversations (2026-11-06, #5195)
 
 A proxy reply the bot writes for a group is one of these too: the hub starts it itself, with a single hub-owned tool, `bot_group_reply`, and the question never enters a conversation of the owner's (`docs/extensions/bots.md`).
+
+A teammate's question that group access lets through is a third kind the hub starts itself (`bot_group`, `docs/extensions/bots.md` "Group access for teammates"). It is one conversation per chat and thread, registered before the node starts it, and it lists `bot_group_reply` plus the connector tools the owner named (`guest_tools`), nothing else: no snapshot, no memory, no skills, no knowledge-base tools, and never a work machine. The question is another person's words and is not stored with the owner's.
 
 A conversation an extension opens to answer **someone else** for the user (for example a Lark extension's opt-in auto replies to @-mentions). Someone else's message goes into it and its answer goes out as the user, so it must have none of the assistant's powers.
 An ordinary extension conversation is an assistant conversation (the assistant directory, its CLAUDE.md and memory, every `mcp__persona` tool allowed up front, `agent_start` / `agent_send` asking the phone only in the health space), where only the prompt stands between the message and those tools; hence this kind.

@@ -25,13 +25,22 @@ type todoChildSummary struct {
 // projectionViewCountsAsOpen reports whether a projected view is open (matching projection.Counts.Open
 // and todoBoardProjection.Counts.OpenTotal: neither done nor someday).
 func projectionViewCountsAsOpen(v assistantwire.TodoSummary) bool {
-	if v.Phase == assistantwire.TodoPhaseDone || v.Section == assistantwire.TodoListSectionDone {
-		return false
-	}
-	if v.Phase == assistantwire.TodoPhaseSomeday || v.Section == assistantwire.TodoListSectionSomeday {
-		return false
-	}
-	return true
+	return !projectionViewIsClosed(v) && v.Section != assistantwire.TodoListSectionSomeday
+}
+
+func projectionViewIsClosed(v assistantwire.TodoSummary) bool {
+	return v.Phase == assistantwire.TodoPhaseDone || v.Section == assistantwire.TodoListSectionDone
+}
+
+// projectionViewNeedsYou is the immediate, non-quiet attention counted by projection.Counts.
+func projectionViewNeedsYou(v assistantwire.TodoSummary, quiet bool) bool {
+	return v.Section == assistantwire.TodoListSectionNeedsYou && !quiet
+}
+
+// todoCarriedByParent mirrors the section count membership of projection.Counts. The caller supplies
+// whether the direct parent is present and unclosed. Outside decisions keep their own count.
+func todoCarriedByParent(t Todo, parentUnclosed bool) bool {
+	return parentUnclosed && t.PartOf != "" && t.PartOf != t.ID && !isOutsideDecisionTodo(t.ID)
 }
 
 // todoTriageFromProjectionView maps a projection TodoSummary into todoTriage so server consumers
@@ -45,7 +54,7 @@ func todoTriageFromProjectionView(t listedTodo, v assistantwire.TodoSummary, loo
 		return todoTriage{Section: section, Rule: rule, Last: last}
 	}
 	switch {
-	case v.Phase == assistantwire.TodoPhaseDone || v.Section == assistantwire.TodoListSectionDone:
+	case projectionViewIsClosed(v):
 		switch v.Reason {
 		case assistantwire.TodoReasonCanceled:
 			return at(triageCancelled, ruleCancelled)
@@ -122,13 +131,16 @@ func populateTodoChildSummaries(list []listedTodo, views []assistantwire.TodoSum
 		}
 		sum.Total++
 		v := views[i]
-		if v.Phase == assistantwire.TodoPhaseDone || v.Section == assistantwire.TodoListSectionDone {
+		if projectionViewIsClosed(v) {
 			sum.Done++
+			continue
+		}
+		if !projectionViewCountsAsOpen(v) {
 			continue
 		}
 		sum.Open++
 		switch {
-		case v.Section == assistantwire.TodoListSectionNeedsYou || v.Section == assistantwire.TodoListSectionCanWait || v.Phase == assistantwire.TodoPhaseNeedsYou:
+		case projectionViewNeedsYou(v, list[i].Quiet):
 			sum.NeedsYou++
 		case v.Section == assistantwire.TodoListSectionWorking || v.Phase == assistantwire.TodoPhaseWorking:
 			sum.Working++

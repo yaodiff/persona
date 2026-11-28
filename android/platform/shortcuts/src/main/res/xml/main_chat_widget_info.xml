@@ -12,5 +12,7 @@
     android:minResizeHeight="100dp"
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="0"
+    android:configure="persona.platform.shortcuts.ConversationWidgetConfigureActivity"
+    android:widgetFeatures="reconfigurable"
     android:widgetCategory="home_screen"
     tools:targetApi="s" />

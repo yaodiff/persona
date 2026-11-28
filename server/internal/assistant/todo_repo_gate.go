@@ -1,11 +1,10 @@
 package assistant
 
 import (
-	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
@@ -316,68 +315,24 @@ func repoGateOpenNonDraftPR(g *repoGate) bool {
 	}
 }
 
-func repoGatePRWait(g *repoGate) *assistantwire.TodoWait {
+func repoGateProjection(g *repoGate) *assistantwire.TodoWait {
 	if !repoGateOpenNonDraftPR(g) {
 		return nil
 	}
-	target := shortRepoGatePRLabel(g.BlockingPR)
-	if target == "" {
-		target = strings.TrimSpace(g.BlockingRepo)
-	}
-	var blockers []assistantwire.TodoWaitPRBlocker
+	var blocker assistantwire.TodoWaitPRBlocker
 	switch g.State {
 	case repoGateBlockedConflict:
-		blockers = append(blockers, assistantwire.TodoWaitPRBlockerConflicts)
+		blocker = assistantwire.TodoWaitPRBlockerConflicts
 	case repoGateBlockedChanges:
-		blockers = append(blockers, assistantwire.TodoWaitPRBlockerChangesRequested)
+		blocker = assistantwire.TodoWaitPRBlockerChangesRequested
 	case repoGateBlockedCI:
-		blockers = append(blockers, assistantwire.TodoWaitPRBlockerChecksFailing)
+		blocker = assistantwire.TodoWaitPRBlockerChecksFailing
 	case repoGateAwaitingReview:
-		blockers = append(blockers, assistantwire.TodoWaitPRBlockerReviewRequired)
+		blocker = assistantwire.TodoWaitPRBlockerReviewRequired
 	case repoGateChecksPending:
 		if strings.EqualFold(strings.TrimSpace(g.Reason), "checks_pending") {
-			blockers = append(blockers, assistantwire.TodoWaitPRBlockerChecksPending)
+			blocker = assistantwire.TodoWaitPRBlockerChecksPending
 		}
 	}
-	return &assistantwire.TodoWait{
-		Kind:       assistantwire.TodoWaitKindPrMerge,
-		WaitingOn:  target,
-		URL:        strings.TrimSpace(g.BlockingPR),
-		PrBlockers: blockers,
-	}
-}
-
-func shortRepoGatePRLabel(raw string) string {
-	clean := strings.TrimSpace(raw)
-	if idx := strings.IndexAny(clean, "#?"); idx >= 0 {
-		clean = clean[:idx]
-	}
-	sep := strings.Index(clean, "://")
-	if sep < 0 {
-		return ""
-	}
-	rest := clean[sep+3:]
-	slash := strings.IndexByte(rest, '/')
-	if slash < 0 {
-		return ""
-	}
-	path := strings.Trim(rest[slash:], "/")
-	if path == "" {
-		return ""
-	}
-	segs := strings.Split(path, "/")
-	if len(segs) < 4 {
-		return ""
-	}
-	n, err := strconv.Atoi(segs[len(segs)-1])
-	if err != nil || n <= 0 {
-		return ""
-	}
-	if segs[len(segs)-2] == "pull" {
-		return fmt.Sprintf("PR #%d", n)
-	}
-	if len(segs) >= 5 && segs[len(segs)-3] == "-" && segs[len(segs)-2] == "merge_requests" {
-		return fmt.Sprintf("MR !%d", n)
-	}
-	return ""
+	return projection.RepoGateWait(strings.TrimSpace(g.BlockingRepo), strings.TrimSpace(g.BlockingPR), blocker)
 }

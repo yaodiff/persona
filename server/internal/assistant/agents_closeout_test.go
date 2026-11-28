@@ -35,26 +35,30 @@ func TestCloseoutDoneNeedsNoModel(t *testing.T) {
 	}
 }
 
-// A closeout that is not "done" still goes to the model for what it waits for, and stays on the state; the agent's
-// own "not done" wins over a model that read the reply as finished.
-func TestCloseoutNotDoneOverModel(t *testing.T) {
-	s, f := workService(t)
-	f.triage = `{"phase":"blocked","on":"external","line":"等审核通过","wait":{"what":"审核通过","then":"核对结果","check_minutes":60}}`
-	f.setSessions("box", stopped("s1", "提审了。\n<closeout status=\"blocked\" merged=\"no\" deployed=\"no\">\nwaiting: 审核\n</closeout>"))
-	triage(t, s, "s1")
-	if w := entryOf(t, s, "s1").Work; w.Phase != proto.WorkBlocked || w.On != proto.WaitExternal || w.Closeout == nil || w.Closeout.Waiting != "审核" || w.By != "model" {
-		t.Fatalf("blocked: %+v", w)
-	}
-
-	f.triage = `{"phase":"done","line":"都做完了"}`
-	f.setSessions("box", stopped("s2", "先到这。\n<closeout status=\"not_done\">\nmissing: 还差线上验证\n</closeout>"))
-	triage(t, s, "s2")
-	if w := entryOf(t, s, "s2").Work; w.Phase != "" || w.Closeout == nil || w.Closeout.Missing != "还差线上验证" {
-		t.Fatalf("not done read as %+v", w)
-	}
-	// Shown with no phase, so it stays Unread, and with a line saying it is not finished (agents_closeout_brief_test.go).
-	if w, shown := reportOf(t, s, "s2"); !shown || w.Phase != "" || w.Line == "" {
-		t.Fatalf("an unfinished turn is reported as %+v (shown %v)", w, shown)
+func TestTriageUnfinishedCloseoutSkipsModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, report, phase, on, wait string
+	}{
+		{"legacy blocked wait", "<closeout status=\"blocked\">\nwaiting: Review\n</closeout>", proto.WorkBlocked, proto.WaitExternal, "Review"},
+		{"unfinished", "<closeout status=\"not_done\">\nmissing: Live verification\n</closeout>", "", "", ""},
+		{"owner without a request", "<closeout status=\"blocked\">\nunblock: user\n</closeout>", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := workService(t)
+			setTriageAnswer(f, `{"phase":"done","line":"Everything is complete"}`)
+			f.setSessions("box", stopped("s1", "Updates so far.\n"+tc.report))
+			triage(t, s, "s1")
+			if n := len(triageCalls(f)); n != 0 {
+				t.Fatalf("closeout triggered %d model calls", n)
+			}
+			w, shown := reportOf(t, s, "s1")
+			if !shown || w.Closeout == nil || w.By != "rule" || w.Line == "" || w.Phase != tc.phase || w.On != tc.on || w.Wait != tc.wait {
+				t.Fatalf("report = %+v (shown %v), want phase %q on %q waiting for %q", w, shown, tc.phase, tc.on, tc.wait)
+			}
+			if w.WakeAt != nil || len(s.workCards()) != 0 {
+				t.Fatalf("closeout scheduled an action: %+v", w)
+			}
+		})
 	}
 }
 

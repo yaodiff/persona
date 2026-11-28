@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "persona_conversations_and_quiet_tasks",
+      "description": "Two cards on one Persona conversation count twice, including its form. Its approval display copy adds nothing. A quiet task's untold card counts once. The ordinary worker and the sessionless card belong to Agents.",
+      "input": {
+        "sessions": [
+          {"machine_id": "studio", "session_id": "persona", "assistant": true},
+          {"machine_id": "studio", "session_id": "persona-main", "assistant": true},
+          {"machine_id": "studio", "session_id": "quiet", "quiet": true},
+          {"machine_id": "studio", "session_id": "worker", "state": "needs_you"}
+        ],
+        "interactions": [
+          {"id": "ix-permission", "machine_id": "studio", "session_id": "persona", "kind": "permission", "mirror_main": true, "created_at": "2026-11-25T09:00:00Z"},
+          {"id": "ix-form", "machine_id": "studio", "session_id": "persona", "kind": "elicitation", "created_at": "2026-11-25T09:01:00Z"},
+          {"id": "ix-quiet", "machine_id": "studio", "session_id": "quiet", "kind": "question", "created_at": "2026-11-25T09:02:00Z"},
+          {"id": "ix-worker", "machine_id": "studio", "session_id": "worker", "kind": "permission", "created_at": "2026-11-25T09:03:00Z"},
+          {"id": "ix-sessionless", "machine_id": "studio", "kind": "question", "created_at": "2026-11-25T09:04:00Z"},
+          {"id": "ix-copy", "machine_id": "studio", "session_id": "persona-main", "kind": "permission", "mirror_of": "ix-permission", "created_at": "2026-11-25T09:05:00Z"}
+        ]
+      },
+      "expected": {"card_ids": ["ix-permission", "ix-form", "ix-quiet"]}
+    },
+    {
+      "name": "excluded_cards_leave_a_known_zero",
+      "description": "Leave out muted Persona conversations, agents in muted spaces, directory-hidden quiet agents, held questions, supervisor-held screen cards, display mirrors and named sessions absent from the inventory. A terminal wait alone contributes no Persona card.",
+      "input": {
+        "sessions": [
+          {"machine_id": "studio", "session_id": "persona", "assistant": true},
+          {"machine_id": "studio", "session_id": "muted-persona", "assistant": true},
+          {"machine_id": "studio", "session_id": "muted-quiet", "quiet": true, "space_name": "muted"},
+          {"machine_id": "studio", "session_id": "hidden-quiet", "quiet": true, "hidden_by_directory": true},
+          {"machine_id": "studio", "session_id": "quiet", "quiet": true},
+          {"machine_id": "studio", "session_id": "quiet-dialog", "quiet": true, "state": "needs_you"}
+        ],
+        "muted": ["studio/muted-persona", "studio/muted-quiet"],
+        "interactions": [
+          {"id": "ix-muted-session", "machine_id": "studio", "session_id": "muted-persona", "kind": "permission", "created_at": "2026-11-25T09:00:00Z"},
+          {"id": "ix-muted-space", "machine_id": "studio", "session_id": "muted-quiet", "kind": "question", "created_at": "2026-11-25T09:01:00Z"},
+          {"id": "ix-hidden", "machine_id": "studio", "session_id": "hidden-quiet", "kind": "question", "created_at": "2026-11-25T09:02:00Z"},
+          {"id": "ix-delegating", "machine_id": "studio", "session_id": "persona", "kind": "question", "delegating": true, "created_at": "2026-11-25T09:03:00Z"},
+          {"id": "ix-supervisor", "machine_id": "studio", "session_id": "quiet", "kind": "screen", "delegating": true, "created_at": "2026-11-25T09:04:00Z"},
+          {"id": "ix-display", "machine_id": "studio", "session_id": "persona", "kind": "permission", "mirror_of": "ix-muted-session", "created_at": "2026-11-25T09:05:00Z"},
+          {"id": "ix-missing", "machine_id": "studio", "session_id": "missing", "kind": "permission", "created_at": "2026-11-25T09:06:00Z"}
+        ]
+      },
+      "expected": {"card_ids": []}
+    },
+    {
+      "name": "folded_cards_follow_the_asking_session",
+      "description": "A quiet child or side remains Persona's card under an ordinary worker's row. A regular child gains no Persona card by folding under a Persona conversation.",
+      "input": {
+        "sessions": [
+          {"machine_id": "studio", "session_id": "worker"},
+          {"machine_id": "studio", "session_id": "persona", "assistant": true},
+          {"machine_id": "studio", "session_id": "quiet-child", "quiet": true, "folded_under": "worker", "folded_as": "child"},
+          {"machine_id": "studio", "session_id": "quiet-side", "quiet": true, "folded_under": "worker", "folded_as": "side"},
+          {"machine_id": "studio", "session_id": "regular-child", "folded_under": "persona", "folded_as": "child"}
+        ],
+        "interactions": [
+          {"id": "ix-quiet-child", "machine_id": "studio", "session_id": "quiet-child", "kind": "plan", "created_at": "2026-11-25T09:00:00Z"},
+          {"id": "ix-quiet-side", "machine_id": "studio", "session_id": "quiet-side", "kind": "permission", "created_at": "2026-11-25T09:01:00Z"},
+          {"id": "ix-regular-child", "machine_id": "studio", "session_id": "regular-child", "kind": "question", "created_at": "2026-11-25T09:02:00Z"}
+        ]
+      },
+      "expected": {"card_ids": ["ix-quiet-child", "ix-quiet-side"]}
+    }
+  ]
+}

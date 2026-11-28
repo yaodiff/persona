@@ -20,5 +20,9 @@
   "filed": "処理済みにしました",
   "kind_todo": "ToDoの提案",
   "add_todo": "ToDoに追加",
-  "todo_added": "ToDoに追加しました"
+  "todo_added": "ToDoに追加しました",
+  "kind_handoff": "「{target}」への引き継ぎ",
+  "hand_off": "引き継ぐ",
+  "handed_off": "引き継ぎました",
+  "handoff_unavailable": "引き継ぎ先の会話は利用できなくなりました。引き継ぎは行われていません。"
 }

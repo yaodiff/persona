@@ -16,6 +16,7 @@ import { formatChord, jumpHint, useBindings } from "../lib/shortcuts";
 import { takeFocusHandoff, toggleSidebarColumn } from "../lib/layout";
 import { CURRENT_ROW, DOT_CLASS, morePagesMenu, pageLabel, type NavPage, pageIconStyle, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { requestDirectWaiting } from "../lib/direct-waiting";
+import { needsYouAutoOpen } from "../lib/needs-you-auto-open";
 import { useMainWaiting } from "./assistant/use-main-waiting";
 import type { UIColor } from "../lib/extension-ui-v6";
 
@@ -24,12 +25,13 @@ export const SIDEBAR_CONTROL = "touch-hit relative z-10 flex shrink-0 items-cent
 /** The button that folds the sidebar to the rail and opens it again (⌘⌥B by default; the hint follows a rebinding). */
 export function CollapseButton({ collapsed, chord, size = "md", onToggle }: { collapsed: boolean; chord?: string; size?: "sm" | "md"; onToggle?: (keepFocus: boolean) => void }) {
   const label = collapsed ? t("sidebar.expand") : t("sidebar.collapse");
-  // pressed with the focus on it, this one is drawn in place of the other (the rail ⇄ the sidebar) and takes the focus;
-  // keyed on `collapsed` so persistent MacBayTools controls also receive focus when toggled by keyboard shortcut
+  // pressed with the focus on it, this one takes the focus when it is in the active (non-inert) layer,
+  // including mid-flight animation reversals where an already-mounted CollapseButton becomes active again.
   const self = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
-    if (takeFocusHandoff()) self.current?.focus({ preventScroll: true });
-  }, [collapsed]);
+    const el = self.current;
+    if (el && !el.closest("[inert]") && takeFocusHandoff()) el.focus({ preventScroll: true });
+  });
   return (
     <button
       ref={self}
@@ -120,7 +122,7 @@ export function SidebarRail({ route, onSearch, onNewAgent, hideCollapse = false 
             : st === "working" || st === "needs_you" || st === "unread" ? <span aria-hidden className="absolute top-0.5 right-0.5 flex rounded-full ring-2 ring-canvas"><StatusMark state={st} /></span> : null,
           bindings.persona ? `${t("sidebar.persona_main")} (${formatChord(bindings.persona)})` : t("sidebar.persona_main"),
           undefined,
-          () => { if (main && pending > 0) requestDirectWaiting(main.session_id); },
+          () => { if (main && pending > 0 && needsYouAutoOpen()) requestDirectWaiting(main.session_id); },
         )}
         {pages.map((p) => link(
           p.k,

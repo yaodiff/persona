@@ -107,7 +107,7 @@ func TestFeishuReadSendsTheRequestToTheMainConversation(t *testing.T) {
 		t.Fatalf("reactions %v", r)
 	}
 	run := e.readLive("fb_om_r1")
-	if run == nil || run.ReplyTo != "om_r1" || run.Ext[readChatKey] != readChat || run.Ext["chat"] != "" || run.Ext["thread"] != "" ||
+	if run == nil || run.ReplyTo != "om_r1" || run.Ext[assistantwire.FeishuReadChatKey] != readChat || run.Ext["chat"] != "" || run.Ext["thread"] != "" ||
 		run.Ext["read_direct"] != "1" {
 		t.Fatalf("run %+v", run)
 	}

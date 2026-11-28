@@ -26,6 +26,21 @@ vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   api: (path: string, init?: unknown) => api(path, init),
 }));
+const toastMock = vi.hoisted(() => vi.fn());
+vi.mock("../ui/atoms", async (orig) => ({
+  ...(await orig<typeof import("../ui/atoms")>()),
+  toast: (...a: unknown[]) => toastMock(...a),
+}));
+const launchedMock = vi.hoisted(() => vi.fn((..._a: unknown[]) => "local-1"));
+vi.mock("../lib/new-agent", async (orig) => ({
+  ...(await orig<typeof import("../lib/new-agent")>()),
+  launchAgent: (...a: unknown[]) => launchedMock(...a),
+}));
+const openFromPageMock = vi.hoisted(() => vi.fn((..._a: unknown[]) => undefined));
+vi.mock("../lib/handoff", async (orig) => ({
+  ...(await orig<typeof import("../lib/handoff")>()),
+  openFromPage: (...a: unknown[]) => openFromPageMock(...a),
+}));
 
 const { getState, upsertSession, dropSession } = await import("../lib/store");
 const { TodosView } = await import("./Todos");
@@ -66,6 +81,9 @@ const before = { ...getState() };
 
 beforeEach(() => {
   api.mockReset();
+  toastMock.mockReset();
+  launchedMock.mockReset();
+  openFromPageMock.mockReset();
   api.mockImplementation(async (path: string) => (path.endsWith("/launchers") ? { launchers: [] } : {}));
   seed({
     todos: [todo],
@@ -240,5 +258,96 @@ describe("交给 Agent 对话框开着时", () => {
     await act(async () => root.render(<TodosView selectedId="t2" />));
     await flush();
     expect(box()?.value ?? "").toBe("");
+  });
+
+  it("guards rapid double-click on existing-agent handover so POST /messages is sent only once", async () => {
+    let finishPost!: () => void;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.endsWith("/launchers")) return { launchers: [] };
+      if ((init as { method?: string })?.method === "POST") {
+        await new Promise<void>((r) => { finishPost = r; });
+        return {};
+      }
+      return {};
+    });
+    await openHandover();
+    const sendBtn = [...dialog().querySelectorAll<HTMLButtonElement>("button:not([role=radio])")].find((b) => b.textContent?.includes("发送"))!;
+    // Two clicks in the same tick before React applies busy=true.
+    await act(async () => {
+      sendBtn.click();
+      sendBtn.click();
+    });
+    const postCalls = api.mock.calls.filter(([p, init]) => p.includes("/messages") && (init as { method?: string })?.method === "POST");
+    expect(postCalls).toHaveLength(1);
+    await act(async () => { finishPost(); });
+    await flush();
+  });
+
+  it("releases lock and allows retry when POST /messages fails, and suppresses stale completion after close or todo switch", async () => {
+    let attempt = 0;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.endsWith("/launchers")) return { launchers: [] };
+      if (path === "/todos") return { todos: [todo] };
+      if ((init as { method?: string })?.method === "POST") {
+        attempt += 1;
+        if (attempt === 1) throw new Error("hub 500");
+        return {};
+      }
+      return {};
+    });
+    await openHandover();
+    const sendBtn = () => [...dialog().querySelectorAll<HTMLButtonElement>("button:not([role=radio])")].find((b) => b.textContent?.includes("发送"))!;
+    await click(sendBtn());
+    expect(toastMock).toHaveBeenCalledWith(expect.stringContaining("hub 500"), "error");
+    expect(dialog()).toBeTruthy();
+    expect(sendBtn().disabled).toBe(false);
+
+    // Retry succeeds after failure unlocked the guard.
+    await click(sendBtn());
+    expect(attempt).toBe(2);
+    expect(openFromPageMock).toHaveBeenCalledTimes(1);
+
+    // Closing dialog while POST /messages is in flight suppresses stale toast/onClose/openFromPage when POST resolves.
+    toastMock.mockReset();
+    openFromPageMock.mockReset();
+    seed({
+      todos: [todo],
+      todosLoaded: true,
+      machines: [{ id: "m1", name: "示例电脑", online: true }],
+      sessions: { m1: [session("s1", "第一个 Agent"), session("s2", "第二个 Agent")] },
+    });
+    let finishInFlight!: () => void;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.endsWith("/launchers")) return { launchers: [] };
+      if (path === "/todos") return { todos: [todo] };
+      if ((init as { method?: string })?.method === "POST") {
+        await new Promise<void>((r) => { finishInFlight = r; });
+        return {};
+      }
+      return {};
+    });
+    await click(button("交给 Agent"));
+    await click(button("已有 Agent"));
+    await act(async () => { sendBtn().click(); });
+    await click(button("取消"));
+    expect(typeof finishInFlight).toBe("function");
+    await act(async () => { finishInFlight(); });
+    await flush();
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(openFromPageMock).not.toHaveBeenCalled();
+  });
+
+  it("guards rapid double-click and Cmd+Enter+click on submitNew so launchAgent runs only once", async () => {
+    await act(async () => root.render(<TodosView selectedId="t1" />));
+    await flush();
+    await click(button("交给 Agent"));
+    const launchBtn = [...dialog().querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("启动并交给"))!;
+    await act(async () => {
+      box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }));
+      launchBtn.click();
+      launchBtn.click();
+    });
+    await flush();
+    expect(launchedMock).toHaveBeenCalledTimes(1);
   });
 });

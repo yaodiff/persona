@@ -26,14 +26,42 @@ func New(database *db.DB) *Store {
 	return &Store{DB: database, Store: externalsourcestore.New(database)}
 }
 
+// The database carries link provenance alongside the existing wire fields.
+type storedTodoRepository struct {
+	repository.TaskRepository
+	Links []storedTodoRepositoryLink `json:"links"`
+}
+
+type storedTodoRepositoryLink struct {
+	repository.TaskLink
+	Provenance repository.LinkProvenance `json:"provenance,omitempty"`
+}
+
 func decodeTodoRepositories(id string, revision int64, raw []byte) (repository.TaskSet, error) {
 	out := repository.TaskSet{SchemaVersion: 1, TodoID: id, Revision: revision, Repositories: []repository.TaskRepository{}}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &out.Repositories); err != nil {
-			return out, err
+	if len(raw) == 0 {
+		return out, nil
+	}
+	var rows []storedTodoRepository
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return out, err
+	}
+	if rows == nil {
+		return out, repository.Problem("store_unavailable")
+	}
+	out.Repositories = make([]repository.TaskRepository, len(rows))
+	for i, row := range rows {
+		out.Repositories[i] = row.TaskRepository
+		if row.Links != nil {
+			out.Repositories[i].Links = make([]repository.TaskLink, len(row.Links))
 		}
-		if out.Repositories == nil {
-			return out, repository.Problem("store_unavailable")
+		for j, record := range row.Links {
+			link := record.TaskLink
+			switch record.Provenance {
+			case repository.LinkProvenanceUnbound, repository.LinkProvenanceExplicit:
+				link.Provenance = record.Provenance
+			}
+			out.Repositories[i].Links[j] = link
 		}
 	}
 	return out, nil
@@ -126,7 +154,17 @@ func ReadRepositoryCatalogTx(ctx context.Context, tx pgx.Tx) (repository.Catalog
 }
 
 func writeTodoRepositoriesTx(ctx context.Context, tx pgx.Tx, set repository.TaskSet) error {
-	raw, err := json.Marshal(set.Repositories)
+	rows := make([]storedTodoRepository, len(set.Repositories))
+	for i, row := range set.Repositories {
+		rows[i].TaskRepository = row
+		if row.Links != nil {
+			rows[i].Links = make([]storedTodoRepositoryLink, len(row.Links))
+		}
+		for j, link := range row.Links {
+			rows[i].Links[j] = storedTodoRepositoryLink{TaskLink: link, Provenance: link.Provenance}
+		}
+	}
+	raw, err := json.Marshal(rows)
 	if err != nil {
 		return err
 	}
@@ -208,7 +246,7 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 				if err != nil {
 					return err
 				}
-				repository.PreserveLinkTitles(row.Links, links, in.Links)
+				repository.ReconcileLinkEdits(row.Links, links, in.Links)
 				cur.Repositories[index].Links = links
 				cur.Revision++
 				out = cur
@@ -220,20 +258,19 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 	return out, err
 }
 
-// SetTodoRepositoryLinkRole rewrites the role of a single link (matched by canonical URL) inside one transaction, so
-// the automatic gate downgrade can never clobber a concurrent edit made to another link.
+// SetTodoRepositoryLinkRole rewrites the role of a single link matched by canonical URL inside one transaction.
 func (d *Store) SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL, role string) (repository.TaskSet, error) {
 	normalized, perr := repository.NormalizeLinkRole(role)
 	if perr != "" {
 		return repository.TaskSet{}, perr
 	}
 	// NormalizeLink stores the default delivery role as an empty string.
-	storedRole := ""
+	storedRole, provenance := "", repository.LinkProvenanceExplicit
 	if normalized == repository.LinkRoleReference {
-		storedRole = normalized
+		storedRole, provenance = normalized, repository.LinkProvenanceUnbound
 	}
 	return d.updateTodoRepositoryLink(ctx, id, canonicalURL, func(link *repository.TaskLink) {
-		link.Role = storedRole
+		link.Role, link.Provenance = storedRole, provenance
 	})
 }
 
@@ -310,66 +347,127 @@ func (d *Store) ImportTodoRepositoryLinks(ctx context.Context, id string, urls [
 func (d *Store) ImportTodoRepositoryLinkDetails(ctx context.Context, id string, input []repository.LinkInput, source string) (repository.TaskSet, bool, error) {
 	var out repository.TaskSet
 	var changed bool
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		var err error
+		out, changed, err = ImportTodoRepositoryLinkDetailsTx(ctx, tx, id, input, source)
+		return err
+	})
+	return out, changed && err == nil, err
+}
+
+// ImportTodoRepositoryLinkDetailsTx imports saved links and their receipts in a caller's transaction.
+func ImportTodoRepositoryLinkDetailsTx(ctx context.Context, tx pgx.Tx, id string, input []repository.LinkInput, source string) (repository.TaskSet, bool, error) {
+	var out repository.TaskSet
+	var changed bool
 	if source != "legacy" && source != "report" && source != "explicit" {
 		return out, false, repository.Problem("invalid")
 	}
 	if len(input) > repository.MaxTaskRepositories*repository.MaxRepositoryLinks {
 		return out, false, repository.Problem("limit")
 	}
-	err := d.Transaction(ctx, func(tx pgx.Tx) error {
-		cur, err := ReadTodoRepositoriesTx(ctx, tx, id, nil)
+	if source == "report" {
+		// Serialize automatic claims across to-dos (and manager instances), not
+		// just writes to one row. Explicit user associations remain deliberate.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('persona.todo_repository_reports'))`); err != nil {
+			return out, false, err
+		}
+	}
+	cur, err := ReadTodoRepositoriesTx(ctx, tx, id, nil)
+	if err != nil {
+		return out, false, err
+	}
+	out = cur
+	if source == "report" {
+		var open bool
+		if err := tx.QueryRow(ctx, `SELECT done_at IS NULL AND done_by <> $2 FROM todos WHERE id=$1`,
+			id, db.DoneByCancelled).Scan(&open); err != nil {
+			return out, false, err
+		}
+		if !open {
+			return out, false, nil
+		}
+	}
+	var seen []string
+	var legacy bool
+	err = tx.QueryRow(ctx, `SELECT seen_urls,legacy_imported FROM todo_repository_link_receipts WHERE todo_id=$1`, id).Scan(&seen, &legacy)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return out, false, err
+	}
+	legacyReplay := source == "legacy" && legacy
+	saved := repositoryURLs(cur.Repositories)
+	pending := []repository.LinkInput{}
+	canonical := []string{}
+	for _, in := range input {
+		if legacyReplay && in.Role != repository.LinkRoleDelivery {
+			continue
+		}
+		_, link, err := repository.ParseTaskLinkInput(in)
 		if err != nil {
-			return err
+			return out, false, err
 		}
-		out = cur
-		var seen []string
-		var legacy bool
-		err = tx.QueryRow(ctx, `SELECT seen_urls,legacy_imported FROM todo_repository_link_receipts WHERE todo_id=$1`, id).Scan(&seen, &legacy)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		if source == "legacy" && legacy {
-			return nil
-		}
-		pending := []repository.LinkInput{}
-		canonical := []string{}
-		for _, in := range input {
-			_, link, err := repository.ParseTaskLinkInput(in)
+		if source == "report" && link.Kind == "pull_request" {
+			match, err := json.Marshal([]any{map[string]any{"links": []any{map[string]string{"canonical_url": link.CanonicalURL}}}})
 			if err != nil {
-				return err
+				return out, false, err
 			}
-			canonical = append(canonical, link.CanonicalURL)
-			if source == "explicit" || !slices.Contains(seen, link.CanonicalURL) {
-				pending = append(pending, repository.LinkInput{URL: link.CanonicalURL, Title: link.Title, Role: in.Role, Resolved: in.Resolved})
+			var claimed bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (
+				SELECT 1 FROM todo_repository_sets r JOIN todos t ON t.id=r.todo_id
+				WHERE r.todo_id<>$1 AND t.done_at IS NULL AND t.done_by<>$3 AND r.repositories @> $2::jsonb
+			)`, id, match, db.DoneByCancelled).Scan(&claimed); err != nil {
+				return out, false, err
 			}
-		}
-		if len(pending) == 0 {
-			if source == "legacy" {
-				return rememberTodoRepositoryLinksTx(ctx, tx, id, canonical, true)
-			}
-			return nil
-		}
-		catalog, err := ReadRepositoryCatalogTx(ctx, tx)
-		if err != nil {
-			return err
-		}
-		rows, err := repository.MergeTaskLinkDetails(cur.Repositories, pending, catalog)
-		if err != nil {
-			return err
-		}
-		if !reflect.DeepEqual(rows, cur.Repositories) {
-			if cur.Revision >= repository.MaxRevision {
-				return repository.Problem("limit")
-			}
-			cur.Repositories = rows
-			cur.Revision++
-			changed = true
-			if err := writeTodoRepositoriesTx(ctx, tx, cur); err != nil {
-				return err
+			if claimed {
+				// A historical duplicate in cur is not an accepted claim.
+				// Fail closed without deleting deliberate associations.
+				for _, row := range cur.Repositories {
+					for _, existing := range row.Links {
+						if existing.CanonicalURL == link.CanonicalURL {
+							return out, false, errors.New("reported PR is already linked to multiple open to-dos")
+						}
+					}
+				}
+				continue
 			}
 		}
-		out = cur
-		return rememberTodoRepositoryLinksTx(ctx, tx, id, canonical, source == "legacy")
-	})
+		canonical = append(canonical, link.CanonicalURL)
+		// A delivery role can promote a saved mirror even when its URL has already been seen.
+		// Keep the receipt's protection for deleted links.
+		bindSaved := in.Role == repository.LinkRoleDelivery && slices.Contains(saved, link.CanonicalURL)
+		if source == "explicit" || bindSaved || !legacyReplay && !slices.Contains(seen, link.CanonicalURL) {
+			pending = append(pending, repository.LinkInput{URL: link.CanonicalURL, Title: link.Title, Role: in.Role, Resolved: in.Resolved})
+		}
+	}
+	if len(pending) == 0 {
+		if source == "legacy" && !legacy {
+			return out, false, rememberTodoRepositoryLinksTx(ctx, tx, id, canonical, true)
+		}
+		return out, false, nil
+	}
+	catalog, err := ReadRepositoryCatalogTx(ctx, tx)
+	if err != nil {
+		return out, false, err
+	}
+	provenance := repository.LinkProvenanceUnbound
+	if source == "explicit" {
+		provenance = repository.LinkProvenanceExplicit
+	}
+	rows, err := repository.MergeTaskLinkDetails(cur.Repositories, pending, catalog, provenance)
+	if err != nil {
+		return out, false, err
+	}
+	if !reflect.DeepEqual(rows, cur.Repositories) {
+		if cur.Revision >= repository.MaxRevision {
+			return out, false, repository.Problem("limit")
+		}
+		cur.Repositories = rows
+		cur.Revision++
+		changed = true
+		if err := writeTodoRepositoriesTx(ctx, tx, cur); err != nil {
+			return out, false, err
+		}
+	}
+	out = cur
+	err = rememberTodoRepositoryLinksTx(ctx, tx, id, canonical, source == "legacy")
 	return out, changed && err == nil, err
 }

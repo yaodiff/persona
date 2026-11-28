@@ -28,25 +28,26 @@ func (m *cannedJSON) JSON(_ context.Context, system, user string, out any) error
 	return json.Unmarshal([]byte(m.answer), out)
 }
 
-func doneReply(text string) prompts.TaskDoneReply {
-	return prompts.TaskDoneReply{Machine: "desk", Ask: "Fix the login retry", Text: text}
+func doneReply(text string) taskDoneReply {
+	return taskDoneReply{TaskDoneReply: prompts.TaskDoneReply{Machine: "desk", Ask: "Fix the login retry", Text: text}}
 }
 
 func TestTaskDoneWithoutModel(t *testing.T) {
 	merged := doneReply("Merged https://github.com/example/app/pull/7 into main.")
+	merged.pr = "https://github.com/example/app/pull/7"
 	for _, tc := range []struct {
 		name        string
-		replies     []prompts.TaskDoneReply
+		replies     []taskDoneReply
 		blocked     bool
 		ok          bool
 		verdict     string
 		reason      string
 		wantReplies int
 	}{
-		{"side conversation without evidence", []prompts.TaskDoneReply{merged}, true, true, verdictNotDone, verdictWords[verdictNotDone], 1},
+		{"side conversation without evidence", []taskDoneReply{merged}, true, true, verdictNotDone, verdictWords[verdictNotDone], 1},
 		{"no reply", nil, false, true, verdictUnsure, "没读到 Agent 的回复", 0}, // i18n-ignore: the verdict's stored reason
-		{"cut off by the model service", []prompts.TaskDoneReply{merged, doneReply("API Error: 529 overloaded")}, false, true, verdictNotDone, interruptedSummary, 2},
-		{"left to the model", []prompts.TaskDoneReply{merged}, false, false, "", "", 1},
+		{"cut off by the model service", []taskDoneReply{merged, doneReply("API Error: 529 overloaded")}, false, true, verdictNotDone, interruptedSummary, 2},
+		{"left to the model", []taskDoneReply{merged}, false, false, "", "", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, ok := taskDoneWithoutModel(tc.replies, tc.blocked)
@@ -61,7 +62,7 @@ func TestTaskDoneWithoutModel(t *testing.T) {
 }
 
 func TestJudgeTaskDoneWithVerdicts(t *testing.T) {
-	deployed := []prompts.TaskDoneReply{doneReply("Deployed to production and checked the login flow: retry works.")}
+	deployed := []taskDoneReply{doneReply("Deployed to production and checked the login flow: retry works.")}
 	for _, tc := range []struct {
 		name     string
 		delivery bool
@@ -201,7 +202,7 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &cannedJSON{answer: `{"verdict":"done","reason":"finished"}`}
-			c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Write the spec", Replies: []prompts.TaskDoneReply{doneReply(tc.reply)}})
+			c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Write the spec", Replies: []taskDoneReply{doneReply(tc.reply)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -218,7 +219,7 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 func TestJudgeTaskDoneWithReasonIsOneShortLine(t *testing.T) {
 	long := "The retry works now.\n\n" + strings.Repeat("Checked again on the staging hub. ", 4)
 	m := &cannedJSON{answer: `{"verdict":"done","reason":` + judgeJSONText(t, long) + `}`}
-	c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Fix the login retry", Replies: []prompts.TaskDoneReply{doneReply("Done.")}})
+	c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Fix the login retry", Replies: []taskDoneReply{doneReply("Done.")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +230,9 @@ func TestJudgeTaskDoneWithReasonIsOneShortLine(t *testing.T) {
 
 func TestJudgeTaskDoneWithModelError(t *testing.T) {
 	m := &cannedJSON{err: errors.New("no model")}
-	replies := []prompts.TaskDoneReply{doneReply("Merged https://github.com/example/app/pull/7 into main.")}
+	reply := doneReply("Merged https://github.com/example/app/pull/7 into main.")
+	reply.pr = "https://github.com/example/app/pull/7"
+	replies := []taskDoneReply{reply}
 	c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Fix the login retry", Replies: replies})
 	if err == nil {
 		t.Fatal("a model error must come back: the todo is left as it is")
@@ -242,7 +245,7 @@ func TestJudgeTaskDoneWithModelError(t *testing.T) {
 func TestJudgeTaskDoneModelErrorKeepsExplicitOwnerAction(t *testing.T) {
 	m := &cannedJSON{err: errors.New("no model")}
 	reply := "The spec is ready. Should I proceed with the implementation?"
-	c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Write the spec", Replies: []prompts.TaskDoneReply{doneReply(reply)}})
+	c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Write the spec", Replies: []taskDoneReply{doneReply(reply)}})
 	if err == nil {
 		t.Fatal("the model error is still reported")
 	}
@@ -255,7 +258,7 @@ func TestJudgeTaskDoneWithAsksWhatItWasGiven(t *testing.T) {
 	notes := "Retry the token refresh once before signing the user out. " + strings.Repeat("x", 4000) + " Keep the old error text."
 	m := &cannedJSON{answer: `{"verdict":"done","reason":"ok"}`}
 	in := taskDoneInput{Owner: "Alex", Delivery: true, Title: "Fix the login retry", Notes: notes, Criteria: []string{"PR merged", "deployed and verified"},
-		Replies: []prompts.TaskDoneReply{doneReply("Deployed and verified.")}}
+		Replies: []taskDoneReply{doneReply("Deployed and verified.")}}
 	if _, err := judgeTaskDoneWith(context.Background(), m, in); err != nil {
 		t.Fatal(err)
 	}

@@ -216,7 +216,7 @@ func (p *Pusher) ringOne(d Device, payload map[string]any, call assistantwire.Ca
 		CollapseID: "call:" + call.ID, Expiration: p.now().Add(time.Duration(voipTTL(call.TTL)) * time.Second).Unix(), Body: body}
 	res, err := p.direct.Send(context.Background(), r)
 	for _, wait := range p.retryWaits {
-		if err == nil && !directRetryable(res.Status) {
+		if (err == nil && !directRetryable(res.Status)) || errors.Is(err, apns.ErrInvalidDeviceToken) {
 			break
 		}
 		time.Sleep(wait)

@@ -553,6 +553,13 @@ async function bodyText(res: Response): Promise<string> {
   }
 }
 
+/** The hub itself answered with a sentence for the reader: a to-do write's refusal (it says what reached the Agent,
+ *  `delivered`) with its own error and a business code. Other coded 5xx bodies keep the generic line. */
+function hubWorded(e: ApiError): boolean {
+  return e.isJson && typeof e.body.error === "string" && e.body.error.trim() !== "" && !!e.code && e.code !== "internal"
+    && typeof e.body.delivered === "string";
+}
+
 export function errorText(e: unknown): string {
   if (e instanceof ApiError) {
     const business = businessFailureText(e);
@@ -564,7 +571,12 @@ export function errorText(e: unknown): string {
     if (e.status === 404 || e.code === "not_found" || /^not[ _]found$/i.test(e.message.trim())) {
       return t("lib-api.not_found", { detail });
     }
-    if (e.status === 502 || e.status === 503 || e.status === 504) return t("lib-api.hub_unavailable", { detail });
+    // The hub's own answer says why in the reader's language (an accept its Agent did not take, #17431): that, not
+    // "the service couldn't complete this request". The generic line is for what stands in front of the hub (an empty
+    // or non-JSON gateway page) and for an internal error, whose words are not for the reader.
+    if (e.status === 502 || e.status === 503 || e.status === 504) {
+      return hubWorded(e) ? e.message : t("lib-api.hub_unavailable", { detail });
+    }
     if (e.status >= 500 && e.status < 600) return t("lib-api.server_error", { detail });
     return e.message;
   }

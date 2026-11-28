@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -94,6 +95,9 @@ type principal struct {
 	// names when it drops the token (extwire.HubTokenRevoked). extAt: when the hub asked the managers whose it is.
 	extHash string
 	extAt   time.Time
+	// extAuthConn binds the verdict (or its legacy snapshot) to the connection that validated the route and token.
+	extAuthConn *busConn
+	extOwner    extwire.OwnerVerdict
 	// extOpens, extScope: an extension's token opens the request's route (the manager said), else the scope it lacks.
 	extOpens bool
 	extScope string
@@ -290,24 +294,38 @@ func (h *Hub) lookupToken(ctx context.Context, tok string) (principal, bool, err
 		}
 	}
 	touch := time.Since(t.touched[c.p.ID]) > 5*time.Minute
+	t.mu.Unlock()
 	if touch {
-		// Account for the async last_seen write under the quiescer before
-		// spawning: paused snapshots skip the touch (without stamping touched,
-		// so the next request after resume updates it), and already-started
-		// touches finish before pause returns.
+		// Account for the async last_seen write under the quiescer without holding
+		// t.mu (t.mu is a leaf lock; quiesce.beginOrDefer can acquire h.mesh.mu):
+		// paused snapshots skip the touch (without stamping touched, so the next
+		// request after resume updates it), and already-started touches finish
+		// before pause returns.
 		if h.quiesce.begin() {
-			t.touched[c.p.ID] = time.Now()
+			t.mu.Lock()
+			if t.isRevoked(c.p.ID) {
+				t.mu.Unlock()
+				h.quiesce.end()
+				return principal{}, false, nil
+			}
+			if t.touched == nil {
+				t.touched = map[string]time.Time{}
+			}
+			if time.Since(t.touched[c.p.ID]) > 5*time.Minute {
+				t.touched[c.p.ID] = time.Now()
+				t.mu.Unlock()
+				go func(id string) {
+					defer h.quiesce.end()
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_ = h.store.TouchDeviceToken(ctx, id)
+				}(c.p.ID)
+				return *c.p, true, nil
+			}
 			t.mu.Unlock()
-			go func(id string) {
-				defer h.quiesce.end()
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = h.store.TouchDeviceToken(ctx, id)
-			}(c.p.ID)
-			return *c.p, true, nil
+			h.quiesce.end()
 		}
 	}
-	t.mu.Unlock()
 	return *c.p, true, nil
 }
 
@@ -684,6 +702,7 @@ func (h *Hub) revoked(id string) {
 	}
 	// Registration holds h.mu while checking t.mu; release t.mu before taking h.mu.
 	t.mu.Unlock()
+	h.previewDeviceRevoked(id)
 	go func() {
 		_ = h.notifyManagers(bus.EventCredentialRevoked, bus.DeviceCredential{ID: id})
 	}()

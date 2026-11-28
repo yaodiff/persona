@@ -40,6 +40,7 @@ type delegateFleet struct {
 func newDelegateFleet(t *testing.T, decide func(DelegateParams) (DelegateResult, error)) *delegateFleet {
 	t.Helper()
 	ft := newFleetTest(t)
+	setSettings(t, ft.s, func(v *Settings) { v.Main = "" }) // exercise the manual node-question fallback
 	on := true
 	ft.f.setHello(func(h *Hello) { h.Agents.Delegate.Enabled = &on }) // off by default
 	list := []proto.Session{{SessionID: "s1", Title: "修登录", Cwd: "/code/app", Status: proto.StatusBlocked, UpdatedAt: time.Now().UTC()}}
@@ -241,12 +242,13 @@ func TestDelegateUserAnswersFirst(t *testing.T) {
 // assistant not asked. With agents.delegate off, or unset (the default), a question is pushed at once too.
 func TestDelegateOnlyQuestions(t *testing.T) {
 	df := newDelegateFleet(t, func(DelegateParams) (DelegateResult, error) { return DelegateResult{Answer: true}, nil })
-	perm := proto.Interaction{ID: "ix_p", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash",
+	perm := proto.Interaction{ID: "ix_p", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
 	plan := proto.Interaction{ID: "ix_plan", MachineID: "mac", SessionID: "s1", Kind: proto.IxPlan, Plan: "1. 改",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
 	own := delegateQuestion("ix_own")
 	own.ToolName = "ask_user"
+	own.ToolInput = json.RawMessage(`{"why_owner":"priority"}`)
 	form := delegateQuestion("ix_form")
 	form.Fields = []proto.Field{{Key: "pw", Label: "密码", Secret: true}}
 	for _, ix := range []proto.Interaction{perm, plan, own, form} {

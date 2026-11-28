@@ -3,9 +3,9 @@ import {
   boardSectionMap,
   boardSectionToTriageSection,
   consumeBoardDirectionGroups,
-  consumeBoardSidebarTree,
   consumeBoardStatusGroups,
 } from "./board-consumer";
+import { consumeBoardSidebarTree } from "./board-sidebar-tree";
 import type { Todo, TodoBoardProjection } from "../../lib/todos";
 import type { Machine, Session } from "../../lib/types";
 
@@ -36,12 +36,50 @@ const machines: Machine[] = [{ id: "m1", name: "Mac", online: true }];
 describe("board-consumer", () => {
   it("maps server status group keys to web triage sections", () => {
     expect(boardSectionToTriageSection("needs_you")).toBe("waiting");
+    expect(boardSectionToTriageSection("can_wait")).toBe("can_wait");
     expect(boardSectionToTriageSection("in_progress")).toBe("working");
     expect(boardSectionToTriageSection("pending_review")).toBe("just_done");
     expect(boardSectionToTriageSection("waiting")).toBe("parked");
+    expect(boardSectionToTriageSection("todo")).toBe("todo");
     expect(boardSectionToTriageSection("someday")).toBe("shelved");
     expect(boardSectionToTriageSection("done")).toBe("done");
+    expect(boardSectionToTriageSection("cancelled")).toBe("cancelled");
     expect(boardSectionToTriageSection("custom_future")).toBe("other");
+  });
+
+  it("keeps current and older closed outcomes separate, including a folded cancellation", () => {
+    const cancelled = { done_at: iso(1), cancelled_at: iso(1) };
+    const todos = [
+      makeTodo("todo", "Ordinary to-do"),
+      makeTodo("later", "Deferred decision"),
+      makeTodo("done", "Finished"),
+      makeTodo("cancelled", "Cancelled", cancelled),
+      makeTodo("folded-cancelled", "Folded cancelled", { ...cancelled, part_of: "todo" }),
+    ];
+    const olderClosed = [
+      makeTodo("old-done", "Older done", { done_at: iso(24) }),
+      makeTodo("old-cancelled", "Older cancelled", { done_at: iso(24), done_by: "cancelled" }),
+      todos[3],
+    ];
+    const board: TodoBoardProjection = {
+      status_groups: [
+        { key: "can_wait", total_count: 1, visible_count: 1, entries: [{ todo_id: "later" }] },
+        { key: "todo", total_count: 1, visible_count: 1, entries: [{ todo_id: "todo", folded_child_ids: ["folded-cancelled"] }] },
+        { key: "done", total_count: 2, visible_count: 2, entries: [{ todo_id: "done" }, { todo_id: "old-done" }] },
+        { key: "cancelled", total_count: 3, visible_count: 2, entries: [{ todo_id: "cancelled" }, { todo_id: "old-cancelled" }] },
+      ],
+      direction_groups: [],
+      sidebar_tree: [],
+      counts: { needs_you: 0, can_wait: 1, in_progress: 0, pending_review: 0, waiting: 0, todo: 1, someday: 0, done: 2, cancelled: 2, open_total: 2 },
+    };
+    const result = consumeBoardStatusGroups(todos, board, undefined, olderClosed);
+    const ids = (section: ReturnType<typeof boardSectionToTriageSection>) => result.goalFold.triaged.sections[section].map(({ key }) => key);
+    expect(result.sectionOrder.slice(0, 4)).toEqual(["can_wait", "todo", "done", "cancelled"]);
+    expect(ids("done")).toEqual(["done", "old-done"]);
+    expect(ids("cancelled")).toEqual(["cancelled", "old-cancelled"]);
+    expect(ids("waiting")).toEqual([]);
+    expect(result.sectionCounts.cancelled).toBe(2);
+    expect(result.goalFold.goals.get("todo")?.children[0].section).toBe("cancelled");
   });
 
   it("strictly preserves server status_groups order, entry order, folding, surfacing, and counts without re-triaging", () => {
@@ -129,7 +167,6 @@ describe("board-consumer", () => {
     // Server counts preserved
     expect(res.sectionCounts.waiting).toBe(3);
     expect(res.sectionCounts.working).toBe(1);
-    expect(res.needsYouCount).toBe(7);
     expect(res.goalFold.triaged.open).toBe(10);
 
     // boardSectionMap maps both top-level entries and folded children

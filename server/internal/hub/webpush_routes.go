@@ -154,6 +154,9 @@ func (h *Hub) webPushRoutes(api *http.ServeMux) {
 			return
 		}
 		switch err := wp.subscribe(s); {
+		case errors.Is(err, errCredentialRevoked):
+			writeErr(w, http.StatusUnauthorized, err)
+			return
 		case errors.Is(err, errWebPushOwned):
 			writeErrCode(w, http.StatusForbidden, "owned", i18n.Err("hub-webpush.err_owned"))
 			return
