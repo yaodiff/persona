@@ -298,3 +298,45 @@ func TestTodoRepositoryConcurrentReportsAndInteractiveEdit(t *testing.T) {
 		}
 	}
 }
+
+func TestTodoRepositoryBindingOriginSurvivesStoreRoundTrip(t *testing.T) {
+	d := open(t)
+	ctx := t.Context()
+	const id = "workspace-binding-origin"
+	createLinkProvenanceTodo(t, d, id)
+	identity, err := repository.Parse("https://github.com/example/web", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := repository.Catalog{Revision: 1, Repositories: []repository.CatalogEntry{{Identity: identity, ID: "web"}}}
+	if err := d.PutSetting(ctx, repository.CatalogKey, catalog); err != nil {
+		t.Fatal(err)
+	}
+
+	_, changed, err := d.ImportTodoRepositoryLinkDetails(ctx, id, []repository.LinkInput{
+		{URL: "https://github.com/example/web/issues/7", Role: repository.LinkRoleReference},
+	}, "explicit")
+	if err != nil || !changed {
+		t.Fatalf("import reference: changed=%v err=%v", changed, err)
+	}
+
+	assertOrigin := func(want repository.RepositoryBindingOrigin) repository.TaskSet {
+		t.Helper()
+		set, err := d.TodoRepositories(ctx, id)
+		if err != nil || len(set.Repositories) != 1 || set.Repositories[0].RepoID != "web" ||
+			set.Repositories[0].BindingOrigin != want || len(set.Repositories[0].Links) != 1 ||
+			set.Repositories[0].Links[0].Role != repository.LinkRoleReference {
+			t.Fatalf("read stored repository, want origin %q: %+v (%v)", want, set, err)
+		}
+		return set
+	}
+	set := assertOrigin(repository.RepositoryBindingLink)
+	_, err = d.SetTodoRepositories(ctx, id, repository.SetInput{
+		ExpectedRevision: &set.Revision, ExpectedCatalogRevision: &catalog.Revision,
+		Repositories: []repository.TaskInput{{RepoID: "web"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOrigin(repository.RepositoryBindingExplicit)
+}

@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -295,6 +296,59 @@ func TestTaskPlanSharedBranchMultiRepoInfersContainerWorkspace(t *testing.T) {
 	}
 	if h.lastPrepare.Plan.Source.Layout != repository.LayoutContainer || len(h.lastPrepare.Plan.Repositories) != 2 {
 		t.Fatalf("expected 2-repo container prepare, got layout=%s repos=%d", h.lastPrepare.Plan.Source.Layout, len(h.lastPrepare.Plan.Repositories))
+	}
+}
+
+func TestTaskPlanSharedBranchContainerIgnoresLinkOnlyRepositories(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		bound []string
+	}{
+		{"one bound repo does not infer a container", []string{"repo_web"}},
+		{"two bound repos infer a container without links", []string{"repo_web", "repo_api"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			st := newContainerWorkspaceMemStore()
+			h := newWorkspaceTestHarness(t, st)
+			seedRepoWorkflowBinding(t, h.s, "repo_web", "https://github.com/example/web", repository.TaskWorkflowSharedBranch)
+			todo, err := h.s.createTaskTodoWithRepositories(ctx, "todo_shared_links", "Shared work", "Update the bound repositories", "conv1", "", "", "", tc.bound)
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog, err := st.catalog(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			set, err := st.TodoRepositories(ctx, todo.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			set.Repositories, err = repository.MergeTaskLinkDetails(set.Repositories, []repository.LinkInput{
+				{URL: "https://github.com/example/unlisted/issues/7", Role: repository.LinkRoleReference},
+			}, catalog, repository.LinkProvenanceUnbound)
+			if err != nil || len(set.Repositories) != len(tc.bound)+1 {
+				t.Fatalf("link import: rows=%+v err=%v", set.Repositories, err)
+			}
+			st.memRepoStore.mu.Lock()
+			st.memRepoStore.sets[todo.ID] = set
+			st.memRepoStore.mu.Unlock()
+
+			task := PlanTask{TodoID: todo.ID}
+			got := h.s.inferredSharedBranchContainerRepos(ctx, task)
+			if len(tc.bound) == 1 {
+				if len(got) != 0 || h.s.canInferContainerWorkspace(ctx, task) {
+					t.Fatalf("a sibling link triggered container inference: %v", got)
+				}
+				if workflow := h.s.resolvedTaskWorkflow(ctx, task); workflow != repository.TaskWorkflowSharedBranch {
+					t.Fatalf("a sibling link masked the bound repository workflow: %q", workflow)
+				}
+				return
+			}
+			if !slices.Equal(got, tc.bound) {
+				t.Fatalf("inferred repository IDs = %v, want %v", got, tc.bound)
+			}
+		})
 	}
 }
 

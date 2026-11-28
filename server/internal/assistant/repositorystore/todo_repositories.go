@@ -26,10 +26,11 @@ func New(database *db.DB) *Store {
 	return &Store{DB: database, Store: externalsourcestore.New(database)}
 }
 
-// The database carries link provenance alongside the existing wire fields.
+// The database carries binding and link provenance alongside the existing wire fields.
 type storedTodoRepository struct {
 	repository.TaskRepository
-	Links []storedTodoRepositoryLink `json:"links"`
+	Links         []storedTodoRepositoryLink         `json:"links"`
+	BindingOrigin repository.RepositoryBindingOrigin `json:"binding_origin,omitempty"`
 }
 
 type storedTodoRepositoryLink struct {
@@ -52,6 +53,10 @@ func decodeTodoRepositories(id string, revision int64, raw []byte) (repository.T
 	out.Repositories = make([]repository.TaskRepository, len(rows))
 	for i, row := range rows {
 		out.Repositories[i] = row.TaskRepository
+		switch row.BindingOrigin {
+		case repository.RepositoryBindingExplicit, repository.RepositoryBindingLink:
+			out.Repositories[i].BindingOrigin = row.BindingOrigin
+		}
 		if row.Links != nil {
 			out.Repositories[i].Links = make([]repository.TaskLink, len(row.Links))
 		}
@@ -157,6 +162,7 @@ func writeTodoRepositoriesTx(ctx context.Context, tx pgx.Tx, set repository.Task
 	rows := make([]storedTodoRepository, len(set.Repositories))
 	for i, row := range set.Repositories {
 		rows[i].TaskRepository = row
+		rows[i].BindingOrigin = row.BindingOrigin
 		if row.Links != nil {
 			rows[i].Links = make([]storedTodoRepositoryLink, len(row.Links))
 		}

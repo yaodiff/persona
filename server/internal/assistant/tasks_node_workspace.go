@@ -101,10 +101,7 @@ func (s *Service) previewDispatchedWorkspace(ctx context.Context, t *PlanTask, r
 	source.Rules, source.RuleSources = workspacenaming.Effective(settings.WorkspaceRules, rules)
 	var selected []string
 	for _, row := range set.Repositories {
-		// Unlisted rows (`linked_*`) are auto-grouped from attached issue/PR URLs
-		// rather than explicitly bound from the repository catalog; keep task_plan
-		// on the local checkout instead of cloning those links over the network.
-		if row.SourceSnapshot.CloneURL != "" && row.CatalogState != "unlisted" && !strings.HasPrefix(row.RepoID, "linked_") {
+		if row.SourceSnapshot.CloneURL != "" && automaticWorkspaceRepository(row) {
 			selected = append(selected, row.RepoID)
 		}
 	}

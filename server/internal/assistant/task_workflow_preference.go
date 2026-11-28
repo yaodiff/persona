@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
@@ -69,6 +70,20 @@ func bindingByGitOrigin(doc repositoryDocument, origin string) (RepositoryBindin
 	return RepositoryBinding{}, false
 }
 
+// automaticWorkspaceRepository reports whether a saved row can supply a workspace without an explicit repo selection.
+func automaticWorkspaceRepository(row repository.TaskRepository) bool {
+	if row.CatalogState == "unlisted" || strings.HasPrefix(row.RepoID, "linked_") {
+		return false
+	}
+	if row.BindingOrigin != repository.RepositoryBindingUnknown {
+		return row.BindingOrigin == repository.RepositoryBindingExplicit
+	}
+	// Older catalog-matched imports have no origin marker. A default row containing only reference links is treated
+	// as context. A configured ref or alias identifies workspace intent, and explicit binding records it on save.
+	return row.DirectoryAlias != "" || row.RequestedRef.Kind != "default" || len(row.Links) == 0 ||
+		slices.ContainsFunc(row.Links, func(link repository.TaskLink) bool { return link.Role != repository.LinkRoleReference })
+}
+
 // inferredSharedBranchContainerRepos returns the bound repository IDs when a writable task omits workspace policy,
 // targets a multi-repository to-do (2+ bound repos), and the bound repositories opt into shared_branch without an
 // explicit isolated override. Cooperates with #13143 container workspace dispatch.
@@ -98,12 +113,15 @@ func (s *Service) inferredSharedBranchContainerRepos(ctx context.Context, t Plan
 		return nil
 	}
 	set, err := s.savedTodoRepositories(ctx, todoID)
-	if err != nil || len(set.Repositories) < 2 {
+	if err != nil {
 		return nil
 	}
 	hasShared := false
 	ids := make([]string, 0, len(set.Repositories))
 	for _, row := range set.Repositories {
+		if !automaticWorkspaceRepository(row) {
+			continue
+		}
 		ids = append(ids, row.RepoID)
 		if b, found := s.bindingForTaskRepo(doc, row); found {
 			switch b.TaskWorkflow {
@@ -114,7 +132,7 @@ func (s *Service) inferredSharedBranchContainerRepos(ctx context.Context, t Plan
 			}
 		}
 	}
-	if !hasShared {
+	if !hasShared || len(ids) < 2 {
 		return nil
 	}
 	return ids
@@ -133,10 +151,8 @@ func (s *Service) resolvedTaskWorkflow(ctx context.Context, t PlanTask) string {
 	}
 	if todoID := firstNonEmpty(t.TodoID, t.ReuseTodo); todoID != "" {
 		if _, hasStore := s.store().(todoRepositoryStore); hasStore {
-			if set, err := s.savedTodoRepositories(ctx, todoID); err == nil && len(set.Repositories) == 1 {
-				if b, found := s.bindingForTaskRepo(doc, set.Repositories[0]); found {
-					return b.TaskWorkflow
-				}
+			if b, found := s.singleTaskRepoBinding(ctx, doc, todoID); found {
+				return b.TaskWorkflow
 			}
 		}
 	}
@@ -150,12 +166,32 @@ func (s *Service) resolvedTaskWorkflow(ctx context.Context, t PlanTask) string {
 	}
 	if t.PartOf != "" {
 		if _, hasStore := s.store().(todoRepositoryStore); hasStore {
-			if set, err := s.savedTodoRepositories(ctx, t.PartOf); err == nil && len(set.Repositories) == 1 {
-				if b, found := s.bindingForTaskRepo(doc, set.Repositories[0]); found {
-					return b.TaskWorkflow
-				}
+			if b, found := s.singleTaskRepoBinding(ctx, doc, t.PartOf); found {
+				return b.TaskWorkflow
 			}
 		}
 	}
 	return ""
+}
+
+func (s *Service) singleTaskRepoBinding(ctx context.Context, doc repositoryDocument, todoID string) (RepositoryBinding, bool) {
+	set, err := s.savedTodoRepositories(ctx, todoID)
+	if err != nil {
+		return RepositoryBinding{}, false
+	}
+	var chosen *repository.TaskRepository
+	for i := range set.Repositories {
+		row := &set.Repositories[i]
+		if !automaticWorkspaceRepository(*row) {
+			continue
+		}
+		if chosen != nil {
+			return RepositoryBinding{}, false
+		}
+		chosen = row
+	}
+	if chosen == nil {
+		return RepositoryBinding{}, false
+	}
+	return s.bindingForTaskRepo(doc, *chosen)
 }

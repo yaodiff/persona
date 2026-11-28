@@ -147,6 +147,16 @@ type TaskInput struct {
 	// Omitted links preserve an existing repository's links. An explicit [] clears them.
 	Links []LinkInput `json:"links,omitempty"`
 }
+
+// RepositoryBindingOrigin records how a repository row was added to a to-do.
+type RepositoryBindingOrigin string
+
+const (
+	RepositoryBindingUnknown  RepositoryBindingOrigin = ""
+	RepositoryBindingExplicit RepositoryBindingOrigin = "explicit"
+	RepositoryBindingLink     RepositoryBindingOrigin = "link"
+)
+
 type TaskRepository struct {
 	RepoID         string         `json:"repo_id"`
 	DirectoryAlias string         `json:"directory_alias,omitempty"`
@@ -154,6 +164,8 @@ type TaskRepository struct {
 	SourceSnapshot SourceSnapshot `json:"source_snapshot"`
 	Links          []TaskLink     `json:"links"`
 	CatalogState   string         `json:"catalog_state,omitempty"`
+	// BindingOrigin is manager storage metadata and stays out of the wire contract.
+	BindingOrigin RepositoryBindingOrigin `json:"-"`
 	// ProviderState and LinkKinds describe an extension provider's row when answering reads (available, off or
 	// missing; its own link labels). Computed like CatalogState, never stored.
 	ProviderState string      `json:"provider_state,omitempty"`
@@ -487,7 +499,7 @@ func Bind(current []TaskRepository, input []TaskInput, catalog Catalog) ([]TaskR
 		if err != nil {
 			return nil, err
 		}
-		row := TaskRepository{RepoID: in.RepoID, DirectoryAlias: in.DirectoryAlias, RequestedRef: ref, Links: []TaskLink{}}
+		row := TaskRepository{RepoID: in.RepoID, DirectoryAlias: in.DirectoryAlias, RequestedRef: ref, Links: []TaskLink{}, BindingOrigin: RepositoryBindingExplicit}
 		old := slices.IndexFunc(current, func(r TaskRepository) bool { return r.RepoID == in.RepoID })
 		if old >= 0 {
 			row.SourceSnapshot = current[old].SourceSnapshot
@@ -794,7 +806,7 @@ func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog C
 			if _, err := CloneTransport(source.CloneURL, identity); err != nil {
 				return nil, err
 			}
-			out = append(out, TaskRepository{RepoID: id, RequestedRef: RequestedRef{Kind: "default"}, SourceSnapshot: source, Links: []TaskLink{}})
+			out = append(out, TaskRepository{RepoID: id, RequestedRef: RequestedRef{Kind: "default"}, SourceSnapshot: source, Links: []TaskLink{}, BindingOrigin: RepositoryBindingLink})
 			index = len(out) - 1
 		}
 		existing := slices.IndexFunc(out[index].Links, func(l TaskLink) bool { return l.Kind == link.Kind && l.Number == link.Number })

@@ -236,9 +236,9 @@ func TestTaskDispatchRecoversNamingPlanSavedBeforeTaskUpdate(t *testing.T) {
 	}
 }
 
-func TestTaskDispatchUnlistedLinkedRepoUsesLocalCheckout(t *testing.T) {
+func TestTaskDispatchLinkOnlyRepoUsesLocalCheckout(t *testing.T) {
 	commit := strings.Repeat("b", 40)
-	t.Run("unlisted linked repo uses local checkout", func(t *testing.T) {
+	checkLocalCheckout := func(t *testing.T, url, role, state string, legacy bool) {
 		ctx := t.Context()
 		st := newContainerWorkspaceMemStore()
 		h := newWorkspaceTestHarness(t, st)
@@ -268,9 +268,12 @@ func TestTaskDispatchUnlistedLinkedRepoUsesLocalCheckout(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rows, err := repository.MergeTaskLinkDetails(nil, []repository.LinkInput{{URL: "https://github.com/example/unlisted/pull/42"}}, catalog, repository.LinkProvenanceUnbound)
-		if err != nil || len(rows) != 1 || !strings.HasPrefix(rows[0].RepoID, "linked_") {
-			t.Fatalf("expected unlisted linked repo row, got %+v (%v)", rows, err)
+		rows, err := repository.MergeTaskLinkDetails(nil, []repository.LinkInput{{URL: url, Role: role}}, catalog, repository.LinkProvenanceUnbound)
+		if err != nil || len(rows) != 1 || repository.CatalogState(rows[0], catalog) != state {
+			t.Fatalf("expected a link row in catalog state %q, got %+v (%v)", state, rows, err)
+		}
+		if legacy {
+			rows[0].BindingOrigin = repository.RepositoryBindingUnknown
 		}
 		st.memRepoStore.mu.Lock()
 		st.memRepoStore.sets[todo.ID] = repository.TaskSet{SchemaVersion: 1, TodoID: todo.ID, Revision: 1, Repositories: rows}
@@ -290,7 +293,7 @@ func TestTaskDispatchUnlistedLinkedRepoUsesLocalCheckout(t *testing.T) {
 		if _, err := h.s.startPlan(ctx, plan.ID, nil, false); err != nil {
 			t.Fatal(err)
 		}
-		waitFor(t, "unlisted link dispatch uses local checkout", func() bool {
+		waitFor(t, "link-only dispatch uses local checkout", func() bool {
 			got, ok := h.s.todoNow(todo.ID)
 			return ok && (len(got.Agents) == 1 || got.StartError != "")
 		})
@@ -308,9 +311,18 @@ func TestTaskDispatchUnlistedLinkedRepoUsesLocalCheckout(t *testing.T) {
 		if len(repos) != 1 || repos[0].Local == nil || repos[0].Local.Commit != commit {
 			t.Fatalf("expected local source preparation, got %+v", repos)
 		}
+	}
+	t.Run("unlisted link", func(t *testing.T) {
+		checkLocalCheckout(t, "https://github.com/example/unlisted/pull/42", "", "unlisted", false)
+	})
+	t.Run("catalog-matched reference", func(t *testing.T) {
+		checkLocalCheckout(t, "https://github.com/example/web/issues/42", repository.LinkRoleReference, "current", false)
+	})
+	t.Run("catalog-matched reference saved before binding origins", func(t *testing.T) {
+		checkLocalCheckout(t, "https://github.com/example/web/issues/42", repository.LinkRoleReference, "current", true)
 	})
 
-	t.Run("bound catalog repo ignores sibling unlisted link", func(t *testing.T) {
+	t.Run("explicit binding with reference ignores sibling links", func(t *testing.T) {
 		ctx := t.Context()
 		st := newContainerWorkspaceMemStore()
 		h := newWorkspaceTestHarness(t, st)
@@ -327,7 +339,10 @@ func TestTaskDispatchUnlistedLinkedRepoUsesLocalCheckout(t *testing.T) {
 		if _, err := h.s.setTodoRepositories(ctx, todo.ID, repository.SetInput{
 			ExpectedRevision:        new(int64(0)),
 			ExpectedCatalogRevision: new(int64(1)),
-			Repositories:            []repository.TaskInput{{RepoID: "repo_web", RequestedRef: repository.RequestedRef{Kind: "branch", Value: "main"}}},
+			Repositories: []repository.TaskInput{{
+				RepoID: "repo_web",
+				Links:  []repository.LinkInput{{URL: "https://github.com/example/web/issues/6", Role: repository.LinkRoleReference}},
+			}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -339,9 +354,12 @@ func TestTaskDispatchUnlistedLinkedRepoUsesLocalCheckout(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		merged, err := repository.MergeTaskLinkDetails(cur.Repositories, []repository.LinkInput{{URL: "https://github.com/other/ref/issues/7", Role: repository.LinkRoleReference}}, catalog, repository.LinkProvenanceUnbound)
-		if err != nil || len(merged) != 2 {
-			t.Fatalf("expected catalog + unlisted row, got %+v (%v)", merged, err)
+		merged, err := repository.MergeTaskLinkDetails(cur.Repositories, []repository.LinkInput{
+			{URL: "https://github.com/other/ref/issues/7", Role: repository.LinkRoleReference},
+			{URL: "https://github.com/example/api/issues/7", Role: repository.LinkRoleReference},
+		}, catalog, repository.LinkProvenanceUnbound)
+		if err != nil || len(merged) != 3 || repository.CatalogState(merged[2], catalog) != "current" {
+			t.Fatalf("expected one bound repo, one unlisted link and one catalog-matched link, got %+v (%v)", merged, err)
 		}
 		st.memRepoStore.mu.Lock()
 		st.memRepoStore.sets[todo.ID] = repository.TaskSet{SchemaVersion: 1, TodoID: todo.ID, Revision: cur.Revision + 1, Repositories: merged}
@@ -361,7 +379,7 @@ func TestTaskDispatchUnlistedLinkedRepoUsesLocalCheckout(t *testing.T) {
 		if _, err := h.s.startPlan(ctx, plan.ID, nil, false); err != nil {
 			t.Fatal(err)
 		}
-		waitFor(t, "catalog repo with sibling unlisted link", func() bool {
+		waitFor(t, "catalog repo with sibling links", func() bool {
 			got, ok := h.s.todoNow(todo.ID)
 			return ok && (len(got.Agents) == 1 || got.StartError != "")
 		})

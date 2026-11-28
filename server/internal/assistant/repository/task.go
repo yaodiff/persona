@@ -27,6 +27,12 @@ type ResolvedLink = repositorywire.ResolvedLink
 type TaskLink = repositorywire.TaskLink
 type LinkProvenance = repositorywire.LinkProvenance
 type TaskInput = repositorywire.TaskInput
+
+const RepositoryBindingUnknown = repositorywire.RepositoryBindingUnknown
+const RepositoryBindingExplicit = repositorywire.RepositoryBindingExplicit
+const RepositoryBindingLink = repositorywire.RepositoryBindingLink
+
+type RepositoryBindingOrigin = repositorywire.RepositoryBindingOrigin
 type TaskRepository = repositorywire.TaskRepository
 type TaskSet = repositorywire.TaskSet
 type CreateBindings = repositorywire.CreateBindings
