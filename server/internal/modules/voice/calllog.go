@@ -219,7 +219,7 @@ func (b *boundTarget) logName() string {
 func (c *conversation) logStart(s *startFrame, p *Provider) {
 	c.mu.Lock()
 	lines, runs := len(c.history), len(c.resume)
-	resumed, echoes, gateOff, modelID, voice := c.resumed, c.gate.echoes, c.gate.off, c.modelID, c.voice
+	resumed, echoes, gateOff, modelID, voice, ttsRate := c.resumed, c.gate.echoes, c.gate.off, c.modelID, c.voice, c.ttsOutRate
 	c.mu.Unlock()
 	if c.dictation {
 		c.logf("start: protocol 2 (dictation), model %s (%s dialect), target unbound", modelID, p.Dialect)
@@ -260,6 +260,9 @@ func (c *conversation) logStart(s *startFrame, p *Provider) {
 	}
 	if s.Surface == surfaceCall { // only the one value: the log never says what an app wrote there (it is shared)
 		more = append(more, "surface call")
+	}
+	if ttsRate > 0 {
+		more = append(more, fmt.Sprintf("tts %d Hz", ttsRate))
 	}
 	extra := ""
 	if len(more) > 0 {

@@ -226,6 +226,9 @@ func (c *conversation) closeAsst() {
 	if c.asst != nil {
 		c.asstText("", false, true, c.asst.source)
 	}
+	if c.tts != nil && !c.turnsEnd && c.ttsCurGen != 0 {
+		c.endTTSTextLocked()
+	}
 }
 
 // recent is the conversation's last n lines in the order they were said, the user's line still open (its caption so

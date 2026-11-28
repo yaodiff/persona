@@ -59,8 +59,13 @@ func (c *conversation) readApp() {
 		switch msg.Type {
 		case "interrupt":
 			c.mu.Lock()
-			c.dropAudio, c.lastAudio, c.cutAt = true, time.Now(), time.Time{}
-			c.pace.playEnd = c.lastAudio // the app drops what it had not played
+			now := time.Now()
+			c.dropAudio, c.lastAudio, c.cutAt = true, now, time.Time{}
+			c.pace.playEnd = now // the app drops what it had not played
+			c.barge = barge{}
+			if c.tts != nil {
+				c.ttsCutLocked(false) // clear and closeReply happen right below
+			}
 			c.closeAsst()
 			c.sendApp(map[string]any{"type": "clear"})
 			c.closeReply(true)

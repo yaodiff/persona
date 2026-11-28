@@ -303,6 +303,11 @@ func agyBackgroundAt(steps []agyStep, conversation, dir string, brain *os.Root, 
 				}
 				message := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(m[3]), "</SYSTEM_MESSAGE>"))
 				heartbeat := agyTaskHeartbeat.MatchString(message)
+				var iteration []string
+				if agyIsOwnTaskID(conversation, sender) {
+					iteration = agyCronIteration.FindStringSubmatch(message)
+				}
+				cronCompleted := false
 				msgAt := at
 				if msgAt.IsZero() {
 					msgAt, _ = time.Parse(time.RFC3339Nano, m[1])
@@ -310,24 +315,29 @@ func agyBackgroundAt(steps []agyStep, conversation, dir string, brain *os.Root, 
 				if record := byID[sender]; record != nil {
 					record.recordSeen(msgAt, i)
 					if end == nil {
-						if iter := agyCronIteration.FindStringSubmatch(message); iter != nil {
+						if iteration != nil {
 							record.oneShot = false
 							record.condition = ""
 							record.deadline = time.Time{}
-							if n, err := strconv.Atoi(iter[1]); err == nil && record.maxIterations > 0 && n >= record.maxIterations {
+							if n, err := strconv.Atoi(iteration[1]); err == nil && record.maxIterations > 0 && n >= record.maxIterations {
 								record.finish(proto.WorkflowCompleted, msgAt, true)
+								cronCompleted = true
 							}
 						} else if record.oneShot && !heartbeat {
 							record.finish(proto.WorkflowCompleted, msgAt, false)
 						}
 					}
 				}
-				if !heartbeat && !msgAt.IsZero() {
+				if message != "" && !heartbeat && !msgAt.IsZero() && (iteration == nil || cronCompleted) {
 					var subID string
 					if sender == "system" {
 						if idle := agySubagentIdleRe.FindStringSubmatch(message); idle != nil {
 							subID = strings.ToLower(idle[1])
 						}
+					}
+					// General runtime notices do not deliver a task or subagent result.
+					if end == nil && subID == "" && (sender == "system" || strings.HasPrefix(message, "[Notice]")) {
+						continue
 					}
 					messages = append(messages, agyReconcileEvent{at: msgAt, order: i, sender: sender, subagentID: subID})
 				}
