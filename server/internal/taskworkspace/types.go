@@ -17,16 +17,17 @@ import (
 const Capability = nodeproto.TaskWorkspace
 const MethodPrefix = "task.workspace."
 
+// The preparation budgets live in the repository contract, so contract packages can read them too.
 const (
-	GitTimeout       = 2 * time.Minute
-	ColdFetchTimeout = 10 * time.Minute
-	RPCTimeout       = 5 * time.Minute
+	GitTimeout       = repository.TaskWorkspaceGitTimeout
+	ColdFetchTimeout = repository.TaskWorkspaceColdFetchTimeout
+	RPCTimeout       = repository.TaskWorkspaceRPCTimeout
 )
 
 // PrepareTimeout budgets ref discovery and a cold fetch for each sequential
 // remote source, with time for local setup and the reply.
 func PrepareTimeout(remoteRepos int) time.Duration {
-	return RPCTimeout + time.Duration(remoteRepos)*(GitTimeout+ColdFetchTimeout)
+	return repository.TaskWorkspacePrepareTimeout(remoteRepos)
 }
 
 // Capabilities is the response to the read-only task.workspace.capabilities probe.

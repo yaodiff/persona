@@ -399,7 +399,7 @@ var Routes = []string{
 	"GET /api/v1/todos/{id}/repositories",
 	"GET /api/v1/todos/{id}/backend-workspace",
 	"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}",
-	RouteBackendWorkspacePrepare,
+	"POST /api/v1/todos/{id}/backend-workspace/prepare", // RouteBackendWorkspacePrepare; the central list takes no new name
 	"POST /api/v1/todos/{id}/backend-workspace/start",
 	"POST /api/v1/todos/{id}/backend-workspace/cancel",
 	"POST /api/v1/todos/{id}/backend-workspace/cleanup",
