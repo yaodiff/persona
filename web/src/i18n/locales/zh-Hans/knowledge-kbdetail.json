@@ -36,5 +36,17 @@
   "recording_transcript": "转写",
   "recording_photos": "照片",
   "recording_photo_label": "照片 {n}",
-  "recording_paused_module_off": "hub 所在的机器上已关闭会议录音，纪要和转写已暂停。已保存的内容仍可查看。"
+  "recording_paused_module_off": "hub 所在的机器上已关闭会议录音，纪要和转写已暂停。已保存的内容仍可查看。",
+  "recording_speakers": "发言人",
+  "recording_speaker_n": "发言人 {n}",
+  "recording_speaker_possibly": "可能是",
+  "recording_speakers_waiting": "正在区分发言人…",
+  "recording_speakers_waiting_done": "正在区分发言人（已完成 {done} 分钟）…",
+  "recording_speakers_waiting_progress": "正在区分发言人（{done}/{total} 分钟）…",
+  "recording_speakers_low_quality": "这场会的发言人区分不太可靠。",
+  "recording_speakers_failed_too_long": "这场会太长，没有区分发言人。",
+  "recording_speakers_failed_timeout": "hub 没能按时分完发言人。",
+  "recording_speakers_failed_engine_unavailable": "hub 上的发言人区分当时不可用。",
+  "recording_speakers_failed_no_audio": "hub 收到的声音太少，没有区分发言人。",
+  "recording_speakers_failed_other": "hub 没能分完这场会的发言人。"
 }

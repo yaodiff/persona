@@ -139,6 +139,58 @@ describe("minutesDebates", () => {
       )[0].outcome,
     ).toEqual({ text: "Picked A" });
   });
+
+  it("preserves valid speaker, speaker_unsure and also attribution fields and drops malformed ones", () => {
+    const out = minutesDebates(
+      [
+        {
+          question: "Ship per item?",
+          status: "open",
+          positions: [
+            {
+              stance: "Per item",
+              at: 10,
+              speaker: "s1",
+              speaker_unsure: false,
+              also: [
+                { speaker: "s3", at: 42 },
+                { speaker: "s4", speaker_unsure: true },
+                { speaker: "bad_id" },
+                null,
+              ],
+            },
+            {
+              stance: "Per recording",
+              at: 20,
+              speaker: "s2",
+              speaker_unsure: true,
+              who: "Grace",
+              also: "not-an-array",
+            },
+          ],
+        },
+      ],
+      0,
+    );
+    expect(out[0]?.positions).toEqual([
+      {
+        stance: "Per item",
+        at: 10,
+        speaker: "s1",
+        also: [
+          { speaker: "s3", at: 42 },
+          { speaker: "s4", speaker_unsure: true },
+        ],
+      },
+      {
+        stance: "Per recording",
+        at: 20,
+        speaker: "s2",
+        speaker_unsure: true,
+        who: "Grace",
+      },
+    ]);
+  });
 });
 
 describe("overviewDecisionTargets", () => {

@@ -3,17 +3,29 @@
 // When nothing survives, no Disagreements section is shown and the minutes look identical to minutes without `debates`.
 // The hub, mock hub, iPhone and this page check the same cases (spec/fixtures/minutes-debates/cases.json).
 import type { MinutesPoint } from "../../lib/kb";
+import { isValidSpeakerId } from "../../lib/recording-speakers";
 import type { MinutesOverview } from "./minutes-overview";
 
 /** Closed status set: an unknown, missing or non-string wire value decodes to `"unknown"` (never to a real status) and
  *  is shown with no status word (`docs/architecture/evolution-guide.md`). */
 export type DebateStatus = "open" | "settled" | "unknown";
 
+export interface DebateSupporter {
+  at?: number;
+  speaker?: string;
+  speaker_unsure?: boolean;
+}
+
 export interface DebatePosition {
   stance: string;
   /** Start of the cited transcript line (seconds into the recording), omitted when absent or invalid. */
   at?: number;
   who?: string;
+  /** Hub-computed speaker attribution from the cited line (#17674); absent without a timeline. */
+  speaker?: string;
+  speaker_unsure?: boolean;
+  /** Additional lines where other speakers backed the same position (#17674). */
+  also?: DebateSupporter[];
 }
 
 export interface DebateOutcome {
@@ -43,12 +55,36 @@ function cleanStatus(v: unknown): DebateStatus {
   return "unknown";
 }
 
+function cleanSupporter(o: Obj): DebateSupporter | null {
+  const at = nonNeg(o.at);
+  const speaker = isValidSpeakerId(o.speaker) ? o.speaker : undefined;
+  const unsure = speaker && o.speaker_unsure === true ? true : undefined;
+  if (at === undefined && !speaker) return null;
+  return {
+    ...(at !== undefined ? { at } : {}),
+    ...(speaker ? { speaker } : {}),
+    ...(unsure ? { speaker_unsure: true } : {}),
+  };
+}
+
 function cleanPosition(o: Obj): DebatePosition | null {
   const stance = nonBlank(o.stance);
   if (!stance) return null;
   const at = nonNeg(o.at);
   const who = nonBlank(o.who);
-  return { stance, ...(at !== undefined ? { at } : {}), ...(who ? { who } : {}) };
+  const speaker = isValidSpeakerId(o.speaker) ? o.speaker : undefined;
+  const unsure = speaker && o.speaker_unsure === true ? true : undefined;
+  const also = Array.isArray(o.also)
+    ? o.also.filter(isObj).map(cleanSupporter).filter((x): x is DebateSupporter => !!x)
+    : [];
+  return {
+    stance,
+    ...(at !== undefined ? { at } : {}),
+    ...(who ? { who } : {}),
+    ...(speaker ? { speaker } : {}),
+    ...(unsure ? { speaker_unsure: true } : {}),
+    ...(also.length ? { also } : {}),
+  };
 }
 
 function cleanOutcome(v: unknown, decisionsCount: number): DebateOutcome | undefined {

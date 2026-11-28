@@ -71,3 +71,8 @@
 /* Disagreements cards (#16728, MinutesDebatesSection): neutral inset cards that reuse .minutes-words, .minutes-mark
    and .minutes-glyph; the settled outcome row keeps extra breathing room above its hairline. */
 .minutes-debate-outcome { margin-top: 0.5rem; }
+
+/* Neutral speaker avatars (#17675, RecordingTranscript & RecordingSpeakersDialog): sized in em so they scale cleanly
+   with the app's Large text setting without adding utilities to the first-screen stylesheet. */
+.speaker-avatar { width: 1.75em; height: 1.75em; min-width: 1.75em; }
+.speaker-avatar-lg { width: 2.1em; height: 2.1em; min-width: 2.1em; }

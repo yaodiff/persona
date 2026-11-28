@@ -4,6 +4,7 @@
 // lib/kb.ts with the recording module (#13407), so none of it loads with the first screen.
 import { formatDate, t } from "../../i18n";
 import { knownZone, wallClock, type DayRecapEntry, type DayRecapGap, type KBSegment, type MeetingConversation, type MeetingRoom, type RecordingPhoto } from "../../lib/kb";
+import { isValidSpeakerId } from "../../lib/recording-speakers";
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
@@ -90,7 +91,7 @@ export interface RecordingView {
   /** Transcription still going (more will come). */
   partial: boolean;
   /** A line per segment and bookmark, at its clock time, in order. */
-  lines: { seconds: number; clock: string; text: string; bookmark?: boolean }[];
+  lines: { seconds: number; clock: string; text: string; bookmark?: boolean; speaker?: string; speakerUnsure?: boolean }[];
   /** Persona attends the meeting in this role (#2981); absent when off. */
   attendance?: "listener" | "participant";
   /** A room meeting whose room only takes notes (#8851): Persona is not in it and answers nothing. */
@@ -141,7 +142,20 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
   for (const s of trimmedAt ? [] : segments ?? []) {
     if (s?.echo === true) continue; // Persona's echo is not the meeting's: hidden, as the phone hides it
     const sec = Number(s?.start) || 0;
-    if (typeof s?.text === "string" && s.text.trim()) at.push({ sec, line: { seconds: sec, clock: clock(sec), text: s.text.trim() } });
+    if (typeof s?.text === "string" && s.text.trim()) {
+      const speaker = isValidSpeakerId(s.speaker) ? s.speaker : undefined;
+      const speakerUnsure = speaker && s.speaker_unsure === true ? true : undefined;
+      at.push({
+        sec,
+        line: {
+          seconds: sec,
+          clock: clock(sec),
+          text: s.text.trim(),
+          ...(speaker ? { speaker } : {}),
+          ...(speakerUnsure ? { speakerUnsure: true } : {}),
+        },
+      });
+    }
   }
   const marks = Array.isArray(meta?.bookmarks) ? (meta.bookmarks as { at?: unknown; label?: unknown }[]) : [];
   for (const b of marks) {
