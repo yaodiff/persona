@@ -168,7 +168,7 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *botc
 			c.Markdown(line)
 		}
 	}
-	if d := deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now()); d != "" && decideAsk(&a) && a.AcceptedAt.IsZero() && a.AgentReply == nil {
+	if d := a.deadlineText(l, s.location(ctx), time.Now(), t.Agents); d != "" && decideAsk(&a) && a.AcceptedAt.IsZero() && a.AgentReply == nil {
 		c.Markdown(botcard.EscapeMarkdown(d))
 	}
 	// Self-contained (#3804): where it came from and stands, what each option leads to, what waiting costs.
@@ -259,6 +259,7 @@ type conclusionInput struct {
 	Reversible bool
 	// Decision: a decision's why_owner, options and cost of waiting (#3804, decision.go); the zero value for the rest.
 	Decision reviewDecision
+	Reviewer string // the supervisor raising this decision, for its pending manual-resume refusal
 	// ForBriefing: the decision can wait and is held for the next briefing: no card now (#4930, decision_wait.go).
 	ForBriefing bool
 	// RaisedBy: the leader conversation or background supervisor that raised it, kept while it is held (acceptAsk).
@@ -306,6 +307,9 @@ func (s *Service) askConclusion(ctx context.Context, t Todo, in conclusionInput)
 		a.Deadline, a.Reversible = in.Deadline, in.Reversible
 	}
 	if in.Outcome == outcomeDecide {
+		if in.Check == "" && in.Reviewer != "" {
+			a.ResumeTerminal = s.todos.takeResumeTerminal(t.ID, in.Reviewer, a.AskedAt)
+		}
 		a.WhyOwner, a.Options, a.CostOfWaiting = in.Decision.WhyOwner, in.Decision.Options, in.Decision.CostOfWaiting
 		a.From, a.Stands = s.decisionBackground(ctx, t) // the hub's, not the model's: where it came from, where it stands
 		a.ForBriefing, a.Check = in.ForBriefing, in.Check

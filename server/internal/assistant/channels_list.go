@@ -123,7 +123,7 @@ func (s *Service) filledChannel(ctx context.Context, v channel.View, v2 bool) ch
 		if pref.Target != nil {
 			t = *pref.Target
 		}
-		threadMode := pref.ThreadMode.Effective(v2 && v.Capabilities.Threads)
+		threadMode := channelRoutingMode(v, pref.ThreadMode, v2)
 		threadIdleHours := pref.ThreadIdleHours
 		features := channel.PluginFeatures(s.botLang(ctx), v.Capabilities, pref.Features)
 		c.mu.Unlock()

@@ -25,7 +25,7 @@ class ConcurrencyTests(unittest.TestCase):
     def test_all_manual_entry_points_cancel_same_branch_lane_not_same_commit_key(self):
         for filename, prefix in [('ci.yml', 'ci'), ('apple-test.yml', 'apple'),
                                  ('server-test.yml', 'server'), ('android-test.yml', 'android'),
-                                 ('scripts-tests.yml', 'scripts')]:
+                                 ('scripts-tests.yml', 'scripts'), ('web-ui-e2e.yml', 'web-ui-e2e')]:
             with self.subTest(filename=filename):
                 config = workflow(filename)['concurrency']
                 self.assertEqual(config['cancel-in-progress'], 'true')

@@ -89,7 +89,9 @@ DOMAINS = [
     "kb_chat_inbox_mock",  # a chat's Inbox items on its knowledge page and its items' kb_chat (#15356), MOCK_KB_CHAT_INBOX
     "command_input_mock",  # an Antigravity command waiting at a prompt (#14527), MOCK_COMMAND_INPUT
     "recording_minutes_debates_mock",  # disagreements in meeting minutes (#16728), POST /mock/recording_minutes_debates
+    "recording_speakers_mock",  # meeting speakers samples and edit route (#17674), POST /api/v1/recordings/{id}/speakers
     "orca_chat_launchers_mock",  # the server's Orca chat launchers in New Agent (#17047), MOCK_ORCA_CHAT_LAUNCHERS
+    "orca_chat_starts_mock",  # the server's "Start new Agents as Orca chats" switch (#17650), MOCK_ORCA_CHAT_STARTS
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")

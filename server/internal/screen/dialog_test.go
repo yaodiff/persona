@@ -251,6 +251,73 @@ func TestParseDangerousCommandPrompt(t *testing.T) {
 	}
 }
 
+const borderlessBashScreen = `────────────────────────────────────────────────
+ Bash command
+   │ target=$WORKSPACE/example.tmp
+   │ rm -- "$target"
+ Clean the temporary
+ workspace files
+
+ │ Dangerous rm operation on statically-unresolvable target: $target
+ │ Review the target before proceeding.
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No`
+
+func TestParseBorderlessCommandPrompt(t *testing.T) {
+	const bashCommand = "target=$WORKSPACE/example.tmp\nrm -- \"$target\""
+	const warning = "Dangerous rm operation on statically-unresolvable target: $target Review the target before proceeding."
+	const powershellScreen = `────────────────────────────────────────────────
+ PowerShell command
+
+   │ $target = './example'
+   │ Get-ChildItem -Path $target
+ List the example files
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No`
+	withoutDescription := strings.Replace(borderlessBashScreen, " Clean the temporary\n workspace files\n", "", 1)
+	for _, tc := range []struct {
+		name, text, command, description, warning, risk string
+	}{
+		{"Bash", borderlessBashScreen, bashCommand, "Clean the temporary workspace files", warning, RiskDelete},
+		{"Bash with an ASCII warning and no description", strings.ReplaceAll(withoutDescription, "\n │ ", "\n | "), bashCommand, "", warning, RiskDelete},
+		{"PowerShell without a warning", powershellScreen, "$target = './example'\nGet-ChildItem -Path $target", "List the example files", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := ParseDialog(tc.text)
+			if d == nil {
+				t.Fatal("no dialog")
+			}
+			if d.Command != tc.command || d.Description != tc.description || d.Warning != tc.warning || d.Risk != tc.risk {
+				t.Errorf("command %q, description %q, warning %q, risk %q", d.Command, d.Description, d.Warning, d.Risk)
+			}
+			if d.Question != "Do you want to proceed?" || len(d.Options) != 2 || d.Options[0].Label != "Yes" || d.Options[1].Label != "No" {
+				t.Errorf("question %q, options %+v", d.Question, d.Options)
+			}
+			if !strings.Contains(d.Detail, tc.command) {
+				t.Errorf("detail omits the command: %q", d.Detail)
+			}
+		})
+	}
+}
+
+func TestBorderlessCommandRevision(t *testing.T) {
+	first := ParseDialog(borderlessBashScreen)
+	changedCommand := ParseDialog(strings.Replace(borderlessBashScreen, "example.tmp", "another.tmp", 1))
+	changedWarning := ParseDialog(strings.Replace(borderlessBashScreen, "Review the target", "Check the target", 1))
+	if first == nil || changedCommand == nil || changedWarning == nil {
+		t.Fatal("no dialog")
+	}
+	if first.Rev == changedCommand.Rev {
+		t.Errorf("different commands share revision %q", first.Rev)
+	}
+	if first.Rev != changedWarning.Rev {
+		t.Errorf("changing the warning changed the revision from %q to %q", first.Rev, changedWarning.Rev)
+	}
+}
+
 // Claude Code 2.1.322's safety check on a command its parser cannot read (real captures in a private pty, the command
 // a placeholder), at 120, 100, 57 and 40 columns and a few seconds apart. 2.1.322 draws a │ before each of the
 // command's rows, as before the warning under it, so the command was read as part of the warning: no client showed

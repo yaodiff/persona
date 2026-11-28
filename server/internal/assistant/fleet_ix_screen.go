@@ -19,15 +19,25 @@ import (
 
 // ---- screen cards ----
 
+func canReadBlockedScreen(sess proto.Session) bool {
+	// Legacy sessions have a terminal. Other sources advertise one explicitly.
+	return sess.Status == proto.StatusBlocked && (sess.SourceKind == "" || sess.Capabilities != nil && sess.Capabilities.Terminal)
+}
+
+// syncScreenAfterHookExpiry checks the session the expired card covered. It can stay blocked without a new status
+// event. The screen read and the checks for a newer card or user handback are shared with the session-list path.
+func (s *Service) syncScreenAfterHookExpiry(machine, session string) {
+	if sess, ok := s.nodeSession(machine, session); ok && canReadBlockedScreen(sess) {
+		go s.createScreenInteraction(machine, sess)
+	}
+}
+
 // syncScreenInteractions turns blocked agents without a hook-driven interaction into "screen" interactions
 // (folder trust, model pickers, any TUI dialog hooks cannot see), and clears them once the agent moves on.
 func (s *Service) syncScreenInteractions(machine string, list []proto.Session) {
 	blocked := map[string]proto.Session{}
 	for _, sess := range list {
-		// A session without a terminal (a source whose capabilities leave it out: Codex app-server, an agent runtime)
-		// has no screen to read a dialog off: it asks through its own cards, and blocked there means it waits in its
-		// own UI (docs/integrations/runtimes.md).
-		if sess.Status == proto.StatusBlocked && (sess.SourceKind == "" || sess.Capabilities != nil && sess.Capabilities.Terminal) {
+		if canReadBlockedScreen(sess) {
 			blocked[sess.SessionID] = sess
 		}
 	}
@@ -89,7 +99,7 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 	if wait := screenCardWait(sess, s.hasHooks(machine, sess)); wait > 0 {
 		time.Sleep(wait)
 	}
-	if cur, ok := s.nodeSession(machine, sess.SessionID); !ok || cur.Status != proto.StatusBlocked {
+	if cur, ok := s.nodeSession(machine, sess.SessionID); !ok || !canReadBlockedScreen(cur) {
 		return
 	}
 	text, d, err := s.screenDialog(ctx, machine, sess.SessionID)

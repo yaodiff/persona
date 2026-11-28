@@ -185,6 +185,9 @@ func Run(ctx context.Context) error {
 	for _, w := range cfg.Warnings {
 		logger.Printf("config: %s", w)
 	}
+	if tts := cfg.TTS(); tts.Configured() {
+		logger.Printf("tts: enabled (model %s, key set: %t)", tts.Model(), tts.Key() != "")
+	}
 	if cfg.ArchiveMachine != "" {
 		logger.Printf("archive: every call's lines go to %s:%s when it ends", cfg.ArchiveMachine, firstNonEmpty(cfg.ArchiveDir, DefaultArchiveDir))
 	}

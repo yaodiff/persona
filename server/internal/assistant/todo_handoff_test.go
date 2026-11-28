@@ -127,14 +127,23 @@ func TestTaskHandoffInboxStaysWithOrigin(t *testing.T) {
 			if err != nil || len(sentToAgent(f)) != 1 {
 				t.Fatalf("handoff did not send exactly once: %s, %v", got, err)
 			}
-			// Read the persisted backlink through a new manager. Its chain points
-			// to the receiver without moving that Agent onto the origin.
 			next, _ := newQuietServiceOn(t, d)
 			if err := next.inboxReady(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			origin.Agents = receiving.Agents
-			assertExistingInboxLink(t, next, it.ID, origin)
+			if mode == "omitted" {
+				next.inbox.mu.Lock()
+				saved := next.inbox.items[it.ID]
+				unlinked := saved != nil && saved.Agent == nil
+				next.inbox.mu.Unlock()
+				if !unlinked {
+					t.Fatal("omitting inbox_item changed the saved Inbox assignment")
+				}
+			} else {
+				// The explicit backlink belongs to the origin. The chain points to the receiver.
+				origin.Agents = receiving.Agents
+				assertExistingInboxLink(t, next, it.ID, origin)
+			}
 			if current, ok := s.openTodoOfAgent("box", session); !ok || current.ID != receiving.ID {
 				t.Fatal("handoff changed the receiver's owning task", current.ID)
 			}

@@ -40,3 +40,24 @@ func TestOrcaBridgeRefusalsAreWordedByReason(t *testing.T) {
 		}
 	}
 }
+
+// A chat Orca can't open for its provider on that computer (#17684) is worded by why, naming the provider (data
+// program) in the request's language; Orca's own words are the detail beside it.
+func TestOrcaChatUnavailableIsWordedWithTheProvider(t *testing.T) {
+	const orcaWords = "Codex can't open as a chat here because its chat runtime isn't installed on this host (install it from a new chat tab in Orca). Start it in a terminal instead."
+	for _, reason := range []string{"orca_chat_runtime_missing", "orca_chat_unavailable"} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			data, _ := json.Marshal(map[string]any{"reason": reason, "program": "Codex", "detail": orcaWords, "delivered": "none"})
+			rec := httptest.NewRecorder()
+			body := call(t, langWriter{rec, lang}, rec, &rpc.Error{Code: "unsupported", Message: "node words", Data: data})
+			want := i18n.T(lang, "rpc-errors."+reason, i18n.Args{"program": "Codex"})
+			if body["error"] != want || body["code"] != "unsupported" || !strings.Contains(want, "Codex") ||
+				strings.Contains(want, "{") || strings.Contains(want, "rpc-errors.") {
+				t.Fatalf("%s %s: %v, want %q", reason, lang, body, want)
+			}
+			if body["detail"] != orcaWords {
+				t.Fatalf("%s %s: detail %v", reason, lang, body["detail"])
+			}
+		}
+	}
+}

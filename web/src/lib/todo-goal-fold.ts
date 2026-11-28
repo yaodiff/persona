@@ -134,7 +134,7 @@ export function foldGoalTasks(triaged: TriageResult): GoalFoldResult {
     return { triaged, goals, surfacedParent };
   }
 
-  const sections = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
+  const sections = { ...triaged.sections, ...Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) };
   for (const sec of TRIAGE_SECTIONS) {
     for (const g of triaged.sections[sec]) {
       const keptMembers = g.members.filter(
@@ -173,9 +173,9 @@ export function foldGoalTasks(triaged: TriageResult): GoalFoldResult {
     });
   }
 
-  const todoCounts = Object.fromEntries(
+  const todoCounts = { ...triaged.todoCounts, ...Object.fromEntries(
     TRIAGE_SECTIONS.map((sec) => [sec, sections[sec].reduce((n, g) => n + g.members.length, 0)]),
-  ) as Record<TriageSection, number>;
+  ) };
 
   return {
     triaged: {

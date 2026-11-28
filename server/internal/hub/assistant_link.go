@@ -425,9 +425,10 @@ func (h *Hub) appTool(ctx context.Context, from, app string, params json.RawMess
 	return json.Marshal(proto.TextResult(res, false))
 }
 
-// snapshotFrom keeps what manager from reported (manager.snapshot) for the hub's own features.
-func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
+// keepSnapshot keeps what a manager reported (manager.snapshot) for the hub's own features.
+func (l assistantLink) keepSnapshot(c *busConn, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
 	h := l.h
+	from := c.managerID()
 	a := h.assistantOf(from)
 	views := make(map[string]assistantwire.SessionView, len(s.Sessions))
 	for _, v := range s.Sessions {
@@ -443,6 +444,7 @@ func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantw
 	if s.Profile != nil {
 		a.profile = s.Profile
 	}
+	c.extensionOwnerProfile.Store(s.Profile)
 	a.mu.Unlock()
 	// The hub keeps one profile as its own (assistant_profile.go): the assistant it starts.
 	if s.Profile != nil && !jsonSame(oldProfile, s.Profile) && from == assistantwire.AssistantID {
@@ -508,8 +510,8 @@ func init() {
 		}
 		return notifyAnswer(out), nil
 	})
-	handleTypedBus(assistantwire.SnapshotMethod, assistantwire.MethodSnapshot+": ", func(h *Hub, ctx context.Context, c *busConn, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
-		res, err := assistantLink{h}.snapshotFrom(ctx, c.managerID(), s)
+	handleTypedBus(assistantwire.SnapshotMethod, assistantwire.MethodSnapshot+": ", func(h *Hub, _ context.Context, c *busConn, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
+		res, err := assistantLink{h}.keepSnapshot(c, s)
 		return res, busCodedError(err)
 	})
 	// ws.broadcast is relayBroadcastFrom's (bus_forward.go).

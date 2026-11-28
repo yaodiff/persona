@@ -95,6 +95,8 @@
   "preset_left_out": "以下设置在此不适用：{what}，将沿用启动器或模型自身的设置。",
   "follow_row": "跟随模型配置",
   "carry_dropped": "{name} 无法在 {computer} 上运行，已改用这台电脑的默认设置。",
+  "opens_orca_chat": "将以 {name} 打开：这台电脑设为新建 Agent 以 Orca 聊天打开。",
+  "opens_orca_chat_own": "将以 {name} 打开，使用 Orca 自己的模型：这台电脑设为新建 Agent 以 Orca 聊天打开。",
   "preset_picked": "预设 {name} · {what}",
   "typed_now": "本次手动输入的模型 ID",
   "temporary_session": "临时会话",

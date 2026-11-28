@@ -214,6 +214,8 @@
     <string name="settings_engine_retry">Retry</string>
     <string name="settings_engine_continue">Continue for now</string>
     <string name="settings_engine_save_failed">Couldn\'t save: %1$s</string>
+    <string name="settings_engine_orca_chats">Start new Agents as Orca chats</string>
+    <string name="settings_engine_orca_chats_detail">New Agent opens Claude Code and Codex in Orca\'s chat view instead of a terminal. A launcher you pick still opens a terminal, and the assistant\'s Agents always do.</string>
 
     <!-- Candidate addresses (Diagnostics) -->
     <string name="settings_endpoint_hint_unchanged">The address hasn\'t changed</string>

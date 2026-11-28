@@ -570,7 +570,7 @@ func (s *Service) mergeTodos(ctx context.Context, targetID string, in todoMergeR
 			closed = row
 		} else {
 			row := todoRowOf(source)
-			row.DoneAt, row.DoneBy, row.DoneReason, row.UpdatedAt = &w.at, db.DoneByCancelled, reason, w.at
+			reviewClose(&row, reason, false, w.at)
 			closed = &row
 		}
 		w.edited = append(w.edited, *closed)

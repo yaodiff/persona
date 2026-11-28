@@ -306,6 +306,7 @@ type Node struct {
 	agyIdleClock      func() time.Time // nil uses time.Now (tests override per-node)
 	agyIdlePolicy     *assistantwire.AgyIdleCompaction
 	agyIdleSessions   map[string]*agyIdleState
+	agyIdleInFlight   int
 	agyAttemptSeq     uint64
 	pendingIxSessions map[string]bool
 	// recoveries: a conversation's bounded model-failure recovery, surviving the process replaced by a model switch.
@@ -390,7 +391,15 @@ type Node struct {
 	previewOnce sync.Once
 
 	// hostAgents: each host's agents in its last answer (refreshHosts), kept for a host that does not answer.
-	hostAgents map[string][]host.Agent
+	// Per-host snapshot sequence numbers and agentsGen keep delayed older snapshots from overwriting newer live state (#2133).
+	// agentsGen numbers each merge of hostAgents as it is taken; agentsCommitted is the newest one written into agents. A
+	// merge gives way only to a newer one already written, never to one still running (#17826).
+	hostAgents      map[string][]host.Agent
+	hostSnapSeq     map[string]uint64
+	hostLayoutSeq   map[string]uint64
+	hostAgentsSeq   map[string]uint64
+	agentsGen       uint64
+	agentsCommitted uint64
 	// paneClaudes: when the outside-claude list first saw each claude whose environment names an engine pane, by pid
 	// (claudeInPane's grace while its engine has not reported it yet).
 	paneClaudes map[int]paneClaudeSeen
@@ -1532,6 +1541,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// PendingInteractionSessions: session IDs on this machine currently holding pending hub interaction cards
 			// (ask_user / approval), so idle auto-compaction does not compact sessions waiting on the user.
 			PendingInteractionSessions *[]string `json:"pending_interaction_sessions"`
+			// BotmuxOwnerUnionID: the BotMux Owner Union ID of Settings › Agents (hostbotmux_owner.go), "" for none;
+			// nil (an older hub, a call that says nothing of it) leaves it as it is.
+			BotmuxOwnerUnionID *string `json:"botmux_owner_union_id"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
@@ -1549,7 +1561,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 			n.hubMCPWait.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.MCPWait))
 		}
-		if c.ClaudeDirs != nil || (c.Keep == nil && c.AgyIdleCompaction == nil && c.PendingInteractionSessions == nil) { // partial updates leave the directories
+		if c.ClaudeDirs != nil || (c.Keep == nil && c.AgyIdleCompaction == nil && c.PendingInteractionSessions == nil && c.BotmuxOwnerUnionID == nil) { // partial updates leave the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
 		}
 		if c.ClaudeDirsBlocked != nil {
@@ -1570,6 +1582,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if c.Botmux != nil {
 			n.useBotmux(*c.Botmux, false)
+		}
+		if c.BotmuxOwnerUnionID != nil {
+			n.setBotmuxOwner(*c.BotmuxOwnerUnionID)
 		}
 		if c.ClaudeStartDir != nil {
 			d := strings.TrimSpace(*c.ClaudeStartDir)
@@ -3410,7 +3425,7 @@ func (n *Node) herdrRunning(ctx context.Context) (running, known bool) {
 	if !ok || h.c == nil {
 		return false, false
 	}
-	return herdrAlive(ctx, h.c.Socket), true
+	return herdrProbe(ctx, h.c.Socket)
 }
 
 func claudeVersion(ctx context.Context) string {

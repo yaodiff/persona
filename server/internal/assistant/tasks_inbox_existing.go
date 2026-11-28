@@ -11,12 +11,19 @@ import (
 
 var errInboxTaskClaimed = errors.New("Inbox item belongs to another task")
 
-// A follow-up may belong to an existing task with a different original Inbox
-// source. Keep that source and append this item's backlink and Agent chain.
-func (s *Service) checkExistingTaskInbox(conversation string, source PlanTask, todo Todo) error {
+func (s *Service) planExistingTaskInbox(ctx context.Context, machine, conversation string, source *PlanTask, todo Todo) error {
+	if err := s.planInboxSource(ctx, machine, conversation, source); err != nil {
+		return err
+	}
 	if source.InboxItem == "" {
 		return nil
 	}
+	return s.checkExistingTaskInbox(conversation, *source, todo)
+}
+
+// A follow-up may belong to an existing task with a different original Inbox
+// source. Keep that source and append this item's backlink and Agent chain.
+func (s *Service) checkExistingTaskInbox(conversation string, source PlanTask, todo Todo) error {
 	if todo.ID != "" && !taskOpen(todo) {
 		return fmt.Errorf("task %s is not open; its Inbox item was not linked", todo.ID)
 	}
@@ -33,11 +40,8 @@ func (s *Service) checkExistingTaskInbox(conversation string, source PlanTask, t
 	return nil
 }
 
-// A confirmed handoff keeps the backlink on the origin and names an Agent on the receiving task.
+// An explicitly selected handoff keeps the backlink on the origin and names an Agent on the receiving task.
 func (s *Service) linkExistingTaskInbox(ctx context.Context, conversation string, source PlanTask, todoID, agentTodoID string, agents []SessionRef) error {
-	if source.InboxItem == "" {
-		return nil
-	}
 	todo, ok := s.todoNow(todoID)
 	if !ok {
 		return fmt.Errorf("task %s no longer exists", todoID)

@@ -288,3 +288,141 @@ func TestTaskTerminalKeepsAgentWhenOwnerOpensItDuringProbe(t *testing.T) {
 		t.Fatalf("review with owner activity during probe = %q, %v (probed: %t)", res, err, probed)
 	}
 }
+
+func TestTaskTerminalRuntimeCloseOnAccept(t *testing.T) {
+	canClose := true
+	cannotClose := false
+	for _, tc := range []struct {
+		name       string
+		closeOnEnd bool
+		userCheck  bool
+		change     func(*proto.Session)
+		extraAgent bool
+		wantClosed bool
+		wantStatus string
+	}{
+		{name: "runtime agy accepted with close_ended_terminals", closeOnEnd: true, wantClosed: true, wantStatus: devicewire.TaskTerminalClosed},
+		{name: "close_ended_terminals off", closeOnEnd: false, wantClosed: false, wantStatus: devicewire.TaskTerminalSkipped},
+		{name: "user_check defers cleanup", closeOnEnd: true, userCheck: true, wantClosed: false, wantStatus: devicewire.TaskTerminalSkipped},
+		{name: "working runtime session", closeOnEnd: true, change: func(s *proto.Session) { s.Status = proto.StatusWorking }, wantStatus: devicewire.TaskTerminalSkipped},
+		{name: "queued input", closeOnEnd: true, change: func(s *proto.Session) { s.Queued = []string{"next"} }, wantStatus: devicewire.TaskTerminalSkipped},
+		{name: "background work", closeOnEnd: true, change: func(s *proto.Session) { s.BackgroundWorking = true }, wantStatus: devicewire.TaskTerminalSkipped},
+		{name: "owner viewing", closeOnEnd: true, change: func(s *proto.Session) { s.SeenAt = time.Now() }, wantStatus: devicewire.TaskTerminalSkipped},
+		{name: "assistant session", closeOnEnd: true, change: func(s *proto.Session) { s.Assistant = true }, wantStatus: devicewire.TaskTerminalSkipped},
+		{name: "runtime without close capability", closeOnEnd: true, change: func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Close: &cannotClose} }, wantStatus: devicewire.TaskTerminalSkipped},
+		{name: "multi-agent task not exclusive", closeOnEnd: true, extraAgent: true, wantStatus: devicewire.TaskTerminalSkipped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := newQuietServiceOn(t, nil)
+			closeOnEnd(t, s, tc.closeOnEnd)
+			row := proto.Session{
+				SessionID:        "agy-runtime-task",
+				MachineID:        "box",
+				Status:           proto.StatusDone,
+				Agent:            "agy",
+				SourceKind:       proto.SourceRuntime,
+				SourceInstanceID: "agy",
+				StartedByPersona: true,
+				Capabilities:     &proto.SessionCapabilities{Close: &canClose},
+			}
+			if tc.change != nil {
+				tc.change(&row)
+			}
+			f.mu.Lock()
+			f.sessions["box"] = []proto.Session{row}
+			f.mu.Unlock()
+			var closeCalls int
+			f.answerNode("session.close", func(machine string, raw json.RawMessage) (any, error) {
+				closeCalls++
+				var in struct {
+					SessionID string `json:"session_id"`
+				}
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, err
+				}
+				if in.SessionID != row.SessionID {
+					t.Errorf("session.close session_id = %q, want %q", in.SessionID, row.SessionID)
+				}
+				return map[string]any{"ok": true}, nil
+			})
+
+			agents := []TodoAgent{{MachineID: "box", SessionID: row.SessionID, Cwd: "/work"}}
+			if tc.extraAgent {
+				agents = append(agents, TodoAgent{MachineID: "box", SessionID: "agy-second-worker", Cwd: "/work"})
+			}
+			todo := Todo{
+				ID:     "todo_rt_" + strings.ReplaceAll(tc.name, " ", "_"),
+				Origin: "conv1",
+				Title:  "Runtime task",
+				Agents: agents,
+			}
+			putTodo(s, todo)
+
+			res, err := runJSON(t, s, "conv1", "task_review", map[string]any{
+				"todo_id":    todo.ID,
+				"verdict":    "accepted",
+				"user_check": tc.userCheck,
+			})
+			if err != nil {
+				t.Fatalf("task_review: %v", err)
+			}
+			if !strings.Contains(res, "Terminal cleanup: "+tc.wantStatus+".") {
+				t.Fatalf("task_review = %q, want Terminal cleanup: %s.", res, tc.wantStatus)
+			}
+			if (closeCalls == 1) != tc.wantClosed || closeCalls > 1 {
+				t.Fatalf("session.close calls = %d, want closed=%v", closeCalls, tc.wantClosed)
+			}
+		})
+	}
+}
+
+func TestCloseDoneTaskAgentsRuntimeSessionClose(t *testing.T) {
+	canClose := true
+	s, f := newQuietServiceOn(t, nil)
+	closeOnEnd(t, s, true)
+	old := taskCloseIdle
+	taskCloseIdle = 0
+	t.Cleanup(func() { taskCloseIdle = old })
+
+	doneAt := time.Now().Add(-5 * time.Minute)
+	row := proto.Session{
+		SessionID:        "agy-done-task",
+		MachineID:        "box",
+		Status:           proto.StatusDone,
+		Agent:            "agy",
+		SourceKind:       proto.SourceRuntime,
+		SourceInstanceID: "agy",
+		StartedByPersona: true,
+		UpdatedAt:        doneAt,
+		Capabilities:     &proto.SessionCapabilities{Close: &canClose},
+	}
+	f.mu.Lock()
+	f.sessions["box"] = []proto.Session{row}
+	f.mu.Unlock()
+	var closeCalls int
+	f.answerNode("session.close", func(machine string, raw json.RawMessage) (any, error) {
+		closeCalls++
+		return map[string]any{"ok": true}, nil
+	})
+
+	todo := Todo{
+		ID:     "todo_rt_done_pass",
+		Origin: "conv1",
+		Title:  "Done runtime task",
+		DoneAt: &doneAt,
+		DoneBy: db.DoneByReview,
+		Agents: []TodoAgent{{MachineID: "box", SessionID: row.SessionID, Cwd: "/work"}},
+	}
+	putTodo(s, todo)
+
+	seen := doneSeen{}
+	s.closeDoneTaskAgents(t.Context(), taskCloseRefused{}, seen)
+	if closeCalls != 1 {
+		t.Fatalf("first closeDoneTaskAgents session.close calls = %d, want 1", closeCalls)
+	}
+	// A subsequent pass must not repeatedly call session.close even though the runtime row stays StatusDone.
+	s.closeDoneTaskAgents(t.Context(), taskCloseRefused{}, seen)
+	if closeCalls != 1 {
+		t.Fatalf("second closeDoneTaskAgents session.close calls = %d, want 1", closeCalls)
+	}
+}

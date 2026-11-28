@@ -839,6 +839,9 @@ export interface UsageItem {
   id: string;
   name: string;
   hosts?: string[];
+  direct?: boolean;
+  remote_address?: string;
+  remote_key?: string;
 }
 
 export interface ProviderItem {
@@ -4779,8 +4782,27 @@ export interface ConnectorInboxReply {
   item_id?: string;
   last?: string;
   text?: string;
+  mentions?: ConnectorInboxMention[];
   client_id?: string;
   changes?: ConnectorStatusChange[];
+}
+
+/**
+ * Binds an exact @name in the reply's text to a verified external user id, for connectors that support real @
+ * mentions.
+ */
+export interface ConnectorInboxMention {
+  id: ConnectorMentionUserID;
+  name: string;
+}
+
+/**
+ * A person's user ID on the connector's own service, as verified for a real @ mention.
+ */
+export type ConnectorMentionUserID = string & { readonly __brand: "ConnectorMentionUserID" };
+/** A ConnectorMentionUserID from its raw string. */
+export function connectorMentionUserID(raw: string): ConnectorMentionUserID {
+  return raw as ConnectorMentionUserID;
 }
 
 export interface ConnectorStatusChange {
@@ -5860,6 +5882,11 @@ export interface KBDetail {
   minutes?: unknown;
   /** An all-day recording's day recap, once written (docs/assistant/day-recap.md); kept as the hub sends them. */
   recap?: unknown;
+  /**
+   * A hub-transcribed meeting's speaker list and timeline (docs/assistant/meeting-minutes.md "Speakers (#17674)");
+   * absent when the meeting has no speaker timeline.
+   */
+  speakers?: KBDetailSpeakers;
   /** A topic's knowledge points (docs/assistant/knowledge.md "Topics"). */
   points?: KBTopicPoint[];
   /**
@@ -5876,6 +5903,75 @@ export interface KBDetail {
   project_mode?: string;
   freshness?: KBProjectFreshness;
   sources?: KBProjectSource[];
+}
+
+/**
+ * Speaker separation state of a hub-transcribed meeting.
+ */
+export type KBSpeakerState = "waiting" | "ready" | "failed" | "cleared";
+export const KBSPEAKER_STATES: readonly KBSpeakerState[] = ["waiting", "ready", "failed", "cleared"];
+
+/** A KBSpeakerState this app does not know, kept as it came. */
+export interface UnknownKBSpeakerState {
+  unknown: string;
+}
+
+/** A raw KBSpeakerState: one this app knows, or UnknownKBSpeakerState with the raw value. */
+export function parseKBSpeakerState(raw: string): KBSpeakerState | UnknownKBSpeakerState {
+  const known = KBSPEAKER_STATES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownKBSpeakerState = { unknown: raw };
+  return unknown;
+}
+
+/**
+ * Hub-assigned speaker identifier within a meeting (s1, s2, ...).
+ */
+export type KBSpeakerID = string & { readonly __brand: "KBSpeakerID" };
+/** A KBSpeakerID from its raw string. */
+export function kBSpeakerID(raw: string): KBSpeakerID {
+  return raw as KBSpeakerID;
+}
+
+/**
+ * One speaking interval encoded as a 3-element JSON tuple [start, end, speaker_id]. Opaque JSON: Heterogeneous JSON
+ * tuple [start, end, speaker_id].
+ */
+export type KBSpeakerTurn = unknown;
+
+/**
+ * A hub-transcribed meeting's speaker list and timeline on detail.speakers (docs/assistant/meeting-minutes.md
+ * "Speakers (#17674)").
+ */
+export interface KBDetailSpeakers {
+  rev: number;
+  state: KBSpeakerState;
+  reason: string;
+  quality: string;
+  source: string;
+  done?: number;
+  end?: number;
+  people: KBDetailSpeakerPerson[];
+  candidates: string[];
+  spans: KBSpeakerTurn[];
+  covered: (number[])[];
+  trimmed: boolean;
+}
+
+/**
+ * One speaker entry in detail.speakers.people.
+ */
+export interface KBDetailSpeakerPerson {
+  id: KBSpeakerID;
+  name?: string;
+  me?: boolean;
+  merged_into?: KBSpeakerID;
+  minor?: boolean;
+  seconds?: number;
+  lines?: number;
+  samples?: number[];
 }
 
 export interface KBProjectSource {
@@ -6036,6 +6132,16 @@ export interface KBRecordingSegment {
    * meeting's words; absent (false) on every other line.
    */
   echo?: boolean;
+  /**
+   * Canonical speaker id ("s1", "s2", ...) assigned by the hub on read when a speaker timeline exists
+   * (docs/assistant/meeting-minutes.md "Speakers (#17674)"); absent otherwise.
+   */
+  speaker?: string;
+  /**
+   * True when the speaker label is uncertain or the meeting's separation quality is low
+   * (docs/assistant/meeting-minutes.md "Speakers (#17674)"); absent (false) otherwise.
+   */
+  speaker_unsure?: boolean;
 }
 
 /**
@@ -6242,8 +6348,8 @@ export interface KBPutRecordingParams {
   language?: string;
   minutes?: KBRecordingMinutes;
   /**
-   * Optional; n, source and echo are the hub's and are dropped. Without minutes, the hub makes minutes of it when the
-   * recording module is on.
+   * Optional; n, source, echo, speaker and speaker_unsure are the hub's and are dropped. Without minutes, the hub
+   * makes minutes of it when the recording module is on.
    */
   transcript?: KBRecordingSegment[];
   /** Slugs of existing projects to link it to; a later write never removes a link. */

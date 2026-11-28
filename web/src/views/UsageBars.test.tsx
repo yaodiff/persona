@@ -6,9 +6,10 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { initI18n } from "../i18n";
+import { chooseManager } from "../lib/manager-choice";
 import { onDraftEvent, type DraftEvent } from "../lib/drafts";
 import { timelinePosition } from "../lib/usage-popover";
-import { resetUsageTimelineOpen, resetUsageViewMode, USAGE_TIMELINE_OPEN_KEY, USAGE_VIEW_MODE_KEY } from "../lib/usage-popover-model";
+import { createUsageAliasStore, resetUsageTimelineOpen, resetUsageViewMode, USAGE_TIMELINE_OPEN_KEY, USAGE_VIEW_MODE_KEY } from "../lib/usage-popover-model";
 import { PINNED_USAGE_ACCOUNTS_KEY, remainingTone, resetPinnedUsageAccounts, usageWindowPinId, type UsageAccount } from "../lib/usage-windows";
 import { UsageBars } from "./UsageBars";
 import { compactResetText, computeUsagePopoverLayout, packedColumnHeight, POPOVER_HYSTERESIS_PX, providerHue, UsagePopover, visibleTimelineTickHours } from "./UsagePopover";
@@ -1986,6 +1987,160 @@ describe("grouped windows, extension metadata, compact views, and collapsible ti
     } finally {
       await act(async () => root.unmount());
       host.remove();
+    }
+  });
+});
+
+describe("Codex historical rollout readings", () => {
+  const live = account("verified", 20, 30, { local: true, machines: ["Machine A"] });
+  const old = { ...account("rollout", 68, 44, { local: true, machines: ["Machine B"], sampled_at: iso(-H), stale: true }), reading_source: "rollout" } as const;
+
+  function panel(accounts: UsageAccount[], mode: "cards" | "table" = "cards") {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={accounts} defaultViewMode={mode} now={NOW} defaultTimelineOpen />);
+    return host;
+  }
+
+  it("counts one account and draws one reset row while retaining the old sample", () => {
+    const host = panel([live, old]);
+    expect({
+      count: host.querySelector('[data-usage-provider="codex"] > header')?.textContent?.match(/\d+ 个账号/)?.[0],
+      resets: [...host.querySelectorAll("[data-timeline-row]")].map(row => row.getAttribute("data-timeline-row")),
+    }).toEqual({ count: "1 个账号", resets: ["verified"] });
+    for (const mode of ["cards", "table"] as const) {
+      const view = panel([live, old], mode);
+      const source = view.querySelector("details")!;
+      expect(source.open).toBe(false);
+      source.querySelector("summary")!.click();
+      expect(source.open).toBe(true);
+      expect(source.textContent).toContain("Machine B");
+      expect(source.querySelector("time")?.dateTime).toBe(iso(-H));
+      expect(source.textContent).toContain("32%");
+      expect(source.querySelector("dd time")?.getAttribute("datetime")).toBe(old.windows[0].resets_at);
+      if (mode === "table") expect(view.querySelectorAll("[data-usage-table-row]")).toHaveLength(1);
+    }
+  });
+
+  it("keeps a source-only panel reachable without adding an account or a reset", () => {
+    const sidebar = document.createElement("div");
+    sidebar.innerHTML = renderToStaticMarkup(<UsageBars accounts={[old]} now={NOW} />);
+    expect(sidebar.querySelector('button[aria-haspopup="dialog"]')).not.toBeNull();
+    expect(sidebar.querySelector('[role="progressbar"]')).toBeNull();
+    for (const mode of ["cards", "table"] as const) {
+      const host = panel([old], mode);
+      expect(host.querySelector("details")?.textContent).toContain("Machine B");
+      expect(host.querySelector("[data-timeline-row], [data-usage-table-row]")).toBeNull();
+    }
+  });
+
+  it("keeps both accounts at a shared reset, including old-hub and keyless team readings", () => {
+    const team = account("team", 55, 11, { name: "Team", local: true, machines: ["Machine C"] });
+    for (const other of [team, { ...team, stale: true }, { ...team, reading_source: "rollout" as const }]) {
+      const host = panel([live, other]);
+      expect(host.querySelector('[data-usage-provider="codex"] > header')?.textContent).toContain("2 个账号");
+      expect(host.querySelectorAll("[data-timeline-row]")).toHaveLength(2);
+      expect(host.querySelector("details")).toBeNull();
+    }
+  });
+});
+
+describe("browser-local Codex account aliases", () => {
+  it("keeps the second same-plan seat distinct in cards, table and timeline after reload, reordering and reset", () => {
+    const plan = { name: "Codex Plus", plan: "plus" };
+    const first = account("seat-a", 14, 20, plan);
+    const second = account("seat-b", 50, 70, plan);
+    const historical = account("old", 65, 72, { ...plan, reading_source: "rollout", stale: true });
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue(" 工作 ");
+    const pin = () => host.querySelector<HTMLButtonElement>('[data-usage-pin="seat-b"]')!;
+    const edit = () => host.querySelector<HTMLButtonElement>('[data-usage-alias="seat-b"] button');
+    const headings = () => Array.from(host.querySelectorAll("section[aria-label] > header h3[title]"), (n) => n.textContent);
+    const view = (accounts: UsageAccount[], key: number, mode: "cards" | "table") =>
+      act(() => root.render(<UsagePopover key={key} accounts={accounts} now={NOW} defaultViewMode={mode} defaultTimelineOpen />));
+    try {
+      view([first, second, historical], 0, "cards");
+      expect(headings()).toEqual(["Codex Plus", "Codex Plus"]);
+      act(() => pin().click());
+      const pins = localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY);
+      expect(edit(), "the selected Codex account has a rename action").not.toBeNull();
+      const resetTimes = () => Array.from(host.querySelectorAll("[data-timeline-row]"), (row) => row.getAttribute("title"));
+      const beforeResetTimes = resetTimes();
+      act(() => edit()!.click());
+      expect(resetTimes()).toEqual(beforeResetTimes);
+      expect(headings()).toEqual(["Codex Plus", "工作"]);
+      expect(pin().getAttribute("aria-label")).toContain("工作");
+      expect(host.querySelector('[data-timeline-row="seat-b"]')?.getAttribute("aria-label")).toContain("工作");
+      expect(host.querySelector('[data-timeline-row="seat-a"] [data-timeline-account-name]')?.textContent).toBe("Plus");
+      expect(host.querySelector('[data-usage-alias="old"]')).toBeNull();
+      expect(host.querySelector('[data-timeline-row="old"]')).toBeNull();
+      expect(second.name).toBe("Codex Plus");
+      act(() => chooseManager("other-manager"));
+      expect(headings()).toEqual(["Codex Plus", "Codex Plus"]);
+      act(() => chooseManager(null));
+      expect(headings()).toEqual(["Codex Plus", "工作"]);
+      const refreshed = { ...second, windows: second.windows.map((w) => ({ ...w, resets_at: iso(5 * H), used_percent: 0 })) };
+      view([refreshed, historical, first], 1, "table");
+      expect(host.querySelectorAll("[data-usage-table-row]")).toHaveLength(2);
+      const row = host.querySelector('[data-usage-table-row="seat-b"]')!;
+      expect(row.querySelector('[title="工作"]')?.textContent).toBe("工作");
+      expect(row.querySelector("[data-usage-plan]")?.textContent).toBe("Plus");
+      expect(host.querySelector('[data-timeline-row="seat-b"] [data-timeline-account-name]')?.textContent).toBe("工作");
+      expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBe(pins);
+      prompt.mockReturnValue("  ");
+      act(() => edit()!.click());
+      expect(row.querySelector('[title="Codex Plus"]')?.textContent).toBe("Codex Plus");
+      expect(host.querySelector('[data-timeline-row="seat-b"] [data-timeline-account-name]')?.textContent).toBe("Plus");
+    } finally {
+      prompt.mockRestore();
+      act(() => root.unmount());
+      chooseManager(null);
+      resetPinnedUsageAccounts();
+    }
+  });
+
+  it("partitions persisted aliases by hub and manager even when their public row IDs match", () => {
+    const id = "same-seat";
+    const read = (hub: string, manager: string) => {
+      const store = createUsageAliasStore(hub, manager);
+      function Label() { return store.useValue().get(id) ?? ""; }
+      return renderToStaticMarkup(<Label />);
+    };
+    const store = createUsageAliasStore("https://hub.example/a", "primary");
+    store.setAlias(id, "Work");
+    try {
+      expect(read("https://hub.example/a", "primary")).toBe("Work");
+      expect(read("https://hub.example/b", "primary")).toBe("");
+      expect(read("https://hub.example/a", "other")).toBe("");
+    } finally {
+      store.setAlias(id, "");
+    }
+  });
+
+  it("edits a single merged header, preserves a literal provider prefix, and rejects an overlong alias", () => {
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const a = account("single", 10, 20, { name: "Codex", plan: "plus" });
+    const prompt = vi.spyOn(window, "prompt");
+    const edit = (value: string | null) => {
+      prompt.mockReturnValue(value);
+      act(() => host.querySelector<HTMLButtonElement>('[data-usage-alias="single"] button')!.click());
+    };
+    try {
+      act(() => root.render(<UsagePopover accounts={[a]} now={NOW} defaultTimelineOpen />));
+      const label = () => host.querySelector("[data-timeline-account-name]")?.textContent;
+      expect(label()).toBe("Codex");
+      edit("Codex Studio");
+      expect(label()).toBe("Codex Studio");
+      expect(host.querySelector("[data-usage-plan]")?.textContent).toBe("Plus");
+      edit("a".repeat(33));
+      edit(null);
+      expect(label()).toBe("Codex Studio");
+      edit("");
+      expect(label()).toBe("Codex");
+    } finally {
+      prompt.mockRestore();
+      act(() => root.unmount());
     }
   });
 });

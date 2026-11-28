@@ -156,10 +156,16 @@ if [[ $LANE == full || $LANE == lint-build-test-0 ]]; then
   run_check 'token checker tests' python3 -B test_android_token_baseline.py
   run_check 'motion checker tests' python3 -B test_android_motion_baseline.py
   run_check 'slot order checker tests' python3 -B test_android_slot_order.py
+  run_check 'Compose budget checker tests' python3 -B test_android_compose_budget.py
+  run_check 'nested Throwable name checker tests' python3 -B test_android_nested_throwables.py
   run_check 'translation resources and literal baseline' python3 -B android_i18n_check.py
   run_check 'design token baseline' python3 -B android_token_baseline.py
   run_check 'motion literal baseline' python3 -B android_motion_baseline.py
   run_check 'design-system slot order' python3 -B android_slot_order.py
+  # Source-side guards for the release shrink check (#17580): Compose functions that grow toward the ART limit, and
+  # nested exceptions whose outer class has no -keepnames rule.
+  run_check 'Compose size budget' python3 -B android_compose_budget.py
+  run_check 'nested Throwable name rules' python3 -B android_nested_throwables.py
   run_check 'generated design tokens' python3 -B "$ROOT/scripts/assets/gen_tokens.py" --check \
     --kotlin "$ROOT/android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt"
   run_check 'icon meanings' python3 -B "$ROOT/scripts/assets/gen_icon_meanings.py" --check

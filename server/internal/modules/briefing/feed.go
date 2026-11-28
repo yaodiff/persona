@@ -35,6 +35,7 @@ func (r *runner) Body(f *modapi.BriefSnapshot, title string) modapi.BriefBody {
 		Directions:       f.Directions,
 		DisabledRoutines: f.DisabledRoutines,
 	}
+	b.DeferredSupervision = f.DeferredSupervision
 	if b.Failed == nil {
 		b.Failed = []modapi.BriefFailure{}
 	}
@@ -140,5 +141,18 @@ func (r *runner) writeFeed(run modapi.BriefScheduleRun, title string, f *modapi.
 	id := "feed_brief_run_" + FallbackID(run.RefID, run.Due)
 	if err := r.feed.AppendOnce(ctx, id, run.SessionID, modapi.FeedKindBrief, run.RefID, r.Body(f, title)); err != nil {
 		r.logf("brief: the feed item of %s: %v", run.RefID, err)
+		return
 	}
+	r.supervisionBriefed(ctx, f)
+}
+
+func (r *runner) supervisionBriefed(ctx context.Context, f *modapi.BriefSnapshot) {
+	if r.todos == nil || f == nil || len(f.DeferredSupervision) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(f.DeferredSupervision))
+	for _, row := range f.DeferredSupervision {
+		ids = append(ids, string(row.ID))
+	}
+	r.todos.SupervisionBriefed(ctx, ids, f.At)
 }

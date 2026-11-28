@@ -6,17 +6,32 @@ package rpc
 // each time it changes). Bytes from anywhere else (a runtime's push, a file) go as json.RawMessage, checked as before.
 type Marshaled []byte
 
+const eventHead, eventMid, eventTail = `{"event":"`, `","params":`, "}\n"
+
+// marshaledLineSize is the encoded line size of {"event":<event>,"params":<params>}\n when marshaledLine can write it
+// directly without falling back to the JSON encoder.
+func marshaledLineSize(event string, params Marshaled) (int, bool) {
+	if !plain(event) || len(params) == 0 {
+		return 0, false
+	}
+	return len(eventHead) + len(event) + len(eventMid) + len(params) + len(eventTail), true
+}
+
+func marshaledLineWithSize(event string, params Marshaled, size int) []byte {
+	b := make([]byte, 0, size)
+	b = append(append(append(b, eventHead...), event...), eventMid...)
+	return append(append(b, params...), eventTail...)
+}
+
 // marshaledLine is the line the envelope's encoder and a newline give for event and params, in one buffer of its
 // size: {"event":<event>,"params":<params>}. False when event is empty (the envelope leaves it out) or has a byte the
 // encoder may escape, or params is empty (an error): the encoder writes those.
 func marshaledLine(event string, params Marshaled) ([]byte, bool) {
-	if !plain(event) || len(params) == 0 {
+	size, ok := marshaledLineSize(event, params)
+	if !ok {
 		return nil, false
 	}
-	const head, mid, tail = `{"event":"`, `","params":`, "}\n"
-	b := make([]byte, 0, len(head)+len(event)+len(mid)+len(params)+len(tail))
-	b = append(append(append(b, head...), event...), mid...)
-	return append(append(b, params...), tail...), true
+	return marshaledLineWithSize(event, params, size), true
 }
 
 // plain: json.Marshal writes s as it is between its quotes, and does not leave it out (it is not empty).
@@ -45,17 +60,32 @@ type Appended struct {
 // parts of Appended params that are not appended by hand are made with it, so the line is the one a value gives.
 func Marshal(v any) ([]byte, error) { return marshal(v) }
 
+// callRawSize is the size of {"id":<id>,"method":<method>,"params":<raw>}\n when id and method are plain JSON strings.
+func callRawSize(id, method string, rawLen int) (int, bool) {
+	if !plain(id) || !plain(method) || rawLen <= 0 {
+		return 0, false
+	}
+	return len(callHead) + len(id) + len(callMid) + len(method) + len(callParams) + rawLen + len("}\n"), true
+}
+
 // callSize is the size of the line callLine writes, and whether it writes it: {"id":<id>,"method":<method>,
 // "params":<params>} and a newline, as json.Marshal writes the envelope. Not when id or method has a byte the encoder
 // may escape or is empty (the envelope leaves it out), or there are no params (an error): the encoder writes those.
 func callSize(id, method string, params Appended) (int, bool) {
-	if !plain(id) || !plain(method) || params.Size <= 0 {
-		return 0, false
-	}
-	return len(callHead) + len(id) + len(callMid) + len(method) + len(callParams) + params.Size + len("}\n"), true
+	return callRawSize(id, method, params.Size)
 }
 
 const callHead, callMid, callParams = `{"id":"`, `","method":"`, `","params":`
+
+const replyHead, replyResult = `{"id":"`, `","result":`
+
+// replyResultSize is the size of {"id":<id>,"result":<raw>}\n when id is a plain JSON string and raw is already encoded.
+func replyResultSize(id string, rawLen int) (int, bool) {
+	if !plain(id) || rawLen <= 0 {
+		return 0, false
+	}
+	return len(replyHead) + len(id) + len(replyResult) + rawLen + len("}\n"), true
+}
 
 // callLine is that line, in one buffer of size bytes (callSize's).
 func callLine(id, method string, params Appended, size int) []byte {

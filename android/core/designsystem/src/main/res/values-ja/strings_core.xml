@@ -226,7 +226,7 @@
     <string name="designsystem_core_session_read_only">このセッションは表示のみです</string>
     <string name="designsystem_core_engine_herdr">ターミナルのherdr</string>
     <string name="designsystem_core_engine_herdr_app">デスクトップアプリで開いたターミナル</string>
-    <string name="designsystem_core_engine_orca">Orcaのターミナル</string>
+    <string name="designsystem_core_engine_orca">Orcaのターミナルとチャット</string>
     <string name="designsystem_core_engine_tern">Ternのターミナル</string>
     <string name="designsystem_core_engine_rex">Rexのターミナル</string>
     <string name="designsystem_core_engine_paseo">Paseoのエージェント</string>

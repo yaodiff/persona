@@ -221,3 +221,150 @@ func TestTaskDispatchRecoversNamingPlanSavedBeforeTaskUpdate(t *testing.T) {
 		t.Fatalf("lost the frozen operation during node rollback: workspace=%+v calls=%v err=%v", task.WorkspaceResolved, h.f.worktrees, err)
 	}
 }
+
+func TestDriftedDispatchReplacesWorkspaceOnRetryAndContinuation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		retry   bool
+		oldLive bool
+	}{
+		{name: "retry frozen operation", retry: true},
+		{name: "continues with a different branch"},
+		{name: "continues cannot release a live launch", oldLive: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(database.Close)
+			st := repositorystore.New(database)
+			h := newWorkspaceTestHarness(t, st)
+			h.f.nodes["task.workspace.capabilities"] = func(string, json.RawMessage) (any, error) {
+				return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true, LocalGit: true}, nil
+			}
+			sourceRepo := repositorywire.PreparationRepository{
+				RepoID: "local", DirectoryAlias: "app", RequestedRef: repository.RequestedRef{Kind: "branch", Value: "main"},
+				Local: &repositorywire.LocalCheckout{CommonDir: "/code/app/.git", Commit: strings.Repeat("a", 40)},
+			}
+			h.f.nodes[taskworkspace.LocalSourceMethod] = func(string, json.RawMessage) (any, error) {
+				return taskworkspace.LocalSource{Repository: &sourceRepo}, nil
+			}
+
+			const chat, oldPlan, oldUse = "dispatch-chat", "plan_original", "launch_previous"
+			todo, err := h.s.createTodo(ctx, "Recover a task", "Complete the task", chat, oldPlan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := repositorywire.LocalSnapshot(h.s.managerIdentity(), todo.ID, sourceRepo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			src := workspacenaming.Source{Manager: h.s.managerIdentity(), TodoID: todo.ID, Title: todo.Title, MachineID: "box",
+				PlannedAt: time.Now(), Layout: repository.LayoutRoot, Rules: workspacenaming.Defaults(), Repositories: snapshot}
+			view := workspacenaming.Resolve(src, workspacenaming.NodeContext{Home: "/home/example"})
+			if view.Plan == nil {
+				t.Fatal(view.Diagnostics)
+			}
+			task := PlanTask{TodoID: todo.ID, Title: todo.Title, Prompt: todo.Notes, Machine: "box",
+				Launcher: "claude", Permission: "bypassPermissions", planID: oldPlan, Workspace: &TaskWorkspace{Mode: workspaceNew}}
+			op := task.dispatchedWorkspaceOperationID()
+			if _, err := st.SaveWorkspaceNamingPlan(ctx, todo.ID, op, 0, *view.Plan); err != nil {
+				t.Fatal(err)
+			}
+			applySavedBackendPlan(&task, view.Plan, op)
+			p := &TaskPlan{ID: oldPlan, Conversation: chat, State: planStarted, Tasks: []PlanTask{task},
+				CreatedAt: time.Now(), UpdatedAt: time.Now()}
+			if err := h.s.savePlan(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := h.s.PrepareBackendWorkspace(ctx, todo.ID, op)
+			if err != nil || prepared.State != "ready" {
+				t.Fatal("prepare old workspace", prepared, err)
+			}
+			use, err := h.s.AcquireBackendWorkspace(ctx, todo.ID, op, oldUse)
+			if err != nil {
+				t.Fatal(err)
+			}
+			drift := taskworkspace.Failure("workspace_drift", "inspect", op, "local", prepared.Plan.RootPath)
+			h.mu.Lock()
+			h.physical[op].Error = drift
+			h.physical[op].Launch = &taskworkspace.Launch{UseID: oldUse, SessionID: "previous-agent", TaskDispatch: true}
+			h.mu.Unlock()
+			release := h.f.nodes["task.workspace.release"]
+			h.f.nodes["task.workspace.release"] = func(machine string, raw json.RawMessage) (any, error) {
+				if tc.oldLive {
+					observed := *h.physical[op]
+					observed.Error = taskworkspace.Failure("worktree_in_use", "release", op, "", "")
+					return observed, nil
+				}
+				h.mu.Lock()
+				h.physical[op].Error = nil
+				h.mu.Unlock()
+				return release(machine, raw)
+			}
+			if tc.retry {
+				use.State, use.Error = "failed", drift
+				if _, err := st.SaveTaskWorkspaceResult(ctx, todo.ID, op, use.Revision, *use); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := h.s.failTodo(ctx, todo.ID, drift.Error()); err != nil {
+				t.Fatal(err)
+			}
+			if tc.retry {
+				if _, err := h.s.retryTask(ctx, todo.ID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				raw, err := json.Marshal(map[string]any{"tasks": []map[string]any{{
+					"title": todo.Title, "prompt": todo.Notes, "machine": "box", "cwd": "/code/app",
+					"continues": todo.ID, "continues_why": "The previous checkout drifted", "readonly": true,
+					"workspace": map[string]any{"new": map[string]any{"branch": "topic/replacement"}},
+				}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := h.s.toolTaskPlan(ctx, chat, raw); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitFor(t, "the start outcome", func() bool {
+				todo, ok := h.s.todoNow(todo.ID)
+				if !ok {
+					return false
+				}
+				return len(todo.Agents) == 1 || tc.oldLive && strings.Contains(todo.StartError, "worktree_in_use")
+			})
+			head, err := st.TaskWorkspace(ctx, todo.ID, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			prior, err := st.TaskWorkspace(ctx, todo.ID, op)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.oldLive {
+				if head.OperationID != op || len(prior.Uses) != 1 {
+					t.Fatalf("the live launch lost its workspace: head=%+v prior=%+v", head, prior)
+				}
+				return
+			}
+			if head.OperationID == op || head.Plan.RootPath == prior.Plan.RootPath || head.State != "ready" ||
+				prior.State != "cancelled" || len(prior.Uses) != 0 || head.PreviousOperationID != "" {
+				t.Fatalf("workspace was not safely replaced: head=%+v prior=%+v", head, prior)
+			}
+			agent := todoNow(h.s, todo.ID).Agents[0]
+			if agent.Cwd != head.Plan.RootPath || !strings.Contains(agent.Cwd, "-retry-") {
+				t.Fatalf("agent did not start in the fresh checkout: %+v", agent)
+			}
+			if !tc.retry && head.Repositories[0].TaskBranch != "topic/replacement" {
+				t.Fatalf("continuation lost the requested branch: %+v", head.Repositories)
+			}
+			if tc.retry && head.Repositories[0].TaskBranch == prior.Repositories[0].TaskBranch {
+				t.Fatal("automatic recovery reused the previous branch")
+			}
+		})
+	}
+}

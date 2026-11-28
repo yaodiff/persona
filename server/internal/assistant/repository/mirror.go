@@ -6,6 +6,7 @@ const (
 	MethodRepoMirrorEnsure           = repositorywire.MethodRepoMirrorEnsure
 	MethodRepoMirrorStatus           = repositorywire.MethodRepoMirrorStatus
 	MethodRepoMirrorRemove           = repositorywire.MethodRepoMirrorRemove
+	MirrorColdFetchTimeout           = repositorywire.MirrorColdFetchTimeout
 	DefaultMirrorFetchTTLSeconds     = repositorywire.DefaultMirrorFetchTTLSeconds
 	MaxMirrorFetchTTLSeconds         = repositorywire.MaxMirrorFetchTTLSeconds
 	DefaultMirrorSyncIntervalMinutes = repositorywire.DefaultMirrorSyncIntervalMinutes

@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,54 @@ import (
 
 	"github.com/nwverse/persona/server/internal/update"
 )
+
+func TestWebDevelopmentBuildChecksReleaseAndBeta(t *testing.T) {
+	for _, tc := range []struct {
+		source, url, version string
+	}{
+		{update.ChannelStable, "https://github.com/nwverse/persona/releases/latest/download", "0.7.0"},
+		{update.ChannelBeta, "https://github.com/nwverse/persona/releases/download/beta-channel", "0.8.0-beta.1"},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			h := newTestHub(t)
+			h.version = "web-dev-fixture"
+			h.build = update.Make(h.version, update.Release, "202611171200", "")
+			h.upd.settings.Source = "web-dev"
+			manifest := update.Manifest{
+				Version: tc.version, Build: 202611161200, Channel: tc.source, Edition: h.build.Edition.Marker(),
+				Files: map[string]update.File{"linux-amd64": {Name: "personad-linux-amd64.gz"}},
+			}
+			data, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.upd.client = &http.Client{Transport: updateLoopTransport(func(r *http.Request) (*http.Response, error) {
+				if want := tc.url + "/" + update.FeedName(h.build.Edition); r.Method != http.MethodGet || r.URL.String() != want {
+					t.Errorf("feed request = %s %s, want GET %s", r.Method, r.URL, want)
+					return nil, http.ErrNotSupported
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+			})}
+			handler := h.routes()
+			call := func(method, path, body string) updateView {
+				t.Helper()
+				w := securityRequest(handler, method, path, h.cfg.Token, body, "127.0.0.1:1", false)
+				var view updateView
+				if err := json.Unmarshal(w.Body.Bytes(), &view); w.Code != http.StatusOK || err != nil {
+					t.Fatalf("%s %s: %d %s (%v)", method, path, w.Code, w.Body, err)
+				}
+				if !view.CanUpdate || view.Source != tc.source || view.UpdateURL != tc.url || view.UpdateFrom != "build" {
+					t.Fatalf("%s %s: unexpected update view: %+v", method, path, view)
+				}
+				return view
+			}
+			call(http.MethodPut, "/api/v1/hub/update/settings", `{"source":"`+tc.source+`"}`)
+			if view := call(http.MethodPost, "/api/v1/hub/update/check", `{"preview":true}`); view.Latest == nil || view.Latest.Version != tc.version || view.Latest.Newer {
+				t.Fatalf("an older release should be visible without being offered as an update: %+v", view.Latest)
+			}
+		})
+	}
+}
 
 func TestBetaSettingsPersistAndInvalidateTheOtherChannel(t *testing.T) {
 	h := newTestHub(t)

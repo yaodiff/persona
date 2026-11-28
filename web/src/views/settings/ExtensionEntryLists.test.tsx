@@ -124,7 +124,7 @@ describe("extension entry lists", () => {
     act(() => typeInto(input, "placeholder-secret-5678"));
     await act(async () => button("保存", document.body).click());
     await flush();
-    expect(setExtensionSecret).toHaveBeenCalledWith("example-entries", "entry_saved", "placeholder-secret-5678");
+    expect(setExtensionSecret).toHaveBeenCalledWith("example-entries", "entry_saved", "placeholder-secret-5678", expect.objectContaining({ managerId: "assistant" }));
     expect(setExtensionConfig).not.toHaveBeenCalled();
     expect(host.textContent).not.toContain("placeholder-secret-5678");
   });

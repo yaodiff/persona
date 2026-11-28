@@ -45,9 +45,11 @@ function formatTraceTime(at: string): string {
 export function TodoCausalTraceSection({
   todoId,
   enabled,
+  compact = false,
 }: {
   todoId: string;
   enabled: boolean;
+  compact?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -106,7 +108,7 @@ export function TodoCausalTraceSection({
     <section
       data-testid="todo-causal-trace"
       aria-label={t("todos.causal_trace_title")}
-      className="mt-6 rounded-control border border-line bg-canvas"
+      className={cx(compact ? "" : "mt-6", "rounded-control border border-line bg-canvas")}
     >
       <div className="flex items-center justify-between gap-2 px-3 py-2">
         <button

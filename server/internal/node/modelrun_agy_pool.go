@@ -68,6 +68,7 @@ type agyWarmKey struct {
 	launcherKey   string
 	settingsHash  [32]byte
 	oauthStat     agyFileStamp
+	keychainStamp string // macOS login-keychain sign-in (modelrun_agy_account.go)
 	geminiEnvHash [32]byte
 	realDataRoot  string
 }
@@ -366,6 +367,7 @@ func (n *Node) agyWarmKeyFor(p proto.ModelRunParams, builtinAgyBacked bool) (key
 		launcherKey:   launcherKey,
 		settingsHash:  sha256.Sum256(settingsJSON),
 		oauthStat:     statAgyFileStamp(filepath.Join(realDataRoot, "antigravity-oauth-token")),
+		keychainStamp: agyKeychainStampFn(),
 		geminiEnvHash: geminiEnvHash,
 		realDataRoot:  realDataRoot,
 	}, settingsJSON, modelProvider, true, nil
@@ -1611,7 +1613,8 @@ func (w *agyWarmWorker) runTurn(
 			ans.Model = finalModel
 		}
 	}
-	return ans, false, closeOK, true, nil
+	// An answer that is agy's quota or sign-in error line is returned as before, but its worker is not reused (#17860).
+	return ans, false, closeOK && !agyAccountTrouble(ans.Text), true, nil
 }
 
 func (w *agyWarmWorker) closeAndCleanSession(sid string) bool {

@@ -127,9 +127,9 @@ type Interaction struct {
 	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
 	// PlanThen is the permission mode recorded at a plan-mode start to use after approval; empty on legacy cards.
 	PlanThen string `json:"plan_then,omitempty"`
-	// EditableText is the outgoing body text an eligible Lark send/reply approval card (Claude Code Bash PreToolUse or a
-	// local assistant_environment runtime command gate) may let the user edit before allowing. Only those command gates
-	// set it; untrusted runtimes and other cards cannot declare it.
+	// EditableText is the outgoing body text an eligible Lark send/reply approval card (Claude Code Bash PreToolUse,
+	// a local assistant_environment runtime command gate, or the node's MCP command-gate tool) may let the user edit
+	// before allowing. Only those command gates set it; untrusted runtimes and other cards cannot declare it.
 	EditableText string `json:"editable_text,omitempty"`
 	// OutwardWrite marks a permission card raised by a trusted connector gate for an outward write acting as
 	// the owner (node/larkgate.go). Runtimes cannot declare it (node/runtimes_events.go clears it), and the

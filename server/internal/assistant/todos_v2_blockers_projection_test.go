@@ -26,9 +26,9 @@ func newCountingBlockerStore() *countingBlockerStore {
 	return &countingBlockerStore{memBlockerStore: newMemBlockerStore()}
 }
 
-func (c *countingBlockerStore) ListActiveTodoBlockers(ctx context.Context) ([]db.TodoBlockerRow, error) {
+func (c *countingBlockerStore) ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]db.TodoBlockerRow, error) {
 	c.listActiveCalls.Add(1)
-	return c.memBlockerStore.ListActiveTodoBlockers(ctx)
+	return c.memBlockerStore.ListTodoReadinessBlockers(ctx, todoIDs)
 }
 
 func TestTodosV2BlockersDefaultExternalPRFetcherAutoWake(t *testing.T) {
@@ -108,56 +108,50 @@ func TestTodosV2BlockersDefaultExternalPRFetcherAutoWake(t *testing.T) {
 		mu.Unlock()
 	})
 
-	// 1. Network failure: sweep succeeds without stalling, deduplicates target_ref to 1 request, keeps edges active.
-	sumErr, err := s.ReconcileTodoBlockers(ctx, "")
-	if err != nil {
-		t.Fatalf("reconcile during upstream error: %v", err)
+	now := time.Now()
+	if err := s.refreshTodoBlockers(ctx, now); err != nil {
+		t.Fatal(err)
 	}
-	if sumErr.Evaluated != 2 || len(sumErr.ResolvedIDs) != 0 || len(sumErr.UnblockedTodoIDs) != 0 {
-		t.Fatalf("expected active blockers kept on network error, got %+v", sumErr)
+	if err := s.refreshTodoBlockers(ctx, now.Add(externalPRRetryMin/2)); err != nil {
+		t.Fatal(err)
 	}
 	mu.Lock()
 	if prRequests != 1 {
-		t.Fatalf("expected per-sweep deduplication to issue 1 request on error, got %d", prRequests)
+		t.Fatalf("shared PR received %d failed requests before backoff expired", prRequests)
 	}
 	failNext = false
-	prRequests = 0
 	mu.Unlock()
 
-	// 2. Open PR: still active, 1 deduplicated request across both blockers.
-	sumOpen, err := s.ReconcileTodoBlockers(ctx, "")
-	if err != nil {
-		t.Fatalf("reconcile while PR open: %v", err)
-	}
-	if len(sumOpen.ResolvedIDs) != 0 || len(sumOpen.UnblockedTodoIDs) != 0 {
-		t.Fatalf("expected blockers active while PR open, got %+v", sumOpen)
+	// The next successful read sees the PR open. A later tick within the TTL reuses it.
+	next := now.Add(2 * externalPRRetryMin)
+	if err := s.refreshTodoBlockers(ctx, next); err != nil {
+		t.Fatal(err)
 	}
 	mu.Lock()
-	if prRequests != 1 {
-		t.Fatalf("expected per-sweep cache to issue 1 request while open, got %d", prRequests)
-	}
 	prMerged = true
-	prRequests = 0
+	mu.Unlock()
+	if err := s.refreshTodoBlockers(ctx, next.Add(externalPRObservationTTL/2)); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if prRequests != 2 || len(woke) != 0 {
+		t.Fatalf("open PR was refetched or cleared before TTL: requests=%d wakes=%v", prRequests, woke)
+	}
 	mu.Unlock()
 
-	// 3. Merged PR: default forge fetcher resolves both edges and wakes both downstream todos.
-	sumMerged, err := s.ReconcileTodoBlockers(ctx, "")
-	if err != nil {
-		t.Fatalf("reconcile after PR merged: %v", err)
+	if err := s.refreshTodoBlockers(ctx, next.Add(2*externalPRObservationTTL)); err != nil {
+		t.Fatal(err)
 	}
-	if len(sumMerged.ResolvedIDs) != 2 {
-		t.Fatalf("expected 2 resolved blockers, got %+v", sumMerged.ResolvedIDs)
+	if active, err := st.ListActiveTodoBlockers(ctx); err != nil || len(active) != 0 {
+		t.Fatalf("terminal observation left blockers active: %+v, %v", active, err)
 	}
 	wantWoke := []string{todoA.ID, todoB.ID}
 	if todoB.ID < todoA.ID {
 		wantWoke = []string{todoB.ID, todoA.ID}
 	}
-	if !reflect.DeepEqual(sumMerged.UnblockedTodoIDs, wantWoke) {
-		t.Fatalf("UnblockedTodoIDs = %v, want %v", sumMerged.UnblockedTodoIDs, wantWoke)
-	}
 	mu.Lock()
-	if prRequests != 1 {
-		t.Fatalf("expected per-sweep cache to issue 1 request on merge, got %d", prRequests)
+	if prRequests != 3 {
+		t.Fatalf("expected one fresh request on merge, got %d requests total", prRequests)
 	}
 	gotWoke := append([]string(nil), woke...)
 	mu.Unlock()

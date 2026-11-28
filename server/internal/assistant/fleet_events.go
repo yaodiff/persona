@@ -99,80 +99,162 @@ func (s *Service) nodeEvent(machine, event string, params json.RawMessage) bool 
 type nodeInteractionEnd struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
+	target    *pending  // exact live occurrence pinned before admission, including legacy zero timestamps
 }
 
 // endNodeInteraction applies a node's cancellation only to the occurrence that
 // node was waiting on. Occurrence-less events retain legacy ID-only behavior;
 // newer peers never let a delayed cancel/dismiss end a same-ID replacement.
 func (s *Service) endNodeInteraction(p nodeInteractionEnd, status, preparedText string, resolution *proto.Resolution) {
-	if p.CreatedAt.IsZero() {
-		if status == "dismissed" {
-			s.fleet.mu.Lock()
-			waiting := detachedApprovalWaitingLocked(s.fleet.interactions[p.ID])
-			s.fleet.mu.Unlock()
-			if waiting {
-				// The original terminal call already returned its non-final waiting
-				// result. A later dismissal cannot decide the retained owner card.
-				return
-			}
-		}
-		by := ""
-		if resolution != nil {
-			by = resolution.AnsweredBy
-		}
-		if s.endPreparedByIDWithBy(p.ID, status, preparedText, by) {
+	runCtx := s.runCtx()
+	retry := func(event nodeInteractionEnd) {
+		// A database-only legacy row can have no creation time. Its ID
+		// alone cannot identify the same card on a later attempt.
+		if event.CreatedAt.IsZero() && event.target == nil {
 			return
 		}
-		s.recordEnd(p.ID, status, resolution)
-		s.finishInteraction(p.ID)
+		time.AfterFunc(time.Minute, func() {
+			if runCtx.Err() == nil {
+				s.endNodeInteraction(event, status, preparedText, resolution)
+			}
+		})
+	}
+	// Serialize the absent-card check and its durable end with installation
+	// of this ID. Once installed, only the live coordinator may decide it.
+	release := s.acquireInteractionAdmission(p.ID, p.target != nil || !p.CreatedAt.IsZero())
+	if release == nil {
+		// A legacy event has no occurrence yet. Pin the card already visible
+		// in history before waiting behind a same-ID registration.
+		s.fleet.mu.Lock()
+		live := s.fleet.interactions[p.ID]
+		if live != nil {
+			p.target = live
+			p.CreatedAt = live.ix.CreatedAt
+		}
+		s.fleet.mu.Unlock()
+		if live == nil {
+			if recorder, ok := s.store().(interactionRecorder); ok {
+				ctx, cancel := context.WithTimeout(runCtx, historyTimeout)
+				rec, err := recorder.InteractionRecord(ctx, p.ID)
+				cancel()
+				if err == nil && rec != nil && rec.Status == "pending" {
+					p.CreatedAt = rec.Interaction.CreatedAt
+				}
+			}
+		}
+		if p.target != nil || !p.CreatedAt.IsZero() {
+			go func() {
+				if runCtx.Err() == nil {
+					s.endNodeInteraction(p, status, preparedText, resolution)
+				}
+			}()
+		}
 		return
 	}
-
+	defer release()
 	s.fleet.mu.Lock()
 	live := s.fleet.interactions[p.ID]
-	mismatch := live != nil && !live.ix.CreatedAt.Equal(p.CreatedAt)
-	waiting := status == "dismissed" && detachedApprovalWaitingLocked(live)
-	s.fleet.mu.Unlock()
-	if mismatch || waiting {
+	if p.target != nil && live != p.target {
+		s.fleet.mu.Unlock()
 		return
 	}
 	if live != nil {
-		if live.prepared != nil {
-			// endPreparedIfBy rechecks this exact pointer under fleet.mu before its
-			// terminal claim; only that winner may record the node's terminal actor.
+		ix := live.ix
+		prepared := live.prepared != nil
+		released := prepared && ix.Detachable && live.prepared.waiting
+		s.fleet.mu.Unlock()
+		if released {
+			return // never wait for a clarification send on the node's event reader
+		}
+		if !p.CreatedAt.IsZero() && !p.CreatedAt.Equal(ix.CreatedAt) {
+			return
+		}
+		if prepared {
 			by := ""
 			if resolution != nil {
 				by = resolution.AnsweredBy
 			}
-			s.endPreparedIfBy(live, status, preparedText, nil, by)
+			// Once the hook has released its turn, transport cancellation and
+			// terminal dismissal cannot take the decision away from the owner.
+			s.endPreparedIfBy(live, status, preparedText, func(a *preparedApproval) bool {
+				return !ix.Detachable || !a.waiting
+			}, by)
 			return
 		}
-		if err := s.recordEndOccurrenceStrict(live.ix, status, resolution); err != nil {
+		if p.CreatedAt.IsZero() {
+			s.recordEnd(p.ID, status, resolution)
+			s.finishInteraction(p.ID)
+			return
+		} else if err := s.recordEndOccurrenceStrict(ix, status, resolution); err != nil {
 			s.logf("record node interaction occurrence outcome: %v", err)
 		}
 		s.finishPending(live)
 		return
 	}
+	s.fleet.mu.Unlock()
 
+	// Legacy nodes send only an ID. Preserve their direct terminal write for
+	// unjournaled cards; no occurrence read or delayed ID-only write is needed.
+	if p.CreatedAt.IsZero() {
+		readCtx, cancel := context.WithTimeout(runCtx, historyTimeout)
+		_, protected, err := s.findApprovalJournal(readCtx, func(a approvalJournalEntry) bool {
+			// Legacy commands lack both occurrence fields and may lack a kind.
+			legacyCommand := a.CreatedAt.IsZero() && (a.Kind == "" || a.Kind == proto.IxPermission)
+			if a.ID != p.ID || a.Finalized || (a.Fingerprint == "" && !legacyCommand) {
+				return false
+			}
+			return a.Status == "applying" || a.Result != "" || !a.WaitingUntil.IsZero()
+		})
+		cancel()
+		if err == nil && !protected {
+			s.recordEnd(p.ID, status, resolution)
+			s.finishInteraction(p.ID)
+			return
+		}
+	}
 	// The waiter may already have returned while its durable row remains. Read
 	// the full occurrence so strict finalization never inserts or ends a guessed
 	// ID-only row, and never touch a different current occurrence.
 	recorder, ok := s.store().(interactionRecorder)
-	if !ok {
-		return
+	if ok {
+		ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
+		defer cancel()
+		rec, err := recorder.InteractionRecord(ctx, p.ID)
+		if err != nil {
+			s.logf("read node interaction occurrence: %v", err)
+			// Only an identified occurrence can be retried. An ID-only end
+			// must never be delivered later to a replacement on another clock.
+			if !p.CreatedAt.IsZero() {
+				retry(p)
+			}
+			return
+		}
+		if rec != nil && !p.CreatedAt.IsZero() && !p.CreatedAt.Equal(rec.Interaction.CreatedAt) {
+			return
+		}
+		if rec != nil && rec.Status == "pending" {
+			released, err := s.detachedNodeEndAfterRelease(ctx, rec.Interaction)
+			if err != nil {
+				// The terminal event is one-shot. Recheck this exact stored
+				// occurrence after the journal recovers, including legacy events.
+				s.logf("defer node outcome for %s: %v", p.ID, err)
+				retry(nodeInteractionEnd{ID: p.ID, CreatedAt: rec.Interaction.CreatedAt})
+				return
+			}
+			if released {
+				return
+			}
+			if !p.CreatedAt.IsZero() {
+				if err := s.recordEndOccurrenceStrict(rec.Interaction, status, resolution); err != nil {
+					s.logf("record node interaction occurrence outcome: %v", err)
+				}
+				return
+			}
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
-	rec, err := recorder.InteractionRecord(ctx, p.ID)
-	cancel()
-	if err != nil {
-		s.logf("read node interaction occurrence: %v", err)
-		return
-	}
-	if rec == nil || rec.Status != "pending" || !rec.Interaction.CreatedAt.Equal(p.CreatedAt) {
-		return
-	}
-	if err := s.recordEndOccurrenceStrict(rec.Interaction, status, resolution); err != nil {
-		s.logf("record node interaction occurrence outcome: %v", err)
+	if p.CreatedAt.IsZero() {
+		s.recordEnd(p.ID, status, resolution)
+		s.finishInteraction(p.ID)
 	}
 }
 

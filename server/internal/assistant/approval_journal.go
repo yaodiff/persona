@@ -49,6 +49,9 @@ type approvalJournalEntry struct {
 	Private   bool `json:"private,omitempty"`
 	// Continuation marks a detached command result whose retry instruction is
 	// valid only while its one-time grant remains unused.
+	// WaitingUntil is written with the transition out of the original hook.
+	// It identifies the retained decision window in the interaction row.
+	WaitingUntil time.Time `json:"waiting_until,omitzero"`
 	Continuation bool      `json:"continuation,omitempty"`
 	Accepted     bool      `json:"accepted,omitempty"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -96,10 +99,17 @@ func (s *Service) loadApprovalJournalLocked(ctx context.Context) bool {
 		}
 	}
 	b.list, b.loaded = list, true
+	// Reconnect may load the journal before the scheduler. Gate result delivery
+	// before an owner can claim a restored command from this batch.
+	b.recovering = b.recovering || slices.ContainsFunc(list, approvalJournalEntry.unansweredDetached)
 	return true
 }
 
 func (s *Service) approvalJournalRecord(ctx context.Context, ix proto.Interaction) (approvalJournalEntry, bool, error) {
+	return s.findApprovalJournal(ctx, func(a approvalJournalEntry) bool { return approvalJournalMatches(a, ix) })
+}
+
+func (s *Service) findApprovalJournal(ctx context.Context, matches func(approvalJournalEntry) bool) (approvalJournalEntry, bool, error) {
 	b := &s.approvals
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -107,7 +117,7 @@ func (s *Service) approvalJournalRecord(ctx context.Context, ix proto.Interactio
 		return approvalJournalEntry{}, false, errors.New("the clarification journal is unavailable")
 	}
 	for i := len(b.list) - 1; i >= 0; i-- {
-		if approvalJournalMatches(b.list[i], ix) {
+		if matches(b.list[i]) {
 			return b.list[i], true, nil
 		}
 	}
@@ -152,6 +162,10 @@ func approvalJournalOccurrence(ix proto.Interaction) (time.Time, string, error) 
 }
 
 func (s *Service) approvalJournalStarted(ctx context.Context, ix proto.Interaction) error {
+	return s.startApprovalJournal(ctx, ix, time.Time{})
+}
+
+func (s *Service) startApprovalJournal(ctx context.Context, ix proto.Interaction, waitingUntil time.Time) error {
 	createdAt, fingerprint, err := approvalJournalOccurrence(ix)
 	if err != nil {
 		return err
@@ -164,7 +178,8 @@ func (s *Service) approvalJournalStarted(ctx context.Context, ix proto.Interacti
 	}
 	summary := safeInteractionSummary(ix)
 	if i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return approvalJournalMatches(a, ix) }); i >= 0 {
-		oldSummary, oldKind := b.list[i].Summary, b.list[i].Kind
+		old := b.list[i]
+		b.list[i].WaitingUntil = waitingUntil
 		b.list[i].live = true
 		if b.list[i].Summary == "" {
 			b.list[i].Summary = summary
@@ -173,13 +188,13 @@ func (s *Service) approvalJournalStarted(ctx context.Context, ix proto.Interacti
 			b.list[i].Kind = ix.Kind
 		}
 		if err := s.saveApprovalJournalLocked(ctx); err != nil {
-			b.list[i].Summary, b.list[i].Kind = oldSummary, oldKind
+			b.list[i] = old
 			return fmt.Errorf("keep the clarification result journal: %w", err)
 		}
 		return nil
 	}
 	b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID,
-		CreatedAt: createdAt, Fingerprint: fingerprint, Kind: ix.Kind, Summary: summary, Private: ix.Private,
+		CreatedAt: createdAt, Fingerprint: fingerprint, Kind: ix.Kind, Summary: summary, Private: ix.Private, WaitingUntil: waitingUntil,
 		UpdatedAt: time.Now().UTC(), live: true})
 	if err := s.saveApprovalJournalLocked(ctx); err != nil {
 		b.list = slices.DeleteFunc(b.list, func(a approvalJournalEntry) bool {
@@ -457,6 +472,10 @@ func (s *Service) adoptRecoveredTerminal(ctx context.Context, entry approvalJour
 func (s *Service) deliverApprovalResults() {
 	b := &s.approvals
 	b.mu.Lock()
+	if !s.loadApprovalJournalLocked(context.Background()) {
+		b.mu.Unlock()
+		return
+	}
 	if b.recovering {
 		b.again = true
 		b.mu.Unlock()
@@ -464,10 +483,6 @@ func (s *Service) deliverApprovalResults() {
 	}
 	if b.delivering {
 		b.again = true
-		b.mu.Unlock()
-		return
-	}
-	if !s.loadApprovalJournalLocked(context.Background()) {
 		b.mu.Unlock()
 		return
 	}
@@ -811,36 +826,111 @@ func (s *Service) recordRestartInvalidation(ctx context.Context, ix proto.Intera
 	go s.deliverApprovalResults()
 }
 
-// recoverApprovalJournals is fail-closed: no process-local operation survives a
-// manager restart. An interrupted apply is explicitly uncertain; any other
-// unfinished clarified card is cancelled without executing.
+// Only a complete persisted command can rebuild the one-time continuation.
+func (a approvalJournalEntry) unansweredDetached() bool {
+	return a.Status == "" && a.Result == "" && !a.Finalized && !a.Accepted && a.Fingerprint != "" && !a.WaitingUntil.IsZero()
+}
+
+// Unlike the original node hook, which may refresh its display timestamp, the
+// stored row and waiting journal carry the manager's canonical creation time.
+func (a approvalJournalEntry) matchesStored(ix proto.Interaction) bool {
+	return (a.WaitingUntil.IsZero() || ix.CreatedAt.Equal(a.CreatedAt)) && approvalJournalMatches(a, ix)
+}
+
+func (a approvalJournalEntry) canResumeDetached(ix proto.Interaction) bool {
+	return a.unansweredDetached() && ix.Detachable && ix.Resumable && ix.Kind == proto.IxPermission &&
+		ix.MachineID != "" && ix.SessionID != "" && ix.ToolName != "" && ix.ExecutionCwd != "" && len(ix.ToolInput) > 0 &&
+		ix.ExpiresAt.Equal(a.WaitingUntil) && a.matchesStored(ix)
+}
+
+// Journal reconciliation classifies the original durable row without starting
+// the fleet expiration sweep. Terminal siblings must finalize in this batch
+// before a reconnecting hook can initiate that sweep.
+func (s *Service) retainDetachedWaiting(ctx context.Context, entry approvalJournalEntry) (bool, error) {
+	if s.ownsDetachedWaiting(entry) {
+		return true, nil
+	}
+	recorder, ok := s.store().(interactionRecorder)
+	if !ok {
+		return false, nil
+	}
+	readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+	defer cancel()
+	rec, err := recorder.InteractionRecord(readCtx, entry.ID)
+	if err != nil {
+		return false, err
+	}
+	if rec != nil && rec.Status == "pending" && entry.canResumeDetached(rec.Interaction) && entry.WaitingUntil.After(time.Now()) {
+		return true, nil
+	}
+	// A reconnect can install the card and claim a timely Allow during the read.
+	return s.ownsDetachedWaiting(entry), nil
+}
+
+func (s *Service) ownsDetachedWaiting(entry approvalJournalEntry) bool {
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	p := s.fleet.interactions[entry.ID]
+	return p != nil && p.prepared != nil && p.prepared.waiting && entry.matchesStored(p.ix)
+}
+
+// Startup gates delivery until its terminal siblings are durable. A later
+// retry of a missing waiting card must leave their results deliverable.
+func (s *Service) retryApprovalRecoveryLocked() {
+	b := &s.approvals
+	b.recovering = !b.recoveryDone
+	s.scheduleApprovalRecoveryLocked()
+}
+
+func (s *Service) scheduleApprovalRecoveryLocked() {
+	b := &s.approvals
+	if !b.recoveryRetry {
+		b.recoveryRetry = true
+		ctx := s.runCtx()
+		time.AfterFunc(time.Minute, func() {
+			b.mu.Lock()
+			b.recoveryRetry = false
+			b.mu.Unlock()
+			if ctx.Err() == nil {
+				s.recoverApprovalJournals(ctx)
+			}
+		})
+	}
+}
+
+// Startup and a reconnect can both start this batch. Give it its own manager
+// deadline independent of the hook and of preceding scheduler recovery work.
+func (s *Service) recoverManagerApprovalJournals() {
+	ctx, cancel := context.WithTimeout(s.runCtx(), taskFailTimeout)
+	defer cancel()
+	s.recoverApprovalJournals(ctx)
+}
+
+// recoverApprovalJournals leaves complete unanswered detachable cards for
+// interaction restore. An interrupted apply remains uncertain.
 func (s *Service) recoverApprovalJournals(ctx context.Context) {
 	b := &s.approvals
 	b.mu.Lock()
+	if b.recoverySeq != 0 && ctx.Err() != nil {
+		b.mu.Unlock()
+		return
+	}
 	if !s.loadApprovalJournalLocked(ctx) {
-		// A transient startup read must not strand delivery forever, including
-		// after a later replay observes recovering=true. Keep the gate closed and
-		// retry the complete load instead of guessing which journals exist.
-		b.recovering, b.recoveryDone = true, false
-		if !b.recoveryRetry {
-			b.recoveryRetry = true
-			time.AfterFunc(time.Minute, func() {
-				b.mu.Lock()
-				b.recoveryRetry = false
-				b.mu.Unlock()
-				s.recoverApprovalJournals(context.Background())
-			})
-		}
+		s.retryApprovalRecoveryLocked()
 		b.mu.Unlock()
 		return
 	}
 	b.recoverySeq++
 	seq := b.recoverySeq
-	b.recovering, b.recoveryDone = true, false
+	b.recovering = !b.recoveryDone
 	var recovered []approvalJournalEntry
 	changed := false
 	var needSummary []string
+	var candidates []approvalJournalEntry
 	for i := range b.list {
+		if a := b.list[i]; !a.live && a.unansweredDetached() {
+			candidates = append(candidates, a)
+		}
 		if b.list[i].Result == "" && !b.list[i].live && b.list[i].Summary == "" {
 			needSummary = append(needSummary, b.list[i].ID)
 		}
@@ -854,11 +944,30 @@ func (s *Service) recoverApprovalJournals(ctx context.Context) {
 		}
 	}
 
+	waiting := make(map[approvalJournalEntry]bool, len(candidates))
+	for _, a := range candidates {
+		keep, err := s.retainDetachedWaiting(ctx, a)
+		if err != nil {
+			s.logf("read waiting detached approval %s: %v", a.ID, err)
+			b.mu.Lock()
+			if b.recoverySeq == seq {
+				s.retryApprovalRecoveryLocked()
+			}
+			b.mu.Unlock()
+			return
+		}
+		waiting[a] = keep
+	}
+
 	b.mu.Lock()
+	if b.recoverySeq != seq {
+		b.mu.Unlock()
+		return
+	}
 	for i := range b.list {
-		if b.list[i].Result == "" && b.list[i].live {
-			// The first load failed earlier, but this entry was created by the
-			// current process after storage recovered. It is not restart residue.
+		if waiting[b.list[i]] || (b.list[i].Result == "" && b.list[i].live) {
+			// Restored continuations and approvals created during a startup
+			// retry still belong to an active owner decision.
 			continue
 		}
 		if b.handled == nil {
@@ -884,10 +993,11 @@ func (s *Service) recoverApprovalJournals(ctx context.Context) {
 			// cannot make a later same-ID card look like the old occurrence.
 			changed = true
 		}
-		// A terminal journal result can be the only durable outcome after a crash
-		// between its write and the interaction's terminal write. Close every
-		// journaled occurrence before any result delivery can remove its journal.
-		recovered = append(recovered, b.list[i])
+		// Startup must finalize the whole batch before delivery. Once delivery
+		// is open, its single worker owns terminal writes, including retries.
+		if !b.recoveryDone {
+			recovered = append(recovered, b.list[i])
+		}
 	}
 	if changed {
 		if err := s.saveApprovalJournalLocked(ctx); err != nil {
@@ -900,7 +1010,7 @@ func (s *Service) recoverApprovalJournals(ctx context.Context) {
 
 // finalizeRecoveredApprovals closes the whole recovered batch before releasing
 // result delivery. A failed terminal interaction write keeps recovery active and
-// retries the same batch; no journal can be delivered and forgotten while its
+// reloads the batch on retry; no journal can be delivered and forgotten while its
 // restored interaction is still pending. The sequence prevents an older retry
 // from completing over a newer recovery pass.
 func (s *Service) finalizeRecoveredApprovals(ctx context.Context, seq uint64, recovered []approvalJournalEntry) {
@@ -940,20 +1050,35 @@ func (s *Service) finalizeRecoveredApprovals(ctx context.Context, seq uint64, re
 		return
 	}
 	if failed {
-		if !b.recoveryRetry {
-			b.recoveryRetry = true
-			time.AfterFunc(time.Minute, func() {
-				b.mu.Lock()
-				b.recoveryRetry = false
-				b.mu.Unlock()
-				s.finalizeRecoveredApprovals(context.Background(), seq, recovered)
-			})
-		}
+		// Re-read the current batch when the timer fires. Another replay may
+		// already have superseded this sequence while the write was failing.
+		s.retryApprovalRecoveryLocked()
 		b.mu.Unlock()
 		return
 	}
 	b.recovering, b.recoveryDone = false, true
+	var waiting []approvalJournalEntry
+	for _, a := range b.list {
+		if !a.live && a.unansweredDetached() {
+			waiting = append(waiting, a)
+		}
+	}
 	b.mu.Unlock()
+	if len(waiting) != 0 {
+		// The terminal siblings are durable. The fleet can now run its normal
+		// startup sweep and install the waiting cards before accepting answers.
+		s.restoreInteractions(ctx)
+		for _, a := range waiting {
+			if !s.ownsDetachedWaiting(a) {
+				// Expiry or a transient restore failure may have left the journal
+				// without a live timer. Reconcile it, keeping delivery available.
+				b.mu.Lock()
+				s.scheduleApprovalRecoveryLocked()
+				b.mu.Unlock()
+				break
+			}
+		}
+	}
 	s.deliverApprovalResults()
 }
 
@@ -1055,7 +1180,7 @@ func (s *Service) finishRecoveredApproval(entry approvalJournalEntry) error {
 	}
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
-	if p != nil && !approvalJournalMatches(entry, p.ix) {
+	if p != nil && !entry.matchesStored(p.ix) {
 		p = nil
 	}
 	if p == nil {
@@ -1068,7 +1193,7 @@ func (s *Service) finishRecoveredApproval(entry approvalJournalEntry) error {
 				s.fleet.mu.Unlock()
 				return readErr
 			}
-			if rec != nil && approvalJournalMatches(entry, rec.Interaction) {
+			if rec != nil && entry.matchesStored(rec.Interaction) {
 				// Use the complete stored call when it is the same occurrence. A
 				// tombstone deliberately has no tool arguments and must not be
 				// mistaken for a different fingerprint.

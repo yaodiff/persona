@@ -356,7 +356,7 @@ func TestPushSentPersists(t *testing.T) {
 	if !h.push.waitInterceptsSaved(2 * time.Second) {
 		t.Fatal("the delivered pushes were not saved")
 	}
-	restarted := newPusher(t.TempDir(), h.push.store, t.Logf)
+	restarted := restartPusher(t, h, h.push.store)
 	stats := restarted.pushDailyStats(h.push.now().Add(-24*time.Hour), "")
 	if len(stats) != 1 || stats[0].Sent != 1 || stats[0].Manager != "manager-a" {
 		t.Fatalf("restored stats = %+v, want one delivered push", stats)
@@ -555,7 +555,7 @@ func TestPushInterceptsSanitizeOldRowsOnLoad(t *testing.T) {
 	store.vals[heldPushesSettingKey] = append([]byte(nil), raw...)
 	store.mu.Unlock()
 
-	restarted := newPusher(t.TempDir(), store, t.Logf)
+	restarted := restartPusher(t, h, store)
 	view := restarted.heldPushesView("", 0)
 	if len(view) != 1 {
 		t.Fatalf("reloaded view = %d entries, want 1", len(view))

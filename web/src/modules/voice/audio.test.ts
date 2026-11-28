@@ -1,7 +1,8 @@
 // BrowserVoiceAudio against fake Web Audio and getUserMedia: what reaches the capture worklet and the call (the real audio
 // path is walked in a browser by web/e2e/voice.mjs).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserVoiceAudio, KEEP_AWAKE_LEVEL } from "./audio";
+import { BrowserVoiceAudio, KEEP_AWAKE_LEVEL, REPLY_CUSHION_S, REPLY_HOLD_TIMEOUT_MS } from "./audio";
+import type { VoiceAudioEvent } from "./conversation";
 import type { CaptureFrame } from "./capture.worklet";
 
 /** A node of the fake graph: what it is and where its output goes. */
@@ -31,6 +32,36 @@ class FakeConstant extends FakeNode {
   }
   start() {
     this.started = true;
+  }
+  stop() {
+    this.stopped = true;
+  }
+}
+class FakeBuffer {
+  readonly duration: number;
+  data: Float32Array;
+  constructor(
+    readonly numberOfChannels: number,
+    readonly length: number,
+    readonly sampleRate: number,
+  ) {
+    this.duration = length / sampleRate;
+    this.data = new Float32Array(length);
+  }
+  copyToChannel(src: Float32Array) {
+    this.data = new Float32Array(src);
+  }
+}
+class FakeBufferSource extends FakeNode {
+  buffer: FakeBuffer | null = null;
+  startedAt: number | null = null;
+  stopped = false;
+  onended: (() => void) | null = null;
+  constructor() {
+    super("bufferSource");
+  }
+  start(when = 0) {
+    this.startedAt = when;
   }
   stop() {
     this.stopped = true;
@@ -76,6 +107,7 @@ class FakeContext {
   currentTime = 0;
   destination = new FakeNode("destination");
   made: FakeNode[] = [];
+  sources: FakeBufferSource[] = [];
   onstatechange: (() => void) | null = null;
   audioWorklet = { addModule: async () => {} };
   constructor(o?: { sampleRate?: number }) {
@@ -101,6 +133,14 @@ class FakeContext {
   }
   createConstantSource() {
     return this.make(new FakeConstant());
+  }
+  createBuffer(channels: number, length: number, sampleRate: number) {
+    return new FakeBuffer(channels, length, sampleRate);
+  }
+  createBufferSource() {
+    const s = this.make(new FakeBufferSource());
+    this.sources.push(s);
+    return s;
   }
 }
 
@@ -250,5 +290,191 @@ describe("BrowserVoiceAudio", () => {
     expect(live.track.stopped).toBe(true);
     expect(nodes[0].port.closed).toBe(true);
     expect(contexts.slice(2).map((c) => c.closed)).toEqual([true, true]);
+  });
+});
+
+/** PCM16 little-endian audio of `ms` milliseconds at `rate`, filled with `sample` so tests can verify ordering. */
+function pcmChunk(ms: number, rate = 24000, sample = 1000): ArrayBuffer {
+  const count = Math.round((rate * ms) / 1000);
+  const view = new DataView(new ArrayBuffer(count * 2));
+  for (let i = 0; i < count; i++) view.setInt16(i * 2, sample, true);
+  return view.buffer;
+}
+
+describe("BrowserVoiceAudio reply playback", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function startedAudio(events: VoiceAudioEvent[] = []) {
+    const audio = owned(new BrowserVoiceAudio(24000));
+    const player = contexts[1];
+    const started = audio.start({ inputRate: 16000, muted: false, onFrame: () => {}, onEvent: (e) => events.push(e) });
+    answer(fakeStream().stream);
+    await started;
+    return { audio, player, events };
+  }
+
+  it("schedules chunks immediately when no reply frames are sent (behaviour unchanged)", async () => {
+    const { audio, player, events } = await startedAudio();
+    audio.play(pcmChunk(20, 24000, 1000), 24000);
+    expect(player.sources).toHaveLength(1);
+    expect(player.sources[0].startedAt).toBeCloseTo(0.05, 6);
+    expect(events).toEqual([{ kind: "playing", on: true }]);
+
+    audio.play(pcmChunk(20, 24000, 2000), 24000);
+    expect(player.sources).toHaveLength(2);
+    expect(player.sources[1].startedAt).toBeCloseTo(0.07, 6);
+
+    // After a gap and drain grace, playback turns off and the next unframed chunk still plays immediately.
+    player.currentTime = 0.5;
+    vi.advanceTimersByTime(500);
+    expect(events).toEqual([{ kind: "playing", on: true }, { kind: "playing", on: false }]);
+
+    audio.play(pcmChunk(20, 24000, 3000), 24000);
+    expect(player.sources).toHaveLength(3);
+    expect(player.sources[2].startedAt).toBeCloseTo(0.55, 6);
+    expect(events).toEqual([{ kind: "playing", on: true }, { kind: "playing", on: false }, { kind: "playing", on: true }]);
+  });
+
+  it("buffers a small cushion before starting playback within an open reply, then appends seamlessly", async () => {
+    const { audio, player, events } = await startedAudio();
+    expect(REPLY_CUSHION_S).toBeGreaterThanOrEqual(0.06);
+    expect(REPLY_CUSHION_S).toBeLessThanOrEqual(0.12);
+
+    audio.reply(true);
+    for (let i = 1; i <= 4; i++) {
+      audio.play(pcmChunk(20, 24000, i * 1000), 24000);
+      expect(player.sources).toHaveLength(0);
+      expect(events).toEqual([]);
+    }
+
+    // Reaching the 100 ms cushion flushes all five chunks in order, back-to-back.
+    audio.play(pcmChunk(20, 24000, 5000), 24000);
+    expect(player.sources).toHaveLength(5);
+    expect(player.sources.map((s) => Number(s.startedAt!.toFixed(3)))).toEqual([0.05, 0.07, 0.09, 0.11, 0.13]);
+    expect(player.sources.map((s) => Math.round(s.buffer!.data[0] * 32768))).toEqual([1000, 2000, 3000, 4000, 5000]);
+    expect(events).toEqual([{ kind: "playing", on: true }]);
+
+    // While audio is still playing, subsequent chunks append immediately without re-buffering.
+    player.currentTime = 0.06;
+    audio.play(pcmChunk(20, 24000, 6000), 24000);
+    expect(player.sources).toHaveLength(6);
+    expect(player.sources[5].startedAt).toBeCloseTo(0.15, 6);
+
+    // A single chunk already at least as long as the cushion plays at once.
+    audio.reply(false);
+    player.currentTime = 1.0;
+    audio.reply(true);
+    audio.play(pcmChunk(120, 24000, 7000), 24000);
+    expect(player.sources).toHaveLength(7);
+    expect(player.sources[6].startedAt).toBeCloseTo(1.05, 6);
+  });
+
+  it("plays held audio when the hold timeout expires even if the cushion has not filled", async () => {
+    const { audio, player, events } = await startedAudio();
+    audio.reply(true);
+    audio.play(pcmChunk(20, 24000, 1000), 24000);
+
+    // A second small chunk arrives later; the deadline stays anchored to the first held chunk.
+    vi.advanceTimersByTime(100);
+    player.currentTime = 0.1;
+    audio.play(pcmChunk(20, 24000, 2000), 24000);
+    expect(player.sources).toHaveLength(0);
+
+    vi.advanceTimersByTime(REPLY_HOLD_TIMEOUT_MS - 101);
+    player.currentTime = (REPLY_HOLD_TIMEOUT_MS - 1) / 1000;
+    expect(player.sources).toHaveLength(0);
+
+    player.currentTime = REPLY_HOLD_TIMEOUT_MS / 1000;
+    vi.advanceTimersByTime(1);
+    expect(player.sources).toHaveLength(2);
+    expect(player.sources[0].startedAt).toBeCloseTo(REPLY_HOLD_TIMEOUT_MS / 1000 + 0.05, 6);
+    expect(player.sources[1].startedAt).toBeCloseTo(REPLY_HOLD_TIMEOUT_MS / 1000 + 0.07, 6);
+    expect(events).toEqual([{ kind: "playing", on: true }]);
+  });
+
+  it("re-buffers across a gap inside an open reply without clicks or pile-ups", async () => {
+    const { audio, player } = await startedAudio();
+    audio.reply(true);
+    // Sentence 1: 100 ms plays at 0.05..0.15.
+    for (let i = 0; i < 5; i++) audio.play(pcmChunk(20, 24000, 1000), 24000);
+    expect(player.sources).toHaveLength(5);
+
+    // 500 ms silence gap while the next sentence is synthesized; player is well past 0.15.
+    player.currentTime = 0.65;
+    for (let i = 1; i <= 4; i++) {
+      audio.play(pcmChunk(20, 24000, 2000 + i), 24000);
+      expect(player.sources).toHaveLength(5);
+    }
+
+    // Cushion fills for sentence 2: schedules freshly ahead of currentTime with no overlap or past timestamps.
+    player.currentTime = 0.69;
+    audio.play(pcmChunk(20, 24000, 2005), 24000);
+    expect(player.sources).toHaveLength(10);
+    const s2 = player.sources.slice(5);
+    expect(s2.map((s) => Number(s.startedAt!.toFixed(3)))).toEqual([0.74, 0.76, 0.78, 0.8, 0.82]);
+    for (let i = 1; i < s2.length; i++) {
+      expect(s2[i].startedAt!).toBeCloseTo(s2[i - 1].startedAt! + s2[i - 1].buffer!.duration, 6);
+    }
+  });
+
+  it("flushes queued audio immediately on reply end and returns to unframed playback afterwards", async () => {
+    const { audio, player, events } = await startedAudio();
+    audio.reply(true);
+    audio.play(pcmChunk(20, 24000, 1000), 24000);
+    audio.play(pcmChunk(20, 24000, 2000), 24000);
+    expect(player.sources).toHaveLength(0);
+
+    audio.reply(false);
+    expect(player.sources).toHaveLength(2);
+    expect(player.sources.map((s) => Number(s.startedAt!.toFixed(3)))).toEqual([0.05, 0.07]);
+    expect(events).toEqual([{ kind: "playing", on: true }]);
+
+    // Hold timer was cancelled, and a redundant reply(false) is a no-op.
+    vi.advanceTimersByTime(REPLY_HOLD_TIMEOUT_MS + 100);
+    audio.reply(false);
+    expect(player.sources).toHaveLength(2);
+
+    // After reply end, an unframed chunk plays immediately.
+    player.currentTime = 1.0;
+    audio.play(pcmChunk(20, 24000, 3000), 24000);
+    expect(player.sources).toHaveLength(3);
+    expect(player.sources[2].startedAt).toBeCloseTo(1.05, 6);
+  });
+
+  it("drops held and playing audio immediately on clear during a reply", async () => {
+    const { audio, player, events } = await startedAudio();
+    // Case 1: clear while holding before first play, followed by reply(false) as the server sends.
+    audio.reply(true);
+    audio.play(pcmChunk(20, 24000, 1000), 24000);
+    audio.play(pcmChunk(20, 24000, 2000), 24000);
+    audio.clear();
+    audio.reply(false);
+    vi.advanceTimersByTime(REPLY_HOLD_TIMEOUT_MS + 100);
+    expect(player.sources).toHaveLength(0);
+    expect(events).toEqual([]);
+
+    // Case 2: clear while playing sentence 1 and holding sentence 2 after a gap.
+    audio.reply(true);
+    for (let i = 0; i < 5; i++) audio.play(pcmChunk(20, 24000, 3000), 24000);
+    expect(player.sources).toHaveLength(5);
+    player.currentTime = 0.5;
+    audio.play(pcmChunk(20, 24000, 4000), 24000);
+    audio.clear();
+    expect(player.sources.every((s) => s.stopped)).toBe(true);
+    expect(events).toEqual([{ kind: "playing", on: true }, { kind: "playing", on: false }]);
+    vi.advanceTimersByTime(REPLY_HOLD_TIMEOUT_MS + 100);
+    expect(player.sources).toHaveLength(5);
+
+    // Case 3: a fresh reply after clear gathers a full cushion (dropped chunks do not carry over).
+    audio.reply(true);
+    for (let i = 0; i < 4; i++) audio.play(pcmChunk(20, 24000, 5000), 24000);
+    expect(player.sources).toHaveLength(5);
+    audio.play(pcmChunk(20, 24000, 5000), 24000);
+    expect(player.sources).toHaveLength(10);
   });
 });

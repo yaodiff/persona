@@ -539,6 +539,9 @@ var Routes = []string{
 	"PUT /api/v1/machines/{mid}/herdr/sessions/blocked",
 	"GET /api/v1/machines/{mid}/botmux",
 	"PUT /api/v1/machines/{mid}/botmux",
+	// "Start new Agents as Orca chats" (#17650, internal/devices orca_chat_starts.go).
+	"GET /api/v1/machines/{mid}/orca-chat-starts",
+	"PUT /api/v1/machines/{mid}/orca-chat-starts",
 	"GET /api/v1/machines/{mid}/health/reports",
 	"DELETE /api/v1/machines/{mid}/health/reports/{name}",
 	"POST /api/v1/machines/{mid}/deploy",

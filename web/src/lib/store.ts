@@ -122,6 +122,7 @@ export interface State {
   closedError: string | null;
   /** Optional server-computed `board` projection tree from GET /todos under todos_v2 (#15800). */
   todoBoard: TodoBoardProjection | null;
+  scopedTodoBoard?: { manager: string; board: TodoBoardProjection | null };
   todosSupported: boolean;
   todosLoaded: boolean;
   todosError: string | null;
@@ -1781,7 +1782,6 @@ type TodosListAnswer = {
 };
 
 let keptTodos: { owner: string; etag: string; revision: string } | null = null;
-let closedEpoch = 0;
 
 function closedCursorsOf(answer: TodosListAnswer): Record<string, TodoClosedCursor> {
   const out: Record<string, TodoClosedCursor> = {};
@@ -1832,6 +1832,10 @@ async function readTodos(dedupe = false) {
   ) : null;
   // A failed chunk load leaves the rows usable and lets another read try the board again.
   return { answer, owner, etag, revision, notModified, todoBoard };
+}
+
+export function applyScopedTodoBoard(scopedTodoBoard: NonNullable<State["scopedTodoBoard"]>) {
+  set({ scopedTodoBoard });
 }
 
 type TodosRead = Awaited<ReturnType<typeof readTodos>>;
@@ -1915,7 +1919,6 @@ function applyTodos(todos: PromiseSettledResult<TodosRead>, fresh: () => boolean
     const list = answer.todos ?? [];
     const sharedBlockers = Array.isArray(answer.shared_blockers) ? answer.shared_blockers : [];
     const older = retainOlderClosed(list, state.olderClosedTodos);
-    closedEpoch++;
     for (const t of list) {
       if (t.manager) noteItemManager(`/todos/${encodeURIComponent(t.id)}`, t.manager);
     }
@@ -1924,6 +1927,7 @@ function applyTodos(todos: PromiseSettledResult<TodosRead>, fresh: () => boolean
       olderClosedTodos: older,
       sharedBlockers,
       todoBoard: todoBoard ?? null,
+      ...(!todoBoard && { scopedTodoBoard: undefined }),
       closedCursors: mergeClosedCursors(state.closedCursors, closedCursorsOf(answer)),
       closedLoading: false,
       closedError: null,
@@ -1938,9 +1942,8 @@ function applyTodos(todos: PromiseSettledResult<TodosRead>, fresh: () => boolean
   }
   const reason = todos.reason;
   if (reason instanceof ApiError && reason.status === 404) {
-    closedEpoch++;
     keptTodos = null;
-    return set({ todos: [], olderClosedTodos: [], sharedBlockers: [], todoBoard: null, closedCursors: {}, closedLoading: false, closedError: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+    return set({ todos: [], olderClosedTodos: [], sharedBlockers: [], todoBoard: null, scopedTodoBoard: undefined, closedCursors: {}, closedLoading: false, closedError: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
   }
   set({ todosLoaded: true, todosError: errorText(reason) });
 }
@@ -1975,39 +1978,21 @@ export function dropTodo(id: string) {
   set({ todos: state.todos.filter((t) => t.id !== id), olderClosedTodos: state.olderClosedTodos.filter((t) => t.id !== id) });
 }
 
-/**
- * Reads one bounded page of closed history from each manager whose default window left rows behind. This is the
- * existing GET /todos cursor path, not a synthetic page: every manager is named, pages keep its cursor, and only rows
- * beyond the default window are appended. A manager can return open duplicates while walking backwards; those are
- * skipped because the default already carries every open to-do.
- */
-export async function loadOlderClosed(manager?: string) {
-  if (state.closedLoading) return;
-  const starts = Object.entries(state.closedCursors).filter(([id, cursor]) =>
-    (!manager || id === manager) && cursor.has_more && cursor.next_cursor);
-  if (!starts.length) return;
-  const epoch = closedEpoch;
-  const owner = credentialOwner();
-  const current = () => epoch === closedEpoch && owner === credentialOwner();
-  set({ closedLoading: true, closedError: null });
-  try {
-    const { readOlderClosed } = await import("../features/todos/closed-history");
-    if (!current()) return;
-    const history = await readOlderClosed(starts, () => current() ? new Set(state.todos.map((todo) => todo.id)) : undefined);
-    if (!history || !current()) return;
-    for (const todo of history.rows) {
-      if (todo.manager) noteItemManager(`/todos/${encodeURIComponent(todo.id)}`, todo.manager);
-    }
-    set({
-      todos: [...state.todos, ...history.rows],
-      olderClosedTodos: [...state.olderClosedTodos, ...history.rows],
-      closedCursors: { ...state.closedCursors, ...history.cursors },
-      closedLoading: false,
-      closedError: history.error,
-    });
-  } catch (reason) {
-    if (current()) set({ closedLoading: false, closedError: errorText(reason) });
+export function setClosedHistoryLoading(closedLoading: boolean, closedError: string | null) {
+  set({ closedLoading, closedError });
+}
+
+export function appendClosedTodos(rows: Todo[], cursors: State["closedCursors"], closedError: string | null) {
+  for (const todo of rows) {
+    if (todo.manager) noteItemManager(`/todos/${encodeURIComponent(todo.id)}`, todo.manager);
   }
+  set({
+    todos: [...state.todos, ...rows],
+    olderClosedTodos: [...state.olderClosedTodos, ...rows],
+    closedCursors: { ...state.closedCursors, ...cursors },
+    closedLoading: false,
+    closedError,
+  });
 }
 
 // A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts. Settle 200 ms, then ask
@@ -2360,7 +2345,6 @@ export function reset() {
   rowHints.clear();
   taskRowsAsked.clear();
   listedFull.clear();
-  closedEpoch++;
   runtimeSessions.reset();
   runtimeAgents.reset();
   clearMemoryPages();
@@ -2390,6 +2374,7 @@ export function reset() {
     todos: [],
     sharedBlockers: [],
     todoBoard: null,
+    scopedTodoBoard: undefined,
     olderClosedTodos: [],
     closedCursors: {},
     closedLoading: false,

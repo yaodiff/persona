@@ -328,6 +328,14 @@ func shellOnlyRefusal() error {
 	return refusal(notRunning, i18n.T(i18n.Default, "rpc-errors.not_running_agent_exited"), map[string]any{"reason": notRunningAgentExited})
 }
 
+// The reasons of a not_delivered refusal for botmux's 403 on a send as the owner (botmuxOwnerRefusedError), each worded
+// by rpc-errors.not_delivered_<reason>.
+const (
+	botmuxOwnerUnresolvedReason = "botmux_owner_unresolved"
+	botmuxOwnerMismatchReason   = "botmux_owner_mismatch"
+	botmuxOwnerRefusedReason    = "botmux_owner_refused"
+)
+
 // deliveryRefusal is the refusal for a host's error that typed nothing (host.ErrNotDelivered, host.ErrAgentBlocked),
 // nil for any other.
 func deliveryRefusal(err error) error {
@@ -349,6 +357,18 @@ func deliveryRefusal(err error) error {
 	var down *botmuxDownError
 	if errors.As(err, &down) {
 		return refusal(notDelivered, fmt.Sprintf(botmuxDownMessage, down.App, down.Why), nil)
+	}
+	var owner *botmuxOwnerRefusedError
+	if errors.As(err, &owner) {
+		// botmux's 403 for the owner: say which, so the hub words it (apierr notDeliveredKeys), not "try again shortly".
+		reason := botmuxOwnerRefusedReason
+		switch owner.Code {
+		case botmuxOwnerUnresolved:
+			reason = botmuxOwnerUnresolvedReason
+		case botmuxOwnerMismatch:
+			reason = botmuxOwnerMismatchReason
+		}
+		return refusal(notDelivered, i18n.T(i18n.Default, "rpc-errors.not_delivered_"+reason), map[string]any{"reason": reason})
 	}
 	return refusal(notDelivered, i18n.T(i18n.Default, "rpc-errors.not_delivered"), map[string]any{"reason": "terminal_refused"})
 }

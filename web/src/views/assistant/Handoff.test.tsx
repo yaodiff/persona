@@ -12,14 +12,23 @@ vi.hoisted(() => {
 });
 
 import { t } from "../../i18n";
-import { getFeedState, type FeedItem, type TaskPlan } from "../../lib/feed";
+import { getFeedState, type DisplayLine, type FeedItem, type TaskPlan } from "../../lib/feed";
 import { handoffFrom } from "../../lib/handoff";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
+import { stateCount } from "../../lib/state-labels";
 import { applyCompleteSessions, refreshTodos, reset } from "../../lib/store";
 import type { Todo, TodoAgent } from "../../lib/todos";
 import type { Session } from "../../lib/types";
-import { handoffAgents, lastActive, shortSessionId, TASK_LINE_SLACK_MS } from "./Handoff";
+import {
+  groupAssistantLines,
+  handoffAgents,
+  HandoffFeedRun,
+  HandoffGroupStateContext,
+  lastActive,
+  shortSessionId,
+  TASK_LINE_SLACK_MS,
+} from "./Handoff";
 import { AssistantActionBar, FeedLineView } from "./Tasks";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -33,7 +42,10 @@ const linked = (id: string, title: string, sessions: Session[], extra: Partial<T
 let served: Todo[];
 let host: HTMLDivElement;
 let root: Root;
-const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+const settle = () => act(async () => {
+  await vi.dynamicImportSettled();
+  await new Promise((r) => setTimeout(r, 0));
+});
 const opened = () => location.pathname + location.search;
 const tray = () => host.querySelector<HTMLButtonElement>('[data-tray-entry="running"]')!;
 const cards = () => [...host.querySelectorAll<HTMLElement>("[data-handoff-card]")];
@@ -320,5 +332,310 @@ describe("which Agents a card stands for (#11854)", () => {
     expect(names(handoffAgents(agents, "2026-11-10T12:00:00Z", false, TASK_LINE_SLACK_MS))).toEqual(["previous"]);
     expect(names(handoffAgents(agents, "2026-11-10T12:00:00Z", false))).toEqual(["planned"]);
     expect(names(handoffAgents(agents.slice(0, 1), "2026-11-10T12:00:00Z", false))).toEqual([]);
+  });
+});
+
+describe("collapsible multi-task hand-off groups (#17766)", () => {
+  const mkSession = (id: string, title: string, state: Session["state"], extra: Partial<Session> = {}): Session => ({
+    ...agent,
+    session_id: id,
+    title,
+    state,
+    status: state === "needs_you" ? "blocked" : state === "working" ? "working" : "idle",
+    ...extra,
+  } as Session);
+
+  const toggleBtn = () => host.querySelector<HTMLButtonElement>("[data-handoff-group-toggle]");
+  const summaryEl = () => host.querySelector<HTMLElement>("[data-handoff-group-summary]");
+
+  it("keeps 1-2 hand-off cards directly expanded with zero extra collapse chrome", async () => {
+    const s1 = mkSession("s1", "Agent One", "working");
+    const s2 = mkSession("s2", "Agent Two", "working");
+    const plan: TaskPlan = {
+      id: "plan-two-direct",
+      conversation,
+      state: "started",
+      created_at: at,
+      tasks: [
+        { title: "Task One", prompt: "a", cwd: "/example", machine: "example-computer", todo_id: "t1" },
+        { title: "Task Two", prompt: "b", cwd: "/example", machine: "example-computer", todo_id: "t2" },
+      ],
+    };
+    getFeedState().plans[plan.id] = plan;
+    await show(
+      { id: "plan-two-ev", conversation, at, kind: "plan", ref: plan.id },
+      [linked("t1", "Task One", [s1]), linked("t2", "Task Two", [s2])],
+      [s1, s2],
+    );
+    expect(host.querySelector("[data-handoff-group]")).toBeNull();
+    expect(toggleBtn()).toBeNull();
+    expect(cards()).toHaveLength(2);
+  });
+
+  it("collapses 3+ cards by default into a compact summary card with live status aggregation and expand/collapse toggle", async () => {
+    const s1 = mkSession("s1", "Agent 1", "working");
+    const s2 = mkSession("s2", "Agent 2", "working");
+    const s3 = mkSession("s3", "Agent 3", "working");
+    const plan: TaskPlan = {
+      id: "plan-five",
+      conversation,
+      state: "started",
+      created_at: at,
+      tasks: [
+        { title: "Task 1", prompt: "a", cwd: "/example", machine: "example-computer", todo_id: "t1" },
+        { title: "Task 2", prompt: "b", cwd: "/example", machine: "example-computer", todo_id: "t2" },
+        { title: "Task 3", prompt: "c", cwd: "/example", machine: "example-computer", todo_id: "t3" },
+        { title: "Task 4", prompt: "d", cwd: "/example", machine: "example-computer", todo_id: "t4" },
+        { title: "Task 5", prompt: "e", cwd: "/example", machine: "example-computer", todo_id: "t5" },
+      ],
+    };
+    getFeedState().plans[plan.id] = plan;
+    await show(
+      { id: "plan-five-ev", conversation, at, kind: "plan", ref: plan.id },
+      [
+        linked("t1", "Task 1", [s1]),
+        linked("t2", "Task 2", [s2]),
+        linked("t3", "Task 3", [s3]),
+        linked("t4", "Task 4", []),
+        linked("t5", "Task 5", []),
+      ],
+      [s1, s2, s3],
+    );
+
+    const group = host.querySelector("[data-handoff-cards]")!;
+    expect(group.getAttribute("data-handoff-cards")).toBe("5");
+    expect(group.getAttribute("data-handoff-group")).toBe("collapsed");
+    expect(toggleBtn()!.getAttribute("aria-expanded")).toBe("false");
+    expect(toggleBtn()!.textContent).toContain(t("assistant-tasks.multi_handoff_title", { count: 5 }));
+    expect(toggleBtn()!.textContent).toContain(t("assistant-tasks.multi_handoff_expand"));
+    expect(summaryEl()!.querySelector('[data-handoff-summary-state="starting"]')?.textContent).toBe(t("assistant-tasks.multi_handoff_starting", { count: 2 }));
+    expect(summaryEl()!.querySelector('[data-handoff-summary-state="working"]')?.textContent).toBe(stateCount("working", 3));
+    expect(cards()).toHaveLength(0);
+
+    // Expanding shows all 5 cards in original order and preserves card click behavior
+    act(() => toggleBtn()!.click());
+    expect(group.getAttribute("data-handoff-group")).toBe("expanded");
+    expect(toggleBtn()!.getAttribute("aria-expanded")).toBe("true");
+    expect(toggleBtn()!.textContent).toContain(t("chat-interactions.collapse"));
+    expect(cards().map((c) => c.getAttribute("data-handoff-card"))).toEqual([
+      "example-computer/s1",
+      "example-computer/s2",
+      "example-computer/s3",
+      "todo:t4",
+      "todo:t5",
+    ]);
+    act(() => cards()[1]!.click());
+    expect(getPanel()).toEqual({ kind: "agent", mid: "example-computer", sid: "s2" });
+
+    // Collapsing folds cards again
+    act(() => toggleBtn()!.click());
+    expect(group.getAttribute("data-handoff-group")).toBe("collapsed");
+    expect(cards()).toHaveLength(0);
+  });
+
+  it("highlights urgent attention counts and surfaces up to 2 urgent cards while collapsed without duplicating when expanded", async () => {
+    const sWorking1 = mkSession("w1", "Working 1", "working");
+    const sWorking2 = mkSession("w2", "Working 2", "working");
+    const sNeeds = mkSession("n1", "Waiting Agent", "needs_you");
+    const sCut = mkSession("c1", "Cut Agent", "idle", { turn_error: "upstream 502" });
+    const plan: TaskPlan = {
+      id: "plan-urgent",
+      conversation,
+      state: "started",
+      created_at: at,
+      tasks: [
+        { title: "Working 1", prompt: "a", cwd: "/example", machine: "example-computer", todo_id: "t1" },
+        { title: "Needs you task", prompt: "b", cwd: "/example", machine: "example-computer", todo_id: "t2" },
+        { title: "Cut task", prompt: "c", cwd: "/example", machine: "example-computer", todo_id: "t3" },
+        { title: "Failed task", prompt: "d", cwd: "/example", machine: "example-computer", todo_id: "t4" },
+        { title: "Working 2", prompt: "e", cwd: "/example", machine: "example-computer", todo_id: "t5" },
+      ],
+    };
+    getFeedState().plans[plan.id] = plan;
+    await show(
+      { id: "plan-urgent-ev", conversation, at, kind: "plan", ref: plan.id },
+      [
+        linked("t1", "Working 1", [sWorking1]),
+        linked("t2", "Needs you task", [sNeeds]),
+        linked("t3", "Cut task", [sCut]),
+        linked("t4", "Failed task", [], { start_error: "machine offline", done_at: at }),
+        linked("t5", "Working 2", [sWorking2]),
+      ],
+      [sWorking1, sWorking2, sNeeds, sCut],
+    );
+
+    // Summary shows semantic tones for all urgent states
+    const failedSeg = summaryEl()!.querySelector('[data-handoff-summary-state="failed"]')!;
+    const cutSeg = summaryEl()!.querySelector('[data-handoff-summary-state="interrupted"]')!;
+    const needsSeg = summaryEl()!.querySelector('[data-handoff-summary-state="needs_you"]')!;
+    expect(failedSeg.className).toContain("text-red");
+    expect(cutSeg.className).toContain("text-red");
+    expect(needsSeg.className).toContain("text-attention");
+
+    // Collapsed: surfaces at most 2 urgent cards, prioritizing failed/interrupted ahead of needs_you
+    expect(host.querySelector("[data-handoff-surfaced]")).not.toBeNull();
+    expect(cards().map((c) => c.getAttribute("data-handoff-card"))).toEqual([
+      "example-computer/c1",
+      "todo:t4",
+    ]);
+
+    // Expanded: shows all 5 cards in original order with zero duplicates
+    act(() => toggleBtn()!.click());
+    expect(host.querySelector("[data-handoff-surfaced]")).toBeNull();
+    expect(cards().map((c) => c.getAttribute("data-handoff-card"))).toEqual([
+      "example-computer/w1",
+      "example-computer/n1",
+      "example-computer/c1",
+      "todo:t4",
+      "example-computer/w2",
+    ]);
+  });
+
+  it("keeps expand/collapse state stable across live status transitions (starting -> working -> done)", async () => {
+    const plan: TaskPlan = {
+      id: "plan-live",
+      conversation,
+      state: "started",
+      created_at: at,
+      tasks: [
+        { title: "Task 1", prompt: "a", cwd: "/example", machine: "example-computer", todo_id: "t1" },
+        { title: "Task 2", prompt: "b", cwd: "/example", machine: "example-computer", todo_id: "t2" },
+        { title: "Task 3", prompt: "c", cwd: "/example", machine: "example-computer", todo_id: "t3" },
+      ],
+    };
+    getFeedState().plans[plan.id] = plan;
+    await show(
+      { id: "plan-live-ev", conversation, at, kind: "plan", ref: plan.id },
+      [linked("t1", "Task 1", []), linked("t2", "Task 2", []), linked("t3", "Task 3", [])],
+      [],
+    );
+    expect(summaryEl()!.textContent).toContain(t("assistant-tasks.multi_handoff_starting", { count: 3 }));
+
+    // User expands while tasks are starting
+    act(() => toggleBtn()!.click());
+    expect(toggleBtn()!.getAttribute("aria-expanded")).toBe("true");
+    expect(cards()).toHaveLength(3);
+
+    // Agents start and move to working
+    const s1 = mkSession("s1", "Agent 1", "working");
+    const s2 = mkSession("s2", "Agent 2", "working");
+    const s3 = mkSession("s3", "Agent 3", "unread");
+    served = [linked("t1", "Task 1", [s1]), linked("t2", "Task 2", [s2]), linked("t3", "Task 3", [s3])];
+    await act(async () => {
+      applyCompleteSessions([s1, s2, s3]);
+      await refreshTodos();
+    });
+    expect(toggleBtn()!.getAttribute("aria-expanded")).toBe("true");
+    expect(summaryEl()!.querySelector('[data-handoff-summary-state="working"]')?.textContent).toBe(stateCount("working", 2));
+    expect(summaryEl()!.querySelector('[data-handoff-summary-state="done"]')?.textContent).toBe(stateCount("done", 1));
+    expect(cards()).toHaveLength(3);
+
+    // All finish -> still expanded
+    const d1 = mkSession("s1", "Agent 1", "idle");
+    const d2 = mkSession("s2", "Agent 2", "idle");
+    const d3 = mkSession("s3", "Agent 3", "idle");
+    await act(async () => {
+      applyCompleteSessions([d1, d2, d3]);
+    });
+    expect(toggleBtn()!.getAttribute("aria-expanded")).toBe("true");
+    expect(summaryEl()!.querySelector('[data-handoff-summary-state="done"]')?.textContent).toBe(stateCount("done", 3));
+  });
+
+  it("groups consecutive standalone task feed items into one collapsible summary and splits on intervening messages or open plans", async () => {
+    const s1 = mkSession("s1", "Agent 1", "working");
+    const s2 = mkSession("s2", "Agent 2", "working");
+    const s3 = mkSession("s3", "Agent 3", "needs_you");
+    const f1: FeedItem = { id: "f1", conversation, at, kind: "task", ref: "t1" };
+    const f2: FeedItem = { id: "f2", conversation, at, kind: "task", ref: "t2" };
+    const f3: FeedItem = { id: "f3", conversation, at, kind: "task", ref: "t3" };
+    const notice: FeedItem = { id: "n1", conversation, at, kind: "notice", body: { text: "Between runs" } };
+    const f4: FeedItem = { id: "f4", conversation, at, kind: "task", ref: "t4" };
+    const f5: FeedItem = { id: "f5", conversation, at, kind: "task", ref: "t5" };
+
+    const lines: DisplayLine[] = [
+      { kind: "feed", id: "feed-f1", item: f1 },
+      { kind: "feed", id: "feed-f2", item: f2 },
+      { kind: "feed", id: "feed-f3", item: f3 },
+      { kind: "feed", id: "feed-n1", item: notice },
+      { kind: "feed", id: "feed-f4", item: f4 },
+      { kind: "feed", id: "feed-f5", item: f5 },
+    ];
+    const grouped = groupAssistantLines(lines);
+    expect(grouped.map((g) => g.kind)).toEqual(["handoff_run", "feed", "handoff_run"]);
+
+    served = [
+      linked("t1", "Task 1", [s1]),
+      linked("t2", "Task 2", [s2]),
+      linked("t3", "Task 3", [s3]),
+      linked("t4", "Task 4", []),
+      linked("t5", "Task 5", []),
+    ];
+    await act(async () => {
+      applyCompleteSessions([s1, s2, s3]);
+      await refreshTodos();
+    });
+
+    const stateMap = new Map<string, boolean>();
+    const renderOther = (it: FeedItem) => <FeedLineView item={it} simplified />;
+    act(() => {
+      root.render(
+        <StrictMode>
+          <HandoffGroupStateContext.Provider value={stateMap}>
+            {grouped.map((g) =>
+              g.kind === "handoff_run"
+                ? <HandoffFeedRun key={g.id} items={g.items} renderOther={renderOther} />
+                : <FeedLineView key={g.id} item={(g as Extract<DisplayLine, { kind: "feed" }>).item} simplified />,
+            )}
+          </HandoffGroupStateContext.Provider>
+        </StrictMode>,
+      );
+    });
+    await settle();
+
+    // First run (3 tasks) is collapsed with the 1 needs_you card surfaced; second run (2 tasks) stays expanded
+    const groups = [...host.querySelectorAll<HTMLElement>("[data-handoff-cards]")];
+    expect(groups).toHaveLength(2);
+    expect(groups[0]!.getAttribute("data-handoff-cards")).toBe("3");
+    expect(groups[0]!.getAttribute("data-handoff-group")).toBe("collapsed");
+    expect([...groups[0]!.querySelectorAll("[data-handoff-card]")].map((c) => c.getAttribute("data-handoff-card"))).toEqual(["example-computer/s3"]);
+    expect(groups[1]!.getAttribute("data-handoff-cards")).toBe("2");
+    expect(groups[1]!.getAttribute("data-handoff-group")).toBeNull();
+    expect(groups[1]!.querySelectorAll("[data-handoff-card]")).toHaveLength(2);
+
+    // Expanding first run persists via HandoffGroupStateContext even if a new task joins the run
+    act(() => groups[0]!.querySelector<HTMLButtonElement>("[data-handoff-group-toggle]")!.click());
+    expect(stateMap.get("f1")).toBe(true);
+    expect(groups[0]!.querySelectorAll("[data-handoff-card]")).toHaveLength(3);
+  });
+
+  it("splits around an open plan inside a consecutive plan/task run", async () => {
+    const openPlan: TaskPlan = {
+      id: "plan-open",
+      conversation,
+      state: "open",
+      created_at: at,
+      tasks: [{ title: "Needs approval", prompt: "a", cwd: "/example", machine: "example-computer" }],
+    };
+    getFeedState().plans[openPlan.id] = openPlan;
+    served = [linked("t1", "Standalone Task", [agent])];
+    await act(async () => {
+      applyCompleteSessions([agent]);
+      await refreshTodos();
+    });
+    const runItems: FeedItem[] = [
+      { id: "open-ev", conversation, at, kind: "plan", ref: openPlan.id },
+      { id: "task-ev", conversation, at, kind: "task", ref: "t1" },
+    ];
+    act(() => {
+      root.render(
+        <StrictMode>
+          <HandoffFeedRun items={runItems} renderOther={(it) => <FeedLineView item={it} simplified />} />
+        </StrictMode>,
+      );
+    });
+    await settle();
+    expect(host.querySelector("[data-plan-actions]")).not.toBeNull();
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]!.getAttribute("data-handoff-card")).toBe(`example-computer/${agent.session_id}`);
   });
 });

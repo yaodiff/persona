@@ -566,19 +566,23 @@ var notFoundKeys = map[string]string{
 
 // bridgeReasonKeys word the refusals of the node's Orca chat bridge by their reason (node/orcabridge.go): Orca is not
 // running, turned the request down, may or may not have done it, or no longer has the chat; a chat it closed takes no
-// mode change; a permission mode the chat's provider does not take; an Orca that cannot rename chats.
+// mode change; a permission mode the chat's provider does not take; an Orca that cannot rename chats; a chat Orca can't
+// open for that provider on the computer, its chat runtime not installed there or for a reason in Orca's words, naming
+// the provider (data program, node/orcabridge_start.go orcaStartErr, #17684).
 var bridgeReasonKeys = map[string]string{
-	"orca_away":               "rpc-errors.orca_away",
-	"orca_refused":            "rpc-errors.orca_refused",
-	"orca_unknown":            "rpc-errors.orca_unknown",
-	"orca_session_gone":       "rpc-errors.orca_session_gone",
-	"orca_closed":             "rpc-errors.orca_closed",
-	"orca_mode_unsupported":   "rpc-errors.orca_mode_unsupported",
-	"orca_rename_unsupported": "rpc-errors.orca_rename_unsupported",
-	"orca_start_unsupported":  "rpc-errors.orca_start_unsupported",
-	"orca_start_folder":       "rpc-errors.orca_start_folder",
-	"orca_start_launcher":     "rpc-errors.orca_start_launcher",
-	"orca_unsupported":        "rpc-errors.orca_unsupported", // a call the bridge does not take (#17057)
+	"orca_away":                 "rpc-errors.orca_away",
+	"orca_refused":              "rpc-errors.orca_refused",
+	"orca_unknown":              "rpc-errors.orca_unknown",
+	"orca_session_gone":         "rpc-errors.orca_session_gone",
+	"orca_closed":               "rpc-errors.orca_closed",
+	"orca_mode_unsupported":     "rpc-errors.orca_mode_unsupported",
+	"orca_rename_unsupported":   "rpc-errors.orca_rename_unsupported",
+	"orca_start_unsupported":    "rpc-errors.orca_start_unsupported",
+	"orca_start_folder":         "rpc-errors.orca_start_folder",
+	"orca_start_launcher":       "rpc-errors.orca_start_launcher",
+	"orca_chat_runtime_missing": "rpc-errors.orca_chat_runtime_missing",
+	"orca_chat_unavailable":     "rpc-errors.orca_chat_unavailable",
+	"orca_unsupported":          "rpc-errors.orca_unsupported", // a call the bridge does not take (#17057)
 }
 
 // openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
@@ -633,6 +637,10 @@ var notDeliveredKeys = map[string]string{
 	"terminal_refused":  "rpc-errors.not_delivered",
 	"terminal_finished": "rpc-errors.not_delivered_finished",
 	"screen_unreadable": "rpc-errors.not_delivered_screen_unreadable",
+	// botmux's 403 on a send as the owner (node/sendsafe.go botmuxOwnerRefusedError).
+	"botmux_owner_unresolved": "rpc-errors.not_delivered_botmux_owner_unresolved",
+	"botmux_owner_mismatch":   "rpc-errors.not_delivered_botmux_owner_mismatch",
+	"botmux_owner_refused":    "rpc-errors.not_delivered_botmux_owner_refused",
 }
 
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {

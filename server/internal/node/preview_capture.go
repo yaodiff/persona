@@ -74,6 +74,7 @@ func (t *previewTab) pick(on bool) bool {
 	}
 	mode := map[string]any{"mode": "none", "highlightConfig": map[string]any{}}
 	if on {
+		t.withdrawSelect()
 		t.cdp("DOM.enable", nil)
 		t.cdp("Overlay.enable", nil)
 		mode = map[string]any{"mode": "searchForNode", "highlightConfig": map[string]any{

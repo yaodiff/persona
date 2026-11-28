@@ -21,17 +21,16 @@ import (
 // this manager works them out, told the hub (counts.view) for the clients to draw instead of counting themselves.
 // liveLoop makes it in each round from the agents and cards the Live Activity's state and Persona Link's summary are
 // made from, after the state is told, so the three agree and a badge is never ahead of the lists the round published.
-// Which rows count is fleetcount's (the Agents list's surface); the view's shape, its row keys and the words for why a
-// row is held are fleetcountadapt's; what this file adds is the view's place in this run: its epoch, rev, as_of and
+// fleetcount decides which Agents rows and Persona cards count. fleetcountadapt writes the view's shape, row keys
+// and held reasons. This file adds the view's place in this run: its epoch, rev, as_of and
 // build, and when it is told. The view's to-dos count is the to-do list's own (countsTodos): the counts
 // GET /api/v1/todos answers, kept from the last whole-list read.
 
 // linkAndCounts is linkAttention and the counts view of the same agents and cards, decided on one fill of the fleet:
-// liveLoop's round. The view is fleetcount's Agents list tally of them and todos, the to-do list's counts as the
-// manager last worked them out (countsTodos.kept), written by fleetcount's adapter, without the epoch, rev, as_of and
-// build (tellCounts).
-func (r *fleetRound) linkAndCounts(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction, told map[string]bool, todos opt.Option[assistantwire.TodoCounts]) (link.Attention, assistantwire.CountsView) {
-	r.fillLink(agents, ixs, told)
+// liveLoop's round. The view carries the Agents badge and Persona cards (which also take quiet agents), and todos
+// as the manager last worked them out (countsTodos.kept). tellCounts adds the epoch, rev, as_of and build.
+func (r *fleetRound) linkAndCounts(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction, told map[string]bool, quiet []fleetInput, todos opt.Option[assistantwire.TodoCounts]) (link.Attention, assistantwire.CountsView) {
+	r.fillLink(agents, ixs, told, quiet)
 	defer r.letLinkGo()
 	needsYou := fleetcount.AgentsNeedsYou(fleetcount.SurfaceBadge(), r.link.Agents(), r.link.Cards())
 	return r.link.Link(string(l), sessionTitle), r.link.View(needsYou, todos)

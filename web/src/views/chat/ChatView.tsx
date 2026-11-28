@@ -152,6 +152,7 @@ import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
 import { sessionAgentName } from "../../lib/agent-kind";
 import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip } from "../assistant/Tasks";
+import { groupAssistantLines, HandoffFeedRun, HandoffGroupStateContext } from "../assistant/Handoff";
 import { decisionKey, taskDecisionCards, type DecisionCard } from "../../lib/decision-pager";
 import { t } from "../../i18n";
 import { lazyDialog, lazyOverlay } from "../LazyOverlay";
@@ -162,6 +163,7 @@ import { AssistantUpdateSlot } from "./AssistantUpdateSlot";
 // first switch does not slide in an empty layer.
 const loadTerminal = () => import("../session/TerminalPanel");
 // Sharing settings load on their first open, outside the first screen (docs/web/web.md "First screen").
+const renderSimplifiedFeedLine = (item: FeedItem) => <FeedLineView item={item} simplified />;
 const ChatSearch = lazyDialog(() => import("./ChatSearch").then((m) => m.ChatSearch));
 const DecisionSourceDialog = lazyDialog(() => import("./DecisionSourceDialog").then((m) => m.DecisionSourceDialog));
 const LinkTodoDialog = lazyDialog(() => import("../LinkTodoDialog").then((m) => m.LinkTodoDialog));
@@ -1850,6 +1852,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     () => (assistant ? displayLines(lines, quiet.timelineFeed, feedFrom) : NO_DISPLAY_LINES),
     [assistant, lines, quiet.timelineFeed, feedFrom],
   );
+  const groupedAssistantLines = useMemo(() => (assistant ? groupAssistantLines(assistantLines) : NO_DISPLAY_LINES), [assistant, assistantLines]);
+  const handoffGroupState = useMemo(() => new Map<string, boolean>(), [mid, sid]);
   // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
   // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
   const busySegment = useMemo(() => (lastLive ? lines.findLast((line) => line.kind === "segment")?.id : undefined), [lastLive, lines]);
@@ -2833,12 +2837,15 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               />
             )}
             <ChatContext.Provider value={ctx}>
+              <HandoffGroupStateContext.Provider value={handoffGroupState}>
               <CardConversation.Provider value={assistant ? sid : ""}>
               {earlier.host && <Suspense fallback={null}><EarlierStretches {...earlier.host} offscreen={offscreen} /></Suspense>}
               {assistant
-                ? assistantLines.flatMap((d) => [
+                ? groupedAssistantLines.flatMap((d) => [
                     ...failedBefore(d.kind === "chat" ? d.id : ""),
-                    d.kind === "feed" ? (
+                    d.kind === "handoff_run" ? (
+                      <HandoffFeedRun key={d.id} items={d.items} renderOther={renderSimplifiedFeedLine} />
+                    ) : d.kind === "feed" ? (
                       <FeedLineView key={d.id} item={d.item} simplified />
                     ) : d.kind === "quick" ? (
                       <QuickResultCard key={d.id} result={d.result} />
@@ -2893,6 +2900,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
                 />
               )])}
               </CardConversation.Provider>
+              </HandoffGroupStateContext.Provider>
             </ChatContext.Provider>
             </LatestMessageTime.Provider>
             </LiveClockContext.Provider>

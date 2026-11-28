@@ -22,6 +22,12 @@ type trustMemStore struct {
 	trusts map[string]db.ExtensionTrust
 }
 
+func (st *trustMemStore) ExtensionTrustOf(_ context.Context, extension string) (string, error) {
+	st.tmu.Lock()
+	defer st.tmu.Unlock()
+	return st.trusts[extension].Trust, nil
+}
+
 func (st *trustMemStore) ExtensionTrusts(context.Context) (map[string]db.ExtensionTrust, error) {
 	st.tmu.Lock()
 	defer st.tmu.Unlock()

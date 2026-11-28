@@ -35,6 +35,7 @@ func (s *Recordings) Hook(e *kb.Engine, core recordingwire.Core) {
 		return s.dayRecapWritten(ctx, e, r, d)
 	})
 	w.OnLive(s.meetingKick)
+	w.OnSpeakersChanged(func(string) { s.kbWake() })
 	e.SetRecordingProvider(w)
 	e.MeetingChanged, e.DayRecordingName = s.meetingLiveChanged, s.dayRecordingName
 }

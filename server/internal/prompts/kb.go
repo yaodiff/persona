@@ -13,6 +13,7 @@ import (
 type KBOwner struct {
 	Owner    string
 	Language string
+	Speakers bool
 }
 
 func RenderKBCompress(o KBOwner) string { return render("kb/compress", o) }
@@ -214,16 +215,25 @@ type KBMinutesInput struct {
 func RenderKBMinutesInput(in KBMinutesInput) string { return render("kb/minutes_input", in) }
 
 // KBMinutesNote is an item of a part's notes: Line the transcript line it cites, or Photo the photo (Line 0 then); Who,
-// By and DueDate as the part said; Topic the title of the part's topic a point or decision is in ("" none, #6563).
+// By and DueDate as the part said; Topic the title of the part's topic a point or decision is in ("" none, #6563);
+// Speaker is the anonymous speaker marker of Line when a timeline is present ("" otherwise, #17674).
 type KBMinutesNote struct {
-	Line, Photo                   int
-	Text, Who, By, DueDate, Topic string
+	Line, Photo                            int
+	Text, Who, By, DueDate, Topic, Speaker string
 }
 
-// KBMinutesDebatePosition is one side of a disagreement in a part's notes for the merging call (#16728).
+// KBMinutesDebateAlso is an additional supporting citation in a part's disagreement notes for the merging call (#17674).
+type KBMinutesDebateAlso struct {
+	Line            int
+	Speaker, Holder string
+}
+
+// KBMinutesDebatePosition is one side of a disagreement in a part's notes for the merging call (#16728, #17674).
 type KBMinutesDebatePosition struct {
-	Line        int
-	Stance, Who string
+	Line            int
+	Stance, Who     string
+	Speaker, Holder string
+	Also            []KBMinutesDebateAlso
 }
 
 // KBMinutesDebate is a disagreement in a part's notes for the merging call (#16728): each position and any outcome

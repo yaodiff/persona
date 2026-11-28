@@ -330,6 +330,8 @@
     <string name="agents_new_presets">Agent presets</string>
     <string name="agents_new_preset_loading">Wait for this preset’s model list before starting.</string>
     <string name="agents_new_preset_left_out">This preset won’t be applied in full:</string>
+    <string name="agents_new_opens_orca_chat">Opens as %1$s: this computer starts new Agents as Orca chats.</string>
+    <string name="agents_new_opens_orca_chat_own">Opens as %1$s, with Orca\'s own model: this computer starts new Agents as Orca chats.</string>
     <string name="agents_new_preset_left_out_model">Model “%1$s” can’t be used here; the launcher’s model will run.</string>
     <string name="agents_new_preset_left_out_effort">Thinking effort “%1$s” can’t be used here; the launcher’s or model’s own effort will run.</string>
     <!-- The agent type of Paseo's providers other than Claude Code and Codex, each listed by its own name under it (#8143). -->

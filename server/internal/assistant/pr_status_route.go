@@ -785,7 +785,7 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 		return "", err
 	}
 	why := cleanWhy(fmt.Sprintf("PR %s on %s@%s", ev.Kind, ev.PRURL, shortSHA(ev.HeadSHA)))
-	if err := s.resumeAllowed(ctx, self, am, lastStopped, why, nil); err != nil {
+	if err := s.resumeAllowed(ctx, self, am, lastStopped, why, nil, resumeReview{}); err != nil {
 		return "", err
 	}
 	params := map[string]any{

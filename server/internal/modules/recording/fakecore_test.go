@@ -63,20 +63,22 @@ type Service struct {
 	f   *fakeHub
 	mux *http.ServeMux
 
-	mu       sync.Mutex
-	set      Settings
-	st       *memStore             // the settings rows (Host.Setting)
-	titles   map[string]string     // TitleFixed's kinds, by session id
-	origins  map[string]Origin     // by session id
-	guests   map[string]*guestConv // guest conversations, by session id
-	cards    []string              // NoteCard's sources
-	todos    map[string]string     // ActionTodos' to-dos: id → title
-	timings  map[string]time.Duration
-	lists    map[string][]time.Duration
-	now      func() time.Time
-	after    func(time.Duration, func()) func() bool
-	readOnly bool
-	work     map[string]bool // computers whose trust is work
+	mu                 sync.Mutex
+	set                Settings
+	st                 *memStore             // the settings rows (Host.Setting)
+	titles             map[string]string     // TitleFixed's kinds, by session id
+	origins            map[string]Origin     // by session id
+	guests             map[string]*guestConv // guest conversations, by session id
+	cards              []string              // NoteCard's sources
+	todos              map[string]string     // ActionTodos' to-dos: id → title
+	timings            map[string]time.Duration
+	lists              map[string][]time.Duration
+	now                func() time.Time
+	after              func(time.Duration, func()) func() bool
+	readOnly           bool
+	speakerTurnsImport bool
+	inSpace            map[string]bool
+	work               map[string]bool // computers whose trust is work
 
 	trans        transcribers
 	meetingModel kb.Model
@@ -321,6 +323,11 @@ func (s *Service) KBReadOnly(ctx context.Context) bool {
 	return s.readOnly
 }
 func (s *Service) KBConnected() bool { return true }
+func (s *Service) SpeakerTurnsImport() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.speakerTurnsImport
+}
 
 func (s *Service) Setting(_ context.Context, key string, out any) (bool, error) {
 	s.st.mu.Lock()
@@ -678,7 +685,11 @@ func (s *Service) transcriptionReady() bool {
 }
 func (s *Service) TranscriptionReadyAwait() bool { return s.transcriptionReady() }
 
-func (s *Service) InSpaceRecording(context.Context, string) bool { return false }
+func (s *Service) InSpaceRecording(_ context.Context, id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inSpace[id]
+}
 func (s *Service) PutSpaceRecordingRoute(w http.ResponseWriter, _ *http.Request, _ recordingwire.RecordingUpload, _ recordingwire.UploadCleaner) {
 	http.Error(w, "no tracks in the module's tests", http.StatusBadRequest)
 }

@@ -111,15 +111,10 @@ func hubSentTypes(t *testing.T) []string {
 	return out
 }
 
-// managerSentTypes are the types of the messages the managers' code sends the apps: the assistant's Service.event and
-// broadcastEvent, its extensions' manager's broadcast (….broadcast(msg)) and broadcastExtension(kind, …)
-// (extension_<kind> and plugin_<kind>). A message is a literal with a "type" key or Type field, assigned to the variable
-// passed in the same function; one the test cannot read is an error, but for the extensions' own types
-// (apiBroadcast: declared in their manifests) and broadcastExtension's.
-func managerSentTypes(t *testing.T) []string {
+func wireStringConstants(t *testing.T, dir string) map[string]string {
 	t.Helper()
-	wireConstants := map[string]string{}
-	for _, file := range goFiles(t, "../assistantwire") {
+	constants := map[string]string{}
+	for _, file := range goFiles(t, dir) {
 		for _, decl := range file.Decls {
 			group, ok := decl.(*ast.GenDecl)
 			if !ok || group.Tok != token.CONST {
@@ -129,16 +124,30 @@ func managerSentTypes(t *testing.T) []string {
 				value := spec.(*ast.ValueSpec)
 				for i, expr := range value.Values {
 					if literal, ok := stringLit(expr); ok {
-						wireConstants[value.Names[i].Name] = literal
+						constants[value.Names[i].Name] = literal
 					}
 				}
 			}
 		}
 	}
+	return constants
+}
+
+// managerSentTypes are the types of the messages the managers' code sends the apps: the assistant's Service.event and
+// broadcastEvent, its extensions' manager's broadcast (….broadcast(msg)) and broadcastExtension(kind, …)
+// (extension_<kind> and plugin_<kind>). A message is a literal with a "type" key or Type field, assigned to the variable
+// passed in the same function; one the test cannot read is an error, but for the extensions' own types
+// (apiBroadcast: declared in their manifests) and broadcastExtension's.
+func managerSentTypes(t *testing.T) []string {
+	t.Helper()
+	wireConstants := map[string]map[string]string{
+		"assistantwire": wireStringConstants(t, "../assistantwire"),
+		"extwire":       wireStringConstants(t, "../extwire"),
+	}
 	eventType := func(expr ast.Expr) (string, bool) {
 		if sel, ok := expr.(*ast.SelectorExpr); ok {
-			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "assistantwire" {
-				s, ok := wireConstants[sel.Sel.Name]
+			if pkg, ok := sel.X.(*ast.Ident); ok {
+				s, ok := wireConstants[pkg.Name][sel.Sel.Name]
 				return s, ok
 			}
 		}
@@ -174,7 +183,7 @@ func managerSentTypes(t *testing.T) []string {
 		for _, el := range lit.Elts {
 			if kv, ok := el.(*ast.KeyValueExpr); ok {
 				if k, _ := stringLit(kv.Key); k == "type" {
-					return stringLit(kv.Value)
+					return eventType(kv.Value)
 				}
 				if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Type" {
 					return eventType(kv.Value)

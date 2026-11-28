@@ -34,8 +34,12 @@ import (
 // BotsConfig is hub.json "bots".
 type BotsConfig struct {
 	Feishu FeishuBotConfig `json:"feishu,omitempty"`
-	// Endpoints are the explicit Agents → Bots registrations; no structured session is inferred to be a bot.
+	// Endpoints are the explicit Agents → Bots registrations; no structured session is inferred to be a bot. An entry
+	// binds an exact Orca session (session_id) or an Orca bot (bot_id, followed to each new Home Chat).
 	Endpoints []agents.BotRegistration `json:"endpoints,omitempty"`
+	// Discovery is "off" to find no Orca bots on the computers (orcabots.go); anything else, or nothing, finds them
+	// through each computer's local Orca (bots.roster). Endpoints registered by hand are kept either way.
+	Discovery string `json:"discovery,omitempty"`
 }
 
 // FeishuBotConfig: the app's credentials, for those who would rather keep them in manager.json (0600) than enter them in

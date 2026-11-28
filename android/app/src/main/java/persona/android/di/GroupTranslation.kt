@@ -296,6 +296,7 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
             names.machine(source.setEngineHosts(names.rawMachine(machineId), hosts, default))
         override suspend fun botmux(machineId: String) = source.botmux(names.rawMachine(machineId))
         override suspend fun setBotmux(machineId: String, on: Boolean) = source.setBotmux(names.rawMachine(machineId), on)
+        override suspend fun setOrcaChatStarts(machineId: String, on: Boolean) = source.setOrcaChatStarts(names.rawMachine(machineId), on)
         override suspend fun claudeSettings(machineId: String) = source.claudeSettings(names.rawMachine(machineId))
         override suspend fun setClaudeSetting(machineId: String, key: String, value: JsonElement) =
             source.setClaudeSetting(names.rawMachine(machineId), key, value)

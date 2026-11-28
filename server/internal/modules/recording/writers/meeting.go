@@ -151,7 +151,7 @@ func (e *engine) putMeetingFields(id string, u *RecordingUpload, now time.Time) 
 	}
 	e.putTranscriptionFields(id, &m, u, now)
 	if meetingSame(before, m) {
-		if m.Room == nil && m.Private == nil && m.Followup == nil && m.Transcription == nil {
+		if m.Room == nil && m.Private == nil && m.Followup == nil && m.Transcription == nil && m.Speakers == nil {
 			return nil, nil, nil
 		}
 		return &m, nil, nil

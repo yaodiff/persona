@@ -16,7 +16,9 @@ weakening security and without pairing the user has to repeat? **No-go for now**
 view reads faster instead (`docs/integrations/terminal.md`, "31. Orca terminals: scrolling up, and a quicker plain view (#17048)").
 
 - **The local socket refuses streaming methods**: the dispatcher answers `method_not_supported` "Method terminal.subscribe
-  requires a streaming transport" (measured), whatever the token.
+  requires a streaming transport" (measured), whatever the token. So does `agentSession.subscribeAvailability` and
+  `managedRuntime.subscribe` (measured for #17684): whether Orca can open a provider's chat on the computer reaches a socket
+  client only as `agent.launch`'s refusal (`docs/integrations/orca.md`, "Structured sessions").
 - **The WebSocket transport** (`ws://127.0.0.1:<port>`, listed in `orca-runtime.json` next to the socket) starts with
   `e2ee_hello`: v1 sends the client's X25519 key and both sides seal with a NaCl box (the server's key is
   `publicKeyB64` in `orca-e2ee-keypair.json`, 0600), v2 adds a transcript hash; within 10 s the client sends a sealed
@@ -49,6 +51,10 @@ capabilities, or falling back on `method_not_supported`), with a `host.Watcher` 
    and push refresh without a stream.
 3. **Loopback pairing for a local client**: `pairing.createOffer {scope: "runtime", reach: "this-computer"}` over the
    local socket without network exposure, so a same-account client can pair itself once, silently and revocably.
+
+For the chat launchers alone (#17684), a unary read of each structured agent's availability (`agentSession.agents` carrying
+the `chatProgram` state `agentSession.subscribeAvailability` streams) would let the bridge offer only the chats Orca can open
+before anyone tries one, instead of after Orca's first refusal.
 
 ## Fixes deferred from the host refactor
 

@@ -148,8 +148,17 @@ def todo_waits():
             yield "TodoWait", f"{where}.expected.wait", wait
 
 
+def integrations_projections():
+    """Catalog and detail samples for the owning assistant's Integrations API."""
+    for where, c in domain_cases("integrations-projection"):
+        for key, name in (("catalog", "IntegrationCatalog"), ("detail", "IntegrationDetail")):
+            if key in c["expected"]:
+                yield name, f"{where}.expected.{key}", c["expected"][key]
+
+
 SAMPLES = {"agent-view.schema.json": agent_views, "counts.schema.json": counts_views, "ids.schema.json": wire_ids,
-           "inbox-sources.schema.json": inbox_sources, "recents.schema.json": recent_setups,
+           "inbox-sources.schema.json": inbox_sources, "integrations-projection.schema.json": integrations_projections,
+           "recents.schema.json": recent_setups,
            "todo-view.schema.json": todo_views, "todo-wait.schema.json": todo_waits}
 
 

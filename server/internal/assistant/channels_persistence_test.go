@@ -72,7 +72,7 @@ func TestChannelUpdateSaveFailurePreservesPreferences(t *testing.T) {
 func TestChannelNewSaveFailurePreservesThread(t *testing.T) {
 	s, _, sent := threadsChannelService(t, true)
 	const thread = "oc_group:omt_topic"
-	s.bindChannelThread("examplechat", channelThreadKeys{primary: thread}, "server", "existing")
+	s.seedThreadBinding("examplechat", thread, "server", "existing")
 	s.store().(*memStore).setFailPut(errors.New("synthetic thread reset write failure"))
 
 	ctx := context.Background()

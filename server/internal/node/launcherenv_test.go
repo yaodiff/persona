@@ -211,6 +211,30 @@ func TestProviderEnv(t *testing.T) {
 	}
 }
 
+func TestProviderEnvBlankGatewayAliasesUseLauncherFallback(t *testing.T) {
+	const gw = "https://gw.example.com"
+	l := proto.ManagedLauncher{
+		Name: "gateway", Kind: "api", BaseURL: gw, Model: "vendor/main",
+		OpusModel: "vendor/opus", SonnetModel: "vendor/sonnet", HaikuModel: "vendor/haiku",
+		FableModel: "vendor/fable", SubagentModel: "vendor/subagent",
+		Env: "ANTHROPIC_DEFAULT_OPUS_MODEL=\nANTHROPIC_DEFAULT_SONNET_MODEL=\nANTHROPIC_DEFAULT_HAIKU_MODEL=\n" +
+			"ANTHROPIC_DEFAULT_FABLE_MODEL=\nCLAUDE_CODE_SUBAGENT_MODEL=",
+	}
+	want := map[string]string{
+		"ANTHROPIC_DEFAULT_OPUS_MODEL":   "vendor/opus",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL": "vendor/sonnet",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "vendor/haiku",
+		"ANTHROPIC_DEFAULT_FABLE_MODEL":  "vendor/fable",
+		"CLAUDE_CODE_SUBAGENT_MODEL":     "vendor/subagent",
+	}
+	env := providerEnv(l, "", "", false)
+	for key, value := range want {
+		if env[key] != value {
+			t.Errorf("%s=%q, want the launcher alias %q", key, env[key], value)
+		}
+	}
+}
+
 // An explicit tier, small or subagent model with a window of 1M or more in the provider's models gets [1m]: Claude
 // Code runs it with the 1M window only then, and drops the marker before calling the gateway (#5149). One between 200K
 // and 1M stays unmarked: marked, Claude Code would count it as 1M, and nothing per model holds it to its size.

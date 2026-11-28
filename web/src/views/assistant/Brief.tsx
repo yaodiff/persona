@@ -293,6 +293,19 @@ export function BriefCard({ item }: { item: FeedItem }) {
           <More n={body.later_total - body.later.length} text="assistant-brief.later_more" />
         </Section>
       )}
+      {body.deferred_supervision.length > 0 && (
+        <Section icon="list" tint="bg-field text-ink-2" title={t("assistant-brief.supervision_deferred")}>
+          {body.deferred_supervision.map((row) => (
+            <div key={row.id} className="flex items-start gap-2 py-1 text-meta">
+              <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                <div className="font-medium">{row.title}</div>
+                <div className="text-ink-2">{row.reason}</div>
+              </div>
+              <Button onClick={() => openTask(row.todo_id)}>{t("assistant-brief.open")}</Button>
+            </div>
+          ))}
+        </Section>
+      )}
       {body.contributions.map((entry) => (
         <Section key={entry.extension_id + ":" + entry.contribution_id} icon="list" tint="bg-field text-ink-2" title={entry.title}>
           <div className="space-y-1 py-1 text-meta [overflow-wrap:anywhere]">

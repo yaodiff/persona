@@ -44,6 +44,7 @@ afterEach(() => {
 });
 const draw = async (ui: React.ReactNode) => {
   await act(async () => root.render(ui));
+  await act(async () => vi.dynamicImportSettled());
   for (let i = 0; i < 10; i++) await act(async () => { await new Promise((done) => setTimeout(done, 0)); });
 };
 /** The page's own Back: a quiet button with the back chevron, named for where it goes. */

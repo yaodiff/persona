@@ -277,6 +277,13 @@ describe("where a link opens", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("keeps a link to a section of the page or to a file beside it, never one above its folder (#17669)", () => {
+    for (const ok of ["#heading", "./other.md", "./notes/a.md#L3"]) expect(linkHref(ok), ok).toBe(ok);
+    for (const bad of ["other.md", "../other.md", "./notes/../../admin", "./%2e%2e/admin", "./..%2fadmin", "./a%5c..%5cadmin", "./a\\b.md", "#a\tb"]) {
+      expect(linkHref(bad), bad).toBeUndefined();
+    }
+  });
 });
 
 describe("<persona-context>", () => {

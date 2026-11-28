@@ -353,10 +353,7 @@ func (s *Service) toolTaskScope(ctx context.Context, machine, self string, args 
 		return "", err
 	}
 	source := PlanTask{InboxItem: a.InboxItem}
-	if err := s.planInboxSource(ctx, machine, self, &source); err != nil {
-		return "", err
-	}
-	if err := s.checkExistingTaskInbox(self, source, t); err != nil {
+	if err := s.planExistingTaskInbox(ctx, machine, self, &source, t); err != nil {
 		return "", err
 	}
 	c := scopeChange{taskContract: contract, By: self, Change: a.Change, Why: a.Why, Expect: a.ExpectMinutes}
@@ -376,14 +373,16 @@ func (s *Service) toolTaskScope(ctx context.Context, machine, self string, args 
 	if err != nil {
 		return "", err
 	}
-	var agents []SessionRef
-	for _, a := range t.Agents {
-		if a.ReleasedAt == nil && a.DismissedAt == nil {
-			agents = append(agents, SessionRef{MachineID: a.MachineID, SessionID: a.SessionID})
+	if source.InboxItem != "" {
+		var agents []SessionRef
+		for _, a := range t.Agents {
+			if a.ReleasedAt == nil && a.DismissedAt == nil {
+				agents = append(agents, SessionRef{MachineID: a.MachineID, SessionID: a.SessionID})
+			}
 		}
-	}
-	if err := s.linkExistingTaskInbox(ctx, self, source, t.ID, t.ID, agents); err != nil {
-		return "", fmt.Errorf("scope updated on task %s, but its Inbox link was not saved: %w", t.ID, err)
+		if err := s.linkExistingTaskInbox(ctx, self, source, t.ID, t.ID, agents); err != nil {
+			return "", fmt.Errorf("scope updated on task %s, but its Inbox link was not saved: %w", t.ID, err)
+		}
 	}
 	s.clearOverdue(t.ID)
 	var b strings.Builder

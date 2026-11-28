@@ -413,6 +413,10 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			}
 			return ext.UsageQuery(ctx, id, launcher)
 		},
+		DirectUsageSources: func() []devices.DirectUsageSource { return ext.DirectUsageSources() },
+		DirectUsageQuery: func(ctx context.Context, source devices.DirectUsageSource) (json.RawMessage, error) {
+			return ext.DirectUsageQuery(ctx, source)
+		},
 		Hub: lazyHost{c: func() *bus.Client { return bh.Client() }}})
 	// The run-time module switch (the modules settings row), read once here, before the extensions: the kernel and every
 	// provider seam (moduleswitch) get the same list, so a module switched off is absent as one built out.
@@ -482,8 +486,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	svc = New(Options{Hub: bh, Store: func() Store { return assistantStore }, Logf: logf, Devices: devs,
 		ModulesOff: modulesOff, // the built-in modules switched off (modules.go)
 		KB:         &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
-		Trust: devs, AgentDirs: devs, HerdrSessions: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
+		Trust: devs, AgentDirs: devs, HerdrSessions: devs, OrcaChats: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
 		RemoteImageCache: filepath.Join(home, "cache", "remote-images")})
+	// A node can reconnect before the scheduler starts. Its restored approval
+	// timers and storage retries belong to this manager's lifetime too.
+	svc.running.Store(&ctx)
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
 	// When the north star's recording began (north_star.go).
 	go svc.northStarStarted(ctx)

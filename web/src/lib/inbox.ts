@@ -29,6 +29,7 @@ import type { ChainEntry, InboxHandling, InboxRelated, InboxStatus, InboxSuggest
 import { actedText, actOnSuggestion, statusOf } from "./inbox-suggestion"; // not inbox-events.ts: that one is the Inbox page's
 import type { MailAccount } from "./agent-settings";
 import type { ExternalRef } from "../features/external-sources/api";
+import type { InboxStoredSources } from "./inbox-sources-wire";
 
 // Not the Inbox's: re-exported from their own modules until their importers import them from there (#11538).
 export { withToken } from "./media-url";
@@ -674,6 +675,8 @@ interface InboxState {
   items: InboxItem[];
   /** The hub's triage state from the last list; null from an older hub. */
   triage: InboxTriage | null;
+  /** Every retained built-in source, including completed history. Null from an old or mixed-version hub (unknown). */
+  storedSources: InboxStoredSources | null;
   loaded: boolean;
   loading: boolean;
   error: string;
@@ -702,7 +705,7 @@ interface InboxState {
   routing: string[];
 }
 
-const EMPTY: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], uncertainReplies: {}, moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {}, doneDays: {}, groupLoading: [], groupComplete: [], routing: [] };
+const EMPTY: InboxState = { items: [], triage: null, storedSources: null, loaded: false, loading: false, error: "", sending: [], uncertainReplies: {}, moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {}, doneDays: {}, groupLoading: [], groupComplete: [], routing: [] };
 let state: InboxState = EMPTY;
 const listeners = new Set<() => void>();
 /** A Map that tells its watchers when it changes. The unsent replies live outside InboxState: a keystroke in the draft
@@ -892,7 +895,7 @@ let again = false;
 /** The hub's last list as it came (before the marks were laid over it) and what names it: its cursor, so a reload asks
  * only for what changed since (docs/protocol/protocol.md "Inbox delta"), and its validator, sent as If-None-Match: a
  * 304 says the list is still this one ("Inbox validator"). Memory only: a page's first list is whole. */
-let lastList: { etag: string; cursor: string; items: InboxItem[]; triage: InboxTriage | null } | null = null;
+let lastList: { etag: string; cursor: string; items: InboxItem[]; triage: InboxTriage | null; storedSources: InboxStoredSources | null } | null = null;
 /** What a reload sends before it has a validator: a tag no list has, which asks the hub for its own. */
 const NO_LIST_TAG = 'W/"i1-"';
 /** Until when reloads ask without `since`: an answer had no cursor (an older hub or manager, or one that failed), so the
@@ -941,7 +944,7 @@ export function reloadInbox(): Promise<void> {
           // "0" until a list is held: one no list has, so the hub answers the whole list and its cursor
           const since = Date.now() < deltasOff ? "" : held?.cursor || "0";
           // If-None-Match too: a hub that knows no `since` still answers a list it has with a 304
-          const r = await api<{ items?: InboxItem[]; triage?: InboxTriage; cursor?: string; delta?: boolean; removed?: { id: string; manager?: string }[] }>(`/inbox?sources=all${since && `&since=${enc(since)}`}`, {
+          const r = await api<{ items?: InboxItem[]; triage?: InboxTriage; stored_sources?: InboxStoredSources | null; cursor?: string; delta?: boolean; removed?: { id: string; manager?: string }[] }>(`/inbox?sources=all${since && `&since=${enc(since)}`}`, {
             headers: { "If-None-Match": held?.etag || NO_LIST_TAG },
             onResponse: (headers, code) => {
               status = code;
@@ -954,10 +957,10 @@ export function reloadInbox(): Promise<void> {
             const cursor = r.cursor ?? "";
             if (since && !cursor) deltasOff = Date.now() + 600_000;
             // a delta answers only the cursor sent, so the list it changes is the one held
-            list = { etag, cursor, items: r.delta && held ? applyInboxDelta(held.items, r.items ?? [], r.removed ?? []) : r.items ?? [], triage: r.triage ?? null };
+            list = { etag, cursor, items: r.delta && held ? applyInboxDelta(held.items, r.items ?? [], r.removed ?? []) : r.items ?? [], triage: r.triage ?? null, storedSources: r.stored_sources ?? null };
             lastList = etag || cursor ? list : null;
           }
-          if (list) set({ items: keepSameItems(state.items, withPending(list.items, seq)), triage: list.triage, loaded: true, error: "",
+          if (list) set({ items: keepSameItems(state.items, withPending(list.items, seq)), triage: list.triage, storedSources: list.storedSources, loaded: true, error: "",
             uncertainReplies: replyHintsAfterRead(status === 304 ? [] : r.items ?? [], observed) });
         } finally {
           endList(seq);
@@ -997,8 +1000,8 @@ export async function refreshInbox(): Promise<void> {
   const seq = beginList();
   const observed = state.uncertainReplies;
   try {
-    const r = await api<{ items?: InboxItem[]; triage?: InboxTriage }>("/inbox/refresh?sources=all", { method: "POST" });
-    set({ items: keepSameItems(state.items, withPending(r.items ?? [], seq)), triage: r.triage ?? null, loaded: true, error: "",
+    const r = await api<{ items?: InboxItem[]; triage?: InboxTriage; stored_sources?: InboxStoredSources | null }>("/inbox/refresh?sources=all", { method: "POST" });
+    set({ items: keepSameItems(state.items, withPending(r.items ?? [], seq)), triage: r.triage ?? null, storedSources: r.stored_sources ?? null, loaded: true, error: "",
       uncertainReplies: replyHintsAfterRead(r.items ?? [], observed) });
   } catch (e) {
     toast(t("lib-inbox.refresh_failed", { error: errorText(e) }), "error");

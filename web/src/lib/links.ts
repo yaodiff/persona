@@ -170,6 +170,15 @@ function isApiPath(raw: string): boolean {
   return !!u && u.origin === "https://hub.invalid" && (u.pathname.startsWith("/api/") || (!!BASE && u.pathname.startsWith(`${BASE}/api/`)));
 }
 
+// A link relative to the page it is on, as a Markdown file links its own sections and the files beside it: a
+// fragment (#heading) or a path from the page's folder (./other.md). No backslash, control character or `..` segment,
+// so it names no other site or scheme and no page above that folder. A bare relative path (api/v1/…) stays refused.
+function isRelativeLink(raw: string): boolean {
+  if (!/^(?:#|\.\/)/.test(raw) || CTRL.test(raw) || raw.includes("\\")) return false;
+  const p = raw.split(/[?#]/, 1)[0];
+  return !/%(?:25)*5c/i.test(p) && !/(?:^|\/|%2f)(?:\.|%(?:25)*2e){2}(?:$|\/|%2f)/i.test(p);
+}
+
 /**
  * Where `url` opens. `lark`: whether the hub reads Feishu (store.larkOn); without it Feishu links are web pages.
  * `origin`: this page's and the hub's advertised ones, for telling the hub's own pages from other sites.
@@ -264,7 +273,7 @@ export function linkHref(url: string): string | undefined {
   if (r.kind === "session") return `${BASE}/s/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.sid)}`;
   if (r.kind === "app") return r.url;
   if (r.kind === "system") return safeSystemHref(raw);
-  if (r.kind === "none") return isApiPath(raw) ? raw : undefined;
+  if (r.kind === "none") return isApiPath(raw) || isRelativeLink(raw) ? raw : undefined;
   return safeWebURL(raw);
 }
 

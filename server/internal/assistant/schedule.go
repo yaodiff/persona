@@ -1768,7 +1768,7 @@ func (s *Service) Run(ctx context.Context) {
 		s.logf("recover interrupted task starts: %v", err)
 	}
 	s.recoverSendsOut(recoverCtx) // sends of more for accepted tasks the manager before this one left out (tasks_sends_out.go)
-	s.recoverApprovalJournals(recoverCtx)
+	s.recoverManagerApprovalJournals()
 	s.recoverIdleArchiveAudit(recoverCtx)
 	cancel()
 	go s.delayedWaitsRecoveryLoop(ctx)     // usage-limit retries and task receipt rechecks left by the previous manager

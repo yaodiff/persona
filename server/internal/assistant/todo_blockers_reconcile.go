@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +29,11 @@ const (
 // Production *db.DB satisfies it directly without widening the core Store interface.
 type todoBlockerStore interface {
 	UpsertTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error)
+	EnsureTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error)
 	ListActiveTodoBlockers(ctx context.Context) ([]db.TodoBlockerRow, error)
+	ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]db.TodoBlockerRow, error)
+	ListMergeTrainPRBlockers(ctx context.Context, prURL, repoKey string) ([]db.TodoBlockerRow, error)
+	UpdateActiveTodoBlockerCondition(ctx context.Context, id, condition string, at time.Time) (*db.TodoBlockerRow, error)
 	ListTodoBlockersByTodo(ctx context.Context, todoID string) ([]db.TodoBlockerRow, error)
 	ListActiveTodoBlockersByTarget(ctx context.Context, targetRef string) ([]db.TodoBlockerRow, error)
 	ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*db.TodoBlockerRow, error)
@@ -54,6 +59,7 @@ type todoBlockerReconcileSummary struct {
 	EscalatedIDs     []string
 	UnblockedTodoIDs []string
 	SharedGroups     []todoBlockerSharedGroup
+	cancelledMirrors int
 }
 
 type todoStageUnlockSpec struct {
@@ -142,6 +148,8 @@ func (s *Service) addTodoBlocker(ctx context.Context, row db.TodoBlockerRow) (*d
 	if st == nil {
 		return nil, nil
 	}
+	s.blockerReconcile.mu.Lock()
+	defer s.blockerReconcile.mu.Unlock()
 	return st.UpsertTodoBlocker(ctx, row)
 }
 
@@ -275,31 +283,6 @@ func normalizeBlockerConditionJSON(raw string) string {
 	return s
 }
 
-// todoStageUnlockRuleFromBlockers extracts a structured stage/contract unlock rule from persisted todo_stage blockers
-// for todoID under todos_v2, allowing structured unlock_stage/unlock_contracts inputs to work alongside legacy notes.
-func (s *Service) todoStageUnlockRuleFromBlockers(ctx context.Context, todoID string) (todoStageUnlockRule, bool) {
-	if s == nil || !s.settings(ctx).todosV2On() {
-		return todoStageUnlockRule{}, false
-	}
-	st := s.todoBlockerDB()
-	if st == nil {
-		return todoStageUnlockRule{}, false
-	}
-	rows, err := st.ListTodoBlockersByTodo(ctx, strings.TrimSpace(todoID))
-	if err != nil {
-		return todoStageUnlockRule{}, false
-	}
-	for _, r := range rows {
-		if r.Kind != todoBlockerKindTodoStage || r.State == db.TodoBlockerStateCancelled {
-			continue
-		}
-		if rule, ok := decodeTodoStageBlockerCondition(r.ConditionJSON); ok {
-			return rule, true
-		}
-	}
-	return todoStageUnlockRule{}, false
-}
-
 // syncAfterBlockers mirrors Todo.After edges into persistent todo_blockers (todo_done or todo_stage) strictly
 // when todos_v2 is enabled. It upserts active edges for current afterIDs, skips already-resolved identical edges,
 // and cancels stale active mirrored todo_done/todo_stage edges whose target_ref was removed without touching
@@ -429,6 +412,8 @@ func (s *Service) reconcileTodoBlockersForPR(ctx context.Context, status TodoPRS
 		State:  status.State,
 		Merged: strings.EqualFold(status.State, "merged"),
 	}
+	now := time.Now()
+	s.blockerReconcile.prs.record(norm, fact, true, now, now)
 	return s.reconcilePersistedTodoBlockersWithPRFact(ctx, norm, &fact)
 }
 
@@ -453,7 +438,13 @@ func (s *Service) cancelTodoBlocker(ctx context.Context, id string) (*db.TodoBlo
 	if st == nil {
 		return nil, nil
 	}
-	return st.CancelTodoBlocker(ctx, id, time.Now().UTC())
+	s.blockerReconcile.mu.Lock()
+	defer s.blockerReconcile.mu.Unlock()
+	row, err := st.CancelTodoBlocker(ctx, id, time.Now().UTC())
+	if row != nil && row.Kind == todoBlockerKindMergeTrain {
+		s.clearMergeTrainBlocker(row.TodoID, row.TargetRef, row.ConditionJSON)
+	}
+	return row, err
 }
 
 // sharedActiveTodoBlockerGroups returns active blockers aggregated by shared target_ref (count >= 2)
@@ -473,162 +464,195 @@ func (s *Service) sharedActiveTodoBlockerGroups(ctx context.Context) ([]todoBloc
 	return sharedActiveTodoBlockers(dbRowsToTodoBlockers(rows)), nil
 }
 
-// reconcilePersistedTodoBlockers performs a pull-based scan of persisted active blockers under todos_v2.
-//
-// When targetRef is empty, all active blockers are scanned (full fallback sweep).
-// When targetRef is non-empty, only to-dos with an active blocker on targetRef are scanned,
-// while still loading all active blockers for those affected to-dos so UnblockedTodoIDs only
-// emits a to-do once every one of its active blockers has resolved.
-//
-// When todos_v2 is disabled, this method returns an empty summary with zero DB or side-effect work.
+// reconcilePersistedTodoBlockers uses local and cached facts. With Labs off, it still
+// services previously stored external PR waits.
 func (s *Service) reconcilePersistedTodoBlockers(ctx context.Context, targetRef string) (todoBlockerReconcileSummary, error) {
 	return s.reconcilePersistedTodoBlockersWithPRFact(ctx, targetRef, nil)
 }
 
-func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, targetRef string, observedPR *todoBlockerPRFact) (todoBlockerReconcileSummary, error) {
-	if s == nil || !s.settings(ctx).todosV2On() {
-		return todoBlockerReconcileSummary{}, nil
+func loadActiveBlockerRows(ctx context.Context, st todoBlockerStore, targetRef string) ([]db.TodoBlockerRow, error) {
+	if targetRef == "" {
+		return st.ListActiveTodoBlockers(ctx)
 	}
+	targeted, err := st.ListActiveTodoBlockersByTarget(ctx, targetRef)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(targeted))
+	var rows []db.TodoBlockerRow
+	for _, row := range targeted {
+		if seen[row.TodoID] {
+			continue
+		}
+		seen[row.TodoID] = true
+		attached, err := st.ListTodoBlockersByTodo(ctx, row.TodoID)
+		if err != nil {
+			return nil, err
+		}
+		for _, b := range attached {
+			if b.State == db.TodoBlockerStateActive {
+				rows = append(rows, b)
+			}
+		}
+	}
+	return rows, nil
+}
+
+func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, targetRef string, observedPR *todoBlockerPRFact) (todoBlockerReconcileSummary, error) {
 	st := s.todoBlockerDB()
 	if st == nil {
 		return todoBlockerReconcileSummary{}, nil
 	}
 
-	targetRef = normalizeTodoBlockerPRRef(targetRef)
-	var rows []db.TodoBlockerRow
-	var err error
-	if targetRef == "" {
-		rows, err = st.ListActiveTodoBlockers(ctx)
-		if err != nil {
-			return todoBlockerReconcileSummary{}, err
+	s.blockerReconcile.mu.Lock()
+	summary, wakes, err := s.reconcileBlockerRows(ctx, st, normalizeTodoBlockerPRRef(targetRef), observedPR)
+	s.blockerReconcile.mu.Unlock()
+	if len(summary.ResolvedIDs) > 0 || summary.cancelledMirrors > 0 {
+		s.todosChanged(ctx)
+		for _, wake := range wakes {
+			s.emitTodoBlockerWake(ctx, wake)
 		}
-	} else {
-		targeted, listErr := st.ListActiveTodoBlockersByTarget(ctx, targetRef)
-		if listErr != nil {
-			return todoBlockerReconcileSummary{}, listErr
-		}
-		if len(targeted) == 0 {
-			return todoBlockerReconcileSummary{}, nil
-		}
-		seenTodos := make(map[string]struct{}, len(targeted))
-		seenIDs := make(map[string]struct{}, len(targeted))
-		for _, r := range targeted {
-			if _, ok := seenTodos[r.TodoID]; ok {
-				continue
-			}
-			seenTodos[r.TodoID] = struct{}{}
-			todoRows, todoErr := st.ListTodoBlockersByTodo(ctx, r.TodoID)
-			if todoErr != nil {
-				return todoBlockerReconcileSummary{}, todoErr
-			}
-			for _, tr := range todoRows {
-				if tr.State != db.TodoBlockerStateActive {
-					continue
-				}
-				if _, dup := seenIDs[tr.ID]; dup {
-					continue
-				}
-				seenIDs[tr.ID] = struct{}{}
-				rows = append(rows, tr)
-			}
-		}
+		s.sweepAdmissionQueue(ctx)
 	}
+	return summary, err
+}
 
+type todoBlockerWake struct {
+	last     db.TodoBlockerRow
+	resolved []todoBlockerRecord
+}
+
+func (s *Service) reconcileBlockerRows(ctx context.Context, st todoBlockerStore, targetRef string, observedPR *todoBlockerPRFact) (todoBlockerReconcileSummary, []todoBlockerWake, error) {
+	rows, err := loadActiveBlockerRows(ctx, st, targetRef)
+	if err != nil {
+		return todoBlockerReconcileSummary{}, nil, err
+	}
+	v2 := s.settings(ctx).todosV2On()
+	if !v2 {
+		rows = s.approvedExternalPRWaits(ctx, rows)
+	}
 	if len(rows) == 0 {
-		return todoBlockerReconcileSummary{}, nil
+		return todoBlockerReconcileSummary{}, nil, nil
 	}
 
 	active := dbRowsToTodoBlockers(rows)
 	facts, err := s.buildBlockerFactSnapshot(ctx, active, observedPR)
 	if err != nil {
-		return todoBlockerReconcileSummary{}, err
+		return todoBlockerReconcileSummary{}, nil, err
 	}
-
 	var reg *blockerRegistry
-	var onUnblocked func(ctx context.Context, todoID string)
 	if h := s.todoBlockerHooks(false); h != nil {
 		h.mu.RLock()
 		reg = h.registry
-		onUnblocked = h.onUnblocked
 		h.mu.RUnlock()
 	}
-
 	result := reconcileTodoBlockers(active, facts, reg)
-
+	mirrors, mirrorErr := s.todoAfterMirrorVerdicts(ctx, rows)
 	now := time.Now().UTC()
-	resolvedSet := make(map[string]struct{}, len(result.ResolvedIDs))
-	lastResolvedByTodo := make(map[string]db.TodoBlockerRow)
-	for _, id := range result.ResolvedIDs {
-		row, err := st.ResolveTodoBlocker(ctx, id, now)
-		if err != nil {
-			return todoBlockerReconcileSummary{}, err
-		}
-		if row != nil && laterBlockerResolution(*row, lastResolvedByTodo[row.TodoID]) {
-			lastResolvedByTodo[row.TodoID] = *row
-		}
-		resolvedSet[id] = struct{}{}
-	}
-
-	resolvedByTodo := make(map[string][]todoBlockerRecord)
+	summary := todoBlockerReconcileSummary{Evaluated: len(active)}
+	lastByTodo := make(map[string]todoBlockerWake)
 	remaining := make([]todoBlockerRecord, 0, len(active))
+	rowsByID := make(map[string]todoBlockerRecord, len(active))
 	for _, b := range active {
-		if _, done := resolvedSet[b.ID]; done {
-			resolvedByTodo[b.TodoID] = append(resolvedByTodo[b.TodoID], b)
-		} else {
-			remaining = append(remaining, b)
+		rowsByID[b.ID] = b
+	}
+	var writeErr error
+	for _, decision := range result.Decisions {
+		b := rowsByID[decision.BlockerID]
+		verdict, mirror := mirrors[b.ID]
+		if !mirror {
+			verdict.ready = decision.Resolution.Resolved
 		}
-	}
-
-	for _, todoID := range result.UnblockedTodoIDs {
-		s.notifyTodoBlockerUnblocked(ctx, todoID, lastResolvedByTodo[todoID], resolvedByTodo[todoID], onUnblocked)
-	}
-	if len(result.UnblockedTodoIDs) > 0 && s.settings(ctx).todosV2On() {
-		s.sweepAdmissionQueue(ctx)
-	}
-
-	return todoBlockerReconcileSummary{
-		Evaluated:        len(active),
-		ResolvedIDs:      result.ResolvedIDs,
-		EscalatedIDs:     result.EscalatedIDs,
-		UnblockedTodoIDs: result.UnblockedTodoIDs,
-		SharedGroups:     sharedActiveTodoBlockers(remaining),
-	}, nil
-}
-
-// activeTodoBlockerRefs returns the target_refs of all active persistent blockers for todoID
-// when todos_v2 is enabled, or nil when todos_v2 is off or no active blockers remain.
-func (s *Service) activeTodoBlockerRefs(ctx context.Context, todoID string) []string {
-	if s == nil || !s.settings(ctx).todosV2On() {
-		return nil
-	}
-	todoID = strings.TrimSpace(todoID)
-	if todoID == "" {
-		return nil
-	}
-	st := s.todoBlockerDB()
-	if st == nil {
-		return nil
-	}
-	rows, err := st.ListTodoBlockersByTodo(ctx, todoID)
-	if err != nil {
-		s.logf("todo_blockers: list active for %s: %v", todoID, err)
-		return nil
-	}
-	var refs []string
-	for _, r := range rows {
-		if r.State != db.TodoBlockerStateActive {
+		if !verdict.ready && !verdict.removed {
+			if !mirror && decision.Resolution.Escalate {
+				summary.EscalatedIDs = append(summary.EscalatedIDs, b.ID)
+			}
+			remaining = append(remaining, b)
 			continue
 		}
-		if ref := strings.TrimSpace(r.TargetRef); ref != "" {
-			refs = append(refs, ref)
+		var row *db.TodoBlockerRow
+		var err error
+		if verdict.removed {
+			row, err = st.CancelTodoBlocker(ctx, b.ID, now)
+		} else {
+			row, err = st.ResolveTodoBlocker(ctx, b.ID, now)
+		}
+		if err != nil {
+			writeErr = errors.Join(writeErr, err)
+			remaining = append(remaining, b)
+			continue
+		}
+		if row == nil {
+			continue // a competing transition already owns this row
+		}
+		if verdict.removed {
+			summary.cancelledMirrors++
+		} else {
+			summary.ResolvedIDs = append(summary.ResolvedIDs, row.ID)
+		}
+		wake := lastByTodo[row.TodoID]
+		wake.resolved = append(wake.resolved, b)
+		if laterBlockerResolution(*row, wake.last) {
+			wake.last = *row
+		}
+		lastByTodo[row.TodoID] = wake
+	}
+	summary.SharedGroups = sharedActiveTodoBlockers(remaining)
+
+	var wakes []todoBlockerWake
+	for todoID, wake := range lastByTodo {
+		ready, err := s.blockerUnblockStillHolds(ctx, superviseSignal{Todo: todoID, Key: blockerResolutionKey(wake.last)})
+		if ready {
+			summary.UnblockedTodoIDs = append(summary.UnblockedTodoIDs, todoID)
+			wakes = append(wakes, wake)
+		} else if err != nil {
+			// An immediate post-commit read can fail. The durable wake rechecks before delivery.
+			if !slices.ContainsFunc(remaining, func(b todoBlockerRecord) bool { return b.TodoID == todoID }) {
+				wakes = append(wakes, wake)
+			}
+			writeErr = errors.Join(writeErr, err)
 		}
 	}
-	return refs
+	slices.Sort(summary.UnblockedTodoIDs)
+	slices.SortFunc(wakes, func(a, b todoBlockerWake) int { return strings.Compare(a.last.TodoID, b.last.TodoID) })
+	return summary, wakes, errors.Join(mirrorErr, writeErr)
 }
 
-// hasActiveTodoBlockers reports whether todoID currently has at least one active persistent blocker under todos_v2.
-func (s *Service) hasActiveTodoBlockers(ctx context.Context, todoID string) bool {
-	return len(s.activeTodoBlockerRefs(ctx, todoID)) > 0
+type todoAfterMirrorVerdict struct {
+	ready   bool
+	removed bool
+}
+
+// todoAfterMirrorVerdicts gives persisted after edges the same live verdict used by projection and dispatch.
+func (s *Service) todoAfterMirrorVerdicts(ctx context.Context, rows []db.TodoBlockerRow) (map[string]todoAfterMirrorVerdict, error) {
+	byTodo := make(map[string][]db.TodoBlockerRow)
+	for _, row := range rows {
+		if isTodoAfterMirror(row) {
+			byTodo[row.TodoID] = append(byTodo[row.TodoID], row)
+		}
+	}
+	verdicts := make(map[string]todoAfterMirrorVerdict)
+	var readErr error
+	for id, attached := range byTodo {
+		todo, ok := s.todoNow(id)
+		if !ok {
+			continue
+		}
+		task, err := s.readinessPlan(ctx, todo)
+		todo.After = cleanIDs(slices.Concat(todo.After, task.After))
+		var readiness todoReadiness
+		if err == nil {
+			readiness, err = s.evaluateTodoAfter(ctx, todo, task, attached, true)
+		}
+		readErr = errors.Join(readErr, err)
+		for _, row := range attached {
+			named := slices.Contains(todo.After, row.TargetRef)
+			verdicts[row.ID] = todoAfterMirrorVerdict{
+				ready: err == nil && named && !slices.Contains(readiness.after, row.TargetRef), removed: err == nil && !named,
+			}
+		}
+	}
+	return verdicts, readErr
 }
 
 // collectUpstreamPRURLs gathers deduplicated upstream PR URLs observed on prerequisite to-dos and resolved
@@ -728,25 +752,36 @@ func blockerResolutionKey(row db.TodoBlockerRow) string {
 	return row.ID + "@" + row.ResolvedAt.UTC().Format(time.RFC3339Nano)
 }
 
-func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string, last db.TodoBlockerRow, resolved []todoBlockerRecord, hook func(ctx context.Context, todoID string)) {
+func (s *Service) emitTodoBlockerWake(ctx context.Context, wake todoBlockerWake) {
+	todoID, last := wake.last.TodoID, wake.last
+	if !s.settings(ctx).todosV2On() {
+		return // the persisted approved queue is still woken by the ordinary admission sweep
+	}
 	if t, ok := s.todoNow(todoID); ok && t.DoneAt == nil && !t.Cancelled() && last.ResolvedAt != nil {
 		s.signal(superviseSignal{
 			Todo:       todoID,
 			Kind:       sigBlockersUnblocked,
 			Key:        blockerResolutionKey(last),
 			To:         s.todoReadySupervisor(ctx, s.settings(ctx), t),
-			BlockerPRs: s.collectUpstreamPRURLs(ctx, todoID, nil, resolved, nil),
+			BlockerPRs: s.collectUpstreamPRURLs(ctx, todoID, nil, wake.resolved, nil),
 		})
+		s.maybeEmitTodoReady(ctx, t)
 	}
-	if hook != nil {
-		hook(ctx, todoID)
+	if h := s.todoBlockerHooks(false); h != nil {
+		h.mu.RLock()
+		fn := h.onUnblocked
+		h.mu.RUnlock()
+		if fn != nil {
+			fn(ctx, todoID)
+		}
 	}
 }
 
 // blockerUnblockStillHolds checks both the current wait and the persisted resolution that ended this round.
 func (s *Service) blockerUnblockStillHolds(ctx context.Context, g superviseSignal) (bool, error) {
 	st := s.todoBlockerDB()
-	if st == nil {
+	todo, ok := s.todoNow(g.Todo)
+	if st == nil || !ok || todo.DoneAt != nil || todo.Cancelled() {
 		return false, nil
 	}
 	rows, err := st.ListTodoBlockersByTodo(ctx, g.Todo)
@@ -755,14 +790,19 @@ func (s *Service) blockerUnblockStillHolds(ctx context.Context, g superviseSigna
 	}
 	var latest db.TodoBlockerRow
 	for _, row := range rows {
-		if row.State == db.TodoBlockerStateActive {
-			return false, nil
-		}
 		if laterBlockerResolution(row, latest) {
 			latest = row
 		}
 	}
-	return g.Key != "" && g.Key == blockerResolutionKey(latest), nil
+	if g.Key == "" || g.Key != blockerResolutionKey(latest) {
+		return false, nil
+	}
+	task, err := s.readinessPlan(ctx, todo)
+	if err != nil {
+		return false, err
+	}
+	readiness, err := s.evaluateTodoReadiness(ctx, todo, task, rows, s.settings(ctx).todosV2On())
+	return err == nil && readiness.ready(), err
 }
 
 func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []todoBlockerRecord, observedPR *todoBlockerPRFact) (todoBlockerFactSnapshot, error) {
@@ -775,13 +815,6 @@ func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []todoBlo
 		Todos:       make(map[string]todoBlockerTodoFact),
 		PRs:         make(map[string]todoBlockerPRFact),
 		MergeTrains: make(map[string]todoBlockerMergeTrainFact),
-	}
-	if observedPR != nil {
-		if norm := normalizeTodoBlockerPRRef(observedPR.URL); norm != "" {
-			cp := *observedPR
-			cp.URL = norm
-			facts.PRs[norm] = cp
-		}
 	}
 
 	s.todos.mu.RLock()
@@ -860,35 +893,26 @@ func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []todoBlo
 		facts.MergeTrains[repo.RepoKey] = mt
 	}
 
-	// Pull live PR truth for any external_pr blocker not already known to be terminal.
-	fetched := make(map[string]todoBlockerPRFact)
-	attempted := make(map[string]struct{})
+	// Network observations are refreshed by the background worker. A committed, merged
+	// local observation is terminal and newer targeted facts take precedence for this pass.
+	now := time.Now()
 	for _, b := range active {
 		if b.Kind != todoBlockerKindExternalPR {
 			continue
 		}
 		norm := normalizeTodoBlockerPRRef(b.TargetRef)
-		if norm == "" {
+		if existing, ok := lookupTodoBlockerPRFact(facts.PRs, norm); ok && existing.Merged {
 			continue
 		}
-		if existing, ok := lookupTodoBlockerPRFact(facts.PRs, norm); ok {
-			st := strings.ToLower(strings.TrimSpace(existing.State))
-			if existing.Merged || st == "merged" || st == "closed" {
-				continue
-			}
+		if fact, ok := s.blockerReconcile.prs.lookup(norm, now); ok {
+			facts.PRs[norm] = fact
 		}
-		cacheKey := strings.ToLower(norm)
-		if cached, ok := fetched[cacheKey]; ok {
-			facts.PRs[norm] = cached
-			continue
-		}
-		if _, tried := attempted[cacheKey]; tried {
-			continue
-		}
-		attempted[cacheKey] = struct{}{}
-		if pr, ok := s.fetchBlockerPRFact(ctx, norm); ok {
-			fetched[cacheKey] = pr
-			facts.PRs[norm] = pr
+	}
+	if observedPR != nil {
+		if norm := normalizeTodoBlockerPRRef(observedPR.URL); norm != "" {
+			cp := *observedPR
+			cp.URL = norm
+			facts.PRs[norm] = cp
 		}
 	}
 

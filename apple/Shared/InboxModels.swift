@@ -499,10 +499,19 @@ nonisolated struct InboxTriageStatus: Codable, Hashable, Sendable {
     }
 }
 
+/// Core-computed retained source presence (#17399). It covers every retained open and completed item, not only this page.
+/// Absence or explicit null is unknown, never an empty archive, and keeps the previous source entries and wording.
+nonisolated struct InboxStoredSources: Decodable, Hashable, Sendable {
+    var lark: Bool
+    var mail: Bool
+}
+
 /// One answer of GET /api/v1/inbox (and of a refresh): the items, and how triage stands (nil from an older hub).
 nonisolated struct InboxListing: Decodable, Sendable {
     var items: [InboxItem]
     var triage: InboxTriageStatus?
+    /// Retained Lark/mail facts, including history outside the bounded list; nil from an old or mixed-version hub.
+    var storedSources: InboxStoredSources? = nil
     /// Asked with `since` (docs/protocol/protocol.md "Inbox delta", #4740): what names this list for the next one; nil
     /// from a hub without deltas.
     var cursor: String?
@@ -517,6 +526,11 @@ nonisolated struct InboxListing: Decodable, Sendable {
         var id: String
         var manager: String?
         var key: String { InboxItem.key(id: id, manager: manager) }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case items, triage, cursor, delta, removed
+        case storedSources = "stored_sources"
     }
 
     /// `held` with this delta applied: changed items in place, new ones in, removed ones out, then in the hub's order

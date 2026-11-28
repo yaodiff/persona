@@ -83,7 +83,9 @@ describe("an Agent opened from a to-do's page (#12055)", () => {
     seed({ todos: [{ ...todo, agents: [{ machine_id: "m1", session_id: "s1", linked_at: iso(1000) }] }] });
     await act(async () => root.render(<TodosView selectedId="t1" />));
     await flush();
-    const row = [...document.querySelectorAll<HTMLElement>("div.cursor-pointer")].find((el) => el.textContent?.includes("First Agent"));
+    const row = [...document.querySelectorAll<HTMLButtonElement>("[data-testid=todo-agent-open]")].find((el) => el.textContent?.includes("First Agent"));
+    expect(row?.tagName).toBe("BUTTON");
+    expect(row?.querySelector("button")).toBeNull();
     const depth = history.length;
     await click(row);
     expect(location.pathname).toBe("/s/m1/s1");

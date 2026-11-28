@@ -1,0 +1,74 @@
+name: Web UI E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      grep:
+        description: 'Optional Playwright grep filter (empty runs all P0 specs)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-ui-e2e-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  web-ui-e2e:
+    name: Web P0 UI stability suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Restore Playwright Chromium cache
+        id: pw-cache
+        # Only a manual main run saves (below); branch runs restore main's entry without writing their own.
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: web-ui-e2e-playwright-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('web/package-lock.json') }}
+          restore-keys: |
+            web-ui-e2e-playwright-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install web dependencies
+        run: cd web && npm ci --no-audit --no-fund
+      - name: Install Playwright Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: cd web && npx --no -- playwright install --with-deps chromium
+      - name: Install Playwright Chromium system deps
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: cd web && npx --no -- playwright install-deps chromium
+      - name: Run Web UI E2E
+        env:
+          UI_E2E_GREP: ${{ inputs.grep }}
+        run: |
+          if [ -n "$UI_E2E_GREP" ]; then
+            scripts/ci/web-ui-e2e.sh --grep "$UI_E2E_GREP"
+          else
+            scripts/ci/web-ui-e2e.sh
+          fi
+      - name: Save Playwright Chromium cache
+        if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.pw-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.pw-cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-web-ui-e2e-results
+          path: web/test-results
+          if-no-files-found: ignore
+          retention-days: 7

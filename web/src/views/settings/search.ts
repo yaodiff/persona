@@ -6,6 +6,7 @@ import { LOCAL_SHORTCUTS, SHORTCUTS } from "../../lib/shortcuts";
 import { registeredModules } from "../../core/module-host";
 import { enabledSettingsTabs } from "../../core/module-settings";
 import { MODULE_FEATURES_ID } from "../../core/module-features";
+import { INTEGRATIONS_SETTINGS_REGISTRATION } from "./integrations-registration";
 import { isLegacyIntegrationTab } from "./integrations-route";
 import { tabInfo, TABS, type Tab } from "./nav";
 
@@ -97,7 +98,7 @@ const SHARED_INDEX: SearchGroup[] = [
     group: t("settings-assistantsettings.agents_title"),
     hint: words(
       t("settings-assistantsettings.auto_naming"), t("settings-assistantsettings.auto_naming_max"), t("settings-assistantsettings.auto_naming_periodic"),
-      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.auto_supervision_mode"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
+      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.auto_supervision_mode"), t("settings-assistantsettings.supervision_triage"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
       t("settings-assistantsettings.inbox_signals"), t("settings-assistantsettings.idle_close"), t("settings-assistantsettings.archive_closed"),
     ),
     anchor: "agents",
@@ -217,37 +218,8 @@ function moduleSwitchEntries(): SearchGroup[] {
 // What is typed and what is matched, compared without case or spaces: "timezone" finds "Time zone", "apikey" "API Key".
 const fold = (s: string) => s.toLocaleLowerCase().replace(/\s+/g, "");
 
-// Legacy groups sometimes share an anchor while their unified destinations differ.
-function integrationEntries(v2: boolean): SearchGroup[] {
-  const connectors = v2 ? "integrations" : "connectors";
-  const extensions = v2 ? "integrations" : "extensions";
-  const sources = v2 ? "integrations" : "sources";
-  const flow = t("settings-integrations.view_sources");
-  const forward = t("settings-assistantsettings.inbox_todo_forward");
-  const bot = v2 ? "builtin:feishu-bot" : "feishu-bot";
-  return [
-    { tab: connectors, group: t("settings-connectors.mail"), anchor: "mail", sub: v2 ? "builtin:mail" : undefined },
-    { tab: connectors, group: t("settings-connectors.lark"), anchor: "lark", sub: v2 ? "builtin:lark" : undefined },
-    { tab: connectors, group: t("settings-larkdisplay.title"), hint: words(t("settings-larkdisplay.anti_recall"), t("settings-larkdisplay.edit_history")), anchor: "lark", sub: v2 ? "builtin:lark" : undefined },
-    { tab: connectors, group: t("settings-feishubot.title"), hint: t("settings-integrations.feishu_bot_description"), anchor: "", sub: bot },
-    { tab: connectors, group: t("settings-larksync.title"), hint: words(t("settings-larksync.add"), t("settings-larksync.schedule_label")), anchor: "", sub: bot },
-    { tab: connectors, group: t("settings-sent.entry_label"), hint: t("settings-sent.hint"), anchor: "sent", sub: v2 ? "-sent" : undefined },
-    { tab: sources, group: v2 ? flow : t("settings-nav.tab_sources"), hint: words(t("settings-nav.tab_sources"), t("settings-nav.hint_sources")), anchor: "inbox-sources", sub: v2 ? "-sources" : undefined },
-    { tab: sources, group: v2 ? path(flow, forward) : forward, hint: t("settings-assistantsettings.inbox_todo_forward_hint"), anchor: "inbox-todo-forward", sub: v2 ? "-sources" : undefined },
-    { tab: sources, group: v2 ? path(flow, t("external-sources.flows")) : t("external-sources.flows"), hint: words(t("external-sources.section"), t("external-sources.add_binding")), anchor: "inbox-sources", sub: v2 ? "-sources" : undefined },
-    { tab: extensions, group: v2 ? t("settings-integrations.group_extensions") : t("settings-extensions.title"), hint: t("settings-extensions.title"), anchor: "extensions" },
-    { tab: extensions, group: t("settings-extensions.secrets_title"), anchor: "extensions" },
-    { tab: extensions, group: t("settings-extensions.market_title"), anchor: "market", sub: v2 ? "-market" : undefined },
-    { tab: extensions, group: t("settings-extensionmarket.manage_markets"), hint: t("settings-extensionmarket.token_optional"), anchor: "market", sub: v2 ? "-markets" : undefined },
-    ...(v2 ? ["thread_mode", "thread_idle_hours"].map((field): SearchGroup => ({
-      tab: "integrations", group: path(t("settings-integrations.routing_title"), t(`settings-integrations.${field}_title`)),
-      hint: field, anchor: `configuration-channel-routing-feishu-${field}`, sub: bot,
-    })) : []),
-  ];
-}
-
-export const SEARCH_INDEX = [...SHARED_INDEX, ...integrationEntries(false)];
-const UNIFIED_INDEX = [...SHARED_INDEX, ...integrationEntries(true)];
+export const SEARCH_INDEX: SearchGroup[] = [...SHARED_INDEX, ...INTEGRATIONS_SETTINGS_REGISTRATION.searchGroups(false)];
+const UNIFIED_INDEX: SearchGroup[] = [...SHARED_INDEX, ...INTEGRATIONS_SETTINGS_REGISTRATION.searchGroups(true)];
 
 /** The search box's matches: categories by label / hint, and page groups and settings by their heading or label.
  *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions`/`sources` into `integrations` and remaps
@@ -262,15 +234,16 @@ export function searchSettings(query: string, integrationsV2 = false, hasInboxSo
     return { tabs: [], groups: [features] };
   }
   const has = (...texts: (string | undefined)[]) => texts.some((s) => s && fold(s).includes(q));
+  const unifiedVisible = INTEGRATIONS_SETTINGS_REGISTRATION.isVisible({ integrationsV2 });
   const searchableTabs = [...TABS, ...enabledSettingsTabs().map((m) => m.key)].filter((k) =>
-    integrationsV2 ? !isLegacyIntegrationTab(k) : k !== "integrations",
+    unifiedVisible ? !isLegacyIntegrationTab(k) : k !== INTEGRATIONS_SETTINGS_REGISTRATION.id,
   );
   const tabMatches = (k: Tab) => {
     const info = tabInfo(k);
     if (has(info.label, info.hint)) return true;
     // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions", "Inbox Sources") still finds Integrations.
-    if (integrationsV2 && k === "integrations") {
-      return (["channels", "connectors", "extensions", "sources"] as const).some((old) => has(tabInfo(old).label, tabInfo(old).hint));
+    if (unifiedVisible && k === INTEGRATIONS_SETTINGS_REGISTRATION.id) {
+      return has(...INTEGRATIONS_SETTINGS_REGISTRATION.searchKeywords());
     }
     return false;
   };

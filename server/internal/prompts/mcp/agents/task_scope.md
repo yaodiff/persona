@@ -11,7 +11,7 @@ The supervisor can change criteria, modes or the estimate. This log preserves th
     },
     "inbox_item": {
       "type": "string",
-      "description": "Inbox source; omit for the conversation's sole eligible open handoff. Several require an id. Links the existing task and its Agents."
+      "description": "Inbox ID to link to the existing task and its Agents. Omit to skip linking."
     },
     "change": {
       "type": "string",

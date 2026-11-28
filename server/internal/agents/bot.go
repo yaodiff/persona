@@ -2,6 +2,8 @@ package agents
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -19,29 +21,37 @@ import (
 // BotSessionKey is the stable public key of every registered endpoint. It deliberately does not contain Orca's session ID.
 const BotSessionKey = "endpoint"
 
-// BotRegistration is a manager-owned explicit endpoint binding. Provider is the transport ("orca" in phase 1).
+// BotRegistration is a manager-owned explicit endpoint binding. Provider is the transport ("orca"). It binds either one
+// exact Orca session (SessionID, phase 1) or one Orca bot (BotID, #16891), whose open Home Chat every read and send
+// resolves again on the node, so a bot that started a new Home Chat is followed there. Exactly one of the two is set.
 type BotRegistration struct {
 	ID        string `json:"id"`
 	Provider  string `json:"provider"`
 	Title     string `json:"title"`
 	MachineID string `json:"machine_id"`
-	SessionID string `json:"session_id"`
+	SessionID string `json:"session_id,omitempty"`
+	BotID     string `json:"bot_id,omitempty"`
 }
 
-// BotHistoryRequest and BotSendRequest are internal manager → node calls, never public HTTP chat endpoints.
+// BotHistoryRequest and BotSendRequest are internal manager → node calls, never public HTTP chat endpoints. A request
+// names an exact session, or a bot (BotID) whose open Home Chat the node resolves. A send that names a bot names the
+// session too: the chat the manager resolved and fixed the operation for, which must still be the bot's Home Chat.
 type BotHistoryRequest struct {
-	SessionID string `json:"session_id"`
+	SessionID string `json:"session_id,omitempty"`
+	BotID     string `json:"bot_id,omitempty"`
 	Cursor    string `json:"cursor,omitempty"`
 	Limit     int    `json:"limit,omitempty"`
 }
 
 type BotSendRequest struct {
 	SessionID   string `json:"session_id"`
+	BotID       string `json:"bot_id,omitempty"`
 	OperationID string `json:"operation_id"`
 	Text        string `json:"text"`
 }
 
 // BotPage is the node-projected directory/history page. Messages come only from Orca history, never a send receipt.
+// SessionID is the Orca session the page was read from (a bot's Home Chat when the request named a bot).
 type BotPage struct {
 	CanSend    bool      `json:"can_send"`
 	RankTimeMs int64     `json:"rank_time_ms"`
@@ -49,6 +59,7 @@ type BotPage struct {
 	Messages   []Message `json:"messages"`
 	HasMore    bool      `json:"has_more"`
 	NextCursor string    `json:"next_cursor,omitempty"`
+	SessionID  string    `json:"session_id,omitempty"`
 }
 
 // BotCaller reaches the exact machine through extmgr.Machine.call; the manager never opens an Orca socket.
@@ -82,10 +93,27 @@ func (r *BotRegistry) Source(reg BotRegistration) (*BotSource, error) {
 	if reg.Provider != "orca" {
 		return nil, fail(http.StatusBadRequest, "agents: unsupported bot provider")
 	}
-	if strings.TrimSpace(reg.Title) == "" || len(reg.Title) > 200 || reg.MachineID == "" || reg.SessionID == "" || len(reg.SessionID) > 512 {
+	if strings.TrimSpace(reg.Title) == "" || len(reg.Title) > 200 || reg.MachineID == "" || (reg.SessionID == "") == (reg.BotID == "") ||
+		len(reg.SessionID) > 512 || len(reg.BotID) > 200 {
 		return nil, fail(http.StatusBadRequest, "agents: incomplete bot registration")
 	}
 	return &BotSource{reg: reg, caller: r.caller, ops: r.ops}, nil
+}
+
+// DiscoveredBot is the registration of an Orca bot the manager found on a computer (agentbot.roster, #16891): bound
+// to the bot, whose open Home Chat the node resolves on every call, so a new Home Chat is followed. Its public id comes
+// from the computer and Orca's bot id: the same across restarts and Home Chat resets, and never an Orca session.
+func DiscoveredBot(machineID, botID, name string) BotRegistration {
+	sum := sha256.Sum256([]byte(machineID + "\x00" + botID))
+	title := strings.TrimSpace(name)
+	if title == "" {
+		title = botID
+	}
+	if len(title) > 200 {
+		title = strings.ToValidUTF8(title[:200], "")
+	}
+	return BotRegistration{ID: "orca-" + hex.EncodeToString(sum[:6]), Provider: "orca", Title: title, MachineID: machineID,
+		BotID: botID}
 }
 
 // BotSource is one manager-registered endpoint as an existing agents.Source.
@@ -109,10 +137,30 @@ func (s *BotSource) call(ctx context.Context, method string, params, out any) er
 
 func (s *BotSource) page(ctx context.Context, method, cursor string, limit int) (*BotPage, error) {
 	var page BotPage
-	if err := s.call(ctx, method, BotHistoryRequest{SessionID: s.reg.SessionID, Cursor: cursor, Limit: limit}, &page); err != nil {
+	req := BotHistoryRequest{SessionID: s.reg.SessionID, BotID: s.reg.BotID, Cursor: cursor, Limit: limit}
+	if err := s.call(ctx, method, req, &page); err != nil {
 		return nil, err
 	}
 	return &page, nil
+}
+
+// binding is what a send is fixed to: the registration itself, or for one bound to a bot, the registration with the
+// session of the bot's open Home Chat now. The operation book keeps that session, so the same clientId after the bot
+// started a new Home Chat conflicts instead of following it there.
+func (s *BotSource) binding(ctx context.Context) (BotRegistration, error) {
+	if s.reg.BotID == "" {
+		return s.reg, nil
+	}
+	page, err := s.page(ctx, "agentbot.describe", "", 1)
+	if err != nil {
+		return BotRegistration{}, err
+	}
+	if page.SessionID == "" {
+		return BotRegistration{}, fail(http.StatusBadGateway, "agents: bot is unavailable")
+	}
+	reg := s.reg
+	reg.SessionID = page.SessionID
+	return reg, nil
 }
 
 func (s *BotSource) session(page *BotPage) Session {
@@ -169,7 +217,11 @@ func (s *BotSource) Messages(ctx context.Context, key, cursor string, limit int)
 }
 
 func (s *BotSource) prepareSend(ctx context.Context, clientID, text string) error {
-	_, err := s.ops.prepare(ctx, s.reg, clientID, text)
+	reg, err := s.binding(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = s.ops.prepare(ctx, reg, clientID, text)
 	return err
 }
 
@@ -184,14 +236,19 @@ func (s *BotSource) Send(ctx context.Context, key, clientID, text string) (json.
 	if strings.TrimSpace(text) == "" || TextLen(text) > AgentMaxText {
 		return nil, fail(http.StatusBadRequest, "agents: invalid bot message")
 	}
-	op, err := s.ops.prepare(ctx, s.reg, clientID, text)
+	reg, err := s.binding(ctx)
+	if err != nil {
+		return nil, err
+	}
+	op, err := s.ops.prepare(ctx, reg, clientID, text)
 	if err != nil {
 		return nil, err
 	}
 	var receipt struct {
 		Accepted bool `json:"accepted"`
 	}
-	if err := s.call(ctx, "agentbot.send", BotSendRequest{SessionID: s.reg.SessionID, OperationID: op, Text: text}, &receipt); err != nil {
+	req := BotSendRequest{SessionID: reg.SessionID, BotID: reg.BotID, OperationID: op, Text: text}
+	if err := s.call(ctx, "agentbot.send", req, &receipt); err != nil {
 		return nil, err
 	}
 	if !receipt.Accepted {

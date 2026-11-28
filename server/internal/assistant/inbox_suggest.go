@@ -7,8 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -37,6 +41,7 @@ type suggestIn struct {
 	Cwd      string           `json:"cwd"`
 	Due      string           `json:"due"`
 	Related  []string         `json:"related"`
+	Mentions []InboxMention   `json:"mentions"`
 	Changes  []DocChange      `json:"changes"`
 	Follow   *suggestFollow   `json:"follow"`
 	Reported *suggestReported `json:"reported"`
@@ -121,6 +126,16 @@ func (in *suggestIn) check() error {
 	}
 	if in.Kind != SuggestReply && len(in.Changes) > 0 {
 		return errSuggestion{"changes go with a reply only"}
+	}
+	if in.Kind != SuggestReply && len(in.Mentions) > 0 {
+		return errSuggestion{"mentions go with a reply only"}
+	}
+	if len(in.Mentions) > 0 {
+		normalized, err := normalizeReplyMentions(in.Text, in.Mentions)
+		if err != nil {
+			return err
+		}
+		in.Mentions = normalized
 	}
 	if in.Kind == SuggestConclusion {
 		switch in.Outcome {
@@ -472,7 +487,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			it.SuggestSeq = max(it.SuggestSeq, 1)
 		}
 		g := &InboxSuggestion{Version: it.SuggestSeq + 1, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
-			Handback: in.Handback, Due: in.Due, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from,
+			Handback: in.Handback, Due: in.Due, Mentions: slices.Clone(in.Mentions), Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from,
 			ReplyPolicy: cloneReplyPolicySnapshot(policySnap), ReplyInstruction: instructionID}
 		if policySnap != nil {
 			it.ReplyPolicy = cloneReplyPolicySnapshot(policySnap)
@@ -670,4 +685,121 @@ func currentSuggestion(it *InboxItem) *InboxSuggestion {
 		return it.Suggestion
 	}
 	return legacySuggestion(it)
+}
+
+var (
+	mentionFenceOpenRe  = regexp.MustCompile("^```[a-zA-Z0-9_+#-]*\\s*$")
+	mentionFenceCloseRe = regexp.MustCompile("^```\\s*$")
+	mentionCodeOrLinkRe = regexp.MustCompile("`[^`\\n]+`|\\[[^\\]\\n]+\\]\\(https?://[^\\s<>()]+\\)")
+)
+
+func isMentionBoundary(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(rest)
+	return !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-')
+}
+
+func mentionPresentInSegment(segment, needle string) bool {
+	for offset := 0; offset <= len(segment)-len(needle); {
+		idx := strings.Index(segment[offset:], needle)
+		if idx < 0 {
+			return false
+		}
+		end := offset + idx + len(needle)
+		if isMentionBoundary(segment[end:]) {
+			return true
+		}
+		offset += idx + 1
+	}
+	return false
+}
+
+// mentionPresentInText reports whether @name appears as a complete mention token in prose outside fenced code blocks,
+// inline code spans, and Markdown HTTP(S) links, matching the connector mention boundary rules.
+func mentionPresentInText(text, name string) bool {
+	if text == "" || name == "" {
+		return false
+	}
+	needle := "@" + name
+	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"), "\n")
+	for i := 0; i < len(lines); {
+		if mentionFenceOpenRe.MatchString(lines[i]) {
+			j := i + 1
+			for j < len(lines) && !mentionFenceCloseRe.MatchString(lines[j]) {
+				j++
+			}
+			if j < len(lines) {
+				i = j + 1
+				continue
+			}
+		}
+		line := lines[i]
+		pos := 0
+		for _, loc := range mentionCodeOrLinkRe.FindAllStringIndex(line, -1) {
+			if loc[0] > pos && mentionPresentInSegment(line[pos:loc[0]], needle) {
+				return true
+			}
+			pos = loc[1]
+		}
+		if pos < len(line) && mentionPresentInSegment(line[pos:], needle) {
+			return true
+		}
+		i++
+	}
+	return false
+}
+
+// normalizeReplyMentions validates and deduplicates explicit mention bindings submitted with a reply suggestion.
+func normalizeReplyMentions(text string, raw []InboxMention) ([]InboxMention, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if len(raw) > 100 {
+		return nil, errSuggestion{"mentions must contain at most 100 entries"}
+	}
+	out := make([]InboxMention, 0, len(raw))
+	byID := make(map[string]string, len(raw))
+	byName := make(map[string]string, len(raw))
+	for _, m := range raw {
+		id := strings.TrimSpace(string(m.ID))
+		if id == "" || strings.ContainsAny(id, " \t\r\n") {
+			return nil, errSuggestion{"each mention requires a non-empty id without whitespace"}
+		}
+		name := m.Name
+		if name == "" || strings.TrimSpace(name) != name || strings.ContainsAny(name, "@\r\n") {
+			return nil, errSuggestion{"each mention name must be one trimmed non-empty line without @"}
+		}
+		if prevName, exists := byID[id]; exists {
+			if prevName != name {
+				return nil, errSuggestion{"duplicate mention id has conflicting names"}
+			}
+			continue
+		}
+		if prevID, exists := byName[name]; exists && prevID != id {
+			return nil, errSuggestion{"two mentioned people cannot share the same name"}
+		}
+		if !mentionPresentInText(text, name) {
+			return nil, errSuggestion{fmt.Sprintf("mention %q must appear as @%s in text", name, name)}
+		}
+		byID[id] = name
+		byName[name] = id
+		out = append(out, InboxMention{ID: InboxMentionUserID(id), Name: name})
+	}
+	return out, nil
+}
+
+// activeReplyMentions retains only bound mentions whose complete @name token still appears in prose after user edits.
+func activeReplyMentions(text string, mentions []InboxMention) []InboxMention {
+	if len(mentions) == 0 || text == "" {
+		return nil
+	}
+	var out []InboxMention
+	for _, m := range mentions {
+		if m.ID != "" && m.Name != "" && mentionPresentInText(text, m.Name) {
+			out = append(out, m)
+		}
+	}
+	return out
 }

@@ -170,7 +170,7 @@ func TestTodosV2AttentionPrefsAutoSeenModesAndUndo(t *testing.T) {
 
 	autoSee := func(id string) {
 		completed, _ := s.todoNow(id)
-		s.autoSeeAcceptedTodo(ctx, completed, outcomeDone, false)
+		s.autoSeeAcceptedTodo(ctx, completionOf(completed), outcomeDone, false)
 	}
 	parentID := makeDoneTodo("Parent goal", "", db.AudienceHuman)
 

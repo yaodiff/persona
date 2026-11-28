@@ -382,6 +382,9 @@ func TestTodosV2RuntimeLoopsPRStatusEventAndBlockedByPREndToEnd(t *testing.T) {
 	})
 	s.superviseWatch(ctx, time.Now())
 
+	waitForCondition(t, 3*time.Second, "blocker observer to reconcile PR", func() bool {
+		return !s.blockerReconcile.sweep.Load()
+	})
 	if len(unblocked) != 2 || unblocked[1] != planTodoID {
 		t.Fatalf("expected periodic superviseWatch fallback sweep to unblock %s, got %+v", planTodoID, unblocked)
 	}

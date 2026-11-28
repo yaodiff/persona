@@ -2,11 +2,15 @@ package node
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/orcart"
+	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // orcaStartHubID is the id the hub names for a chat New Agent starts (a session id as the hub makes them).
@@ -213,5 +217,120 @@ func TestOrcaBridgeStartCreatesOnAnOlderOrca(t *testing.T) {
 	}
 	if bad := o.f.Invalid(); len(bad) > 0 {
 		t.Fatalf("Orca's schema refused %v", bad)
+	}
+}
+
+// Orca 1.4.277 names the providers it runs as chats (agentSession.agents): an installed agent it does not run as one gets
+// no launcher. An Orca without the method offers every installed one (TestOrcaBridgeOffersChatLaunchers).
+func TestOrcaBridgeOffersOnlyTheChatsOrcaRuns(t *testing.T) {
+	o := newOrcaChats(t)
+	o.f.SetStatus(map[string]any{"capabilities": append(append([]string{}, orcaControlsCaps...), orcart.CapChatLaunch)})
+	o.f.Handle("preflight.installedAgents", func(map[string]any) any { return map[string]any{"agents": []any{"claude", "codex"}} })
+	o.f.Handle("agentSession.agents", func(map[string]any) any {
+		return map[string]any{"agents": []any{map[string]any{"agent": "claude", "managedRuntime": true},
+			map[string]any{"agent": "pi"}}}
+	})
+	n, _ := orcaBridgeNodeOn(t, o)
+	waitFor(t, "Claude Code's chat launcher", func() bool { return len(orcaLaunchersOf(t, n)) == 1 })
+	if ls := orcaLaunchersOf(t, n); ls["orca-claude"].Name == "" {
+		t.Fatalf("launchers %+v", ls)
+	}
+}
+
+// orcaChatRuntimeMissing is Orca 1.4.277's refusal of a chat whose runtime it has not installed on the computer.
+const orcaChatRuntimeMissing = "Codex can't open as a chat here because its chat runtime isn't installed on this host " +
+	"(install it from a new chat tab in Orca). Start it in a terminal instead."
+
+// orcaChatRefusal is the bridge's refusal err as the hub gets it: its code, data reason and the provider it names.
+func orcaChatRefusal(t *testing.T, err error) (code, reason, program string) {
+	t.Helper()
+	var re *rpc.Error
+	if !errors.As(err, &re) {
+		t.Fatalf("not a refusal: %v", err)
+	}
+	var data struct{ Reason, Program, Delivered string }
+	if json.Unmarshal(re.Data, &data) != nil || data.Delivered != "none" {
+		t.Fatalf("data %s", re.Data)
+	}
+	return re.Code, data.Reason, data.Program
+}
+
+// A provider whose chat Orca refuses to open for a missing chat runtime (a fresh Orca 1.4.277) is refused in those words,
+// nothing started, and its launcher is withdrawn at once, so New Agent offers it no more and its default start stays in
+// a terminal; the other provider's stays. Orca showing a new chat of it (the person installed the runtime from a new
+// chat tab in Orca) offers it again, and so does Orca starting again.
+func TestOrcaBridgeWithdrawsAChatWhoseRuntimeOrcaLacks(t *testing.T) {
+	n, o := orcaChatStartNode(t)
+	o.f.Handle("agent.launch", func(p map[string]any) any {
+		if p["agent"] == "codex" {
+			return orcarttest.Refuse("agent_launch_surface_unavailable", orcaChatRuntimeMissing)
+		}
+		return map[string]any{"sessionId": p["sessionId"]}
+	})
+	waitFor(t, "the launchers", func() bool { return len(orcaLaunchersOf(t, n)) == 2 })
+	start := func(id string) error {
+		_, err := nodeCall(t, n, "session.start", map[string]any{"cwd": "/w/app", "prompt": "Fix the flaky test",
+			"launcher": "orca-codex", "session_id": id})
+		return err
+	}
+	err := start(orcaStartHubID)
+	words := i18n.T(i18n.Default, "rpc-errors.orca_chat_runtime_missing", i18n.Args{"program": "Codex"})
+	if code, reason, program := orcaChatRefusal(t, err); code != "unsupported" || reason != "orca_chat_runtime_missing" ||
+		program != "Codex" || !strings.Contains(err.Error(), words) {
+		t.Fatalf("refusal %v (%s %s %s)", err, code, reason, program)
+	}
+	if _, ok := listed(t, n)[orcaStartHubID]; ok {
+		t.Fatal("a refused start is listed")
+	}
+	waitFor(t, "Codex's chat launcher withdrawn", func() bool {
+		ls := orcaLaunchersOf(t, n)
+		return len(ls) == 1 && ls["orca-claude"].Name != ""
+	})
+	waitFor(t, "the Codex chat no longer naming it", func() bool { return listed(t, n)[orcaCodexID].Launcher == "" })
+
+	// The person opens a new Codex chat in Orca: Orca may have its runtime now.
+	o.with(func(o *orcaChats) {
+		o.tabs = []any{map[string]any{"type": "agent-session", "id": "agent-session:codex_new_chat", "title": "Codex Chat",
+			"sessionId": "codex_new_chat", "agent": "codex"}}
+	})
+	waitFor(t, "Codex's chat launcher offered again", func() bool { return len(orcaLaunchersOf(t, n)) == 2 })
+
+	// Refused again, then Orca quits and starts again: offered again.
+	if _, reason, _ := orcaChatRefusal(t, start("0d000000-0000-4000-8000-00000000c0df")); reason != "orca_chat_runtime_missing" {
+		t.Fatalf("second refusal %q", reason)
+	}
+	waitFor(t, "withdrawn again", func() bool { return len(orcaLaunchersOf(t, n)) == 1 })
+	o.f.Stop()
+	waitFor(t, "none while Orca is not running", func() bool { return len(orcaLaunchersOf(t, n)) == 0 })
+	if err := o.f.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "both once Orca runs again", func() bool { return len(orcaLaunchersOf(t, n)) == 2 })
+}
+
+// Another reason Orca won't open the chat (a project under WSL) is worded as such, naming the provider, and keeps the
+// launcher: it may hold for this folder only. An Orca with no chat start at all keeps its own words.
+func TestOrcaBridgeChatUnavailableForAnotherReason(t *testing.T) {
+	n, o := orcaChatStartNode(t)
+	o.f.Handle("agent.launch", func(map[string]any) any {
+		return orcarttest.Refuse("agent_launch_surface_unavailable",
+			"Claude can't open as a chat here because this workspace runs under WSL. Start it in a terminal instead.")
+	})
+	waitFor(t, "the launchers", func() bool { return len(orcaLaunchersOf(t, n)) == 2 })
+	_, err := nodeCall(t, n, "session.start", map[string]any{"cwd": "/w/app", "prompt": "hi", "launcher": "orca-claude",
+		"session_id": orcaStartHubID})
+	if code, reason, program := orcaChatRefusal(t, err); code != "unsupported" || reason != "orca_chat_unavailable" || program != "Claude Code" {
+		t.Fatalf("refusal %v (%s %s %s)", err, code, reason, program)
+	}
+	polls := o.f.Count("worktree.ps")
+	waitFor(t, "two refreshes after the refusal", func() bool { return o.f.Count("worktree.ps") >= polls+2 })
+	if ls := orcaLaunchersOf(t, n); len(ls) != 2 {
+		t.Fatalf("launchers %+v", ls)
+	}
+	for _, code := range []string{"agent_launch_unsupported", "method_not_found"} {
+		re, ok := orcaStartErr(&orcart.Error{Code: code}, "claude").(*rpc.Error)
+		if !ok || !strings.Contains(string(re.Data), `"reason":"orca_start_unsupported"`) {
+			t.Errorf("%s: %#v", code, orcaStartErr(&orcart.Error{Code: code}, "claude"))
+		}
 	}
 }

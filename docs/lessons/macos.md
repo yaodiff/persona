@@ -442,5 +442,5 @@ the same cause. Recheck scrolling, folding and layout separately with synthetic 
 - Leaving `transparent` at its default (`false`) while enabling `vibrancy` (`"hud"` dark / `"popover"` light),
   `visualEffectState: "active"`, and `backgroundColor: "#00000000"` yields identical behind-window frosted tinting
   with zero gray dropout across Stage Manager switches (`DIPS = 0` in dark, light, and runtime Default -> Glass
-  toggles), while `[data-desktop-glass="1"]` suppresses redundant CSS `backdrop-filter` inside `<main>` so Chromium
+  toggles), while `[data-desktop-glass="1"]` suppresses redundant CSS `backdrop-filter` across the document (`<main>`, split panel `<aside>`, and overlays) so Chromium
   never needs `transparent: true` to composite cleanly.

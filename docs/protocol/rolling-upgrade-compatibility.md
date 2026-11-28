@@ -59,6 +59,7 @@
 | `thread_mode`, `thread_idle_hours` | The web offers editing on installed extension channels reporting a supported mode. Older clients preserve both values on partial writes. Switching off uses legacy message threads and 30 days of inactivity. Switching back on reuses saved preferences. In split modes older plugins can still supply the opaque `thread` key. |
 | `target_override` | Optional detail metadata. Clients can display the reported `topics`, `groups_and_topics`, or `threads` precedence hint. An absent hint needs no placeholder. Older clients ignore it and can still edit the default target. |
 | `configuration.*.section` | A manifest property can group a field under `connection`, `channel`, `inbox`, or `advanced`. Omitted or empty keeps the existing form valid. Older clients ignore the returned form hint. Extensions declaring the hint need a matching minimum hub version in `engines.persona` for install-time validation. |
+| `integrations_projection_v1` | A connected assistant names it in `manager.hello`. A hub that serves the projection publishes `integrations_projection_v1: true` on that assistant's entry in `GET /api/v1/managers`. With the field absent, use the existing settings reads for the same assistant. Older clients keep their existing read and write routes. |
 
 ### Agent tab naming (#15387)
 

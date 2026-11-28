@@ -115,3 +115,25 @@ func TestUsageHostsLimitTheGateways(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestDirectUsageKeyFollowsHTTPSOrigin(t *testing.T) {
+	m := &extension.Manifest{Contributes: map[string]json.RawMessage{
+		"usage": json.RawMessage(`[{"id":"direct","name":"Direct","direct":true,"remote_address":"address","remote_key":"read_key"}]`),
+	}}
+	p := &extension.Extension{Full: m}
+	first := json.RawMessage(`{"address":"https://one.example.invalid/prefix"}`)
+	same := json.RawMessage(`{"address":"https://one.example.invalid:443/other"}`)
+	other := json.RawMessage(`{"address":"https://two.example.invalid"}`)
+	local := json.RawMessage(`{"address":"http://127.0.0.1:3425"}`)
+	if keys := directUsageKeysToClear(p, first, same); len(keys) != 0 {
+		t.Fatalf("same HTTPS origin cleared the key: %v", keys)
+	}
+	for _, cfg := range []json.RawMessage{other, local, json.RawMessage(`{}`)} {
+		if keys := directUsageKeysToClear(p, first, cfg); len(keys) != 1 || keys[0] != "read_key" {
+			t.Fatalf("changed or missing HTTPS origin did not clear the key: %v", keys)
+		}
+	}
+	if directUsageKeyNeedsURL(p, "read_key", local) == nil || directUsageKeyNeedsURL(p, "read_key", first) != nil {
+		t.Fatal("read key was not restricted to a saved HTTPS origin")
+	}
+}

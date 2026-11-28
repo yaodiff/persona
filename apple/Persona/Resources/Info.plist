@@ -79,6 +79,8 @@
 	<string>Persona shows your recent photos under the + button so you can attach them to a message, and lets Claude look at recent photos when you ask, for example to read a screenshot you took.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Persona lets Claude read and create reminders when you ask, for example to add “review the PR” to your Today list.</string>
+	<key>NSSiriUsageDescription</key>
+	<string>Persona uses Siri so you can call Persona by saying “Call Persona using Persona”. Siri passes the call to Persona, which calls the assistant on your hub; Persona shares nothing else with Siri.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Persona turns your voice into text when you use the mic button, for example to dictate a reply to Claude, and on an urgent call you answer, to hear what you decide. It does this on your iPhone when it can.</string>
 	<key>NSSupportsLiveActivities</key>
@@ -144,7 +146,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSSiriUsageDescription</key>
-	<string>Persona uses Siri so you can call Persona by saying “Call Persona using Persona”. Siri passes the call to Persona, which calls the assistant on your hub; Persona shares nothing else with Siri.</string>
 </dict>
 </plist>

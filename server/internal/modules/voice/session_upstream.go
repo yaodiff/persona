@@ -38,7 +38,7 @@ func upstreamCode(err error) string {
 // woken: it is the session a wake opens (suspend.go), not one after a drop: its instructions say the voice was paused.
 func (c *conversation) connect(woken bool) error {
 	c.mu.Lock()
-	p, w, model, voice := c.p, c.w, c.model, c.voice
+	p, w, model, voice, wantTextOnly := c.p, c.w, c.model, c.voice, c.wantTextOnly
 	c.mu.Unlock()
 	history, err := c.historyForConnect()
 	if err != nil {
@@ -71,25 +71,11 @@ func (c *conversation) connect(woken bool) error {
 	}
 	tools := c.toolSet()
 	var rate int
-	partial := false
+	partial, textOnly := false, false
 	if c.dictation {
 		rate, partial, up, err = c.startDictation(dctx, up, p, w, model, c.instructions(in, nil))
 	} else {
-		rate, err = c.startSession(dctx, up, w, p, model, voice, in, tools)
-	}
-	if err != nil && !c.dictation && len(tools) > 0 && auto && refusedTools(err) {
-		// The service does not take function tools (#1420): the same session without them, once. Remembered only once
-		// that one starts: a session refused all the same was not refused for its tools.
-		c.logf("provider %s: the service refused the function tools as the session started (%s); starting it again without them", p.ID, failure(err))
-		if up, err = c.dial(dctx, p, w, model); err == nil {
-			rate, err = c.startSession(dctx, up, w, p, model, voice, in, nil)
-		}
-		if err == nil {
-			c.toolless.Store(true)
-			if c.pl.forgoTools(p.ID) {
-				c.logf("provider %s: its sessions go without function tools from now on", p.ID)
-			}
-		}
+		rate, textOnly, up, err = c.startCallSession(dctx, up, p, w, model, voice, in, tools, auto, wantTextOnly)
 	}
 	if err != nil {
 		return err
@@ -103,6 +89,7 @@ func (c *conversation) connect(woken bool) error {
 	}
 	c.up, c.ready, c.connectedAt = up, true, time.Now()
 	c.dictationPartial = partial
+	c.textOnly = textOnly
 	gen := c.gen
 	first := !c.started
 	why := "first"
@@ -112,8 +99,12 @@ func (c *conversation) connect(woken bool) error {
 	case !first:
 		why = fmt.Sprintf("reconnect %d", c.reconnects)
 	}
-	c.logf("upstream: session %d started in %v (%s), %d Hz, tools %s", sessionNo(gen), logDur(c.connectedAt.Sub(began)), why, rate,
-		c.toolsLog(p, c.toolSet()))
+	mode := ""
+	if textOnly {
+		mode = ", text-only"
+	}
+	c.logf("upstream: session %d started in %v (%s), %d Hz, tools %s%s", sessionNo(gen), logDur(c.connectedAt.Sub(began)), why, rate,
+		c.toolsLog(p, c.toolSet()), mode)
 	// A session after a drop is told the bound conversation as it is now: an agent's words the last session had not
 	// taken in (its turn went on meanwhile) close the user-speech gate, as a result sent does. The same snapshot does
 	// not: a request the user made just before the drop still counts.
@@ -191,12 +182,92 @@ func (c *conversation) historyForConnect() ([]prompts.VoiceLine, error) {
 	return voiceLines(c.history), nil
 }
 
+// startCallSession negotiates one call session on up (already dialed), falling back when the service refuses
+// text-only output (error frame or echoed non-text output_modalities) or auto function tools (#1420).
+// Returns the session's audio rate, whether text-only output was granted, the connected upLink, and any error.
+func (c *conversation) startCallSession(ctx context.Context, up upLink, p *Provider, w wire, model, voice string,
+	in prompts.VoiceInstructions, tools []string, auto, wantTextOnly bool) (int, bool, upLink, error) {
+	upVoice := voice
+	if wantTextOnly {
+		// External TTS uses the app's voice; never send it to the realtime upstream (including fallback or codex).
+		upVoice = ""
+	}
+	textOnly := wantTextOnly && supportsTextOnly(w) && !refusesTextOnly(p)
+	droppedTools := false
+	droppedTextOnly := false
+	ambiguousTextOnly := false
+	textOnlyWhy := ""
+
+	for {
+		var started event
+		rate, err := c.startSession(ctx, up, w, p, model, upVoice, in, tools, textOnly, func(e event) { started = e })
+		if err == nil {
+			if textOnly && nonTextModalities(started.modalities) {
+				// The service started the session but echoed output modalities other than text-only: close it,
+				// remember the refusal and restart without requesting text-only output.
+				_ = up.CloseNow()
+				textOnly = false
+				droppedTextOnly = true
+				ambiguousTextOnly = false
+				textOnlyWhy = fmt.Sprintf("echoed %v", started.modalities)
+				if forgoTextOnly(p) {
+					c.logf("provider %s: the service refused text-only output (%s): call output audio will be discarded", p.ID, textOnlyWhy)
+				}
+				up, err = c.dial(ctx, p, w, model)
+				if err != nil {
+					return 0, false, nil, err
+				}
+				continue
+			}
+			if droppedTools {
+				c.toolless.Store(true)
+				if c.pl.forgoTools(p.ID) {
+					c.logf("provider %s: its sessions go without function tools from now on", p.ID)
+				}
+			}
+			if droppedTextOnly && forgoTextOnly(p) {
+				c.logf("provider %s: the service refused text-only output (%s): call output audio will be discarded", p.ID, textOnlyWhy)
+			}
+			return rate, textOnly, up, nil
+		}
+
+		// Start failed (startUpstream already closed up). Decide whether to retry without text-only or tools.
+		switch {
+		case textOnly && refusedTextOnly(err):
+			textOnly = false
+			droppedTextOnly = true
+			ambiguousTextOnly = !explicitTextOnly(err)
+			textOnlyWhy = textOnlyRefusalReason(err)
+		case len(tools) > 0 && auto && refusedTools(err):
+			// The service does not take function tools (#1420): the same session without them, once. Remembered only
+			// once that one starts: a session refused all the same was not refused for its tools.
+			c.logf("provider %s: the service refused the function tools as the session started (%s); starting it again without them", p.ID, failure(err))
+			tools = nil
+			droppedTools = true
+			if ambiguousTextOnly {
+				// Dropping text-only did not clear an ambiguous field error; try dropping tools while keeping text-only.
+				textOnly = true
+				droppedTextOnly = false
+				ambiguousTextOnly = false
+				textOnlyWhy = ""
+			}
+		default:
+			return 0, false, up, err
+		}
+		up, err = c.dial(ctx, p, w, model)
+		if err != nil {
+			return 0, false, nil, err
+		}
+	}
+}
+
 // startSession starts the upstream session on up, declaring tools (nil: none), and waits for the service to start it:
 // the rate of its audio. A failure closes up; the service's refusal is a *sessionRefused.
 func (c *conversation) startSession(ctx context.Context, up upLink, w wire, p *Provider, model, voice string,
-	in prompts.VoiceInstructions, tools []string) (int, error) {
-	s := session{Model: model, Voice: voice, InputRate: p.inputRate(), Instructions: c.instructions(in, tools), Tools: toolDecls(tools, c.meeting != nil, string(c.language()))}
-	return startUpstream(ctx, up, w, p, s)
+	in prompts.VoiceInstructions, tools []string, textOnly bool, onStarted ...func(event)) (int, error) {
+	s := session{Model: model, Voice: voice, InputRate: p.inputRate(), Instructions: c.instructions(in, tools),
+		Tools: toolDecls(tools, c.meeting != nil, string(c.language())), TextOnly: textOnly}
+	return startUpstream(ctx, up, w, p, s, onStarted...)
 }
 
 // instructions are what a session that declares tools is told: voice/instructions, or a meeting call's voice/meeting
@@ -211,7 +282,8 @@ func (c *conversation) instructions(in prompts.VoiceInstructions, tools []string
 
 // startUpstream sends session s's start on up and waits for the service to start it: the rate of its audio. A failure
 // closes up; the service's refusal is a *sessionRefused. A call's sessions and a read-aloud's (speak.go) start alike.
-// onStarted, when given, receives the started event before the return (dictation reads its interim-caption grant).
+// onStarted, when given, receives the started event before the return (dictation reads its interim-caption grant;
+// calls inspect echoed output_modalities).
 func startUpstream(ctx context.Context, up upLink, w wire, p *Provider, s session, onStarted ...func(event)) (int, error) {
 	if err := writeJSON(ctx, up, w.start(s)); err != nil {
 		_ = up.CloseNow()
@@ -229,6 +301,11 @@ func startUpstream(ctx context.Context, up upLink, w wire, p *Provider, s sessio
 		for _, e := range w.decode(b) {
 			switch e.kind {
 			case evStarted:
+				if s.TextOnly && e.name == "created" {
+					// OpenAI Realtime sends session.created with the server's default modalities before answering
+					// session.update; wait for session.updated (or an error refusing it).
+					continue
+				}
 				if len(onStarted) > 0 {
 					onStarted[0](e)
 				}
@@ -280,6 +357,57 @@ func refusedTools(err error) bool {
 }
 
 func namesTools(s string) bool { return strings.Contains(strings.ToLower(s), "tools") }
+
+// nonTextModalities reports whether a started/updated session echoed output modalities other than text-only.
+// An omitted list means the service accepted the start without echoing modalities.
+func nonTextModalities(modalities []string) bool {
+	return len(modalities) > 0 && !(len(modalities) == 1 && modalities[0] == "text")
+}
+
+// refusedTextOnly reports whether a call session's start failed because the service refused text-only output:
+// the same detection dictation and meeting transcription use (refusedField), except an error that explicitly
+// names tools belongs to the function-tools fallback instead.
+func refusedTextOnly(err error) bool {
+	if upstreamCode(err) != "" {
+		return false
+	}
+	var refused *sessionRefused
+	if errors.As(err, &refused) {
+		if refused.param != "" && namesTools(refused.param) {
+			return false
+		}
+		if refused.param == "" && namesTools(refused.text) && !strings.Contains(strings.ToLower(refused.text), "modalit") {
+			return false
+		}
+		return refusedField(refused, false) == "text_only"
+	}
+	var ce websocket.CloseError
+	return errors.As(err, &ce) && strings.Contains(strings.ToLower(ce.Reason), "modalit")
+}
+
+// explicitTextOnly reports whether a text-only refusal error explicitly named modalities or output (rather than
+// matching only on a bare unknown_parameter / unsupported_* code with no param).
+func explicitTextOnly(err error) bool {
+	var refused *sessionRefused
+	if errors.As(err, &refused) {
+		words := strings.ToLower(refused.param + " " + refused.text)
+		return strings.Contains(words, "modalit") || strings.Contains(words, "output")
+	}
+	var ce websocket.CloseError
+	return errors.As(err, &ce) && strings.Contains(strings.ToLower(ce.Reason), "modalit")
+}
+
+func textOnlyRefusalReason(err error) string {
+	var refused *sessionRefused
+	if errors.As(err, &refused) {
+		return firstNonEmpty(refused.code, "no code")
+	}
+	var ce websocket.CloseError
+	if errors.As(err, &ce) {
+		return fmt.Sprintf("close %d", ce.Code)
+	}
+	return "no code"
+}
 
 // instructionsMost is the most a session's instructions run to, in runes: the measured service started a session with
 // 19000 characters of them and refused one with 25000, the limit counting what it adds itself (docs/lessons/voice.md

@@ -18,7 +18,7 @@ import (
 )
 
 // seedFeedPlans puts n plan cards, each naming its own plan, into a new conversation of st and returns the conversation
-// and the plan ids in order. task_plans and assistant_feed are not truncated between tests, so the names are fresh.
+// and the plan ids in order.
 func seedFeedPlans(tb testing.TB, s *Service, n int) (string, []string) {
 	tb.Helper()
 	ctx := context.Background()

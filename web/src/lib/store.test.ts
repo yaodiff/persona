@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { managerHeaderFor } from "./manager-choice";
-import { applyMachine, dropAnswered, endInteraction, getState, hubHas, larkOn, loadOlderClosed, putTodo, refresh, refreshAssistant, refreshTodos, reset, setSpacesSupported } from "./store";
+import { loadOlderClosed } from "../features/todos/closed-history";
+import { applyMachine, dropAnswered, endInteraction, getState, hubHas, larkOn, putTodo, refresh, refreshAssistant, refreshTodos, reset, setSpacesSupported } from "./store";
 
 const emptyBoard = {
   status_groups: [],

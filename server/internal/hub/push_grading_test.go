@@ -185,6 +185,20 @@ func setGradingClock(h *Hub, at time.Time) {
 
 var gradingClocks sync.Map // *Pusher → *atomic.Int64
 
+// restartPusher is h's hub started again on store at h's moment: a new Pusher that reads h's clock and gets the store
+// only then, so its startup load (the grading switch, the held pushes, the delivered pushes) runs on the fixture's
+// clock, as gradingHub builds its own. newPusher(dir, store, …) loads on the wall clock, and held and delivered rows
+// expire after heldPushMaxAge: rows stamped by gradingHub's fixed clock would all count as expired once the real
+// date passes it by that much.
+func restartPusher(t *testing.T, h *Hub, store Store) *Pusher {
+	t.Helper()
+	p := newPusher(t.TempDir(), nil, t.Logf)
+	p.now = h.push.now
+	p.store = store
+	p.loadPushGradingState()
+	return p
+}
+
 // moveGradingClock sets the clock setGradingClock made.
 func moveGradingClock(h *Hub, at time.Time) {
 	c, _ := gradingClocks.Load(h.push)
@@ -362,13 +376,23 @@ func TestPushGradingSwitchAndInterceptsPersist(t *testing.T) {
 	if !h.push.waitInterceptsSaved(2 * time.Second) {
 		t.Fatal("the held pushes were not saved")
 	}
-	restarted := newPusher(t.TempDir(), store, t.Logf)
+	restarted := restartPusher(t, h, store)
 	if !restarted.pushGradingOn() {
 		t.Fatal("the ln mode switch did not survive a restart")
 	}
 	view := restarted.heldPushesView("", 0)
 	if len(view) != 1 || view[0].RelatedKey != "persisted" {
 		t.Fatalf("restored intercepts = %+v, want the held P2 entry", view)
+	}
+	// The held row lives heldPushMaxAge: a restart a second short of that still has it, one at the limit drops it.
+	held := view[0].At
+	moveGradingClock(h, held.Add(heldPushMaxAge-time.Second))
+	if view := restartPusher(t, h, store).heldPushesView("", 0); len(view) != 1 {
+		t.Fatalf("a restart inside heldPushMaxAge restored %+v, want the held P2 entry", view)
+	}
+	moveGradingClock(h, held.Add(heldPushMaxAge))
+	if view := restartPusher(t, h, store).heldPushesView("", 0); len(view) != 0 {
+		t.Fatalf("a restart heldPushMaxAge later restored %+v, want the expired row dropped", view)
 	}
 }
 

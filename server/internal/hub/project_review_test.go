@@ -21,6 +21,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+const projectReviewNoChange = "review_receipt_no_change"
+
 func TestProjectReviewAuthenticatedAppIngress(t *testing.T) {
 	h, server, store := newBusHub(t)
 	manager, _ := managerDBOf(t, h)
@@ -123,7 +125,7 @@ func TestProjectReviewAuthenticatedAppIngress(t *testing.T) {
 		strings.Contains(string(next.Event), "private words") {
 		t.Fatalf("wrong event: %s %v", next.Event, err)
 	}
-	if err := manager.SettleProjectReview(ctx, next.ID, "fixture"); err != nil {
+	if err := manager.SettleProjectReview(ctx, next.ID, projectReviewNoChange); err != nil {
 		t.Fatal(err)
 	}
 	unbound, ok, err := manager.NextProjectReview(ctx, target)
@@ -131,14 +133,14 @@ func TestProjectReviewAuthenticatedAppIngress(t *testing.T) {
 		!strings.Contains(string(unbound.Event), `"project": ""`) {
 		t.Fatalf("unbound input inferred a project: %s %v %v", unbound.Event, ok, err)
 	}
-	if err := manager.SettleProjectReview(ctx, unbound.ID, "fixture"); err != nil {
+	if err := manager.SettleProjectReview(ctx, unbound.ID, projectReviewNoChange); err != nil {
 		t.Fatal(err)
 	}
 	offline, ok, err := manager.NextProjectReview(ctx, target)
 	if err != nil || !ok || !strings.Contains(string(offline.Event), "owner-while-manager-offline") {
 		t.Fatalf("missing offline input %s: %v %v", offline.Event, ok, err)
 	}
-	if err := manager.SettleProjectReview(ctx, offline.ID, "fixture"); err != nil {
+	if err := manager.SettleProjectReview(ctx, offline.ID, projectReviewNoChange); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := manager.NextProjectReview(ctx, target); err != nil || ok {
@@ -350,7 +352,7 @@ func TestProjectReviewMainAndFirstAppInput(t *testing.T) {
 			t.Fatalf("want one of %v: got %s (%v, %v)", want, event.Event, ok, err)
 		}
 		delete(want, captured.Reference)
-		if err := manager.SettleProjectReview(ctx, event.ID, "fixture"); err != nil {
+		if err := manager.SettleProjectReview(ctx, event.ID, projectReviewNoChange); err != nil {
 			t.Fatal(err)
 		}
 	}

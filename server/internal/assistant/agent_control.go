@@ -1046,7 +1046,15 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 		if phase != "" || a.PR != "" {
 			return "", errors.New("task runtime fields belong to the task report, outside a handoff receipt")
 		}
-		return s.reportTaskHandoff(ctx, machine, session, *a.Handoff, a.Kind, text, a.Evidence, now)
+		res, err := s.reportTaskHandoff(ctx, machine, session, *a.Handoff, a.Kind, text, a.Evidence, now)
+		if err == nil {
+			if a.Kind == upReportDone {
+				s.noteSpawnedDone(machine, session, now)
+			} else {
+				s.clearSpawnedDone(machine, session)
+			}
+		}
+		return res, err
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return "", err
@@ -1114,13 +1122,24 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	if notUrgent && a.Kind == upReportQuestion {
 		answer, queued := s.reportLater(ctx, t, machine, session, text, evidence, byMode, now)
 		if queued {
+			s.clearSpawnedDone(machine, session)
 			return answer, nil
 		}
 		prefix := answer // it goes as an urgent one: the answer says so first
 		res, err := s.reportNow(ctx, t, machine, session, a.Kind, text, evidence, step, steps, now)
+		if err == nil {
+			s.clearSpawnedDone(machine, session)
+		}
 		return prefix + res, err
 	}
 	res, err := s.reportNow(ctx, t, machine, session, a.Kind, text, evidence, step, steps, now)
+	if err == nil {
+		if a.Kind == upReportDone {
+			s.noteSpawnedDone(machine, session, now)
+		} else {
+			s.clearSpawnedDone(machine, session)
+		}
+	}
 	if notUrgent {
 		res = "urgent only applies to a question (kind question); this was sent as usual. " + res
 	}

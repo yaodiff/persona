@@ -76,6 +76,8 @@ func (r *runner) fallbackRun(ctx context.Context, scheduled modapi.BriefSchedule
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		if err := r.feed.AppendOnce(fctx, "feed_brief_fallback_"+id, scheduled.SessionID, modapi.FeedKindBrief, scheduled.RefID, body); err != nil {
 			r.logf("briefing fallback feed %s: %v", task.ID, err)
+		} else {
+			r.supervisionBriefed(fctx, run.Facts)
 		}
 		cancel()
 	}

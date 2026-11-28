@@ -48,8 +48,9 @@ type Client struct {
 	// logged. nil: silent. The auth token is never logged.
 	Log func(format string, args ...any)
 	// ReadOnly refuses, without sending, every method that could change Orca: only status.get, terminal.list,
-	// worktree.ps, terminal.read, terminal.agentStatus and terminal.inspectProcess go out (live checks against the
-	// user's own Orca).
+	// worktree.ps, terminal.read, terminal.agentStatus, terminal.inspectProcess, session.tabs.listAll, the bots.* reads
+	// (bots.roster, bots.chats, bots.items.list) and the structured sessions' reads (agentSession.history, .options,
+	// .currentRequests) go out (live checks against the user's own Orca).
 	ReadOnly bool
 
 	seq   atomic.Int64
@@ -301,7 +302,9 @@ func gaveUp(ctx context.Context) bool {
 
 // readOnlyMethods are the calls a ReadOnly client makes.
 var readOnlyMethods = map[string]bool{"status.get": true, "terminal.list": true, "worktree.ps": true, "terminal.read": true,
-	"terminal.agentStatus": true, "terminal.inspectProcess": true}
+	"terminal.agentStatus": true, "terminal.inspectProcess": true, "session.tabs.listAll": true, "bots.roster": true,
+	"bots.chats": true, "bots.items.list": true, "agentSession.history": true, "agentSession.options": true,
+	"agentSession.currentRequests": true}
 
 func (c *Client) call(ctx context.Context, timeout time.Duration, method string, params, out any, check bool) error {
 	if c.ReadOnly && !readOnlyMethods[method] {

@@ -171,9 +171,11 @@ type Manager struct {
 	uiPages       pageSessions
 	uiDelivery    pageDelivery
 	agents        *agents.Service
-	bots          botHub
-	channels      channelsHub
-	chans         struct{ in inbound }
+	// orcaBots are the Orca bots found on the computers (orcabots.go, #16891), each an Agents → Bots source.
+	orcaBots orcaBotDiscovery
+	bots     botHub
+	channels channelsHub
+	chans    struct{ in inbound }
 	// clarificationProofs are one-time owner-question attestations issued after
 	// a fresh channel action, never reusable approval capabilities.
 	clarificationProofs clarificationProofBook

@@ -187,6 +187,7 @@ POST /api/v1/machines/{mid}/panes/close_finished
 POST /api/v1/machines/{mid}/panes/git
 POST /api/v1/machines/{mid}/panes/split
 POST /api/v1/machines/{mid}/ports/{port}/open
+POST /api/v1/machines/{mid}/preview/grant
 POST /api/v1/machines/{mid}/preview/start
 POST /api/v1/machines/{mid}/processes/{pid}/kill
 POST /api/v1/machines/{mid}/services/action

@@ -213,6 +213,7 @@ func (n *Node) runtimeUsageWindows(h *runtimeConn, params json.RawMessage, now t
 		}
 		windows = append(windows, w)
 	}
+	a.ReadingSource = "" // A runtime event is independent of this node's rollout reader.
 	a.Windows = liveWindows(windows, now)
 	a.SampledAt = a.SampledAt.UTC()
 	enrichLegacyAgyUsage(&a, &accountKey, now)
@@ -321,7 +322,8 @@ func codexUsageAccount(home string, now time.Time) (proto.UsageAccount, bool) {
 		if len(wins) == 0 {
 			continue
 		}
-		return proto.UsageAccount{Provider: "codex", Name: codexAccountName(s.plan), Plan: s.plan, Windows: wins, SampledAt: s.at}, true
+		return proto.UsageAccount{Provider: "codex", Name: codexAccountName(s.plan), Plan: s.plan,
+			Windows: wins, SampledAt: s.at, ReadingSource: proto.UsageReadingRollout}, true
 	}
 	return proto.UsageAccount{}, false
 }

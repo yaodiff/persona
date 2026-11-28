@@ -2,6 +2,7 @@ package orcart
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 )
@@ -24,6 +25,43 @@ func (c *Client) InstalledAgents(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return res.Agents, nil
+}
+
+// ChatAgents is agentSession.agents: the providers Orca runs as chats on this computer (its provider ids; Orca 1.4.277,
+// method_not_found on an older one). It does not say whether Orca can open one now: a provider whose chat runs on a
+// runtime Orca installs itself (its "managedRuntime", the same before and after the install) opens only once that
+// runtime is there, which Orca tells streaming clients only (agentSession.subscribeAvailability,
+// managedRuntime.subscribe); the local socket refuses those (method_not_supported, measured on 1.4.277), so
+// ChatRuntimeMissing is how a caller learns it.
+func (c *Client) ChatAgents(ctx context.Context) ([]string, error) {
+	var res struct {
+		Agents []struct {
+			Agent string `json:"agent"`
+		} `json:"agents"`
+	}
+	if err := c.Call(ctx, CallTimeout, "agentSession.agents", map[string]any{}, &res); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(res.Agents))
+	for _, a := range res.Agents {
+		if a.Agent != "" {
+			out = append(out, a.Agent)
+		}
+	}
+	return out, nil
+}
+
+// ChatSurfaceUnavailable: err is agent.launch refusing to open the agent as a chat (agent_launch_surface_unavailable),
+// with nothing launched; Orca's words say why and that it can start in a terminal.
+func ChatSurfaceUnavailable(err error) bool { return IsCode(err, "agent_launch_surface_unavailable") }
+
+// ChatRuntimeMissing: err is agent.launch refusing a chat because the provider's chat runtime is not installed on this
+// computer (Orca 1.4.277's reason chat_runtime_not_installed, which its answer carries only in its words: "Claude can't
+// open as a chat here because its chat runtime isn't installed on this host (install it from a new chat tab in
+// Orca)…"). Every other reason (a project under WSL, a host that cannot run one there) is ChatSurfaceUnavailable alone.
+func ChatRuntimeMissing(err error) bool {
+	var e *Error
+	return ChatSurfaceUnavailable(err) && errors.As(err, &e) && strings.Contains(strings.ToLower(e.Message), "chat runtime")
 }
 
 // CreateSupport is agentSession.createSupport: Orca can create a chat of agent in worktree (a selector, "id:<id>").

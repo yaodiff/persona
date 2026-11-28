@@ -5,7 +5,9 @@
   "takeover_title": "Take over Codex",
   "takeover_confirm": "Take over",
   "takeover_running_confirm": "This will end the turn currently running in the terminal.",
+  "takeover_app_confirm": "This will take over the session from the Codex app on your computer.",
   "takeover_done": "Taken over",
   "reason_encrypted_context": "The encrypted conversation context cannot be resumed in this session. Continue in a new session instead.",
+  "reason_app_running": "The Codex app is running on the computer. Continue in a new session, or use the desktop app.",
   "reason_unavailable": "This conversation cannot be resumed in this session. Continue in a new session instead."
 }

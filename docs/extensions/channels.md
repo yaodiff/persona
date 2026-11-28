@@ -154,7 +154,8 @@ While the assistant process is restarting or disconnected from hub, **receivers 
    binding falls back to an active binding under the other key. Successful delivery refreshes both known bindings,
    and `/new` clears the conversation's known bindings even if the command carries a single key. A routed
    conversation that is gone or has timed out starts fresh. Up to 500 routing keys are kept per channel in the
-   `channels` setting.
+   `channels` setting. A message keeps its routing keys from admission through delivery, including if Labs changes
+   while it waits.
 6. **Assemble content**: prepend a `<persona-context>` explaining which channel this came from, that the answer goes back there, and the format to use (prompt `prompts/channel/message.md`; the Lark bot keeps its own `bot/message.md`);
    put quoted messages and merged-forward chat records in separate `<persona-context>` blocks; images become attachments; files follow `files_in`. A mention uses `prompts/channel/mention_message.md` instead: its chat, topic and gathered context are data blocks, and the turn is explicitly public. The prompt does not disclose private context from other chats, sessions, mail or health unless the owner's request explicitly asks for the specific information. The internal per-message `public` marker also suppresses the owner's live snapshot for that input only; it never changes the main conversation's origin or later private turns.
 7. **Send**: Persona chats use `session.send` (main chat follows the model selected in Settings), `client_msg_id = <channel>-<message id>`.

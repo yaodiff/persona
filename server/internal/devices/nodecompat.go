@@ -49,7 +49,7 @@ func nodeHas(info proto.NodeInfo, cap string) bool {
 		return slices.Contains(info.Capabilities, cap)
 	}
 	switch cap {
-	case nodeproto.AssistantConfigDir, nodeproto.AssistantSupervisionInstructions, nodeproto.AssistantServiceTier, nodeproto.SessionStartSpeed, nodeproto.SessionStartServiceTier, nodeproto.SessionSkills, nodeproto.TaskExecution, nodeproto.TaskInput, nodeproto.OwnerControls, nodeproto.NodeLanes, nodeproto.SessionEchoStatus, nodeproto.SourcePermissions, nodeproto.ResumeOutsideHealth, nodeproto.StartOpID, nodeproto.NodeUpdateDrain:
+	case nodeproto.AssistantConfigDir, nodeproto.AssistantSupervisionInstructions, nodeproto.AssistantServiceTier, nodeproto.SessionStartSpeed, nodeproto.SessionStartServiceTier, nodeproto.SessionStartModelAliases, nodeproto.SessionSkills, nodeproto.TaskExecution, nodeproto.TaskInput, nodeproto.OwnerControls, nodeproto.NodeLanes, nodeproto.SessionEchoStatus, nodeproto.SourcePermissions, nodeproto.ResumeOutsideHealth, nodeproto.StartOpID, nodeproto.NodeUpdateDrain:
 		return false // these contracts arrived after the handshake
 	case nodeproto.ModelConfiguration:
 		return info.Version == "" || info.ModelConfiguration // "": a test's or a dev node that said nothing

@@ -565,6 +565,7 @@ func TestSourceMainReplyHeadlessTurnEnds(t *testing.T) {
 // The main conversation runs headless: its transcript has no turn end. The answer goes out once
 // the node lists the conversation as done, not at the fallback three minutes after the close.
 func TestSourceReportHeadlessMainAnswer(t *testing.T) {
+	needsLarkLayer(t)
 	e := newAskEnv(t, nil)
 	minutes := 0
 	e.fullReply, e.reportDelay = true, &minutes

@@ -499,6 +499,41 @@ func TestExtensionSourceRowsAreNotMerged(t *testing.T) {
 	}
 }
 
+func TestExtensionSourceAccountIDsSurviveReordering(t *testing.T) {
+	now := time.Now()
+	var g usageGateways
+	makeRows := func(first, second string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"accounts":[
+			{"provider":"claude","id":%q,"name":%q,"notice":"unavailable"},
+			{"provider":"claude","id":%q,"name":%q,"notice":"unavailable"},
+			{"provider":"claude","name":"No identity","notice":"unavailable"}]}`, first, first, second, second))
+	}
+	raw := makeRows("one", "two")
+	g.fetchExtension = func(context.Context, string, string) (json.RawMessage, error) {
+		return raw, nil
+	}
+	g.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "s1", Name: "Pool", Type: "extension", Extension: "example-usage", Launcher: "pool"}}}, func() {}, func(string, ...any) {})
+	poll := func(at time.Time) []proto.UsageAccount {
+		g.pollDue(context.Background(), at)
+		rows := mergeUsageAccounts(g.accounts(at), at)
+		if len(rows) != 3 || rows[0].ID == rows[1].ID || rows[1].ID == rows[2].ID || rows[0].ID == rows[2].ID {
+			t.Fatalf("expected three distinct account IDs, got %+v", rows)
+		}
+		return rows
+	}
+	before := poll(now)
+	raw = makeRows("two", "one")
+	after := poll(now.Add(6 * time.Minute))
+	if after[0].Name != "two" || after[0].ID != before[1].ID || after[1].ID != before[0].ID || after[2].ID != before[2].ID {
+		t.Fatalf("reorder changed identity: before %+v, after %+v", before, after)
+	}
+	raw = makeRows("one", "one")
+	duplicate := poll(now.Add(12 * time.Minute))
+	if duplicate[0].ID == before[0].ID || duplicate[1].ID == before[0].ID {
+		t.Fatalf("ambiguous extension identity was used: %+v", duplicate)
+	}
+}
+
 // manager.json's extension source keeps its extension and launcher through a read and a rewrite, and a different one is
 // another source (its samples are not the old one's).
 func TestExtensionSourceConfigRoundTrip(t *testing.T) {
@@ -561,3 +596,39 @@ func TestUsageWindowsRouteCarriesAnExtensionsProtectionLines(t *testing.T) {
 }
 
 func f64(v float64) *float64 { return &v }
+
+func TestDirectUsageDiscoveryNeedsNoSavedSource(t *testing.T) {
+	now := time.Now()
+	source := NewDirectUsageSource("example-usage", "pool", "Direct pool", now)
+	installed := true
+	var g usageGateways
+	g.discoverDirect = func() []DirectUsageSource {
+		if installed {
+			return []DirectUsageSource{source}
+		}
+		return nil
+	}
+	calls := 0
+	g.fetchDirect = func(_ context.Context, got DirectUsageSource) (json.RawMessage, error) {
+		calls++
+		if got != source {
+			t.Errorf("source %+v, want %+v", got, source)
+		}
+		return json.RawMessage(`{"accounts":[{"id":"opaque","provider":"claude","name":"Direct","windows":[{"label":"5h","used_percent":20}]}]}`), nil
+	}
+	g.init(UsageConfig{}, func() {}, nil)
+	g.pollDue(context.Background(), now)
+	if rows := g.accounts(now); len(rows) != 1 || rows[0].Sources[0] != "Direct pool" || calls != 1 || len(g.config().Sources) != 0 {
+		t.Fatalf("rows=%+v calls=%d config=%+v", rows, calls, g.config())
+	}
+	source = NewDirectUsageSource(source.Extension(), source.Contribution(), source.Name(), now.Add(time.Second))
+	g.pollDue(context.Background(), source.UpdatedAt())
+	if calls != 2 {
+		t.Fatal("changed settings must invalidate and repoll the source")
+	}
+	installed = false
+	g.pollDue(context.Background(), now.Add(2*time.Second))
+	if len(g.accounts(now.Add(2*time.Second))) != 0 || calls != 2 {
+		t.Fatal("removed contribution retained usage or was polled")
+	}
+}

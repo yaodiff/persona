@@ -54,19 +54,36 @@ func (s *Service) seeTodo(ctx context.Context, id string, seen bool) (Todo, erro
 	return out, nil
 }
 
+// todoCompletion is one completion of a to-do as the writer that closed it saw it: the to-do, when it was closed and
+// when it was last reopened before that. Auto-seen settles that completion only, never a later one.
+type todoCompletion struct {
+	id                 string
+	doneAt, reopenedAt *time.Time
+}
+
+// completionOf is t's completion as t holds it.
+func completionOf(t Todo) todoCompletion {
+	return todoCompletion{id: t.ID, doneAt: t.DoneAt, reopenedAt: t.ReopenedAt}
+}
+
+// committedCompletion is the completion row, the committed close of to-do id, records.
+func committedCompletion(id string, row db.TodoRow) todoCompletion {
+	return todoCompletion{id: id, doneAt: row.DoneAt, reopenedAt: row.ReopenedAt}
+}
+
 // autoSeeTodo writes only the completion the caller observed. Keep the check, commit and cache update
 // in the same writer order as reopen and manual Undo.
-func (s *Service) autoSeeTodo(ctx context.Context, completed Todo) (bool, error) {
+func (s *Service) autoSeeTodo(ctx context.Context, completed todoCompletion) (bool, error) {
 	now := time.Now().UTC()
 	s.todos.writing.Lock()
-	cur, ok := s.todoNow(completed.ID)
+	cur, ok := s.todoNow(completed.id)
 	if !ok || !sameTodoCompletion(cur, completed) || cur.AutoSeenUndone {
 		s.todos.writing.Unlock()
 		return false, nil
 	}
 	var row *db.TodoRow
 	if st := s.todoDB(); st != nil {
-		r, updated, err := st.AutoSeeTodo(ctx, cur.ID, *completed.DoneAt, completed.ReopenedAt, now)
+		r, updated, err := st.AutoSeeTodo(ctx, cur.ID, *completed.doneAt, completed.reopenedAt, now)
 		if err != nil || !updated {
 			s.todos.writing.Unlock()
 			return false, err
@@ -85,9 +102,9 @@ func (s *Service) autoSeeTodo(ctx context.Context, completed Todo) (bool, error)
 	return applied, nil
 }
 
-func sameTodoCompletion(current, completed Todo) bool {
-	return current.DoneAt != nil && sameTime(current.DoneAt, completed.DoneAt) &&
-		sameTime(current.ReopenedAt, completed.ReopenedAt)
+func sameTodoCompletion(current Todo, completed todoCompletion) bool {
+	return current.DoneAt != nil && sameTime(current.DoneAt, completed.doneAt) &&
+		sameTime(current.ReopenedAt, completed.reopenedAt)
 }
 
 // autoSeeAcceptedTodo settles an accepted autonomous to-do when todos_v2 is enabled (#14639, #16098):
@@ -96,7 +113,7 @@ func sameTodoCompletion(current, completed Todo) bool {
 // Never applies when todos_v2 is off, mode is "off", mode is "subtasks" on a top-level to-do,
 // audience != autonomous, user_check is true, outcome != done,
 // or the owner called Undo in this completion round (DELETE /api/v1/todos/{id}/seen -> AutoSeenUndone == true).
-func (s *Service) autoSeeAcceptedTodo(ctx context.Context, completed Todo, outcome string, userCheck bool) {
+func (s *Service) autoSeeAcceptedTodo(ctx context.Context, completed todoCompletion, outcome string, userCheck bool) {
 	cfg := s.settings(ctx)
 	if userCheck || outcome != outcomeDone || !cfg.todosV2On() {
 		return
@@ -105,7 +122,7 @@ func (s *Service) autoSeeAcceptedTodo(ctx context.Context, completed Todo, outco
 	if mode == todosV2AutoSeenOff {
 		return
 	}
-	id := completed.ID
+	id := completed.id
 	cur, ok := s.todoNow(id)
 	if !ok || cur.Audience != db.AudienceAutonomous || cur.AutoSeenUndone || !sameTodoCompletion(cur, completed) {
 		return

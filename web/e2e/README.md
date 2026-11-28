@@ -653,3 +653,12 @@ meaning; it checks the saved-word underline is painted (Custom Highlight ranges,
 not split); and with `available: false` and with no `text_lookup` feature it checks the same click adds no card, no
 style and no highlight. Fails on any page error. Writes `results.json` and screenshots; a 180-second watchdog ends
 the run with a timeout verdict.
+
+## macOS desktop Frosted Glass backdrop-filter suppression (#17761)
+
+```sh
+(cd web && npm run build && npx vite preview --host 127.0.0.1 --port <web port> --strictPort &)
+node web/e2e/desktop-glass-backdrop.mjs http://127.0.0.1:<web port> [--chromium <executable>] [--shots <artifact-directory>]
+```
+
+Opens the built web client in headless Chromium with every hub HTTP/WebSocket request answered by synthetic data. Verifies in both light and dark modes under `data-surface-style="liquid-glass"` + `data-desktop-glass="1"` (including split-panel `<aside>`, Palette, Modal, and ImageViewer) that every visible `[class*="backdrop-"]` node resolves `backdropFilter === "none"`, while Web-only Frosted Glass (`data-desktop-glass` unset) retains shell and utility blur and Default appearance remains unblurred.

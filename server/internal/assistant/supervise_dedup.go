@@ -468,9 +468,7 @@ func (s *Service) restoreDigest(signals []superviseSignal, at, prev time.Time) {
 		b.last = prev
 	}
 	for _, g := range signals {
-		if b.sent[g.id()] == g.Key {
-			delete(b.sent, g.id())
-		}
+		b.forgetToldLocked(g) // put back untold: neither the key last told nor one a digest still holds (#17838)
 		if cur, newer := b.pending[g.id()]; !newer {
 			b.pending[g.id()] = g
 		} else if g.Kind == sigInbox && cur.Key != g.Key {

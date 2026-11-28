@@ -33,7 +33,7 @@ MID = "macbook"
 SID = "a1f3c2d4-0000-4000-8000-000000000001"
 UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
       "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")
-KEYS = "在预览里输入"  # the panel's keys field (preview.keyboard_label)
+KEYS = "在预览中输入"  # the panel's keys field (preview.keyboard_label)
 
 # iOS: a focused text field raises the keyboard, which shrinks only the visual viewport. A stand-in the page follows
 # (as web_mobile_input_e2e.py's), up while a text field has focus; __raised counts how often it came up.
@@ -102,9 +102,14 @@ def run(browser, base, hub, token, size, theme, shots, full):
                 item.wait_for(timeout=1000)
             except PlaywrightTimeout:
                 page.keyboard.press("Escape")
+                page.wait_for_timeout(150)
                 continue
             item.click()
-            break
+            try:
+                panel.wait_for(timeout=3000)
+                break
+            except PlaywrightTimeout:
+                continue
         else:
             fail(f"{tag}: the ⋯ menu has no Preview")
         expect(panel).to_be_visible()
@@ -128,35 +133,94 @@ def run(browser, base, hub, token, size, theme, shots, full):
     addr.press("Enter")
     expect(addr).to_have_value("/settings")
     page.wait_for_timeout(1500)
-    if not any(m.get("t") == "nav" and m.get("url") == "/settings" for m in mock(hub, token)["log"]):
-        fail(f"{tag}: the address went to the node as {mock(hub, token)['log'][-3:]}")
-    ok(f"{tag}: the address bar navigates")
+    snap = mock(hub, token)
+    if not any(m.get("t") == "nav" and m.get("url") == "/settings" for m in snap["log"]):
+        fail(f"{tag}: the address went to the node as {snap['log'][-3:]}")
+    if not any(m.get("t") == "features" and m.get("select") and m.get("png") for m in snap["log"]):
+        fail(f"{tag}: ready did not advertise features {{select: true, png: true}}")
+    ok(f"{tag}: the address bar navigates and features advertised")
     shot("settings")
+
+    # native <select> popup: real mouse pick, real keyboard pick (skipping disabled), and Esc dismiss
+    cbox = canvas.bounding_box()
+    last_w = next((m["w"] for m in reversed(snap["log"]) if m.get("t") == "size"), None) or next(m["open"]["w"] for m in reversed(snap["log"]) if "open" in m)
+    last_h = next((m["h"] for m in reversed(snap["log"]) if m.get("t") == "size"), None) or next(m["open"]["h"] for m in reversed(snap["log"]) if "open" in m)
+    sel_x = max(0.0, (last_w - 760.0) / 2.0) + 22.0 + 80.0
+    sel_y = 154.0 + 19.0
+    click_x = cbox["x"] + sel_x * (cbox["width"] / last_w)
+    click_y = cbox["y"] + sel_y * (cbox["height"] / last_h)
+    page.mouse.click(click_x, click_y)
+    listbox = page.locator("[data-preview-select][role='listbox']")
+    expect(listbox).to_be_visible()
+    expect(listbox.locator("[data-preview-select-group]")).to_have_text(["Workspace", "Automation"])
+    expect(listbox.get_by_role("option", name="Owner (managed)", exact=True)).to_have_attribute("aria-disabled", "true")
+    expect(listbox.get_by_role("option", name="Editor", exact=True)).to_have_attribute("aria-selected", "true")
+    shot("select-open")
+
+    acks_before = mock(hub, token)["acks"]
+    listbox.get_by_role("option", name="Viewer", exact=True).click()
+    expect(listbox).to_have_count(0)
+    page.wait_for_timeout(1200)
+    after_mouse = mock(hub, token)
+    if after_mouse["select"]["value"] != 1 or not any(m.get("t") == "select_choose" and m.get("index") == 1 for m in after_mouse["log"]):
+        fail(f"{tag}: mouse select did not choose Viewer: {after_mouse['select']}")
+    if after_mouse["acks"] <= acks_before:
+        fail(f"{tag}: updated PNG frame was not acknowledged after mouse select")
+    ok(f"{tag}: native <select> mouse pick updates value to Viewer and acks frame")
+
+    # Keyboard reopen (Space while select keeps focus), ArrowDown skips disabled Owner -> Reviewer, Enter chooses
+    page.keyboard.press("Space")
+    expect(listbox).to_be_visible()
+    expect(listbox.get_by_role("option", name="Viewer", exact=True)).to_have_attribute("aria-selected", "true")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Enter")
+    expect(listbox).to_have_count(0)
+    page.wait_for_timeout(1200)
+    after_key = mock(hub, token)
+    if after_key["select"]["value"] != 3 or not any(m.get("t") == "select_choose" and m.get("index") == 3 for m in after_key["log"]):
+        fail(f"{tag}: keyboard select did not skip disabled and choose Reviewer: {after_key['select']}")
+    ok(f"{tag}: native <select> keyboard pick skips disabled and updates value to Reviewer")
+
+    # Esc closes popup, sends select_close, preserves value and keeps panel open
+    n_esc = len(after_key["log"])
+    page.keyboard.press("Space")
+    expect(listbox).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(listbox).to_have_count(0)
+    expect(panel).to_be_visible()
+    after_esc = mock(hub, token)
+    if not any(m.get("t") == "select_close" for m in after_esc["log"][n_esc:]) or after_esc["select"]["value"] != 3:
+        fail(f"{tag}: Esc did not dismiss select cleanly: {after_esc['log'][n_esc:]}")
+    ok(f"{tag}: native <select> Esc dismisses cleanly without closing panel")
 
     if not narrow or full:
         # picking an element and commenting on it
-        panel.get_by_role("button", name="选一个元素来评论").click()
+        panel.get_by_role("button", name="选择页面元素进行评论").click()
         expect(page.locator("[data-preview-picking]")).to_be_visible()
         page.wait_for_timeout(1500)
         shot("picking")
         box = canvas.bounding_box()
         page.mouse.click(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.5)
-        line = page.locator("[data-line-box]")
+        line = page.get_by_role("dialog", name="你的评论")
         expect(line).to_be_visible()
         expect(line).to_contain_text("button.save")
         line.locator("textarea").fill("把按钮改成主色，和别处一致")
         shot("comment-box")
-        line.get_by_role("button", name="添加").click()
-        card = page.locator("[data-comment-card]").first
-        expect(card).to_contain_text("button.save")
-        expect(card).to_contain_text("/settings")
+        line.get_by_role("button", name="保存评论").click()
+        chip = page.get_by_role("button", name="1 条评论")
+        expect(chip).to_be_visible()
+        chip.click()
+        popover = page.locator("[data-comment-popover]")
+        expect(popover).to_contain_text("button.save")
+        expect(popover).to_contain_text("/settings")
         ok(f"{tag}: a picked element becomes a comment above the message box")
         shot("commented")
+        page.keyboard.press("Escape")
 
         # a screenshot into the message box
         panel.get_by_role("button", name="截图").click()
         page.get_by_role("menuitem", name="可见区域").click()
-        expect(page.get_by_text("截图已加到消息里")).to_be_visible()
+        expect(page.get_by_text("截图已添加到消息中")).to_be_visible()
         ok(f"{tag}: a screenshot lands in the message box")
         shot("screenshot")
 
@@ -209,13 +273,13 @@ def run(browser, base, hub, token, size, theme, shots, full):
         fail(f"{tag}: start asked {start}")
     ok(f"{tag}: Start runs the confirmed entry in the session's workspace, and the page shows once it answers")
 
-    for mode, text, name in (("none", "还没有开发服务器", "empty"), ("old", "更新这台电脑后才能预览", "old")):
+    for mode, text, name in (("none", "暂无开发服务器", "empty"), ("old", "更新这台电脑后才能预览", "old")):
         open_panel(mode)
         expect(panel).to_contain_text(text)
         ok(f"{tag}: {name}")
         shot(name)
     open_panel("nobrowser")
-    expect(panel).to_contain_text("MacBook 上没有能用来预览的浏览器")
+    expect(panel).to_contain_text("MacBook 上未找到可用于预览的浏览器")
     ok(f"{tag}: no browser on the computer")
     shot("nobrowser")
     mock(hub, token, "?mode=1")
@@ -303,7 +367,7 @@ def phone_touch(browser, base, hub, token, shots, w=390, h=844, theme="light"):
     ok(f"{tag}: a finger's scroll scrolls the page; the keyboard stays down and the page keeps its height ({h0})")
     shot("scrolled")
 
-    pick = panel.get_by_role("button", name="选一个元素来评论")
+    pick = panel.get_by_role("button", name="选择页面元素进行评论")
     pick.tap()
     banner = page.locator("[data-preview-picking]")
     expect(banner).to_be_visible()
@@ -359,7 +423,7 @@ def main():
         os.makedirs(a.shots, exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=a.executable) if a.executable else p.chromium.launch(channel=a.channel)
-        for size, theme in (("wide", "light"), ("wide", "dark"), ("narrow", "light")):
+        for size, theme in (("wide", "light"), ("wide", "dark"), ("narrow", "light"), ("narrow", "dark")):
             run(browser, a.base, a.hub, a.token, size, theme, a.shots, full=size == "wide")
         phone_touch(browser, a.base, a.hub, a.token, a.shots)
         browser.close()

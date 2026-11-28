@@ -281,6 +281,7 @@ struct RootView: View {
         .htmlCardSample()
         .voiceOrbSample()
         .closeoutSample()
+        .botmuxSample()
         .modifier(ModuleDebugSamples())
         #endif
         .alert("Claude Wants to Act on Your iPhone", isPresented: Binding(

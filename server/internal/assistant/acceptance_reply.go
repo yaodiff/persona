@@ -36,7 +36,13 @@ func (s *Service) conclusionQuestion(ctx context.Context, ev *botcard.MessageEve
 	if !ask.Conclusion || text == "" {
 		return false
 	}
-	if !strings.ContainsAny(text, "?？") { // i18n-ignore: question marks in the owner's reply, never shown
+	todo, ok := s.todoNow(id)
+	literal := unquoteOption(text)
+	question := strings.ContainsAny(text, "?？") // i18n-ignore: question marks in the owner's reply, never shown
+	if ask.manualTerminalAnswer(text, todo.Agents) && (!question || literal == ask.Recommend || slices.ContainsFunc(ask.Options, func(o DecisionOption) bool { return o.Label == literal })) {
+		return false // acceptReply refuses the option; a question must repeat the displayed label verbatim
+	}
+	if !question {
 		if passWords.MatchString(text) && (!decideAsk(&ask) || ask.Recommend != "") {
 			return false
 		}
@@ -47,7 +53,6 @@ func (s *Service) conclusionQuestion(ctx context.Context, ev *botcard.MessageEve
 			}
 		}
 	}
-	todo, ok := s.todoNow(id)
 	if !ok {
 		return false
 	}
@@ -158,9 +163,16 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.accept_gone"))
 		return true
 	}
-	if a, _ := s.acceptAskLocked(id); a == nil || !a.AskedAt.Equal(ask.AskedAt) || acceptAskStale(a, t) {
+	current, present := s.askCopy(id)
+	if !present || !current.AskedAt.Equal(ask.AskedAt) || acceptAskStale(&current, t) ||
+		decideAsk(&current) && (!current.AcceptedAt.IsZero() || acceptAskEnded(&current, t) || !current.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision)) {
 		s.reviewDismissals.actions.release(id)
 		s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
+		return true
+	}
+	if current.manualTerminalAnswer(text, t.Agents) {
+		s.reviewDismissals.actions.release(id)
+		s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.manual_terminal_resume"))
 		return true
 	}
 	// Feedback starts its work round before delivery, which may wait for an offline Agent to resume.
@@ -335,6 +347,10 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		b.mu.Unlock()
 		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: recommend}, byDefault)
 	}
+	if a.manualTerminalRecommendation(t.Agents) {
+		b.mu.Unlock()
+		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
+	}
 	if ownerCheck && !resumeOwnerPass {
 		if work := s.unconfirmedTaskClose(ctx, t); work != nil {
 			b.mu.Unlock()
@@ -353,10 +369,6 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			b.mu.Unlock()
 			return acceptResult{}, err
 		}
-	}
-	if decideAsk(a) && terminalResumeLabel(a.Recommend) {
-		b.mu.Unlock()
-		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
 	}
 	previousDueAt, previousAcceptedAt := a.DueAt, a.AcceptedAt
 	if a.AcceptedAt.IsZero() {

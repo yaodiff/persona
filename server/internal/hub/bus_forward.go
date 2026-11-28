@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/memtrim"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -133,6 +134,17 @@ func httpParams(req assistantwire.HTTPRequest) any {
 	}
 }
 
+func relayHTTPTimeout(pattern string) time.Duration {
+	switch pattern {
+	case assistantwire.RouteBackendWorkspacePrepare:
+		return assistantwire.BackendWorkspacePrepareTimeout(repositorywire.MaxTaskRepositories)
+	case assistantwire.RouteRepoMirrorSync:
+		return repositorywire.MirrorEnsureTimeout + time.Minute
+	default:
+		return 5 * time.Minute
+	}
+}
+
 func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send, admin bool) {
 	body, err := readRelayed(w, r)
 	if err != nil {
@@ -173,7 +185,7 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 	ctx := r.Context()
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		ctx, cancel = context.WithTimeout(ctx, relayHTTPTimeout(r.Pattern))
 		defer cancel()
 	}
 	// What may change the manager's inbox: a merged list fetched while it is under way is not kept, and one kept from

@@ -26,6 +26,7 @@ import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner, Switch, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
+import { BoundMentions, ReplyRichText } from "./ReplyBody";
 import { Icon, type IconName } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { StatusMark } from "../../ui/StatusMark";
@@ -524,7 +525,8 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
     return (
       <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-delivery={attempt.status}>
         <p className={cx("text-submeta font-medium", label === "failed" ? "text-red" : "text-ink-2")}>{t(`assistant-handoffcard.${label}`)}</p>
-        <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{attempt.text}</p>
+        <ReplyRichText text={attempt.text} className="mt-1.5 text-meta leading-relaxed text-ink" dataSuggestionText />
+        <BoundMentions text={attempt.text} mentions={attempt.mentions ?? s.mentions} sent={attempt.status === "sent"} className="mt-1.5" />
         {Number.isFinite(Date.parse(attempt.at)) && <time dateTime={attempt.at} className="mt-1 block text-submeta text-ink-3">{chainTime(attempt.at)}</time>}
         {label !== "sent" && <p role="status" className="mt-2 text-meta text-ink-2">
           {t(`assistant-handoffcard.${label === "failed" ? retryable ? "retry_hint" : "failed_hint" : label + "_hint"}`)}
@@ -553,6 +555,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
             className="w-full resize-y rounded-control bg-field px-2.5 py-2 text-meta leading-relaxed text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]"
             data-suggestion-editor
           />
+          <BoundMentions text={text} mentions={s.mentions} />
           {!replyReadOnly && (
             <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
               <Icon name="chat" size={13} className="shrink-0 text-ink-3" />
@@ -591,7 +594,8 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
         </div>
       ) : (
         <>
-          <p className="mt-1.5 text-meta leading-relaxed wrap-anywhere whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
+          <ReplyRichText text={s.text} className="mt-1.5 text-meta leading-relaxed text-ink" dataSuggestionText />
+          <BoundMentions text={s.text} mentions={s.mentions} className="mt-1.5" />
           {(s.changes ?? []).map((c) => (
             <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-submeta text-ink-2">
               <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />

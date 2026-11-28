@@ -96,6 +96,9 @@ const (
 	SessionStartSpeed = "session_start_speed"
 	// SessionStartServiceTier lets session.start apply a native Codex service_tier before the first turn.
 	SessionStartServiceTier = "session_start_service_tier"
+	// SessionStartModelAliases: session.start and session.start.work take model_aliases for a new Claude Code
+	// terminal session. A node without it would drop the requested aliases and run the launcher's models.
+	SessionStartModelAliases = "session_start_model_aliases"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -228,6 +231,10 @@ const (
 	// StartOpID: session.start and session.start.work record op_id on the started session (persisted via state.put)
 	// and answer start.status for reconnect reconciliation of held Agent starts (#10674).
 	StartOpID = "start_op_id_v1"
+	// OrcaBots: the node answers agentbot.roster and agentbot.items, and agentbot.describe / history / send take a
+	// bot_id they resolve to the bot's open Home Chat (docs/integrations/orca.md "Bots found on a computer",
+	// #16891). Without it the manager finds no bots there; endpoints registered by hand work as before.
+	OrcaBots = "orca_bots_v1"
 )
 
 // ResumeWindowSeconds is how long the manager tries to resume a dropped connection that can resume, from when it
@@ -344,7 +351,7 @@ type TaskWorkspaceCapabilities struct {
 const MarkdownCloseout = "closeout.markdown.v1"
 
 // Announced is what a node built from this code announces.
-var Announced = []string{MarkdownCloseout, TaskWorkspace, ScratchWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, SessionStartServiceTier, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, SecretRunEnv, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, NodeUpdateDrain, PaneNewSpace, MachineDiagnose, MachineStorageUsage, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, HerdrSessionsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs, StartOpID}
+var Announced = []string{MarkdownCloseout, TaskWorkspace, ScratchWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, SessionStartServiceTier, SessionStartModelAliases, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, SecretRunEnv, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, NodeUpdateDrain, PaneNewSpace, MachineDiagnose, MachineStorageUsage, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, HerdrSessionsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs, StartOpID, OrcaBots}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

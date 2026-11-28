@@ -15,7 +15,7 @@ import { until } from '../testing/fake-node.js'
 
 // The node's end of a daemon connection: a WebSocket client wrapped as the socket wire.js's Peer reads, so the test
 // answers hello and calls the runtime like personad does.
-function dialNode(url, { token, protocols = [SUBPROTOCOL] } = {}) {
+function dialNode(url, { token, protocols = [SUBPROTOCOL], features = ['prefer_running'] } = {}) {
   const ws = new WebSocket(url, { protocols, headers: token ? { authorization: `Bearer ${token}` } : {} })
   const handlers = { data: [], close: [], error: [] }
   const socket = {
@@ -34,7 +34,7 @@ function dialNode(url, { token, protocols = [SUBPROTOCOL] } = {}) {
     onRequest: async (method, params) => {
       if (method === 'runtime.hello') {
         n.hello = params
-        return { protocol: 1, node_version: 'test', hub: true, features: ['prefer_running'] }
+        return { protocol: 1, node_version: 'test', hub: true, features }
       }
       throw new Error(`unexpected ${method}`)
     },
@@ -129,18 +129,31 @@ test('the echo daemon CLI honors only the Persona token environment, including a
 })
 
 test('a listening runtime serves its endpoint: the node dials in with the token and the protocol runs as on the socket', async (t) => {
-  const { driver, sent } = toy()
+  const { driver, sent } = toy({
+    input: () => assert.fail('a daemon cannot type command input'),
+    start(params) {
+      assert.deepEqual(params, { session_id: 's1' })
+      return { session: { ...params, waiting_inputs: [{ task: 'private-task' }], input_binding: 'driver-forgery' } }
+    },
+    listSessions: () => [{ session_id: 's1', input_binding: 'driver-forgery', waiting_inputs: [{ task: 'private-task' }] }],
+  })
   const rt = createRuntime(driver, { runtime: 'toy', name: 'Toy', listen: { port: 0, token: 'tok-1' }, refreshMs: 0 })
   t.after(() => rt.stop())
   const addr = await rt.start()
   assert.equal(addr.address, '127.0.0.1', 'loopback by default')
-  const n = dialNode(`ws://127.0.0.1:${addr.port}/persona/runtime`, { token: 'tok-1' })
+  const n = dialNode(`ws://127.0.0.1:${addr.port}/persona/runtime`, { token: 'tok-1', features: ['input'] })
   t.after(() => n.ws.close())
   await until('hello', () => n.hello, 3000)
   assert.equal(n.hello.runtime, 'toy')
-  assert.deepEqual(n.hello.caps, { start: false, send: true, interrupt: false, rename: false, close: false, assistant: false,
+  assert.deepEqual(n.hello.caps, { start: true, send: true, interrupt: false, rename: false, close: false, assistant: false,
     queue_edit: false, queue_send_now: false })
+  assert.deepEqual(await n.peer.call('session.start', { session_id: 's1', input_binding: 'unnegotiated' }),
+    { session: { session_id: 's1' } })
+  await rt.pushNow()
   await until('the list', () => n.last('runtime.sessions'), 3000)
+  assert.deepEqual(n.last('runtime.sessions').sessions, [{ session_id: 's1' }])
+  await assert.rejects(n.peer.call('session.input', { session_id: 's1', task: 'task', wait_id: 'wait', line: 'example' }),
+    error => error.code === 'command_input_unreachable')
   await n.peer.call('session.send', { session_id: 's1', text: 'over the websocket', client_msg_id: 'm-1' })
   assert.equal(sent[0].text, 'over the websocket')
   // A big message both ways (beyond a 16-bit frame length).

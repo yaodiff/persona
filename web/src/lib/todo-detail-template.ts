@@ -5,6 +5,7 @@
 
 import { foldedState } from "./child-sessions";
 import { safeWebURL } from "./format";
+import { explicitTodoItemType } from "./todo-list-filter";
 import { makeSessionLookup, responsibleOf, type SessionLookup, type Todo } from "./todos";
 import type { AgentState, Session } from "./types";
 
@@ -83,6 +84,8 @@ export function classifyTodoDetailTemplate(
   childCount = 0,
   options?: { repositoryCount?: number },
 ): TodoDetailTemplate {
+  const explicit = explicitTodoItemType(todo.item_type);
+  if (explicit) return explicit === "task" ? "work_goal" : "personal";
   if ((todo.agents?.length ?? 0) > 0) return "work_goal";
   if (todo.supervision) return "work_goal";
   if ((todo.repositories?.length ?? 0) > 0 || (options?.repositoryCount ?? 0) > 0) return "work_goal";
@@ -94,10 +97,7 @@ export function classifyTodoDetailTemplate(
   ) {
     return "work_goal";
   }
-  if (childCount > 0) return "work_goal";
-  if (hasExecutionSignals(todo)) return "work_goal";
-  if ((todo.direction_id?.trim() || todo.part_of?.trim()) && hasExecutionSignals(todo)) return "work_goal";
-  return "personal";
+  return childCount > 0 || hasExecutionSignals(todo) ? "work_goal" : "personal";
 }
 
 function agentPriorityRank(state: AgentState, session: Session): number {

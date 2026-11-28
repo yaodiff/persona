@@ -1087,10 +1087,12 @@ func (s *Service) assignPendingPlacementWith(
 	}
 	candidate.Placement = pl
 
-	var blockerRefs []string
-	if s.settings(ctx).todosV2On() {
-		blockerRefs = s.activeTodoBlockerRefs(ctx, pt.TodoID)
+	todo, _ := s.todoNow(pt.TodoID)
+	readiness, readinessErr := s.taskTodoReadiness(ctx, todo, pt)
+	if readinessErr != nil {
+		s.logf("task %s: placement queue: read prerequisites: %v", pt.TodoID, readinessErr)
 	}
+	blocked := readinessErr != nil || !readiness.ready()
 
 	wasRetry := false
 	casResult := "not_pending"
@@ -1130,8 +1132,8 @@ func (s *Service) assignPendingPlacementWith(
 		live.Permission = candidate.Permission
 		live.Why = candidate.Why
 		live.Placement = pl
-		if len(blockerRefs) > 0 {
-			q := s.blockerWaitQueue(blockerRefs)
+		if blocked {
+			q := s.blockerWaitQueue(ctx, readiness.refs())
 			q.Retry = wasRetry
 			live.Queue = q
 			live.Placement = queuedPlacement(*live, q)
@@ -1159,8 +1161,8 @@ func (s *Service) assignPendingPlacementWith(
 	}
 
 	s.savePlacement(ctx, pl)
-	if len(blockerRefs) > 0 {
-		s.logf("task %s: placed on %s but deferred until active todo blockers clear (%d active)", pt.TodoID, m.ID, len(blockerRefs))
+	if blocked {
+		s.logf("task %s: placed on %s and waiting for prerequisites", pt.TodoID, m.ID)
 		assignedCwd := candidate.Cwd
 		if assignedCwd == "" && candidate.WorkspaceResolved != nil {
 			assignedCwd = candidate.WorkspaceResolved.Path

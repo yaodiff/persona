@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -87,6 +88,33 @@ func TestCodexDaemonPaneJoinsAndSendsThroughTheProtocol(t *testing.T) {
 	}
 	if starts := f.sent("turn/start"); len(starts) != 1 || inputText(starts[0]) != "hello from the phone" {
 		t.Fatalf("turn/start %v", starts)
+	}
+}
+
+func TestCodexDaemonJoinsActiveThreadsOutsidePanes(t *testing.T) {
+	n := remoteTestNode(t)
+	withFakeHub(t, n)
+	_, first := connectRemoteFixture(t, n, t.TempDir(), "first", remoteRaw)
+	f, second := connectRemoteFixture(t, n, t.TempDir(), "second", remoteRaw, remoteOther)
+	first.message(codexMessage{Method: "thread/status/changed", Params: json.RawMessage(`{"threadId":"` + remoteRaw + `","status":{"type":"active"}}`)})
+	external := threadOf(first, remoteRaw).publicID
+	second.mu.Lock()
+	child := second.threads[remoteRaw]
+	child.status, child.parent = proto.StatusBlocked, remoteOther
+	second.threads[remoteRaw] = child
+	second.mu.Unlock()
+	f.mu.Lock()
+	f.resumeRequest = true
+	f.mu.Unlock()
+	n.joinCodexPanes(context.Background())
+	waitFor(t, "external thread subscribed and child approval replayed", func() bool {
+		return n.codexJoined(external) && f.replyCount() == 1
+	})
+	if n.codexJoined(threadOf(second, remoteOther).publicID) || len(n.codexInventory().Joined) != 0 {
+		t.Fatal("automatic join subscribed to the idle thread or persisted a join")
+	}
+	if err := n.attachCodex(context.Background(), child.publicID); err == nil {
+		t.Fatal("explicit join of a subagent succeeded")
 	}
 }
 
@@ -186,7 +214,7 @@ func TestCodexDaemonAsyncAnswer(t *testing.T) {
 }
 
 // 0.163's control sockets are aliases: only the target Codex itself computes is followed.
-func TestCodexSocketAlias(t *testing.T) {
+func TestCodexSocketPathAlias(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o700); err != nil { // as Codex makes app-server-control/ (a umask may leave it group-writable)
 		t.Fatal(err)
@@ -199,6 +227,18 @@ func TestCodexSocketAlias(t *testing.T) {
 	if err := os.Symlink(want, alias); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := codexSocketPath(alias); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dangling alias: %v", err)
+	}
+	if err := os.Mkdir(filepath.Dir(want), 0o700); err == nil {
+		t.Cleanup(func() { _ = os.Remove(filepath.Dir(want)) })
+	} else if !errors.Is(err, os.ErrExist) {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(want, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(want) })
 	if got, err := codexSocketPath(alias); err != nil || got != want {
 		t.Errorf("alias: %q %v, want %q", got, err, want)
 	}

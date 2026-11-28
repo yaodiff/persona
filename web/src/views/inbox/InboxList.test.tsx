@@ -10,6 +10,7 @@ vi.hoisted(() => {
 });
 
 let fail = true;
+let inboxItems: unknown[] = [];
 // the hub's Done day counts (#2967): null for none, as a read that fails
 let doneDays: { day: string; count: number }[] | null = null;
 // the hub's mail accounts: one by default (a source is connected, an empty inbox is "All caught up"); [] for none
@@ -21,7 +22,7 @@ vi.mock("../../lib/api", async (orig) => ({
     calls.push(path);
     if (path === "/mail/accounts") return Promise.resolve({ accounts: mailAccounts });
     if (path.startsWith("/inbox/done/days") && doneDays) return Promise.resolve({ days: doneDays });
-    return path.startsWith("/inbox") && fail ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve({});
+    return path.startsWith("/inbox") && fail ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve({ items: inboxItems });
   },
 }));
 
@@ -48,6 +49,7 @@ const flush = async () => {
 beforeEach(() => {
   resetInboxForTests();
   resetMailForTests();
+  inboxItems = [];
   mailAccounts = [{ id: "a1", email: "me@example.com" }];
   doneDays = null;
   host = document.createElement("div");
@@ -170,5 +172,19 @@ describe("收件箱：首屏一次画好", () => {
       fakeStore.waiting = false;
       fakeStore.storeLoaded = true;
     }
+  });
+
+  it("renders sticky group headers with bg-page/95 rather than translucent bg-canvas/95 under Frosted Glass", async () => {
+    fail = false;
+    inboxItems = [
+      { id: "l1", source: "lark", kind: "dm", account: "feishu", account_name: "Lark", title: "Ping", preview: "", count: 1, updated_at: new Date().toISOString(), tier: "action", version: "v1" },
+      { id: "m1", source: "mail", kind: "mail", account: "a1", account_name: "me@example.com", title: "Weekly status", preview: "", count: 1, updated_at: new Date().toISOString(), tier: "action", version: "v2" },
+    ];
+    act(() => root.render(<InboxList />));
+    await flush();
+    const stickyHead = host.querySelector<HTMLElement>("[data-group] > .sticky");
+    expect(stickyHead).not.toBeNull();
+    expect(stickyHead!.className).toContain("bg-page/95");
+    expect(stickyHead!.className).not.toContain("bg-canvas/95");
   });
 });

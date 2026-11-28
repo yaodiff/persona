@@ -1,0 +1,5 @@
+{
+  "title": "新しい Agent を Orca チャットで開始",
+  "detail": "新規 Agent の Claude Code と Codex を、ターミナルではなく Orca のチャット画面で開きます。選んだランチャーはターミナルで開き、アシスタントの Agent も常にターミナルを使います。",
+  "save_failed": "保存できませんでした：{error}"
+}

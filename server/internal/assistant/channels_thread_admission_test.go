@@ -162,7 +162,7 @@ func receiveAdmissionMessage(t *testing.T, s *Service, id, text, thread string) 
 
 func waitAdmissionDrained(t *testing.T, s *Service) {
 	t.Helper()
-	waitUntil(t, func() bool { s.chans.mu.Lock(); defer s.chans.mu.Unlock(); return len(s.chans.receiving) == 0 })
+	waitUntil(t, func() bool { s.chans.mu.Lock(); defer s.chans.mu.Unlock(); return len(s.chans.bindings.pending) == 0 })
 }
 
 func TestChannelOrdinaryReceiptsReserveTheSameOrderedRoute(t *testing.T) {
@@ -173,11 +173,11 @@ func TestChannelOrdinaryReceiptsReserveTheSameOrderedRoute(t *testing.T) {
 		t.Fatalf("first ordinary receipt: %v %v", first, err)
 	}
 	second, err := s.admitChannelMessage(ctx, "examplechat", channel.Message{ID: "second", Thread: " "})
-	if err != nil || second == nil || first.done == nil || second.slots[0].prev != first.done {
+	if err != nil || second == nil || first.reservation.done == nil || second.reservation.slots[0].prev != first.reservation.done {
 		t.Fatalf("the second ordinary receipt did not follow the first: %v %v", second, err)
 	}
 	topic, err := s.admitChannelMessage(ctx, "examplechat", channel.Message{ID: "topic", Thread: "independent"})
-	if err != nil || topic == nil || topic.slots[0].prev != nil {
+	if err != nil || topic == nil || topic.reservation.slots[0].prev != nil {
 		t.Fatalf("an independent topic waited on the ordinary route: %v %v", topic, err)
 	}
 }
@@ -352,7 +352,7 @@ func (st *admissionClaimStore) PutSetting(ctx context.Context, key string, value
 	if state, ok := value.(channelsState); ok && key == channelsStateKey && slices.Contains(state.Seen["examplechat"], "first") {
 		st.once.Do(func() {
 			// saveChannelStateLocked holds the book lock: the durable claim must already have its queue position.
-			st.observed <- len(st.s.chans.receiving) == 1
+			st.observed <- len(st.s.chans.bindings.pending) == 1
 			<-st.release
 		})
 	}
@@ -416,7 +416,7 @@ func TestChannelReceiveFailedClaimCanBeRedelivered(t *testing.T) {
 		t.Fatal("failed durable claim was acknowledged")
 	}
 	s.chans.mu.Lock()
-	reserved := len(s.chans.receiving)
+	reserved := len(s.chans.bindings.pending)
 	seen := slices.Contains(s.chans.st.Seen["examplechat"], "retryable")
 	s.chans.mu.Unlock()
 	if reserved != 0 || seen || f.sent() != 0 {

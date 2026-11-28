@@ -329,16 +329,27 @@ func TestReportedPRRequiresTaskOwnedCloseout(t *testing.T) {
 }
 
 func TestExplicitUnmergedDeliveryStillBlocksWithRelatedReferences(t *testing.T) {
-	for _, recorded := range []string{"", "4", "9"} {
-		t.Run("recorded_"+recorded, func(t *testing.T) {
+	for _, tc := range []struct {
+		recorded string
+		mirrored bool
+	}{{"", false}, {"4", false}, {"9", false}, {"4", true}, {"9", true}} {
+		name := "recorded_" + tc.recorded
+		if tc.mirrored {
+			name += "_mirrored"
+		}
+		recorded := tc.recorded
+		t.Run(name, func(t *testing.T) {
 			s, f, todo := newSupervisedServiceOn(t, repositorystore.New(todoTestDB(t)))
 			ctx := context.Background()
 			deliveryOn(t, s)
 			if recorded != "" {
 				ref := "https://github.com/o/r/pull/" + recorded
 				s.setTaskStage(ctx, todo.ID, "review", ref)
-				// The legacy stage still points to an incidental reference. Only the reported PR is delivery.
-				setTestTodoLinkRole(t, s, todo.ID, ref, repository.LinkRoleReference)
+				// The legacy stage still points to an incidental reference. Only the reported PR is delivery. Mirrored
+				// keeps the default-role link setTaskStage saved for it, which is still only the stage's own record.
+				if !tc.mirrored {
+					setTestTodoLinkRole(t, s, todo.ID, ref, repository.LinkRoleReference)
+				}
 			}
 			f.setItems(append(artifactCreationItems(todo, "https://github.com/o/r/pull/5"),
 				proto.Item{Role: "assistant", Kind: proto.KindText, TS: artifactTurnAt(todo), Text: "Related merged PR: https://github.com/o/r/pull/9\n" +

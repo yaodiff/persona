@@ -795,25 +795,31 @@ select:not([multiple], [size], .appearance-none) {
     display: block;
     overflow: hidden;
   }
-  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header.h-14,
-  [data-app-shell][data-mac-chrome="windowed"] > aside header.h-14 {
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside :is(header.h-14, header[data-terminal-header]) {
     height: 45px;
     -webkit-app-region: drag;
   }
-  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header.h-14 :is(button, a, input, select, [role="button"]),
-  [data-app-shell][data-mac-chrome="windowed"] > aside header.h-14 :is(button, a, input, select, [role="button"]) {
-    -webkit-app-region: no-drag;
+  [data-app-shell][data-mac-chrome="windowed"] > aside [data-subagent-panel] > header > :first-child {
+    -webkit-app-region: drag;
   }
-  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] > main > .min-h-0 header.h-14 {
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) :is(button, a, input, select, [role="button"], [data-chat-title]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside :is(header.h-14, header[data-terminal-header]) :is(button, a, input, select, [role="button"], [data-chat-title]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside [data-subagent-panel] > header > :first-child :is(button, a, input, select, [role="button"]),
+  [data-app-shell][data-mac-chrome="windowed"] [role="separator"] {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
     padding-left: var(--mac-header-inset, 1rem);
   }
-  [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 header.h-14 {
+  [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
     padding-left: 146px;
   }
-  [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 header.h-14 {
+  [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
     padding-left: 200px;
   }
-  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"]) > main > .min-h-0 > * > :not(:first-child) header.h-14 {
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"]) > main > .min-h-0 > * > :not(:first-child) :is(header.h-14, header[data-terminal-header]) {
     padding-left: 1rem;
   }
 }
@@ -840,8 +846,8 @@ select:not([multiple], [size], .appearance-none) {
 :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body {
   background: transparent;
 }
-/* Over native NSVisualEffectView, disable Chromium CSS backdrop-filter inside <main> to prevent double-compositing focus flashes (electron#39529). */
-:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] [data-app-shell] > main :is(.backdrop-blur, .backdrop-blur-sm, .backdrop-blur-md) {
+/* Over native NSVisualEffectView, disable Chromium CSS backdrop-filter across the document (main, split panel <aside>, portals, and arbitrary utilities) to prevent vibrancy alpha-clearing ghosting and double-compositing focus flashes (electron#39529). */
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] [class*="backdrop-"] {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -923,8 +929,18 @@ select:not([multiple], [size], .appearance-none) {
 :root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
   filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.34));
 }
+/* While ComposerImageStage elevates the live composer, clear shell filters/clip-path so position:fixed anchors to the viewport cleanly. */
+:root[data-composer-stage="1"] [data-app-shell],
+:root[data-composer-stage="1"] [data-app-shell] > :is(main, aside) {
+  filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  clip-path: none !important;
+  -webkit-clip-path: none !important;
+}
 @media (prefers-reduced-transparency: reduce) {
-  :root[data-surface-style="liquid-glass"] {
+  :root[data-surface-style="liquid-glass"],
+  :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] {
     background: #f1f1f4;
     --canvas: #f1f1f4;
     --page: #f7f7f9;
@@ -932,7 +948,8 @@ select:not([multiple], [size], .appearance-none) {
     --glass-main-shadow: none;
     --glass-sidebar-shadow: none;
   }
-  :root.dark[data-surface-style="liquid-glass"] {
+  :root.dark[data-surface-style="liquid-glass"],
+  :root.dark[data-surface-style="liquid-glass"][data-desktop-glass="1"] {
     background: #0b0b0c;
     --canvas: #0b0b0c;
     --page: #111113;
@@ -940,14 +957,24 @@ select:not([multiple], [size], .appearance-none) {
     --glass-main-shadow: none;
     --glass-sidebar-shadow: none;
   }
-  :root[data-surface-style="liquid-glass"] body {
+  :root[data-surface-style="liquid-glass"] body,
+  :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body,
+  :root.dark[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
     background: var(--page);
   }
   :root[data-surface-style="liquid-glass"] [data-app-shell],
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell],
   :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
-  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > main,
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > aside {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+  }
+  :root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main,
+  :root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
+    filter: none;
   }
 }
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); transition: transform 150ms var(--ease-out-strong); }

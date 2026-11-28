@@ -31,6 +31,9 @@ type CountsViewCounts struct {
 	AgentsNeedsYou *CountsViewCount `json:"agents_needs_you,omitempty"`
 	// The to-dos that need the owner, N of the To-dos list (docs/protocol/counts.md, "todos_needs_you").
 	TodosNeedsYou *CountsViewCount `json:"todos_needs_you,omitempty"`
+	// Pending owner cards on Persona conversations and quiet tasks' agents, one per card (docs/protocol/counts.md,
+	// "persona_cards").
+	PersonaCards *CountsViewCount `json:"persona_cards,omitempty"`
 }
 
 // CountsViewTotals: each count's n again, by its id, for what reads a number without its rows: the hub copies it as
@@ -40,6 +43,8 @@ type CountsViewTotals struct {
 	AgentsNeedsYou *int `json:"agents_needs_you,omitempty"`
 	// counts.todos_needs_you.n.
 	TodosNeedsYou *int `json:"todos_needs_you,omitempty"`
+	// counts.persona_cards.n.
+	PersonaCards *int `json:"persona_cards,omitempty"`
 }
 
 // CountsViewCount: one count: its number, the rows it counts and the rows the list keeps but the count leaves out.
@@ -57,8 +62,8 @@ type CountsViewCount struct {
 // CountsRow: one counted row.
 type CountsRow struct {
 	ID CountsRowKey `json:"id"`
-	// The row's pending cards, oldest first: a card on no session is its own one card. Absent for a session that waits
-	// in its terminal with no card.
+	// The row's pending cards, oldest first: a card row lists that one card. Absent for a session that waits in its
+	// terminal with no card.
 	Cards []CountsCardID `json:"cards,omitempty"`
 }
 
@@ -69,7 +74,7 @@ type CountsHeldRow struct {
 }
 
 // CountsRowKey: A row as the shared fixtures key it: agent:<machine>/<session> for a session (its children's and
-// sides' cards under it), card:<interaction id> for a card on no session.
+// sides' cards under it), card:<interaction id> for a card counted on its own.
 type CountsRowKey string
 
 // String returns the ID as it is on the wire.

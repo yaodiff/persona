@@ -38,5 +38,6 @@
   "recorded_not_delivered": "已记录。没能送到 Agent，将由督办接手转交",
   "setup_head": "推荐设置",
   "setup_intro": "以下建议基于 Persona 过去 7 天的运行记录生成（已另行注明时间范围的项目除外）。目前尚未做任何更改，在你手动修改前，各项设置都将保持原样。",
-  "setup_open": "打开设置"
+  "setup_open": "打开设置",
+  "supervision_deferred": "留到早晚报查看的跟进"
 }

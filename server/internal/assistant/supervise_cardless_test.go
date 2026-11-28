@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -185,6 +186,201 @@ func TestCardlessWorkersStopped(t *testing.T) {
 	}
 	if cardlessWorkersStopped([]proto.Session{stopped, {SessionID: "s5", PendingInteractions: 1}}) {
 		t.Error("a worker with a pending interaction means the review is not card-less")
+	}
+}
+
+func TestOwnerWaitCardlessSupervisionGoesBackOnce(t *testing.T) {
+	for _, state := range []string{"", reviewRework} {
+		t.Run(cmp.Or(state, "going_on"), func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			quietDigest(s)
+			holdDigest(s)
+			ctx := context.Background()
+			stopOnOwner(t, s, f, todo.ID)
+			if state != "" {
+				if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+					v.State = state
+					return true
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wait := todoNow(s, todo.ID).Supervision.Waits
+			s.superviseWatch(ctx, wait.At.Add(cardlessSettle-time.Minute))
+			if slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+				t.Fatal("an owner wait was handed back inside the settle window")
+			}
+			before := cardlessNotices(f)
+			s.superviseWatch(ctx, wait.At.Add(cardlessSettle+time.Minute))
+			g := pendingCardlessSignal(t, s, todo.ID)
+			if !strings.HasPrefix(g.Key, "cardless-wait@") {
+				t.Fatalf("owner-wait claim key = %q, want cardless-wait@", g.Key)
+			}
+			cur := todoNow(s, todo.ID).Supervision
+			if cur.Waits == nil || cur.Waits.CardlessToldAt == nil {
+				t.Fatalf("owner wait was not stamped: %+v", cur.Waits)
+			}
+			if cur.CardlessToldAt != nil {
+				t.Fatal("owner-wait supervision changed the pending-review round marker")
+			}
+			setSuperviseTimings(s, shortSuperviseTimings)
+			releaseDigest(s)
+			waitFor(t, "the owner-wait card-less message", func() bool { return cardlessNotices(f) > before })
+			var notice string
+			for _, n := range f.notices() {
+				if strings.Contains(n, "signal=cardless_wait") {
+					notice = n
+				}
+			}
+			if !strings.Contains(notice, "两版草稿等用户挑一版再发") {
+				t.Fatalf("the delivered notice lacks the owner-wait reason:\n%s", notice)
+			}
+			forgetSignals(t, s)
+			s.superviseWatch(ctx, wait.At.Add(48*time.Hour))
+			if slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+				t.Fatal("the same owner wait was handed back twice")
+			}
+		})
+	}
+}
+
+func TestOwnerWaitCloneCopiesCardlessStampAndNotifiedAt(t *testing.T) {
+	notified, told := time.Now().UTC(), time.Now().Add(time.Minute).UTC()
+	wantNotified, wantTold := notified, told
+	origNotified, origTold := notified, told
+	v := &Supervision{Waits: &OwnerWait{NotifiedAt: &origNotified, CardlessToldAt: &origTold}}
+	clone := v.clone()
+	if clone.Waits.NotifiedAt == v.Waits.NotifiedAt || clone.Waits.CardlessToldAt == v.Waits.CardlessToldAt {
+		t.Fatal("cloning an owner wait aliased one of its timestamp pointers")
+	}
+	*clone.Waits.NotifiedAt = clone.Waits.NotifiedAt.Add(time.Hour)
+	*clone.Waits.CardlessToldAt = clone.Waits.CardlessToldAt.Add(time.Hour)
+	if !v.Waits.NotifiedAt.Equal(wantNotified) || !v.Waits.CardlessToldAt.Equal(wantTold) {
+		t.Fatal("cloning an owner wait shared one of its timestamps")
+	}
+}
+
+func TestOwnerWaitCardlessSupervisionGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(context.Context, *Service, *fakeHub, Todo)
+		at   func(Todo) time.Time
+	}{
+		{name: "inside_settle", at: func(t Todo) time.Time { return t.Supervision.Waits.At.Add(cardlessSettle - time.Minute) }},
+		{name: "needs_user", at: pastOwnerWait, edit: func(ctx context.Context, s *Service, _ *fakeHub, todo Todo) {
+			if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.State = reviewNeedsUser; return true }); err != nil {
+				t.Error(err)
+			}
+		}},
+		{name: "parked", at: pastOwnerWait, edit: func(ctx context.Context, s *Service, _ *fakeHub, todo Todo) {
+			if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+				v.State = reviewParked
+				v.Reviews = append(v.Reviews, TaskReview{Verdict: reviewParked, At: time.Now().UTC(), Until: time.Now().Add(time.Hour).UTC()})
+				return true
+			}); err != nil {
+				t.Error(err)
+			}
+		}},
+		{name: "open_ask", at: pastOwnerWait, edit: func(ctx context.Context, s *Service, _ *fakeHub, todo Todo) {
+			s.askConclusion(ctx, todoNow(s, todo.ID), conclusionInput{Outcome: outcomeDecide, Reason: "要不要发布", Recommend: "发布"})
+		}},
+		{name: "worker_working", at: pastOwnerWait, edit: func(_ context.Context, _ *Service, f *fakeHub, _ Todo) {
+			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusWorking, State: proto.StateWorking})
+		}},
+		{name: "worker_needs_user", at: pastOwnerWait, edit: func(_ context.Context, _ *Service, f *fakeHub, _ Todo) {
+			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", State: proto.StateNeedsYou, PendingInteractions: 1})
+		}},
+		{name: "worker_unreachable", at: pastOwnerWait, edit: func(_ context.Context, _ *Service, f *fakeHub, _ Todo) {
+			f.mu.Lock()
+			f.sessionsFail["box"] = 100
+			f.mu.Unlock()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			quietDigest(s)
+			holdDigest(s)
+			stopOnOwner(t, s, f, todo.ID)
+			if tc.edit != nil {
+				tc.edit(context.Background(), s, f, todoNow(s, todo.ID))
+			}
+			s.superviseWatch(context.Background(), tc.at(todoNow(s, todo.ID)))
+			if slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+				t.Fatal("a guarded owner wait was handed back")
+			}
+			if w := todoNow(s, todo.ID).Supervision.Waits; w != nil && w.CardlessToldAt != nil {
+				t.Fatalf("a guarded owner wait was stamped: %+v", w)
+			}
+		})
+	}
+}
+
+func pastOwnerWait(t Todo) time.Time {
+	return t.Supervision.Waits.At.Add(cardlessSettle + time.Minute)
+}
+
+func TestOwnerWaitCardlessSupervisionWaitsForStop(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	quietDigest(s)
+	holdDigest(s)
+	ctx := context.Background()
+	stopOnOwner(t, s, f, todo.ID)
+	s.markReporter(ctx, "box", todo.Origin)
+	s.setReporterStopped(ctx, todo.Origin, "app")
+	wait := todoNow(s, todo.ID).Supervision.Waits
+	s.superviseWatch(ctx, wait.At.Add(cardlessSettle+time.Minute))
+	if slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) || todoNow(s, todo.ID).Supervision.Waits.CardlessToldAt != nil {
+		t.Fatal("an owner wait was handed back while its conversation was stopped")
+	}
+	s.setReporterStopped(ctx, todo.Origin, "")
+	s.superviseWatch(ctx, wait.At.Add(cardlessSettle+2*time.Minute))
+	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+		t.Fatalf("the owner wait was not handed back after /stop was lifted: %v", pendingKinds(s, todo.ID))
+	}
+	if todoNow(s, todo.ID).Supervision.Waits.CardlessToldAt == nil {
+		t.Fatal("the recovered owner wait was not stamped")
+	}
+}
+
+func TestOwnerWaitCardlessDigestDropsStaleClaim(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(context.Context, *Service, *fakeHub, Todo)
+	}{
+		{name: "worker_resumes", edit: func(_ context.Context, _ *Service, f *fakeHub, _ Todo) {
+			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusWorking, State: proto.StateWorking})
+		}},
+		{name: "open_ask", edit: func(ctx context.Context, s *Service, _ *fakeHub, todo Todo) {
+			s.askConclusion(ctx, todoNow(s, todo.ID), conclusionInput{Outcome: outcomeDecide, Reason: "要不要发布", Recommend: "发布"})
+		}},
+		{name: "wait_cleared", edit: func(ctx context.Context, s *Service, _ *fakeHub, todo Todo) {
+			if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.Waits = nil; return true }); err != nil {
+				t.Error(err)
+			}
+		}},
+		{name: "reviewed", edit: func(ctx context.Context, s *Service, _ *fakeHub, todo Todo) {
+			if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.State = reviewNeedsUser; return true }); err != nil {
+				t.Error(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			quietDigest(s)
+			holdDigest(s)
+			ctx := context.Background()
+			stopOnOwner(t, s, f, todo.ID)
+			wait := todoNow(s, todo.ID).Supervision.Waits
+			s.superviseWatch(ctx, wait.At.Add(cardlessSettle+time.Minute))
+			g := pendingCardlessSignal(t, s, todo.ID)
+			if _, ok := s.digestEntry(ctx, g, ""); !ok {
+				t.Fatal("the owner-wait entry did not render while the claim held")
+			}
+			tc.edit(ctx, s, f, todoNow(s, todo.ID))
+			if _, ok := s.digestEntry(ctx, g, ""); ok {
+				t.Fatal("a stale owner-wait entry rendered")
+			}
+		})
 	}
 }
 

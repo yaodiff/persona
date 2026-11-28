@@ -261,6 +261,7 @@ func (m *Machine) snapshot() proto.Machine {
 	}
 	clipboardOn := d.clipboardOn(m.cfg.ID)
 	fileTransferOn := d.fileTransferOn(m.cfg.ID)
+	orcaChats := orcaChatStartsField(choice, d.orcaChatStartsOn(m.cfg.ID))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	engines := []proto.Engine{} // what the node found: none while offline
@@ -320,10 +321,11 @@ func (m *Machine) snapshot() proto.Machine {
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
-		Clipboard:    m.clipboardStateLocked(clipboardOn),
-		FileTransfer: m.fileTransferState(fileTransferOn),
-		ClaudePlugin: m.info.ClaudePlugin,
-		LinkSwitch:   linkSwitch,
+		Clipboard:      m.clipboardStateLocked(clipboardOn),
+		FileTransfer:   m.fileTransferState(fileTransferOn),
+		OrcaChatStarts: orcaChats,
+		ClaudePlugin:   m.info.ClaudePlugin,
+		LinkSwitch:     linkSwitch,
 	}
 }
 
@@ -645,6 +647,17 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			(proto.FasterSpeed(strings.TrimSpace(fields.Speed)) && !nodeHas(info, nodeproto.SessionStartSpeed)) {
 			// An older node would drop the explicit, billable choice and start at the launcher's own speed.
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_session_start_speed")}
+		}
+	}
+	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.SessionStartModelAliases) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			ModelAliases map[string]string `json:"model_aliases"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if len(fields.ModelAliases) != 0 {
+			// An older node would drop the per-start aliases and run the launcher's models.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_aliases")}
 		}
 	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.StartGoal) {

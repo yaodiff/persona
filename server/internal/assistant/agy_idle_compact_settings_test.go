@@ -102,6 +102,9 @@ func TestAgyIdleCompactSettingsToolAndNodeConfig(t *testing.T) {
 		if err := json.Unmarshal(call.Params, &payload); err != nil {
 			t.Fatal(err)
 		}
+		if !strings.Contains(string(call.Params), `"agy_idle_compaction"`) {
+			continue // another setting's node.configure (the BotMux Owner Union ID)
+		}
 		if payload.Policy == nil || !payload.Policy.Enabled || payload.Policy.IdleMinutes != 10 || payload.Policy.ContextTokens != 200000 {
 			t.Fatalf("unexpected agy_idle_compaction payload: %+v", payload.Policy)
 		}

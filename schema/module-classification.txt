@@ -417,6 +417,7 @@ web web/src/views core
 web web/src/views/agents core
 web web/src/views/assistant core
 web web/src/views/chat core
+web web/src/views/execution core
 web web/src/views/extensions core
 web web/src/views/inbox core
 web web/src/views/knowledge knowledge-ui

@@ -143,7 +143,7 @@ func supervisorOptionLabel(text string, options []DecisionOption) string {
 //
 // The card's action lock is held from the look at the round until the entry is gone, and the entry stays in the book,
 // marked settling, until then: the deadline default and the overdue reminder look for a waiting choice under the same
-// lock (acceptDefault, deadlineHandled), so while this waits for the lock they still find the choice, and once it
+// lock (handleTaskDeadline), so while this waits for the lock they still find the choice, and once it
 // lets go the round is answered.
 //
 // The entry ends here whatever chooseOptionLocked says, since nothing would settle it later (the delivered notice,
@@ -268,7 +268,7 @@ func (s *Service) handBackOneSupervisorReply(ctx context.Context, r SessionRef, 
 // Locks, outermost first: the card's action lock (s.reviewDismissals.actions), then s.undelivered.mu, then the book's
 // own mutex. The accept ledger's mutex (s.accept.mu) may be taken under the action lock, and this file never holds
 // it together with the other two. A choice is registered under its card's action lock (holdSupervisorChoice), the
-// lock the deadline default holds while it checks the book once more and takes the recommendation (acceptDefault):
+// lock the deadline default holds while it checks the book once more and takes the recommendation (handleTaskDeadline):
 // a choice either is in the book before the default looks, or finds the round answered and is not registered.
 //
 // A choice whose message went in stays in the book until it is recorded. Whoever learns of the delivery claims the
@@ -358,7 +358,7 @@ func (b *supervisorSettleBook) pruneLocked(now time.Time, room int) {
 
 // holdSupervisorChoice registers the owner's exact choice of to-do id's decision, written in r as message
 // clientMsgID, to settle when that message is delivered. It runs under the card's action lock, which the deadline
-// default holds too (acceptDefault): once this returns the default finds the choice, and a default that got there
+// default holds too (handleTaskDeadline): once this returns the default finds the choice, and a default that got there
 // first has answered the round, so nothing is registered for it.
 func (s *Service) holdSupervisorChoice(ctx context.Context, r SessionRef, clientMsgID, id string, at time.Time, text string) {
 	s.reviewDismissals.actions.acquire(id)

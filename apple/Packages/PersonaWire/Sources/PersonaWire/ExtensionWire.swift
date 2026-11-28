@@ -2181,17 +2181,26 @@ public nonisolated struct ExtensionUsageItem: Codable, Hashable, Sendable {
     public var id: String
     public var name: String
     public var hosts: [String]?
+    public var direct: Bool?
+    public var remoteAddress: String?
+    public var remoteKey: String?
 
-    public init(id: String = "", name: String = "", hosts: [String]? = nil) {
+    public init(id: String = "", name: String = "", hosts: [String]? = nil, direct: Bool? = nil, remoteAddress: String? = nil, remoteKey: String? = nil) {
         self.id = id
         self.name = name
         self.hosts = hosts
+        self.direct = direct
+        self.remoteAddress = remoteAddress
+        self.remoteKey = remoteKey
     }
 
     enum CodingKeys: String, CodingKey {
         case id
         case name
         case hosts
+        case direct
+        case remoteAddress = "remote_address"
+        case remoteKey = "remote_key"
     }
 
     public init(from decoder: Decoder) throws {
@@ -2199,6 +2208,9 @@ public nonisolated struct ExtensionUsageItem: Codable, Hashable, Sendable {
         self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
         self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
         self.hosts = try? c.decodeIfPresent([String].self, forKey: .hosts)
+        self.direct = try? c.decodeIfPresent(Bool.self, forKey: .direct)
+        self.remoteAddress = try? c.decodeIfPresent(String.self, forKey: .remoteAddress)
+        self.remoteKey = try? c.decodeIfPresent(String.self, forKey: .remoteKey)
     }
 }
 

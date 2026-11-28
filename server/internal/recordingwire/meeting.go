@@ -142,6 +142,8 @@ const (
 	PartTopics   = "topics"
 	// PartHighlights is the room's highlights of the meeting so far (phase 2b, live.go HighlightsSet).
 	PartHighlights = "highlights"
+	// PartSpeakers is the meeting's speaker list, state and timeline (#17674, meeting.json).
+	PartSpeakers = "speakers"
 )
 
 // Hand-off states and how many a meeting keeps.
@@ -173,7 +175,10 @@ type Meeting struct {
 	// MeetingHandoffsKept: whether each went, and why not. No part of their own: the apps read them with the detail and
 	// from the hand-off's answer.
 	Handoffs []MeetingHandoff `json:"handoffs,omitempty"`
-	// Revs are the parts' revisions (PartRoom, PartPrivate, PartFollowup, PartTranscription): each only goes up.
+	// Speakers is the meeting's speaker list, state and quality (#17674): nil until speaker separation runs or a
+	// timeline is imported. Kept when a transcript is trimmed.
+	Speakers *MeetingSpeakers `json:"speakers,omitempty"`
+	// Revs are the parts' revisions (PartRoom, PartPrivate, PartFollowup, PartTranscription, PartSpeakers): each only goes up.
 	Revs map[string]int64 `json:"revs,omitempty"`
 }
 
@@ -202,6 +207,7 @@ func (m Meeting) Clone() Meeting {
 	}
 	out.Transcription = m.Transcription.Clone()
 	out.Handoffs = slices.Clone(m.Handoffs)
+	out.Speakers = m.Speakers.Clone()
 	return out
 }
 

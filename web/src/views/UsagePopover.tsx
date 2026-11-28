@@ -2,16 +2,20 @@
 // for the cold first screen, so the overlay, its CSS transitions, and its long strings load on intent.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { t as tr } from "../i18n";
+import { formatDate, t as tr } from "../i18n";
 import { sendDraft } from "../lib/drafts";
 import { navigate } from "../lib/router";
+import { here } from "../lib/hubs";
+import { useShownManager } from "../lib/manager-choice";
 import { getState } from "../lib/store";
 import { balanceEmpty, balanceText } from "../lib/usage-balance";
 import { useCloseOnBack } from "../lib/back-close";
 import { accountPace } from "../lib/usage-pace";
-import { groupByProvider, planNote, providerTitle, remainingText, TIMELINE_CAP_MS, TIMELINE_TICKS_HOURS, timelinePosition, type ProviderGroup } from "../lib/usage-popover";
+import { groupByProvider, planNote, providerTitle, remainingText, TIMELINE_CAP_MS, TIMELINE_TICKS_HOURS, timelinePosition, type PopoverAccount, type ProviderGroup } from "../lib/usage-popover";
 import {
   buildUsageTable,
+  createUsageAliasStore,
+  USAGE_ALIAS_MAX_LENGTH,
   detectLocalExternalOverlaps,
   groupAccountWindows,
   nextTimelineReset,
@@ -26,8 +30,8 @@ import {
   type UsageViewMode,
 } from "../lib/usage-popover-model";
 import { isWindowPaused, unifiedTimeline, type TimelineLane, type UnifiedTimelineRow } from "../lib/usage-timeline";
-import { canonicalUsageProvider, isBalanceAccount, isPinnableUsageAccount, protectReserve, remainingPercent, remainingTone, resetLabel, resetPinnedUsageAccounts, sampleAge, selectSidebarUsageItems, sourceNames, togglePinnedUsageAccount, usageWindowPinId, usePinnedUsageAccounts, windowKey, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
-import { Collapse, cx } from "../ui/atoms";
+import { canAliasUsageAccount, canonicalUsageProvider, isBalanceAccount, isPinnableUsageAccount, protectReserve, remainingPercent, remainingTone, resetLabel, resetPinnedUsageAccounts, sampleAge, selectSidebarUsageItems, sourceNames, togglePinnedUsageAccount, usageWindowPinId, usePinnedUsageAccounts, windowKey, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
+import { Collapse, cx, IconButton, toast } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { reducedMotion } from "../ui/motion";
 import { NARROW_QUERY, returnFocus, useMedia } from "../ui/overlay";
@@ -498,8 +502,21 @@ export function UsagePopover({
 
   const [tableSort, setTableSort] = useState<UsageTableSort | null>(null);
 
-  const groups = useMemo(() => groupByProvider(accounts), [accounts]);
-  const hasAnyWindows = useMemo(() => accounts.some((a) => a.windows.length > 0), [accounts]);
+  const hub = here();
+  const manager = useShownManager();
+  const aliasStore = useMemo(() => createUsageAliasStore(hub, manager), [hub, manager]);
+  const aliases = aliasStore.useValue();
+  const editAlias = (a: PopoverAccount) => {
+    const value = window.prompt(tr("usage.alias_prompt", { name: a.name, limit: USAGE_ALIAS_MAX_LENGTH }), a.alias ?? "");
+    if (value === null) return;
+    if (Array.from(value.trim()).length > USAGE_ALIAS_MAX_LENGTH) {
+      toast(tr("usage.alias_too_long", { limit: USAGE_ALIAS_MAX_LENGTH }), "error");
+      return;
+    }
+    aliasStore.setAlias(a.id, value);
+  };
+  const groups = useMemo(() => groupByProvider(accounts, aliases), [accounts, aliases]);
+  const hasAnyWindows = groups.some((g) => g.accounts.some((a) => a.windows.length > 0));
   const pinnedIds = usePinnedUsageAccounts();
   const pinnedSet = new Set(pinnedIds);
   const { items: selectedPins, custom: hasLivePins } = selectSidebarUsageItems(accounts, pinnedIds);
@@ -511,7 +528,7 @@ export function UsagePopover({
   }, [fixed, phase]);
   const now = fixed ?? tick;
 
-  const overlaps = useMemo(() => detectLocalExternalOverlaps(accounts, now), [accounts, now]);
+  const overlaps = useMemo(() => detectLocalExternalOverlaps(accounts, now, aliases), [accounts, now, aliases]);
   const tableModel = useMemo(
     () => (viewMode === "table" && accounts.length > 0 ? buildUsageTable(groups, tableSort) : null),
     [viewMode, accounts.length, groups, tableSort],
@@ -704,14 +721,12 @@ export function UsagePopover({
               </div>
             )}
             {viewMode === "table" && tableModel ? (
-              <UsageTable
-                model={tableModel}
-                sort={tableSort}
-                onSort={setTableSort}
-                pinnedSet={pinnedSet}
-                overlaps={overlaps}
-                now={now}
-              />
+              <>
+                {tableModel.rows.length > 0 && (
+                  <UsageTable onEditAlias={editAlias} model={tableModel} sort={tableSort} onSort={setTableSort} pinnedSet={pinnedSet} overlaps={overlaps} now={now} />
+                )}
+                {groups.flatMap((g) => g.historicalReadings.map((a) => <HistoricalReading key={a.id} a={a} now={now} />))}
+              </>
             ) : (
               groups.map((g) => {
                 const title = providerTitle(g.provider);
@@ -755,7 +770,7 @@ export function UsagePopover({
                             {singlePlan}
                           </span>
                         )}
-                        {g.accounts.length > 1 && (
+                        {(g.accounts.length > 1 || g.historicalReadings.length > 0) && (
                           <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{tr("usage.provider_accounts", { count: g.accounts.length })}</span>
                         )}
                       </span>
@@ -764,6 +779,7 @@ export function UsagePopover({
                           {singleHeaderAge}
                         </span>
                       )}
+                      {singleAcct && <AliasButton account={singleAcct} onEdit={editAlias} />}
                       {mergedSingle && singleAcct && singleShowPin && (
                         <PinToggle
                           pinned={singlePinned}
@@ -780,12 +796,14 @@ export function UsagePopover({
                           now={now}
                           pinnedSet={pinnedSet}
                           headerAge={headerAge}
+                          onEditAlias={editAlias}
                           mergedHeader={mergedSingle}
                           overlapWith={overlaps.get(a.id)}
                           align={cardAlign}
                         />
                       </div>
                     ))}
+                    {g.historicalReadings.map((a) => <HistoricalReading key={a.id} a={a} now={now} />)}
                   </section>
                 );
               })
@@ -835,6 +853,16 @@ function windowPinLabel(name: string, w: UsageWindow, pinned: boolean): string {
   return pinned ? tr("usage.unpin_window", { name, window: w.label }) : tr("usage.pin_window", { name, window: w.label });
 }
 
+function AliasButton({ account, onEdit }: { account: PopoverAccount; onEdit: (a: PopoverAccount) => void }) {
+  if (!canAliasUsageAccount(account)) return null;
+  const label = tr("usage.edit_alias", { name: account.alias ?? account.name });
+  return (
+    <span data-usage-alias={account.id} className="shrink-0">
+      <IconButton icon="pencil" size={24} iconSize={13} label={label} onClick={() => onEdit(account)} />
+    </span>
+  );
+}
+
 function PinToggle({
   pinned,
   label,
@@ -876,16 +904,46 @@ function PinToggle({
   );
 }
 
+/** A file sample is inspectable even when the hub has no current subscription reading. */
+function HistoricalReading({ a, now }: { a: UsageAccount; now: number }) {
+  return (
+    <details className="rounded-control bg-inset px-2.5 text-submeta text-ink-2">
+      <summary className="min-h-11 cursor-pointer break-words py-3.5 font-medium">
+        {[tr("usage.codex_local_reading"), sourceNames(a).join(" · "), sampleAge(a.sampled_at, now)].filter(Boolean).join(" · ")}
+      </summary>
+      <p className="mt-1 leading-snug">{tr("usage.codex_local_explanation")}</p>
+      <time dateTime={a.sampled_at} className="text-ink-3">{formatDate(a.sampled_at, { dateStyle: "medium", timeStyle: "short" })}</time>
+      <dl className="mt-1 flex flex-col gap-1 pb-2">
+        {a.windows.map((w) => (
+          <div key={windowKey(w)} className="flex flex-wrap items-baseline justify-between gap-x-2">
+            <dt>{w.label}</dt>
+            <dd className="flex flex-wrap justify-end gap-x-2 tabular-nums">
+              <span>{tr("usage.left_short", { percent: shown(remainingPercent(w.used_percent)) })}</span>
+              {w.resets_at && (
+                <time dateTime={w.resets_at} className="text-ink-3">
+                  {tr("usage.reset_at", { time: formatDate(w.resets_at, { dateStyle: "short", timeStyle: "short" }) })}
+                </time>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
 function AccountSection({
   a,
   now,
   pinnedSet,
   headerAge = "",
+  onEditAlias,
   mergedHeader = false,
   overlapWith,
   align,
 }: {
-  a: UsageAccount;
+  a: PopoverAccount;
+  onEditAlias: (a: PopoverAccount) => void;
   now: number;
   pinnedSet: ReadonlySet<string>;
   headerAge?: string;
@@ -894,6 +952,7 @@ function AccountSection({
   align: CardWindowAlign;
 }) {
   const [staleOverlapOpen, setStaleOverlapOpen] = useState(false);
+  const name = a.alias ?? a.name;
   const from = sourceNames(a);
   const plan = planNote(a);
   const pinned = pinnedSet.has(a.id);
@@ -920,7 +979,7 @@ function AccountSection({
             <div key={`plain:${idx}`} className="flex flex-col gap-1.5">
               {section.windows.map((w) => {
                 const pinId = usageWindowPinId(a.id, w);
-                return <WindowRow key={windowKey(w)} name={a.name} w={w} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} align={align} />;
+                return <WindowRow key={windowKey(w)} name={name} w={w} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} align={align} />;
               })}
             </div>
           );
@@ -930,7 +989,7 @@ function AccountSection({
           return (
             <WindowRow
               key={windowKey(section.window)}
-              name={a.name}
+              name={name}
               w={section.window}
               inlineModel={section.model}
               stale={Boolean(a.stale)}
@@ -954,7 +1013,7 @@ function AccountSection({
             <div className="flex flex-col gap-1">
               {section.windows.map((w) => {
                 const pinId = usageWindowPinId(a.id, w);
-                return <WindowRow key={windowKey(w)} name={a.name} w={w} groupContext={section.title} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} align={align} />;
+                return <WindowRow key={windowKey(w)} name={name} w={w} groupContext={section.title} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} align={align} />;
               })}
             </div>
           </div>
@@ -965,21 +1024,21 @@ function AccountSection({
 
   if (collapseStaleOverlap && overlapWith) {
     const staleSummary = tr("usage.overlap_stale_summary", { name: overlapWith });
-    const fullTip = [a.name, acctAge ? tr("usage.stale_age", { age: acctAge }) : "", tr("usage.overlap_hint_title", { name: overlapWith })].filter(Boolean).join(" · ");
+    const fullTip = [name, acctAge ? tr("usage.stale_age", { age: acctAge }) : "", tr("usage.overlap_hint_title", { name: overlapWith })].filter(Boolean).join(" · ");
     return (
-      <section aria-label={a.name} data-usage-stale="true" data-usage-stale-overlap={staleOverlapOpen ? "expanded" : "collapsed"} className="flex flex-col gap-1">
+      <section aria-label={name} data-usage-stale="true" data-usage-stale-overlap={staleOverlapOpen ? "expanded" : "collapsed"} className="flex flex-col gap-1">
         <div className="flex items-center gap-1">
           <button
             type="button"
             data-usage-stale-overlap-toggle
             aria-expanded={staleOverlapOpen}
-            aria-label={staleOverlapOpen ? tr("usage.overlap_stale_hide", { name: a.name }) : tr("usage.overlap_stale_show", { name: a.name })}
+            aria-label={staleOverlapOpen ? tr("usage.overlap_stale_hide", { name }) : tr("usage.overlap_stale_show", { name })}
             title={fullTip}
             onClick={() => setStaleOverlapOpen((v) => !v)}
             className="flex min-w-0 flex-1 items-center gap-1.5 rounded-control px-1 py-0.5 text-left text-submeta text-ink-3 transition-colors hover:bg-hover/60"
           >
             <Icon name="info" size={11} className="shrink-0" />
-            <span className="max-w-[42%] shrink-0 truncate font-medium text-ink-2">{a.name}</span>
+            <span className="max-w-[42%] shrink-0 truncate font-medium text-ink-2">{name}</span>
             <span data-usage-overlap-hint className="min-w-0 flex-1 truncate text-ink-3">
               {staleSummary}
             </span>
@@ -987,11 +1046,12 @@ function AccountSection({
               <Icon name="chevron" size={10} />
             </span>
           </button>
+          <AliasButton account={a} onEdit={onEditAlias} />
           {pinned && (
             <PinToggle
               pinned={pinned}
               pinAttr={a.id}
-              label={tr("usage.unpin_account", { name: a.name })}
+              label={tr("usage.unpin_account", { name })}
               onClick={() => togglePinnedUsageAccount(a.id)}
             />
           )}
@@ -1017,7 +1077,7 @@ function AccountSection({
                   <PinToggle
                     pinned={false}
                     pinAttr={a.id}
-                    label={tr("usage.pin_account", { name: a.name })}
+                    label={tr("usage.pin_account", { name })}
                     onClick={() => togglePinnedUsageAccount(a.id)}
                   />
                 )}
@@ -1036,7 +1096,7 @@ function AccountSection({
   const hasSubMeta = from.length > 0 || showAge || Boolean(overlapWith || problem || a.headline?.trim() || a.notice?.trim());
   return (
     <section
-      aria-label={a.name}
+      aria-label={name}
       data-usage-stale={a.stale ? "true" : undefined}
       data-usage-merged-header={mergedHeader ? "true" : undefined}
       className="flex flex-col gap-1.5"
@@ -1045,19 +1105,20 @@ function AccountSection({
         <header className="flex flex-col gap-0.5">
           {!mergedHeader && (
             <div className="flex items-center gap-1.5">
-              <h3 className={cx("min-w-0 flex-1 truncate text-label font-medium", a.stale ? "text-ink-2" : "text-ink")} title={a.name}>
-                {a.name}
+              <h3 className={cx("min-w-0 flex-1 truncate text-label font-medium", a.stale ? "text-ink-2" : "text-ink")} title={name}>
+                {name}
               </h3>
               {plan && (
                 <span data-usage-plan className="max-w-36 shrink-0 truncate whitespace-nowrap rounded-chip bg-inset px-1.5 py-px text-submeta font-medium text-ink-2" title={plan}>
                   {plan}
                 </span>
               )}
+              <AliasButton account={a} onEdit={onEditAlias} />
               {showPin && (
                 <PinToggle
                   pinned={pinned}
                   pinAttr={a.id}
-                  label={pinned ? tr("usage.unpin_account", { name: a.name }) : tr("usage.pin_account", { name: a.name })}
+                  label={pinned ? tr("usage.unpin_account", { name }) : tr("usage.pin_account", { name })}
                   onClick={() => togglePinnedUsageAccount(a.id)}
                 />
               )}
@@ -1101,12 +1162,14 @@ function AccountSection({
 
 function UsageTable({
   model,
+  onEditAlias,
   sort,
   onSort,
   pinnedSet,
   overlaps,
   now,
 }: {
+  onEditAlias: (a: PopoverAccount) => void;
   model: ReturnType<typeof buildUsageTable>;
   sort: UsageTableSort | null;
   onSort: (next: UsageTableSort | null) => void;
@@ -1183,6 +1246,7 @@ function UsageTable({
         <tbody>
           {model.rows.map((row, idx) => {
             const { account: a, provider, plan } = row;
+            const name = a.alias ?? a.name;
             const from = sourceNames(a);
             const showPin = isPinnableUsageAccount(a) || pinnedSet.has(a.id);
             const problem = isBalanceAccount(a) ? balanceProblemText(a) : problemText(a);
@@ -1207,14 +1271,14 @@ function UsageTable({
                       type="button"
                       data-usage-stale-overlap-toggle
                       aria-expanded={false}
-                      aria-label={tr("usage.overlap_stale_show", { name: a.name })}
-                      title={[a.name, age, tr("usage.overlap_hint_title", { name: overlapWith })].filter(Boolean).join(" · ")}
+                      aria-label={tr("usage.overlap_stale_show", { name })}
+                      title={[name, age, tr("usage.overlap_hint_title", { name: overlapWith })].filter(Boolean).join(" · ")}
                       onClick={() => toggleStaleRow(a.id)}
                       className="flex w-full items-center gap-1.5 rounded-control text-left text-submeta text-ink-3 transition-colors hover:text-ink"
                     >
                       <span aria-hidden data-provider-dot={provider} className="size-1.5 shrink-0 rounded-full opacity-60" style={{ background: providerHue(provider) }} />
                       <Icon name="info" size={11} className="shrink-0" />
-                      <span className="shrink-0 font-medium text-ink-2">{a.name}</span>
+                      <span className="max-w-[42%] shrink-0 truncate font-medium text-ink-2">{name}</span>
                       <span data-usage-overlap-hint className="min-w-0 flex-1 truncate">
                         {tr("usage.overlap_stale_summary", { name: overlapWith })}
                       </span>
@@ -1240,17 +1304,18 @@ function UsageTable({
                     <span aria-hidden data-provider-dot={provider} className="mt-1.5 size-2 shrink-0 rounded-full" style={{ background: providerHue(provider) }} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1">
-                        <span className={cx("min-w-0 flex-1 truncate text-label font-medium", a.stale ? "text-ink-2" : "text-ink")} title={a.name}>
-                          {a.name}
+                        <span className={cx("min-w-0 flex-1 truncate text-label font-medium", a.stale ? "text-ink-2" : "text-ink")} title={name}>
+                          {name}
                         </span>
                       </div>
-                      {(plan || metaLine) && (
+                      {(plan || metaLine || canAliasUsageAccount(a)) && (
                         <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-submeta text-ink-3">
                           {plan && (
                             <span data-usage-plan className="shrink-0 whitespace-nowrap rounded-chip bg-inset px-1 py-px text-submeta font-medium text-ink-2">
                               {plan}
                             </span>
                           )}
+                          <AliasButton account={a} onEdit={onEditAlias} />
                           {metaLine && (
                             <span data-usage-source className="min-w-0 truncate" title={metaLine}>
                               {metaLine}
@@ -1264,7 +1329,7 @@ function UsageTable({
                             type="button"
                             data-usage-stale-overlap-toggle
                             aria-expanded={true}
-                            aria-label={tr("usage.overlap_stale_hide", { name: a.name })}
+                            aria-label={tr("usage.overlap_stale_hide", { name })}
                             onClick={() => toggleStaleRow(a.id)}
                             className="flex max-w-full items-center gap-1 text-submeta text-ink-3 hover:text-ink"
                           >
@@ -1290,7 +1355,7 @@ function UsageTable({
                       <PinToggle
                         pinned={pinnedSet.has(a.id)}
                         pinAttr={a.id}
-                        label={pinnedSet.has(a.id) ? tr("usage.unpin_account", { name: a.name }) : tr("usage.pin_account", { name: a.name })}
+                        label={pinnedSet.has(a.id) ? tr("usage.unpin_account", { name }) : tr("usage.pin_account", { name })}
                         onClick={() => togglePinnedUsageAccount(a.id)}
                       />
                     )}
@@ -1326,7 +1391,7 @@ function UsageTable({
                                 return (
                                   <TableWindowCell
                                     key={windowKey(w)}
-                                    name={a.name}
+                                    name={name}
                                     w={w}
                                     subLabel={tableWindowSubLabel(w, col.head, list.length, tr("usage.table_plan_window"))}
                                     stale={Boolean(a.stale)}
@@ -1352,7 +1417,7 @@ function UsageTable({
                             return (
                               <TableWindowCell
                                 key={windowKey(w)}
-                                name={a.name}
+                                name={name}
                                 w={w}
                                 subLabel={{
                                   text: sub.text ? `${w.label} · ${sub.text}` : w.label,
@@ -1642,6 +1707,7 @@ export function UnifiedTimeline({
           const providerBreak = i > 0 && rows[i - 1].provider !== r.provider;
           const parts = r.lanes.map((l) => formatLaneSummary(l, now));
           const plan = planNote(r.account);
+          const name = r.account.alias ?? r.account.name;
           const shaded = i % 2 === 0;
           return (
             <div
@@ -1650,13 +1716,13 @@ export function UnifiedTimeline({
               data-timeline-provider={r.provider}
               data-timeline-paused={r.paused ? "true" : undefined}
               role="img"
-              aria-label={`${r.account.name}: ${parts.join("; ")}`}
+              aria-label={`${name}: ${parts.join("; ")}`}
               title={parts.join("\n")}
               className={cx("usage-timeline-grid relative min-h-7 items-center py-0.5", shaded && "rounded-md bg-inset")}
             >
               {providerBreak && <span aria-hidden data-timeline-provider-divider className="absolute inset-x-0 top-0 z-[2] border-t border-line" />}
               <span className="z-[1] flex min-w-0 flex-col justify-center pr-2 pl-1.5 text-submeta leading-tight text-ink-2">
-                <span className="flex min-w-0 items-center gap-1.5" title={r.account.name}>
+                <span className="flex min-w-0 items-center gap-1.5" title={name}>
                   <span aria-hidden data-timeline-provider-dot={r.provider} className="size-1.5 shrink-0 rounded-full" style={{ background: providerHue(r.provider) }} />
                   <span data-timeline-account-name className="min-w-0 truncate">{r.displayName}</span>
                 </span>

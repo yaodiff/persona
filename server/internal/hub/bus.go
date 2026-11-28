@@ -117,6 +117,7 @@ type busState struct {
 	stopping bool
 	// Tests shorten these; zero is the protocol's (internal/bus).
 	pingEvery, pingTimeout, helloTimeout time.Duration
+	maxMessage                           int
 	// idents keeps the identities instead of h.store (tests without Postgres).
 	idents busStore
 	// storeErrLog throttles the line for a token lookup the store did not answer; storeDown is until when (UnixNano)
@@ -164,6 +165,9 @@ type busConn struct {
 	// (extwire.ProofKey of the token it connected with, extensions_proof.go): made from the token as it connects, kept
 	// here only, never stored.
 	proofKey string
+
+	// extensionOwnerProfile is the latest accepted profile on this connection for legacy extension authorization.
+	extensionOwnerProfile atomic.Pointer[assistantwire.Profile]
 
 	// guarded by busState.mu
 	presence busPresence
@@ -320,9 +324,15 @@ func (h *Hub) serveBus(w http.ResponseWriter, r *http.Request) {
 	// close frame.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	limit := h.busMaxMessage()
 	conn := bus.NewConn(ctx, ws)
 	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ") // the one busCaller took
 	c := &busConn{ident: ident, proofKey: extwire.ProofKey(tok), ws: ws, peer: rpc.New("h", conn), helloed: make(chan struct{})}
+	c.peer.ReadLimit = limit
+	c.peer.WriteLimit = limit
+	c.peer.OnWriteRejected = func(kind, op string, size, max int) {
+		h.logf("bus: [%s] rejected outgoing %s %s: %d bytes (limit %d)", ident.ID, kind, op, size, max)
+	}
 	// A card the hub's own feature asks (fleet.ask) is withdrawn when that feature stops waiting (a tool call whose
 	// caller went away, #2597). So is what the manager does for one of the hub's features (extensions.hub_call): a
 	// persona_settings change of one of its own settings is a card it holds and a change it makes, and untold it kept
@@ -366,6 +376,13 @@ func durationOr(d, def time.Duration) time.Duration {
 		return d
 	}
 	return def
+}
+
+func (h *Hub) busMaxMessage() int {
+	if h.bus.maxMessage > 0 {
+		return h.bus.maxMessage
+	}
+	return bus.MaxMessage
 }
 
 // busRequest is the connection's dispatcher: its handshake, then busMethods on the current connection only.
@@ -724,15 +741,20 @@ func (h *Hub) callBusAsIs(ctx context.Context, id, method string, params, out an
 	if c == nil {
 		return fmt.Errorf("%s: %w", id, errBusOffline)
 	}
+	return c.Call(ctx, method, params, out)
+}
+
+// Call uses this exact connection and the caller's deadline.
+func (c *busConn) Call(ctx context.Context, method string, params, out any) error {
 	if params == nil {
 		params = map[string]any{}
 	}
 	err := c.peer.Call(ctx, method, params, out)
 	switch {
 	case errors.Is(err, rpc.ErrDropped):
-		return fmt.Errorf("%s: %w", id, errBusDropped)
+		return fmt.Errorf("%s: %w", c.ident.ID, errBusDropped)
 	case errors.Is(err, rpc.ErrClosed):
-		return fmt.Errorf("%s: %w", id, errBusOffline)
+		return fmt.Errorf("%s: %w", c.ident.ID, errBusOffline)
 	}
 	return err
 }

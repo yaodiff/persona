@@ -34,6 +34,8 @@ final class InboxStore {
     /// How triage stands on the hub (new items held back until the model sorts them), with every list; nil from an
     /// older hub, and until the first list of this run (it is not kept on disk: an old count must not show offline).
     private(set) var triage: InboxTriageStatus?
+    /// Core's retained Lark/mail facts for this hub, kept only in memory; nil means unknown, not an empty archive.
+    private(set) var storedSources: InboxStoredSources?
     private(set) var loading = false
     /// A listing came from the hub since launch: what is cached on disk may be from before a source was added.
     private(set) var listed = false
@@ -311,6 +313,7 @@ final class InboxStore {
         items = []
         scopeChanged()
         triage = nil
+        storedSources = nil
         error = nil
         save()
     }
@@ -375,6 +378,7 @@ final class InboxStore {
                 if let listing = answer.listing {
                     apply(marks.lay(listing.items, seq: seq))
                     if listing.triage != triage { triage = listing.triage }
+                    if storedSources != listing.storedSources { storedSources = listing.storedSources }
                 }
                 listTag = answer.etag.map { (etag: $0, hub: hub, revision: itemsRevision) }
             } else {
@@ -390,6 +394,7 @@ final class InboxStore {
                 } else {
                     apply(marks.lay(listing.items, seq: seq))
                 }
+                if storedSources != listing.storedSources { storedSources = listing.storedSources }
                 if listing.triage != triage { triage = listing.triage }
                 let oldCursor = cursor
                 let oldRevision = cursorRevision
@@ -456,6 +461,7 @@ final class InboxStore {
             let listing = try await api.refreshInbox(connectors: Self.drawsConnectors)
             guard visit == hubVisit else { return }
             apply(marks.lay(listing.items, seq: seq))
+            if storedSources != listing.storedSources { storedSources = listing.storedSources }
             listed = true
             if listing.triage != triage { triage = listing.triage }
             error = nil

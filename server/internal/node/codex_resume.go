@@ -107,7 +107,7 @@ func (n *Node) codexResumableIn(ctx context.Context, id string, pass *codexListP
 	if n.codexEncryptedFailed(id, turn) || desktop && n.codexTurnRunning(src, turn) {
 		return false
 	}
-	return !m.sub && m.cwd != ""
+	return !m.sub && m.cwd != "" && !n.codexWriterLockHeld(src)
 }
 
 // codexRemoteConnecting: an app-server of home is configured but not connected yet.

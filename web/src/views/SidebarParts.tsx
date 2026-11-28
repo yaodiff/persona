@@ -20,7 +20,7 @@ import { BUILTIN_PAGE_COLORS, useSidebarIconMode } from "../lib/sidebar-icons";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
 import { href, inWorkView, navigate, parse, type Route } from "../lib/router";
 import { scoped, useScope, useScopedCounts } from "../lib/current-assistant";
-import { useOwnerNeeds } from "../lib/todo-owner-needs";
+import { useOwnerNeeds, useTodoBoard } from "../lib/todo-owner-needs";
 import { useStore, type State } from "../lib/store";
 import { connPhase } from "../lib/connection";
 import { useStarredCount } from "../lib/starred-summary";
@@ -119,10 +119,10 @@ export function useNavPages() {
   const total = useStore((s) => scoped(s.machines, scope).length);
   const assistant = useStore((s) => s.assistant);
   const todosSupported = useStore((s) => s.todosSupported);
-  // The open to-dos that need the owner, not those Agents are on (#11085, lib/todo-triage ownerNeeds); quiet tasks
-  // (#1731) are told about in the main conversation, not counted here. The To-dos page's "Not done" counts every open one,
-  // and the page marks the rows counted here from the same hook (#11838), so the number and the marks agree.
-  const todosBadge = useOwnerNeeds().size;
+  // Use the hub's deduplicated total under the Lab. Standard and older hubs keep the badge's owner marks (#11085, #11838).
+  const todoBoard = useTodoBoard(scope);
+  const legacyNeeds = useOwnerNeeds(!todoBoard);
+  const todosBadge = todoBoard?.counts.needs_you ?? legacyNeeds.size;
   const todosBadgeLabel = todosBadge ? t("sidebar.todos_badge_title", { count: todosBadge }) : undefined;
   const counts = useScopedCounts();
   const inbox = useInboxBadge();

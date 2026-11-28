@@ -128,11 +128,14 @@ export interface TodoChildSummary {
 /** Server-owned board projection section keys returned under todos_v2 (#15774, #15800). */
 export type TodoBoardSectionKey =
   | "needs_you"
+  | "can_wait"
   | "in_progress"
   | "pending_review"
   | "waiting"
+  | "todo"
   | "someday"
   | "done"
+  | "cancelled"
   | (string & {});
 
 /** One top-level entry in a server-computed status group, with optional folded/surfaced child IDs (#15774). */
@@ -185,11 +188,14 @@ export interface TodoBoardSidebarNode {
 /** Global section and open totals in `board.counts` (#15774). */
 export interface TodoBoardCounts {
   needs_you: number;
+  can_wait?: number;
   in_progress: number;
   pending_review: number;
   waiting: number;
+  todo?: number;
   someday: number;
   done: number;
+  cancelled?: number;
   open_total: number;
 }
 

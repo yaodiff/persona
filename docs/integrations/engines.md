@@ -246,9 +246,10 @@ screen reads, keys, or live terminal. A Claude chat reads as its Claude transcri
 and the rest read from Orca's own journal. A chat shows before its first message, and a chat closed in Orca stays listed, not
 running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card.
 New Agent also offers an "Orca chat · <provider>" launcher for each provider Orca has installed (while Orca runs and can start
-chats): picking one starts an Orca chat, in the background, in the Orca worktree holding the folder, with the first message; New
-Agent's default launcher still opens a terminal (a per-computer setting to start New Agent's Claude Code and Codex as Orca chats is
-#17650). See `docs/integrations/orca.md` ("Structured sessions") for the ids, the closed chats, the cards, the controls and starts.
+chats), except one whose chat Orca refused to open because its chat runtime isn't installed there (until Orca shows a new chat
+of that provider, or restarts; #17684): picking one starts an Orca chat, in the background, in the Orca worktree holding the
+folder, with the first message; New Agent's default launcher opens a terminal unless the computer starts new Agents as Orca chats
+("Orca chats as New Agent's default" below). See `docs/integrations/orca.md` ("Structured sessions") for the ids, the closed chats, the cards, the controls and starts.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with the Agent not in front, saying it may be suspended and nothing was sent (`agent_not_in_front`), or asking to reopen it on the computer (`not_running`).
@@ -305,6 +306,44 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 - Available only when both herdr and herdr-core are detected (can preselect offline, effective on reconnect; if only one exists,
   it works normally while the other list is empty).
 - Orca next to herdr goes through "Host sets" above; there are no more combination options.
+
+### Orca chats as New Agent's default
+
+Who it serves: Agents users who prefer Orca's chat view to a terminal (#17650). A computer whose engine set includes Orca has a
+switch under its Engine, **Start new Agents as Orca chats**, off by default (web: the machine page's Engine section; Android: the
+computer's Engine page; iOS follows in #17056). The manager keeps it per computer in settings (`machine_orca_chat_starts`), answers
+`GET` / `PUT /api/v1/machines/{mid}/orca-chat-starts`, and sends it on the machine as `orca_chat_starts` (`"on"` / `"off"`) only while Orca is in the set
+(`docs/protocol/protocol.md`, "Engines"); the clients show the switch exactly where it is sent. Taking Orca out of the set keeps the
+switch's value but stops it applying.
+
+With it on, the manager (`server/internal/assistant/orca_chat_default.go`, in `agents.start_params`, the step every New Agent start an
+app makes goes through) sends a start to the computer's Orca chat launcher of the same provider (`orca-claude` / `orca-codex`,
+"Starting a chat" in `docs/integrations/orca.md`) when all of these hold:
+
+- the person kept New Agent's default: no launcher, preset or model picked, and no host but Orca;
+- that default runs the plain Claude Code or Codex CLI (`claude` / `codex`). A wrapper or a provider kept in Persona stays in a
+  terminal: Orca's chat runs the plain CLI, so it would answer on another model or account;
+- the computer's Orca offers that chat launcher now (Orca running, able to start chats, the provider installed there and its chat
+  not refused for a missing chat runtime, the launcher neither hidden nor out of the computer's scope), and the computer's default
+  host is not an engine runtime (Paseo, Cindy);
+- the chat takes the start: not plan mode (an Orca chat promises no read-only start), a permission mode Orca takes for the provider
+  (Codex's chats take no Accept edits), and none of the options only a terminal takes (a faster speed, ultracode, a goal, model aliases).
+
+The chat runs the default's model when Orca's chats of that provider list it, with its effort when that model lists it; otherwise
+Orca's own, and the start's note says so. A start Orca refuses is refused as an explicit Orca chat start is, with nothing started: a
+folder no Orca worktree holds and no Git repository Orca can add (`orca_start_folder`), or a provider whose chat runtime Orca has not
+installed on that computer yet (`orca_chat_runtime_missing`: start it in a terminal, or install it from a new chat tab in Orca).
+Orca says the latter only when asked to open the chat, so the first such start is refused; the bridge then withdraws that chat
+launcher (`docs/integrations/orca.md`, "Structured sessions"), and the next default starts open a terminal until Orca can open
+the chat. Picking a terminal launcher starts it there.
+
+Never routed: the assistant's starts (`agent_start`, `dispatch_start`, `task_plan`, reviewers, follow-ups, which never go through
+`agents.start_params`; an Orca chat carries none of Persona's launcher, hooks or MCP config that a supervised task needs), resumes,
+and any start that names a launcher. New Agent says where a start will go: `GET /api/v1/machines/{mid}/launchers` carries
+`default_opens` (the chat, the permission modes with which a default start opens there, and whether the default's model goes with
+it), worked out by the same rule; web and Android show one line under the start while the form keeps the default
+(`web/src/lib/orca-chat.ts`, Android `NewAgentState.opensAsOrcaChat`), and the line goes as soon as the person picks a launcher,
+a preset, a model, plan mode or another host.
 
 ## Task workspaces (#4786)
 
@@ -565,8 +604,12 @@ Typical use: work Agents in botmux, personal Agents in herdr, viewed together.
   resumes suspended sessions itself (no separate herdr `claude --resume`, also for suspended beyond 7 days / unlisted), and sends replies back to Lark topics.
   Node gets the dashboard token through `botmux dashboard current`, memory-only, connecting only to local 127.0.0.1.
   Before sending, the node checks capabilities via the read-only `GET /api/sessions/:id/turns` probe (cached per botmux instance and re-probed after dashboard restart, token rotation, or CLI upgrade; never probed with a real message and never retried after delivery).
-  When `capabilities` includes `ownerActor`, `POST /api/trigger` sends top-level `actor: "owner"` (with no `envelope.payload` or `envelope.rawText`) and confirms the echoed `actor: "owner"` in the response, so botmux delivers the turn as the bot owner with `<sender>` and `<message_location>`.
-  On older botmux versions (below 3.59.23, where the endpoint returns `404` or `ownerActor` is absent), the node sends the existing external-event trigger and sets `botmux_external_trigger: true` on the session so the composer shows a one-line upgrade notice (`3.59.23+`).
+  Sending as the bot's owner needs the **BotMux Owner Union ID** (Settings › Agents, under "Show botmux sessions"; one hub-wide value handed to every node with `node.configure botmux_owner_union_id`, kept in the node's memory and handed again on each connection).
+  Empty, the node sends the existing external-event trigger even to a botmux that advertises `ownerActor`, and sets `botmux_external_trigger: true` with `botmux_external_trigger_reason: "owner_unset"` so the composer says no BotMux Owner Union ID is set and messages go the usual way.
+  Set, when `capabilities` includes `ownerActor`, `POST /api/trigger` sends top-level `actor: "owner"` (with no `envelope.payload` or `envelope.rawText`), adds `actorUnionId` only when `capabilities` also includes `ownerUnionId`, and confirms the echoed `actor: "owner"` in the response, so botmux delivers the turn as the bot owner with `<sender>` and `<message_location>`.
+  botmux's `403 owner_unresolved` (several `allowedUsers`, no `ownerUnionId`) or `owner_mismatch` (another person's id) is not retried as a stale token: the send is refused with a reason the apps word plainly (`docs/protocol/protocol.md` "BotMux messages").
+  On older botmux versions (below 3.59.23, where the endpoint returns `404` or `ownerActor` is absent), the node sends the existing external-event trigger and sets `botmux_external_trigger: true` (`botmux_external_trigger_reason: "upgrade"`) on the session so the composer shows a one-line upgrade notice (`3.59.23+`).
+  Settings suggests an id from the computers' bots.json (`botmux.owner_candidates`: only `ownerUnionId` and the `on_…` entries of `allowedUsers`, read-only); a suggestion only fills the field, and nothing takes effect until it is saved.
 - **Unsupported**: screen reads, keys, dialogs (answer in Lark), close, rename, create, live terminal; app hides or explains by capabilities.
 - **Showing it as in Lark**: **structured turns first, wrapper parsing as per-turn fallback.**
   When the local botmux dashboard serves `GET /api/sessions/:id/turns` (`botmux.session-turns.v1`, `server/internal/node/hostbotmux_turns.go`, `server/internal/transcript/botmux_turns.go`), the node reads turns incrementally by `seq` cursor and matches each turn to its transcript entry by `anchor.cliEntryId` or `anchor.inputSha256`, filling `Item.botmux` with the inbound text, sender display name, attachment metadata, thread placement, mentions, and full reply text (including `--content-file` and `--card-file` replies).

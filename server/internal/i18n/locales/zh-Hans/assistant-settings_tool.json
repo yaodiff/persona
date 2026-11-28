@@ -59,6 +59,8 @@
   "change_auto_supervision_messages": "「自动督办消息」：{before} → {after}",
   "title_auto_supervision_mode": "自动督办消息",
   "change_auto_supervision_mode": "「自动督办消息」：{before} → {after}",
+  "title_supervision_triage": "在早晚报里查看例行跟进",
+  "change_supervision_triage": "「在早晚报里查看例行跟进」：{before} → {after}",
   "auto_supervision_mode_all": "全部",
   "auto_supervision_mode_outcomes": "只发结果和待决定",
   "auto_supervision_mode_off": "关",

@@ -526,6 +526,7 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 
 - A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.
 - Allocation budgets are set from numbers measured on the hub machine (linux/amd64). The same tests read about 2 KB lower on an arm64 Mac, so #5150 passed `TestReindexOneRevAllocation` and `TestIndexWholeListAllocation` there and failed them on the hub (#5188). Judge a budget only from a `test-server.sh` run. To find where a regression comes from, compare `allocated(...)` in a probe at both commits; the Mac shows the same difference, so a `pprof -sample_index=alloc_space` profile of the measured call can be taken there.
+- A test that re-executes its own binary as a fake child and parks that child in `select {}` behaves differently by OS. On Linux, once nothing else in the child is live (no timer, no network waiter), the runtime ends it with `fatal error: all goroutines are asleep - deadlock!`, about 70 ms after it starts; on macOS it stays parked until killed. `TestModelRunAgyWarmWriteBlockedNoDeadlock` meant its fake agy to stall a write, passed on the Mac and failed every run on the hub, where the node rightly reported a dead worker instead (#17725). Park such a child on something the runtime never calls a deadlock, such as `signal.Notify` for the signal its parent's teardown sends (#17740). To check a Linux-only red quickly, cross-compile the test binary (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c`) and run it on the hub machine with `-test.count`.
 
 ## Settle task outcomes and query review history by ref in Postgres tests (#13231)
 
@@ -617,6 +618,10 @@ link's first event can read that finished turn before the call has heard the fir
 answer is then rightly said at once: nobody was talking yet. It failed about one run in 25 on two loaded cores, and on
 the gate. Make the premise true first and wait on something observable (here: the service got the user's audio, which
 the call weighs before it sends it on), then trigger what it races with. A longer sleep only makes the race rarer.
+- The same holds for stubs: install them before any setup that may already run the code under test. The agy root tests
+seeded their agent (which lists the sessions, and listing scans for the pane's data directory) and only then stubbed
+the clock and the scan, so the real scan recorded the real time and the earlier stubbed time never passed the rescan
+limit; both failed on every run (#17724, fixed by #17739).
 
 ## A moved file or block needs a test that fails when the old copy comes back (2026-11-20, #11476, #11543)
 

@@ -203,7 +203,7 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         SessionReadOnly("This session is view only"),
         EngineHerdr("herdr in a terminal"),
         EngineHerdrApp("Terminals opened in the desktop app"),
-        EngineOrca("Terminals in Orca"),
+        EngineOrca("Terminals and chats in Orca"),
         EngineTern("Terminals in Tern"),
         EngineRex("Terminals in Rex"),
         EnginePaseo("Agents in Paseo"),

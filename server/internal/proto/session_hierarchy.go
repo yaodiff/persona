@@ -121,6 +121,10 @@ type SessionHierarchy struct {
 	// external-event trigger; clients show a one-line notice in the composer. Stored here so ordinary Session rows
 	// stay inside their 1,536-byte allocation size class; encoded as top-level "botmux_external_trigger".
 	BotmuxExternalTrigger bool `json:"botmux_external_trigger,omitempty"`
+	// BotmuxExternalTriggerReason says why, when BotmuxExternalTrigger is set: botmux needs an upgrade, or no BotMux
+	// Owner Union ID is set (proto.BotmuxTriggerOwnerUnset). Empty from an older node; encoded as top-level
+	// "botmux_external_trigger_reason".
+	BotmuxExternalTriggerReason BotmuxExternalTriggerReason `json:"botmux_external_trigger_reason,omitempty"`
 }
 
 // View is the session's five-phase view, nil from a hub that does not send one (FeatureAgentView) and on a row the
@@ -235,7 +239,8 @@ func (h *SessionHierarchy) empty() bool {
 		h.FoldedUnder == "" && h.FoldedUnderMachineID == "" && h.FoldedAs == "" && h.FoldedSide == "" &&
 		h.ParentMachineID == "" && h.A2ATaskID == "" && h.SubagentOrigin == "" &&
 		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil && len(h.Aliases) == 0 &&
-		len(h.BackgroundEnded) == 0 && h.ContextBreakdown == nil && h.OutputTokens == 0 && !h.Deleted && h.View == nil && !h.BotmuxExternalTrigger
+		len(h.BackgroundEnded) == 0 && h.ContextBreakdown == nil && h.OutputTokens == 0 && !h.Deleted && h.View == nil && !h.BotmuxExternalTrigger &&
+		h.BotmuxExternalTriggerReason == ""
 }
 
 // OutputTokensValue is the cumulative generated output recorded for the row.
@@ -261,13 +266,23 @@ func (s *Session) BotmuxExternalTrigger() bool {
 	return s.Hierarchy != nil && s.Hierarchy.BotmuxExternalTrigger
 }
 
-// SetBotmuxExternalTrigger updates the sparse external-trigger flag without mutating shared copies of the row.
-func (s *Session) SetBotmuxExternalTrigger(v bool) {
-	if s.BotmuxExternalTrigger() == v {
+// BotmuxExternalTriggerReason says why this botmux session's sends fall back to the external-event trigger, "" when
+// they do not or the node did not say.
+func (s *Session) BotmuxExternalTriggerReason() BotmuxExternalTriggerReason {
+	if s.Hierarchy == nil {
+		return ""
+	}
+	return s.Hierarchy.BotmuxExternalTriggerReason
+}
+
+// SetBotmuxExternalTrigger updates the sparse external-trigger flag without mutating shared copies of the row. A
+// reason other than "" sets the flag and says why; "" clears both.
+func (s *Session) SetBotmuxExternalTrigger(reason BotmuxExternalTriggerReason) {
+	if s.BotmuxExternalTrigger() == (reason != "") && s.BotmuxExternalTriggerReason() == reason {
 		return
 	}
 	h := s.hierarchy()
-	h.BotmuxExternalTrigger = v
+	h.BotmuxExternalTrigger, h.BotmuxExternalTriggerReason = reason != "", reason
 	s.setHierarchy(h)
 }
 

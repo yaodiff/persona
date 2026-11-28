@@ -228,5 +228,114 @@ func (s *Service) admitDispatchedWorkspace(ctx context.Context, t *PlanTask) err
 	if support.Capability != taskworkspace.Capability || !support.LocalGit || !support.Start {
 		return taskworkspace.Failure("unsupported", "capability", op, "", t.Cwd)
 	}
-	return s.admitPreparedTaskWorkspace(ctx, t, op)
+	st, err := s.backendWorkspaceStore()
+	if err != nil {
+		return err
+	}
+	head, err := st.TaskWorkspace(ctx, t.TodoID, "")
+	if err != nil {
+		return err
+	}
+	if head != nil && head.State == "failed" && head.Error != nil && head.Error.Code == "workspace_drift" {
+		if replaced, err := s.replaceDriftedDispatch(ctx, st, t, op, head); replaced || err != nil {
+			return err
+		}
+	}
+	err = s.admitPreparedTaskWorkspace(ctx, t, op)
+	p, drifted := errors.AsType[*taskworkspace.Problem](err)
+	if !drifted || p.Code != "workspace_drift" && (p.Code != "operation_conflict" || p.Stage != "manager") {
+		return err
+	}
+	head, readErr := st.TaskWorkspace(ctx, t.TodoID, "")
+	if readErr != nil {
+		return readErr
+	}
+	if head != nil && (head.OperationID == p.OperationID || p.Code == "operation_conflict") {
+		if replaced, replaceErr := s.replaceDriftedDispatch(ctx, st, t, op, head); replaced || replaceErr != nil {
+			return replaceErr
+		}
+	}
+	return err
+}
+
+// replaceDriftedDispatch leaves the old checkout and branch on disk. The Node
+// must attest drift and release every old launch before the manager can replace
+// its head. A timeout, lost reply or different Node is not proof of drift.
+func (s *Service) replaceDriftedDispatch(ctx context.Context, st taskWorkspaceStore, t *PlanTask, op string, old *taskworkspace.Record) (bool, error) {
+	if old.Plan.Source.MachineID != t.Machine || old.Plan.Source.Manager != s.managerIdentity() {
+		return false, nil
+	}
+	view, err := s.InspectBackendWorkspace(ctx, t.TodoID, old.OperationID)
+	if err != nil {
+		return false, err
+	}
+	observed := view.Observation
+	if observed == nil || observed.OperationID != old.OperationID || observed.NodeOperationID != old.OperationID ||
+		observed.WorkspaceID != old.WorkspaceID || observed.InputDigest != old.InputDigest ||
+		observed.Error == nil || observed.Error.Code != "workspace_drift" {
+		return false, nil
+	}
+	if err := s.releaseStoppedBackendUses(ctx, old, ""); err != nil {
+		return false, err
+	}
+	old, err = st.TaskWorkspace(ctx, t.TodoID, old.OperationID)
+	if err != nil {
+		return false, err
+	}
+	if old == nil {
+		return false, taskworkspace.Failure("not_found", "prepare", op, "", "")
+	}
+	naming := s.store().(workspaceNamingStore)
+	suffix := "-retry-" + taskworkspace.Hash([]string{t.dispatchedWorkspaceOperationID(), old.OperationID})[:10]
+	replacement := "op_" + taskworkspace.Hash(suffix)[:24]
+	plan, err := naming.WorkspaceNamingPlan(ctx, t.TodoID, replacement)
+	if err != nil {
+		return false, err
+	}
+	if plan == nil {
+		requested, err := naming.WorkspaceNamingPlan(ctx, t.TodoID, op)
+		if err != nil {
+			return false, err
+		}
+		if requested == nil {
+			return false, taskworkspace.Failure("not_found", "plan", op, "", "")
+		}
+		source := requested.Source
+		source.Rules.TaskDirectoryTemplate += suffix
+		if source.TaskBranch == "" && len(source.Repositories.Repositories) > 0 {
+			source.Rules.BranchTemplate += suffix
+		}
+		var preview workspacenaming.Preview
+		if err := s.call(ctx, t.Machine, "workspace.naming.resolve", source, &preview); err != nil {
+			return false, err
+		}
+		if preview.Plan == nil {
+			return false, taskworkspace.Failure("naming_incomplete", "plan", replacement, "", "")
+		}
+		if err := validateWorkspaceNamingPlan(*preview.Plan, source); err != nil {
+			return false, err
+		}
+		rules, err := naming.TodoWorkspaceRules(ctx, t.TodoID)
+		if err != nil {
+			return false, err
+		}
+		plan, err = naming.SaveWorkspaceNamingPlan(ctx, t.TodoID, replacement, rules.Revision, *preview.Plan)
+		if err != nil {
+			return false, err
+		}
+	}
+	applySavedBackendPlan(t, plan, replacement)
+	if err := s.patchPlanTask(ctx, t.planID, t.planIndex, func(pt *PlanTask) {
+		pt.Cwd, pt.MachinePolicy, pt.WorkspaceResolved = t.Cwd, machineFixed, t.WorkspaceResolved
+	}); err != nil {
+		return false, err
+	}
+	r, err := s.prepareBackendWorkspace(ctx, t.TodoID, replacement, old)
+	if err != nil {
+		return false, err
+	}
+	if r.Error != nil {
+		return false, r.Error
+	}
+	return true, s.admitPreparedTaskWorkspace(ctx, t, replacement)
 }

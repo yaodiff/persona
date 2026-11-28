@@ -226,7 +226,7 @@ describe("待办 back on a narrow screen", () => {
     seed({ todos: [todo()], todosLoaded: true, sessions: {} });
     const back = vi.spyOn(history, "back").mockImplementation(() => {});
     await render(<TodosView />);
-    await click(byText("整理发布清单", "[role=button], button") ?? [...document.querySelectorAll("button, [role=button]")].find((b) => b.textContent?.includes("整理发布清单")));
+    await click(document.querySelector('[data-todo="t1"] [data-testid="todo-row-open"]') ?? document.querySelector('[data-todo="t1"]'));
     await render(<TodosView selectedId="t1" />); // the route now says ?id=t1
     await click(document.querySelector('[data-testid="todos-back"] button'));
     expect(back).toHaveBeenCalledTimes(1);

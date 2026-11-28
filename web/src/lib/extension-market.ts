@@ -8,6 +8,7 @@ import { itemHeaders } from "./manager-choice";
 import { extRoot, listOf } from "./extension-api";
 import { changed, type HubExtension, type HubExtensionDetail, type ExtensionPermission } from "./extensions";
 import { previewConsent, type DependencyState, type PackMember } from "./extension-model";
+import type { ScopedAssistantClient } from "./scoped-assistant-api";
 import { t } from "../i18n";
 
 /** One market the hub reads (its token, if any, is never sent back). */
@@ -200,12 +201,13 @@ export interface ExtensionRemovalResult {
   warnings?: string[] | null;
 }
 /** Only one installed from a market (`origin` market:…); keepData leaves ~/.persona/extensions/data/<id>/. */
-export const uninstallExtension = (id: string, keepData = false, cascade = false, members = false) => {
+export const uninstallExtension = (id: string, keepData = false, cascade = false, members = false, client?: ScopedAssistantClient) => {
   const q = new URLSearchParams();
   if (keepData) q.set("keep_data", "1");
   if (cascade) q.set("cascade", "1");
   if (members) q.set("members", "1");
-  return api<ExtensionRemovalResult>(`${extRoot()}/${enc(id)}/-/${q.size ? `?${q}` : ""}`, { method: "DELETE" }).then(changed);
+  const remove = client?.request ?? api;
+  return remove<ExtensionRemovalResult>(`${extRoot()}/${enc(id)}/-/${q.size ? `?${q}` : ""}`, { method: "DELETE" }).then(changed);
 };
 
 // ── words and rules ─────────────────────────────────────

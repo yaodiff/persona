@@ -798,7 +798,7 @@ Edit operations (only these four):
 {"op": "clear"}                                 // deletes timeline and list, state cleared, running job cancelled; cannot be undone
 ```
 
-Errors reuse the existing recording codes (`404`, `410` deleted, `403 forbidden` without full credentials, `403 kb_read_only`, `409 not_meeting` for a non-meeting, track recording or device-mode meeting) plus `409 speakers_stale`, `409 speakers_cleared` and `409 op_id_reused`. Write routes require full credentials only and stay out of `extwire.RouteScopes`.
+Errors reuse the existing recording codes (`400` for an invalid body, unknown op, unknown speaker, or a name that is multiline or over 100 characters; `404`; `410` deleted; `403 forbidden` without full credentials; `403 kb_read_only`; `409 not_meeting` for a non-meeting, track recording or device-mode meeting; `413 too_large` over the body or 20000-turn limit) plus `409 speakers_stale`, `409 speakers_cleared` and `409 op_id_reused`. Write routes require full credentials only and stay out of `extwire.RouteScopes`.
 
 **Exposure.** `detail.segments` is part of the extension KB contract (`schema/extension/kb.schema.json`, `sdk/go`, `sdk/ts`): extensions with `kb.read` see speaker numbers and names alongside the transcript and minutes they already read.
 

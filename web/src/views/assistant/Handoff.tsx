@@ -3,8 +3,9 @@
 // own page (lib/handoff.ts), never a panel. Before its Agent is up the card stands for the task: starting, or why it
 // did not start, in plain words (lib/start-failure.ts; the task's Needs you row has Retry and Remove). It is the task's
 // only card in the chat (#8237): a turn the model service cut off shows on it too, in place, with why.
+import { createContext, lazy, Suspense } from "react";
 import { openAgent, openTask } from "../../lib/handoff";
-import { startFailure, type TaskPlan } from "../../lib/feed";
+import { startFailure, type DisplayLine, type FeedItem, type TaskPlan } from "../../lib/feed";
 import { startFailureCardLine } from "../../lib/start-failure";
 import { interruption, TODO_STATUS_INFO, type Todo, type TodoAgent } from "../../lib/todos";
 import { ago, stateOf } from "../../lib/format";
@@ -16,6 +17,11 @@ import { cx, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
 import { t } from "../../i18n";
+
+// Loaded only when 3+ hand-off cards or a consecutive hand-off run renders, keeping the summary UI and its copy
+// off the cold first screen (src/startup-preload.ts FIRST_SCREEN_BUDGET).
+const LazyHandoffGroup = lazy(() => import("./HandoffGroup").then((m) => ({ default: m.HandoffGroup })));
+const LazyHandoffFeedRunImpl = lazy(() => import("./HandoffGroup").then((m) => ({ default: m.HandoffFeedRun })));
 
 /** How the Agent came to the task (a `task` feed item's `wake`): started for it (New), running already when the task
  *  took it over (Already active), or closed and resumed by the hand-off's message (Resumed). A plan can also
@@ -115,7 +121,7 @@ export function shortSessionId(id: string): string {
 }
 
 /** The Agent's session as the store has it now. */
-function sessionIn(s: State, mid: string, sid: string): Session | undefined {
+export function sessionIn(s: State, mid: string, sid: string): Session | undefined {
   return (s.sessions[mid] ?? []).find((x) => x.session_id === sid) ?? s.sessionSummaries.find((x) => x.machine_id === mid && x.session_id === sid);
 }
 
@@ -226,12 +232,90 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
   );
 }
 
-/** The cards of one feed line, stacked as cindy stacks them: one per Agent, no heading over them. */
-export function HandoffCards({ handoffs }: { handoffs: Handoff[] }) {
+/** Minimum number of cards in a hand-off group before it defaults to a compact collapsible summary (#17766). */
+export const HANDOFF_COLLAPSE_MIN = 3;
+
+/** Scoped expand/collapse memory for hand-off groups inside a conversation so a live batch growing from a single feed
+ *  item into a consecutive run keeps the user's toggle without leaking across conversations or tests. */
+export const HandoffGroupStateContext = createContext<Map<string, boolean> | null>(null);
+
+/** The cards of one feed line (or consecutive hand-off run): 1-2 cards render directly with no extra chrome; 3+ cards
+ *  collapse by default into a compact summary card with live status aggregation and urgent attention surfacing (#17766). */
+export function HandoffCards({ handoffs, groupKey }: { handoffs: Handoff[]; groupKey?: string }) {
   if (handoffs.length === 0) return null;
+  if (handoffs.length >= HANDOFF_COLLAPSE_MIN) {
+    return (
+      <Suspense fallback={<div data-handoff-cards={handoffs.length} className="h-16 w-full rounded-card bg-surface shadow-card" />}>
+        <LazyHandoffGroup handoffs={handoffs} groupKey={groupKey} />
+      </Suspense>
+    );
+  }
   return (
     <div data-handoff-cards={handoffs.length} className="flex w-full min-w-0 flex-col gap-2">
       {handoffs.map((h) => <HandoffCard key={h.key} handoff={h} />)}
     </div>
+  );
+}
+
+/** The plan a `plan` item carries in its body (the hub writes it there with the item), when it is one of this item's. */
+export function itemPlan(item: FeedItem): TaskPlan | undefined {
+  const p = item.body?.plan as TaskPlan | undefined;
+  return p && typeof p === "object" && p.id === item.ref && Array.isArray(p.tasks) ? p : undefined;
+}
+
+/** The to-do plan task i ran on: its todo_id, or, once a later plan continued that to-do and cleared it (#11854), the
+ *  one it continued or reused, else the one only this task can have made (the to-do keeps the plan it came from). A
+ *  task that failed to start keeps none: its card says why. */
+export function planTaskTodo(plan: TaskPlan, i: number, todos: Todo[]): string | undefined {
+  const task = plan.tasks[i];
+  if (!task) return undefined;
+  if (task.todo_id) return task.todo_id;
+  if (task.error || plan.state !== "started") return undefined;
+  if (task.continues || task.reuse_todo) return task.continues || task.reuse_todo;
+  const bare = plan.tasks.filter((x) => !x.todo_id && !x.error && !x.continues && !x.reuse_todo);
+  const held = new Set(plan.tasks.map((x) => x.todo_id || x.continues || x.reuse_todo).filter(Boolean));
+  const made = todos.filter((x) => x.plan_id === plan.id && !held.has(x.id));
+  return bare.length === 1 && made.length === 1 ? made[0]!.id : undefined;
+}
+
+export type GroupedDisplayLine = DisplayLine | { kind: "handoff_run"; id: string; items: FeedItem[] };
+
+const isHandoffFeedKind = (item: FeedItem) => item.kind === "plan" || item.kind === "task";
+
+/** Coalesces 2+ consecutive `plan` / `task` feed lines (with no intervening messages, day lines, or other feed items)
+ *  into a single hand-off run so back-to-back single-task dispatches collapse cleanly when 3+ cards accumulate. */
+export function groupAssistantLines(lines: readonly DisplayLine[]): GroupedDisplayLine[] {
+  const out: GroupedDisplayLine[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const cur = lines[i]!;
+    if (cur.kind === "feed" && isHandoffFeedKind(cur.item)) {
+      let j = i + 1;
+      while (j < lines.length) {
+        const next = lines[j]!;
+        if (next.kind === "feed" && isHandoffFeedKind(next.item)) j++;
+        else break;
+      }
+      if (j - i >= 2) {
+        out.push({
+          kind: "handoff_run",
+          id: cur.id,
+          items: lines.slice(i, j).map((d) => (d as Extract<DisplayLine, { kind: "feed" }>).item),
+        });
+        i = j;
+        continue;
+      }
+    }
+    out.push(cur);
+    i++;
+  }
+  return out;
+}
+
+export function HandoffFeedRun({ items, renderOther }: { items: readonly FeedItem[]; renderOther: (item: FeedItem) => React.ReactNode }) {
+  return (
+    <Suspense fallback={null}>
+      <LazyHandoffFeedRunImpl items={items} renderOther={renderOther} />
+    </Suspense>
   );
 }

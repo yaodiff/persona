@@ -29,18 +29,12 @@ func TestTaskPlansList(t *testing.T) {
 	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
 		setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
 		e.sessions("server", scopeListed()...)
-		// task_plans is not truncated between tests and the store's partitions share one database, so another test's
-		// open plans may be listed too: only this test's own plans are checked.
 		own := []*TaskPlan{
 			{ID: "plan_main", Conversation: "conv1", State: planOpen},
 			{ID: "plan_side", Conversation: "side", State: planOpen},
 			{ID: "plan_health", Conversation: "h0", State: planOpen},
 			{ID: "plan_started", Conversation: "conv1", State: planStarted},
 			{ID: "plan_dismissed", Conversation: "conv1", State: planDismissed},
-		}
-		mine := map[string]bool{}
-		for _, p := range own {
-			mine[p.ID] = true
 		}
 		for _, p := range own {
 			if err := e.s.savePlan(t.Context(), p); err != nil {
@@ -61,9 +55,6 @@ func TestTaskPlansList(t *testing.T) {
 			plans := listedTaskPlans(t, e.do("GET", "/api/v1/task-plans"+tc.query, ""))
 			var ids []string
 			for _, p := range plans {
-				if !mine[p.ID] {
-					continue
-				}
 				ids = append(ids, p.ID)
 				if p.State != planOpen || p.ID == "plan_health" && p.Space != SpaceHealth {
 					t.Errorf("%s: plan not open or missing its space: %+v", tc.query, p)

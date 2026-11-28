@@ -319,7 +319,7 @@ const isUnsupported = (error: unknown) => error instanceof ApiError && error.sta
 
 /** A to-do's own PR, as the page already parses it (the editor does not read the stage bar, a first-screen chunk). */
 type LegacyPR = { url: string; text: string };
-type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; prStatus?: PRFacts; otherPRs?: PRFacts[]; version?: unknown; todosV2?: boolean; repoGate?: TodoRepoGate; onRepositoriesCount?: (count: number) => void };
+type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; prStatus?: PRFacts; otherPRs?: PRFacts[]; version?: unknown; todosV2?: boolean; repoGate?: TodoRepoGate; hideRepoGateBanner?: boolean; onRepositoriesCount?: (count: number) => void };
 
 function hasNewPRLinkTitle(previous: Map<string, PRFacts>, current: Map<string, PRFacts>, saved?: TaskRepositorySet) {
   if (previous === current) return false;
@@ -335,7 +335,7 @@ function hasNewPRLinkTitle(previous: Map<string, PRFacts>, current: Map<string, 
 export function TodoRepositoryBindings(props: TodoRepositoryBindingsProps) {
   return <TodoRepositoryBindingsSession key={`${props.owner}:${props.manager}:${props.todoId}`} {...props} />;
 }
-function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], prStatus, otherPRs, version, todosV2, repoGate, onRepositoriesCount }: TodoRepositoryBindingsProps) {
+function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], prStatus, otherPRs, version, todosV2, repoGate, hideRepoGateBanner, onRepositoriesCount }: TodoRepositoryBindingsProps) {
   const prByURL = useMemo(() => {
     const facts = new Map<string, PRFacts>();
     if (prStatus) facts.set(normalizedPR(prStatus.url), prStatus);
@@ -553,7 +553,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     </Fragment>;
   };
   const renderRepoGateBanner = () => {
-    if (todosV2 !== true || !repoGate) return null;
+    if (todosV2 !== true || !repoGate || hideRepoGateBanner) return null;
     const tone = repoGateTone(repoGate.state);
     const toneText: Record<RepoGateTone, string> = {
       green: "text-green",

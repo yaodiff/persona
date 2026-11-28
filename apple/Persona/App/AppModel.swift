@@ -1393,6 +1393,7 @@ final class AppModel {
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
         PortForwarder.shared.closeAll() // no hub left for a forwarded port to reach
+        LoopbackCertificateTrustStore.shared.reset()
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
         // No key may open a push any more: the notification extension tries every key left (PushCrypto.allKeys).
         for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }

@@ -495,7 +495,7 @@ func (s *Service) replyMigrated(ctx context.Context, r inboxReplyReq) (bool, err
 	}
 	if err := s.deliverInboxReply(ctx, r, func(ctx context.Context) error {
 		_, err := s.connectorReply(ctx, migratedConnectorID, connector.InboxReply{Thread: migratedThread(&it), ItemID: it.ID, Last: it.Last,
-			Text: r.text, ClientID: clientID, Changes: changes}, r.sendID)
+			Text: r.text, Mentions: r.mentions, ClientID: clientID, Changes: changes}, r.sendID)
 		return err
 	}); err != nil {
 		return false, err

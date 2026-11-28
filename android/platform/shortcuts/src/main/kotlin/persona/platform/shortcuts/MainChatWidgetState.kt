@@ -84,6 +84,10 @@ data class MainChatWidgetSnapshot(
     val pendingCount: Int = 0,
     val pending: MainChatPendingItem? = null,
     val todos: List<MainChatTodoItem> = emptyList(),
+    val title: String? = null,
+    val isMainChat: Boolean = true,
+    val targetAssistant: Boolean? = true,
+    val bindingMissing: Boolean = false,
 )
 
 /** Pure projection from repository state into [MainChatWidgetSnapshot]. */
@@ -96,9 +100,24 @@ object MainChatWidgetState {
         sessions: List<Session>,
         interactions: List<Interaction>,
         resources: Resources,
+        targetBinding: ConversationWidgetBinding? = null,
     ): MainChatWidgetSnapshot {
         if (!paired) {
-            return MainChatWidgetSnapshot(paired = false, phase = MainChatPhase.Unpaired)
+            return MainChatWidgetSnapshot(
+                paired = false,
+                phase = MainChatPhase.Unpaired,
+                title = targetBinding?.takeUnless { it.isMain }?.titleSnapshot?.takeIf(String::isNotBlank),
+                isMainChat = targetBinding == null || targetBinding.isMain,
+            )
+        }
+        if (targetBinding != null && !targetBinding.isMain) {
+            return buildTarget(
+                binding = targetBinding,
+                assistant = assistant,
+                sessions = sessions,
+                interactions = interactions,
+                resources = resources,
+            )
         }
 
         val liveByKey = sessions.associateBy { it.key }
@@ -234,6 +253,143 @@ object MainChatWidgetState {
             pendingCount = pendingCount,
             pending = leadPending,
             todos = todos,
+        )
+    }
+
+    private fun buildTarget(
+        binding: ConversationWidgetBinding,
+        assistant: AssistantSnapshot,
+        sessions: List<Session>,
+        interactions: List<Interaction>,
+        resources: Resources,
+    ): MainChatWidgetSnapshot {
+        val targetKey = binding.sessionKey ?: return MainChatWidgetSnapshot(
+            paired = true,
+            phase = MainChatPhase.Idle,
+            title = binding.titleSnapshot.takeIf(String::isNotBlank),
+            isMainChat = false,
+            bindingMissing = true,
+        )
+        val liveByKey = sessions.associateBy { it.key }
+        val targetSession = liveByKey[targetKey] ?: assistant.conversations.firstOrNull { it.key == targetKey }
+        val tree = assistant.directionTree
+        val direction = tree?.leaders?.firstOrNull { dir ->
+            dir.id == targetKey.sessionId || dir.external?.target == targetKey
+        }
+        val isLeader = direction != null ||
+            binding.kind == ConversationWidgetKind.Leader ||
+            targetKey.sessionId in assistant.leaders
+
+        val missing = (targetSession == null && direction == null) || targetSession?.archived == true
+        val resolvedTitle = when {
+            direction?.name?.isNotBlank() == true -> direction.name
+            !assistant.directionNames[targetKey.sessionId].isNullOrBlank() -> assistant.directionNames[targetKey.sessionId]
+            !targetSession?.displayTitle.isNullOrBlank() -> targetSession?.displayTitle
+            else -> binding.titleSnapshot.takeIf(String::isNotBlank)
+        }
+        val targetAssistant = targetSession?.assistant ?: when {
+            direction?.external?.target == targetKey -> false
+            isLeader || binding.kind == ConversationWidgetKind.Assistant -> true
+            binding.kind == ConversationWidgetKind.Agent -> false
+            else -> null
+        }
+
+        if (missing) {
+            return MainChatWidgetSnapshot(
+                paired = true,
+                phase = MainChatPhase.Idle,
+                mainSession = targetKey,
+                title = resolvedTitle,
+                isMainChat = false,
+                targetAssistant = targetAssistant,
+                bindingMissing = true,
+            )
+        }
+
+        val ownedKeys = LinkedHashSet<SessionKey>()
+        val _ = ownedKeys.add(targetKey)
+        if (direction != null) {
+            direction.tasks
+                .flatMap { it.agents }
+                .flatMap { it.flatten() }
+                .forEach { agent ->
+                    val _ = ownedKeys.add(agent.key)
+                    val _ = ownedKeys.add(agent.openKey)
+                }
+        }
+
+        val matchingPending = interactions
+            .asSequence()
+            .filterNot { it.isDelegating }
+            .filter { ix ->
+                ix.sessionId.isNotBlank() && (ix.sessionKey in ownedKeys || ix.homeKey in ownedKeys)
+            }
+            .distinctBy { it.id }
+            .sortedWith(
+                compareByDescending<Interaction> { it.sessionKey == targetKey || it.homeKey == targetKey }
+                    .thenByDescending { parseTime(it.createdAt) ?: Instant.MIN }
+                    .thenBy { it.id },
+            )
+            .toList()
+
+        val leadPending = matchingPending.firstOrNull()?.let { ix ->
+            val session = liveByKey[ix.sessionKey] ?: liveByKey[ix.homeKey]
+            val isAssistant = session?.assistant ?: if (ix.sessionKey == targetKey || ix.homeKey == targetKey) targetAssistant else false
+            MainChatPendingItem(
+                id = ix.id,
+                machineId = ix.machineId,
+                sessionId = ix.sessionId,
+                assistant = isAssistant,
+                kind = ix.kind,
+                title = MainChatText.pendingTitle(ix, resources),
+            )
+        }
+
+        val targetNeedsYou = targetSession?.foldedState == AgentState.NeedsYou ||
+            targetSession?.agentState == AgentState.NeedsYou ||
+            (targetSession?.pendingInteractions ?: 0) > 0 ||
+            (direction?.counts?.needsYou ?: 0) > 0
+        val pendingCount = when {
+            matchingPending.isNotEmpty() -> maxOf(matchingPending.size, targetSession?.pendingInteractions ?: 0, direction?.counts?.needsYou ?: 0)
+            targetNeedsYou -> maxOf(targetSession?.pendingInteractions ?: 0, direction?.counts?.needsYou ?: 0, 1)
+            else -> 0
+        }
+
+        val targetWorking = targetSession?.foldedState == AgentState.Working ||
+            targetSession?.agentState == AgentState.Working ||
+            targetSession?.starting == true ||
+            targetSession?.compaction?.running == true ||
+            direction?.running == true
+
+        val phase = when {
+            pendingCount > 0 -> MainChatPhase.NeedsYou
+            targetWorking -> MainChatPhase.Working
+            else -> MainChatPhase.Idle
+        }
+
+        val rawSummary = when {
+            targetSession?.awaitsReply == true && !targetSession.asks.isNullOrBlank() -> targetSession.asks
+            !targetSession?.lastText.isNullOrBlank() -> targetSession.lastText
+            !targetSession?.reasonPreview.isNullOrBlank() -> targetSession.reasonPreview
+            else -> null
+        }
+        val summary = MainChatText.sanitize(rawSummary, maxChars = SUMMARY_MAX_CHARS)
+        val updatedAt = targetSession?.updatedAt ?: targetSession?.activityAt ?: targetSession?.stateSince
+        val todos = if (direction != null) pickUrgentTodos(direction.tasks, emptyList()) else emptyList()
+
+        return MainChatWidgetSnapshot(
+            paired = true,
+            phase = phase,
+            mainSession = targetKey,
+            summary = summary,
+            updatedAt = updatedAt,
+            pendingCount = pendingCount,
+            pending = leadPending,
+            todos = todos,
+            title = resolvedTitle,
+            isMainChat = false,
+            targetAssistant = targetAssistant,
+            bindingMissing = false,
         )
     }
 
@@ -475,16 +631,29 @@ internal object MainChatWidgetStore {
         val snapshot: MainChatWidgetSnapshot,
     )
 
-    fun save(context: Context, pairingScope: String?, snapshot: MainChatWidgetSnapshot) {
+    private fun snapshotKey(conversationKey: String): String =
+        if (conversationKey.isBlank() || conversationKey == ConversationWidgetPrefs.MAIN_CONVERSATION_KEY) KEY_SNAPSHOT
+        else "${KEY_SNAPSHOT}_$conversationKey"
+
+    fun save(
+        context: Context,
+        pairingScope: String?,
+        snapshot: MainChatWidgetSnapshot,
+        conversationKey: String = ConversationWidgetPrefs.MAIN_CONVERSATION_KEY,
+    ) {
         if (!snapshot.paired) {
             clear(context)
             return
         }
         val scope = pairingScope?.takeIf(String::isNotBlank) ?: return
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val storedPairing = prefs.getString(KEY_PAIRING, null)?.takeIf(String::isNotBlank)
         prefs.edit {
+            if (storedPairing != null && storedPairing != scope) {
+                val _ = clear()
+            }
             val _ = putString(KEY_PAIRING, scope)
-            val _ = putString(KEY_SNAPSHOT, encode(snapshot, scope))
+            val _ = putString(snapshotKey(conversationKey), encode(snapshot, scope))
         }
     }
 
@@ -493,22 +662,23 @@ internal object MainChatWidgetStore {
      * match [activePairing]. Legacy unscoped records, corrupt payloads, or snapshots belonging to a
      * different pairing are cleared immediately and never returned.
      */
-    fun read(context: Context, activePairing: String?): MainChatWidgetSnapshot? {
+    fun read(
+        context: Context,
+        activePairing: String?,
+        conversationKey: String = ConversationWidgetPrefs.MAIN_CONVERSATION_KEY,
+    ): MainChatWidgetSnapshot? {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val raw = prefs.getString(KEY_SNAPSHOT, null)
         val storedPairing = prefs.getString(KEY_PAIRING, null)?.takeIf(String::isNotBlank)
-        if (raw == null) {
-            if (storedPairing != null) clear(context)
-            return null
-        }
         val scope = activePairing?.takeIf(String::isNotBlank)
         if (scope == null || storedPairing != scope) {
-            clear(context)
+            if (storedPairing != null || prefs.all.isNotEmpty()) clear(context)
             return null
         }
+        val key = snapshotKey(conversationKey)
+        val raw = prefs.getString(key, null) ?: return null
         val record = decodeRecord(raw)
         if (record == null || record.pairingScope != scope) {
-            clear(context)
+            if (key == KEY_SNAPSHOT) clear(context) else prefs.edit { val _ = remove(key) }
             return null
         }
         return record.snapshot
@@ -551,6 +721,12 @@ internal object MainChatWidgetStore {
                 val _ = arr.put(obj)
             }
             val _ = root.put("todos", arr)
+        }
+        snapshot.title?.let { val _ = root.put("title", it) }
+        val _ = root.put("is_main_chat", snapshot.isMainChat)
+        snapshot.targetAssistant?.let { val _ = root.put("target_assistant", it) }
+        if (snapshot.bindingMissing) {
+            val _ = root.put("binding_missing", true)
         }
         return root.toString()
     }
@@ -607,6 +783,10 @@ internal object MainChatWidgetStore {
                 pendingCount = root.optInt("pending_count", 0).coerceAtLeast(0),
                 pending = pending,
                 todos = todos.take(MainChatWidgetState.MAX_TODOS),
+                title = root.optString("title", "").takeIf { it.isNotEmpty() },
+                isMainChat = root.optBoolean("is_main_chat", true),
+                targetAssistant = if (root.has("target_assistant")) root.optBoolean("target_assistant") else true,
+                bindingMissing = root.optBoolean("binding_missing", false),
             ),
         )
     }.getOrNull()

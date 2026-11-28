@@ -802,7 +802,10 @@
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "name": {"type": "string", "minLength": 1},
-        "hosts": {"type": "array", "items": {"$ref": "#/$defs/Host"}}
+        "hosts": {"type": "array", "items": {"$ref": "#/$defs/Host"}},
+        "direct": {"type": "boolean"},
+        "remote_address": {"$ref": "#/$defs/ID"},
+        "remote_key": {"$ref": "#/$defs/ID"}
       },
       "required": ["id", "name"]
     },

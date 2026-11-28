@@ -115,9 +115,14 @@ import (
 // Hardening Antigravity Desktop hub discovery/RPC/context wrapping, workspacePathOf UNC/NUL/host checks, and custom-channel fork/rewind isolation with rollback adds 1,012 B (317,963 B -> 318,975 B).
 // Anchoring Antigravity one-shot timer heartbeat detection and returning turn_over_background when interrupting background-only sessions (#17619) add 222 B (318,975 B -> 319,197 B).
 // Preserving active native Antigravity interrupts alongside running background tasks (#17652) adds 15 B (319,197 B -> 319,212 B).
+// Runtime command input (#14573) adds 2,657 B to the runtime SDK package
+// on top of the 319,212 B upstream total (321,869 B combined).
+// Reaping idle assistant ACP workers independently of coding agents and storing compact background summaries instead of full exported.steps in listedTranscriptCache add 8 B (321,869 B -> 321,877 B).
+// Replacing resident Antigravity ACP processes after a new agy sign-in (metadata-only sign-in stamp, lib/sign-in.js) or a
+// quota or sign-in error (#17860) adds 1,809 B (321,877 B -> 323,686 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 319_212
+	const budget = 323_686
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

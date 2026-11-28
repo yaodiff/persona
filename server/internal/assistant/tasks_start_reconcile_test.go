@@ -10,7 +10,40 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 )
+
+func TestPlanStartTimeout(t *testing.T) {
+	ordinary := PlanTask{}
+	if got := ordinary.planStartTimeout(); got != taskStartTimeout {
+		t.Errorf("ordinary task timeout = %v, want %v", got, taskStartTimeout)
+	}
+	minimum := 2*repoMirrorCallTimeout + 3*5*time.Minute + taskStartTimeout
+	workspaces := map[string]PlanTask{
+		"resolved": {WorkspaceResolved: &TaskWorkspaceResolved{Repositories: make([]BackendLaunchRepository, 2)}},
+		"selected": {Workspace: &TaskWorkspace{
+			Mode:      workspaceContainer,
+			Container: &ContainerWorkspaceSelection{SelectedRepoIDs: []string{"repo_web", "repo_api"}},
+		}},
+	}
+	for name, task := range workspaces {
+		if got := task.planStartTimeout(); got <= minimum {
+			t.Errorf("%s workspace timeout = %v, want more than %v for two mirrors, workspace RPCs and the agent start", name, got, minimum)
+		}
+	}
+	saved := PlanTask{Workspace: &TaskWorkspace{
+		Mode:    workspaceBackend,
+		Backend: &BackendWorkspaceSelection{OperationID: "op_saved"},
+	}}
+	minimum = repositorywire.MaxTaskRepositories*repoMirrorCallTimeout + 3*5*time.Minute + taskStartTimeout
+	if got := saved.planStartTimeout(); got <= minimum {
+		t.Errorf("unresolved saved workspace timeout = %v, want more than %v for the full repository limit", got, minimum)
+	}
+	saved.WorkspaceResolved = &TaskWorkspaceResolved{OperationID: "op_saved"}
+	if got := saved.planStartTimeout(); got != taskStartTimeout {
+		t.Errorf("resolved empty workspace timeout = %v, want %v", got, taskStartTimeout)
+	}
+}
 
 // ctxAwareLinkStore is a Store + todoStore whose agent links refuse a spent context, as pgx does: its first pool
 // Acquire on a cancelled or deadline-exceeded context fails at once. Only the methods the task-start path calls are

@@ -74,5 +74,7 @@
   "crashed": "The page crashed.",
   "leave": "The page asks whether to leave it.",
   "notice_file_chooser": "The page asked for a file. Previews can't pick files yet.",
-  "no_box": "This conversation takes no messages, so the element can't be sent as a comment."
+  "no_box": "This conversation takes no messages, so the element can't be sent as a comment.",
+  "select_label": "Select an option",
+  "select_empty": "No options"
 }

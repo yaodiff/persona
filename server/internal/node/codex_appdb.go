@@ -39,6 +39,7 @@ type codexAppThread struct {
 	Title       string `json:"title"`
 	Cwd         string `json:"cwd"`
 	Source      string `json:"source"`
+	Originator  string `json:"originator"`
 	UpdatedAtMs int64  `json:"updatedAtMs"`
 	Paginated   bool   `json:"-"`
 	// Model and Effort are what the App runs the chat with (its model and reasoning_effort columns, #6501): its
@@ -194,14 +195,14 @@ func readCodexAppThreads(ctx context.Context, db string, ids []string) (map[stri
 		byID = rows
 	}
 	migrated, err := readCodexThreads(ctx, db, `archived = 0 AND (
-		(originator IN ('Codex Desktop', 'codex_work_desktop') AND source != '' AND source != 'exec')
+		(originator IN ('Codex Desktop', 'codex_work_desktop', 'codex-tui') AND source != '' AND source != 'exec')
 		OR (originator = 'persona' AND source = 'vscode')
 	)`)
 	if err == nil {
 		for id, t := range migrated {
 			// Subagent metadata is needed for parent folding and guardian suppression. Other inferred sources are not
-			// desktop conversations; explicit sidebar IDs above remain authoritative for legacy rows.
-			if strings.TrimSpace(t.Source) != "vscode" && !t.origin().sub {
+			// desktop or terminal conversations; explicit sidebar IDs remain authoritative for legacy rows.
+			if t.Originator != "codex-tui" && strings.TrimSpace(t.Source) != "cli" && strings.TrimSpace(t.Source) != "vscode" && !t.origin().sub {
 				continue
 			}
 			if _, ok := byID[id]; !ok {
@@ -230,9 +231,14 @@ func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAp
 		hideCodexSQLiteWindow(cmd)
 		return cmd.Output()
 	}
-	out, err := query(`, COALESCE(model, '') AS model, COALESCE(reasoning_effort, '') AS effort`)
-	if err != nil { // a schema without those columns: the rest as before
-		out, err = query("")
+	settings := `, COALESCE(model, '') AS model, COALESCE(reasoning_effort, '') AS effort`
+	origin := `, COALESCE(originator, '') AS originator`
+	var out []byte
+	for _, columns := range []string{settings + origin, origin, settings, ""} {
+		out, err = query(columns) // older schemas may lack settings, originator, or both
+		if err == nil {
+			break
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -246,6 +252,7 @@ func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAp
 		return nil, err
 	}
 	for _, r := range rows {
+		r.includeRunning = r.Originator == "codex-tui" || strings.TrimSpace(r.Source) == "cli"
 		byID[r.ID] = r
 	}
 	return byID, nil

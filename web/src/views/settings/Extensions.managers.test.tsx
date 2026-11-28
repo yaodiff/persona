@@ -15,7 +15,8 @@ vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof impor
 import { t } from "../../i18n";
 import { readExternalDirections, readExternalPolicy } from "../../features/external-sources/api";
 import { chooseManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
-import { setRoster } from "../../lib/managers";
+import { setRoster, type ManagerList } from "../../lib/managers";
+import type { ExtensionTrust } from "../../lib/tracks";
 import { ChannelPage } from "./Channels";
 import { Connectors } from "./Connectors";
 import { Extensions } from "./Extensions";
@@ -47,7 +48,9 @@ let host: HTMLDivElement;
 let root: Root;
 let calls: { url: string; method: string; header: string | null; body?: string }[] = [];
 let roster: (() => void) | null = null; // set: the roster's answer waits until it is called
+let servedRoster: ManagerList;
 let detail: Record<string, unknown> = DETAIL;
+let grants: Record<string, ExtensionTrust>;
 
 const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body), headers: new Headers() });
 const flush = async () => {
@@ -57,17 +60,27 @@ const flush = async () => {
 beforeEach(() => {
   calls = [];
   roster = null;
+  servedRoster = ROSTER;
   detail = DETAIL;
+  grants = {
+    assistant: { extension: DETAIL.id, trust: "third_party", categories: ["finance"] },
+    "m-1": { extension: DETAIL.id, trust: "owner", categories: [] },
+  };
   resetManagerChoice();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const header = new Headers(init?.headers).get("X-Persona-Manager");
     calls.push({ url, method: init?.method ?? "GET", header, body: init?.body as string | undefined });
     if (url.endsWith("/managers")) {
-      if (roster === null) return reply(ROSTER);
-      return new Promise((done) => (roster = () => done(reply(ROSTER))));
+      if (roster === null) return reply(servedRoster);
+      return new Promise((done) => (roster = () => done(reply(servedRoster))));
     }
     if (/\/(plugins|extensions)\/example-wechat\/-\/\?entry_lists=1$/.test(url)) return reply(detail);
-    if (url.endsWith("/assistant/extension-trust")) return reply({ items: [{ extension: "example-wechat", trust: "third_party", categories: ["finance"] }] });
+    if (url.endsWith("/assistant/extension-trust")) return reply({ items: [grants[header ?? "assistant"]] });
+    if (url.endsWith(`/assistant/extension-trust/${DETAIL.id}`) && init?.method === "PUT") {
+      const grant = { extension: DETAIL.id, ...JSON.parse(String(init.body)) };
+      grants[header ?? "assistant"] = grant;
+      return reply(grant);
+    }
     if (url.endsWith("/connectors")) {
       // the merged list: each manager's copy of the connector, stamped
       return reply({ connectors: [
@@ -138,7 +151,7 @@ describe("another manager's extension page", () => {
     expect(onOpen).toHaveBeenLastCalledWith("example-wechat@m-1");
   });
 
-  it("keeps default extension requests unscoped and stamps its external source bindings with the default owner", async () => {
+  it("names the default on trust reads and stamps its external source bindings with the default owner", async () => {
     setRoster(ROSTER);
     await import("../../features/external-sources/ExternalSourceSettings");
     act(() => root.render(<Extensions open="example-wechat" onOpen={() => {}} onChannel={() => {}} onConnector={() => {}} />));
@@ -151,7 +164,10 @@ describe("another manager's extension page", () => {
     expect(calls.some((c) => c.url.includes("/external-source-bindings/summary") && c.header === null)).toBe(true);
     expect(calls.some((c) => c.url.includes("/assistant/external-source-policies") && c.header === null)).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/assistant/leaders") && c.header === null)).toBe(true);
-    expect(calls.filter((c) => !c.url.endsWith("/managers")).every((c) => c.header === null)).toBe(true);
+    expect(calls.filter((c) => c.url.endsWith("/assistant/extension-trust")).map((c) => c.header)).toEqual(["assistant"]);
+    const detail = calls.find((c) => /example-wechat\/-\/\?entry_lists=1$/.test(c.url));
+    expect(detail?.header).toBe("assistant");
+    expect(calls.filter((c) => c !== detail && !c.url.endsWith("/managers") && !c.url.endsWith("/assistant/extension-trust")).every((c) => !c.header)).toBe(true);
   });
 
   it("pins the default assistant on external-source reads even when another assistant is chosen", async () => {
@@ -167,12 +183,33 @@ describe("another manager's extension page", () => {
     expect(calls.find((c) => c.url.endsWith("/assistant/leaders"))?.header).toBe("assistant");
   });
 
-  it("leaves out what the extension may read: extension trust is the default manager's", async () => {
-    setRoster(ROSTER);
-    act(() => root.render(<Extensions open="example-wechat@m-1" onOpen={() => {}} onChannel={() => {}} onConnector={() => {}} />));
-    await flush();
+  it("edits the named assistant's grants in legacy Extensions while the sidebar stays on the default", async () => {
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, extension_info_access_scoped: m.id === "m-1" })) };
+    setRoster(servedRoster);
+    await act(async () => root.render(<Extensions open="example-wechat@m-1" onOpen={() => {}} />));
+    const owner = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(owner?.getAttribute("aria-checked")).toBe("true");
+    await act(async () => owner.click());
+    expect(calls.filter(({ url }) => url.includes("/assistant/extension-trust")).map(({ method, header }) => [method, header]))
+      .toEqual([["GET", "m-1"], ["PUT", "m-1"], ["GET", "m-1"]]);
+    expect(grants["m-1"].trust).toBe("third_party");
+    expect(grants.assistant.categories).toEqual(["finance"]);
+  });
+
+  it.each([undefined, false])("keeps trust default-only when the other assistant advertises %s", async (capability) => {
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, extension_info_access_scoped: capability })) };
+    setRoster(servedRoster);
+    chooseManager("m-1");
+    await act(async () => root.render(<Extensions open="example-wechat@m-1" onOpen={() => {}} />));
     expect(host.querySelector("[data-extension-info-access]")).toBeNull();
-    expect(calls.some((c) => c.url.endsWith("/assistant/extension-trust"))).toBe(false);
+    expect(calls.some(({ url }) => url.includes("/assistant/extension-trust"))).toBe(false);
+
+    await act(async () => root.render(<Extensions open="example-wechat@assistant" onOpen={() => {}} />));
+    const owner = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(owner?.getAttribute("aria-checked")).toBe("false");
+    await act(async () => owner.click());
+    expect(calls.filter(({ url }) => url.includes("/assistant/extension-trust")).map(({ method, header }) => [method, header]))
+      .toEqual([["GET", "assistant"], ["PUT", "assistant"], ["GET", "assistant"]]);
   });
 
   it("shows what the default's extension may read, with live switches", async () => {
@@ -235,6 +272,7 @@ describe("another manager's connector and channel pages", () => {
   it("reads another manager's channel with its name", async () => {
     setRoster(ROSTER);
     act(() => root.render(<ChannelPage id="wechat" manager="m-1" onBack={() => {}} onSettings={() => {}} />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(calls.find((c) => c.url.endsWith("/channels/wechat"))?.header).toBe("m-1");
   });
@@ -250,6 +288,7 @@ describe("a page opened by an address that names no assistant, or another one", 
     expect(host.textContent).not.toContain("home@example.com");
     expect(managerHeaderFor("/connectors/wechat/settings")).toBe("m-1");
     act(() => root.render(<ChannelPage id="wechat" onBack={() => {}} onSettings={() => {}} />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(calls.find((c) => c.url.endsWith("/channels/wechat"))?.header).toBe("m-1");
   });

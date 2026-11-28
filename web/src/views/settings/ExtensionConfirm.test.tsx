@@ -71,7 +71,7 @@ describe("x-confirm on a boolean field", () => {
     expect(toggle().getAttribute("aria-checked")).toBe("true");
     await act(async () => button("保存")!.click());
     await flush();
-    expect(setExtensionConfig).toHaveBeenCalledWith("example-chat", { agent: true });
+    expect(setExtensionConfig).toHaveBeenCalledWith("example-chat", { agent: true }, expect.objectContaining({ managerId: "assistant" }));
   });
 
   it("does not ask before turning it off", async () => {

@@ -164,10 +164,13 @@ class ReleaseCandidateTests(unittest.TestCase):
         self.assertIs(release_candidate.active_candidate([pr], "nwverse/persona", "release"), pr)
         self.assertIs(release_candidate.active_branch_candidate([pr], "nwverse/persona", "release/1.2.0"), pr)
 
+        # The spoofed names are built, as test_external_service_refs.py writes its samples: that guard reads any other
+        # repository of the organisation written out as a reference to it.
+        org = "nwverse"
         for non_ascii_repo, non_ascii_user in (
-            ("nwverse/perßona", "chyroc"),
+            (org + "/perßona", "chyroc"),
             ("nwverse/persona", "chyro\u212a"),
-            ("nwverse/pers\u0130na", "chyroc"),
+            (org + "/pers\u0130na", "chyroc"),
             ("nwverse/persona", "chyr\u0130c"),
         ):
             with self.subTest(repo=non_ascii_repo, user=non_ascii_user):

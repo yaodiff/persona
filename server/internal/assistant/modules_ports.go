@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // modulePorts wires the narrow core ports (modapi.Ports) this Service serves to loaded modules.
@@ -240,6 +241,31 @@ func (p briefTodoPort) TodoTitle(id string) (string, bool) {
 		return "", false
 	}
 	return t.Title, true
+}
+
+func (p briefTodoPort) DeferredSupervision(ctx context.Context, at time.Time) []modapi.BriefDeferredSupervision {
+	st, ok := p.s.store().(supervisionDecisionStore)
+	if !ok {
+		return nil
+	}
+	rows, err := st.DeferredSupervision(ctx, at.Add(-24*time.Hour), at)
+	if err != nil {
+		p.s.logf("briefing: could not read deferred supervision: %v", err)
+		return nil
+	}
+	var out []modapi.BriefDeferredSupervision
+	for _, row := range rows {
+		out = append(out, modapi.BriefDeferredSupervision{ID: modapi.BriefSupervisionDecisionID(row.ID), TodoID: wireids.TodoID(row.TodoID), Title: row.Title, Reason: row.Reason})
+	}
+	return out
+}
+
+func (p briefTodoPort) SupervisionBriefed(ctx context.Context, ids []string, at time.Time) {
+	if st, ok := p.s.store().(supervisionDecisionStore); ok {
+		if err := st.SupervisionBriefed(ctx, ids, at); err != nil {
+			p.s.logf("briefing: could not acknowledge deferred supervision: %v", err)
+		}
+	}
 }
 
 func (p briefTodoPort) StalePRFollowups(ctx context.Context, at time.Time, lang string) []modapi.BriefPRFollowup {

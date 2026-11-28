@@ -43,7 +43,7 @@ func taskInboxArgs(items ...string) json.RawMessage {
 	return raw
 }
 
-func TestTaskPlanInboxAutoSourceUsesTheActualHandoff(t *testing.T) {
+func TestTaskPlanInboxExplicitSourceUsesTheActualHandoff(t *testing.T) {
 	ctx := context.Background()
 	s, f := newTaskService(t)
 	f.inbox = newFakeInbox()
@@ -62,7 +62,7 @@ func TestTaskPlanInboxAutoSourceUsesTheActualHandoff(t *testing.T) {
 	if _, _, err := s.handOff(ctx, it.ID, handoffReq{Text: "Investigate the report", ClientID: namedClientID("actual handoff")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.toolTaskPlanFrom(ctx, "box", "m1", taskInboxArgs("")); err != nil {
+	if _, err := s.toolTaskPlanFrom(ctx, "box", "m1", taskInboxArgs(it.ID)); err != nil {
 		t.Fatal(err)
 	}
 	p, err := s.startPlan(ctx, planOf(t, s, "m1").ID, nil, false)

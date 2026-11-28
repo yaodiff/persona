@@ -171,7 +171,8 @@ type Hub struct {
 	// reported is what the manager told of the nodes' interactions and the fleet (fleet_link.go).
 	reported fleetCache
 
-	ports portOpens // ports the user opened in the app (ports.go)
+	ports         portOpens          // ports the user opened in the app (ports.go)
+	previewOrigin previewOriginState // isolated wildcard-subdomain preview proxy (preview_origin.go)
 	// assistant: what the assistant (internal/assistant, its own process on the bus) last reported (assistant_link.go).
 	assistant assistantState
 	owners    ownerCache    // the default manager, kept a moment (ownership.go)

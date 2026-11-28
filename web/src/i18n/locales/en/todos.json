@@ -285,6 +285,8 @@
   "section_awaiting_review": "Delivered · awaiting review",
   "section_pr": "Waiting for merge",
   "section_other": "Other open",
+  "section_todo": "To do",
+  "section_can_wait": "Can wait",
   "section_shelved": "Inactive",
   "section_done": "Done",
   "shelved_hint": "No progress for 48 hours and nothing running. Not counted as open; nothing was deleted.",
@@ -381,7 +383,6 @@
   "reorganize_success_transferred_other": "Updated {count} items ({transferred} supervision transferred)",
   "detail_template_work_goal": "Work goal",
   "detail_ownership_region": "Work goal ownership",
-  "detail_status_summary_region": "Work goal status summary",
   "detail_parent_label": "Goal: {title}",
   "detail_subtasks_section": "Subtasks · {done}/{total}",
   "detail_open_active_agent": "Open active Agent",
@@ -521,5 +522,10 @@
   "direction_done_count": "Done {count}",
   "direction_review_done_label_one": "Review {count} completed item in {direction}",
   "direction_review_done_label_other": "Review {count} completed items in {direction}",
-  "detail_subtasks_done_toggle": "Completed subtasks · {count}"
+  "detail_subtasks_done_toggle": "Completed subtasks · {count}",
+  "detail_focus_region": "Current focus",
+  "detail_focus_more_one": "+{count} more status",
+  "detail_focus_more_other": "+{count} more statuses",
+  "detail_focus_less": "Hide extra status",
+  "detail_audit_group": "Details and history"
 }

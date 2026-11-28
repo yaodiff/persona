@@ -209,6 +209,8 @@
     <string name="settings_engine_retry">重试</string>
     <string name="settings_engine_continue">先继续</string>
     <string name="settings_engine_save_failed">保存失败：%1$s</string>
+    <string name="settings_engine_orca_chats">新建 Agent 以 Orca 聊天打开</string>
+    <string name="settings_engine_orca_chats_detail">新建 Agent 时，Claude Code 和 Codex 在 Orca 的聊天视图里打开，而不是终端。你手动选的启动器仍在终端打开，助手启动的 Agent 也一直用终端。</string>
 
     <!-- Candidate addresses (Connection diagnostics) -->
     <string name="settings_endpoint_hint_unchanged">地址没有改动</string>

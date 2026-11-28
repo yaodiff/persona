@@ -7,6 +7,7 @@ import persona.core.contracts.InboxEvent
 import persona.core.contracts.LarkEvent
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
+import persona.core.contracts.generated.InboxStoredSources
 import persona.core.domain.inbox.InboxInteraction
 import persona.core.domain.inbox.InboxItem
 import persona.core.domain.sort.AgentPreferences
@@ -35,6 +36,14 @@ private const val WINDOW_SNAPSHOT_ENVELOPE_BYTES = 4L * 1024
 
 /** With a hub, polling only backs up its invalidation events. */
 private const val HUB_INBOX_POLL_MILLIS = 300_000L
+
+/** The whole response's source-presence fact; absent, null, or malformed is unknown, never an empty archive (#17399). */
+private fun storedSourcesOf(body: JsonObject): InboxStoredSources? {
+    val sources = body["stored_sources"] as? JsonObject ?: return null
+    val lark = (sources["lark"] as? JsonPrimitive)?.booleanOrNull ?: return null
+    val mail = (sources["mail"] as? JsonPrimitive)?.booleanOrNull ?: return null
+    return InboxStoredSources(lark, mail)
+}
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class RealInboxRepository(
@@ -91,6 +100,7 @@ class RealInboxRepository(
     private val groupNames = InboxGroupNames()
     // The items last written to the list snapshot, so an unchanged list is not written again.
     private var savedItems: Pair<String, JsonArray>? = null
+    private var savedStoredSources: Pair<String, InboxStoredSources?>? = null
     private val sendLock = Mutex()
     private val personaLock = Mutex()
     private val personaRequests = mutableMapOf<String, String>()
@@ -107,8 +117,12 @@ class RealInboxRepository(
         if (restoredScope == transport.scope) return
         quietly { snapshots.restore<JsonObject>("${transport.scope}:inbox")?.let { data ->
             savedItems = transport.scope to JsonArray(data.array("items"))
+            val storedSources = storedSourcesOf(data)
+            savedStoredSources = transport.scope to storedSources
             val records = listed(data.array("items").map { it.jsonObject }, transport)
-            if (owns(transport)) completions.publish(records, data.array("items").map { it.jsonObject }, completions.epoch()) { state, restored -> state.copy(records = restored, loading = false) }
+            if (owns(transport)) completions.publish(records, data.array("items").map { it.jsonObject }, completions.epoch()) { state, restored ->
+                state.copy(records = restored, loading = false, storedSources = storedSources)
+            }
         } }
         restoredScope = transport.scope
     }
@@ -147,7 +161,7 @@ class RealInboxRepository(
             connection.current.collectLatest { transport ->
                 refreshLock.withLock {
                     completions.reset()
-                    current.update { it.copy(records = emptyList(), loading = false, error = null,
+                    current.update { it.copy(records = emptyList(), loading = false, error = null, storedSources = null,
                         contentSource = transport?.let(::LarkContentSource),
                         mutes = hubPreferences?.preferences?.value?.mutes?.let { m -> AgentPreferences(m.spaces, m.sessions, m.allowed) }
                             ?: AgentPreferences()) }
@@ -297,6 +311,7 @@ class RealInboxRepository(
             val data = body.array("items").map { it.jsonObject }
             // New items waiting for triage (#1773); an older hub sends no `triage`.
             val triage = InboxTriage.decode(body["triage"])
+            val storedSources = storedSourcesOf(body)
             val mute = if (hubPreferences == null) transport.mutes() else null
             if (!owns(transport)) return@withLock
             groupNames.refresh(data, transport)
@@ -313,7 +328,7 @@ class RealInboxRepository(
             outbox.value = saved.outbox
             completions.publish(records.map { item -> withLocalStatus(item, saved) }, data, started) { it, merged -> it.copy(records = merged,
                 mutes = mute?.let { m -> AgentPreferences(m.strings("spaces"), m.strings("sessions"), m.strings("allowed").toSet()) } ?: it.mutes,
-                loading = false, error = null, triage = triage, refreshes = it.refreshes + 1) }
+                loading = false, error = null, triage = triage, storedSources = storedSources, refreshes = it.refreshes + 1) }
             persistInbox(transport)
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
@@ -385,9 +400,21 @@ class RealInboxRepository(
     private suspend fun persistInbox(transport: InboxAssistantTransport) = cacheLock.withLock {
         if (!owns(transport)) return@withLock
         val items = completions.cachedItems()
-        if (savedItems != transport.scope to items) {
-            snapshots.save("${transport.scope}:inbox", buildJsonObject { put("items", items) })
-            if (owns(transport)) savedItems = transport.scope to items
+        val storedSources = current.value.storedSources
+        if (savedItems != transport.scope to items || savedStoredSources != transport.scope to storedSources) {
+            snapshots.save("${transport.scope}:inbox", buildJsonObject {
+                put("items", items)
+                storedSources?.let { sources ->
+                    put("stored_sources", buildJsonObject {
+                        put("lark", sources.lark)
+                        put("mail", sources.mail)
+                    })
+                }
+            })
+            if (owns(transport)) {
+                savedItems = transport.scope to items
+                savedStoredSources = transport.scope to storedSources
+            }
         }
     }
 

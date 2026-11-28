@@ -22,6 +22,7 @@ machine_redeploy
 agents_list
 agent_read
 agent_send
+agent_modes
 agent_switch
 agents_switch
 agent_interrupt

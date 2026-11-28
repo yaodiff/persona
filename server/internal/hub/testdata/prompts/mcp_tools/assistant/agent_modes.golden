@@ -1,0 +1,46 @@
+{
+  "name": "agent_modes",
+  "description": "Change a running coding Agent's model, effort, or permission mode via `session.modes` (use `agent_switch` to change launcher). Give `model`, `effort`, and/or `permission_mode`. Permission-mode changes need owner phone approval; read-only tasks, pending approvals, assistant chats, stopped, or unsupported sessions are refused.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "machine",
+      "session_id"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "machine": {
+        "type": "string"
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "model": {
+        "type": "string"
+      },
+      "effort": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ]
+      },
+      "permission_mode": {
+        "type": "string",
+        "enum": [
+          "default",
+          "acceptEdits",
+          "plan",
+          "auto",
+          "bypassPermissions"
+        ]
+      }
+    }
+  }
+}

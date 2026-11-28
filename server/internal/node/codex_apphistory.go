@@ -38,7 +38,7 @@ import (
 
 // codexAppHistoryVersion changes when already-written JSONL no longer matches what the converter produces. A mark
 // without it is a legacy cache and is rebuilt once, even when the App database has not changed.
-const codexAppHistoryVersion = 3
+const codexAppHistoryVersion = 4
 
 // codexAppHistoryWait bounds one read of the history database; a long chat's turns stream in well under it.
 const codexAppHistoryWait = 30 * time.Second
@@ -727,6 +727,21 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		item["type"], item["kind"], item["query"], item["results"] = "Extension", "web.search", v.Query, v.Results
 		if v.Action != nil {
 			item["action"] = v.Action
+		}
+	case "collabAgentToolCall", "subAgentActivity", "plan":
+		if json.Unmarshal(raw, &item) != nil || item == nil {
+			return nil
+		}
+		item["type"] = map[string]string{"collabAgentToolCall": "CollabAgentToolCall", "subAgentActivity": "SubAgentActivity", "plan": "Plan"}[kind]
+		for from, to := range map[string]string{
+			"senderThreadId": "sender_thread_id", "receiverThreadIds": "receiver_thread_ids",
+			"receiverAgents": "receiver_agents", "agentsStates": "agents_states",
+			"agentThreadId": "agent_thread_id", "agentPath": "agent_path", "reasoningEffort": "reasoning_effort",
+		} {
+			if value, ok := item[from]; ok {
+				item[to] = value
+				delete(item, from)
+			}
 		}
 	case "contextCompaction":
 		item["type"] = "ContextCompaction"

@@ -81,7 +81,7 @@ describe("a secret that holds a reference", () => {
     act(() => typeInto(input, "op://Dev/Notes/new"));
     await act(async () => button("保存")!.click());
     await flush();
-    expect(setExtensionSecretReference).toHaveBeenCalledWith("example-notes", "api_key", "op://Dev/Notes/new");
+    expect(setExtensionSecretReference).toHaveBeenCalledWith("example-notes", "api_key", "op://Dev/Notes/new", expect.objectContaining({ managerId: "assistant" }));
     expect(setExtensionSecret).not.toHaveBeenCalled();
   });
 
@@ -114,7 +114,7 @@ describe("a secret provider's page", () => {
     const confirm = [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button, dialog button")].find((b) => b.textContent === "移除");
     await act(async () => confirm!.click());
     await flush();
-    expect(removeHandoffRule).toHaveBeenCalledWith("onepassword", "0123456789abcdef");
+    expect(removeHandoffRule).toHaveBeenCalledWith("onepassword", "0123456789abcdef", expect.objectContaining({ managerId: "assistant" }));
     expect(host.querySelector("[data-handoff-rules]")).toBeNull();
   });
 });

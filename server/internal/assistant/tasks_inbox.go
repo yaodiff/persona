@@ -3,13 +3,13 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 )
 
+// planInboxSource validates a caller-selected item. matchPlannedInbox handles source inference for plans.
 func (s *Service) planInboxSource(ctx context.Context, machine, conversation string, t *PlanTask) error {
 	source := strings.TrimSpace(t.InboxItem)
 	if source == "none" {
@@ -18,29 +18,7 @@ func (s *Service) planInboxSource(ctx context.Context, machine, conversation str
 	}
 	t.InboxItem = source
 	if t.InboxItem == "" {
-		if err := s.inboxReady(ctx); err != nil {
-			return err
-		}
-		// The persisted handoff is authoritative; never extract an item ID from model text.
-		var candidates []string
-		s.inbox.mu.Lock()
-		for _, it := range s.inbox.items {
-			h := handoffTo(it, conversation)
-			if it.open() && inboxTaskLinkEligible(it) && h != nil && h.MachineID == machine && h.Op != "" {
-				candidates = append(candidates, it.ID)
-			}
-		}
-		s.inbox.mu.Unlock()
-		switch len(candidates) {
-		case 0:
-			return nil
-		case 1:
-			t.InboxItem = candidates[0]
-		default:
-			slices.Sort(candidates)
-			return fmt.Errorf("multiple unarchived Inbox items were handed to this conversation (%s); "+
-				"set inbox_item explicitly for each task; nothing was planned", strings.Join(candidates, ", "))
-		}
+		return nil
 	}
 	if todo, ok := s.todoNow(t.ReuseTodo); ok && todo.InboxItem != "" && todo.InboxItem != t.InboxItem {
 		return fmt.Errorf("todo %s already belongs to another Inbox item", todo.ID)

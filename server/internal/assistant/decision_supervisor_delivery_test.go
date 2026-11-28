@@ -507,7 +507,7 @@ func TestSupervisorChoiceWaitsForADefaultUnderWay(t *testing.T) {
 	want := a.Options[1].Label
 	pastDeadline(t, s, todo.ID)
 	actions := &s.reviewDismissals.actions
-	actions.acquire(todo.ID) // the default, as acceptDefault takes it
+	actions.acquire(todo.ID) // the default, as handleTaskDeadline takes it
 	spoke := make(chan struct{})
 	go func() {
 		defer close(spoke)

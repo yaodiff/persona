@@ -865,10 +865,25 @@
         "item_id": {"type": "string"},
         "last": {"type": "string"},
         "text": {"type": "string"},
+        "mentions": {"type": "array", "items": {"$ref": "#/$defs/ConnectorInboxMention"}},
         "client_id": {"type": "string"},
         "changes": {"type": "array", "items": {"$ref": "#/$defs/ConnectorStatusChange"}}
       },
       "required": ["contribution", "thread"]
+    },
+    "ConnectorInboxMention": {
+      "description": "Binds an exact @name in the reply's text to a verified external user id, for connectors that support real @ mentions.",
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "x-id": "ConnectorMentionUserID"},
+        "name": {"type": "string"}
+      },
+      "required": ["id", "name"]
+    },
+    "ConnectorMentionUserID": {
+      "type": "string",
+      "x-id": "ConnectorMentionUserID",
+      "description": "A person's user ID on the connector's own service, as verified for a real @ mention."
     },
     "ConnectorStatusChange": {
       "type": "object",

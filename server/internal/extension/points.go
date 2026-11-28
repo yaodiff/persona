@@ -149,6 +149,9 @@ type QuotaItem struct {
 	Hosts []string `json:"hosts,omitempty"`
 }
 
+// MethodUsageQuery is the RPC method an extension contributing usage answers (docs/extensions/extensions.md "Usage").
+const MethodUsageQuery = "usage.query"
+
 // UsageItem is a contribution to usage: a gateway whose accounts' subscription usage the plugin turns into the usage
 // bars' accounts and windows (docs/extensions/extensions.md "Usage").
 type UsageItem struct {
@@ -157,6 +160,11 @@ type UsageItem struct {
 	// Hosts are the gateways' host names it reads ("*.example.com" allowed); empty: it may be pointed at any launcher's
 	// gateway and answers unsupported for one that is not its.
 	Hosts []string `json:"hosts,omitempty"`
+	// Direct is polled automatically. The extension uses its own settings and network grant.
+	Direct bool `json:"direct,omitempty"`
+	// RemoteAddress and RemoteKey name the extension setting and secret bound to that HTTPS origin.
+	RemoteAddress string `json:"remote_address,omitempty"`
+	RemoteKey     string `json:"remote_key,omitempty"`
 }
 
 // AgentSourceItem is a contribution to agent_sources: a source of personal agents' sessions in the Agents tab, next
@@ -486,7 +494,7 @@ var Points = map[string]Point{
 		}
 		return q.ID, nil
 	}},
-	"usage": {Name: "usage", Namespace: "usage", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+	"usage": {Name: "usage", Namespace: "usage", Version: 2, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
 		var u UsageItem
 		if err := strict(raw, &u); err != nil {
 			return "", err
@@ -496,6 +504,14 @@ var Points = map[string]Point{
 		}
 		if u.Name == "" {
 			return u.ID, errors.New("usage " + u.ID + ": no name")
+		}
+		if u.Direct && len(u.Hosts) != 0 {
+			return u.ID, errors.New("direct usage does not match launcher hosts")
+		}
+		if u.RemoteAddress != "" || u.RemoteKey != "" {
+			if !u.Direct || !idPattern.MatchString(u.RemoteAddress) || !idPattern.MatchString(u.RemoteKey) {
+				return u.ID, errors.New("remote usage address and key must name a setting and a secret of a direct source")
+			}
 		}
 		for _, h := range u.Hosts {
 			if !hostPattern.MatchString(h) {

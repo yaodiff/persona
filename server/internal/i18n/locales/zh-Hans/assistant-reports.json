@@ -70,6 +70,8 @@
   "verdict_decided_to_agent": "用户的决定（从飞书回的）：\n{decision}\n\n照这个接着做。",
   "verdict_take_to_agent": "用户选了推荐的做法：\n{option}\n\n照这个接着做。",
   "verdict_over": "返工了 {rounds} 轮还没做完，接下来怎么办？",
+  "deadline_manual_resume": "截止时间为 {when}，到期后仍等你决定。若采纳推荐选项，请亲自在终端恢复 Agent。",
+  "deadline_manual_resume_overdue": "已过截止时间 {when}，决定仍待处理。若采纳推荐选项，请亲自在终端恢复 Agent。",
   "deadline_default": "到 {when} 没回复就按推荐执行（可撤回）",
   "deadline_irreversible": "截止 {when}；撤不回，到期不会自动执行，只再提醒",
   "deadline_overdue": "已过截止 {when}；撤不回，不会自动执行，等你决定",

@@ -46,6 +46,7 @@ type Host interface {
 	KBWake()
 	KBReadOnly(ctx context.Context) bool
 	KBConnected() bool
+	SpeakerTurnsImport() bool
 
 	// The manager's settings rows (nil store: none written, none read).
 	Setting(ctx context.Context, key string, out any) (bool, error)
@@ -151,6 +152,7 @@ func (s *Recordings) kbGet(ctx context.Context) (*kb.Engine, error) { return s.h
 func (s *Recordings) kbWake()                                       { s.h.KBWake() }
 func (s *Recordings) kbReadOnly(ctx context.Context) bool           { return s.h.KBReadOnly(ctx) }
 func (s *Recordings) kbConnected() bool                             { return s.h.KBConnected() }
+func (s *Recordings) speakerTurnsImport() bool                      { return s.h.SpeakerTurnsImport() }
 
 // settingStore is the manager's settings rows.
 type settingStore interface {

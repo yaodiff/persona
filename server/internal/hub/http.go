@@ -142,7 +142,7 @@ func (h *Hub) routes() http.Handler {
 	h.managerInstallRoutes(mux) // GET /i/<code>: the install script (managers_install.go)
 	mux.Handle("/api/", appAPI)
 	mux.Handle("/", h.adminRoutes(mux, appAPI, webApp(filepath.Join(h.cfg.dir, "web"))))
-	return h.outerLayers(h.privateNetworkOnly(h.sharingDispatcher(h.plaintextLoopbackOnly(jsonRouteErrors(mux)))))
+	return h.previewDispatcher(h.outerLayers(h.privateNetworkOnly(h.sharingDispatcher(h.plaintextLoopbackOnly(jsonRouteErrors(mux))))))
 }
 
 // outerLayers are what every request goes through around the routes, outermost first: the auth layer's marks
@@ -1103,6 +1103,10 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("hub-machine.node_no_session_start_speed"))
 		return
 	}
+	if len(p.ModelAliases) != 0 && !m.announces(nodeproto.SessionStartModelAliases) {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("hub-machine.node_no_model_aliases"))
+		return
+	}
 	opID := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Persona-Op-Id")))
 	if replay != nil {
 		opID = replay.opID
@@ -1630,13 +1634,15 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 	if items == nil {
 		items = []proto.Item{}
 	}
-	msg := func(items []proto.Item) []byte {
-		out := span.into(map[string]any{"type": "items", "machine_id": machineID, "session_id": sessionID, "items": items})
-		if moreAfter {
-			out["more_after"] = true
-		}
-		b, _ := marshalItems(out)
-		return b
+	buildFrames := func(items []proto.Item) [][]byte {
+		frames, _ := marshalItemsFrames(itemsFrameOpts{
+			machineID: machineID,
+			sessionID: sessionID,
+			items:     items,
+			span:      span,
+			moreAfter: moreAfter,
+		})
+		return frames
 	}
 	// One message per language and image mode: the node's Chinese lines read in each connection's (transcript_text.go).
 	type form struct {
@@ -1646,7 +1652,7 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		ring             bool // draws ```persona-card rings (card_compat.go)
 		toolViews        bool // draws Item.ToolViews / Fold.ToolViews (proto.FeatureToolViews)
 	}
-	msgs := map[form][]byte{}
+	msgs := map[form][][]byte{}
 	key := [2]string{machineID, sessionID}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1658,16 +1664,20 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 			continue
 		}
 		f := form{lang: c.lang(), lazy: wantsLazy, ring: c.has(featureCardRing), markdownCloseout: c.has(featureMarkdownCloseout), toolViews: c.has(proto.FeatureToolViews)}
-		b, ok := msgs[f]
+		frames, ok := msgs[f]
 		if !ok {
 			its := clientItemsCompat(f.lang, f.ring, f.markdownCloseout, f.toolViews, localizedItems(f.lang, items))
 			if f.lazy {
 				its = proto.WithoutImageData(its)
 			}
-			b = msg(its)
-			msgs[f] = b
+			frames = buildFrames(its)
+			msgs[f] = frames
 		}
-		c.queue(b) // not select/default: a burst's tail dropped here left a page behind with nothing to tell it (#3036)
+		for _, b := range frames {
+			if !c.queue(b) { // not select/default: a burst's tail dropped here left a page behind with nothing to tell it (#3036)
+				break
+			}
+		}
 	}
 }
 
@@ -2112,23 +2122,34 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 		if lazy {
 			res.Items = proto.WithoutImageData(res.Items)
 		}
-		out := res.itemSpan.into(map[string]any{"type": "items", "machine_id": m.cfg.ID, "session_id": sid, "items": res.Items, "backlog": true})
-		if res.Partial {
-			out["partial"] = true
+		opts := itemsFrameOpts{
+			machineID: m.cfg.ID,
+			sessionID: sid,
+			items:     res.Items,
+			span:      res.itemSpan,
+			backlog:   true,
+			partial:   res.Partial,
 		}
 		if since == 0 {
 			// Only a page counted back from the end knows whether older items exist. A catch-up after since_seq does
 			// not: sending false there told the app the history was complete, and scrolling up stopped at its oldest.
-			out["has_more"] = res.HasMore
+			hasMore := res.HasMore
+			opts.hasMore = &hasMore
 		}
 		// A catch-up continues page by page (one page used to be all: whatever came after its 500 items was lost).
 		more := since > 0 && res.MoreAfter && len(res.Items) > 0
 		if more && page+1 >= backlogPages {
-			out["more_after"] = true
+			opts.moreAfter = true
 			more = false
 		}
-		if b, err := marshalItems(out); err == nil {
-			if !m.queueConversationBacklog(sid, func() { c.queue(b) }) {
+		if frames, err := marshalItemsFrames(opts); err == nil {
+			if !m.queueConversationBacklog(sid, func() {
+				for _, b := range frames {
+					if !c.queue(b) {
+						break
+					}
+				}
+			}) {
 				c.sendJSON(deletedConversationEvent(m.cfg.ID, sid))
 				return
 			}

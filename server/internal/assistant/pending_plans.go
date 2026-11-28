@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -79,6 +80,25 @@ func (s *Service) planWithSpace(ctx context.Context, p *TaskPlan) *TaskPlan {
 		return nil
 	}
 	cp := *p
+	copied := false
+	s.todos.mu.RLock()
+	for i, task := range p.Tasks {
+		if task.TodoID == "" || task.Error == "" && task.ErrorCode == "" && task.WorkspaceError == nil && task.Start == nil {
+			continue
+		}
+		todo := s.todos.todos[task.TodoID]
+		if todo == nil || todo.DoneAt == nil || todo.failedStart() {
+			continue
+		}
+		task.Error, task.ErrorCode, task.ErrorArgs = "", "", nil
+		task.WorkspaceError, task.RetryWith, task.Start = nil, nil, nil
+		if !copied {
+			cp.Tasks = slices.Clone(p.Tasks)
+			copied = true
+		}
+		cp.Tasks[i] = task
+	}
+	s.todos.mu.RUnlock()
 	if space, known := s.conversationSpace(ctx, p.Conversation); known {
 		cp.Space = space
 	}

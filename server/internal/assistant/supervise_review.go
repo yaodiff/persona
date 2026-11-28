@@ -239,7 +239,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return fmt.Sprintf("Task %s is already accepted and closed.", t.ID) + terminalCleanupWords(terminalCleanupStatus(plan)), nil
 		}
 	}
-	if decided && slices.ContainsFunc(decision.Options, func(o DecisionOption) bool { return terminalResumeLabel(o.Label) }) {
+	if decided && slices.ContainsFunc(decision.Options, func(o DecisionOption) bool { return terminalResumeLabel(o.Label, t.Agents) }) {
 		return "", errors.New("Resume on a terminal page is an action only the owner can perform. Put that instruction in the reason and give options the supervisor can carry out, such as starting a replacement or waiting for the owner. A decision button cannot resume an Agent")
 	}
 	if err := restated(t, a.Verdict, decision); err != nil {
@@ -665,9 +665,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				"archived only when idle and the user has been inactive for 10 minutes (their terminals stay). "+
 				"Tell the user only if they need to know.", t.ID), nil
 		}
-		completed := t
+		completed := completionOf(t)
 		if closing.row != nil {
-			completed.DoneAt, completed.ReopenedAt = closing.row.DoneAt, closing.row.ReopenedAt
+			completed = committedCompletion(t.ID, *closing.row)
 		}
 		s.autoSeeAcceptedTodo(ctx, completed, conclusion.Outcome, a.UserCheck)
 		authorized := isMain || background || t.Supervision != nil && t.Supervision.Supervisor == self ||
@@ -712,6 +712,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return "The owner already replied in the Agent conversation. The reply was handed to you for review and no card was sent. Verify the result or clarify the question.", nil
 		}
 		conclusion.Outcome, conclusion.Reason, conclusion.Recommend, conclusion.Decision = outcomeDecide, decision.Reason, decision.Recommend, decision
+		conclusion.Reviewer = self
 		conclusion.Check = scheduledCheckOf(ctx) // raised by a recurring check (escalateScheduledTodo), never by a model's call
 		reversible := false
 		switch {
@@ -837,7 +838,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		displayMax = maxReworkRounds
 	}
 	text := prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: v.Round, Max: displayMax, Checks: reworkChecks(checks), Note: note})
-	sent, err := s.sendToTask(ctx, t, text)
+	// The task's origin still owns delivery. Attribute an owner-only refusal to the supervisor who tried this rework.
+	sent, err := s.sendToTask(context.WithValue(ctx, reworkReviewerKey{}, beginResumeReview(self)), t, text)
 	if err != nil {
 		return "", fmt.Errorf("recorded rework round %d, but sending it to the agent failed: %v (send it with agent_send)", v.Round, err)
 	}
@@ -1065,10 +1067,7 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 		}
 		row = db.TodoRow{ID: t.ID, Title: t.Title, Notes: t.Notes, CreatedAt: t.CreatedAt, Origin: t.Origin, PlanID: t.PlanID,
 			ReopenedAt: t.ReopenedAt, Quiet: t.Quiet}
-		row.DoneAt, row.DoneBy, row.DoneReason, row.UpdatedAt = &now, db.DoneByReview, reason, now
-		if !accepted {
-			row.DoneBy = db.DoneByCancelled
-		}
+		reviewClose(&row, reason, accepted, now)
 		t.keepPlan(&row)
 	}
 	var before Todo
@@ -1100,8 +1099,27 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 	}
 	return &row, func() {
 		s.todoRowSet(ctx, doneKeys)
+		if before.failedStart() {
+			if p, _, err := s.currentPlanAssignment(ctx, before); err == nil {
+				s.tasks.planEdits.acquire(p.ID)
+				if current, err := s.loadPlan(ctx, p.ID); err == nil {
+					s.publishTaskPlan(ctx, current)
+				}
+				s.tasks.planEdits.release(p.ID)
+			}
+		}
 		s.afterReviewClose(ctx, before, row, accepted)
 	}, nil
+}
+
+// reviewClose is a review's close of row without the database, the one place it is written: done at at for reason,
+// by the review when it accepted the work and cancelled when not. It only sets those four fields; storing the row and
+// what follows a close stay with its callers (reviewDoneTodoLocked, and mergeTodos closing its source).
+func reviewClose(row *db.TodoRow, reason string, accepted bool, at time.Time) {
+	row.DoneAt, row.DoneBy, row.DoneReason, row.UpdatedAt = &at, db.DoneByReview, reason, at
+	if !accepted {
+		row.DoneBy = db.DoneByCancelled
+	}
 }
 
 func (s *Service) afterReviewClose(ctx context.Context, before Todo, row db.TodoRow, accepted bool) {
@@ -1279,7 +1297,8 @@ func (s *Service) resumeStoppedTaskAgent(ctx context.Context, t Todo, c proto.Se
 	if !ok {
 		return "", errors.New("its machine is offline")
 	}
-	if err := s.resumeAllowed(ctx, t.Origin, am, c, "rework of this task", nil); err != nil {
+	reviewer, _ := ctx.Value(reworkReviewerKey{}).(resumeReview)
+	if err := s.resumeAllowed(ctx, t.Origin, am, c, "rework of this task", nil, reviewer); err != nil {
 		return "", err
 	}
 	return s.resumeAndSend(ctx, t.Origin, am, c, map[string]any{"text": text}, "rework of this task", text, "", nil)

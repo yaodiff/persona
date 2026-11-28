@@ -512,7 +512,7 @@ func (s *Service) confirmHandedReply(ctx context.Context, it *InboxItem, g *Inbo
 	} else if it.Mail != nil {
 		err = errMailReplyTargetChanged // a pre-upgrade mail suggestion has no trustworthy target
 	} else {
-		out, err = s.replyInboxDo(ctx, it.ID, text, clientID, false, true, g.Changes...)
+		out, err = s.replyInboxDoMentions(ctx, it.ID, text, clientID, false, true, activeReplyMentions(text, g.Mentions), g.Changes...)
 	}
 	b := &s.inbox
 	if err != nil {

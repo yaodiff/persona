@@ -276,7 +276,7 @@ func (m *containerWorkspaceMemStore) TaskWorkspace(_ context.Context, todo, op s
 	return cloneWorkspaceRecord(r), nil
 }
 
-func (m *containerWorkspaceMemStore) BeginTaskWorkspace(ctx context.Context, todo, op, manager string) (*taskworkspace.Record, error) {
+func (m *containerWorkspaceMemStore) BeginTaskWorkspace(ctx context.Context, todo, op, manager string, replacing ...*taskworkspace.Record) (*taskworkspace.Record, error) {
 	if !workspacenaming.ValidOperationID(op) {
 		return nil, taskworkspace.Failure("invalid_input", "manager", op, "", "")
 	}
@@ -312,10 +312,15 @@ func (m *containerWorkspaceMemStore) BeginTaskWorkspace(ctx context.Context, tod
 	}
 	if head := m.heads[todo]; head != "" {
 		if cur := m.workspaces[head]; cur != nil && cur.State != "cancelled" && cur.State != "removed" {
-			if cur.InputDigest == taskworkspace.InputKey(plan) {
+			switch {
+			case len(replacing) > 0 && replacing[0].OperationID == head && replacing[0].Revision == cur.Revision &&
+				len(cur.Uses) == 0 && cur.Plan.RootPath != plan.RootPath:
+				cur.State, cur.Revision = "cancelled", cur.Revision+1
+			case cur.InputDigest == taskworkspace.InputKey(plan):
 				return cloneWorkspaceRecord(cur), nil
+			default:
+				return nil, taskworkspace.Failure("operation_conflict", "manager", op, "", "")
 			}
-			return nil, taskworkspace.Failure("operation_conflict", "manager", op, "", "")
 		}
 	}
 	r := &taskworkspace.Record{

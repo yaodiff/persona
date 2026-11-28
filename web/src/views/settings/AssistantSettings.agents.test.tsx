@@ -107,10 +107,10 @@ it("deduplicates inbox_todo_forward into a status link to Integrations Data flow
   expect(host.querySelector(`[role="switch"][aria-label="${t("settings-assistantsettings.inbox_todo_forward")}"]`)).toBeNull();
   expect(row!.textContent).toContain(t("settings-assistantsettings.inbox_todo_forward"));
   expect(row!.textContent).toContain(t("settings-assistantsettings.inbox_todo_forward_on"));
-  expect(row!.getAttribute("href")).toBe("/settings?tab=integrations&integration=-sources");
+  expect(row!.getAttribute("href")).toBe("/settings?tab=integrations&manager=assistant&integration=-sources%40assistant");
 
   await click(row!);
-  expect(location.pathname + location.search).toBe("/settings?tab=integrations&integration=-sources");
+  expect(location.pathname + location.search).toBe("/settings?tab=integrations&manager=assistant&integration=-sources%40assistant");
 
   // Off state reflects accurately too.
   stored = { ...stored, inbox_todo_forward: false };
@@ -120,7 +120,7 @@ it("deduplicates inbox_todo_forward into a status link to Integrations Data flow
   expect(offRow.textContent).toContain(t("settings-assistantsettings.inbox_todo_forward_off"));
 });
 
-it("preserves -sources@<manager> on the deduplicated inbox_todo_forward link for a non-default assistant", async () => {
+it("carries the manager parameter and legacy owner on a non-default assistant's Data flow link", async () => {
   mockStore.features = ["inbox_sources"];
   chooseManager("work");
   stored = { ...stored, manager: "work", integrations_v2: true, inbox_todo_forward: false };
@@ -128,9 +128,9 @@ it("preserves -sources@<manager> on the deduplicated inbox_todo_forward link for
 
   const row = host.querySelector<HTMLAnchorElement>('a[data-settings-row="inbox-todo-forward"]');
   expect(row).not.toBeNull();
-  expect(row!.getAttribute("href")).toBe("/settings?tab=integrations&integration=-sources%40work");
+  expect(row!.getAttribute("href")).toBe("/settings?tab=integrations&manager=work&integration=-sources%40work");
   await click(row!);
-  expect(location.pathname + location.search).toBe("/settings?tab=integrations&integration=-sources%40work");
+  expect(location.pathname + location.search).toBe("/settings?tab=integrations&manager=work&integration=-sources%40work");
 });
 
 it("keeps the original inbox_todo_forward switch when integrations_v2 is off or hub lacks inbox_sources", async () => {

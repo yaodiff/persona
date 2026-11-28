@@ -32,13 +32,20 @@ class AdaptiveFailure(RuntimeError):
     pass
 
 
+def decode_evidence_object(raw, error_message):
+    try:
+        evidence = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise AdaptiveFailure(error_message) from error
+    if not isinstance(evidence, dict):
+        raise AdaptiveFailure(error_message)
+    return evidence
+
+
 def decode_stack_probe(raw, pid, now):
     if len(raw) > MAX_PROBE_BYTES:
         raise AdaptiveFailure("Assistant stack probe exceeds the size bound")
-    try:
-        probe = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise AdaptiveFailure("Assistant stack probe is corrupt") from error
+    probe = decode_evidence_object(raw, "Assistant stack probe is corrupt")
     if probe.get("fieldVersion") != 1 or probe.get("pid") != pid or not probe.get("session"):
         raise AdaptiveFailure("Assistant stack probe belongs to a different field version, PID or session")
     updated = probe.get("updatedAtNanos")
@@ -476,7 +483,8 @@ class AdaptiveRunner:
                 now = self.elapsed_nanos()
                 texts = [node.attrib.get("text", "") for node in self.ui_tree()]
                 page = self.page_evidence(probe, "chat:" + target, now, texts)
-                return page.get("composer", {}).get("draftLoaded") is True or None
+                composer = page.get("composer") or {}
+                return composer.get("draftLoaded") is True or None
             poll("composer draft " + target, draft_ready, timeout=float(step.get("timeout", 60)))
         probe_page = step.get("probePage") or {
             "machines": "Machines", "settings": "Settings", "phone": "Phone data",
@@ -577,10 +585,7 @@ class AdaptiveRunner:
             return stack["route"], stack.get("selectedKey")
         path = poll("navigation checkpoint", self.shell_ready, timeout=10)
         raw = self.adb.shell("run-as", self.app_id, "cat", path, timeout=5)
-        try:
-            position = json.loads(raw)
-        except json.JSONDecodeError as error:
-            raise AdaptiveFailure("invalid shell-position.json") from error
+        position = decode_evidence_object(raw, "invalid shell-position.json")
         # ShellPosition defaults to Persona; JsonCodec omits fields with their default value.
         tab = position.get("tab", "Persona")
         if not isinstance(tab, str) or not tab:
@@ -604,10 +609,7 @@ class AdaptiveRunner:
         raw = self.adb.shell("run-as", self.app_id, "cat", PROBE_PATH, timeout=5)
         if len(raw) > MAX_PROBE_BYTES:
             raise AdaptiveFailure("adaptive probe exceeds the size bound")
-        try:
-            probe = json.loads(raw)
-        except json.JSONDecodeError as error:
-            raise AdaptiveFailure("adaptive probe is corrupt") from error
+        probe = decode_evidence_object(raw, "adaptive probe is corrupt")
         if probe.get("fieldVersion") != 1 or probe.get("pid") != pid or not probe.get("session"):
             raise AdaptiveFailure("adaptive probe belongs to a different field version, PID or session")
         now = self.elapsed_nanos()
@@ -629,6 +631,12 @@ class AdaptiveRunner:
         if len(matches) != 1:
             raise AdaptiveFailure("required probe page %s matched %d pages" % (page_name or "<visible>", len(matches)))
         page = matches[0]
+        if not isinstance(page, dict):
+            raise AdaptiveFailure("required probe page is not an object")
+        for field in ("list", "composer", "bounds"):
+            value = page.get(field)
+            if value is not None and not isinstance(value, dict):
+                raise AdaptiveFailure("required probe page has invalid %s evidence" % field)
         updated = page.get("updatedAtNanos")
         if not isinstance(updated, int) or updated - now > 2_000_000_000 or now - updated > MAX_PROBE_AGE_NANOS:
             raise AdaptiveFailure("required probe page is stale")

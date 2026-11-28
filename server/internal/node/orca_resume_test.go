@@ -104,11 +104,21 @@ func orcaStartFiles(t *testing.T, o *orcarttest.Fake, procs *fakeProcs) func() [
 func TestOrcaResumesAStoppedCodex(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"cx": {"codex", "-m", "gpt-6"}})
 	n, o, procs, cwd := orcaCodexNode(t, "cx")
-	if s := byID(listSessions(t, n))[startThread]; s.Capabilities == nil || !s.Capabilities.Terminal || s.Capabilities.Send {
+	if s := byID(listSessions(t, n))[startThread]; s.Capabilities == nil || !s.Capabilities.Terminal || s.Capabilities.Send ||
+		s.ReadOnlyReason != stoppedReason {
 		t.Fatalf("the stopped Codex is not offered Resume: %+v (%+v)", s, s.Capabilities)
 	}
 	o.Reset()
 	files := orcaStartFiles(t, o, procs)
+	// A plain message does not bring it back on Orca either (#4754, #17809): refused, with no terminal opened or typed in.
+	_, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "go on"})
+	if code, _ := refusalOf(t, err); code != agentStopped {
+		t.Fatalf("a message to the stopped Codex: %v", err)
+	}
+	if calls := o.Trace("terminal.create", "terminal.send"); len(calls) != 0 || len(files()) != 0 {
+		t.Fatalf("a message opened or typed into a terminal: %v", calls)
+	}
+	o.Reset()
 	res, err := request(t, n, "session.start", map[string]any{"resume_session_id": startThread})
 	if err != nil {
 		t.Fatalf("resume: %v (calls %v)", err, o.Trace())

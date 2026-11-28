@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { t } from "../../i18n";
 import { base64File, releaseAttachments } from "../../lib/attachments";
 import { useCloseOnBack } from "../../lib/back-close";
@@ -338,7 +339,7 @@ function ExpandedComposer({ editLabel, value, placeholder, selection, onChange, 
   };
   // Back collapses it, as the collapse button does, and stays in the chat
   useCloseOnBack(true, () => onCollapse(sel()), useMedia(NARROW));
-  return (
+  return createPortal(
     <div
       ref={panel}
       role="dialog"
@@ -398,7 +399,8 @@ function ExpandedComposer({ editLabel, value, placeholder, selection, onChange, 
           <Icon name="up" size={18} stroke={2.4} />
         </button>
       </div>}
-    </div>
+    </div>,
+    document.body,
   );
 }
 

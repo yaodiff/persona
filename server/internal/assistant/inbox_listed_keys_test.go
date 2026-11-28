@@ -69,6 +69,7 @@ var listedDrops = map[string]string{
 	"suggestion_attempts[].content_version": "the attempt's item content version snapshot",
 	"suggestion_attempts[].policy_revision": "the attempt's reply-policy revision snapshot",
 	"suggestion_attempts[].reviewed":        "the attempt's independent-review authorization snapshot",
+	"suggestion_attempts[].mentions_set":    "the attempt's send binding: its mentions were fixed at the send, not recomputed",
 	// The processing conversation's bookkeeping (inbox_agent.go: InboxAgent).
 	"agent.pending":                "notes waiting to be told to the processing conversation",
 	"agent.wake":                   "whether those notes start a turn",

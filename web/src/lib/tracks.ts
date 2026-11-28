@@ -177,7 +177,7 @@ export function changeConversationCategories(sid: string, change: { add?: string
 }
 
 /** What every extension the user decided about may read (one with no row is a third party's with no grant); null from
- *  an assistant without grants. */
+ *  an assistant without grants. The scoped integration adapter keeps these operations for pre-roster hubs. */
 export async function listExtensionTrust(): Promise<ExtensionTrust[] | null> {
   const r = await api<{ items?: ExtensionTrust[] }>("/assistant/extension-trust");
   return Array.isArray(r?.items) ? r.items : null;

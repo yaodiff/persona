@@ -113,6 +113,8 @@ func searchable(rel string) bool {
 		return false // photos.json (recording_photos.go): digests and deletions; photos.md has the photos' words
 	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], hubSegmentsFile):
 		return false // hub_segments.json and its temporary file: transcript.md has the transcript of record
+	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], speakerTurnsFile):
+		return false // speaker_turns.json and its temporary file: raw speaker timeline, never searched
 	case len(parts) == 3 && parts[0] == KindPerson && parts[2] == "handles.json":
 		return false
 	case len(parts) == 3 && parts[0] == KindPerson && parts[2] == profilesFile:

@@ -79,6 +79,11 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 				}
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}
+			// With the computer's switch on, a start that keeps the default Claude Code or Codex opens as its Orca chat
+			// (orca_chat_default.go, #17650).
+			var routed string
+			agent, routed = s.routeOrcaChat(ctx, m, own, params, agent)
+			note = strings.TrimSpace(note + " " + routed)
 			if err := checkStartSpeed(params, agent, ""); err != nil {
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}

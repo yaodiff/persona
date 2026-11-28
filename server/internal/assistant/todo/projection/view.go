@@ -57,12 +57,12 @@ func place(f *Facts, now time.Time) placement {
 // place is the placement the rows and the steps give, without next_change_at.
 func (r *reading) place() placement {
 	p := r.withSteps(r.own())
-	if !r.f.TodosV2 || p.Section != assistantwire.TodoListSectionTodo {
+	if p.Section != assistantwire.TodoListSectionTodo {
 		return p
 	}
-	// A v2 gate or blocker fills an otherwise idle row before it is ranked or rolled up to a parent.
+	// A gate or blocker fills an otherwise idle row before it is ranked or rolled up to a parent.
 	switch {
-	case r.f.RepoGate != nil:
+	case r.f.TodosV2 && r.f.RepoGate != nil:
 		p.Reason = assistantwire.TodoReasonPrOpen
 		p.Line = line(assistantwire.TodoLineKeyPrOpen)
 		p.wait = copyWait(*r.f.RepoGate)

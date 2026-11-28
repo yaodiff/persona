@@ -260,7 +260,7 @@ Workspace new isolates and can name a branch (default task/<todo id>). Existing 
           },
           "inbox_item": {
             "type": "string",
-            "description": "Inbox ID or 'none' to skip; omit to link sole eligible handoff (multiple need ID; none stays unlinked). Never files/replies."
+            "description": "Inbox ID or 'none' to skip. Omit for strong-match inference outside continuations. Never files or replies."
           },
           "tier": {
             "type": "string",

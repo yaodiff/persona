@@ -20,6 +20,7 @@ import (
 
 func (s *Service) agentRoutes() {
 	s.agentsDisplayRoutes()
+	s.botmuxOwnerRoutes()
 	s.handle("GET /api/v1/agents/triage", func(w http.ResponseWriter, r *http.Request) {
 		sw, err := s.readTriageSwitches(r.Context())
 		if err != nil {

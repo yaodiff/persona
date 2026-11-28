@@ -107,6 +107,20 @@ function findTileRect(composer: HTMLElement | null, id: string): DOMRect | null 
   return null;
 }
 
+let openStageCount = 0;
+
+/** Marks the document root while ComposerImageStage is mounted so fixed stage/composer geometry escapes shell filters and clip-path. */
+function retainComposerStage(): () => void {
+  const root = document.documentElement;
+  if (++openStageCount === 1) root.dataset.composerStage = "1";
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--openStageCount === 0) delete root.dataset.composerStage;
+  };
+}
+
 export function ComposerImageStage({
   attachments,
   activeId,
@@ -472,6 +486,9 @@ export function ComposerImageStage({
       );
     }
   }, []);
+
+  // Clear shell filter/backdrop-filter/clip-path before measuring or elevating the live composer.
+  useLayoutEffect(() => retainComposerStage(), []);
 
   // Open choreography: measure the docked live composer & clicked tile before elevating the same DOM node to its
   // fixed bottom dock, hold the normal-flow placeholder height so chat scroll never jumps, and run FLIP animations.

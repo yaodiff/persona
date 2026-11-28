@@ -242,8 +242,8 @@ func (s *Service) startChannelRun(r *channel.Run) {
 }
 
 // startChannelRunForBinding records the run only if the binding that sent its message is still current.
-// A nil generation is for callers whose channel does not use the plugin binding lifecycle.
-func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) {
+// A nil binding is for callers outside the plugin binding lifecycle.
+func (s *Service) startChannelRunForBinding(r *channel.Run, binding *threadBindingRef) {
 	if r.MachineID == "" || r.SessionID == "" {
 		s.logf("channels: %s: no conversation to follow", r.ID)
 		return
@@ -251,7 +251,7 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 	c := &s.chans
 	c.mu.Lock()
 	s.loadChannelStateLocked(context.Background())
-	if generation != nil && c.generation[r.Channel] != *generation {
+	if binding != nil && !c.bindings.isCurrent(*binding) {
 		c.mu.Unlock()
 		return
 	}
@@ -384,10 +384,7 @@ func (s *Service) forgetChannelTurns(id string) error {
 		c.mu.Unlock()
 		return errChannelsUnread
 	}
-	if c.generation == nil {
-		c.generation = map[string]uint64{}
-	}
-	c.generation[id]++
+	c.bindings.invalidate(id)
 	delete(c.lastEnded, id)
 	c.list = nil
 	c.st.Runs = slices.DeleteFunc(c.st.Runs, func(r *channel.Run) bool { return r.Channel == id })

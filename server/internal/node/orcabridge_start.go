@@ -3,6 +3,8 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,10 +18,12 @@ import (
 // Starting an Orca chat from Persona (#17047, docs/integrations/orca.md "Structured sessions"). The bridge offers
 // a launcher for each provider Orca runs as a chat and found installed ("orca-claude", "orca-codex"…), on an Orca that
 // starts chats (agent.launch's chat surface); none while Orca is not running, and none on a computer whose Orca host is
-// off (the bridge does not run there). A start goes to the deepest local Orca worktree holding the folder (a Git
-// repository not in Orca yet is added, as a terminal start adds it), never to an unrelated one, and the chat starts at
-// that worktree's root. Its Orca session id is "persona-<the id the hub named>" (orcaStartPrefix), so a start the hub
-// asks for again after losing the answer finds the chat it made instead of making another.
+// off (the bridge does not run there). A provider whose chat Orca refused to open for a missing chat runtime is not
+// offered until Orca shows that may have changed (#17684, chatsOffered). A start goes to the deepest local Orca
+// worktree holding the folder (a Git repository not in Orca yet is added, as a terminal start adds it), never to an
+// unrelated one, and the chat starts at that worktree's root. Its Orca session id is "persona-<the id the hub named>"
+// (orcaStartPrefix), so a start the hub asks for again after losing the answer finds the chat it made instead of
+// making another.
 
 const (
 	// orcaLauncherPrefix starts the name of each of the bridge's launchers; the rest is Orca's provider id.
@@ -56,8 +60,9 @@ func orcaProviderName(agent string) string {
 	return firstOf(orcaAgentNames[agent], agent)
 }
 
-// installed is the agents Orca found installed (preflight.installedAgents), read again at most every
-// orcaAgentsMaxAge; the last ones while it cannot be read, none from an Orca without the method.
+// installed is the agents Orca found installed (preflight.installedAgents) that it runs as chats on this computer
+// (agentSession.agents; every one while that can't be read, as on an Orca without it), read again at most every
+// orcaAgentsMaxAge; the last ones while the installed agents can't be read, none from an Orca without the method.
 func (b *orcaBridge) installed(ctx context.Context) []string {
 	b.mu.Lock()
 	agents, at := b.agents, b.agentsAt
@@ -66,23 +71,84 @@ func (b *orcaBridge) installed(ctx context.Context) []string {
 		return agents
 	}
 	got, err := b.c.InstalledAgents(ctx)
+	if err == nil {
+		if chats, cerr := b.c.ChatAgents(ctx); cerr == nil {
+			got = slices.DeleteFunc(got, func(a string) bool { return !slices.Contains(chats, a) })
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.agentsAt = time.Now()
 	switch {
 	case err == nil:
 		b.agents = got
-	case orcart.IsCode(err, "method_not_found") || orcart.IsCode(err, "method_not_supported"):
+	case orcaNoMethod(err):
 		b.agents = nil
 	}
 	return b.agents
 }
 
-// orcaLaunchers are the bridge's launchers (runtimes.md "launchers"): one per provider Orca runs as a chat and found
-// installed, on an Orca whose agent.launch takes the chat surface; none on any other. A provider that is not Claude
-// Code's lists the permission modes a start takes (plan aside: the bridge promises no read-only start), and each lists
-// the models its open chats' options name (opts: the options of each provider's open chats), with the efforts Persona
-// can send.
+// orcaNoMethod: err is Orca not having the method (an older Orca).
+func orcaNoMethod(err error) bool {
+	return orcart.IsCode(err, "method_not_found") || orcart.IsCode(err, "method_not_supported")
+}
+
+// chatsOffered are the providers of agents (installed) whose chats the bridge offers to start: all but those Orca
+// refused to open as a chat for a missing chat runtime (noteNoChat). Orca tells whether it can open one only to streaming
+// clients (orcart.ChatAgents), so a refusal is how the bridge learns it, and it offers the provider again when that may
+// have changed: Orca shows a chat of it that was not open then, or one of those changes (the person installed the
+// runtime from a new chat tab in Orca, as the refusal says, and used it), and every one once Orca is not running (it may
+// come back updated, or with the runtime installed). It keeps the open chats (chats) by provider for noteNoChat.
+func (b *orcaBridge) chatsOffered(running bool, agents []string, chats []orcaChat) []string {
+	revs := map[string]map[string]int64{}
+	for _, c := range chats {
+		if revs[c.agent] == nil {
+			revs[c.agent] = map[string]int64{}
+		}
+		revs[c.agent][c.orca] = c.rev
+	}
+	var again []string
+	b.mu.Lock()
+	b.openRevs = revs
+	if !running {
+		b.noChat = nil
+	}
+	for agent, then := range b.noChat {
+		for orca, rev := range revs[agent] {
+			if was, ok := then[orca]; !ok || rev > was {
+				delete(b.noChat, agent)
+				again = append(again, agent)
+				break
+			}
+		}
+	}
+	offered := slices.DeleteFunc(slices.Clone(agents), func(a string) bool { _, no := b.noChat[a]; return no })
+	b.mu.Unlock()
+	for _, agent := range again {
+		b.logf("orca bridge: Orca shows a %s chat it had not before; its chat launcher is offered again", agent)
+	}
+	return offered
+}
+
+// noteNoChat withdraws the provider's chat launcher: Orca refused to open its chat for a missing chat runtime. The
+// chats of it open now are kept, so that a new one, or one of them changing, offers it again (chatsOffered); the next
+// refresh pushes the launchers without it, and New Agent's default start stays in a terminal (#17650 routes only to an
+// offered launcher).
+func (b *orcaBridge) noteNoChat(agent string) {
+	b.mu.Lock()
+	if b.noChat == nil {
+		b.noChat = map[string]map[string]int64{}
+	}
+	b.noChat[agent] = maps.Clone(b.openRevs[agent])
+	b.mu.Unlock()
+	b.logf("orca bridge: Orca can't open %s as a chat here, its chat runtime isn't installed; its chat launcher is withdrawn", agent)
+}
+
+// orcaLaunchers are the bridge's launchers (runtimes.md "launchers"): one per provider of agents (those Orca runs as a
+// chat, found installed, and has not refused for a missing chat runtime: chatsOffered), on an Orca whose agent.launch
+// takes the chat surface; none on any other. A provider that is not Claude Code's lists the permission modes a start
+// takes (plan aside: the bridge promises no read-only start), and each lists the models its open chats' options name
+// (opts: the options of each provider's open chats), with the efforts Persona can send.
 func orcaLaunchers(agents []string, st *orcart.Status, opts map[string][]*orcart.Options) []map[string]any {
 	if !st.Has(orcart.CapChatLaunch) {
 		return nil
@@ -230,18 +296,33 @@ func (b *orcaBridge) start(ctx context.Context, params json.RawMessage) (any, er
 	}
 	if err != nil {
 		if _, herr := b.c.Head(ctx, orca); herr != nil { // made all the same (Orca had it, or answered too late)
-			return nil, orcaStartErr(err)
+			if orcart.ChatRuntimeMissing(err) {
+				b.noteNoChat(agent)
+			}
+			return nil, orcaStartErr(err, agent)
 		}
 	}
 	b.noteStarted(orca, persona, agent, row, tree, now)
 	return map[string]any{"session": row}, nil
 }
 
-// orcaStartErr is a failed start in the user's words: an Orca with no way to start a chat, else as for any write.
-func orcaStartErr(err error) error {
-	if orcart.IsCode(err, "method_not_found") || orcart.IsCode(err, "method_not_supported") ||
-		orcart.IsCode(err, "agent_launch_unsupported") || orcart.IsCode(err, "agent_launch_surface_unavailable") {
-		return orcaChatErr("unsupported", "orca_start_unsupported", map[string]any{"delivered": "none"}, "")
+// orcaStartErr is a failed start of agent's chat in the user's words, nothing started: Orca can't open that provider as
+// a chat here, its chat runtime not installed (orca_chat_runtime_missing) or for another reason in its words
+// (orca_chat_unavailable), either naming the provider (program); an Orca with no way to start a chat; else as for any
+// write.
+func orcaStartErr(err error, agent string) error {
+	none := map[string]any{"delivered": "none"}
+	var e *orcart.Error
+	switch {
+	case orcart.ChatSurfaceUnavailable(err) && errors.As(err, &e):
+		none["program"] = orcaProviderName(agent)
+		reason := "orca_chat_unavailable"
+		if orcart.ChatRuntimeMissing(err) {
+			reason = "orca_chat_runtime_missing"
+		}
+		return orcaChatErr("unsupported", reason, none, e.Message)
+	case orcaNoMethod(err) || orcart.IsCode(err, "agent_launch_unsupported"):
+		return orcaChatErr("unsupported", "orca_start_unsupported", none, "")
 	}
 	return orcaWriteErr(err)
 }

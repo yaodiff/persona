@@ -207,6 +207,11 @@ sealed interface ChatLine {
      * stays as pictures come in and the answer changes, so the strip grows sideways in place.
      */
     data class Viewed(override val id: String, val images: List<ViewedImage>) : ChatLine
+    /**
+     * What an exchange's work sent to Lark ([botmuxReplies]), after its answer: a BotMux chat shows each reply as the
+     * agent's message while it decodes (web `BotmuxReplies`). Only exchanges with such replies have one.
+     */
+    data class BotmuxReplies(override val id: String, val replies: List<BotmuxReply>) : ChatLine
     /** What the assistant's conversation adds to the transcript (docs/assistant/unified-entry.md, `tasks.AssistantLines`): the
      *  hub's feed items, quick results, day lines; [payload] is drawn by the chat's host. */
     data class Extra(override val id: String, val payload: Any) : ChatLine

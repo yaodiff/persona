@@ -499,6 +499,12 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		s.ackSupervisePending(batch)
 		return false
 	}
+	entries, kept = s.screenModelSupervision(ctx, leaderRef(lead.MachineID, lead.SessionID), entries, kept, now, prev)
+	batch = append(moot, kept...)
+	if len(entries) == 0 {
+		s.ackSupervisePending(moot)
+		return false
+	}
 	holds := kept
 	session, listed := s.session(ctx, lead.MachineID, lead.SessionID)
 	if !listed {

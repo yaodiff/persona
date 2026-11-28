@@ -14,6 +14,7 @@ import {
   GITHUB_TOKEN_URL, isGitHubMarket, type Catalog, type CatalogItem, type Market, type MarketPreview,
 } from "../../lib/extension-market";
 import { extensionDetail, extensionUpgrades, listExtensions, pointText, setExtensionUpgrades, type ExtensionPermission } from "../../lib/extensions";
+import type { ScopedAssistantClient } from "../../lib/scoped-assistant-api";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Spinner, toast, useNow } from "../../ui/atoms";
 import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { ExtensionDownloads, packageDownloads } from "../../ui/ExtensionDownloads";
@@ -71,6 +72,7 @@ function TokenHint({ onFix }: { onFix: () => void }) {
 // ── the catalog ─────────────────────────────────────────
 
 const askKey = (q: string, market: string) => `${market}\n${q}`;
+const MARKET_SETTINGS = ["/extensions/-/markets", "/plugins/-/markets", "/extensions/-/upgrades", "/plugins/-/upgrades"];
 
 export function MarketCatalog({
   manager,
@@ -90,6 +92,7 @@ export function MarketCatalog({
   /** Optional callback to open the Markets management page from the catalog header's top-right action. */
   onManageMarkets?: () => void;
 }) {
+  useLayoutEffect(() => pinManagerAt(MARKET_SETTINGS, manager), [manager]);
   const manageMarkets = onManageMarkets ?? onMarkets;
   const [q, setQ] = useState("");
   const [market, setMarket] = useState("");
@@ -695,10 +698,12 @@ export function PackMemberRow({ member, name, mono }: { member: PackMember; name
 }
 
 /** Uninstalling an extension a market installed; its data can stay for a later install. */
-export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { id: string; name: string; version?: string; pack?: PackMember[]; onClose: () => void; onDone: () => void }) {
+export function UninstallDialog({ id, name, version, pack, client, onClose, onDone }: {
+  id: string; name: string; version?: string; pack?: PackMember[]; client?: ScopedAssistantClient; onClose: () => void; onDone: () => void;
+}) {
   const [members, setMembers] = useState(false);
   const [packMembers, setPackMembers] = useState(pack);
-  useEffect(() => { if (!pack) void extensionDetail(id).then((d) => setPackMembers(d.extension_pack), () => {}); }, [id, pack]);
+  useEffect(() => { if (!pack) void extensionDetail(id, undefined, client).then((d) => setPackMembers(d.extension_pack), () => {}); }, [id, pack, client]);
   // A pack's members by the names they're installed under (#4072); one not installed keeps its id.
   const names = useInstalledNames(!!packMembers?.length);
   const named = (ids: string[]) => ids.map((m) => names[m] || m).join(t("settings-extensionmarket.list_separator"));
@@ -716,7 +721,7 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
     setError("");
     setPartial(null);
     try {
-      const result = await uninstallExtension(id, keep, cascade, members);
+      const result = await uninstallExtension(id, keep, cascade, members, client);
       if (result.warnings?.length) setWarnings(result.warnings);
       else {
         toast(t("settings-extensionmarket.uninstalled", { name }), "ok");
@@ -809,7 +814,8 @@ function RemovalNote({ count }: { count: number | null }) {
   );
 }
 
-export function Markets({ onBack }: { onBack?: () => void }) {
+export function Markets({ onBack, manager }: { onBack?: () => void; manager?: string }) {
+  useLayoutEffect(() => pinManagerAt(MARKET_SETTINGS, manager), [manager]);
   const [list, setList] = useState<Market[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -826,8 +832,7 @@ export function Markets({ onBack }: { onBack?: () => void }) {
     setConfirm(m.id);
     setAffected(null);
     const settle = (count: number | null) => asking.current === m.id && setAffected({ market: m.id, count });
-    // the markets here are the default manager's (no manager header), so are the extensions counted
-    listExtensions().then((l) => settle(upgradingFrom(m.id, l, defaultManager())), () => settle(null));
+    listExtensions().then((l) => settle(upgradingFrom(m.id, l, manager ?? defaultManager())), () => settle(null));
   };
   const stopAsking = () => ((asking.current = ""), setConfirm(""));
   const affectedBy = (id: string) => (affected?.market === id ? affected.count : null);

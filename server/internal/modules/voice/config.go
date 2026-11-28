@@ -54,12 +54,22 @@ type Config struct {
 	// call ends, into ArchiveDir there (default DefaultArchiveDir); empty: calls are not archived (archive.go, #13249).
 	ArchiveMachine string `json:"archive_machine,omitempty"`
 	ArchiveDir     string `json:"archive_dir,omitempty"`
+	// Streaming TTS endpoint settings (#17843, tts_config.go): empty TTSURL leaves calls on the upstream's own audio.
+	// TTSKey comes only from extension secrets (never JSON).
+	TTSURL          string `json:"tts_url,omitempty"`
+	TTSModel        string `json:"tts_model,omitempty"`
+	TTSDefaultVoice string `json:"tts_default_voice,omitempty"`
+	TTSSampleRate   int    `json:"tts_sample_rate,omitempty"`
+	TTSKey          string `json:"-"`
 
 	// Setup is what is missing before a conversation can start when no upstream is usable (SetupURLAndKey, SetupKey,
 	// SetupURL); "" when one is. The plugin runs either way.
 	Setup string `json:"-"`
-	// Warnings are settings that were not taken (WarnFormIDTaken, WarnFormNoKey, WarnDefaultUnknown, WarnArchiveDir).
+	// Warnings are settings that were not taken (WarnFormIDTaken, WarnFormNoKey, WarnDefaultUnknown, WarnArchiveDir,
+	// WarnTTSURL, WarnTTSModel, WarnTTSDefaultVoice, WarnTTSSampleRate).
 	Warnings []string `json:"-"`
+
+	tts TTSEndpoint
 }
 
 // What a configuration without a usable upstream lacks (Config.Setup).
@@ -97,15 +107,21 @@ type Form struct {
 	// ArchiveMachine, ArchiveDir: Config's (archive.go).
 	ArchiveMachine string `json:"archive_machine"`
 	ArchiveDir     string `json:"archive_dir"`
+	// Streaming TTS endpoint settings (#17843, tts_config.go).
+	TTSURL          string `json:"tts_url"`
+	TTSModel        string `json:"tts_model"`
+	TTSDefaultVoice string `json:"tts_default_voice"`
+	TTSSampleRate   int    `json:"tts_sample_rate"`
 }
 
 // Sources are where the built-in extension's settings come from (docs/assistant/voice.md "How the extension receives config").
 type Sources struct {
-	// Form is the settings form (PERSONA_EXTENSION_CONFIG), Key its secret key (PERSONA_EXTENSION_SECRETS).
-	Form json.RawMessage
-	Key  string
+	// Form is the settings form (PERSONA_EXTENSION_CONFIG), Key and TTSKey its secrets (PERSONA_EXTENSION_SECRETS).
+	Form   json.RawMessage
+	Key    string
+	TTSKey string
 	// HubJSON is the config of the hub.json entry the hub took over (PERSONA_VOICE_HUB_CONFIG): providers, default,
-	// owner, notes.
+	// owner, notes, archive, and TTS settings (never secrets).
 	HubJSON json.RawMessage
 	// Gateway is an upstream provider derived from a quota gateway extension's settings
 	// (PERSONA_VOICE_GATEWAY_CONFIG) when the extension has a gateway_url and an API key.
@@ -127,6 +143,9 @@ func Merge(s Sources) (Config, error) {
 		if _, old := keys["providers"]; old {
 			if err := json.Unmarshal(form, &c); err != nil {
 				return Config{}, fmt.Errorf("config: %w", err)
+			}
+			if strings.TrimSpace(c.TTSURL) != "" {
+				c.TTSKey = strings.TrimSpace(s.TTSKey)
 			}
 			return c, c.validate()
 		}
@@ -150,6 +169,18 @@ func Merge(s Sources) (Config, error) {
 	if err := c.validateArchive(); err != nil {
 		return Config{}, err
 	}
+	formTTSURL := strings.TrimSpace(f.TTSURL)
+	c.TTSURL = firstNonEmpty(formTTSURL, strings.TrimSpace(c.TTSURL))
+	c.TTSModel = firstNonEmpty(strings.TrimSpace(f.TTSModel), strings.TrimSpace(c.TTSModel))
+	c.TTSDefaultVoice = firstNonEmpty(strings.TrimSpace(f.TTSDefaultVoice), strings.TrimSpace(c.TTSDefaultVoice))
+	if f.TTSSampleRate != 0 {
+		c.TTSSampleRate = f.TTSSampleRate
+	}
+	// The tts_key secret is bound to the settings form's tts_url origin; only attach it when the form supplies tts_url.
+	if formTTSURL != "" {
+		c.TTSKey = strings.TrimSpace(s.TTSKey)
+	}
+	c.validateTTS()
 	fromHubJSON := len(c.Providers) > 0
 	switch {
 	case f.URL == "":
@@ -244,7 +275,7 @@ func LoadConfig() (Config, error) {
 			return Config{}, errors.New("PERSONA_EXTENSION_SECRETS is not a JSON object of strings")
 		}
 	}
-	return Merge(Sources{Form: json.RawMessage(extensionEnv("CONFIG")), Key: secrets["key"],
+	return Merge(Sources{Form: json.RawMessage(extensionEnv("CONFIG")), Key: secrets["key"], TTSKey: secrets["tts_key"],
 		HubJSON: json.RawMessage(identity.Getenv("PERSONA_VOICE_HUB_CONFIG")),
 		Gateway: json.RawMessage(identity.Getenv("PERSONA_VOICE_GATEWAY_CONFIG"))})
 }
@@ -336,6 +367,7 @@ func (c *Config) validate() error {
 	if err := c.validateArchive(); err != nil {
 		return err
 	}
+	c.validateTTS()
 	return c.validateProviders()
 }
 

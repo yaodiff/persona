@@ -59,7 +59,7 @@ describe("合集的启用开关", () => {
     expect(hub.enabled).not.toHaveBeenCalled();
     act(() => button("一起停用")!.click());
     await flush();
-    expect(hub.enabled).toHaveBeenCalledWith("group", false, false);
+    expect(hub.enabled).toHaveBeenCalledWith("group", false, false, expect.objectContaining({ managerId: "assistant" }));
     expect(document.body.textContent).not.toContain("停用「示例合集」及其成员？");
     expect(host.textContent).toContain("重新启用合集时会一并重新启用 基础、附加");
   });
@@ -92,7 +92,7 @@ describe("合集的启用开关", () => {
     expect(host.textContent).toContain("停用合集仅会停用合集本身");
     act(() => enabledSwitch().click());
     await flush();
-    expect(hub.enabled).toHaveBeenCalledWith("group", false, false);
+    expect(hub.enabled).toHaveBeenCalledWith("group", false, false, expect.objectContaining({ managerId: "assistant" }));
   });
 
   it("switches at once when no installed member is on, with nothing to name", async () => {
@@ -102,7 +102,7 @@ describe("合集的启用开关", () => {
     act(() => enabledSwitch().click());
     expect(document.body.textContent).not.toContain("停用「示例合集」及其成员？");
     await flush();
-    expect(hub.enabled).toHaveBeenCalledWith("group", false, false);
+    expect(hub.enabled).toHaveBeenCalledWith("group", false, false, expect.objectContaining({ managerId: "assistant" }));
   });
 
   it("keeps the ordinary footnote for an extension that is not a pack", () => {

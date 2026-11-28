@@ -526,6 +526,9 @@ func TestAgyTranscriptMapsCompactToDividerNotices(t *testing.T) {
 }
 
 func TestAgyIdleAutoCompactMultiCompanionIsolationAndCleanup(t *testing.T) {
+	oldCap := agyIdleCompactMaxConcurrent
+	agyIdleCompactMaxConcurrent = 3
+	t.Cleanup(func() { agyIdleCompactMaxConcurrent = oldCap })
 	base := time.Date(2026, 11, 27, 14, 0, 0, 0, time.UTC)
 
 	n, host1, _ := runtimeCompactFixture(t)
@@ -840,7 +843,7 @@ func TestAgyIdleAutoCompactFailoverWindowReconnectStaleSnapshotAndClockRollback(
 	hClosed.hello = runtimeHello{Runtime: "agy-closing", Agent: agyAgent}
 	hClosed.ready = true
 	hClosed.mu.Unlock()
-	n.runtimes.setSessionList(hClosed, []proto.Session{{SessionID: s3, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000}}, nil)
+	n.runtimes.setSessions(hClosed, []proto.Session{{SessionID: s3, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000}})
 	n.markAgyIdleAttempt(hClosed, s3, clock.get())
 	// Sweep while hClosed.peer is closed but reg.remove(hClosed) has not run yet (ownerOf(s3) == hClosed).
 	n.sweepAgyIdleCompactions(t.Context(), clock.get())
@@ -940,4 +943,74 @@ func TestAgyIdleAutoCompactFailoverWindowReconnectStaleSnapshotAndClockRollback(
 	if stNewAttempt.host != h2 || !stNewAttempt.attempted || !stNewAttempt.lastAttempt.Equal(tNew) || stNewAttempt.attemptToken != tokNew {
 		t.Fatalf("stale-owner late failure clobbered newer owner attempt: %+v", stNewAttempt)
 	}
+}
+
+func TestAgyIdleAutoCompactSweepCapsConcurrency(t *testing.T) {
+	base := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+
+	ids := []string{
+		"agy-11111111-1111-1111-1111-111111111111",
+		"agy-22222222-2222-2222-2222-222222222222",
+		"agy-33333333-3333-3333-3333-333333333333",
+		"agy-44444444-4444-4444-4444-444444444444",
+		"agy-55555555-5555-5555-5555-555555555555",
+	}
+	rows := make([]proto.Session, 0, len(ids))
+	for _, id := range ids {
+		cwd := filepath.Join(n.home, "proj", id)
+		n.state.put(id, sessionState{Launcher: "agy", Cwd: cwd})
+		rows = append(rows, proto.Session{
+			SessionID: id, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 250_000, UpdatedAt: base,
+		})
+	}
+	pushAgyRow(t, n, host, rows...)
+
+	// A single sweep with 5 ready sessions must cap concurrent auto-compactions at agyIdleCompactMaxConcurrent (2).
+	clock.set(base.Add(15 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	waitFor(t, "first batch of 2 compactions started", func() bool {
+		return len(host.got("session.send")) == agyIdleCompactMaxConcurrent
+	})
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-t.Context().Done():
+		t.Fatal(t.Context().Err())
+	case <-timer.C:
+	}
+	if got := len(host.got("session.send")); got != agyIdleCompactMaxConcurrent {
+		t.Fatalf("sweep started %d concurrent compactions, want cap %d", got, agyIdleCompactMaxConcurrent)
+	}
+
+	// Settle the first batch (drop tokens to 50k so they are no longer eligible) and verify the next sweep picks up 2 more.
+	started := map[string]bool{}
+	for _, raw := range host.got("session.send") {
+		var p struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil {
+			t.Fatal(err)
+		}
+		started[p.SessionID] = true
+	}
+	for i := range rows {
+		if started[rows[i].SessionID] {
+			rows[i].Rev = 2
+			rows[i].ContextTokens = 50_000
+			rows[i].UpdatedAt = clock.get()
+		}
+	}
+	pushAgyRow(t, n, host, rows...)
+	waitFor(t, "first batch settled and slots released", func() bool {
+		n.agyIdleMu.Lock()
+		defer n.agyIdleMu.Unlock()
+		return n.agyIdleInFlight == 0
+	})
+
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	waitFor(t, "second batch of 2 compactions started", func() bool {
+		return len(host.got("session.send")) == agyIdleCompactMaxConcurrent*2
+	})
 }

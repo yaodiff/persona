@@ -1,30 +1,20 @@
 // Channel state and unified sections (Account & Connection binding + Chat & Delivery routing) for IntegrationDetail (#14847).
-import { useLayoutEffect, useRef } from "react";
+import { useEffect } from "react";
 import { t } from "../../../i18n";
-import { settingsTarget, type ChannelDetail } from "../../../lib/channels";
+import { settingsTarget } from "../../../lib/channels";
 import { Loading } from "../../../ui/atoms";
 import { ChannelBindingBlock, ChannelDeliveryControls, ChannelTargetControls, ChannelStateInline } from "../Channels";
-import { ConfigurationForm } from "../configuration/ConfigurationForm";
+import { ConfigurationFormView } from "../configuration/ConfigurationForm";
 import { Group, Row, SettingsHint } from "../SettingsParts";
-import { useChannelController, type ChannelController } from "../useChannelController";
-import { channelRoutingSource, type IntegrationTarget } from "./model";
+import type { ChannelController } from "../useChannelController";
+import type { IntegrationTarget } from "./model";
 
-export { ChannelBindingBlock, ChannelStateInline, useChannelController, type ChannelController };
+export { ChannelBindingBlock, ChannelStateInline, type ChannelController };
+export { useChannelController } from "../useChannelController";
 
-function ChannelRoutingForm({ detail, updateRouting }: { detail: ChannelDetail; updateRouting: ChannelController["updateRouting"] }) {
-  const current = useRef({ detail, updateRouting });
-  const listener = useRef<(() => void) | null>(null);
-  useLayoutEffect(() => {
-    current.current = { detail, updateRouting };
-    listener.current?.();
-  }, [detail, updateRouting]);
-
-  // A refresh supplies a new document to the same form, which keeps its uncommitted fields.
-  const source = channelRoutingSource(detail.id, () => current.current.detail, (body) => current.current.updateRouting(body), (changed) => {
-    listener.current = changed;
-    return () => { listener.current = null; };
-  });
-  return <ConfigurationForm source={source} />;
+function ChannelRoutingForm({ routing }: { routing: NonNullable<ChannelController["routing"]> }) {
+  useEffect(routing.start, [routing]);
+  return <ConfigurationFormView ctl={routing.form} onReload={() => void routing.reload()} />;
 }
 
 /** Chat & Delivery controls: enable, target, thread_mode & thread_idle_hours, features, capabilities, test message. */
@@ -63,9 +53,9 @@ export function ChannelDeliveryBlock({ ctl, target, targetOnly, onSettings }: {
       ctl={ctl}
       onSettings={openSettings}
       afterTarget={
-        showRouting ? (
+        showRouting && ctl.routing ? (
           <fieldset className="mb-6 min-w-0" data-channel-routing disabled={!!ctl.busy && ctl.busy !== "routing"}>
-            <ChannelRoutingForm key={d.id} detail={d} updateRouting={ctl.updateRouting} />
+            <ChannelRoutingForm key={ctl.routing.form.source.key} routing={ctl.routing} />
           </fieldset>
         ) : undefined
       }

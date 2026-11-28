@@ -148,7 +148,7 @@ describe("To-dos grouped by 常驻", () => {
   it("opens a row's menu on a right click, as the other groupings do", async () => {
     localStorage.setItem("persona.todos.grouping", "direction");
     await render();
-    const row = [...sections()[1].querySelectorAll<HTMLElement>("[role=button]")].find((r) => r.textContent?.includes("Card"));
+    const row = [...sections()[1].querySelectorAll<HTMLElement>("[data-todo]")].find((r) => r.textContent?.includes("Card"));
     expect(row).toBeTruthy();
     const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 120 });
     await act(async () => void row!.dispatchEvent(ev));

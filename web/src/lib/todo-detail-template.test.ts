@@ -27,6 +27,20 @@ const makeSession = (patch: Partial<Session> & { machine_id: string; session_id:
 });
 
 describe("classifyTodoDetailTemplate", () => {
+  it.each(["personal", "quick", "concern"])("keeps explicit %s items personal even with execution signals", (item_type) => {
+    const todo = baseTodo({ item_type, origin: "conv-1", plan_id: "plan-1", audience: "autonomous" });
+    expect(classifyTodoDetailTemplate(todo, 2, { repositoryCount: 1 })).toBe("personal");
+  });
+
+  it.each(["task", "goal"])("uses the work template for an explicit %s without execution signals", (item_type) => {
+    expect(classifyTodoDetailTemplate(baseTodo({ item_type, audience: "human" }))).toBe("work_goal");
+  });
+
+  it("uses structural signals for an unfamiliar item type", () => {
+    expect(classifyTodoDetailTemplate(baseTodo({ item_type: "future" }))).toBe("personal");
+    expect(classifyTodoDetailTemplate(baseTodo({ item_type: "future", origin: "conv-1" }))).toBe("work_goal");
+  });
+
   it("classifies plain personal notes and reminders as personal", () => {
     expect(classifyTodoDetailTemplate(baseTodo(), 0)).toBe("personal");
     expect(

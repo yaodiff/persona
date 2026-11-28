@@ -11,6 +11,7 @@ import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
 import { useScope, scoped } from "../../lib/current-assistant";
 import { sameManager } from "../../lib/manager-choice";
+import { BoundMentions, ReplyRichText } from "../inbox/ReplyBody";
 
 // A hand-off conversation's write-back as a card in the chat (#5932, docs/assistant/inbox.md "Item actions"): the
 // item's summary, the reply or conclusion, and Send / OK, which confirm the item's suggestion. The item is the one home
@@ -69,6 +70,8 @@ export const HandoffCard = memo(function HandoffCard({ item: feed }: { item: Fee
   const live = st.state === "live" && !!item;
   const reply = card.kind === "reply";
   const draft = text ?? card.text;
+  const bodyText = st.state === "sent" ? st.text : attempt?.text ?? card.text;
+  const mentions = attempt?.mentions ?? (live ? item?.suggestion?.mentions : undefined) ?? card.mentions;
   const confirm = async () => {
     if (!item) return;
     await suggestionAct(item, "confirm", reply && draft !== card.text ? draft : undefined);
@@ -133,15 +136,21 @@ export const HandoffCard = memo(function HandoffCard({ item: feed }: { item: Fee
           <span className="min-w-0 truncate">{heading}</span>
         </span>
         {live && reply ? (
-          <textarea
-            value={draft}
-            onChange={(e) => setText(e.target.value)}
-            aria-labelledby={headingId}
-            rows={Math.min(6, Math.max(2, draft.split("\n").length))}
-            className="-mx-1.5 resize-none rounded-control bg-transparent px-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          />
+          <>
+            <textarea
+              value={draft}
+              onChange={(e) => setText(e.target.value)}
+              aria-labelledby={headingId}
+              rows={Math.min(6, Math.max(2, draft.split("\n").length))}
+              className="-mx-1.5 resize-none rounded-control bg-transparent px-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            />
+            <BoundMentions text={draft} mentions={mentions} className="pt-1" />
+          </>
         ) : (
-          <div className="whitespace-pre-line text-sm [overflow-wrap:anywhere]">{st.state === "sent" ? st.text : attempt?.text ?? card.text}</div>
+          <>
+            <ReplyRichText text={bodyText} />
+            <BoundMentions text={bodyText} mentions={mentions} sent={st.state === "sent"} className="pt-1" />
+          </>
         )}
       </div>
       {attempt && Number.isFinite(Date.parse(attempt.at)) && <time dateTime={attempt.at} className="text-xs text-ink-3" data-testid="handoff-attempt-time">{chainTime(attempt.at)}</time>}

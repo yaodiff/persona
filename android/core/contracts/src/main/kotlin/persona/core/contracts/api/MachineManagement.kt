@@ -83,6 +83,12 @@ interface MachineManagement {
     /** `PUT /api/v1/machines/{id}/botmux {"on"}`: saved at once, also while offline; returns the setting in force. */
     suspend fun setBotmux(machineId: String, on: Boolean): Boolean = throw UnsupportedOperationException("botmux switch")
 
+    /**
+     * `PUT /api/v1/machines/{id}/orca-chat-starts {"on"}`: "Start new Agents as Orca chats" (#17650), saved at once, also
+     * while offline; returns the switch in force. The machine carries it ([Machine.orcaChatStarts]) where it applies.
+     */
+    suspend fun setOrcaChatStarts(machineId: String, on: Boolean): Boolean = throw UnsupportedOperationException("orca chat starts")
+
     /** `GET /api/v1/machines/{id}/claude-settings`. */
     suspend fun claudeSettings(machineId: String): List<ClaudeSetting>
 

@@ -3,7 +3,7 @@
 // bot, credentials), where its messages go, what it does, a test message to the owner — and, for a market's, the way
 // to install it. Read-only ones (the apps, /agent, voice) say where they are set up.
 import { OwnerMark } from "./OwnerMark";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../../lib/channels";
 import { canSendStep, fieldInput } from "../../lib/connectors";
 import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
+import { lazyPage } from "../../lib/lazy-page";
 import { otherManager, ownedSub, useChosenManager } from "../../lib/manager-choice";
 import { isOpenBeside } from "./open-beside";
 import { ago, safeWebURL } from "../../lib/format";
@@ -22,7 +23,7 @@ import { ChannelMark } from "../../ui/ChannelMark";
 import { Icon } from "../../ui/icons";
 import { QRStep, useStepPolling } from "./LoginSteps";
 import { Group, Pill, Row, SettingsHint, Switch } from "./SettingsParts";
-import { useChannelController, type ChannelController } from "./useChannelController";
+import type { ChannelController } from "./useChannelController";
 import { byTime } from "../../lib/times";
 
 const DOT: Record<ChannelTone, string> = { green: "bg-green", red: "bg-red", idle: "bg-line-strong" };
@@ -96,11 +97,12 @@ export function ChannelLink({ id, manager, onOpen }: { id: string; manager?: str
 
 /** `openBeside`: the channel open beside the list (Settings' two columns): its row is marked current, and every row puts
  *  its state under its name, so the narrow column shows the name whole. */
-export function ChannelList({ onOpen, onMarketItem, openBeside }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void; openBeside?: string | null }) {
+export function ChannelList({ onOpen, onMarketItem, openBeside, manager }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void; openBeside?: string | null; manager?: string }) {
   // the current assistant's channels (docs/assistant/managers.md "The current assistant"), asked of it by name (none for
   // the default); a row opens its copy (`<id>@<manager>`)
-  const picked = useChosenManager();
-  const owner = otherManager(picked ?? undefined);
+  const chosen = useChosenManager();
+  const picked = manager ?? chosen;
+  const owner = manager ?? otherManager(chosen ?? undefined);
   const [list, setList] = useState<Channel[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -189,14 +191,14 @@ export function ChannelBindingBlock({ ctl, showAccountMark = true }: { ctl: Chan
   const d = ctl.detail;
   useEffect(() => {
     setUnbinding(false);
-  }, [d?.id]);
+  }, [ctl.resourceKey]);
   if (!d) return null;
   const editable = !d.read_only && d.source !== "market";
   if (!editable) return null;
 
   return (
     <>
-      {canBind(d) && <BindSteps c={d} onDone={ctl.load} />}
+      {canBind(d) && <BindSteps key={ctl.resourceKey} c={d} bind={ctl.bind} onDone={ctl.load} />}
       {isBound(d) && (
         <Group title={t("settings-channels.binding")} footer={t("settings-channels.binding_footer")}>
           <Row label={t("settings-channels.bound_account")}>
@@ -252,7 +254,7 @@ export function ChannelTargetControls({ ctl, onSettings }: { ctl: ChannelControl
   const d = ctl.detail;
   useEffect(() => {
     setPicking(false);
-  }, [d?.id]);
+  }, [ctl.resourceKey]);
   if (!d) return null;
 
   const editable = !d.read_only && d.source !== "market";
@@ -420,26 +422,38 @@ export function ChannelDeliveryControls({
 /** `manager`: whose channel (another manager's, opened from its extension's page): the page's requests name it while it
  *  is open; none: the current assistant's. */
 /** `headerBack`: the page's top bar has the way back (a phone), so it draws no Back of its own. */
-export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void; headerBack?: boolean }) {
+export type ChannelPageProps = { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void; headerBack?: boolean };
+
+const ChannelResource = lazyPage(() => import("./ChannelResource").then((m) => m.ChannelResource));
+
+export function ChannelPage({ id, manager: named, ...props }: ChannelPageProps) {
   // a route that names none (written by hand, or before several managers): the current assistant's, as for an extension
-  const manager = named ?? otherManager(useChosenManager() ?? undefined);
-  const ctl = useChannelController(id, manager);
-  const d = ctl.detail;
+  const chosen = useChosenManager();
+  const manager = named ?? otherManager(chosen ?? undefined);
+  return (
+    <Suspense fallback={<ChannelPageContent {...props} manager={manager} ctl={null} />}>
+      <ChannelResource {...props} id={id} manager={manager} />
+    </Suspense>
+  );
+}
+
+export function ChannelPageContent({ ctl, manager, onBack, onSettings, headerBack }: Omit<ChannelPageProps, "id"> & { ctl: ChannelController | null }) {
+  const d = ctl?.detail;
 
   const head = (
     <div className="mb-3 flex items-center gap-2">
       {!headerBack && <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-channels.title")}</Button>}
       <OwnerMark manager={manager} />
       <span className="flex-1" />
-      <IconButton icon="retry" label={t("settings-channels.refresh")} onClick={() => void ctl.load()} />
+      <IconButton icon="retry" label={t("settings-channels.refresh")} onClick={() => void ctl?.load()} />
     </div>
   );
-  if (!d) {
+  if (!ctl || !d) {
     return (
       <>
         {head}
         <Group>
-          <div className="px-4 py-3">{ctl.error ? <p className="text-meta text-red">{t("settings-channels.channel_load_failed", { error: ctl.error })}</p> : <Loading />}</div>
+          <div className="px-4 py-3">{ctl?.error ? <p className="text-meta text-red">{t("settings-channels.channel_load_failed", { error: ctl.error })}</p> : <Loading />}</div>
         </Group>
       </>
     );
@@ -521,8 +535,9 @@ export function TargetPicker({ open, current, onClose, onPick }: { open: boolean
  * Binding `c` a step at a time. The Lark bot's page reuses it to create the bot's app by scanning (#5818), with its own
  * `title`, `footer` and `startLabel` for the first button; everything after the first press is the same steps.
  */
-export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }: {
+export function BindSteps({ c, bind, onDone, title, footer: startFooter, startLabel }: {
   c: Pick<Channel, "id" | "name" | "bind">;
+  bind?: ChannelController["bind"];
   onDone: () => Promise<void>;
   title?: string;
   footer?: string;
@@ -541,7 +556,7 @@ export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }:
   const send = useCallback(async (step: string, vals: Record<string, string>, quiet = false): Promise<boolean> => {
     if (!quiet) setBusy(true);
     try {
-      const p = await bindChannel(c.id, step, vals);
+      const p = await (bind ? bind(step, vals) : bindChannel(c.id, step, vals));
       if (!live.current) return false;
       if (p.done) {
         setPrompt(null);
@@ -561,7 +576,7 @@ export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }:
       if (!quiet && live.current) setBusy(false);
     }
     return false;
-  }, [c.id, c.name, onDone]);
+  }, [bind, c.id, c.name, onDone]);
 
   // A QR code or a code on screen: ask again every interval until it is scanned / sent.
   useStepPolling(isPolled(prompt) ? prompt : null, (step) => send(step, {}, true), 3);

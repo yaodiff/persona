@@ -9,6 +9,8 @@ const MaxRepositoryLinks = repositorywire.MaxRepositoryLinks
 const MaxRevision = repositorywire.MaxRevision
 const LinkRoleDelivery = repositorywire.LinkRoleDelivery
 const LinkRoleReference = repositorywire.LinkRoleReference
+const LinkProvenanceUnbound = repositorywire.LinkProvenanceUnbound
+const LinkProvenanceExplicit = repositorywire.LinkProvenanceExplicit
 const LayoutRoot = repositorywire.LayoutRoot
 const LayoutContainer = repositorywire.LayoutContainer
 const TaskWorkflowIsolated = repositorywire.TaskWorkflowIsolated
@@ -23,6 +25,7 @@ type SourceSnapshot = repositorywire.SourceSnapshot
 type LinkInput = repositorywire.LinkInput
 type ResolvedLink = repositorywire.ResolvedLink
 type TaskLink = repositorywire.TaskLink
+type LinkProvenance = repositorywire.LinkProvenance
 type TaskInput = repositorywire.TaskInput
 type TaskRepository = repositorywire.TaskRepository
 type TaskSet = repositorywire.TaskSet
@@ -63,8 +66,8 @@ func NormalizeTaskWorkflow(workflow string) (string, Problem) {
 func LinkKey(identity Identity, link TaskLink) string { return repositorywire.LinkKey(identity, link) }
 func DefaultAlias(identity Identity) string           { return repositorywire.DefaultAlias(identity) }
 
-func PreserveLinkTitles(current, next []TaskLink, input []LinkInput) {
-	repositorywire.PreserveLinkTitles(current, next, input)
+func ReconcileLinkEdits(current, next []TaskLink, input []LinkInput) {
+	repositorywire.ReconcileLinkEdits(current, next, input)
 }
 func ParseTaskLink(raw string) (Identity, TaskLink, error) { return repositorywire.ParseTaskLink(raw) }
 func ParseTaskLinkInput(in LinkInput) (Identity, TaskLink, error) {
@@ -73,8 +76,8 @@ func ParseTaskLinkInput(in LinkInput) (Identity, TaskLink, error) {
 func MergeTaskLinks(current []TaskRepository, urls []string, catalog Catalog) ([]TaskRepository, error) {
 	return repositorywire.MergeTaskLinks(current, urls, catalog)
 }
-func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog Catalog) ([]TaskRepository, error) {
-	return repositorywire.MergeTaskLinkDetails(current, input, catalog)
+func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog Catalog, provenance LinkProvenance) ([]TaskRepository, error) {
+	return repositorywire.MergeTaskLinkDetails(current, input, catalog, provenance)
 }
 
 func IsWindowsReservedName(name string) bool { return repositorywire.IsWindowsReservedName(name) }

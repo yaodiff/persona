@@ -52,6 +52,9 @@ type TodoAgent struct {
 	Source      string     `json:"source"`
 	Via         string     `json:"via,omitempty"`
 	DismissedAt *time.Time `json:"dismissed_at,omitempty"`
+
+	// A resume check begun before this binding was observed running, resumable or closed cannot supply a terminal.
+	resumeInvalidatedAt time.Time
 }
 
 type Todo struct {
@@ -240,10 +243,11 @@ type todoBook struct {
 	loaded              bool
 	todos               map[string]*Todo
 	deletedRequestGates map[string]bool
-	activeBySession     map[[2]string]string  // (machine_id, session_id) -> the open todo it works for
-	snapshotSyncing     map[[2]string]bool    // (machine_id, session_id) whose title is being written
-	spacesByKey         map[string]string     // "<machine_id>/<space>" -> todo_id
-	botmux              map[string]botmuxSeen // by machine: its botmux sessions' chats and dispatches (todo_sessions.go)
+	activeBySession     map[[2]string]string        // (machine_id, session_id) -> the open todo it works for
+	refusedResumes      map[resumeAttempt]time.Time // pending manual-resume decisions, scoped to this binding
+	snapshotSyncing     map[[2]string]bool          // (machine_id, session_id) whose title is being written
+	spacesByKey         map[string]string           // "<machine_id>/<space>" -> todo_id
+	botmux              map[string]botmuxSeen       // by machine: its botmux sessions' chats and dispatches (todo_sessions.go)
 
 	tokensMu sync.Mutex
 	tokens   map[string]*tokenSync // by machine (todo_sessions.go)
@@ -1799,6 +1803,16 @@ func (s *Service) setTodoRowLocked(id string, row db.TodoRow, guard func(*Todo) 
 	t.Title = row.Title
 	t.Notes = row.Notes
 	becameDone := t.DoneAt == nil && row.DoneAt != nil
+	if becameDone {
+		// A stopped Agent can keep the same binding when its task is closed and later reopened.
+		now := time.Now()
+		for i := range t.Agents {
+			if t.Agents[i].active() {
+				t.Agents[i].resumeInvalidatedAt = now
+			}
+		}
+		s.todos.pruneResumeChecksLocked(now)
+	}
 	reopened := t.DoneAt != nil && row.DoneAt == nil
 	var reopenedEvent map[string]any
 	if reopened {

@@ -203,12 +203,23 @@ const (
 	TagExternalObject = "external_object"
 )
 
+// MentionUserID is a person's user ID on the connector's own service, as verified for a real @ mention.
+type MentionUserID string
+
+// InboxMention binds an exact @name in InboxReply.Text to a verified external user ID.
+type InboxMention struct {
+	ID   MentionUserID `json:"id"`
+	Name string        `json:"name"`
+}
+
 // InboxReply is a reply to one of a connector's inbox items.
 type InboxReply struct {
 	Thread string `json:"thread"`
 	ItemID string `json:"item_id,omitempty"` // the hub's inbox item
 	Last   string `json:"last,omitempty"`    // the newest move the item holds (InboxThing.Last): what the reply answers
 	Text   string `json:"text,omitempty"`
+	// Mentions lists explicit @name bindings (verified user ID + exact display name) for connectors that support real @ mentions.
+	Mentions []InboxMention `json:"mentions,omitempty"`
 	// ClientID is the app's id for the send: a retry with the same one goes out once (empty: the connector derives one).
 	ClientID string `json:"client_id,omitempty"`
 	// Changes move a document row's status first (a document item's "Change status", the AI twin's proposal); Text may then be empty.

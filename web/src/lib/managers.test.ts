@@ -1,10 +1,37 @@
+// @vitest-environment jsdom
 // Settings › Managers' words (docs/assistant/managers.md): where one runs, its status line, why Delete is off, and the hub's refusals.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApiError, errorText } from "./api";
-import { deleteBlocked, deployText, hostedManagerAttention, hostedManagersForMachine, managerError, managerVersionLag, minutesLeft, statusLine, unsupported, validName, whereText, type Manager, type ManagerList } from "./managers";
+import { deleteBlocked, deployText, hostedManagerAttention, hostedManagersForMachine, listManagers, managerError, managerVersionLag, minutesLeft, statusLine, unsupported, validName, whereText, type Manager, type ManagerList } from "./managers";
+import { extensionInfoAccessMode } from "./scoped-extension-trust";
 
 const NOW = Date.parse("2026-11-05T12:00:00Z");
 const m = (over: Partial<Manager>): Manager => ({ id: "m-1", name: "工作", online: false, ...over });
+
+it("recognizes only an explicit true capability for the owning assistant in the roster response", async () => {
+  const response = {
+    default: "assistant",
+    managers: [
+      m({ id: "assistant", online: true }),
+      m({ id: "supported", online: true, extension_info_access_scoped: true }),
+      m({ id: "previous", online: true, extension_info_access_scoped: false }),
+      m({ id: "omitted", online: true }),
+      { ...m({ id: "malformed", online: true }), extension_info_access_scoped: "true" },
+    ],
+  };
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json(response)));
+  try {
+    const roster = await listManagers();
+    expect(extensionInfoAccessMode(roster, "assistant")).toBe("legacy");
+    expect(extensionInfoAccessMode(roster, "supported")).toBe("scoped");
+    expect(extensionInfoAccessMode(roster, "previous")).toBeUndefined();
+    expect(extensionInfoAccessMode(roster, "omitted")).toBeUndefined();
+    expect(extensionInfoAccessMode(roster, "malformed")).toBeUndefined();
+    expect(extensionInfoAccessMode(roster, "unknown")).toBeUndefined();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 describe("助手", () => {
   it("运行在哪：机器 · 系统 · 怎么跑", () => {

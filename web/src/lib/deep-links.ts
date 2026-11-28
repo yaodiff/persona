@@ -24,7 +24,7 @@ export type DeepPage =
   | { page: "knowledge-entry"; kind: string; id: string }
   | { page: "machines" }
   | ({ page: "machine"; id: string } & MachineLocation)
-  | { page: "settings"; tab?: string; item?: string; manager?: string }
+  | { page: "settings"; tab?: string; item?: string; manager?: string; otherManager?: string; filter?: string; prefill?: string; integration?: string }
   | { page: "extension"; extension: string; ui: string; state?: string };
 
 /** The knowledge base's kinds (lib/kb.ts KB_KINDS; a test keeps the two the same). */
@@ -106,13 +106,21 @@ function segments(path: string): string[] | null {
   }
 }
 
-function settingsPage(q: URLSearchParams): DeepPage {
-  const tab = q.get("tab") ?? "";
-  const manager = q.get("manager") ?? undefined;
-  if (tab === "sent") return clean({ page: "settings", tab: "connectors", item: SENT, manager });
+function settingsPage(q: URLSearchParams, route?: ReturnType<typeof parseSettingsPath>): DeepPage {
+  const rawTab = route?.tab ?? q.get("tab") ?? "";
+  const tab = rawTab === "plugins" ? "extensions" : rawTab === "sent" ? "connectors" : rawTab;
+  const managers = [...new Set([...q.getAll("manager"), route?.manager].filter(Boolean))];
+  const [manager, otherManager] = managers;
   if (!(tab in DEEP_SETTINGS_TABS)) return clean({ page: "settings", manager });
   const key = DEEP_SETTINGS_TABS[tab];
-  return clean({ page: "settings", tab, item: key ? q.get(key) ?? undefined : undefined, manager });
+  const item = rawTab === "sent" ? SENT : route?.sub ?? (key ? q.get(key) ?? (tab === "extensions" ? q.get("plugin") : null) : null);
+  if (tab === "integrations" || isLegacyIntegrationTab(tab)) {
+    const set = q.getAll("set");
+    const prefill = set.length === 1 ? set[0] : undefined;
+    const integration = tab === "integrations" ? undefined : q.get("integration") ?? undefined;
+    return clean({ page: "settings", tab, item: item ?? undefined, manager, otherManager, filter: q.get("filter") ?? undefined, prefill, integration });
+  }
+  return clean({ page: "settings", tab, item: item ?? undefined, manager });
 }
 
 /** The page a path of the hub's web app is (without the sub-path), with its query; null for a path the table does not
@@ -159,8 +167,7 @@ export function pageOfPath(path: string, search = ""): DeepPage | null {
       if (p.length === 1) return settingsPage(q);
       const route = parseSettingsPath(path);
       if (!route || route.tab === "sent") return null;
-      const key = DEEP_SETTINGS_TABS[route.tab];
-      return clean({ page: "settings", tab: route.tab, item: route.sub ?? (key ? v(key) : undefined), manager: v("manager") ?? route.manager });
+      return settingsPage(q, route);
     }
     case "extension":
     case "plugin":
@@ -274,7 +281,8 @@ export function pagePath(p: DeepPage): string {
       return machinePath(p.id, p);
     case "settings": {
       const key = p.tab ? DEEP_SETTINGS_TABS[p.tab] : null;
-      return withQuery("/settings", [["tab", p.tab], [key ?? "", key ? p.item : undefined], ["manager", p.manager]]);
+      return withQuery("/settings", [["tab", p.tab], [key ?? "", key ? p.item : undefined],
+        ["manager", p.manager], ["manager", p.otherManager], ["filter", p.filter], ["set", p.prefill], ["integration", p.integration]]);
     }
     case "extension":
       return withQuery(`/extension/${enc(p.extension)}/${enc(p.ui)}`, [["state", p.state]]);

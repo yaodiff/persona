@@ -25,6 +25,18 @@ func TestExtensionCallsWire(t *testing.T) {
 	checkMethodWire[wire.UIImageParams, wire.UIImage](t, extwire.UIImageMethod, "ui.image",
 		`{"contribution":"camera","ref":"snapshot","width":640,"placement":"nav_page"}`,
 		`{"mime":"image/png","data":"AAE=","max_age":10}`)
+	checkMethodWire[wire.SettingsCheckParams, wire.SettingsCheckResult](t, extwire.SettingsCheckMethod, "settings.check",
+		`{"config":{"endpoint":"https://example.com"},"secrets":{"example":"EXAMPLE_VALUE"},"proxy":"http://example.com:8080"}`,
+		`{"ok":false,"error":"Please check the endpoint"}`)
+	checkMethodWire[wire.ShortcutRunParams, wire.ShortcutResult](t, extwire.ShortcutRunMethod, "shortcut.run",
+		`{"contribution":"ping","values":{},"ui_version":7,"tz":"Asia/Shanghai","locale":"en","platform":"ios"}`,
+		`{"text":"Example result","view":{"title":"Example view","sections":[]}}`)
+	checkMethodWire[wire.OffloadJobParams, buswire.None](t, extwire.OffloadCancelMethod, "offload.cancel",
+		`{"contribution":"archive","locale":"en","machine":{"id":"example-machine","name":"Example computer","os":"linux","online":true},"job":"job-1"}`,
+		`{}`)
+	checkMethodWire[wire.MemoryEntriesParams, json.RawMessage](t, extwire.MemoryEntriesMethod, "memory.entries",
+		`{"contribution":"library","limit":200,"after":"example-cursor"}`,
+		`{"entries":[],"tagged":true,"has_more":true,"after":"next-page","standing_bytes":4096}`)
 }
 
 func checkMethodWire[P, R any](t *testing.T, method buswire.Method[P, R], name, request, reply string) {

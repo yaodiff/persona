@@ -20,6 +20,7 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/agentprompt"
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
@@ -618,7 +619,8 @@ func gateToolSchema(g proto.CommandGate) json.RawMessage {
 }
 
 // assistantGateTool runs a gated command for an assistant conversation on a runtime: the gate decides first, as for a
-// Bash call of Claude's (larkCheck: reads go, writes are confirmed on the phone, the configured rules deny), then the
+// Bash call of Claude's or a local assistant_environment runtime's (larkCheckOutcome: reads go, writes are confirmed on
+// the phone with editable text for eligible proxy-authenticated send/reply calls, the configured rules deny), then the
 // skill's script runs here with the gate's credentials in its environment only.
 func (n *Node) assistantGateTool(ctx context.Context, g *proto.CommandGate, session string, raw json.RawMessage) proto.ToolResult {
 	var a struct {
@@ -643,21 +645,77 @@ func (n *Node) assistantGateTool(ctx context.Context, g *proto.CommandGate, sess
 		words[i] = shellQuote(w)
 	}
 	command := g.Command + " " + strings.Join(words, " ")
-	ix := proto.Interaction{SessionID: session, Cwd: cwd, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(nodeclient.HookTimeout).UTC(),
-		ToolName: g.Tool.Name, ToolInput: raw, SessionTitle: filepath.Base(cwd)}
+	ix := proto.Interaction{
+		ID:           "ix_" + randHex(6),
+		SessionID:    session,
+		Cwd:          cwd,
+		CreatedAt:    time.Now().UTC(),
+		ExpiresAt:    time.Now().Add(nodeclient.HookTimeout).UTC(),
+		ToolName:     g.Tool.Name,
+		ToolInput:    raw,
+		SessionTitle: filepath.Base(cwd),
+	}
 	if s, _, ok := n.runtimes.rowOf(session); ok && s.Title != "" {
 		ix.SessionTitle = s.Title
 	}
-	decision, reason, err := n.larkCheck(ctx, session, cwd, command, ix)
+	cfg := n.assistantLark(ctx)
+	call, _, original, editable := n.editableLarkCall(cfg, command, cwd)
+	if editable {
+		ix.EditableText = original
+	}
+	out, err := n.larkCheckOutcome(ctx, session, cwd, command, ix)
 	if err != nil {
 		return proto.TextResult("没有执行："+err.Error(), true)
 	}
-	if decision == "deny" {
-		return proto.TextResult("没有执行："+reason, true)
+	if out.decision != "allow" {
+		return gateToolDenyResult(out)
+	}
+	if editable && out.editedText != "" && out.editedText != original {
+		card := out.card
+		if card.InteractionID == "" {
+			card.InteractionID = ix.ID
+		}
+		if err := n.applyLarkProxyEdit(ctx, cfg, session, card, call, out.editedText); err != nil {
+			return proto.TextResult("没有执行："+err.Error(), true)
+		}
 	}
 	rctx, cancel := context.WithTimeout(ctx, gateToolTimeout)
 	defer cancel()
 	return runGateScript(rctx, g.Command, script, a.Args, cwd, env)
+}
+
+// gateToolDenyResult maps a non-allow larkCheckOutcome to an MCP tool result, keeping detached pending cards as
+// non-error WaitingText/ClarifyingText, preserving owner deny notes, and avoiding misleading retry prompts on dismiss.
+func gateToolDenyResult(out larkCheckOutcome) proto.ToolResult {
+	switch {
+	case out.pending:
+		msg := strings.TrimSpace(out.reason)
+		if msg == "" {
+			msg = approvalops.WaitingText + " The command was not executed."
+		}
+		return proto.TextResult(msg, false)
+	case out.dismiss:
+		msg := strings.TrimSpace(out.reason)
+		if msg == "" {
+			msg = "审批已取消或未完成，没有执行，请勿自动重试。"
+		}
+		return proto.TextResult(msg, true)
+	case out.userDenied:
+		if out.userNote != "" {
+			return proto.TextResult("没有执行（用户已拒绝）："+out.userNote, true)
+		}
+		msg := strings.TrimSpace(out.reason)
+		if msg == "" {
+			msg = "用户拒绝了这次操作，没有执行。"
+		}
+		return proto.TextResult(msg, true)
+	default:
+		msg := strings.TrimSpace(out.reason)
+		if msg == "" {
+			msg = "权限校验未放行，无法执行该操作。"
+		}
+		return proto.TextResult("没有执行："+msg, true)
+	}
 }
 
 // gateOutputCap is how much of a gated command's output goes back to the assistant; gateOutputNotice follows it when

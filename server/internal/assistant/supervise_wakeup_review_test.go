@@ -327,6 +327,9 @@ func TestUndeliveredDecisionIdleRestartIgnoresFutureWake(t *testing.T) {
 	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
 	s, f, todo := newSupervisedServiceOn(t, st)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	// The handoff skips the gather (#17099), so the hour above does not keep it until the simulated restart: hold the
+	// digest timer, as if the manager stopped before its digest ran. The explicit wakeRound below still delivers.
+	s.stopSuperviseTimers()
 	now := time.Now()
 	sid := todo.Agents[0].SessionID
 	f.setSessions("box", proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,

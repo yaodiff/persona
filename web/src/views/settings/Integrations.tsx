@@ -7,11 +7,9 @@ import { hubServes, moduleFeature } from "../../core/module-host";
 import { loadMailAccounts, useMailboxEnabled } from "../../lib/mail";
 import { t } from "../../i18n";
 import type { MailAccount } from "../../lib/agent-settings";
-import { api, enc, errorText } from "../../lib/api";
+import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { listChannels, type Channel } from "../../lib/channels";
 import { connectorBrand, listConnectors, type HubConnector } from "../../lib/connectors";
-import { stripBase } from "../../lib/base";
-import { navigate, subscribeRoute } from "../../lib/router";
 import { scoped, useScope } from "../../lib/current-assistant";
 import { hubHasExt } from "../../lib/extension-api";
 import { onAuthChange, withAuth } from "../../lib/extension-auth";
@@ -21,7 +19,7 @@ import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, 
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { botStatus, type FeishuBotStatus } from "../../lib/feishu-bot";
 import { lazyPage } from "../../lib/lazy-page";
-import { chooseManager, defaultManager, otherManager, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { chooseManager, defaultManager, otherManager, pinManagerAt, useShownManager } from "../../lib/manager-choice";
 import { managerOf, useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useLarkOn, useStore } from "../../lib/store";
@@ -42,12 +40,12 @@ import { OwnerMark } from "./OwnerMark";
 import { SentSettings } from "./SentSettings";
 import { Group, Pill, Row, SettingsHint } from "./SettingsParts";
 import {
-  formatIntegrationsSub,
+  integrationManager,
+  integrationScope,
   isIntegrationDetailRoute,
-  normalizeIntegrationFilter,
-  parseIntegrationsSub,
   type IntegrationFilter,
   type IntegrationsRoute,
+  type IntegrationView,
 } from "./integrations-route";
 import {
   buildIntegrationCatalog,
@@ -55,12 +53,16 @@ import {
   isIntegrationRowSelected,
   resolveIntegrationTarget,
   resolveSourceItem,
-  type IntegrationCapability,
   type IntegrationItem,
   type IntegrationSubscriptionAlert,
   type IntegrationTone,
   type LarkGatewaySummary,
 } from "./integrations/catalog";
+import { capabilityLabel, projectedCatalogItem, projectedResource, projectionSourceErrors } from "./integrations/projectedCatalog";
+import { editableSection, IntegrationReadProblem, projectedIntegrationTarget, projectedSections, type ProjectedDetail } from "./integrations/projectedDetail";
+import { IntegrationDetailShell, originBadgeLabel } from "./integrations/DetailShell";
+import { integrationResourceKey } from "./integrations/model";
+import { useIntegrationCatalogProjection, useIntegrationDetailProjection, useIntegrationProjectionMode, useProjectedMarkets } from "./integrations/useIntegrationProjection";
 
 const IntegrationDetail = lazyPage(() => import("./IntegrationDetail").then((m) => m.IntegrationDetail));
 const MarketCatalog = lazyPage(() => import("./ExtensionMarket").then((m) => m.MarketCatalog));
@@ -72,19 +74,17 @@ const ExtensionUI = lazyPage(() => import("./ExtensionView").then((m) => m.Exten
 const LazySourcesUI = lazyPage(() => import("../subscriptions/SourcesUI").then((m) => m.SourcesUI));
 
 export interface IntegrationsProps {
-  open: string | null;
+  route: IntegrationsRoute;
   prefill?: JsonObject;
-  onOpen: (sub: string | null, drillDown?: boolean) => void;
+  onOpen: (route: IntegrationsRoute, action?: "push" | "replace" | "root") => void;
+  onBack: () => void;
   /** Desktop split-pane layout (when the Settings host has room): list stays beside the open integration detail. */
   twoCol?: boolean;
   /** The page's top bar already provides Back (phone), so subviews omit their own Back button. */
   headerBack?: boolean;
-  /** Parent `?integration=` sub-route recorded when drilling down (for example upgrade or scoped push-source detail). */
-  parentSub?: string | null;
-  /** Step back to `parentSub` via browser history when mounted inside Settings. */
-  onBackParent?: () => void;
+  parentView?: IntegrationView;
   /** Navigate to a Settings URL linked from a channel override notice. */
-  onSettings?: (url: string) => void;
+  onSettings?: (url: string, manager?: string) => void;
   /** Report whether an open extension plugin_page needs the wide page container. */
   onPageWide?: (wide: boolean) => void;
 }
@@ -110,20 +110,14 @@ const FILTER_CHIPS: readonly { id: IntegrationFilter; labelKey: string }[] = [
   { id: "tools", labelKey: "settings-integrations.filter_tools" },
 ];
 
-const CAP_LABEL_KEY: Record<IntegrationCapability, string> = {
-  channels: "settings-integrations.cap_channels",
-  data: "settings-integrations.cap_data",
-  tools: "settings-integrations.cap_tools",
-};
-
 function ItemMark({ item }: { item: IntegrationItem }) {
-  if (item.kind === "extension" && item.extension) {
+  if (item.kind === "extension") {
     return (
       <ExtensionLogo
-        url={item.extension.icon_url}
-        manager={item.extension.manager ?? ""}
+        url={item.extension?.icon_url}
+        manager={item.extension?.manager ?? item.manager ?? ""}
         iconSize={15}
-        className={cx("flex size-8 shrink-0 items-center justify-center rounded-control", EXT_TILE[extensionTone(item.extension)])}
+        className={cx("flex size-8 shrink-0 items-center justify-center rounded-control", EXT_TILE[item.extension ? extensionTone(item.extension) : item.tone])}
       />
     );
   }
@@ -174,69 +168,93 @@ function SubscriptionAlertBadge({ alert }: { alert: IntegrationSubscriptionAlert
   );
 }
 
-/** Detail pane for a standalone push source (or single source deep link), backed by lazy SourcesUI. */
+/** Detail pane for a standalone push source (or single source deep link), composed through IntegrationDetailShell. */
 function PushSourceDetailPane({
   state,
   item,
   manager,
   onBack,
   backLabel,
+  onSwitchAssistant,
+  onOpenDataFlow,
   reloadKey,
   onReload,
+  projection,
+  resourceId,
 }: {
   state: string;
   item: IntegrationItem | null;
   manager?: string;
   onBack?: () => void;
   backLabel?: string;
+  onSwitchAssistant?: () => void;
+  onOpenDataFlow?: () => void;
   reloadKey: number;
   onReload: () => void;
+  projection?: ProjectedDetail;
+  resourceId?: string;
 }) {
   const title = item?.name ?? t("subscriptions.title_sources");
-  return (
-    <div data-integration-detail={item?.id ?? "source"} data-integration-kind="source">
-      <div className="mb-3 flex items-center gap-2">
-        {onBack && (
-          <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
-            {backLabel ?? t("settings-integrations.back")}
-          </Button>
-        )}
-        <OwnerMark manager={manager} />
-        <span className="flex-1" />
-        <IconButton icon="retry" label={t("settings-integrations.refresh")} onClick={onReload} />
-      </div>
+  const source = projectedSections(projection, "inbox_and_sync").find(({ ref }) =>
+    (ref.kind === "push_source" || ref.kind === "subscription") && ref.id === resourceId);
+  const readOnly = source && !editableSection(source);
+  const resourceKind = projection?.detail.item.ref.kind === "subscription" || item?.ref?.kind === "subscription"
+    ? "subscription"
+    : "push_source";
+  const resolvedId = projection?.detail.item.ref.id ?? item?.id ?? resourceId ?? state;
+  const resourceKey = integrationResourceKey(manager, resourceKind, resolvedId);
 
-      {item && (
-        <section className="mb-6 overflow-hidden rounded-card bg-surface shadow-card">
-          <div className="flex items-center gap-3 px-4 py-3.5">
-            <ItemMark item={item} />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <h1 className="truncate text-card-title font-semibold text-ink">{item.name}</h1>
-                <Pill>{t("settings-integrations.push_source_badge")}</Pill>
-              </div>
-              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-label text-ink-3">
-                <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT_CLASS[item.tone])} />
-                <span className="truncate">{item.statusText}</span>
-              </div>
-            </div>
-          </div>
-          {item.description && (
-            <div className="border-t border-line px-4 py-3">
-              <p className="text-meta leading-relaxed text-ink-2">{item.description}</p>
-            </div>
-          )}
-        </section>
+  const sourceContent = (
+    <>
+      {readOnly && <Group><SettingsHint>{t("settings-integrations.projection_read_only")}</SettingsHint></Group>}
+      {(!projection || (source && editableSection(source))) && (
+        <Suspense fallback={<Loading />}>
+          <LazySourcesUI key={`${manager ?? ""}:${state}:${reloadKey}`} title={title} state={state} manager={manager} />
+        </Suspense>
       )}
+      {onOpenDataFlow && (
+        <Group anchor="source-data-flow">
+          <Row
+            anchor="source-data-flow-entry"
+            icon="loop"
+            label={t("settings-integrations.view_sources")}
+            hint={t("settings-integrations.source_data_flow_hint")}
+            wrapHint
+            onClick={onOpenDataFlow}
+          />
+        </Group>
+      )}
+    </>
+  );
 
-      <Suspense fallback={<Loading />}>
-        <LazySourcesUI key={`${manager ?? ""}:${state}:${reloadKey}`} title={title} state={state} manager={manager} />
-      </Suspense>
-    </div>
+  return (
+    <IntegrationDetailShell
+      id={item?.id ?? "source"}
+      kind="source"
+      resourceKey={resourceKey}
+      manager={manager}
+      onBack={onBack}
+      backLabel={backLabel}
+      onSwitchAssistant={onSwitchAssistant}
+      onRefresh={onReload}
+      hideHeaderCard={!item}
+      mark={item ? <ItemMark item={item} /> : undefined}
+      title={item?.name}
+      badge={item ? originBadgeLabel(item.origin, "source", { subscription: item.ref?.kind === "subscription" }) : undefined}
+      status={item ? (
+        <>
+          <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT_CLASS[item.tone])} />
+          <span className="truncate">{item.statusText}</span>
+        </>
+      ) : undefined}
+      headerBody={item?.description ? <p className="text-meta leading-relaxed text-ink-2">{item.description}</p> : undefined}
+      projection={projection}
+      slots={{ inbox: sourceContent }}
+    />
   );
 }
 
-/** Full-width Data Flow pane (`-sources` / `-sources@<manager>`), pinning `/subscriptions` when a manager is named. */
+/** Full-width Data Flow pane for the route's assistant. */
 function SourcesFlowPane({
   onOpenSource,
   manager,
@@ -309,47 +327,33 @@ function IntegrationExtensionPage({
 }
 
 export function Integrations(props: IntegrationsProps) {
-  const picked = useChosenManager();
-  return <IntegrationsForManager key={picked ?? ""} {...props} picked={picked} />;
+  const current = useShownManager();
+  const owner = integrationManager(props.route.scope) ?? otherManager(current);
+  const credential = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  return <IntegrationsForManager key={JSON.stringify([credential, owner ?? current])} {...props} owner={owner} current={current} />;
 }
 
 function IntegrationsForManager({
-  picked,
-  open,
+  current,
+  owner,
+  route,
   prefill,
   onOpen,
+  onBack,
   twoCol = false,
   headerBack = false,
-  parentSub = null,
-  onBackParent,
+  parentView,
   onSettings,
   onPageWide,
-}: IntegrationsProps & { picked: string | null }) {
-  const route = useMemo(() => parseIntegrationsSub(open), [open]);
-  const [drillOrigin, setDrillOrigin] = useState<{ child: string; parent: string } | null>(null);
-  const go = (next: IntegrationsRoute) => {
-    setDrillOrigin(null);
-    onOpen(formatIntegrationsSub(next));
-  };
-  const drillDown = (next: IntegrationsRoute) => {
-    const childSub = formatIntegrationsSub(next);
-    if (open && childSub && open !== childSub) {
-      setDrillOrigin({ child: childSub, parent: open });
-    }
-    onOpen(childSub, true);
-  };
-  const returnParent = parentSub ?? (drillOrigin && drillOrigin.child === open ? drillOrigin.parent : null);
-  const stepBackTo = (target: string) => {
-    setDrillOrigin(null);
-    if (onBackParent && parentSub === target) onBackParent();
-    else onOpen(target);
-  };
-
-  const owner = otherManager(picked ?? undefined);
-  const effectiveManager = ("manager" in route ? route.manager : undefined) ?? owner;
+}: IntegrationsProps & { owner?: string; current: string }) {
+  const { view, filter } = route;
   const roster = useRoster();
   const scope = useScope();
-  const offline = useShownOffline();
+  const shownOffline = useShownOffline();
+  const offline = shownOffline?.manager.id === (owner ?? current) ? shownOffline : null;
+  const resourceOwner = owner ?? (scope.several ? current : undefined);
+  const go = (view: IntegrationView, manager = resourceOwner, action?: "push" | "replace" | "root") =>
+    onOpen({ scope: integrationScope(manager), view, filter }, action);
 
   const hasExtensions = useStore((s) => hubHasExt(s.features, "manager"));
   const hasChannels = useStore((s) => s.features.includes("channels"));
@@ -360,25 +364,36 @@ function IntegrationsForManager({
   const announcesLarkModule = useStore((s) => s.features.includes(moduleFeature("lark")));
   const hasSubscriptions = useSubscriptionsShown();
   const hasInboxSources = useInboxSourcesShown();
+  const mode = useIntegrationProjectionMode(owner ?? current);
+  const legacy = mode.mode === "legacy";
+  const showDetail = isIntegrationDetailRoute(view);
+  const projectCatalog = mode.mode === "projection" && (view.kind === "list" || showDetail);
+  const managerId = owner ?? current;
+  const catalog = useIntegrationCatalogProjection(managerId, projectCatalog);
+  const { value: projectedMarkets, refresh: refreshMarkets } = useProjectedMarkets(managerId, projectCatalog && hasExtensions);
+  const requested = projectedResource(view, catalog.value?.items);
+  const detail = useIntegrationDetailProjection(managerId, projectCatalog && (view.kind !== "source" || catalog.value) ? requested : null);
+  const refreshCatalog = catalog.refresh;
+  const refreshDetail = detail.refresh;
+  const reloadDetail = useCallback(() => {
+    refreshDetail();
+    refreshCatalog();
+  }, [refreshDetail, refreshCatalog]);
+  const projection = useMemo(() => detail.value && { detail: detail.value, refresh: reloadDetail, loading: detail.loading },
+    [detail.value, reloadDetail, detail.loading]);
 
-  const filter = useSyncExternalStore(subscribeRoute, () => normalizeIntegrationFilter(new URLSearchParams(location.search).get("filter")));
-  const setFilter = (next: IntegrationFilter) => {
-    const url = new URL(location.href);
-    if (next === "all") url.searchParams.delete("filter");
-    else url.searchParams.set("filter", next);
-    navigate(stripBase(url.pathname) + url.search + url.hash, true);
-  };
+  const setFilter = (filter: IntegrationFilter) => onOpen({ ...route, filter }, "replace");
 
   const [extensions, setExtensions] = useState<HubExtension[]>([]);
-  const [markets, setMarkets] = useState(false);
+  const [legacyMarkets, setMarkets] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [connectors, setConnectors] = useState<HubConnector[]>([]);
   const [subscriptions, setSubscriptions] = useState<HubSubscription[]>([]);
   const [mailAccounts, setMailAccounts] = useState<MailAccount[] | null>();
   const [larkStatus, setLarkStatus] = useState<LarkGatewaySummary | null>();
   const [feishuBotStatus, setFeishuBotStatus] = useState<FeishuBotStatus | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [legacyLoaded, setLoaded] = useState(false);
+  const [legacyLoading, setLoading] = useState(false);
   const [partialErrors, setPartialErrors] = useState<string[]>([]);
   const [subscriptionError, setSubscriptionError] = useState("");
   const [sourcesReload, setSourcesReload] = useState(0);
@@ -440,62 +455,79 @@ function IntegrationsForManager({
   }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, larkModule, loadSubscriptionsOnly, owner]);
 
   useEffect(() => {
+    if (!legacy) return;
     void loadAll();
     return () => {
       seq.current++;
       subscriptionSeq.current++;
     };
-  }, [loadAll]);
+  }, [legacy, loadAll]);
 
   // Refresh subscriptions when a subscription state changes on the hub (at most once per second).
   useEffect(() => {
+    if (!legacy && !projectCatalog) return;
     if (!hasSubscriptions && !hasInboxSources) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const off = onHubEvent("subscription", () => {
       clearTimeout(timer);
-      timer = setTimeout(() => void loadSubscriptionsOnly(), 1000);
+      timer = setTimeout(() => projectCatalog ? refreshCatalog() : void loadSubscriptionsOnly(), 1000);
     });
     return () => {
       clearTimeout(timer);
       off();
     };
-  }, [hasSubscriptions, hasInboxSources, loadSubscriptionsOnly]);
+  }, [hasSubscriptions, hasInboxSources, legacy, projectCatalog, loadSubscriptionsOnly, refreshCatalog]);
+
+  const reloadList = useCallback(() => {
+    if (legacy) void loadAll();
+    if (projectCatalog) {
+      refreshCatalog();
+      refreshDetail();
+      refreshMarkets();
+    }
+  }, [legacy, projectCatalog, loadAll, refreshCatalog, refreshDetail, refreshMarkets]);
 
   // Reload list when an extension is installed, upgraded, or uninstalled.
   useEffect(() => {
+    let active = true;
     let queued = false;
     const again = () => {
       if (queued) return;
       queued = true;
       queueMicrotask(() => {
         queued = false;
-        void loadAll();
+        if (active) reloadList();
       });
     };
     window.addEventListener(EXTENSIONS_CHANGED, again);
     const stop = watchOperations(() => {});
     return () => {
+      active = false;
       window.removeEventListener(EXTENSIONS_CHANGED, again);
       stop();
     };
-  }, [loadAll]);
+  }, [reloadList]);
 
   // Keep extension auth updates reflected immediately on list rows.
-  useEffect(
-    () =>
-      onAuthChange((id, auth, from) =>
-        setExtensions((cur) => cur.map((x) => ((x.manager || defaultManager()) === from ? withAuth(x, id, auth) : x))),
-      ),
-    [],
-  );
+  useEffect(() => onAuthChange((id, auth, from) => {
+    if (legacy) setExtensions((cur) => cur.map((x) => ((x.manager || defaultManager()) === from ? withAuth(x, id, auth) : x)));
+    if (projectCatalog && from === managerId) reloadDetail();
+  }), [legacy, projectCatalog, managerId, reloadDetail]);
 
-  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && void loadAll()), [loadAll]);
+  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && reloadList()), [reloadList]);
 
-  const ownExtensions = useMemo(() => scoped(extensions, scope), [extensions, scope]);
-  const ownConnectors = useMemo(() => scoped(connectors, scope), [connectors, scope]);
+  const named = integrationManager(route.scope);
+  const assistantDefault = defaultManager();
+  const ownExtensions = useMemo(() => named
+    ? extensions.filter((item) => (item.manager || assistantDefault) === named)
+    : scoped(extensions, scope), [extensions, scope, named, assistantDefault]);
+  const ownConnectors = useMemo(() => named
+    ? connectors.filter((item) => (item.manager || assistantDefault) === named)
+    : scoped(connectors, scope), [connectors, scope, named, assistantDefault]);
 
-  const items = useMemo(
-    () =>
+  const items = useMemo(() => {
+    if (!legacy) return catalog.value?.items.filter((item) => item.availability.state !== "module_off").map(projectedCatalogItem) ?? [];
+    return (
       buildIntegrationCatalog({
         extensions: ownExtensions,
         channels: larkModule ? channels : channels.filter((c) => c.id !== "feishu"),
@@ -508,19 +540,22 @@ function IntegrationsForManager({
         larkStatus,
         feishuBotStatus,
         ownerManager: owner,
-      }),
-    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, larkModule, announcesLarkModule, mailAccounts, larkStatus, feishuBotStatus, owner],
-  );
+      })
+    );
+  }, [legacy, catalog.value, ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, larkModule, announcesLarkModule, mailAccounts, larkStatus, feishuBotStatus, owner]);
 
   const counts = useMemo(
-    () => ({
+    () => legacy ? {
       all: items.length,
       channels: items.filter((it) => it.capabilities.includes("channels")).length,
       data: items.filter((it) => it.capabilities.includes("data")).length,
       tools: items.filter((it) => it.capabilities.includes("tools")).length,
-    }),
-    [items],
+    } : catalog.value?.counts,
+    [legacy, items, catalog.value],
   );
+  const loaded = legacy ? legacyLoaded : !!catalog.value;
+  const loading = legacy ? legacyLoading : catalog.loading || mode.mode === "pending";
+  const markets = legacy ? legacyMarkets : projectedMarkets;
 
   const filtered = useMemo(() => filterIntegrationItems(items, filter), [items, filter]);
   const builtins = useMemo(() => filtered.filter((it) => it.kind === "builtin"), [filtered]);
@@ -528,83 +563,74 @@ function IntegrationsForManager({
   const pushSources = useMemo(() => filtered.filter((it) => it.kind === "source"), [filtered]);
   const installedExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension" && !it.builtinExtension), [filtered]);
 
-  const isSourcesView = route.kind === "sources" && !route.state;
-  const sourceDetailState = route.kind === "sources" && route.state ? route.state : null;
-  const showDetail = isIntegrationDetailRoute(route);
+  const isSourcesView = view.kind === "data-flow";
+  const sourceDetailState = view.kind === "source" ? view.state : null;
   const compactList = showDetail && twoCol;
   const listScrollRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
+  const viewKey = view.kind === "source" ? view.state : "id" in view ? view.id : view.kind;
 
   useLayoutEffect(() => {
     if (compactList && detailScrollRef.current) {
       detailScrollRef.current.scrollTop = 0;
     }
-  }, [compactList, open]);
+  }, [compactList, view.kind, viewKey]);
 
   // Full-width subviews (Market catalog, Market item, Manage markets, Extension UI page, Sent records).
-  if (route.kind === "catalog") {
+  if (view.kind === "catalog") {
     return (
       <Suspense fallback={<Loading />}>
         <MarketCatalog
-          key={effectiveManager}
-          manager={effectiveManager}
+          manager={owner}
           backLabel={t("settings-integrations.back")}
-          onBack={headerBack ? undefined : () => onOpen(null)}
+          onBack={headerBack ? undefined : onBack}
           onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })}
           onManageMarkets={() => go({ kind: "markets" })}
         />
       </Suspense>
     );
   }
-  if (route.kind === "item") {
-    const upgradeOrigin = returnParent && parseIntegrationsSub(returnParent).kind === "extension" ? returnParent : null;
+  if (view.kind === "item") {
     return (
       <Suspense fallback={<Loading />}>
         <MarketItem
-          key={open ?? ""}
-          market={route.market}
-          id={route.id}
-          manager={effectiveManager}
-          onBack={
-            headerBack
-              ? undefined
-              : () => {
-                  if (upgradeOrigin) {
-                    stepBackTo(upgradeOrigin);
-                    return;
-                  }
-                  go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" });
-                }
-          }
-          onInstalled={(id) => go({ kind: "extension", id, manager: effectiveManager })}
+          key={`${view.market}/${view.id}`}
+          market={view.market}
+          id={view.id}
+          manager={owner}
+          onBack={headerBack ? undefined : onBack}
+          onInstalled={(id) => {
+            if (parentView?.kind === "extension" && parentView.id === id) onBack();
+            else go({ kind: "extension", id }, resourceOwner, "replace");
+          }}
         />
       </Suspense>
     );
   }
-  if (route.kind === "markets") {
+  if (view.kind === "markets") {
     return (
       <Suspense fallback={<Loading />}>
-        <Markets onBack={headerBack ? undefined : () => go({ kind: "catalog" })} />
+        <Markets manager={owner} onBack={headerBack ? undefined : onBack} />
       </Suspense>
     );
   }
-  if (route.kind === "page") {
+  if (view.kind === "page") {
     return (
       <IntegrationExtensionPage
-        key={`${open ?? ""}@${route.manager ?? ""}`}
-        id={route.id}
-        ui={route.ui}
-        manager={effectiveManager}
-        onBack={headerBack ? undefined : () => go({ kind: "extension", id: route.id, manager: route.manager })}
+        key={`${view.id}/${view.ui}`}
+        id={view.id}
+        ui={view.ui}
+        manager={owner}
+        onBack={headerBack ? undefined : onBack}
         onWide={onPageWide}
       />
     );
   }
-  if (route.kind === "sent") {
+  if (view.kind === "sent") {
     return (
       <>
         {!headerBack && (
-          <Button tone="quiet" icon="chevronLeft" onClick={() => onOpen(null)} className="-ml-2 mb-3">
+          <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2 mb-3">
             {t("settings-integrations.back")}
           </Button>
         )}
@@ -614,11 +640,16 @@ function IntegrationsForManager({
     );
   }
 
-  const resolvedTarget = showDetail && !sourceDetailState ? resolveIntegrationTarget(route, items, picked) : null;
-  const resolvedSourceItem = sourceDetailState ? resolveSourceItem(route, items, picked) : null;
+  const resolvedTarget = projection ? projectedIntegrationTarget(projection)
+    : legacy && showDetail && !sourceDetailState ? resolveIntegrationTarget(route, items, current) : null;
+  const projectedSource = sourceDetailState && projection && projection.detail.item.ref.id === requested?.id &&
+    projection.detail.item.ref.kind === requested.kind ? projectedCatalogItem(projection.detail.item) : null;
+  const resolvedSourceItem = legacy ? resolveSourceItem(route, items, current) : projectedSource;
 
   const renderRow = (item: IntegrationItem) => {
-    const selected = isIntegrationRowSelected(open, item, picked);
+    const selected = item.ref && projection ? item.ref.kind === projection.detail.item.ref.kind && item.ref.id === projection.detail.item.ref.id
+      : item.ref && "id" in view ? view.kind === item.view.kind && view.id === item.id
+      : isIntegrationRowSelected(route, item, current);
     const status = (
       <span
         className={cx(
@@ -637,14 +668,11 @@ function IntegrationsForManager({
         type="button"
         data-integration-row={item.key}
         data-integration-kind={item.kind}
-        data-integration-source={item.extension?.source}
+        data-integration-source={item.origin ?? item.extension?.source}
         data-integration-id={item.id}
         data-integration-sub-alert={item.subscriptionAlert?.state}
         aria-current={selected || undefined}
-        onClick={() => {
-          setDrillOrigin(null);
-          onOpen(item.sub);
-        }}
+        onClick={() => go(item.view, item.manager ?? resourceOwner, compactList ? "replace" : "push")}
         className={cx(
           "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
           selected ? "bg-accent-tint" : "hover:bg-hover",
@@ -659,7 +687,7 @@ function IntegrationsForManager({
             )}
             {!compactList &&
               item.capabilities.map((cap) => (
-                <Pill key={cap}>{t(CAP_LABEL_KEY[cap])}</Pill>
+                <Pill key={cap}>{t(capabilityLabel[cap])}</Pill>
               ))}
             {!compactList && item.subscriptionAlert && item.kind !== "source" && (
               <SubscriptionAlertBadge alert={item.subscriptionAlert} />
@@ -706,14 +734,14 @@ function IntegrationsForManager({
       <IconButton
         icon="retry"
         label={t("settings-integrations.refresh")}
-        onClick={() => (isSourcesView ? setSourcesReload((n) => n + 1) : void loadAll())}
+        onClick={() => isSourcesView ? setSourcesReload((n) => n + 1) : mode.mode === "error" ? mode.retry() : reloadList()}
         disabled={!isSourcesView && loading}
       />
     </div>
   );
 
-  const crossAssistantSources = isSourcesView && !sameManager(effectiveManager, owner);
-  const targetAssistantName = (effectiveManager && managerOf(roster, effectiveManager)?.name) || effectiveManager || "";
+  const crossAssistantSources = isSourcesView && named !== undefined && named !== current;
+  const targetAssistantName = named ? managerOf(roster, named)?.name ?? named : "";
 
   const viewSwitch = hasInboxSources ? (
     <div className={cx(compactList ? "mb-2" : "mb-3 flex")} data-integrations-view-switch>
@@ -726,14 +754,15 @@ function IntegrationsForManager({
           { v: "sources", label: t("settings-integrations.view_sources") },
         ]}
         onChange={(v) => {
-          if (v === "sources") go({ kind: "sources", manager: otherManager(effectiveManager) });
-          else go({ kind: "list" });
+          if (v === "sources") go({ kind: "data-flow" });
+          else if (parentView?.kind === "list") onBack();
+          else go({ kind: "list" }, resourceOwner, "root");
         }}
       />
     </div>
   ) : null;
 
-  // Full-width global Data Flow view (`route.kind === "sources"` without `state`):
+  // Full-width Data Flow view:
   // natural single-scroll container so SourcesGraph can use the full wide canvas, with the forwarding setting.
   if (isSourcesView) {
     return (
@@ -746,7 +775,7 @@ function IntegrationsForManager({
                 tone="quiet"
                 icon="chevronLeft"
                 testId="integrations-cross-assistant-back"
-                onClick={() => go({ kind: "list" })}
+                onClick={onBack}
                 className="-ml-2"
               >
                 {t("settings-integrations.back")}
@@ -757,8 +786,8 @@ function IntegrationsForManager({
                   size="sm"
                   testId="integrations-switch-assistant"
                   onClick={() => {
-                    chooseManager(otherManager(effectiveManager) ?? null);
-                    go({ kind: "list" });
+                    chooseManager(otherManager(named) ?? null);
+                    onOpen({ scope: integrationScope(), view: { kind: "list" }, filter }, "root");
                   }}
                 >
                   {t("settings-integrations.switch_assistant_integrations", { name: targetAssistantName })}
@@ -769,9 +798,9 @@ function IntegrationsForManager({
             viewSwitch
           ))}
         <SourcesFlowPane
-          manager={effectiveManager}
+          manager={owner}
           reloadKey={sourcesReload}
-          onOpenSource={headerBack ? (page) => drillDown({ kind: "sources", state: page, manager: effectiveManager }) : undefined}
+          onOpenSource={(state) => go({ kind: "source", state })}
         />
       </div>
     );
@@ -790,7 +819,7 @@ function IntegrationsForManager({
     >
       {FILTER_CHIPS.map((chip) => {
         const active = filter === chip.id;
-        const count = counts[chip.id];
+        const count = counts?.[chip.id];
         return (
           <button
             key={chip.id}
@@ -807,25 +836,30 @@ function IntegrationsForManager({
             )}
           >
             <span>{t(chip.labelKey)}</span>
-            {loaded && <span className={cx("tabular-nums", active ? "opacity-80" : "text-ink-3")}>{count}</span>}
+            {loaded && count !== undefined && <span className={cx("tabular-nums", active ? "opacity-80" : "text-ink-3")}>{count}</span>}
           </button>
         );
       })}
     </div>
   );
 
-  const loadErrors = subscriptionError ? [...partialErrors, subscriptionError] : partialErrors;
+  const loadErrors = legacy ? (subscriptionError ? [...partialErrors, subscriptionError] : partialErrors)
+    : projectionSourceErrors(catalog.value?.availability ?? []);
+  const catalogError = mode.mode === "error" ? mode.error : catalog.error;
+  const retryCatalog = mode.mode === "error" ? mode.retry : reloadList;
   const listBody = (
     <>
+      {catalogError && (
+        <IntegrationReadProblem text={t("settings-integrations.projection_load_error", { error: catalogError })} retry={retryCatalog} />
+      )}
       {loadErrors.length > 0 && (
         <div className="mb-4">
-          <Group>
-            <SettingsHint alert>{t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })}</SettingsHint>
-          </Group>
+          {legacy ? <Group><SettingsHint alert>{t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })}</SettingsHint></Group>
+            : <IntegrationReadProblem text={t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })} retry={retryCatalog} busy={catalog.loading} />}
         </div>
       )}
 
-      {!loaded && filtered.length === 0 && (
+      {!loaded && !catalogError && filtered.length === 0 && (
         <Group anchor="integrations">
           <div className="px-4 py-3">
             <Loading />
@@ -833,7 +867,7 @@ function IntegrationsForManager({
         </Group>
       )}
 
-      {loaded && filtered.length === 0 && (
+      {loaded && filtered.length === 0 && !catalogError && (legacy || loadErrors.length === 0) && (
         <Group anchor="integrations">
           {offline && items.length === 0 ? (
             <OfflineState offline={offline} ring="ring-surface" className="py-8" />
@@ -898,7 +932,7 @@ function IntegrationsForManager({
           anchor="push-sources"
           title={
             <span className="flex items-center gap-2">
-              {t("settings-integrations.group_push_sources")}
+              {t(pushSources.some((item) => item.ref?.kind === "subscription") ? "subscriptions.title" : "settings-integrations.group_push_sources")}
               <span className="font-normal">{t("settings-integrations.count", { count: pushSources.length })}</span>
             </span>
           }
@@ -927,44 +961,77 @@ function IntegrationsForManager({
     </>
   );
 
-  const backFromDetail = () => {
-    if (returnParent) {
-      stepBackTo(returnParent);
-      return;
-    }
-    setDrillOrigin(null);
-    onOpen(null);
-  };
-  const pushSourceBackLabel = returnParent
-    ? (parseIntegrationsSub(returnParent).kind === "sources"
-      ? t("subscriptions.view_graph")
-      : t("settings-extensionview.back"))
+  const detailBack = !headerBack && (!twoCol || parentView?.kind !== "list") ? onBack : undefined;
+  const pushSourceBackLabel = parentView?.kind === "data-flow" ? t("subscriptions.view_graph")
+    : parentView && parentView.kind !== "list" ? t("settings-extensionview.back")
     : t("settings-integrations.back");
 
-  const detailPane = sourceDetailState ? (
-    <PushSourceDetailPane
-      state={sourceDetailState}
-      item={resolvedSourceItem}
-      manager={effectiveManager}
-      onBack={headerBack || twoCol ? undefined : backFromDetail}
-      backLabel={pushSourceBackLabel}
-      reloadKey={sourcesReload}
-      onReload={() => setSourcesReload((n) => n + 1)}
-    />
+  const detailError = mode.mode === "error" ? mode.error : detail.error ?? (sourceDetailState && !catalog.value ? catalog.error : undefined);
+  const detailRetry = mode.mode === "error" ? mode.retry : reloadDetail;
+  const detailProblem = detailError && (
+    <IntegrationReadProblem text={t("settings-integrations.projection_detail_error", { error: detailError })} retry={detailRetry} />
+  );
+  const waitForProjection = showDetail && !legacy && !projection && (mode.mode !== "projection" || !!requested);
+  const pendingBack = detailBack ?? (detailError && !headerBack ? onBack : undefined);
+
+  const detailOwner = projection?.detail.item.ref.manager ?? owner;
+  const switchDetailAssistant = detailOwner && detailOwner !== current
+    ? () => {
+        chooseManager(otherManager(detailOwner) ?? null);
+        onOpen({ scope: integrationScope(), view: { kind: "list" }, filter }, "root");
+      }
+    : undefined;
+
+  const openSourceDataFlow = !compactList && hasInboxSources && parentView?.kind !== "data-flow"
+    ? () => go({ kind: "data-flow" }, detailOwner ?? resourceOwner)
+    : undefined;
+
+  const detailPane = waitForProjection ? (
+    <>
+      {pendingBack && (
+        <Button tone="quiet" icon="chevronLeft" onClick={pendingBack} className="touch-hit -ml-2 mb-3">
+          {t("settings-integrations.back")}
+        </Button>
+      )}
+      {detailProblem || <Loading />}
+    </>
+  ) : sourceDetailState ? (
+    <>
+      {detailProblem}
+      <PushSourceDetailPane
+        state={sourceDetailState}
+        item={resolvedSourceItem}
+        manager={detailOwner}
+        onBack={detailBack}
+        backLabel={pushSourceBackLabel}
+        onSwitchAssistant={switchDetailAssistant}
+        onOpenDataFlow={openSourceDataFlow}
+        reloadKey={sourcesReload}
+        onReload={() => {
+          if (projection) reloadDetail();
+          setSourcesReload((n) => n + 1);
+        }}
+        projection={projection}
+        resourceId={requested?.id}
+      />
+    </>
   ) : showDetail && resolvedTarget ? (
     <Suspense fallback={<Loading />}>
+      {detailProblem}
       <IntegrationDetail
-        target={{ ...resolvedTarget, manager: effectiveManager }}
+        target={{ ...resolvedTarget, manager: detailOwner }}
+        projection={projection}
         prefill={prefill}
         integrationsV2={true}
-        onBack={headerBack || twoCol ? undefined : backFromDetail}
-        onUnavailableBack={headerBack ? undefined : backFromDetail}
-        onUninstalled={() => onOpen(null)}
-        onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
-        onUpgrade={(market, extId, manager) => drillDown({ kind: "item", market, id: extId, manager })}
+        onBack={detailBack}
+        onUnavailableBack={headerBack ? undefined : onBack}
+        onSwitchAssistant={switchDetailAssistant}
+        onUninstalled={onBack}
+        onPage={(id, ui, manager) => go({ kind: "page", id, ui }, manager)}
+        onUpgrade={(market, id, manager) => go({ kind: "item", market, id }, manager)}
         onSettings={onSettings}
-        onOpenConnector={(id, manager) => drillDown({ kind: "connector", id, manager })}
-        onOpenSources={(sourceState, manager) => drillDown({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}
+        onOpenConnector={(id, manager) => go({ kind: "connector", id }, manager)}
+        onOpenSources={(state, manager) => go(state ? { kind: "source", state } : { kind: "data-flow" }, manager)}
       />
     </Suspense>
   ) : null;

@@ -31,6 +31,7 @@ func (h *Manager) initAgents() {
 		}
 		return m.call(ctx, method, params, out)
 	}))
+	h.orcaBots.setRegistry(registry)
 	for _, registration := range h.cfg.Bots.Endpoints {
 		src, err := registry.Source(registration)
 		if err != nil {

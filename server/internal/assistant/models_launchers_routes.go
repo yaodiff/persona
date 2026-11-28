@@ -568,6 +568,10 @@ func (s *Service) machineLauncherRoutes() {
 			out["unavailable"] = unavailable
 		}
 		if purpose == "" || purpose == "agent.new" {
+			// where a start that keeps the default opens, when the computer starts New Agents as Orca chats (#17650)
+			if opens := s.orcaChatDefault(ctx, d, def, r.URL.Query().Get("host")); opens != nil {
+				out["default_opens"] = opens
+			}
 			usable := make([]ConfiguredLauncher, 0, len(shown))
 			for _, l := range shown {
 				usable = append(usable, l.ConfiguredLauncher)

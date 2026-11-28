@@ -50,6 +50,10 @@ export interface Machine {
   engine_suggested?: { hosts: string[]; default: string };
   /** The node is too old for sets and runs `engine` alone until it is updated. */
   engine_sets_unsupported?: boolean;
+  /** "Start new Agents as Orca chats" (#17650): the switch, on or off, present only while Orca is in its engine set (where
+   *  it applies); absent elsewhere and from older hubs, which then offer no switch. A value this client does not know reads
+   *  as absent (lib/orca-chat.ts orcaChatSwitch). Changed with PUT …/orca-chat-starts {"on"}. */
+  orca_chat_starts?: OrcaChatStarts;
   kind?: string;
   arch?: string;
   home?: string;
@@ -76,6 +80,9 @@ export interface Machine {
    *  hour after a switch ended; absent from older hubs, which then offer nothing. */
   link_switch?: MachineLinkSwitch;
 }
+
+/** `Machine.orca_chat_starts` (#17650, `proto.OrcaChatStarts`): a closed set; a later value reads as absent. */
+export type OrcaChatStarts = "on" | "off";
 
 /** Where switching an ssh computer to Persona Link stands (`proto.MachineLinkSwitch`): `available`, a switch can start
  *  now, else `reason` says why not; `phase`, the current or last switch's ("" none), and a failed one's `error`, with
@@ -335,9 +342,12 @@ export interface Session {
    *  once its turn is over, resuming the same conversation (#6476, node/mode_restart.go); `permission_mode` is the mode
    *  it still runs in until then. */
   bypass_pending?: boolean;
-  /** On a botmux session whose botmux instance does not advertise ownerActor, sends go through the untrusted
-   *  external-event trigger; the composer shows a one-line notice. */
+  /** On a botmux session whose sends go through the untrusted external-event trigger (botmux does not advertise
+   *  ownerActor, or no BotMux Owner Union ID is set), the composer shows a one-line notice. */
   botmux_external_trigger?: boolean;
+  /** Why, when `botmux_external_trigger` is set: `upgrade` (botmux before 3.59.23) or `owner_unset` (Settings › Agents
+   *  has no BotMux Owner Union ID). Absent from an older node: the upgrade notice. */
+  botmux_external_trigger_reason?: "upgrade" | "owner_unset";
   /** What the model saw in the latest reply and the model's window, in tokens (#2430); omitted while the node cannot tell. */
   context_tokens?: number;
   context_restart_recommended?: boolean;

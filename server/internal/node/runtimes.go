@@ -72,6 +72,7 @@ type runtimeHello struct {
 		Close        bool `json:"close"`
 		Rewind       bool `json:"rewind"`
 		Fork         bool `json:"fork"`
+		Input        bool `json:"input"` // session.input types one line into a particular waiting command
 		QueueEdit    bool `json:"queue_edit"`
 		QueueSendNow bool `json:"queue_send_now"`
 		// Assistant: its launcher may run the Persona assistant (assistant_runtime.go; docs/integrations/runtimes.md "Assistant").
@@ -169,6 +170,8 @@ type runtimeConn struct {
 	// agyPaneBackground holds running tasks projected for a live terminal when the ACP row hides them.
 	agyPaneBackground map[string][]proto.BackgroundTask
 	agyPreviews       map[string]agyPreview
+	// inputWaits is bound to this connection, guarded by runtimeRegistry.mu.
+	inputWaits map[runtimeInputKey]*runtimeInputWait
 	// workspaces are its own workspaces, as its last runtime.workspaces said (caps.workspaces, runtimeworkspaces.go);
 	// workspacesSaid: it said them on this connection (a workspace missing from them is gone).
 	workspaces     []runtimeWorkspace

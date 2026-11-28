@@ -44,6 +44,8 @@ fun EngineSelectionScreen(
             putDefault = management::setEngineHosts, pairing = pairing)
     }
     LaunchedEffect(machine) { machine?.let { model?.synchronize(it) } }
+    // "Start new Agents as Orca chats" (#17650): saved at once, apart from the engine choice and its Save
+    val orcaChats = remember(machineId, management) { management?.let { OrcaChatStartsModel(machine?.orcaChatSwitch, it::setOrcaChatStarts) } }
     val state = model?.state?.collectAsState()?.value ?: EngineSelectionState()
     var reading by remember(machineId) { mutableStateOf(machine == null) }
     LaunchedEffect(machineId, reading) {
@@ -115,6 +117,10 @@ fun EngineSelectionScreen(
             }
         }
         item("footer") { SettingsCaption(Engines.footer(machine, state.selected).text(), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s)) }
+        // Only where the hub sends the switch (Orca in the computer's engine set), and not while pairing
+        if (!pairing && orcaChats != null && machine.orcaChatSwitch != null) item("orca-chats") {
+            JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) { OrcaChatStartsRow(machine, orcaChats) }
+        }
     }
 }
 

@@ -1,0 +1,5 @@
+{
+  "title": "Start new Agents as Orca chats",
+  "detail": "New Agent opens Claude Code and Codex in Orca’s chat view instead of a terminal. A launcher you pick still opens a terminal, and the assistant’s Agents always do.",
+  "save_failed": "Couldn’t save: {error}"
+}

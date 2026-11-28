@@ -112,6 +112,8 @@ internal data class NewAgentState(
     val profile: PickerTierProfile? = null,
     /** The preset whose launcher, model and effort fill this start; a manual edit to any of them clears the mark. */
     val pickedTier: PickerTier? = null,
+    /** Where a start that keeps the default opens, as the hub says (#17650, [opensAsOrcaChat]); null: where it always did. */
+    val defaultOpens: persona.core.contracts.api.DefaultOpens? = null,
     val recent: List<AgentRecentDirectory> = emptyList(),
     val browser: AgentDirectories? = null,
     val browsing: Boolean = false,
@@ -198,6 +200,19 @@ internal data class NewAgentState(
     val follow: ModelPurposeDetail? get() = (modelConfig as? NewAgentModelConfig.Follow)?.detail
     /** An empty launcher follows the model configuration, when the hub has one. */
     val following: Boolean get() = follow != null && selection.launcher.isEmpty()
+    /**
+     * The Orca chat this start opens as while the computer starts new Agents as Orca chats (#17650): the hub's
+     * [defaultOpens], while the start keeps the default (no launcher, preset or model picked, no other engine's workspace,
+     * no ultracode) with a permission mode the chat takes; null when it opens where it always did. The hub decides where
+     * a start goes; this only checks that this one still keeps the default.
+     */
+    val opensAsOrcaChat: persona.core.contracts.api.DefaultOpens? get() {
+        val opens = defaultOpens ?: return null
+        if (!following || pickedTier != null || sentModel != null || ultracode && agentType == "claude") return null
+        if (workspace?.source?.let { it != OrcaHost } == true) return null
+        val mode = if (claudeModes) selection.mode else ""
+        return opens.takeIf { mode.isEmpty() || mode in it.permissionModes }
+    }
     /** The launcher the "New Agent" configuration resolves to on this machine, when it is one of its launchers. */
     val configuredLauncher: AgentLauncher? get() = follow?.purpose?.effective?.provider?.removePrefix("launcher.")
         ?.let { name -> launchers.firstOrNull { it.name == name } }
@@ -439,7 +454,7 @@ internal class NewAgentViewModel(
         machineJob?.cancel()
         browseJob?.cancel()
         modelsJob?.cancel()
-        mutable.update { it.copy(machineId = id, startMachine = machine, selection = AgentDefaults(), launchers = emptyList(), unavailable = emptyList(),
+        mutable.update { it.copy(machineId = id, startMachine = machine, selection = AgentDefaults(), launchers = emptyList(), unavailable = emptyList(), defaultOpens = null,
             tiers = emptyList(), profile = null, pickedTier = null, recent = emptyList(),
             browser = null, browsing = false, loading = true, error = null, models = NewAgentModels(), model = "", pickedSetup = null,
             workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "", providerMode = "", providerEffort = "") }
@@ -471,7 +486,7 @@ internal class NewAgentViewModel(
                 val launchers = listed.launchers
                 val launcher = defaultLauncher(config, defaults, launchers)
                 mutable.update { it.copy(loading = false, launchers = launchers, unavailable = listed.unavailable,
-                    tiers = listed.tiers, profile = listed.tiersProfile, pickedTier = null,
+                    tiers = listed.tiers, profile = listed.tiersProfile, pickedTier = null, defaultOpens = listed.defaultOpens,
                     recent = dirs.recent.take(6), modelConfig = config,
                     selection = defaults.copy(cwd = it.space?.cwd ?: prefilledCwd ?: defaults.cwd.ifEmpty { dirs.recent.firstOrNull()?.path ?: dirs.path },
                         launcher = launcher),

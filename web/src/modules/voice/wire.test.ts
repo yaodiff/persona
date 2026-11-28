@@ -40,6 +40,15 @@ describe("voice frames from the extension", () => {
     expect(parseFrame('{"type":"error","code":"upstream_forbidden","message":"401","fatal":true}')).toEqual({ type: "error", failure: { code: "upstream_forbidden", message: "401", fatal: true } });
   });
 
+  it("reads reply start/end frames and ignores unknown reply states", () => {
+    expect(parseFrame('{"type":"reply","state":"start"}')).toEqual({ type: "reply", state: "start" });
+    expect(parseFrame('{"type":"reply","state":"end"}')).toEqual({ type: "reply", state: "end" });
+    expect(parseFrame('{"type":"reply","state":"pause"}')).toEqual({ type: "other", name: "reply" });
+    expect(parseFrame('{"type":"reply","state":""}')).toEqual({ type: "other", name: "reply" });
+    expect(parseFrame('{"type":"reply"}')).toEqual({ type: "other", name: "reply" });
+    expect(parseFrame('{"type":"reply","state":1}')).toEqual({ type: "other", name: "reply" });
+  });
+
   it("keeps an unknown frame and refuses what is not a frame", () => {
     expect(parseFrame('{"type":"newer","x":1}')).toEqual({ type: "other", name: "newer" });
     expect(parseFrame("not json")).toBeNull();

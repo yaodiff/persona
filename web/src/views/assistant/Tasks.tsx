@@ -69,7 +69,7 @@ const NeedsYouPart = lazy(() => import("./TaskDecision"));
 const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)) && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
-import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
+import { feedWake, HandoffCard, HandoffCards, itemPlan, planTaskTodo, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
 import { acceptanceStands, latestReview, parkedLine, progressLine, reviewState } from "../../lib/supervision";
 import { isLegacyCodexRouteNotice } from "../../lib/compatibility";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
@@ -462,12 +462,6 @@ function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; t
 
 // ── the hub's lines ──
 
-/** The plan a `plan` item carries in its body (the hub writes it there with the item), when it is one of this item's. */
-function itemPlan(item: FeedItem): TaskPlan | undefined {
-  const p = item.body?.plan as TaskPlan | undefined;
-  return p && typeof p === "object" && p.id === item.ref && Array.isArray(p.tasks) ? p : undefined;
-}
-
 // Memoized: the chat re-renders on every streamed item and session push, while an item keeps its identity until its body
 // changes (mergeInto); the plan, todo and "Later" it shows come through its own selectors.
 export const FeedLineView = memo(function FeedLineView({ item, simplified = false }: { item: FeedItem; simplified?: boolean }) {
@@ -490,7 +484,7 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
     if (item.kind === "plan") {
       const shown = plan ?? itemPlan(item);
       if (!shown) return null;
-      return shown.state === "started" ? <PlanHandoffs plan={shown} since={item.at} /> : <PlanCard plan={shown} />;
+      return shown.state === "started" ? <PlanHandoffs plan={shown} since={item.at} groupKey={item.id} /> : <PlanCard plan={shown} />;
     }
     if (item.kind === "task") return planned ? null : <TaskHandoffs item={item} />;
     if (item.kind === "message" && !cardSent(item) && !cardFiled(item)) return null;
@@ -801,7 +795,7 @@ const EMPTY_CARDS: TaskCardMetadata[] = [];
 /** A started plan's tasks in the conversation (#3700, #5096): a hand-off card for each Agent they started (one per task
  *  while its Agent is starting, or says why it did not start), in plan order; live to-do titles over the plan's. `since`:
  *  the plan line's time, so each card keeps the Agents this plan started (#11854). */
-function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
+function PlanHandoffs({ plan, since, groupKey }: { plan: TaskPlan; since?: string; groupKey?: string }) {
   const plans = useFeed((s) => s.plans);
   const handoffs = useStoreRows((s) =>
     plan.tasks.flatMap((task, i) => {
@@ -811,22 +805,7 @@ function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
       return taskHandoffs(id ? s.todos.find((x) => x.id === id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: id, superseded }, task.continues ? "continuation" : "created", plans, s.todosLoaded, since);
     }),
   );
-  return <HandoffCards handoffs={handoffs} />;
-}
-
-/** The to-do plan task i ran on: its todo_id, or, once a later plan continued that to-do and cleared it (#11854), the
- *  one it continued or reused, else the one only this task can have made (the to-do keeps the plan it came from). A
- *  task that failed to start keeps none: its card says why. */
-function planTaskTodo(plan: TaskPlan, i: number, todos: Todo[]): string | undefined {
-  const task = plan.tasks[i];
-  if (!task) return undefined;
-  if (task.todo_id) return task.todo_id;
-  if (task.error || plan.state !== "started") return undefined;
-  if (task.continues || task.reuse_todo) return task.continues || task.reuse_todo;
-  const bare = plan.tasks.filter((x) => !x.todo_id && !x.error && !x.continues && !x.reuse_todo);
-  const held = new Set(plan.tasks.map((x) => x.todo_id || x.continues || x.reuse_todo).filter(Boolean));
-  const made = todos.filter((x) => x.plan_id === plan.id && !held.has(x.id));
-  return bare.length === 1 && made.length === 1 ? made[0]!.id : undefined;
+  return <HandoffCards handoffs={handoffs} groupKey={groupKey ?? plan.id} />;
 }
 
 /** A task the conversation dispatched on its own (agent_start), or one made of an Agent already running
@@ -835,7 +814,7 @@ function TaskHandoffs({ item }: { item: FeedItem }) {
   const plans = useFeed((s) => s.plans);
   const wake = feedWake(field(item, "wake"));
   const handoffs = useStoreRows((s) => (item.ref ? taskHandoffs(s.todos.find((x) => x.id === item.ref), { key: item.id, title: "", todoId: item.ref }, wake, plans, s.todosLoaded, item.at, TASK_LINE_SLACK_MS) : []));
-  return <HandoffCards handoffs={handoffs} />;
+  return <HandoffCards handoffs={handoffs} groupKey={item.id} />;
 }
 
 /** One slot, one row: live task/session state wins over historical feed metadata. `fresh`: a Finished row the owner has

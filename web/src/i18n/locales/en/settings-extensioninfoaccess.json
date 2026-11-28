@@ -5,5 +5,7 @@
   "owner_footer": "It reads all your information, personal matters included.",
   "footer": "Turned off, it never sees that kind of personal information. Everything else it may read as before.",
   "category": "Let it read {name}",
+  "load_failed": "Couldn't load what it may read: {error}",
+  "unconfirmed": "Couldn't confirm what this extension may read.",
   "save_failed": "Couldn't change what it may read: {error}"
 }

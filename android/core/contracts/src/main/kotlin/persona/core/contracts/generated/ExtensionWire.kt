@@ -1187,6 +1187,9 @@ data class ExtensionUsageItem(
     val id: String = "",
     val name: String = "",
     val hosts: List<String>? = null,
+    val direct: Boolean? = null,
+    @SerialName("remote_address") val remoteAddress: String? = null,
+    @SerialName("remote_key") val remoteKey: String? = null,
 )
 
 @Serializable

@@ -210,6 +210,7 @@
         "segments": {"type": "array", "items": {"$ref": "#/$defs/KBRecordingSegment"}},
         "minutes": {"description": "A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them."},
         "recap": {"description": "An all-day recording's day recap, once written (docs/assistant/day-recap.md); kept as the hub sends them."},
+        "speakers": {"$ref": "#/$defs/KBDetailSpeakers", "x-go-pointer": true, "description": "A hub-transcribed meeting's speaker list and timeline (docs/assistant/meeting-minutes.md \"Speakers (#17674)\"); absent when the meeting has no speaker timeline."},
         "points": {"type": "array", "items": {"$ref": "#/$defs/KBTopicPoint"}, "description": "A topic's knowledge points (docs/assistant/knowledge.md \"Topics\")."},
         "profiles": {"type": "object", "additionalProperties": {"$ref": "#/$defs/KBProfileRecord"}, "description": "A person's profiles by writer (\"user\", \"ext:<id>\"), as written; summary shows them too (docs/assistant/knowledge.md \"Person profiles\")."},
         "paused": {"type": "string", "description": "A recording's in-flight state that nothing can settle, as KBEntry.paused: module_off when the recording module is off. Derived when read, never stored."},
@@ -218,6 +219,55 @@
         "sources": {"type": "array", "items": {"$ref": "#/$defs/KBProjectSource"}}
       },
       "required": ["kind", "id", "path", "meta"]
+    },
+    "KBSpeakerState": {
+      "description": "Speaker separation state of a hub-transcribed meeting.",
+      "type": "string",
+      "enum": ["waiting", "ready", "failed", "cleared"],
+      "x-enum": "closed"
+    },
+    "KBSpeakerID": {
+      "description": "Hub-assigned speaker identifier within a meeting (s1, s2, ...).",
+      "type": "string",
+      "x-id": "KBSpeakerID"
+    },
+    "KBSpeakerTurn": {
+      "description": "One speaking interval encoded as a 3-element JSON tuple [start, end, speaker_id].",
+      "x-opaque": "Heterogeneous JSON tuple [start, end, speaker_id]"
+    },
+    "KBDetailSpeakers": {
+      "description": "A hub-transcribed meeting's speaker list and timeline on detail.speakers (docs/assistant/meeting-minutes.md \"Speakers (#17674)\").",
+      "type": "object",
+      "properties": {
+        "rev": {"type": "integer", "x-go-type": "int64"},
+        "state": {"$ref": "#/$defs/KBSpeakerState"},
+        "reason": {"type": "string"},
+        "quality": {"type": "string"},
+        "source": {"type": "string"},
+        "done": {"type": "number", "x-go-pointer": true},
+        "end": {"type": "number", "x-go-pointer": true},
+        "people": {"type": "array", "items": {"$ref": "#/$defs/KBDetailSpeakerPerson"}},
+        "candidates": {"type": "array", "items": {"type": "string"}},
+        "spans": {"type": "array", "items": {"$ref": "#/$defs/KBSpeakerTurn"}},
+        "covered": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
+        "trimmed": {"type": "boolean"}
+      },
+      "required": ["rev", "state", "reason", "quality", "source", "people", "candidates", "spans", "covered", "trimmed"]
+    },
+    "KBDetailSpeakerPerson": {
+      "description": "One speaker entry in detail.speakers.people.",
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/KBSpeakerID"},
+        "name": {"type": "string"},
+        "me": {"type": "boolean"},
+        "merged_into": {"$ref": "#/$defs/KBSpeakerID"},
+        "minor": {"type": "boolean"},
+        "seconds": {"type": "number"},
+        "lines": {"type": "integer"},
+        "samples": {"type": "array", "items": {"type": "number"}}
+      },
+      "required": ["id"]
     },
     "KBProjectSource": {
       "type": "object",
@@ -370,7 +420,9 @@
         "text": {"type": "string"},
         "n": {"type": "integer", "description": "An all-day recording's line number: the segment's 1-based position in its uploads (docs/assistant/day-recap.md); absent on other recordings."},
         "source": {"type": "string", "enum": ["hub", "device"], "description": "Whose text the segment is in a meeting transcribed on the hub (docs/assistant/meeting-minutes.md \"The transcript of record\"): hub or device; absent means device."},
-        "echo": {"type": "boolean", "description": "The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md \"Persona's echo\"): kept in the transcript but not what the meeting said, so leave it out of anything read as the meeting's words; absent (false) on every other line."}
+        "echo": {"type": "boolean", "description": "The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md \"Persona's echo\"): kept in the transcript but not what the meeting said, so leave it out of anything read as the meeting's words; absent (false) on every other line."},
+        "speaker": {"type": "string", "description": "Canonical speaker id (\"s1\", \"s2\", ...) assigned by the hub on read when a speaker timeline exists (docs/assistant/meeting-minutes.md \"Speakers (#17674)\"); absent otherwise."},
+        "speaker_unsure": {"type": "boolean", "description": "True when the speaker label is uncertain or the meeting's separation quality is low (docs/assistant/meeting-minutes.md \"Speakers (#17674)\"); absent (false) otherwise."}
       },
       "required": ["start", "end", "text"]
     },
@@ -516,7 +568,7 @@
         "ended_at": {"type": "string", "format": "date-time", "description": "An RFC 3339 time, not before started_at."},
         "language": {"type": "string", "description": "An i18n code (zh-Hans, en, ja)."},
         "minutes": {"$ref": "#/$defs/KBRecordingMinutes"},
-        "transcript": {"type": "array", "items": {"$ref": "#/$defs/KBRecordingSegment"}, "maxItems": 20000, "description": "Optional; n, source and echo are the hub's and are dropped. Without minutes, the hub makes minutes of it when the recording module is on."},
+        "transcript": {"type": "array", "items": {"$ref": "#/$defs/KBRecordingSegment"}, "maxItems": 20000, "description": "Optional; n, source, echo, speaker and speaker_unsure are the hub's and are dropped. Without minutes, the hub makes minutes of it when the recording module is on."},
         "projects": {"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "Slugs of existing projects to link it to; a later write never removes a link."},
         "meeting": {"$ref": "#/$defs/KBRecordingMeeting"}
       },

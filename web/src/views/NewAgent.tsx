@@ -58,6 +58,7 @@ import { useScopedMachines } from "../lib/current-assistant";
 import { currentHosts, engineName, startHosts } from "../lib/engines";
 import { CODEX_APP_SOURCE, projectsFolder, startsInDesktopApp } from "../lib/desktop-start";
 import { initialLauncher, launcherBlock } from "../lib/launcher-health";
+import { opensAsOrcaChat, type DefaultOpens } from "../lib/orca-chat";
 import { navigate } from "../lib/router";
 import { hasFinePointer } from "../lib/viewport";
 import { providersPath } from "../lib/readiness";
@@ -170,6 +171,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // the mode picked for a launcher that lists its own (Paseo's other providers, #8261): its own ("") or Full access,
   // picked on this sheet and never remembered, so a mode left from a Claude Code start never reaches such a start
   const [providerMode, setProviderMode] = useState("");
+  // where a start that keeps the default opens, as the hub says (#17650, lib/orca-chat.ts); for the computer `launchersOf` names
+  const [defaultOpens, setDefaultOpens] = useState<DefaultOpens | undefined>();
   // Pre-preset mode values so dropping or switching away from a preset restores them without leaking across launchers.
   const presetModeRestore = useRef<{ mode: string; providerMode: string } | null>(null);
   const chooseMode = (next: string) => {
@@ -507,6 +510,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           setLaunchers(ls);
           setSkipped(r.unavailable ?? []);
           setTiers(r.tiers ?? []);
+          setDefaultOpens(r.default_opens);
           setLaunchersOf(mid);
           setUnified(hasUnified);
           setConfigured(effective);
@@ -789,6 +793,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
   const followDetail = formatFollowDetail(unified ? configured : null, defaultRuns, defaultList, names) || modelDefault;
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
+  // with the computer's switch on, a start that keeps the default opens as its Orca chat (#17650): the hub says which, the
+  // form only checks that this start still keeps the default
+  const orcaChat = launchersOf === mid && !desktopStart && !projectDocument ? opensAsOrcaChat(defaultOpens, {
+    launcher, tier: Boolean(tier), model, host: opensIn, mode: claudeModes ? effectiveClaudeMode : "",
+    ultracode: ultracodeShown && !ultracodeBlocked && ultracode, serviceTier: startSpeedTier(speedModel, speed),
+  }) : null;
 
   // The recent setups' cards (#2134): not when another page opened the sheet on a folder of its own (a space's or a
   // knowledge entry's New agent), which a card would replace.
@@ -1371,6 +1381,11 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               </div>
             </div>
             <ModelNotes>
+              {orcaChat && (
+                <Note data-testid="new-agent-orca-chat" icon="info">
+                  {t(orcaChat.dropped ? "newagent.opens_orca_chat_own" : "newagent.opens_orca_chat", { name: orcaChat.display_name || orcaChat.launcher })}
+                </Note>
+              )}
               {dropped && (
                 <Note data-testid="new-agent-dropped" icon="info">{t("newagent.carry_dropped", { name: dropped.name, computer: dropped.computer })}</Note>
               )}

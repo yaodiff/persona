@@ -109,7 +109,8 @@ func TestFailTodoRetiresTheWake(t *testing.T) {
 
 // Reopening the todo leaves a newly scheduled follow-up alone: only the open to done transition retires (#4489).
 func TestReopenDoesNotRetireANewWake(t *testing.T) {
-	s, _ := workService(t)
+	s, f := workService(t)
+	f.setSessions("box", stopped("s1", "我两分钟后再查一下"))
 	id, cardID := todoWakeSetup(t, s)
 	done := time.Now()
 	s.applyTodoRow(context.Background(), id, db.TodoRow{ID: id, Title: "发 1.3 版", DoneAt: &done, UpdatedAt: done}, nil)

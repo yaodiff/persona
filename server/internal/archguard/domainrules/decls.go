@@ -301,41 +301,92 @@ var basic = map[string]bool{
 	"error": true, "any": true,
 }
 
-// primitive says whether a type expression is a primitive: a predeclared basic type, error or any, an empty
-// interface, a func or chan type, or a slice, array or pointer of one, a map with one as key or value, or a generic
-// type with one among its type arguments. A kit type is no wrapper that makes raw input domain input:
-// opt.Option[string] and outcome.Of[[]int, Fail] are primitives as string and []int are. A type the package declares
-// counts as what it is declared as, exported or not: an alias as its target, a named basic, func or chan type
-// (type label string) as that type, and a struct as no primitive, so a name of its own hides no primitive.
-func (d *decls) primitive(e ast.Expr) bool { return d.primitiveIn(e, map[string]bool{}) }
+// stdPrimitives are named types of the computing standard library that hold raw primitives (strings, numbers, bytes,
+// runes or functions), so a core cannot hide raw input behind them in a field or signature.
+var stdPrimitives = map[string]bool{
+	"bytes.Buffer":        true,
+	"bytes.Reader":        true,
+	"iter.Seq":            true,
+	"iter.Seq2":           true,
+	"sort.Float64Slice":   true,
+	"sort.IntSlice":       true,
+	"sort.StringSlice":    true,
+	"strconv.NumError":    true,
+	"strings.Builder":     true,
+	"strings.Reader":      true,
+	"strings.Replacer":    true,
+	"unicode.CaseRange":   true,
+	"unicode.Range16":     true,
+	"unicode.Range32":     true,
+	"unicode.RangeTable":  true,
+	"unicode.SpecialCase": true,
+}
 
-func (d *decls) primitiveIn(e ast.Expr, seen map[string]bool) bool {
+// stdCollections are named types of the computing standard library that are or hold slices of raw data, so a core
+// cannot pass or return a collection behind them.
+var stdCollections = map[string]bool{
+	"bytes.Buffer":        true,
+	"bytes.Reader":        true,
+	"sort.Float64Slice":   true,
+	"sort.IntSlice":       true,
+	"sort.StringSlice":    true,
+	"unicode.RangeTable":  true,
+	"unicode.SpecialCase": true,
+}
+
+// stdType is "<import path>.<Sel>" when sel's package qualifier is an import of f, "" otherwise.
+func stdType(sel *ast.SelectorExpr, f *File, idx Index) string {
+	id, ok := sel.X.(*ast.Ident)
+	if !ok || f == nil {
+		return ""
+	}
+	if imp, ok := idx.imports(f)[id.Name]; ok {
+		return imp.Path + "." + sel.Sel.Name
+	}
+	return ""
+}
+
+// primitive says whether a type expression is a primitive: a predeclared basic type, error or any, an empty
+// interface, a func or chan type, a standard-library named type that wraps raw values (sort.StringSlice,
+// strings.Builder, bytes.Buffer, …), or a slice, array or pointer of one, a map with one as key or value, or a
+// generic type with one among its type arguments. A kit type is no wrapper that makes raw input domain input:
+// opt.Option[string] and outcome.Of[[]int, Fail] are primitives as string and []int are. A type the package declares
+// counts as what it is declared as, exported or not: an alias as its target, a named basic, func, chan or
+// standard-library primitive type (type label string, type lines sort.StringSlice) as that type, and a struct as no
+// primitive, so a name of its own hides no primitive.
+func (d *decls) primitive(f *File, idx Index, e ast.Expr) bool {
+	return d.primitiveIn(f, idx, e, map[string]bool{})
+}
+
+func (d *decls) primitiveIn(f *File, idx Index, e ast.Expr, seen map[string]bool) bool {
 	switch x := e.(type) {
 	case *ast.Ident:
-		if t := d.declared(x, seen); t != nil {
-			return d.primitiveIn(t, seen)
+		if t, tf := d.declared(x, seen); t != nil {
+			return d.primitiveIn(tf, idx, t, seen)
 		}
 		return basic[x.Name]
+	case *ast.SelectorExpr:
+		return stdPrimitives[stdType(x, f, idx)]
 	case *ast.ParenExpr:
-		return d.primitiveIn(x.X, seen)
+		return d.primitiveIn(f, idx, x.X, seen)
 	case *ast.IndexExpr, *ast.IndexListExpr:
 		for _, a := range typeArgs(x) {
-			if d.primitiveIn(a, seen) {
+			if d.primitiveIn(f, idx, a, seen) {
 				return true
 			}
 		}
-		if id, ok := genericBase(x).(*ast.Ident); ok {
-			return d.primitiveIn(id, seen) // a generic type the package declares: what it is declared as
+		if base := genericBase(x); base != nil {
+			return d.primitiveIn(f, idx, base, seen)
 		}
 		return false
 	case *ast.StarExpr:
-		return d.primitiveIn(x.X, seen)
+		return d.primitiveIn(f, idx, x.X, seen)
 	case *ast.ArrayType:
-		return d.primitiveIn(x.Elt, seen)
+		return d.primitiveIn(f, idx, x.Elt, seen)
 	case *ast.Ellipsis:
-		return d.primitiveIn(x.Elt, seen)
+		return d.primitiveIn(f, idx, x.Elt, seen)
 	case *ast.MapType:
-		return d.primitiveIn(x.Key, seen) || d.primitiveIn(x.Value, seen)
+		return d.primitiveIn(f, idx, x.Key, seen) || d.primitiveIn(f, idx, x.Value, seen)
 	case *ast.FuncType, *ast.ChanType:
 		return true
 	case *ast.InterfaceType:
@@ -344,43 +395,48 @@ func (d *decls) primitiveIn(e ast.Expr, seen map[string]bool) bool {
 	return false
 }
 
-// collection says whether a type expression is a slice, array or map (or a variadic parameter), or a generic type
-// with one among its type arguments, all the way down (opt.Option[[]Agent], outcome.Of[map[Key]Agent, Fail]). A type
-// the package declares counts as what it is declared as, exported or not (type rows []row is a slice).
-func (d *decls) collection(e ast.Expr) bool { return d.collectionIn(e, map[string]bool{}) }
+// collection says whether a type expression is a slice, array or map (or a variadic parameter), a standard-library
+// named slice type (sort.StringSlice, bytes.Buffer, …), or a generic type with one among its type arguments, all the
+// way down (opt.Option[[]Agent], outcome.Of[map[Key]Agent, Fail]). A type the package declares counts as what it is
+// declared as, exported or not (type rows []row is a slice).
+func (d *decls) collection(f *File, idx Index, e ast.Expr) bool {
+	return d.collectionIn(f, idx, e, map[string]bool{})
+}
 
-func (d *decls) collectionIn(e ast.Expr, seen map[string]bool) bool {
+func (d *decls) collectionIn(f *File, idx Index, e ast.Expr, seen map[string]bool) bool {
 	switch x := e.(type) {
 	case *ast.Ident:
-		if t := d.declared(x, seen); t != nil {
-			return d.collectionIn(t, seen)
+		if t, tf := d.declared(x, seen); t != nil {
+			return d.collectionIn(tf, idx, t, seen)
 		}
+	case *ast.SelectorExpr:
+		return stdCollections[stdType(x, f, idx)]
 	case *ast.ParenExpr:
-		return d.collectionIn(x.X, seen)
+		return d.collectionIn(f, idx, x.X, seen)
 	case *ast.ArrayType, *ast.MapType, *ast.Ellipsis:
 		return true
 	case *ast.IndexExpr, *ast.IndexListExpr:
 		for _, a := range typeArgs(x) {
-			if d.collectionIn(a, seen) {
+			if d.collectionIn(f, idx, a, seen) {
 				return true
 			}
 		}
-		if id, ok := genericBase(x).(*ast.Ident); ok {
-			return d.collectionIn(id, seen)
+		if base := genericBase(x); base != nil {
+			return d.collectionIn(f, idx, base, seen)
 		}
 	}
 	return false
 }
 
-// declared is what a type name the package declares is declared as (an alias's target included), once per walk
-// (seen), so a type that names itself ends; nil for a name the package does not declare.
-func (d *decls) declared(id *ast.Ident, seen map[string]bool) ast.Expr {
+// declared is what a type name the package declares is declared as (an alias's target included) and the file that
+// declares it, once per walk (seen), so a type that names itself ends; nil for a name the package does not declare.
+func (d *decls) declared(id *ast.Ident, seen map[string]bool) (ast.Expr, *File) {
 	t := d.types[id.Name]
 	if t == nil || seen[id.Name] {
-		return nil
+		return nil, nil
 	}
 	seen[id.Name] = true
-	return t.spec.Type
+	return t.spec.Type, t.file
 }
 
 // named is what a parameter's type is once the package's own aliases and named non-struct, non-interface types are

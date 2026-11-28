@@ -20,6 +20,7 @@ const (
 	PartLines      = recordingwire.PartLines
 	PartTopics     = recordingwire.PartTopics
 	PartHighlights = recordingwire.PartHighlights
+	PartSpeakers   = recordingwire.PartSpeakers
 )
 
 // MeetingRoomLean is declared in recordingwire (docs/plans/plan-kb-recording-port.md).

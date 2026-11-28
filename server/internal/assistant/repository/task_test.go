@@ -189,13 +189,16 @@ func TestTaskLinkTitlesSurviveOlderEditsAndURLReports(t *testing.T) {
 	if err != nil || kept[0].Links[0].Title != rows[0].Links[0].Title || kept[0].Links[1].Title != "Fix sign in" {
 		t.Fatal(kept, err)
 	}
-	updated, err := MergeTaskLinkDetails(kept, []LinkInput{{URL: identity.CanonicalURL + "/pull/7", Title: "Updated review title"}}, catalog)
+	updated, err := MergeTaskLinkDetails(kept, []LinkInput{{URL: identity.CanonicalURL + "/pull/7", Title: "Updated review title"}}, catalog, LinkProvenanceUnbound)
 	if err != nil || len(updated[0].Links) != 2 || updated[0].Links[0].Title != "Updated review title" || kept[0].Links[0].Title != rows[0].Links[0].Title {
 		t.Fatal(updated, kept, err)
 	}
 	reported, err := MergeTaskLinks(updated, []string{identity.CanonicalURL + "/pull/7"}, catalog)
 	if err != nil || reported[0].Links[0].Title != "Updated review title" {
 		t.Fatal(reported, err)
+	}
+	if got := reported[0].Links[0].Provenance; got != LinkProvenanceExplicit {
+		t.Fatalf("a URL-only report changed the saved delivery binding to %q", got)
 	}
 	cleared, err := Bind(rows, []TaskInput{{RepoID: "web", Links: []LinkInput{}}}, catalog)
 	if err != nil || len(cleared[0].Links) != 0 {

@@ -559,7 +559,12 @@ describe("To-dos v2 board direction, hierarchy, and grouping (#16939)", () => {
       project: "beta",
     });
     const todoBoard: TodoBoardProjection = {
-      status_groups: [],
+      status_groups: [{
+        key: "in_progress",
+        total_count: 4,
+        visible_count: 4,
+        entries: [explicit, serverEffective, boardGroupResolved, ungrouped].map(({ id }) => ({ todo_id: id })),
+      }],
       direction_groups: [
         {
           direction_id: "dir-platform",
@@ -608,6 +613,10 @@ describe("To-dos v2 board direction, hierarchy, and grouping (#16939)", () => {
     const parentBtn = row("goal-child")?.querySelector<HTMLButtonElement>("button[data-testid=board-parent-goal]");
     expect(parentBtn).toBeTruthy();
     expect(parentBtn?.textContent).toContain(t("todos.goal_parent_hint", { title: "Ship Q4 platform release" }));
+    // Board row with clickable parent goal uses sibling controls rather than nesting a button inside role="button" (#17696)
+    expect(row("goal-child")?.getAttribute("role")).toBeNull();
+    expect(parentBtn?.closest('[role="button"]')).toBeNull();
+    expect(row("goal-child")?.querySelector<HTMLButtonElement>("button[data-testid=board-row-open]")).toBeTruthy();
 
     // Inherited direction from parent also resolves cleanly via effectiveDirectionOf.
     expect(row("goal-child")?.querySelector("[data-testid=board-direction-tag]")?.textContent).toBe("Platform Direction");
@@ -682,7 +691,7 @@ describe("To-dos v2 board direction, hierarchy, and grouping (#16939)", () => {
     expect(row("leaf-item")?.querySelector("[data-testid=board-child-summary]")).toBeNull();
   });
 
-  it("switches board grouping between By project and By direction, sorts ungrouped last, hides redundant tags, and resets when todos_v2 turns off", async () => {
+  it("switches board grouping, sorts ungrouped last, hides redundant tags, and keeps the v2 choice across rollback", async () => {
     const platA = ownerDecision(todo("plat-a", "Platform waiting task", {
       project: "apollo",
       effective_direction_id: "dir-platform",
@@ -741,12 +750,12 @@ describe("To-dos v2 board direction, hierarchy, and grouping (#16939)", () => {
     expect(group("beta")).toBeTruthy();
     expect(board()?.querySelector("[data-testid=board-direction-tag]")).toBeNull();
 
-    // Re-enabling todos_v2 starts back on the default project grouping cleanly.
+    // Re-enabling the Lab restores the previous v2 choice.
     await act(async () => {
       patchAssistant({ todos_v2: true });
     });
     await flush();
-    expect(boardGroupingButton("project")?.getAttribute("aria-checked")).toBe("true");
-    expect(group("apollo")).toBeTruthy();
+    expect(boardGroupingButton("direction")?.getAttribute("aria-checked")).toBe("true");
+    expect(directionGroup("dir-platform")).toBeTruthy();
   });
 });

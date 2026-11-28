@@ -110,8 +110,8 @@ beforeEach(async () => {
     if (path.includes("/kb")) {
       return {
         items: [
-          { slug: "core", name: "Core Project" },
-          { slug: "web", name: "Web Project" },
+          { id: "core", slug: "core", name: "Core Project" },
+          { id: "web", slug: "web", name: "Web Project" },
         ],
       };
     }

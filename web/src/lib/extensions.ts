@@ -11,6 +11,7 @@ import type { Contribution, DependencyState, PackMember } from "./extension-mode
 import type { ExtensionAuth, ExtensionTool } from "./extension-auth";
 import { clock } from "./format";
 import type { SecretReference } from "./secret-reference";
+import type { ScopedAssistantClient } from "./scoped-assistant-api";
 import { itemHeaders } from "./manager-choice";
 import { t } from "../i18n";
 
@@ -321,38 +322,46 @@ export const listExtensionsInfo = (isAuthContextCurrent?: () => boolean) =>
     markets: !!r.markets,
   }));
 /** A detail as either kind of hub sends it, its pages' places read with the new keys. */
-export const detailOf = (d: HubExtensionDetail): HubExtensionDetail => (d.ui ? { ...d, ui: d.ui.map(placeOf) } : d);
-export const extensionDetail = (id: string, options?: Pick<Parameters<typeof api>[1] & object, "headers" | "signal" | "isAuthContextCurrent">) =>
-  api<HubExtensionDetail>(withEntryLists(`${base(id)}/`), options).then(detailOf);
+export const detailOf = (d: HubExtensionDetail): HubExtensionDetail => (d?.ui ? { ...d, ui: d.ui.map(placeOf) } : d);
+export const extensionDetail = (id: string, options?: Pick<Parameters<typeof api>[1] & object, "headers" | "signal" | "isAuthContextCurrent">, client?: ScopedAssistantClient) => {
+  const path = withEntryLists(`${base(id)}/`);
+  return (client ? client.request<HubExtensionDetail>(path) : api<HubExtensionDetail>(path, options)).then(detailOf);
+};
+
+function extensionWrite(id: string, path: string, mutation: { method: "PUT" | "DELETE"; json?: unknown }, client?: ScopedAssistantClient, preserveEntries = false) {
+  const request = client?.request ?? api;
+  const endpoint = withEntryLists(`${base(id)}/${path}`);
+  return request<HubExtensionDetail>(preserveEntries ? `${endpoint}&preserve_entries=1` : endpoint, mutation).then(detailOf);
+}
 /** After a change that can start, stop or reconfigure an extension: its entries, cards and sections are asked for again. */
 export const changed = <T>(r: T): T => {
   refreshExtensionPlaces();
   if (typeof window !== "undefined") window.dispatchEvent(new Event(EXTENSIONS_CHANGED));
   return r;
 };
-export const setExtensionEnabled = (id: string, enabled: boolean, cascade = false) =>
-  api<HubExtensionDetail>(withEntryLists(`${base(id)}/enabled`), { method: "PUT", json: { enabled, ...(cascade ? { cascade } : {}) } }).then(detailOf).then(changed);
-export const setContribution = (id: string, point: string, cid: string, enabled: boolean) =>
-  api<HubExtensionDetail>(withEntryLists(`${base(id)}/contributions/${enc(point)}/${enc(cid)}`), { method: "PUT", json: { enabled } }).then(detailOf).then(changed);
-export const setExtensionAutoUpgrade = (id: string, auto: boolean) =>
-  api<HubExtensionDetail>(withEntryLists(`${base(id)}/auto-upgrade`), { method: "PUT", json: { auto } }).then(detailOf);
+export const setExtensionEnabled = (id: string, enabled: boolean, cascade = false, client?: ScopedAssistantClient) =>
+  extensionWrite(id, "enabled", { method: "PUT", json: { enabled, ...(cascade ? { cascade } : {}) } }, client).then(changed);
+export const setContribution = (id: string, point: string, cid: string, enabled: boolean, client?: ScopedAssistantClient) =>
+  extensionWrite(id, `contributions/${enc(point)}/${enc(cid)}`, { method: "PUT", json: { enabled } }, client).then(changed);
+export const setExtensionAutoUpgrade = (id: string, auto: boolean, client?: ScopedAssistantClient) =>
+  extensionWrite(id, "auto-upgrade", { method: "PUT", json: { auto } }, client);
 /** The auto-upgrade switch for all market extensions; a hub from before it has no route (null). */
 export const extensionUpgrades = (manager?: string) =>
   api<{ auto: boolean; upgrades?: ExtensionUpgrade[] }>(`${extRoot()}/-/upgrades`, { headers: itemHeaders(manager) }).then((r) => r.auto, () => null);
 export const setExtensionUpgrades = (auto: boolean) => api<{ auto: boolean }>(`${extRoot()}/-/upgrades`, { method: "PUT", json: { auto } }).then((r) => r.auto);
-export const setExtensionConfig = (id: string, config: JsonObject) =>
-  api<HubExtensionDetail>(withEntryLists(`${base(id)}/config`), { method: "PUT", json: { config } }).then(detailOf).then(changed);
+export const setExtensionConfig = (id: string, config: JsonObject, client?: ScopedAssistantClient) =>
+  extensionWrite(id, "config", { method: "PUT", json: { config } }, client).then(changed);
 /** An immediate fixed-field save, not an entry-list edit: the hub keeps its current arrays and answers with the capable form. */
-export const setExtensionConfigPreservingEntries = (id: string, config: JsonObject) =>
-  api<HubExtensionDetail>(`${withEntryLists(`${base(id)}/config`)}&preserve_entries=1`, { method: "PUT", json: { config } }).then(detailOf).then(changed);
-export const setExtensionSecret = (id: string, name: string, value: string) =>
-  api<HubExtensionDetail>(withEntryLists(`${base(id)}/secrets/${enc(name)}`), { method: "PUT", json: { value } }).then(detailOf).then(changed);
-export const setExtensionSecretReference = (id: string, name: string, reference: string) =>
-  api<HubExtensionDetail>(withEntryLists(`${base(id)}/secrets/${enc(name)}`), { method: "PUT", json: { reference } }).then(detailOf).then(changed);
-export const removeHandoffRule = (id: string, rule: string) =>
-  api<HubExtensionDetail>(withEntryLists(`${base(id)}/handoff-rules/${enc(rule)}`), { method: "DELETE" }).then(detailOf).then(changed);
-export const clearExtensionSecret = (id: string, name: string) =>
-  api<HubExtensionDetail>(withEntryLists(`${base(id)}/secrets/${enc(name)}`), { method: "DELETE" }).then(detailOf).then(changed);
+export const setExtensionConfigPreservingEntries = (id: string, config: JsonObject, client?: ScopedAssistantClient) =>
+  extensionWrite(id, "config", { method: "PUT", json: { config } }, client, true).then(changed);
+export const setExtensionSecret = (id: string, name: string, value: string, client?: ScopedAssistantClient) =>
+  extensionWrite(id, `secrets/${enc(name)}`, { method: "PUT", json: { value } }, client).then(changed);
+export const setExtensionSecretReference = (id: string, name: string, reference: string, client?: ScopedAssistantClient) =>
+  extensionWrite(id, `secrets/${enc(name)}`, { method: "PUT", json: { reference } }, client).then(changed);
+export const removeHandoffRule = (id: string, rule: string, client?: ScopedAssistantClient) =>
+  extensionWrite(id, `handoff-rules/${enc(rule)}`, { method: "DELETE" }, client).then(changed);
+export const clearExtensionSecret = (id: string, name: string, client?: ScopedAssistantClient) =>
+  extensionWrite(id, `secrets/${enc(name)}`, { method: "DELETE" }, client).then(changed);
 
 /** A 400 invalid_config: the field the hub refused (its dotted path, "" when it names none) and why. */
 export function configError(e: unknown): { field: string; message: string } | null {
@@ -699,7 +708,7 @@ const isGroup = (v: Json | undefined): v is JsonObject => !!v && typeof v === "o
 
 /** What a draft changes of the configuration it was made on (both read as sent): each changed field's path and its value
  *  in the draft (undefined: cleared). Groups are gone into, so a change is one field's, not its whole group's. */
-function draftEdits(draft: JsonObject, base: JsonObject, requiredEntryLists?: ReadonlySet<string>): { path: string[]; value: Json | undefined }[] {
+export function draftEdits(draft: JsonObject, base: JsonObject, requiredEntryLists?: ReadonlySet<string>): { path: string[]; value: Json | undefined }[] {
   const out: { path: string[]; value: Json | undefined }[] = [];
   const walk = (a: JsonObject, b: JsonObject, at: string[]) => {
     for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {

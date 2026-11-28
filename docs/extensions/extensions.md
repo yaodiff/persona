@@ -125,7 +125,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `browser` (version 1) | — | `id`, `name?` | — | The assistant's browser tools (`browser_run` / `browser_look`) and **Browser** on the machine page (only the built-in `ego`), see [plan-ego-browser.md](../plans/plan-ego-browser.md) |
 | `iphone` (version 1) | — | `id`, `name?` | — | The assistant's phone-control tools (`iphone_status` / `iphone_look` / `iphone_do`), **Phone Control** on a computer's page and **Control of This iPhone** on the iPhone (only the built-in `iphone`), see [iphone.md](iphone.md) |
 | `quota` (version 1) | `quota.` | `id`, `name`, `hosts?` (gateway host names, may start with `*.`) | Process speaks the protocol, permission `launcher_keys` | **Quota** on the launcher page, see "Quota" below |
-| `usage` (version 1, #12402) | `usage.` | `id`, `name`, `hosts?` (gateway host names, may start with `*.`) | Process speaks the protocol, permission `launcher_keys` | Rows of the **subscription usage bars** from a gateway whose usage answer has its own shape, see "Usage extensions" below |
+| `usage` (version 2, #12402) | `usage.` | `id`, `name`, `hosts?` (gateway host names, may start with `*.`), `direct?` (discover without a launcher), `remote_address?`, `remote_key?` | Process speaks the protocol; launcher-backed items need permission `launcher_keys` | Rows of the **subscription usage bars** from a gateway or direct source whose usage answer has its own shape, see "Usage extensions" below |
 | `providers` (version 1) | `provider.` | `id`, `name`, `description?`, `kind?` (`launcher` / `api`), `api?` (`messages` / `responses`), `base_url`, `model?`, `small_model?`, `models?: [{id, name?}]`, `dynamic_models?`, `key_hint?` | Declarative is enough; `dynamic_models` needs the process to speak the protocol | **From Extension** in **Settings › Model Providers**, see "Model providers" below |
 | `api` (version 1) | `api.` | `id`, `prefix` (one path segment), `features?`, `events?`, `receipts?` (`[{method, path, kind}]`: writes that need send receipts) | `runtime.http`, `on_startup`; with `events`, the process must speak the protocol | A block of App-facing API `/api/v1/<prefix>/…`, see "App API" below |
 | `assistant` (version 1) | `assistant.` | `id`, `title?` (≤ 40 characters, for the contribution switch), `skills?` (directories in the package, each with `SKILL.md`), `instructions?` (an `.md` in the package), `gate?` (a `.json` in the package: the gate for one command in a skill) | These files exist in the package; `gate` requires `skills`, and when credentials are needed the process speaks the protocol | The assistant's skills, instructions and command gates, see "Assistant" below |
@@ -1638,6 +1638,39 @@ Exactly one of `archive` and `npm`; if this hub's platform has no `archive` entr
 - **No sudo, nothing global**: it writes only the hub's state directory; anything else the program needs (credentials, caches) goes in the extension's data directory, e.g. by pointing its config directory there with an env var.
 - `tools` in the list and details are the programs this version uses: `[{name, title?, version, reused}]`.
 
+### Read-only Integrations settings projection
+
+People managing connections for several assistants can open the settings of the assistant that owns each integration.
+The hub relays `GET /api/v1/assistant/integrations` and `GET /api/v1/assistant/integrations/{kind}/{id}` through its
+normal `X-Persona-Manager` routing. Use the selected assistant's `integrations_projection_v1` field in
+`GET /api/v1/managers` to opt in. Both reads require a full-access client, like the settings reads they compose.
+Clients use the existing settings routes for writes and for reading the settings inside each section.
+
+- The catalog returns `items`, `counts` and `availability`. Each row has a stable `ref {manager, kind, id}`
+  including the explicit default assistant id, a display name, `origin`, typed `capabilities` and
+  `availability {state, reason?}`. `counts.all` counts visible rows once. Each other count is the number of visible
+  rows that have that capability. One row may belong to several filters. Only the detail response carries sections.
+- Host registrations take precedence over extension contribution references. A legacy producer can use an exact id
+  match within a resource type and the same assistant when it has no explicit relationship of that type.
+  An independent row reports `relationship_issue` for ambiguous claims, a missing or unavailable owner, or a
+  subscription whose saved extension conflicts with the connector's current owner. Push sources use their own refs.
+- A failed read reports `unavailable` and `read_failed` for its source in `availability`. The catalog keeps successful
+  reads and their counts. A row can also have a `capability_availability` entry for a failed or unready related resource.
+  Detail returns 503 when the requested resource's source failed and the resource could not be resolved, and 404
+  when that source answered and the resource is absent.
+- The host reports `module.lark` and `module.mail` in the service entries of `availability`. A service whose
+  provider is off or excluded from the build is omitted from the catalog and counts. Its service detail can still
+  report `module_off` for an older settings link such as `service/mail`. A readable saved subscription can still
+  appear there. An installed Lark gateway extension has its own entry and follows its own settings.
+- Detail returns the canonical `item`, typed `sections` and source `availability`. Each section names its own
+  typed resource `ref` and `edit` mode. `settings` delegates actions to the existing settings workflow, including
+  its permission and confirmation checks. An addressable member resolves to its owning integration. Configuration
+  hints map to Connection, Conversation and Push, Inbox and Sync, or Extension Configuration. Missing and unknown
+  hints map to the general configuration group. The projection carries section descriptors and status codes.
+
+The wire contract is generated from `schema/wire/integrations-projection.schema.json`. The reads require no new
+setting or migration, and `integrations_v2` continues to control the client entry.
+
 ### Host CLI integrations
 
 `tools` installs a program for an extension. `host_integrations` instead names a command-line integration that the owner has already configured on the manager. It is not an alternative way to write an executable or a shell command: the closed integration ID is resolved by the manager, and the extension gets no binary path, profile, configuration or credential.
@@ -2713,7 +2746,11 @@ The open-source repo ships no quota extension for any particular gateway.
 
 A usage extension (`usage`, #12402) turns a gateway's own usage answer into the rows of the subscription usage bars (`docs/server/usage-windows.md`), where the fixed `relay`, `relay_key` and `generic` source types do not fit. Like a quota extension it **never sees the launcher's key**.
 
-It is read as a usage source of `type: "extension"` in the manager's `manager.json` (`usage.sources[]`, with `extension`: the extension's id, and `launcher`: the launcher whose gateway it reads; no `url`, no `key`). Every poll cycle (`usage.poll_minutes`, default 5) the manager:
+**Direct sources (usage version 2).** A contribution with `direct: true` is discovered from installed, enabled extensions. The manager polls it with `usage.query {contribution, tz, lang}`; no launcher, `usage.http` session, or manager configuration entry is needed. The program uses its extension settings and normal sandbox network grants, and returns the same accounts as a launcher-backed source. Disabling the contribution or extension removes its rows. The manager's global usage switch and polling interval apply to both modes.
+
+A direct contribution can declare `remote_address` and `remote_key` naming its URI setting and fixed secret. Persona requires a saved HTTPS address before accepting the secret and clears that secret when the origin changes. Declare the relevant `permissions.network` hosts or settings separately. A direct contribution does not declare launcher `hosts` or require `launcher_keys`.
+
+**Launcher-backed sources.** A contribution without `direct` is read as a usage source of `type: "extension"` in the manager's `manager.json` (`usage.sources[]`, with `extension`: the extension's id, and `launcher`: the launcher whose gateway it reads; no `url`, no `key`). Every poll cycle (`usage.poll_minutes`, default 5) the manager:
 
 1. checks that the extension is enabled, running, granted `launcher_keys`, and that one of its `usage` items names the launcher's gateway host (no `hosts`: any);
 2. sends `usage.query {contribution, query_id, base_url, tz, lang}`: `base_url` is the gateway's root (with `/v1` removed), `tz` the user's time zone, `lang` the user's language (`en`, `zh-Hans`, `ja`), which the extension's text is written in;
@@ -2721,6 +2758,8 @@ It is read as a usage source of `type: "extension"` in the manager's `manager.js
 4. the extension answers `{accounts: [{id?, provider, name, plan?, headline?, notice?, sampled_at?, windows: [{label? or window_minutes, used_percent, resets_at?, model?, group?, title?, note?, protect_percent?}]}]}`.
 
 The manager checks and cuts the answer (`usagesource.FromExtension`): `provider` is `^[a-z0-9][a-z0-9_-]{0,31}$`; a window needs a length (`label` such as `5h`, `7d`, or `window_minutes`) and a number (clamped to 0–100); an account with no window needs a `headline` or a `notice`; at most 500 accounts and 32 windows each; text is plain, one line, cut to 80 (`name`), 40 (`plan`, `model`, `group`, `title`) and 200 characters (`headline`, `notice`, `note`). No colour or icon: the clients choose them. What does not fit is left out. `protect_percent` is the gateway's protection line for that window (the used percentage at which it stops sending work to the account; it can differ per account and per window): kept when it is a number from 0 to 100, otherwise dropped, and forwarded on the window in `GET /api/v1/usage/windows` so clients can mark it on the bar (`docs/server/usage-windows.md` ("Usage extensions")).
+
+A supplied account `id` keeps the sidebar row identity stable across polls when it is unique for that provider within the source. Rows with absent or duplicate IDs use their position. Use an opaque ID and keep it constant when the same account is read again.
 
 Rows from an extension are **not merged** with what the computers or other gateways report: they are drawn as sent, after the merged ones, in the extension's order. `group`, `title`, `note`, `headline` and `notice` are optional fields of the usage answer (`GET /api/v1/usage/windows`); a client that does not know them ignores them and draws the flat windows it always did. A failed query keeps the last answer, faded and marked, like any other source.
 
@@ -4967,7 +5006,12 @@ can set addresses, keys and switches; admin has a switch too:
 | `models`, `default_model` | As above; omitted live-dialect values read the service's model list |
 | `input_rate` | 16000 / 24000 |
 | `owner`, `notes` | What to call you, extra instructions for the voice assistant; supplied values override manager.json |
+| `tts_url` | Optional OpenAI-compatible streaming TTS endpoint (`http://` or `https://`, base URL such as `https://tts.example.com` or full `…/v1/audio/speech`; #17843). Empty keeps the realtime upstream's own audio; also accepted in manager.json |
+| `tts_model` | Optional TTS `model` value; empty sends `"default"`. Also accepted in manager.json |
+| `tts_default_voice` | Optional fallback voice id (`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`), always included and marked default in `GET /voices` while TTS is configured. Also accepted in manager.json |
+| `tts_sample_rate` | Optional fallback PCM sample rate (`8000`–`48000` Hz) when the TTS response omits a rate header. Also accepted in manager.json |
 | Secret `key` | API key sent as `Authorization: Bearer`; encrypted with `secret.key` in `plugin_secrets`, write-only, endpoint reports only "set" |
+| Secret `tts_key` | Optional Bearer key sent only to `tts_url`; write-only secret in `plugin_secrets` (never manager.json), bound to `tts_url`'s origin like `key` is to `url` (#17843) |
 
 `ssh`, `key_file`, `key_command`, an explicit `tools` and additional upstreams are manager.json-only (`key_command` executes on the hub machine). Additional upstreams do not fit the deliberately restricted entry-list shape or its current web-only editing support, so the form still exposes the one upstream above.
 The form's upstream has no `tools` switch, so it is auto: it declares the function tools and drops them only if the service refuses them (#1420). To keep them off, configure that upstream in manager.json with `"tools": false` instead.
@@ -4980,7 +5024,7 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
   with a sentence such as "Real-time voice service address and key" in `needs_setup` (like `hubJSONWaitsForTriageModel`: running but needs configuration); the app only recognizes `running` voice extensions, so no voice entry appears.
 - **Keys are sent only to the address they were set for**: when config changes `url` to another origin (scheme + host + port; case, default port and path differences do not count),
   the hub **deletes the key before saving config**, responds with `secrets_cleared: ["key"]` and adds "Address changed; key cleared. Please enter it again" to `warnings`; clearing the address counts as a change too.
-  With an empty address, `PUT …/-/secrets/key` returns 400 `needs_url`. This prevents changing the address to an attacker's host and receiving the key as a Bearer token.
+  With an empty address, `PUT …/-/secrets/key` returns 400 `needs_url`. The optional `tts_key` follows `tts_url`'s origin independently under the same rule (`secrets_cleared: ["tts_key"]`, `PUT …/-/secrets/tts_key` returns 400 `needs_url` while `tts_url` is empty; #17843). This prevents changing an address to an attacker's host and receiving its Bearer token.
   - Implemented in the registry (`Registry.BoundSecrets` / `SecretNeeds`, hooks from `voice_extension.go`): applies to all `SetConfig` callers (assistant config changes, etc.), not just this endpoint;
     checking, key deletion, config save and key setting share one registry operation lock, so interleaved requests cannot pair a key with an address it was never set for.
   - **Prefer deletion on failure**: delete whether or not key-presence can be read (idempotent); unreadable presence still returns `secrets_cleared`. If deletion fails, save nothing, return 500 `secret_not_cleared`;
@@ -4993,9 +5037,10 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
 - **Meeting transcription** (#3862 phase 5): the manifest also contributes `transcription: [{"id": "gpt-live", "name": "GPT-Live"}]` beside its voice (its kind stays `voice`), with the same upstreams and key.
   It transcribes only through a GPT-Live (`live` dialect) upstream: the default model's when its upstream is one, else the first `live` upstream's default; with none,
   `GET /transcription/gpt-live/info` says `setup: "live_upstream"`. See "Transcription" above and [meeting-minutes.md](../assistant/meeting-minutes.md) "The built-in adapter".
-- **Extension env vars**: `PERSONA_EXTENSION_CONFIG` (form values with defaults), `PERSONA_EXTENSION_SECRETS` (`{"key": "…"}`, decrypted only in process environment),
+- **Extension env vars**: `PERSONA_EXTENSION_CONFIG` (form values with defaults), `PERSONA_EXTENSION_SECRETS` (`{"key": "…", "tts_key": "…"}`, decrypted only in process environment),
   `PERSONA_VOICE_HUB_CONFIG` (original `config` of the taken-over entry), entry `env`, and `PERSONA_HUB_URL` / `PERSONA_HUB_TOKEN` (manifest `hub_api`, as before);
   legacy `PERSONA_PLUGIN_*` names are also supplied and accepted.
+- **TTS voice list (#17843)**: while `tts_url` is configured, `GET /voices` reads the TTS endpoint's `GET …/v1/audio/voices` (sending `Authorization: Bearer` only when `tts_key` is set), caches good lists for 10 minutes, always includes `tts_default_voice` as default (else the endpoint's default, else the first), returns the last good list marked `stale: true` on failure, and falls back to `tts_default_voice` alone on `404` or when unreachable (`docs/assistant/voice.md` 5.10). Without `tts_url`, `GET /voices` behaves as before.
 
 ### Taking over manager.json entries
 

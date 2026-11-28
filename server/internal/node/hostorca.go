@@ -64,6 +64,9 @@ type orcaHost struct {
 	// missing are the methods the runtime missingIn (its id) answered method_not_found to (hostorca_panes.go).
 	missing   map[string]bool
 	missingIn string
+	// listSeq / listApplied keep delayed older terminal.list responses from clobbering newer cached terminals (#2133).
+	listSeq     uint64
+	listApplied uint64
 }
 
 // track remembers a terminal this host created (h.mu held), to find it by handle if Orca re-keys it.
@@ -181,6 +184,8 @@ func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Term
 	}
 	// Taken before the list: a terminal created while it is asked for is not taken for gone.
 	made := maps.Clone(h.made)
+	h.listSeq++
+	seq := h.listSeq
 	h.mu.Unlock()
 	layouts := fresh
 	l, err := h.c.Terminals(ctx, layouts)
@@ -211,7 +216,7 @@ func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Term
 		named = h.namedTabs(ctx, l.Tabs) // the names renames gave them (hostorca_panes.go)
 	}
 	h.mu.Lock()
-	if layouts {
+	if layouts && seq >= h.listApplied {
 		h.tabs, h.tabsAt, h.topology = named, time.Now(), orcaTopology(l)
 	}
 	tabs := h.tabs
@@ -241,6 +246,10 @@ func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Term
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if seq < h.listApplied {
+		return terms, tabs, nil
+	}
+	h.listApplied = seq
 	for key := range made {
 		if !listed[key] {
 			delete(h.made, key) // gone

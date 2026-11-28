@@ -1,6 +1,6 @@
-import { api, errorText } from "../../lib/api";
+import { api, credentialOwner, errorText } from "../../lib/api";
 import { stampedHeaders } from "../../lib/manager-choice";
-import type { TodoClosedCursor } from "../../lib/store";
+import { appendClosedTodos, getState, setClosedHistoryLoading, type TodoClosedCursor } from "../../lib/store";
 import { isClosedForHistory, type Todo } from "../../lib/todos";
 
 type TodoPageAnswer = {
@@ -10,7 +10,7 @@ type TodoPageAnswer = {
 };
 
 /** Walk a bounded number of pages per manager. A page with only duplicates may lead to an older one. */
-export async function readOlderClosed(
+async function readOlderClosed(
   starts: [string, TodoClosedCursor][],
   currentIds: () => ReadonlySet<string> | undefined,
 ) {
@@ -41,4 +41,23 @@ export async function readOlderClosed(
     cursors[manager] = { next_cursor: cursor, has_more: Boolean(cursor) };
   }
   return { rows: [...added.values()], cursors, error: errors.length ? errors.join(" · ") : null };
+}
+
+/** Extends the bounded list without replacing the hub's board. */
+export async function loadOlderClosed(manager?: string) {
+  const { closedCursors, closedLoading } = getState();
+  if (closedLoading) return;
+  const starts = Object.entries(closedCursors).filter(([id, cursor]) =>
+    (!manager || id === manager) && cursor.has_more && cursor.next_cursor);
+  if (!starts.length) return;
+  const owner = credentialOwner();
+  // A full list refresh or login reset replaces the cursor table, invalidating all older replies.
+  const current = () => getState().closedCursors === closedCursors && credentialOwner() === owner;
+  setClosedHistoryLoading(true, null);
+  try {
+    const history = await readOlderClosed(starts, () => current() ? new Set(getState().todos.map((todo) => todo.id)) : undefined);
+    if (history && current()) appendClosedTodos(history.rows, history.cursors, history.error);
+  } catch (reason) {
+    if (current()) setClosedHistoryLoading(false, errorText(reason));
+  }
 }

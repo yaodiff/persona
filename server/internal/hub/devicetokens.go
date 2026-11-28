@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -94,6 +95,9 @@ type principal struct {
 	// names when it drops the token (extwire.HubTokenRevoked). extAt: when the hub asked the managers whose it is.
 	extHash string
 	extAt   time.Time
+	// extAuthConn binds the verdict (or its legacy snapshot) to the connection that validated the route and token.
+	extAuthConn *busConn
+	extOwner    extwire.OwnerVerdict
 	// extOpens, extScope: an extension's token opens the request's route (the manager said), else the scope it lacks.
 	extOpens bool
 	extScope string
@@ -698,6 +702,7 @@ func (h *Hub) revoked(id string) {
 	}
 	// Registration holds h.mu while checking t.mu; release t.mu before taking h.mu.
 	t.mu.Unlock()
+	h.previewDeviceRevoked(id)
 	go func() {
 		_ = h.notifyManagers(bus.EventCredentialRevoked, bus.DeviceCredential{ID: id})
 	}()

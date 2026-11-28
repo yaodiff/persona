@@ -310,6 +310,8 @@
     <string name="agents_new_presets">Agent 预设</string>
     <string name="agents_new_preset_loading">正在读取此预设的模型列表，读取完成后才能开始。</string>
     <string name="agents_new_preset_left_out">此预设的以下设置无法在这里使用：</string>
+    <string name="agents_new_opens_orca_chat">将以 %1$s 打开：这台电脑设为新建 Agent 以 Orca 聊天打开。</string>
+    <string name="agents_new_opens_orca_chat_own">将以 %1$s 打开，使用 Orca 自己的模型：这台电脑设为新建 Agent 以 Orca 聊天打开。</string>
     <string name="agents_new_preset_left_out_model">模型「%1$s」无法在这里使用，将按启动器的模型运行。</string>
     <string name="agents_new_preset_left_out_effort">思考强度「%1$s」无法在这里使用，将按启动器或模型自身的强度运行。</string>
     <string name="agents_new_type_other">其他 Agent</string>

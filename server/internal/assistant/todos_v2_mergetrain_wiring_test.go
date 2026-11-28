@@ -205,82 +205,52 @@ func TestTodosV2MergeTrainHumanReviewGuardNeverAutoMerges(t *testing.T) {
 	}
 }
 
-func TestTodosV2MergeTrainTwoStrikeConflictEscalationDedupAndReset(t *testing.T) {
+func TestTodosV2MergeTrainConflictObservationsKeepFailureCountAndNotify(t *testing.T) {
 	s, _ := newQuietServiceOn(t, nil)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	setMergeTrainTodosV2Flag(t, s, true, false)
 
-	ctx := context.Background()
-	now := time.Now().UTC()
+	ctx := t.Context()
+	now := time.Now()
 	task := newMergeTrainTask(t, s, "Conflicting PR", "https://github.com/example/conflict-repo/pull/42")
+	for i, head := range []string{"head-a", "head-a", "head-b", "head-c"} {
+		if err := s.applyPRStatus(ctx, task, TodoPRStatus{
+			URL: task.PRURL, State: "open", HeadOID: head, Review: "approved", Checks: "failure",
+			Conflicts: true, CheckedAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		repo, _ := findRepoSnapshot(s.mergeTrainSnapshot(ctx), "github.com/example/conflict-repo")
+		if repo.Head == nil || repo.Head.RebaseFailures != 0 || repo.Head.State != mergetrain.StateActive {
+			t.Fatalf("conflict poll was counted as a rebase failure: %+v", repo.Head)
+		}
+	}
+	sig, ok := pendingPRConflict(s, task.ID)
+	if !ok || sig.Key != task.PRURL+"@head-c" || !strings.Contains(sig.Detail, "merge conflicts") {
+		t.Fatalf("ordinary conflict wake missing: %+v", sig)
+	}
+}
 
-	// Strike 1 on head-a.
-	if err := s.applyPRStatus(ctx, task, TodoPRStatus{
-		URL: task.PRURL, State: "open", HeadOID: "head-a", Review: "approved", Checks: "failure", Conflicts: true, CheckedAt: now,
-	}); err != nil {
-		t.Fatal(err)
+func TestTodosV2MergeTrainSiblingPRGetsItsOwnTurnWake(t *testing.T) {
+	s, _ := newQuietServiceOn(t, newMemBlockerStore())
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	setMergeTrainTodosV2Flag(t, s, true, false)
+	ctx := t.Context()
+	now := time.Now()
+	const first, second = "https://github.com/example/repo/pull/15", "https://github.com/example/repo/pull/16"
+	task := newMergeTrainTask(t, s, "Two PRs for one task", first)
+	s.onPRStatusMergeTrain(ctx, task, TodoPRStatus{URL: first, State: "open", CheckedAt: now})
+	s.onPRStatusMergeTrain(ctx, task, TodoPRStatus{URL: second, State: "open", CheckedAt: now})
+	snap := buildMergeTrainSnapshotResponse(s.mergeTrainSnapshot(ctx), nil)
+	if b := snap.ByTodo[task.ID]; b.Position != 1 {
+		t.Fatalf("sibling PR overwrote the head badge: %+v", b)
 	}
-	repo, ok := findRepoSnapshot(s.mergeTrainSnapshot(ctx), "github.com/example/conflict-repo")
-	if !ok || repo.Head == nil || repo.Head.RebaseFailures != 1 || repo.Head.State != mergetrain.StateActive {
-		t.Fatalf("after strike 1: %+v", repo.Head)
+	out := s.onPRStatusMergeTrain(ctx, task, TodoPRStatus{URL: first, State: "merged", CheckedAt: now.Add(time.Second)})
+	if out.turnWakeup.Todo != task.ID || out.turnWakeup.PRURL != second {
+		t.Fatalf("second PR did not get its own turn wake: %+v", out.turnWakeup)
 	}
-
-	// Silent re-poll of the same head-a must NOT increment rebase failures.
-	if err := s.applyPRStatus(ctx, task, TodoPRStatus{
-		URL: task.PRURL, State: "open", HeadOID: "head-a", Review: "approved", Checks: "failure", Conflicts: true, CheckedAt: now.Add(time.Second),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	repo, _ = findRepoSnapshot(s.mergeTrainSnapshot(ctx), "github.com/example/conflict-repo")
-	if repo.Head.RebaseFailures != 1 || repo.Head.State != mergetrain.StateActive {
-		t.Fatalf("silent re-poll incremented failures: %+v", repo.Head)
-	}
-
-	// Conflict clears before strike 2 -> failure streak resets to 0.
-	if err := s.applyPRStatus(ctx, task, TodoPRStatus{
-		URL: task.PRURL, State: "open", HeadOID: "head-b", Review: "approved", Checks: "pending", Conflicts: false, CheckedAt: now.Add(2 * time.Second),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	repo, _ = findRepoSnapshot(s.mergeTrainSnapshot(ctx), "github.com/example/conflict-repo")
-	if repo.Head.RebaseFailures != 0 || repo.Head.State != mergetrain.StateActive {
-		t.Fatalf("conflict resolution did not reset failure count: %+v", repo.Head)
-	}
-
-	// Now trigger two consecutive conflict rounds (head-c then head-d) -> trips StateEscalated.
-	if err := s.applyPRStatus(ctx, task, TodoPRStatus{
-		URL: task.PRURL, State: "open", HeadOID: "head-c", Review: "approved", Checks: "failure", Conflicts: true, CheckedAt: now.Add(3 * time.Second),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	repo, _ = findRepoSnapshot(s.mergeTrainSnapshot(ctx), "github.com/example/conflict-repo")
-	if repo.Head.RebaseFailures != 1 || repo.Head.State != mergetrain.StateActive {
-		t.Fatalf("after fresh strike 1: %+v", repo.Head)
-	}
-
-	if err := s.applyPRStatus(ctx, task, TodoPRStatus{
-		URL: task.PRURL, State: "open", HeadOID: "head-d", Review: "approved", Checks: "failure", Conflicts: true, CheckedAt: now.Add(4 * time.Second),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	repo, _ = findRepoSnapshot(s.mergeTrainSnapshot(ctx), "github.com/example/conflict-repo")
-	if repo.Head.RebaseFailures != 2 || repo.Head.State != mergetrain.StateEscalated {
-		t.Fatalf("after strike 2: head=%+v, want RebaseFailures=2 StateEscalated", repo.Head)
-	}
-	sig, hasSig := pendingPRConflict(s, task.ID)
-	if !hasSig || !strings.Contains(sig.Detail, "circuit breaker") || !strings.Contains(sig.Detail, "needs_user") {
-		t.Fatalf("expected escalated supervision signal detail, got (%v, %+v)", hasSig, sig)
-	}
-
-	// Repeated poll at the same escalated head-d must be deduplicated (Escalate == false).
-	dup := s.onPRStatusMergeTrain(ctx, task, TodoPRStatus{
-		URL: task.PRURL, State: "open", HeadOID: "head-d", Review: "approved", Checks: "failure", Conflicts: true, CheckedAt: now.Add(5 * time.Second),
-	})
-	if dup.Escalate {
-		t.Fatalf("duplicate escalation emitted for same (todo, pr, head): %+v", dup)
-	}
-	if dup.Decision.Action != mergetrain.ActionEscalateNeedsUser || dup.Decision.State != mergetrain.StateEscalated {
-		t.Fatalf("expected escalated decision on repeat poll, got %+v", dup.Decision)
+	if _, valid := s.mergeTrainHeadForWake(out.turnWakeup); !valid {
+		t.Fatalf("turn wake could not be revalidated: %+v", out.turnWakeup)
 	}
 }
 
@@ -362,15 +332,14 @@ func TestTodosV2MergeTrainQueuedEscalatedEntryDoesNotResetOrCorruptHead(t *testi
 		t.Fatalf("initial task1 decision = %+v, want ActionWaitQueue for %s", out1.Decision, task1.ID)
 	}
 
-	// Trip 2-strike conflict escalation on queued task2.
-	for i, head := range []string{"t2-conflict-1", "t2-conflict-2"} {
-		out := s.onPRStatusMergeTrain(ctx, task2, TodoPRStatus{
-			URL: task2.PRURL, State: "open", HeadOID: head, Review: "approved", Checks: "failure", Conflicts: true,
-			CheckedAt: now.Add(time.Duration(i+1) * time.Second),
-		})
-		if i == 1 && (out.Decision.Action != mergetrain.ActionEscalateNeedsUser || out.Decision.State != mergetrain.StateEscalated) {
-			t.Fatalf("task2 strike 2 decision = %+v, want ActionEscalateNeedsUser/StateEscalated", out.Decision)
-		}
+	s.onPRStatusMergeTrain(ctx, task2, TodoPRStatus{
+		URL: task2.PRURL, State: "open", HeadOID: "conflicting", Conflicts: true, CheckedAt: now.Add(time.Second),
+	})
+	// The state machine still accepts explicit results from rebase attempts.
+	_, _ = s.mergeTrain.train.RecordRebaseFailure(task2.PRURL, "first attempt failed")
+	out, err := s.mergeTrain.train.RecordRebaseFailure(task2.PRURL, "second attempt failed")
+	if err != nil || out.Action != mergetrain.ActionEscalateNeedsUser {
+		t.Fatalf("real rebase failures did not escalate: %+v, %v", out, err)
 	}
 
 	// Clearing conflicts on queued escalated task2 with green checks MUST NOT evaluate task1 (head)

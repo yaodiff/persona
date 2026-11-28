@@ -9,10 +9,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
@@ -36,8 +40,9 @@ func (h *repoMirrorTestHub) DeviceCall(ctx context.Context, call DeviceCall) (js
 // memRepoMirrorStore adds in-memory repoMirrorStore persistence on top of containerWorkspaceMemStore.
 type memRepoMirrorStore struct {
 	*containerWorkspaceMemStore
-	mmu     sync.Mutex
-	mirrors map[string]repository.RepoMirrorRecord
+	mmu           sync.Mutex
+	mirrors       map[string]repository.RepoMirrorRecord
+	enrollmentErr error
 }
 
 func newMemRepoMirrorStore() *memRepoMirrorStore {
@@ -82,17 +87,25 @@ func (m *memRepoMirrorStore) ListRepoMirrors(_ context.Context, machineID, repoI
 	return out, nil
 }
 
-func (m *memRepoMirrorStore) ListEnabledRepoMirrors(_ context.Context, machineID string, repoIDs []string) ([]repository.RepoMirrorRecord, error) {
+func (m *memRepoMirrorStore) CreateOnDemandRepoMirror(_ context.Context, machineID, repoID string, now time.Time) (*repository.RepoMirrorRecord, error) {
 	m.mmu.Lock()
 	defer m.mmu.Unlock()
-	out := []repository.RepoMirrorRecord{}
-	for _, rec := range m.mirrors {
-		if rec.MachineID == machineID && rec.Enabled && slices.Contains(repoIDs, rec.RepoID) {
-			out = append(out, rec)
-		}
+	if m.enrollmentErr != nil {
+		return nil, m.enrollmentErr
 	}
-	slices.SortFunc(out, func(a, b repository.RepoMirrorRecord) int { return strings.Compare(a.RepoID, b.RepoID) })
-	return out, nil
+	key := mirrorKey(machineID, repoID)
+	rec, ok := m.mirrors[key]
+	if !ok {
+		rec = repository.RepoMirrorRecord{
+			MachineID:           machineID,
+			RepoID:              repoID,
+			Enabled:             true,
+			SyncIntervalMinutes: repository.DefaultMirrorSyncIntervalMinutes,
+			UpdatedAt:           now,
+		}
+		m.mirrors[key] = rec
+	}
+	return &rec, nil
 }
 
 func (m *memRepoMirrorStore) ListDueAutoSyncRepoMirrors(_ context.Context, now time.Time) ([]repository.RepoMirrorRecord, error) {
@@ -393,18 +406,19 @@ func TestRepoMirrorPeriodicSyncZeroTrafficWhenDisabledAndBackoffOnFailure(t *tes
 }
 
 func TestPrepareBackendWorkspaceUsesEnabledMirrorAndFallsBackCleanly(t *testing.T) {
-	setup := func(t *testing.T, enableMirror bool, ensureErr error) (ensureCalls int, prepareMirrorRepos []string, record *taskworkspace.Record) {
+	setup := func(t *testing.T, enabled *bool, ensureErr, enrollmentErr error) (ensureCalls int, prepareMirrorRepos []string, config *repository.RepoMirrorRecord) {
 		t.Helper()
 		st := newMemRepoMirrorStore()
+		st.enrollmentErr = enrollmentErr
 		seedMirrorRepo(t, st, "repo_web", "https://github.com/example/web")
 		id, _ := repository.Parse("https://github.com/example/web", "")
 		now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 
-		if enableMirror {
+		if enabled != nil {
 			if _, err := st.UpsertRepoMirrorConfig(t.Context(), repository.RepoMirrorRecord{
 				MachineID:           "dev1",
 				RepoID:              "repo_web",
-				Enabled:             true,
+				Enabled:             *enabled,
 				AutoSync:            false,
 				SyncIntervalMinutes: 30,
 				UpdatedAt:           now,
@@ -457,12 +471,24 @@ func TestPrepareBackendWorkspaceUsesEnabledMirrorAndFallsBackCleanly(t *testing.
 		baseHub.devices = []Device{{ID: "dev1", Name: "Dev 1", Online: true}}
 		hub := &repoMirrorTestHub{
 			fakeHub: baseHub,
-			onCall: func(_ context.Context, _ string, method string, raw json.RawMessage) (any, error) {
+			onCall: func(ctx context.Context, _ string, method string, raw json.RawMessage) (any, error) {
 				switch method {
 				case "task.workspace.capabilities":
 					return map[string]any{"capability": taskworkspace.Capability, "start": true}, nil
 				case repository.MethodRepoMirrorEnsure:
 					ensureCalls++
+					deadline, ok := ctx.Deadline()
+					remaining := time.Until(deadline)
+					if !ok || remaining <= repository.MirrorColdFetchTimeout || remaining > repoMirrorCallTimeout {
+						t.Errorf("mirror RPC has %v remaining, want the cold fetch budget plus time for the reply", remaining)
+					}
+					var req repository.MirrorEnsureRequest
+					if err := json.Unmarshal(raw, &req); err != nil {
+						return nil, err
+					}
+					if req.TTLSeconds != repository.DefaultMirrorFetchTTLSeconds || req.Force {
+						t.Errorf("expected on-demand ensure with default TTL: %+v", req)
+					}
 					if ensureErr != nil {
 						return nil, ensureErr
 					}
@@ -512,39 +538,247 @@ func TestPrepareBackendWorkspaceUsesEnabledMirrorAndFallsBackCleanly(t *testing.
 		s := New(Options{Hub: hub, Store: func() Store { return st }})
 		s.repoMirrors.now = func() time.Time { return now }
 		rec, err := s.PrepareBackendWorkspace(t.Context(), "todo_1", "op_mirror_1")
-		if err != nil {
-			t.Fatalf("PrepareBackendWorkspace: %v", err)
+		if err != nil || rec == nil || rec.State != "ready" {
+			t.Fatalf("PrepareBackendWorkspace did not return a ready workspace: %+v, %v", rec, err)
 		}
-		return ensureCalls, prepareMirrorRepos, rec
+		config, err = st.RepoMirror(t.Context(), "dev1", "repo_web")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ensureCalls, prepareMirrorRepos, config
 	}
 
-	t.Run("mirror disabled by default", func(t *testing.T) {
-		calls, mirrorRepos, rec := setup(t, false, nil)
-		if calls != 0 || len(mirrorRepos) != 0 || rec.State != "ready" {
-			t.Fatalf("expected zero mirror calls when disabled: calls=%d repos=%v state=%s", calls, mirrorRepos, rec.State)
+	t.Run("missing mirror config enrolls on demand", func(t *testing.T) {
+		calls, mirrorRepos, config := setup(t, nil, nil, nil)
+		if calls != 1 || !slices.Equal(mirrorRepos, []string{"repo_web"}) {
+			t.Fatalf("expected one mirror ensure and a mirror hint: calls=%d repos=%v", calls, mirrorRepos)
+		}
+		if config == nil || !config.Enabled || config.AutoSync || config.NextSyncAt != nil ||
+			config.SyncIntervalMinutes != repository.DefaultMirrorSyncIntervalMinutes || config.LastSyncedAt == nil {
+			t.Fatalf("expected a synced on-demand mirror with periodic sync off: %+v", config)
+		}
+	})
+
+	t.Run("explicit opt-out skips mirror ensure and use", func(t *testing.T) {
+		calls, mirrorRepos, config := setup(t, new(false), nil, nil)
+		if calls != 0 || len(mirrorRepos) != 0 || config == nil || config.Enabled {
+			t.Fatalf("expected disabled config and no mirror work: calls=%d repos=%v config=%+v", calls, mirrorRepos, config)
 		}
 	})
 
 	t.Run("mirror enabled refreshes and passes MirrorRepos", func(t *testing.T) {
-		calls, mirrorRepos, rec := setup(t, true, nil)
-		if calls != 1 || !slices.Equal(mirrorRepos, []string{"repo_web"}) || rec.State != "ready" {
-			t.Fatalf("expected mirror ensure + MirrorRepos=[repo_web]: calls=%d repos=%v state=%s", calls, mirrorRepos, rec.State)
+		calls, mirrorRepos, _ := setup(t, new(true), nil, nil)
+		if calls != 1 || !slices.Equal(mirrorRepos, []string{"repo_web"}) {
+			t.Fatalf("expected one mirror ensure and a mirror hint: calls=%d repos=%v", calls, mirrorRepos)
 		}
 	})
 
 	t.Run("mirror ensure failure falls back cleanly", func(t *testing.T) {
-		calls, mirrorRepos, rec := setup(t, true, errors.New("transient error"))
-		if calls != 1 || len(mirrorRepos) != 0 || rec.State != "ready" {
-			t.Fatalf("expected clean fallback on ensure error: calls=%d repos=%v state=%s", calls, mirrorRepos, rec.State)
+		calls, mirrorRepos, _ := setup(t, nil, errors.New("transient error"), nil)
+		if calls != 1 || len(mirrorRepos) != 0 {
+			t.Fatalf("expected clean fallback on ensure error: calls=%d repos=%v", calls, mirrorRepos)
 		}
 	})
 
 	t.Run("older node without repo.mirror.ensure falls back cleanly", func(t *testing.T) {
-		calls, mirrorRepos, rec := setup(t, true, errors.New("unknown method repo.mirror.ensure"))
-		if calls != 1 || len(mirrorRepos) != 0 || rec.State != "ready" {
-			t.Fatalf("expected clean fallback on older node: calls=%d repos=%v state=%s", calls, mirrorRepos, rec.State)
+		calls, mirrorRepos, _ := setup(t, nil, errors.New("unknown method repo.mirror.ensure"), nil)
+		if calls != 1 || len(mirrorRepos) != 0 {
+			t.Fatalf("expected clean fallback on older node: calls=%d repos=%v", calls, mirrorRepos)
 		}
 	})
+
+	t.Run("mirror store failure falls back cleanly", func(t *testing.T) {
+		calls, mirrorRepos, config := setup(t, nil, nil, errors.New("mirror store unavailable"))
+		if calls != 0 || len(mirrorRepos) != 0 || config != nil {
+			t.Fatalf("expected direct prepare when enrollment fails: calls=%d repos=%v config=%+v", calls, mirrorRepos, config)
+		}
+	})
+}
+
+func TestPrepareWorkspaceDoesNotEnrollLocalOrLinkOnlyRepositories(t *testing.T) {
+	st := newMemRepoMirrorStore()
+	hub := &repoMirrorTestHub{
+		fakeHub: newFakeHub(),
+		onCall: func(_ context.Context, _ string, method string, _ json.RawMessage) (any, error) {
+			t.Fatalf("unexpected mirror RPC %s", method)
+			return nil, nil
+		},
+	}
+	s := New(Options{Hub: hub, Store: func() Store { return st }})
+	r := &taskworkspace.Record{Plan: workspacenaming.Plan{Source: workspacenaming.Source{
+		MachineID: "dev1",
+		Repositories: repository.PreparationSnapshot{Repositories: []repository.PreparationRepository{
+			{RepoID: "local", Local: &repositorywire.LocalCheckout{}},
+			{RepoID: "linked_example"},
+			{RepoID: "invalid/id", SourceSnapshot: repository.SourceSnapshot{CatalogRevision: 1}},
+		}},
+	}}}
+	if ready := s.prepareEnabledMirrorsForWorkspace(t.Context(), r); len(ready) != 0 {
+		t.Fatalf("unexpected mirror hints: %v", ready)
+	}
+	if mirrors, err := st.ListRepoMirrors(t.Context(), "dev1", ""); err != nil || len(mirrors) != 0 {
+		t.Fatalf("unexpected saved mirrors: %+v, %v", mirrors, err)
+	}
+}
+
+func TestTaskPlanContainerUsesOnDemandRepoMirror(t *testing.T) {
+	h := newWorkspaceTestHarness(t, newMemRepoMirrorStore())
+	h.f.nodes[repository.MethodRepoMirrorEnsure] = func(string, json.RawMessage) (any, error) {
+		return repository.MirrorInfo{RepoID: "repo_web", Exists: true, Fetched: true}, nil
+	}
+
+	ctx := t.Context()
+	args := `{"tasks":[{"title":"Prepare workspace","prompt":"Update the example repository","role":"worker","machine":"box","permission":"bypassPermissions","done_when":["Tests pass"],"workspace":{"container":{"selected_repo_ids":["repo_web"]}}}]}`
+	if _, err := h.s.toolTaskPlan(ctx, "mirror-chat", json.RawMessage(args)); err != nil {
+		t.Fatal(err)
+	}
+	p := readonlyFeedPlan(t, h.s, "mirror-chat")
+	if _, err := h.s.startPlan(ctx, p.ID, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "workspace agent link", func() bool {
+		todo, ok := h.s.todoNow(p.Tasks[0].ReservedTodoID)
+		return ok && len(todo.Agents) == 1
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !slices.Equal(h.lastPrepare.MirrorRepos, []string{"repo_web"}) {
+		t.Fatalf("workspace did not use the enrolled mirror: %v", h.lastPrepare.MirrorRepos)
+	}
+}
+
+func TestTaskPlanColdMirrorTimeoutFallsBackAndLaunches(t *testing.T) {
+	testTaskColdMirrorTimeoutFallsBackAndLaunches(t, 2, func(t *testing.T, h *containerTestHarness) string {
+		ctx := t.Context()
+		args := `{"tasks":[{"title":"Prepare workspace","prompt":"Update the example repositories","role":"worker","machine":"box","permission":"bypassPermissions","done_when":["Tests pass"],"workspace":{"container":{"selected_repo_ids":["repo_web","repo_api"]}}}]}`
+		if _, err := h.s.toolTaskPlan(ctx, "mirror-chat", json.RawMessage(args)); err != nil {
+			t.Fatal(err)
+		}
+		p := readonlyFeedPlan(t, h.s, "mirror-chat")
+		if _, err := h.s.startPlan(ctx, p.ID, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		return p.Tasks[0].ReservedTodoID
+	})
+}
+
+func TestSavedBackendTaskColdMirrorTimeoutFallsBackAndLaunches(t *testing.T) {
+	testTaskColdMirrorTimeoutFallsBackAndLaunches(t, 1, func(t *testing.T, h *containerTestHarness) string {
+		ctx := t.Context()
+		const planID, operationID, conversation = "plan_backend", "op_saved_backend", "mirror-chat"
+		repos := []string{"repo_web"}
+		todo, err := h.s.createTaskTodoWithRepositories(ctx, "todo_backend", "Prepare workspace", "Update the example repository", conversation, planID, "", "", repos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.ensureBackendWorkspacePlan(ctx, todo.ID, namingRequest{
+			OperationID: operationID, MachineID: "box", Layout: repository.LayoutRoot, SelectedRepoIDs: repos,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// The saved operation can be admitted even if the task plan has no workspace preview.
+		task := PlanTask{TodoID: todo.ID, Machine: "box", Title: todo.Title, Prompt: todo.Notes, Role: "worker",
+			Workspace: &TaskWorkspace{Mode: workspaceBackend, Backend: &BackendWorkspaceSelection{OperationID: operationID}}}
+		now := time.Now().UTC()
+		plan := &TaskPlan{ID: planID, Conversation: conversation, Tasks: []PlanTask{task}, State: planStarted, CreatedAt: now, UpdatedAt: now}
+		if err := h.s.savePlan(ctx, plan); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.failTodo(ctx, todo.ID, "Previous start was interrupted."); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.s.retryTask(ctx, todo.ID); err != nil {
+			t.Fatal(err)
+		}
+		return todo.ID
+	})
+}
+
+func testTaskColdMirrorTimeoutFallsBackAndLaunches(t *testing.T, mirrors int, start func(*testing.T, *containerTestHarness) string) {
+	t.Helper()
+	// Keep the harness's local model listener outside the virtual clock.
+	h := newWorkspaceTestHarness(t, newMemRepoMirrorStore())
+	// Disable the Agent's background tab naming so it cannot open a real network connection in the bubble.
+	h.f.mu.Lock()
+	h.f.hello.Models.AI = ai.Config{}
+	h.f.mu.Unlock()
+	synctest.Test(t, func(t *testing.T) {
+		var mirrorWaits []time.Duration
+		launched := make(chan struct{}, 1)
+		setHub(h.s, &firstToolsTimingHub{Hub: h.f, beforeCall: func(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+			switch call.Method {
+			case repository.MethodRepoMirrorEnsure:
+				started := time.Now()
+				<-ctx.Done()
+				mirrorWaits = append(mirrorWaits, time.Since(started))
+				return nil, ctx.Err()
+			case "task.workspace.prepare", "task.workspace.acquire", devicewire.MethodStartBackendSession:
+				if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) != 5*time.Minute {
+					t.Errorf("%s deadline leaves %v, want five minutes", call.Method, time.Until(deadline))
+				}
+				// Use almost all of each existing RPC budget after the mirrors have timed out.
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(5*time.Minute - time.Second):
+				}
+			}
+			out, err := h.f.DeviceCall(ctx, call)
+			if call.Method == devicewire.MethodStartBackendSession && err == nil {
+				launched <- struct{}{}
+			}
+			return out, err
+		}})
+
+		todoID := start(t, h)
+		select {
+		case <-launched:
+		case <-time.After(45 * time.Minute):
+			t.Errorf("agent did not launch after a direct workspace prepare")
+		}
+		synctest.Wait()
+		if want := slices.Repeat([]time.Duration{11 * time.Minute}, mirrors); !slices.Equal(mirrorWaits, want) {
+			t.Errorf("mirror attempts waited %v, want %v", mirrorWaits, want)
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.prepareCalls != 1 || len(h.lastPrepare.MirrorRepos) != 0 {
+			t.Errorf("workspace prepare calls = %d, supplied mirrors = %v, want one direct prepare", h.prepareCalls, h.lastPrepare.MirrorRepos)
+		}
+		if todo, ok := h.s.todoNow(todoID); !ok || len(todo.Agents) != 1 {
+			t.Errorf("expected one agent linked to the task, found %d (%s)", len(todo.Agents), todo.StartError)
+		}
+	})
+}
+
+func TestPrepareWorkspaceMirrorsStopsOnCallerCancellation(t *testing.T) {
+	st := newMemRepoMirrorStore()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var calls int
+	hub := &repoMirrorTestHub{fakeHub: newFakeHub(), onCall: func(context.Context, string, string, json.RawMessage) (any, error) {
+		calls++
+		cancel()
+		return nil, context.Canceled
+	}}
+	s := New(Options{Hub: hub, Store: func() Store { return st }})
+	r := &taskworkspace.Record{}
+	r.Plan.Source.MachineID = "dev1"
+	for _, repoID := range []string{"repo_web", "repo_api"} {
+		url := "https://github.com/example/" + repoID
+		seedMirrorRepo(t, st, repoID, url)
+		id, _ := repository.Parse(url, "")
+		r.Plan.Source.Repositories.Repositories = append(r.Plan.Source.Repositories.Repositories, repository.PreparationRepository{
+			RepoID:         repoID,
+			SourceSnapshot: repository.SourceSnapshot{Identity: id, CloneURL: url, CatalogRevision: 1},
+		})
+	}
+	if ready := s.prepareEnabledMirrorsForWorkspace(ctx, r); len(ready) != 0 || calls != 1 {
+		t.Fatalf("after cancellation: ready = %v, RPCs = %d, want no mirror and one RPC", ready, calls)
+	}
+	if rec, err := st.RepoMirror(t.Context(), "dev1", "repo_api"); err != nil || rec != nil {
+		t.Fatalf("enrolled the second repository after cancellation: %+v (%v)", rec, err)
+	}
 }
 
 func TestPrepareBackendWorkspaceFreshRefreshPreservesAutoSyncSchedule(t *testing.T) {

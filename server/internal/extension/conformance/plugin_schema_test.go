@@ -618,6 +618,9 @@ func (s schemas) compare(t *testing.T, at string, node map[string]any, g reflect
 	}
 	switch node["type"] {
 	case nil:
+		if asString(node["x-opaque"]) != "" && g.Implements(marshalerType) && reflect.PointerTo(g).Implements(unmarshalerType) {
+			return
+		}
 		if g != rawType && g.Kind() != reflect.Interface {
 			t.Errorf("%s: the schema says any JSON, Go has %s", at, g)
 		}
@@ -649,8 +652,11 @@ func (s schemas) compare(t *testing.T, at string, node map[string]any, g reflect
 		}
 		kind(reflect.Bool)
 	case "array":
-		kind(reflect.Slice)
-		if g.Kind() == reflect.Slice {
+		if g.Implements(marshalerType) && reflect.PointerTo(g).Implements(unmarshalerType) && node["items"] == nil {
+			return
+		}
+		kind(reflect.Slice, reflect.Array)
+		if g.Kind() == reflect.Slice || g.Kind() == reflect.Array {
 			items, _ := node["items"].(map[string]any)
 			s.compare(t, at+"[]", items, g.Elem(), seen)
 		}

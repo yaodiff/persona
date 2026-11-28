@@ -7,7 +7,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
-import { ApiError } from "../../lib/api";
+import { ApiError, setPairedToken } from "../../lib/api";
 import type { ChannelDetail, ChannelTestResult } from "../../lib/channels";
 
 type Asked = {
@@ -69,6 +69,7 @@ const byText = (text: string) =>
 const puts = () => hub.asked.filter((a) => a.kind === "put");
 
 beforeEach(async () => {
+  setPairedToken("");
   hub.asked = [];
   vi.mocked(toast).mockReset();
   onSettings = vi.fn<(url: string) => void>();
@@ -76,6 +77,7 @@ beforeEach(async () => {
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => root.render(<ChannelPage id="demo" onBack={() => {}} onSettings={onSettings} />));
+  await act(async () => vi.dynamicImportSettled());
   await answer(hub.asked.shift(), detail(false, false));
   hub.asked = [];
 });
@@ -216,22 +218,18 @@ describe("ChannelPage saves", () => {
     expect(sw("Feature A").getAttribute("aria-checked")).toBe("true");
   });
 
-  it("reads again when a refresh was sent while a change was out", async () => {
+  it("waits for the write before reading a refresh requested during the change", async () => {
     await flip("Feature A");
     const change = hub.asked.shift();
-    // a refresh while the change is out: the hub serves its read before the change lands
     await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-channels.refresh")}"]`)!.click());
-    await settle();
-    const read = hub.asked.shift();
-    expect(read?.kind).toBe("get");
-    await answer(read, detail(false, true));
+    expect(hub.asked).toHaveLength(0);
     await answer(change, detail(true, false));
-    // the change's answer is older than the read, so it is not shown; the page asks again
-    expect(sw("Feature B").getAttribute("aria-checked")).toBe("true");
+    expect(sw("Feature A").getAttribute("aria-checked")).toBe("true");
     const again = hub.asked.shift();
     expect(again?.kind).toBe("get");
     await answer(again, detail(true, true));
     expect(sw("Feature A").getAttribute("aria-checked")).toBe("true");
+    expect(sw("Feature B").getAttribute("aria-checked")).toBe("true");
     expect(sw("Feature A").disabled).toBe(false);
     expect(hub.asked).toHaveLength(0);
   });

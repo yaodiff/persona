@@ -18,6 +18,67 @@ export interface SlimSecondaryCue {
   askOutcome?: string;
 }
 
+export type SlimLine2BadgeKind =
+  | "goal_blocked"
+  | "child_needs_you"
+  | "repo_gate"
+  | "mergetrain"
+  | "parent_goal"
+  | "child_working"
+  | "direction"
+  | "project"
+  | "repo_count";
+
+export interface SlimLine2BadgeAvailability {
+  goalBlocked?: boolean;
+  childNeedsYou?: boolean;
+  repoGate?: boolean;
+  mergeTrain?: boolean;
+  parentGoal?: boolean;
+  childWorking?: boolean;
+  direction?: boolean;
+  project?: boolean;
+  repoCount?: boolean;
+}
+
+export interface SlimLine2BadgeBudgetResult {
+  shown: readonly SlimLine2BadgeKind[];
+  omittedCount: number;
+}
+
+const SLIM_LINE2_PRIORITY: readonly { kind: SlimLine2BadgeKind; key: keyof SlimLine2BadgeAvailability }[] = [
+  { kind: "goal_blocked", key: "goalBlocked" },
+  { kind: "child_needs_you", key: "childNeedsYou" },
+  { kind: "repo_gate", key: "repoGate" },
+  { kind: "mergetrain", key: "mergeTrain" },
+  { kind: "parent_goal", key: "parentGoal" },
+  { kind: "child_working", key: "childWorking" },
+  { kind: "direction", key: "direction" },
+  { kind: "project", key: "project" },
+  { kind: "repo_count", key: "repoCount" },
+];
+
+/**
+ * Enforces a strict line-2 metadata badge quota on narrow slim task rows under todos_v2 (#17696)
+ * so the highest-signal wait/decision cue (`flex-1 truncate`) retains ample readable width in narrow
+ * and large-text layouts. Lower-priority badges demote cleanly to the detail pane.
+ */
+export function selectSlimLine2Badges(
+  available: SlimLine2BadgeAvailability,
+  options: { hasCue: boolean; hasAction?: boolean },
+): SlimLine2BadgeBudgetResult {
+  const candidates: SlimLine2BadgeKind[] = [];
+  for (const entry of SLIM_LINE2_PRIORITY) {
+    if (available[entry.key]) candidates.push(entry.kind);
+  }
+  const maxBadges = options.hasCue ? (options.hasAction ? 0 : 1) : options.hasAction ? 1 : 2;
+  const shown = candidates.slice(0, maxBadges);
+  return {
+    shown,
+    omittedCount: Math.max(0, candidates.length - shown.length),
+  };
+}
+
 /** Under todos_v2 (#14830), low-noise sections (parked, shelved, done, cancelled) start compactly folded by default. */
 export function sectionStartsFoldedV2(section: TriageSection): boolean {
   return section === "parked" || section === "shelved" || section === "done" || section === "cancelled";

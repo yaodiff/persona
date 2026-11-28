@@ -8,10 +8,11 @@ export { normalizedPR, openMergePRs, PR_STATUS_FRESH_MS };
 import { TODO_LIST_SECTIONS, TODO_REASONS } from "./todo-view-wire";
 
 /** Where a to-do shows: merge waits join explicit holds on the web (#9325); cancelled stays apart from Done (#5732). */
-export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "other" | "shelved" | "done" | "cancelled";
+export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "other" | "shelved" | "done" | "cancelled" | "can_wait" | "todo";
 
-/** The page's order (#5707): unfinished work stays open; cancelled has its own section after Done (#5732). */
+/** The standard order (#5707). The server board provides its own order and two additional sections. */
 export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "parked", "other", "just_done", "shelved", "done", "cancelled"];
+export const ALL_TRIAGE_SECTIONS: readonly TriageSection[] = [...TRIAGE_SECTIONS, "can_wait", "todo"];
 
 /** Sections that start folded by default: unfinished to-dos stay open (#5707); cancelled folds apart from Done (#5732). */
 export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(TRIAGE_SECTIONS.slice(-3));
@@ -565,8 +566,8 @@ export function triageTodos(
     else byRoot.set(r, [td]);
   }
 
-  const sections = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
-  const todoCounts = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
+  const sections = Object.fromEntries(ALL_TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
+  const todoCounts = Object.fromEntries(ALL_TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
   let open = 0;
   for (const td of list) {
     const tr = placed.get(td.id)!;

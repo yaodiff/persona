@@ -106,7 +106,7 @@ describe("todo rows on a sessions push", () => {
     } }));
     api.mockImplementation(async (path) => path === "/todos" ? { todos: list } : {});
     await act(async () => { await refreshTodos(); });
-    const row = () => [...host.querySelectorAll<HTMLElement>("[role=button]")].find((el) => el.textContent?.includes("修登录页"))!;
+    const row = () => [...host.querySelectorAll<HTMLElement>("[data-todo]")].find((el) => el.textContent?.includes("修登录页"))!;
     expect(row().querySelector('[data-testid="review-badge"]')?.textContent).toContain("0/2");
     const updated = list.map((td) => td.id !== "tb" ? td : { ...td, supervision: { ...td.supervision, criteria: [
       { criterion: "Tests pass", state: "met" as const, evidence: "go test: PASS", at: now, by: "agent:m1/s2" },
@@ -213,7 +213,7 @@ describe("todo rows on a sessions push", () => {
     await act(async () => upsertSession(session("s2", { state: "needs_you", status: "blocked" })));
     expect(renders.get("tb")).toBe(1);
     expect(renders.get("ta")).toBeUndefined();
-    const titles = [...host.querySelectorAll("[role=button] .truncate.font-semibold")].map((el) => el.textContent);
+    const titles = [...host.querySelectorAll("[data-todo] .truncate.font-semibold")].map((el) => el.textContent);
     expect(titles).toEqual(["修登录页", "整理发布清单"]);
   });
 

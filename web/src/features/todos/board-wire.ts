@@ -1,4 +1,27 @@
 import type { TodoBoardProjection } from "../../lib/todos";
+import { api, credentialOwner } from "../../lib/api";
+import { shownManager, stampedHeaders } from "../../lib/manager-choice";
+import { applyScopedTodoBoard, getState } from "../../lib/store";
+
+let requested: { manager: string; source: TodoBoardProjection } | undefined;
+
+/** The merged list contains all managers' totals. The shown assistant's counts need its own projection. */
+export async function refreshScopedTodoBoard(manager: string, source: TodoBoardProjection) {
+  if (requested?.manager === manager && requested.source === source) return;
+  const request = requested = { manager, source };
+  const owner = credentialOwner();
+  try {
+    const answer = await api<{ board?: unknown }>("/todos", { query: { closed_limit: "50" }, headers: stampedHeaders(manager) });
+    if (requested !== request) return;
+    if (getState().todoBoard === source && shownManager() === manager && credentialOwner() === owner) {
+      applyScopedTodoBoard({ manager, board: validTodoBoard(answer?.board) });
+      return;
+    }
+  } catch {
+    // Keep the previous projection for this assistant on a transient failure.
+  }
+  if (requested === request) requested = undefined;
+}
 
 const isCount = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 const areIds = (ids: unknown): boolean => Array.isArray(ids) && ids.every((id) => typeof id === "string");
@@ -8,6 +31,7 @@ export function validTodoBoard(raw: unknown): TodoBoardProjection | null {
   const b = raw as Partial<TodoBoardProjection>;
   const c = b.counts;
   if (!c || ![c.needs_you, c.in_progress, c.pending_review, c.waiting, c.someday, c.done, c.open_total].every(isCount)) return null;
+  if (![c.can_wait, c.todo, c.cancelled].every((n) => n === undefined || isCount(n))) return null;
   if (!Array.isArray(b.status_groups) || !b.status_groups.every((g) =>
     g && typeof g.key === "string" && isCount(g.total_count) && isCount(g.visible_count) &&
     Array.isArray(g.entries) && g.entries.every((e) =>

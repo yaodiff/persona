@@ -54,22 +54,22 @@ var supervisedStarts = map[string]string{
 // startOptOuts are the start paths that stay unsupervised on purpose, with why. Each is the user's own conversation or
 // Agent, the supervisor itself, or work some other part of the hub already follows.
 var startOptOuts = map[string]string{
-	"startBotRun":                "a Lark message (or the owner's /read in a group) opening a conversation: the user's own conversation",
-	"channelForwardInGeneration": "a channel's message opening a conversation: the user's own conversation",
-	"request":                    "the hub bus's assistant.start: an app opening a conversation for the user",
-	"startRoutes":                "the apps' POST /api/v1/sessions: the user started it by hand (assistant.agent_tasks makes it a task when on)",
-	"startChatAgent":             "the Lark bot's start card: the user started the Agent by hand in the chat",
-	"sendHandoff":                "the inbox's hand-off into the main conversation: the main conversation is the supervisor",
-	"startInboxAgentAuthorized":  "an inbox event's policy-authorized agent: its result is the draft in the inbox, which the user reviews",
-	"runTask":                    "a scheduled task's own conversation: its runs report through notify_user, and the schedule follows them",
-	"runAutoReview":              "an independent reviewer of a supervised task: the review is part of that task's supervision",
-	"startSessionReview":         "an explicit independent reviewer: its source session's owner asked for it and answers its result card",
-	"deliverSessionReview":       "the owner chose Send on a finished review card: an explicit message or resume of the source session",
-	"startRepairAgent":           "a launcher repair Agent: the launcher health checks follow it (launcher_repair.go)",
-	"a2aLaunch":                  "the persisted A2A task follows its Agent and returns questions, failures and results to the session that started it",
-	"StartHandoffGuest":          "a proxy reply's one-tool guest: the lark module's handoff book follows it and ends it on post, decline or expiry (modules/lark/handoff.go)",
-	"StartGroupGuest":            "a group teammate's isolated guest: the lark module's guest book follows it, ends an unanswered turn and starts the next question in a fresh session (modules/lark/guest.go)",
-	"startBackground":            "the background supervisor's own conversation: it is the supervisor of the tasks no leader supervises (supervise_background.go)",
+	"startBotRun":               "a Lark message (or the owner's /read in a group) opening a conversation: the user's own conversation",
+	"forwardChannelMessage":     "a channel's message opening a conversation: the user's own conversation",
+	"request":                   "the hub bus's assistant.start: an app opening a conversation for the user",
+	"startRoutes":               "the apps' POST /api/v1/sessions: the user started it by hand (assistant.agent_tasks makes it a task when on)",
+	"startChatAgent":            "the Lark bot's start card: the user started the Agent by hand in the chat",
+	"sendHandoff":               "the inbox's hand-off into the main conversation: the main conversation is the supervisor",
+	"startInboxAgentAuthorized": "an inbox event's policy-authorized agent: its result is the draft in the inbox, which the user reviews",
+	"runTask":                   "a scheduled task's own conversation: its runs report through notify_user, and the schedule follows them",
+	"runAutoReview":             "an independent reviewer of a supervised task: the review is part of that task's supervision",
+	"startSessionReview":        "an explicit independent reviewer: its source session's owner asked for it and answers its result card",
+	"deliverSessionReview":      "the owner chose Send on a finished review card: an explicit message or resume of the source session",
+	"startRepairAgent":          "a launcher repair Agent: the launcher health checks follow it (launcher_repair.go)",
+	"a2aLaunch":                 "the persisted A2A task follows its Agent and returns questions, failures and results to the session that started it",
+	"StartHandoffGuest":         "a proxy reply's one-tool guest: the lark module's handoff book follows it and ends it on post, decline or expiry (modules/lark/handoff.go)",
+	"StartGroupGuest":           "a group teammate's isolated guest: the lark module's guest book follows it, ends an unanswered turn and starts the next question in a fresh session (modules/lark/guest.go)",
+	"startBackground":           "the background supervisor's own conversation: it is the supervisor of the tasks no leader supervises (supervise_background.go)",
 }
 
 // supervisionCalls make or keep a ledger.

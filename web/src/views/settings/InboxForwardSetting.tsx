@@ -1,54 +1,22 @@
-// Opt-in toggle for deterministic PR/Issue Inbox auto-forwarding (#12492) surfaced on Settings › Inbox Sources.
-import { useEffect, useState } from "react";
+import { Suspense } from "react";
 import { t } from "../../i18n";
-import { api, errorText } from "../../lib/api";
-import { ownerHeaders, useChosenManager } from "../../lib/manager-choice";
-import { toast } from "../../ui/atoms";
+import { lazyPage } from "../../lib/lazy-page";
 import { Group, Row, Switch } from "./SettingsParts";
+import type { RenderForwarding } from "./integrations/InboxForwardController";
 
-export function InboxForwardSetting({ manager: owner }: { manager?: string }) {
-  const picked = useChosenManager();
-  const manager = owner ?? picked ?? undefined;
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
+// Sources can open directly. Load the scoped settings code only when the forwarding control is mounted.
+const InboxForwardController = lazyPage(() => import("./integrations/InboxForwardController").then((m) => m.InboxForwardController));
 
-  useEffect(() => {
-    let dead = false;
-    setEnabled(null);
-    api<{ inbox_todo_forward?: boolean }>("/assistant", { headers: ownerHeaders(manager) })
-      .then((r) => {
-        if (!dead && typeof r.inbox_todo_forward === "boolean") setEnabled(r.inbox_todo_forward);
-      })
-      .catch(() => {});
-    return () => {
-      dead = true;
-    };
-  }, [manager]);
-
-  if (enabled === null) return null;
-
-  const toggle = async (next: boolean) => {
-    const before = enabled;
-    setEnabled(next);
-    setBusy(true);
-    try {
-      const r = await api<{ inbox_todo_forward?: boolean }>("/assistant", { method: "PUT", json: { inbox_todo_forward: next }, headers: ownerHeaders(manager) });
-      setEnabled(typeof r.inbox_todo_forward === "boolean" ? r.inbox_todo_forward : next);
-    } catch (e) {
-      setEnabled(before);
-      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="mt-4">
-      <Group anchor="inbox-todo-forward">
-        <Row label={t("settings-assistantsettings.inbox_todo_forward")} hint={t("settings-assistantsettings.inbox_todo_forward_hint")} wrapHint>
-          <Switch on={enabled} onChange={(on) => void toggle(on)} disabled={busy} label={t("settings-assistantsettings.inbox_todo_forward")} />
-        </Row>
-      </Group>
-    </div>
-  );
+export function InboxForwardSetting(props: { manager?: string }) {
+  return <Suspense fallback={null}><InboxForwardController {...props} render={forwardingSwitch} /></Suspense>;
 }
+
+const forwardingSwitch: RenderForwarding = (enabled, busy, toggle) => (
+  <div className="mt-4">
+    <Group anchor="inbox-todo-forward">
+      <Row label={t("settings-assistantsettings.inbox_todo_forward")} hint={t("settings-assistantsettings.inbox_todo_forward_hint")} wrapHint>
+        <Switch on={enabled} onChange={toggle} disabled={busy} label={t("settings-assistantsettings.inbox_todo_forward")} />
+      </Row>
+    </Group>
+  </div>
+);

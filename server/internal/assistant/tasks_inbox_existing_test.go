@@ -76,10 +76,10 @@ func TestExistingTaskInboxHandoffBindsSendAndScopeWithoutTaskPlan(t *testing.T) 
 				t.Fatal(err)
 			}
 			it := taskInboxItem(t, s, "example:follow-up", "server", "conv1")
-			// Nothing is inferred from the prompt; reload the manager's persisted handoff.
+			// Check the explicit source against the manager's persisted handoff.
 			next, nf := newQuietServiceOn(t, st)
 			secretary(nf)
-			if _, err := existingInboxCall(t, next, name, existingInboxArgs(name, todo, "")); err != nil {
+			if _, err := existingInboxCall(t, next, name, existingInboxArgs(name, todo, it.ID)); err != nil {
 				t.Fatal(err)
 			}
 			assertExistingInboxLink(t, next, it.ID, todo)
@@ -96,7 +96,7 @@ func TestExistingTaskInboxHandoffBindsSendAndScopeWithoutTaskPlan(t *testing.T) 
 			}
 			assertExistingInboxLink(t, again, it.ID, todo)
 			// Recording the same task/session twice adds no duplicate chain entries.
-			source := PlanTask{}
+			source := PlanTask{InboxItem: it.ID}
 			if err := again.planInboxSource(t.Context(), "server", "conv1", &source); err != nil {
 				t.Fatal(err)
 			}
@@ -112,7 +112,7 @@ func TestExistingTaskInboxHandoffBindsSendAndScopeWithoutTaskPlan(t *testing.T) 
 	}
 }
 
-func TestExistingTaskInboxHandoffAmbiguityRequiresExplicitSourceBeforeSideEffects(t *testing.T) {
+func TestExistingTaskInboxOmittedSourceLeavesMultipleHandoffsUnlinked(t *testing.T) {
 	for _, name := range []string{"agent_send", "agent_send(task)", "task_scope"} {
 		t.Run(name, func(t *testing.T) {
 			s, f := newQuietService(t)
@@ -124,13 +124,22 @@ func TestExistingTaskInboxHandoffAmbiguityRequiresExplicitSourceBeforeSideEffect
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := existingInboxCall(t, s, name, existingInboxArgs(name, todo, ""))
-			if err == nil || !strings.Contains(err.Error(), "inbox_item") || !strings.Contains(err.Error(), a.ID) || !strings.Contains(err.Error(), b.ID) {
-				t.Fatal("ambiguous handoff was not refused", result, err)
+			if _, err := existingInboxCall(t, s, name, existingInboxArgs(name, todo, "")); err != nil {
+				t.Fatal("unrelated handoffs blocked existing task work", err)
 			}
-			after, _ := s.briefOfTodo(todo.ID)
-			if len(sentToAgent(f)) != before || len(after.Log) != len(brief.Log) || len(after.Criteria) != len(brief.Criteria) {
-				t.Fatal("ambiguous call sent a message or changed task scope")
+			if name == "task_scope" {
+				after, _ := s.briefOfTodo(todo.ID)
+				if len(after.Log) != len(brief.Log)+1 {
+					t.Fatal("the scope change was not logged")
+				}
+			} else if len(sentToAgent(f)) != before+1 {
+				t.Fatal("the message was not sent exactly once")
+			}
+			s.inbox.mu.Lock()
+			linked := a.Agent != nil && a.Agent.TodoID != "" || b.Agent != nil && b.Agent.TodoID != ""
+			s.inbox.mu.Unlock()
+			if linked {
+				t.Fatal("omitted source linked a historical handoff")
 			}
 			if _, err := existingInboxCall(t, s, name, existingInboxArgs(name, todo, a.ID)); err != nil {
 				t.Fatal(err)
@@ -197,7 +206,7 @@ func TestExistingTaskInboxHandoffRechecksBeforeLinkingAndKeepsProcessingConversa
 	s, f := newQuietService(t)
 	todo := agentTask(t, s, f)
 	it := taskInboxItem(t, s, "example:changed", "server", "conv1")
-	source := PlanTask{}
+	source := PlanTask{InboxItem: it.ID}
 	if err := s.planInboxSource(t.Context(), "server", "conv1", &source); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +236,7 @@ func TestExistingTaskInboxHandoffFailedSendDoesNotClaimAnAgent(t *testing.T) {
 	todo := agentTask(t, s, f)
 	it := taskInboxItem(t, s, "example:failed-send", "server", "conv1")
 	f.failSend = errors.New("the node refused the message")
-	if _, err := existingInboxCall(t, s, "agent_send", existingInboxArgs("agent_send", todo, "")); err == nil {
+	if _, err := existingInboxCall(t, s, "agent_send", existingInboxArgs("agent_send", todo, it.ID)); err == nil {
 		t.Fatal("failed send reported success")
 	}
 	s.inbox.mu.Lock()
@@ -251,7 +260,7 @@ func TestExistingTaskInboxHandoffSaveFailureReportsPartialSuccessAndRollsBack(t 
 			it := taskInboxItem(t, s, "example:failed-save", "server", "conv1")
 			before := len(sentToAgent(f))
 			st.failInbox.Store(true)
-			_, err := existingInboxCall(t, s, name, existingInboxArgs(name, todo, ""))
+			_, err := existingInboxCall(t, s, name, existingInboxArgs(name, todo, it.ID))
 			if err == nil || !strings.Contains(err.Error(), "Inbox link was not saved") {
 				t.Fatal("failed association save reported full success", err)
 			}
@@ -344,7 +353,7 @@ func TestExistingTaskInboxHandoffPersistsAfterSendCallerEnds(t *testing.T) {
 					caller, cancel = context.WithTimeout(ctx, 2*time.Second)
 				}
 				defer cancel()
-				args := existingInboxArgs("agent_send", todo, "")
+				args := existingInboxArgs("agent_send", todo, it.ID)
 				if ending == "inline canceled" {
 					args["wait_seconds"] = 1
 				}

@@ -116,7 +116,7 @@
   },
   {
     "name": "ask_user_withdraw",
-    "description": "Withdraw a pending ask_user question card created by this conversation when it is no longer needed. Only cancels this conversation's own ask_user question; another conversation's card and user-owned approvals, plans or screen dialogs are rejected. Repeated calls on an already-ended card of this conversation are idempotent.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Withdraw a pending `ask_user` card of this conversation. Other chats' cards and user-owned approvals/plans/dialogs are rejected; already-ended own cards are idempotent.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -124,12 +124,10 @@
       ],
       "properties": {
         "interaction_id": {
-          "type": "string",
-          "description": "the pending ask_user interaction ID (ix_…)"
+          "type": "string"
         },
         "reason": {
-          "type": "string",
-          "description": "optional short reason why the question is no longer needed"
+          "type": "string"
         }
       }
     },
@@ -614,7 +612,7 @@
         },
         "inbox_item": {
           "type": "string",
-          "description": "Inbox ID; for this conversation's eligible handoffs, omit for one, specify for several."
+          "description": "Inbox ID to link to the task. Omit to skip linking."
         },
         "resume": {
           "type": "boolean",
@@ -698,6 +696,53 @@
         }
       }
     }
+  },
+  {
+    "name": "agent_modes",
+    "description": "Change a running coding Agent's model, effort, or permission mode via `session.modes` (use `agent_switch` to change launcher). Give `model`, `effort`, and/or `permission_mode`. Permission-mode changes need owner phone approval; read-only tasks, pending approvals, assistant chats, stopped, or unsupported sessions are refused.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "machine",
+        "session_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "machine": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        },
+        "permission_mode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "auto",
+            "bypassPermissions"
+          ]
+        }
+      }
+    },
+    "defer_loading": true
   },
   {
     "name": "agent_switch",
@@ -1212,7 +1257,7 @@
   },
   {
     "name": "inbox_suggest",
-    "description": "Submit the event’s recap and one suggestion (replaces any earlier one). Nothing goes out until the user confirms; the program executes it verbatim. `kind`: `reply` — message in the user's voice ready to send (no 【…】 blanks; omit unknowns and explain in `note`; Feishu sheet/Base `changes`: ref, field, listed value); `agent` — new Agent instruction in `text` (`machine`, `cwd` optional); `handoff` — hand to an existing eligible conversation on this manager (main, active leader, or linked task) with `machine`, `session`, and `text` as the note (processing chat only; refuses archived, unknown, or other-manager targets); `todo` — to-do title in `text` (action-led, no chat/people names), `due` only for an explicit deadline (`2006-01-02` all day or RFC 3339 with offset; omit if unsure and note why; confirming files the row); `conclusion` — dealt with, `text` conclusion, `outcome` `fyi` or `done`. `handback: true` returns confirmation here as an instruction for user judgment. `note`: 1–2 sentences on findings/evidence. `recap`: background, progress, blockers (≤600 chars) every time. `title` (no chat/person names) and `summary` (1 sentence on state and who waits) every time; source-titled items (mail, docs, PRs/issues) ignore `title`. `related`: ids of related items in other chats/sources. `recap` without `kind` creates no suggestion and may include `title`, `summary`, and `follow`. `follow` (valid only without `kind`) waits on the other side: `who` (empty = other side's reply), `next`, `check_at` (RFC 3339 with zone) or `check_in` (`30m`, `4h`, `2d`; default `24h`, clamped 30m–14d). `reported`: `{text, by}` records one completed external action unobserved by the program (never plans; `by` `agent`|`assistant`, default `assistant`; one line ≤120 chars; refused on filed items; deduped against latest). Call at end of turn. In a handed-off chat (context names event id), pass `item` to write back (also shown as a card); refuses unhanded or filed items.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Submit the event’s recap and one suggestion (replaces any earlier one). Nothing goes out until the user confirms; the program executes it verbatim. `kind`: `reply` — message in the user's voice ready to send (no 【…】 blanks; omit unknowns and explain in `note`; to really `@` someone in a connector that supports mentions such as Feishu, pass `mentions` as `[{\"id\":\"\u003cverified user id\u003e\",\"name\":\"\u003cexact display name\u003e\"}]` from the source's search/member tool and write `@name` verbatim in `text` — `@name` without `mentions` is ordinary text; Feishu sheet/Base `changes`: ref, field, listed value); `agent` — new Agent instruction in `text` (`machine`, `cwd` optional); `handoff` — hand to an existing eligible conversation on this manager (main, active leader, or linked task) with `machine`, `session`, and `text` as the note (processing chat only; refuses archived, unknown, or other-manager targets); `todo` — to-do title in `text` (action-led, no chat/people names), `due` only for an explicit deadline (`2006-01-02` all day or RFC 3339 with offset; omit if unsure and note why; confirming files the row); `conclusion` — dealt with, `text` conclusion, `outcome` `fyi` or `done`. `handback: true` returns confirmation here as an instruction for user judgment. `note`: 1–2 sentences on findings/evidence. `recap`: background, progress, blockers (≤600 chars) every time. `title` (no chat/person names) and `summary` (1 sentence on state and who waits) every time; source-titled items (mail, docs, PRs/issues) ignore `title`. `related`: ids of related items in other chats/sources. `recap` without `kind` creates no suggestion and may include `title`, `summary`, and `follow`. `follow` (valid only without `kind`) waits on the other side: `who` (empty = other side's reply), `next`, `check_at` (RFC 3339 with zone) or `check_in` (`30m`, `4h`, `2d`; default `24h`, clamped 30m–14d). `reported`: `{text, by}` records one completed external action unobserved by the program (never plans; `by` `agent`|`assistant`, default `assistant`; one line ≤120 chars; refused on filed items; deduped against latest). Call at end of turn. In a handed-off chat (context names event id), pass `item` to write back (also shown as a card); refuses unhanded or filed items.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1310,6 +1355,26 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "mentions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
           }
         },
         "changes": {
@@ -2399,7 +2464,7 @@
   },
   {
     "name": "conversations_switch",
-    "description": "Switch Assistant conversations to another launcher/model; preview first unless confirmed. Busy items queue until turn end without interruption or synthetic messages. Execution saves original settings and returns a batch ID. `restore_batch_id` restores completed items exactly; `batch_id` reads status. Independent changes are refused.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Switch Assistant chats to another launcher/model; preview first unless confirmed. Busy chats queue at turn end without interruption. Execution saves originals and returns a batch ID; `restore_batch_id` restores completed items; `batch_id` reads status.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -2410,40 +2475,31 @@
           },
           "minItems": 1,
           "maxItems": 50,
-          "uniqueItems": true,
-          "description": "IDs from conversations_list"
+          "uniqueItems": true
         },
         "machine_id": {
-          "type": "string",
-          "description": "Assistant machine; defaults to current"
+          "type": "string"
         },
         "launcher": {
-          "type": "string",
-          "description": "target launcher"
+          "type": "string"
         },
         "model": {
-          "type": "string",
-          "description": "target model; empty uses launcher default"
+          "type": "string"
         },
         "effort": {
-          "type": "string",
-          "description": "target effort; empty uses launcher default"
+          "type": "string"
         },
         "permission_mode": {
-          "type": "string",
-          "description": "target mode; empty preserves each conversation's mode"
+          "type": "string"
         },
         "preview": {
-          "type": "boolean",
-          "description": "read-only; no batch, queue, or confirmation"
+          "type": "boolean"
         },
         "restore_batch_id": {
-          "type": "string",
-          "description": "batch to restore; excludes forward fields"
+          "type": "string"
         },
         "batch_id": {
-          "type": "string",
-          "description": "batch status; use alone"
+          "type": "string"
         }
       }
     },
@@ -3089,7 +3145,7 @@
               },
               "inbox_item": {
                 "type": "string",
-                "description": "Inbox ID or 'none' to skip; omit to link sole eligible handoff (multiple need ID; none stays unlinked). Never files/replies."
+                "description": "Inbox ID or 'none' to skip. Omit for strong-match inference outside continuations. Never files or replies."
               },
               "tier": {
                 "type": "string",
@@ -3530,7 +3586,7 @@
         },
         "inbox_item": {
           "type": "string",
-          "description": "Inbox source; omit for the conversation's sole eligible open handoff. Several require an id. Links the existing task and its Agents."
+          "description": "Inbox ID to link to the existing task and its Agents. Omit to skip linking."
         },
         "change": {
           "type": "string",
@@ -3610,7 +3666,7 @@
   },
   {
     "name": "task_start_screen",
-    "description": "Read the last 30 lines of the terminal tab a task's agent did not start in, while its computer keeps that tab (a 督办 message says until when): the question the tab's shell waits on, or where the agent's own screen stopped. Only for a task of this conversation whose start is being remedied; what it shows stays here, it is not kept with the task.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Read the last 30 lines of a failed startup's kept tab while the start is being remedied. A supervision message says how long the tab is kept. Only the main conversation or the task's current supervising conversation may read it. See what stopped the shell or Agent. The screen stays in this conversation.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3631,7 +3687,7 @@
   },
   {
     "name": "task_start_keys",
-    "description": "Type into the terminal tab a task's agent did not start in, while its computer keeps that tab and no agent runs there: text as is (no enter, at most 32 characters), then keys by name (\"enter\", \"esc\", \"ctrl+c\", \"y\", \"n\", \"up\", \"down\"…, at most 8). Use it to answer the question the tab's shell waits on, or to get past where the agent's screen stopped; read the tab first with task_start_screen and again after. The keys, the text and your reason are kept with the task's history. It starts nothing: start the agent again with task_retry.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Answer a failed startup's shell or Agent prompt in its kept terminal tab while no Agent runs there. Only the main conversation or the task's current supervising conversation may act. Read the tab with task_start_screen before and after. Send up to 32 characters without Enter, then up to 8 named keys (enter, esc, ctrl+c, y, n, up, down). The keys, text and reason go in the task history. Use task_retry to start again.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3666,7 +3722,7 @@
   },
   {
     "name": "task_retry",
-    "description": "Start a failed task's agent again: in its kept tab (once task_start_keys answered what stopped it), else in a new tab, reopening it; with launcher, on that launcher of the same computer and workspace. At most 3 retries; the hub never retries itself. Returns at once; the outcome comes as a 督办 message. Only this conversation's tasks; reason goes in their history.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Retry a failed task in its kept tab after clearing the blocker, or reopen it in a new tab. An optional launcher uses the same computer and workspace. The main conversation may retry any task. Other conversations may retry only tasks they supervise. Up to 3 manual retries. Returns at once. Look for the result in supervision. The task history records the reason.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [

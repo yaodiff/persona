@@ -38,47 +38,89 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MODE = {"mode": os.environ.get("MOCK_PREVIEW") or "1"}
 LOG = []
 STARTED = {}  # port -> when it was started from the panel
-SHOTS = {}  # (path, w, h, dpr, mobile, hl) -> PNG bytes
+SHOTS = {}  # (path, w, h, dpr, mobile, hl, sel) -> PNG bytes
+SELECT_STATE = {"value": 0, "label": "Editor"}
+ACKS = {"count": 0}
+
+SELECT_OPTIONS = [
+    {"index": 0, "label": "Editor", "group": "Workspace"},
+    {"index": 1, "label": "Viewer", "group": "Workspace"},
+    {"index": 2, "label": "Owner (managed)", "disabled": True, "group": "Workspace"},
+    {"index": 3, "label": "Reviewer", "group": "Automation"},
+    {"index": 4, "label": "Observer", "group": "Automation"},
+]
 
 PAGES = {
     "/": ("Acme Notes", "<h1>Good morning</h1><p class=muted>3 notes changed since yesterday.</p>"
           "<div class=grid><div class=card><b>Roadmap</b><p>Ship the editor toolbar</p></div>"
           "<div class=card><b>Groceries</b><p>Oat milk, lemons, rice</p></div>"
           "<div class=card><b>Trip</b><p>Train at 9:40, platform 3</p></div></div>"),
-    "/settings": ("Settings · Acme Notes", "<h1>Settings</h1><form><label>Display name<input value='Sam Lee'></label>"
+    "/settings": ("Settings · Acme Notes", "<h1>Settings</h1><form>"
+                  "<label>Role<select id='role' class='role-select'>{select_options}</select></label>"
+                  "<p class=role-note>Current role: <b>{role_label}</b></p>"
+                  "<label>Display name<input value='Sam Lee'></label>"
                   "<label>Email<input value='sam@example.com'></label><label class=row><input type=checkbox checked> Weekly summary</label>"
                   "<div class=actions><button type=button class=ghost>Cancel</button><button type=button class='save {hl}'>Save changes</button></div></form>"),
     "/notes": ("Notes · Acme Notes", "<h1>Notes</h1><ul class=list><li>Roadmap<span>today</span></li><li>Groceries<span>yesterday</span></li>"
                "<li>Trip<span>Mon</span></li><li>Reading list<span>Oct 30</span></li></ul>"),
 }
 STYLE = """*{box-sizing:border-box}body{margin:0;font:15px/1.5 -apple-system,system-ui,sans-serif;background:#f6f7f9;color:#17181c}
-nav{display:flex;align-items:center;gap:18px;padding:14px 22px;background:#fff;border-bottom:1px solid #e6e8ec}
+nav{display:flex;align-items:center;gap:18px;height:54px;padding:0 22px;background:#fff;border-bottom:1px solid #e6e8ec}
 nav b{font-size:16px;margin-right:auto}nav a{color:#5b606b;text-decoration:none}nav a.on{color:#2a62d6;font-weight:600}
-main{max-width:760px;margin:0 auto;padding:28px 22px}h1{font-size:26px;margin:0 0 6px}.muted{color:#6b707b;margin:0 0 18px}
+main{max-width:760px;margin:0 auto;padding:24px 22px}h1{font-size:26px;line-height:32px;height:32px;margin:0 0 18px}.muted{color:#6b707b;margin:0 0 18px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}.card{background:#fff;border:1px solid #e6e8ec;border-radius:12px;padding:14px}
-.card p{margin:4px 0 0;color:#6b707b}form{display:flex;flex-direction:column;gap:14px;max-width:420px;margin-top:18px}
-label{display:flex;flex-direction:column;gap:6px;font-weight:600;font-size:13px}label.row{flex-direction:row;align-items:center;font-weight:500}
-input{font:inherit;padding:9px 11px;border:1px solid #d5d8de;border-radius:8px;background:#fff}.actions{display:flex;gap:10px;justify-content:flex-end}
+.card p{margin:4px 0 0;color:#6b707b}form{display:flex;flex-direction:column;gap:14px;max-width:420px;margin-top:0}
+label{display:flex;flex-direction:column;gap:6px;font-weight:600;font-size:13px;line-height:20px}label.row{flex-direction:row;align-items:center;font-weight:500}
+input,select{font:inherit;padding:9px 11px;border:1px solid #d5d8de;border-radius:8px;background:#fff;color:#17181c}
+select.role-select{height:38px;padding:0 11px}.role-note{margin:-6px 0 0;font-size:13px;color:#5b606b}
+.actions{display:flex;gap:10px;justify-content:flex-end}
 button{font:inherit;font-weight:600;padding:9px 16px;border-radius:8px;border:1px solid #d5d8de;background:#fff}
 button.save{background:#2a62d6;border-color:#2a62d6;color:#fff}.hl{outline:3px solid rgba(57,135,229,.9);box-shadow:0 0 0 9999px rgba(57,135,229,.08)}
 .list{list-style:none;padding:0;margin:18px 0 0;background:#fff;border:1px solid #e6e8ec;border-radius:12px}
 .list li{display:flex;justify-content:space-between;padding:12px 14px;border-top:1px solid #eef0f3}.list li:first-child{border-top:0}.list span{color:#6b707b}"""
 
 
-def page_html(path, hl="", width=0):
+def select_rect(w):
+    """Border box of #role on /settings in CSS pixels, matching STYLE above."""
+    content_x = max(0.0, (w - 760.0) / 2.0) + 22.0
+    field_w = min(420.0, max(120.0, w - 44.0))
+    return {"x": round(content_x), "y": 154, "w": round(field_w), "h": 38}
+
+
+def _select_html(selected):
+    parts, cur_group = [], None
+    for opt in SELECT_OPTIONS:
+        g = opt.get("group")
+        if g != cur_group:
+            if cur_group is not None:
+                parts.append("</optgroup>")
+            if g is not None:
+                parts.append(f"<optgroup label='{g}'>")
+            cur_group = g
+        sel = " selected" if opt["index"] == selected else ""
+        dis = " disabled" if opt.get("disabled") else ""
+        parts.append(f"<option value='{opt['index']}'{sel}{dis}>{opt['label']}</option>")
+    if cur_group is not None:
+        parts.append("</optgroup>")
+    return "".join(parts)
+
+
+def page_html(path, hl="", width=0, selected=0):
     title, body = PAGES.get(path, PAGES["/"])
     # Chrome's --screenshot lays out no narrower than 500 px whatever the window: a phone-wide page is pinned to its width
     pin = f"html{{width:{width}px;overflow:hidden}}" if width else ""
     links = "".join(f"<a href='{p}' class='{'on' if p == path else ''}'>{n}</a>" for p, n in (("/", "Home"), ("/notes", "Notes"), ("/settings", "Settings")))
+    opt = next((o for o in SELECT_OPTIONS if o["index"] == selected), SELECT_OPTIONS[0])
+    rendered = body.replace("{hl}", hl).replace("{select_options}", _select_html(selected)).replace("{role_label}", opt["label"])
     return (f"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-            f"<title>{title}</title><style>{STYLE}{pin}</style></head><body><nav><b>Acme Notes</b>{links}</nav><main>{body.replace('{hl}', hl)}</main></body></html>")
+            f"<title>{title}</title><style>{STYLE}{pin}</style></head><body><nav><b>Acme Notes</b>{links}</nav><main>{rendered}</main></body></html>")
 
 
 class _Page(BaseHTTPRequestHandler):
     def do_GET(self):
         path, _, query = self.path.partition("?")
         args = dict(x.split("=", 1) for x in query.split("&") if "=" in x)
-        b = page_html(path, "hl" if args.get("hl") == "1" else "", int(args.get("w", "0") or 0)).encode()
+        b = page_html(path, "hl" if args.get("hl") == "1" else "", int(args.get("w", "0") or 0), int(args.get("sel", "0") or 0)).encode()
         self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(b)))
         self.end_headers(); self.wfile.write(b)
 
@@ -114,9 +156,9 @@ def grey_png(w, h):
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
 
 
-def render(path, w, h, dpr, mobile, hl=False):
+def render(path, w, h, dpr, mobile, hl=False, sel=0):
     """A picture of the made-up app at a viewport, cached."""
-    key = (path, w, h, dpr, mobile, hl)
+    key = (path, w, h, dpr, mobile, hl, sel)
     if key in SHOTS: return SHOTS[key]
     exe = browser()
     png = None
@@ -126,7 +168,7 @@ def render(path, w, h, dpr, mobile, hl=False):
             args = [exe, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--use-mock-keychain",
                     f"--user-data-dir={d}/profile", f"--window-size={w},{h}", f"--force-device-scale-factor={dpr}", f"--screenshot={out}"]
             if mobile: args.append("--user-agent=Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
-            url = f"http://127.0.0.1:{page_server()}{path}?hl={1 if hl else 0}&w={w if w < 500 else 0}"
+            url = f"http://127.0.0.1:{page_server()}{path}?hl={1 if hl else 0}&w={w if w < 500 else 0}&sel={sel}"
             try:
                 subprocess.run(args + [url], timeout=30, capture_output=True)
                 with open(out, "rb") as f: png = f.read()
@@ -187,8 +229,10 @@ def install(hub):
 
 def route(h, method, p, q):
     if p == "/mock/preview":
-        if q.get("mode"): MODE["mode"] = q["mode"][0]; STARTED.clear(); agent_ports()
-        return h.send_json({"mode": MODE["mode"], "log": LOG}) or True
+        if q.get("mode"):
+            MODE["mode"] = q["mode"][0]; STARTED.clear(); agent_ports()
+            SELECT_STATE.update(value=0, label=SELECT_OPTIONS[0]["label"])
+        return h.send_json({"mode": MODE["mode"], "log": LOG, "select": dict(SELECT_STATE), "acks": ACKS["count"]}) or True
     if not p.startswith("/api/v1/machines/"): return False
     parts = p.split("/")  # ['', 'api', 'v1', 'machines', mid, 'preview' | 'ports', …]
     if len(parts) < 6: return False
@@ -223,7 +267,8 @@ def connect(h, q):
     h.send_header("Sec-WebSocket-Accept", accept); h.end_headers(); h.wfile.flush()
     lock = threading.Lock()
     state = {"open": True, "seq": 0, "path": q.get("path") or "/", "w": int(float(q.get("w") or 800)), "h": int(float(q.get("h") or 600)),
-             "dpr": float(q.get("dpr") or 1), "mobile": q.get("mobile") == "1", "picking": False, "history": []}
+             "dpr": float(q.get("dpr") or 1), "mobile": q.get("mobile") == "1", "picking": False, "history": [],
+             "features": {}, "select_id": 0, "select_open_id": 0, "select_focused": False, "select_value": SELECT_STATE["value"]}
     port = int(q.get("port") or 0)
     LOG.append({"open": {"port": port, "path": state["path"], "w": state["w"], "h": state["h"], "mobile": state["mobile"]}})
 
@@ -245,9 +290,22 @@ def connect(h, q):
     def picture():
         w, hh = (390, 844) if state["mobile"] else (state["w"], state["h"])
         if MODE["mode"] == "slow": time.sleep(30)
-        png = render(state["path"], w, hh, state["dpr"], state["mobile"], hl=state["picking"] and state["path"] == "/settings")
+        png = render(state["path"], w, hh, state["dpr"], state["mobile"], hl=state["picking"] and state["path"] == "/settings", sel=state["select_value"])
         state["seq"] += 1
         frame(0x2, b"f" + struct.pack(">IHH", state["seq"], w, hh) + png)
+
+    def open_select():
+        w = 390 if state["mobile"] else state["w"]
+        state["select_id"] += 1
+        state["select_open_id"] = state["select_id"]
+        state["select_focused"] = True
+        say({"t": "select_open", "id": state["select_id"], "rect": select_rect(w), "selected": state["select_value"], "options": SELECT_OPTIONS})
+
+    def withdraw_select():
+        if state["select_open_id"]:
+            old = state["select_open_id"]
+            state["select_open_id"] = 0
+            say({"t": "select_close", "id": old})
 
     if MODE["mode"] == "nobrowser":
         say({"t": "error", "code": "no_browser", "error": "no Chrome, Chromium, Edge or Brave on this computer"})
@@ -261,6 +319,8 @@ def connect(h, q):
         return
 
     def go(path):
+        withdraw_select()
+        state["select_focused"] = False
         state["history"].append(state["path"])
         state["path"] = path if path in PAGES else "/"
         page(True)
@@ -284,9 +344,15 @@ def connect(h, q):
             if op != 1: continue
             m = json.loads(payload)
             t = m.get("t")
-            if t in ("ack", "mouse") and not (t == "mouse" and m.get("type") == "down"): continue
+            if t == "ack":
+                ACKS["count"] += 1
+                continue
+            if t == "mouse" and m.get("type") != "down": continue
             LOG.append(m)
-            if t == "size":
+            if t == "features":
+                state["features"] = m
+            elif t == "size":
+                withdraw_select()
                 state.update(w=int(m["w"]), h=int(m["h"]), dpr=float(m.get("dpr") or 1), mobile=bool(m.get("mobile")))
                 threading.Thread(target=picture, daemon=True).start()
             elif t == "nav":
@@ -294,9 +360,12 @@ def connect(h, q):
                 if u.startswith("/"): threading.Thread(target=go, args=(u.split("?")[0],), daemon=True).start()
                 else: say({"t": "external", "url": u})
             elif t == "back" and state["history"]:
+                withdraw_select()
+                state["select_focused"] = False
                 state["path"] = state["history"].pop()
                 page(); threading.Thread(target=picture, daemon=True).start()
             elif t == "reload":
+                withdraw_select()
                 page(True); threading.Thread(target=lambda: (picture(), page()), daemon=True).start()
             elif t == "pick":
                 state["picking"] = bool(m.get("on"))
@@ -309,8 +378,32 @@ def connect(h, q):
                      "component": "SaveButton", "source": {"file": "/Users/me/src/acme-notes/src/settings/SaveButton.tsx", "line": 14},
                      "rect": {"x": 600, "y": 300, "w": 130, "h": 40}, "url": url(), "title": PAGES.get(state["path"], PAGES["/"])[0]})
                 threading.Thread(target=picture, daemon=True).start()
+            elif t == "mouse" and state["path"] == "/settings" and state["features"].get("select"):
+                rect = select_rect(390 if state["mobile"] else state["w"])
+                mx, my = m.get("x", -1), m.get("y", -1)
+                if rect["x"] - 4 <= mx <= rect["x"] + rect["w"] + 4 and rect["y"] - 4 <= my <= rect["y"] + rect["h"] + 4:
+                    open_select()
+                else:
+                    state["select_focused"] = False
+            elif t == "key" and m.get("type") == "down" and state["select_focused"] and state["path"] == "/settings" and state["features"].get("select"):
+                k = m.get("key", "")
+                mods = m.get("mods", 0) or 0
+                if k in (" ", "F4") or (k in ("ArrowDown", "ArrowUp") and (mods & 1)):
+                    open_select()
+            elif t == "select_choose":
+                if m.get("id") == state["select_open_id"]:
+                    opt = next((o for o in SELECT_OPTIONS if o["index"] == m.get("index") and not o.get("disabled")), None)
+                    state["select_open_id"] = 0
+                    state["select_focused"] = True
+                    if opt is not None:
+                        state["select_value"] = opt["index"]
+                        SELECT_STATE.update(value=opt["index"], label=opt["label"])
+                        threading.Thread(target=picture, daemon=True).start()
+            elif t == "select_close":
+                if m.get("id") == state["select_open_id"]:
+                    state["select_open_id"] = 0
             elif t == "shot":
-                png = render(state["path"], *((390, 844) if state["mobile"] else (state["w"], state["h"])), state["dpr"], state["mobile"])
+                png = render(state["path"], *((390, 844) if state["mobile"] else (state["w"], state["h"])), state["dpr"], state["mobile"], sel=state["select_value"])
                 frame(0x2, b"s" + struct.pack(">I", int(m.get("id") or 0)) + png)
             elif t == "mock_external":  # what a click on a link elsewhere does
                 say({"t": "external", "url": "https://docs.example.com/notes/api"})

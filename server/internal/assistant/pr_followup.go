@@ -220,7 +220,7 @@ func (s *Service) createPRFollowups(ctx context.Context, t Todo) {
 }
 
 // sweepPRFollowups polls every active or unwatched post-closure subscription: terminal PRs clear the subscription and
-// notify on post-closure transitions; a new conflict or a current-head changes-requested review notifies the original
+// save quiet notices on post-closure transitions; a new conflict or a current-head changes-requested review is kept for the original
 // supervisor once per head. When GitHub is disconnected or the PR's host has no code host that can read review state,
 // the subscription persists watch_status = host_not_connected without updating last_observed_at or spamming notices,
 // and returns to active watching once a later sweep successfully polls the PR. The to-do is never reopened.
@@ -344,11 +344,11 @@ func (s *Service) observeFollowupPR(ctx context.Context, url string, f prStatusF
 	return followupObserveResult{outcome: followupObserved, status: status}
 }
 
-// applyFollowupObservation clears terminal subscriptions, notifies once per conflict or review head, and refreshes
+// applyFollowupObservation clears terminal subscriptions, records news for the next conversation turn, and refreshes
 // the stored facts and active watch status for PRs that remain open.
 func (s *Service) applyFollowupObservation(ctx context.Context, st prFollowupStore, sub repository.PRFollowup, status TodoPRStatus, observedAt time.Time) {
 	terminal := status.State == "merged" || status.State == "closed"
-	// Conflict and review only act on the current head, and each head wakes the supervisor once.
+	// Conflict and review only act on the current head, and each head is recorded once.
 	newConflict := status.State == "open" && status.Conflicts && status.HeadOID != "" &&
 		sub.NotifiedConflictHead != status.HeadOID
 	newReview := status.State == "open" && status.Review == "changes_requested" && status.HeadOID != "" &&
@@ -365,18 +365,23 @@ func (s *Service) applyFollowupObservation(ctx context.Context, st prFollowupSto
 	switch {
 	case terminal:
 		// An open observation proves a transition. Forge time can also prove one before the first poll.
-		if sub.State == repository.ReviewOpen || status.terminalAt.After(sub.CreatedAt) {
-			s.notifyFollowup(ctx, sub, title, supervisor, status.State, false)
+		if (sub.State == repository.ReviewOpen || status.terminalAt.After(sub.CreatedAt)) &&
+			!s.keepPRFollowup(ctx, sub, title, supervisor, status.State, status.HeadOID) {
+			return // retry the observation until the quiet record is safe
 		}
 		if err := st.DeletePRFollowup(ctx, sub.ID); err != nil {
 			s.logf("PR follow-up %s: delete failed: %v", sub.PRURL, err)
 		}
 		return
 	case newConflict:
-		s.notifyFollowup(ctx, sub, title, supervisor, "conflict", true)
+		if !s.keepPRFollowup(ctx, sub, title, supervisor, "conflict", status.HeadOID) {
+			return
+		}
 		sub.NotifiedConflictHead = status.HeadOID
 	case newReview:
-		s.notifyFollowup(ctx, sub, title, supervisor, "changes_requested", true)
+		if !s.keepPRFollowup(ctx, sub, title, supervisor, "changes_requested", status.HeadOID) {
+			return
+		}
 		sub.NotifiedReviewHead = status.HeadOID
 	}
 
@@ -393,19 +398,21 @@ func (s *Service) applyFollowupObservation(ctx context.Context, st prFollowupSto
 	}
 }
 
-// notifyFollowup sends one record to the closed to-do's original supervisor conversation. It is a relay record like
-// task_end, not a reopen and not an acceptance signal; only real-time conflict/review events ask for a push.
-func (s *Service) notifyFollowup(ctx context.Context, sub repository.PRFollowup, title, supervisor, event string, realtime bool) {
+// keepPRFollowup carries post-closure news into a later turn the supervisor
+// was already going to run.
+func (s *Service) keepPRFollowup(ctx context.Context, sub repository.PRFollowup, title, supervisor, event, head string) bool {
 	if supervisor == "" {
-		return
+		return true
 	}
 	text := prompts.RenderPRFollowupNotice(prompts.PRFollowupNotice{
-		ID: sub.TodoID, Title: title, PRURL: sub.PRURL, Event: event, Realtime: realtime,
+		ID: sub.TodoID, Title: title, PRURL: sub.PRURL, Event: event,
 		Language: answerLanguage(s.hello(ctx).Locale),
 	})
-	s.relayOrQueue(ctx, supervisor, relayMsg{
-		From: sub.TodoID, FromTitle: "任务「" + title + "」", Tool: prFollowupTool, Text: text, At: time.Now().UTC(), // i18n-ignore: queue label, as the task notices'
+	_, kept := s.keepRelayLater(supervisor, relayMsg{
+		From: sub.TodoID, FromTitle: title, Tool: prFollowupTool, Text: text, At: time.Now().UTC(),
+		OnceID: sub.ID + ":" + event + ":" + head,
 	})
+	return kept
 }
 
 // stalePRFollowups returns non-terminal subscriptions to surface in the daily briefing: unwatched subscriptions

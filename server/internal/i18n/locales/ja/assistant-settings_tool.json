@@ -59,6 +59,8 @@
   "change_auto_supervision_messages": "「自動の監督メッセージ」：{before} → {after}",
   "title_auto_supervision_mode": "自動の監督メッセージ",
   "change_auto_supervision_mode": "「自動の監督メッセージ」：{before} → {after}",
+  "title_supervision_triage": "定期フォローアップをブリーフィングで確認",
+  "change_supervision_triage": "「定期フォローアップをブリーフィングで確認」：{before} → {after}",
   "auto_supervision_mode_all": "すべて",
   "auto_supervision_mode_outcomes": "結果と判断待ちのみ",
   "auto_supervision_mode_off": "オフ",

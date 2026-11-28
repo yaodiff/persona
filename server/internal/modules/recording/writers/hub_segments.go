@@ -42,6 +42,13 @@ func cleanHubSegments(segs []RecordingSegment) []RecordingSegment {
 // ErrNotFound when the recording was deleted or trimmed (also meanwhile), ErrReadOnly, ErrNotHub when it is not
 // transcribed on the hub, ErrTranscriptionFinal for a live pass once a final one is stored.
 func (e *engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (rev int64, err error) {
+	return e.HubTranscriptPutWithTiming(rawID, pass, "", segs)
+}
+
+// HubTranscriptPutWithTiming is HubTranscriptPut that also records hub_segments.json's timing reliability (when valid;
+// empty preserves any previously stored timing, absent reads as TimingSpread). When a speaker timeline is already
+// stored, stats, minor marks and quality are recomputed under the store locks.
+func (e *engine) HubTranscriptPutWithTiming(rawID, pass string, timing TranscriptTiming, segs []RecordingSegment) (rev int64, err error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return 0, ErrNotFound
@@ -49,8 +56,17 @@ func (e *engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (
 	if pass != HubPassLive && pass != HubPassFinal {
 		return 0, badRecording("a hub transcript's pass is live or final")
 	}
+	if timing != "" && !timing.Valid() {
+		return 0, badRecording("a hub transcript's timing must be exact, turn or spread")
+	}
 	clean := cleanHubSegments(segs)
 	st := e.Store
+	var spParts []string
+	defer func() {
+		if len(spParts) > 0 {
+			e.meetingChanged(id, spParts)
+		}
+	}()
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	if st.ReadOnly() {
@@ -63,15 +79,25 @@ func (e *engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (
 	if !r.HubTranscribed() {
 		return 0, ErrNotHub
 	}
-	h, record, err := st.putHubLocked(r, pass, clean)
+	h, record, err := st.putHubLocked(r, pass, timing, clean)
 	if err != nil {
 		return 0, err
 	}
 	if chars := recordChars(record); chars != r.Chars {
+		conv := r.Conv
 		r.Chars = chars
 		planMinutes(r)
 		if err := st.putEntity(KindRecording, r.ID, r, &r.Tagging, false); err != nil {
 			return h.Rev, err
+		}
+		r.Conv = conv
+	}
+	if parts, minChanged, err := e.recomputeSpeakersLocked(r, 0); err != nil {
+		e.logf("recording %s: speakers recompute after hub transcript: %v", id, err)
+	} else {
+		spParts = parts
+		if minChanged {
+			st.notify(KindRecording, id, "summary")
 		}
 	}
 	st.notify(KindRecording, id, "messages")
@@ -81,7 +107,7 @@ func (e *engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (
 
 // putHubLocked writes recording r's hub_segments.json (segs, cleaned, from pass) and transcript.md from the transcript
 // of record after it, not when the recording was deleted or trimmed meanwhile (ErrNotFound). The caller holds recMu.
-func (s *store) putHubLocked(r *Recording, pass string, segs []RecordingSegment) (HubTranscript, []RecordingSegment, error) {
+func (s *store) putHubLocked(r *Recording, pass string, timing TranscriptTiming, segs []RecordingSegment) (HubTranscript, []RecordingSegment, error) {
 	s.recFilesMu.Lock()
 	defer s.recFilesMu.Unlock()
 	if err := s.recoverRecordingLocked(r.ID); err != nil {
@@ -98,7 +124,10 @@ func (s *store) putHubLocked(r *Recording, pass string, segs []RecordingSegment)
 	if h.Pass == HubPassFinal && pass == HubPassLive {
 		return HubTranscript{}, nil, ErrTranscriptionFinal // a late live flush never replaces the final pass's
 	}
-	h = HubTranscript{Rev: h.Rev + 1, Pass: pass, Segments: segs}
+	if timing == "" {
+		timing = h.Timing
+	}
+	h = HubTranscript{Rev: h.Rev + 1, Pass: pass, Timing: timing, Segments: segs}
 	raw, err := json.MarshalIndent(h, "", "  ")
 	if err != nil {
 		return HubTranscript{}, nil, err

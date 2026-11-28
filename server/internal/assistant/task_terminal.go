@@ -109,7 +109,13 @@ func (s *Service) finishTaskTerminal(ctx context.Context, t Todo, accepted bool)
 	if err != nil {
 		s.logf("task %s: load terminal cleanup: %v", t.ID, err)
 	}
-	if !task.CloseTabOnAccept || task.TerminalCleanup != "" {
+	if task.TerminalCleanup != "" {
+		return terminalCleanupStatus(task)
+	}
+	if !task.CloseTabOnAccept {
+		if accepted && s.closeEndedTerminals(ctx) {
+			return s.finishRuntimeTaskSession(ctx, t, i)
+		}
 		return terminalCleanupStatus(task)
 	}
 	target := task.TerminalTarget
@@ -247,4 +253,119 @@ func (s *Service) taskTerminalOwned(id string, acceptedAt time.Time, target task
 		linked++
 	}
 	return linked == 1
+}
+
+func runtimeCloseable(row proto.Session) bool {
+	return row.SourceKind == proto.SourceRuntime && row.PaneID == "" &&
+		row.Capabilities != nil && row.Capabilities.Close != nil && *row.Capabilities.Close
+}
+
+// finishRuntimeTaskSession releases an exclusive, idle runtime-backed task session (such as Antigravity)
+// via session.close when assistant.close_ended_terminals is enabled and the task has been accepted.
+// Non-runtime sessions or busy/watched/shared sessions are left untouched without mutating plan state.
+func (s *Service) finishRuntimeTaskSession(ctx context.Context, t Todo, planIndex int) string {
+	cur, ok := s.todoNow(t.ID)
+	if !ok || cur.DoneAt == nil || cur.DoneBy != db.DoneByReview {
+		return devicewire.TaskTerminalSkipped
+	}
+	machine, sessionID, ok := s.soleRuntimeTaskAgent(t.ID, *cur.DoneAt)
+	if !ok {
+		return devicewire.TaskTerminalSkipped
+	}
+	if !s.taskRuntimeSessionIdle(ctx, machine, sessionID) {
+		return devicewire.TaskTerminalSkipped
+	}
+	if s.sessionActivitySnapshotReason(machine, sessionID, time.Now()) != "" {
+		return devicewire.TaskTerminalSkipped
+	}
+	if planIndex >= 0 && t.PlanID != "" {
+		claimed := false
+		status := devicewire.TaskTerminalSkipped
+		err := s.patchPlanTask(ctx, t.PlanID, planIndex, func(pt *PlanTask) {
+			if pt.TodoID != t.ID {
+				return
+			}
+			if pt.TerminalCleanup != "" {
+				status = terminalCleanupStatus(*pt)
+				return
+			}
+			if m, sid, ok := s.soleRuntimeTaskAgent(t.ID, *cur.DoneAt); ok && m == machine && sid == sessionID {
+				claimed = true
+				status = devicewire.TaskTerminalPending
+				pt.TerminalCleanup = status
+			}
+		})
+		if err != nil {
+			s.logf("task %s: claim runtime cleanup: %v", t.ID, err)
+			return devicewire.TaskTerminalSkipped
+		}
+		if !claimed {
+			return status
+		}
+	}
+	err := s.call(ctx, machine, "session.close", map[string]any{"session_id": sessionID}, nil)
+	var status string
+	switch {
+	case err == nil:
+		status = devicewire.TaskTerminalClosed
+	case sendUnknown(err):
+		status = devicewire.TaskTerminalPending
+	default:
+		s.logf("task %s: runtime session.close %s/%s: %v", t.ID, machine, sessionID, err)
+		status = devicewire.TaskTerminalSkipped
+	}
+	if planIndex >= 0 && t.PlanID != "" && status != devicewire.TaskTerminalPending {
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		defer cancel()
+		if err := s.patchPlanTask(saveCtx, t.PlanID, planIndex, func(pt *PlanTask) {
+			if pt.TodoID == t.ID && pt.TerminalCleanup == devicewire.TaskTerminalPending {
+				pt.TerminalCleanup = status
+			}
+		}); err != nil {
+			s.logf("task %s: save runtime cleanup result: %v", t.ID, err)
+		}
+	}
+	return status
+}
+
+func (s *Service) soleRuntimeTaskAgent(id string, acceptedAt time.Time) (string, string, bool) {
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	t := s.todos.todos[id]
+	if t == nil || t.DoneAt == nil || !t.DoneAt.Equal(acceptedAt) || t.DoneBy != db.DoneByReview {
+		return "", "", false
+	}
+	var machine, sessionID string
+	var linked int
+	for _, a := range t.Agents {
+		if a.ReleasedAt != nil || a.DismissedAt != nil {
+			continue
+		}
+		machine, sessionID = a.MachineID, a.SessionID
+		linked++
+	}
+	if linked != 1 || machine == "" || sessionID == "" {
+		return "", "", false
+	}
+	if s.todos.activeBySession[[2]string{machine, sessionID}] != "" {
+		return "", "", false
+	}
+	return machine, sessionID, true
+}
+
+func (s *Service) taskRuntimeSessionIdle(ctx context.Context, machine, sessionID string) bool {
+	var row proto.Session
+	var ok bool
+	if s.fleetOn() {
+		row, ok = s.listedSession(machine, sessionID)
+	} else {
+		row, ok = s.session(ctx, machine, sessionID)
+	}
+	if !ok || !runtimeCloseable(row) || !row.StartedByPersona || row.Assistant || row.Archived ||
+		row.Starting || row.Attached || row.PendingSwitch != nil ||
+		(row.Undelivered != nil && len(*row.Undelivered) > 0) ||
+		time.Since(row.SeenAt) < time.Minute || agentCloseBusy(row) || taskAgentHasUnfinishedWork(row) {
+		return false
+	}
+	return row.Status == proto.StatusIdle || row.Status == proto.StatusDone
 }

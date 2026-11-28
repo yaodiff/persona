@@ -263,6 +263,11 @@ func (s *Service) recheckQueuedDigestAtDetailed(ctx context.Context, to string, 
 	tried := !msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero()
 	var deferred []superviseSignal
 	if !tried {
+		before := len(signals)
+		signals = slices.DeleteFunc(signals, func(g superviseSignal) bool { return s.routineSignalSuppressed(g, now) })
+		if dropped := before - len(signals); dropped > 0 {
+			s.logf("supervise: %d queued routine signal(s) suppressed by task state or recent owner input", dropped)
+		}
 		signals, deferred = s.partitionFinalWakeSignals(ctx, signals, now, "drain")
 	}
 	// A tried message cannot change its text or identity; do not let wake partitioning strand it at the queue head.
@@ -314,6 +319,9 @@ func (s *Service) recheckQueuedDigestAtDetailed(ctx context.Context, to string, 
 				return msg, false, true, false
 			}
 		} else {
+			if g.Kind == sigCardlessWait && s.cardlessDigestShouldRetry(g) {
+				return msg, false, true, false
+			}
 			e, ok = s.digestEntryRecheck(ctx, g, web, tried)
 		}
 		if ok {

@@ -136,6 +136,166 @@ export function parseBinary(buf: ArrayBuffer): PreviewBinary | null {
   return null;
 }
 
+/** Identifies a binary `f` frame's image format from its magic bytes (never assumes JPEG). */
+export function frameImageMime(data: Uint8Array): "image/png" | "image/jpeg" | null {
+  if (data.length >= 4 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return "image/png";
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return "image/jpeg";
+  return null;
+}
+
+/** Display dimensions (CSS px) for the preview canvas inside `area`, preserving aspect ratio and aligning desktop
+ *  display size to physical pixels where possible without altering layout on higher-DPR displays. */
+export function canvasFit(
+  area: { w: number; h: number },
+  page: { w: number; h: number },
+  opts: { mobile: boolean; dpr: number; backing?: { w: number; h: number } | null },
+): { w: number; h: number; scale: number } {
+  const pw = Math.max(1, page.w);
+  const ph = Math.max(1, page.h);
+  const aw = Math.max(0, area.w);
+  const ah = Math.max(0, area.h);
+  const scale = Math.min(aw / pw, ah / ph, 1);
+  const dpr = opts.dpr > 0 && Number.isFinite(opts.dpr) ? opts.dpr : 1;
+  if (!opts.mobile && scale >= 1) {
+    // At 1:1 desktop CSS scale, if the node floored int(w * dpr) on a fractional DPR (e.g. 1.25/1.5),
+    // align the CSS box to backing / dpr so each backing pixel lands on one physical pixel.
+    const b = opts.backing;
+    const w = b && b.w > 0 && Math.abs(b.w - pw * dpr) <= 1 && b.w / dpr <= aw ? b.w / dpr : pw;
+    const h = b && b.h > 0 && Math.abs(b.h - ph * dpr) <= 1 && b.h / dpr <= ah ? b.h / dpr : ph;
+    return { w, h, scale: 1 };
+  }
+  if (!opts.mobile) {
+    return { w: Math.floor(pw * scale * dpr) / dpr, h: Math.floor(ph * scale * dpr) / dpr, scale };
+  }
+  return { w: Math.floor(pw * scale), h: Math.floor(ph * scale), scale };
+}
+
+export const MAX_SELECT_OPTIONS = 1000;
+export const MAX_SELECT_LABEL = 200;
+export const SELECT_POPUP_MAX_HEIGHT = 280;
+const SELECT_POPUP_EDGE = 8;
+const SELECT_POPUP_GAP = 4;
+const SELECT_POPUP_MIN_WIDTH = 120;
+
+export interface PreviewSelectRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface PreviewSelectOption {
+  index: number;
+  label: string;
+  disabled?: boolean;
+  group?: string;
+}
+
+export interface PreviewSelectState {
+  id: number;
+  rect: PreviewSelectRect;
+  selected: number;
+  options: PreviewSelectOption[];
+}
+
+/** Sanitizes and caps a `select_open` payload from the node so untrusted pages cannot flood or bloat the popup. */
+export function normalizeSelectOpen(m: PreviewSelectState): PreviewSelectState | null {
+  if (!Number.isInteger(m.id) || m.id <= 0 || !m.rect || !Array.isArray(m.options)) return null;
+  const cap = (s: unknown) => (typeof s === "string" ? s.slice(0, MAX_SELECT_LABEL) : "");
+  const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : 0);
+  const options: PreviewSelectOption[] = [];
+  for (const raw of m.options.slice(0, MAX_SELECT_OPTIONS)) {
+    if (!raw || typeof raw.index !== "number" || !Number.isInteger(raw.index) || raw.index < 0) continue;
+    const opt: PreviewSelectOption = { index: raw.index, label: cap(raw.label) };
+    if (raw.disabled) opt.disabled = true;
+    if (typeof raw.group === "string" && raw.group) opt.group = cap(raw.group);
+    options.push(opt);
+  }
+  return {
+    id: m.id,
+    rect: { x: num(m.rect.x), y: num(m.rect.y), w: Math.max(0, num(m.rect.w)), h: Math.max(0, num(m.rect.h)) },
+    selected: typeof m.selected === "number" && Number.isInteger(m.selected) ? m.selected : -1,
+    options,
+  };
+}
+
+export interface SelectPopupPlacement {
+  left: number;
+  top: number;
+  minWidth: number;
+  maxWidth: number;
+  maxHeight: number;
+  placement: "bottom" | "top";
+}
+
+/** Maps a page-space `<select>` rect onto the canvas box inside the preview container, preferring below and flipping
+ *  above when below lacks room. */
+export function placeSelectPopup(
+  rect: PreviewSelectRect,
+  page: { w: number; h: number },
+  canvasBox: { left: number; top: number; w: number; h: number },
+  container: { w: number; h: number },
+  naturalHeight: number,
+  measuredWidth?: number,
+): SelectPopupPlacement {
+  const pw = Math.max(1, page.w);
+  const ph = Math.max(1, page.h);
+  const sx = canvasBox.w / pw;
+  const sy = canvasBox.h / ph;
+  const selLeft = canvasBox.left + rect.x * sx;
+  const selTop = canvasBox.top + rect.y * sy;
+  const selW = rect.w * sx;
+  const selH = rect.h * sy;
+  const selBottom = selTop + selH;
+
+  const maxWidth = Math.max(0, container.w - 2 * SELECT_POPUP_EDGE);
+  const minWidth = Math.min(Math.max(selW, SELECT_POPUP_MIN_WIDTH), maxWidth);
+  const usedWidth = Math.min(Math.max(minWidth, measuredWidth ?? minWidth), maxWidth);
+  const left = Math.max(SELECT_POPUP_EDGE, Math.min(selLeft, container.w - SELECT_POPUP_EDGE - usedWidth));
+
+  const spaceBelow = Math.max(0, container.h - SELECT_POPUP_EDGE - (selBottom + SELECT_POPUP_GAP));
+  const spaceAbove = Math.max(0, selTop - SELECT_POPUP_GAP - SELECT_POPUP_EDGE);
+  const desiredH = Math.min(Math.max(0, naturalHeight), SELECT_POPUP_MAX_HEIGHT);
+  const flip = desiredH > spaceBelow && spaceAbove > spaceBelow;
+  const placement: "bottom" | "top" = flip ? "top" : "bottom";
+  const maxHeight = Math.max(0, Math.min(SELECT_POPUP_MAX_HEIGHT, flip ? spaceAbove : spaceBelow));
+  const shownH = Math.min(Math.max(0, naturalHeight), maxHeight);
+  const rawTop = flip ? selTop - SELECT_POPUP_GAP - shownH : selBottom + SELECT_POPUP_GAP;
+  const maxTop = Math.max(SELECT_POPUP_EDGE, container.h - SELECT_POPUP_EDGE - shownH);
+  const top = Math.max(SELECT_POPUP_EDGE, Math.min(rawTop, maxTop));
+
+  return { left: Math.round(left), top: Math.round(top), minWidth: Math.round(minWidth), maxWidth: Math.round(maxWidth), maxHeight: Math.round(maxHeight), placement };
+}
+
+/** First or last non-disabled option position in `options`, or -1 when none is enabled. */
+export function edgeSelectOption(options: readonly PreviewSelectOption[], last: boolean): number {
+  if (last) {
+    for (let i = options.length - 1; i >= 0; i--) if (!options[i].disabled) return i;
+    return -1;
+  }
+  for (let i = 0; i < options.length; i++) if (!options[i].disabled) return i;
+  return -1;
+}
+
+/** Initial keyboard highlight for `select_open`: the selected option if enabled, else -1 (next arrow lands on an enabled item). */
+export function initialSelectActive(options: readonly PreviewSelectOption[], selected: number): number {
+  if (selected >= 0) {
+    const i = options.findIndex((o) => o.index === selected);
+    if (i >= 0 && !options[i].disabled) return i;
+    return -1;
+  }
+  return edgeSelectOption(options, false);
+}
+
+/** Next non-disabled option position in direction `dir` (1 down, -1 up), clamping at ends. */
+export function stepSelectOption(options: readonly PreviewSelectOption[], from: number, dir: 1 | -1): number {
+  if (from < 0) return edgeSelectOption(options, dir === -1);
+  for (let i = from + dir; i >= 0 && i < options.length; i += dir) {
+    if (!options[i].disabled) return i;
+  }
+  return from;
+}
+
 /** What the node says, as JSON. */
 export type PreviewMessage =
   | { t: "ready"; browser: string; w: number; h: number }
@@ -150,6 +310,8 @@ export type PreviewMessage =
   | { t: "shot_failed"; id: number; error: string }
   | { t: "copied"; text: string }
   | { t: "notice"; code: string }
+  | ({ t: "select_open" } & PreviewSelectState)
+  | { t: "select_close"; id: number }
   | { t: "crashed" }
   | { t: "closed"; code: string }
   | { t: "error"; code: string; error: string };

@@ -7,8 +7,9 @@ import { api, ApiError, enc, errorText } from "../../lib/api";
 import { addCodeComment, commentKey } from "../../lib/comment-target";
 import { sendDraft } from "../../lib/drafts";
 import {
-  addressOf, buttonName, commandLine, editCommand, elementQuote, keyMessage, LAUNCH_EXAMPLE, modsOf, parseBinary, PHONE_SIZE, previewOptions,
-  previewProblems, previewSocketURL, safeExternal, toPage, type PickedElement, type PreviewMessage, type PreviewOption, type PreviewServers,
+  addressOf, buttonName, canvasFit, commandLine, editCommand, elementQuote, frameImageMime, keyMessage, LAUNCH_EXAMPLE, modsOf,
+  normalizeSelectOpen, parseBinary, PHONE_SIZE, previewOptions, previewProblems, previewSocketURL, safeExternal, toPage,
+  type PickedElement, type PreviewMessage, type PreviewOption, type PreviewSelectState, type PreviewServers,
 } from "../../lib/preview";
 import { sessionCan } from "../../lib/format";
 import { hasFinePointer } from "../../lib/viewport";
@@ -17,6 +18,7 @@ import { useStore } from "../../lib/store";
 import { Button, cx, Dialog, IconButton, Menu, Spinner, toast, useMenu } from "../../ui/atoms";
 import type { MenuItem } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
+import { SelectListbox } from "../../ui/SelectListbox";
 import { hasKey, t } from "../../i18n";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { Empty } from "./files/parts";
@@ -438,6 +440,13 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
   const [bar, setBar] = useState<Bar | null>(null);
   const [area, setArea] = useState<{ w: number; h: number } | null>(null);
   const [drawn, setDrawn] = useState(false);
+  const [frameMetrics, setFrameMetrics] = useState<{ page: { w: number; h: number }; backing: { w: number; h: number } } | null>(null);
+  const [selectOpen, setSelectOpen] = useState<PreviewSelectState | null>(null);
+  const selectOpenRef = useRef<PreviewSelectState | null>(null);
+  const selectPopupRef = useRef<HTMLDivElement>(null);
+  const suppressedPointer = useRef<number | null>(null);
+  const swallowKeyUp = useRef(new Set<string>());
+  const lastDrawnSeq = useRef(0);
   const pageSize = useRef({ w: 1, h: 1 });
   const at = useRef(path);
   const shots = useRef(new Map<number, boolean>());
@@ -449,6 +458,35 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     const s = sock.current;
     if (s?.readyState === WebSocket.OPEN) s.send(JSON.stringify(m));
   }, []);
+
+  // The keys field is a real editable: focusing it raises a phone's keyboard, which shrinks the panel and so the page.
+  // On a touch screen only a tap that lands on the page focuses it (onPointerUp); a scroll, a pick or Go does not.
+  const focusKeys = useCallback(() => keys.current?.focus({ preventScroll: true }), []);
+
+  const dismissSelect = useCallback((notify = true, restoreFocus = true) => {
+    const cur = selectOpenRef.current;
+    if (!cur) return;
+    selectOpenRef.current = null;
+    setSelectOpen(null);
+    if (notify) send({ t: "select_close", id: cur.id });
+    if (restoreFocus) {
+      const active = document.activeElement;
+      const popup = selectPopupRef.current;
+      const ours = !active || active === document.body || Boolean(popup?.contains(active));
+      if (ours) focusKeys();
+    }
+  }, [send, focusKeys]);
+
+  const chooseSelect = useCallback((index: number) => {
+    const cur = selectOpenRef.current;
+    if (!cur) return;
+    const opt = cur.options.find((o) => o.index === index);
+    if (!opt || opt.disabled) return;
+    selectOpenRef.current = null;
+    setSelectOpen(null);
+    send({ t: "select_choose", id: cur.id, index });
+    focusKeys();
+  }, [send, focusKeys]);
 
   // the page's size: the panel's (desktop) or a phone's, in CSS pixels
   const size = useMemo(() => {
@@ -493,13 +531,17 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
       const s = new WebSocket(previewSocketURL(location, mid, port, at.current, sizeNow.current!));
       s.binaryType = "arraybuffer";
       sock.current = s;
+      lastDrawnSeq.current = 0;
       let refused = false;
       s.onopen = () => setConn((c) => (c.kind === "error" ? c : { kind: "open" }));
       s.onmessage = (ev) => {
         if (typeof ev.data !== "string") {
           const b = parseBinary(ev.data as ArrayBuffer);
-          if (b?.kind === "frame") void draw(b.data, b.w, b.h).then(() => s.readyState === WebSocket.OPEN && s.send(JSON.stringify({ t: "ack", seq: b.seq })));
-          else if (b?.kind === "shot" && shots.current.delete(b.id)) addShot(b.data);
+          if (b?.kind === "frame") {
+            void draw(b.seq, b.data, b.w, b.h).finally(() => {
+              if (s.readyState === WebSocket.OPEN) s.send(JSON.stringify({ t: "ack", seq: b.seq }));
+            });
+          } else if (b?.kind === "shot" && shots.current.delete(b.id)) addShot(b.data);
           return;
         }
         let m: PreviewMessage;
@@ -508,12 +550,16 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
         } catch {
           return;
         }
-        if (m.t === "ready") tries = 0;
+        if (m.t === "ready") {
+          tries = 0;
+          if (s.readyState === WebSocket.OPEN) s.send(JSON.stringify({ t: "features", select: true, png: true }));
+        }
         if (m.t === "error") refused = true;
         onMessage(m);
       };
       s.onclose = () => {
         if (sock.current === s) sock.current = null;
+        dismissSelect(false, false);
         if (gone || refused) return;
         tries++;
         setConn({ kind: "lost", tries });
@@ -524,11 +570,20 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     return () => {
       gone = true;
       clearTimeout(timer);
+      dismissSelect(false, false);
       sock.current?.close();
       sock.current = null;
     };
     // a new socket for another server, or after "Try again"; a new size goes as a message
-  }, [ready, mid, port, reconnect]);
+  }, [ready, mid, port, reconnect, dismissSelect]);
+
+  // Dismiss an open <select> popup when the panel itself resizes or switches Desktop <-> Phone.
+  const prevArea = useRef<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const prev = prevArea.current;
+    prevArea.current = area;
+    if (prev && area && (prev.w !== area.w || prev.h !== area.h)) dismissSelect(true, true);
+  }, [area, dismissSelect]);
 
   // a new size (the panel resized, Desktop ⇄ Phone) goes to the page, settled first
   useEffect(() => {
@@ -537,18 +592,35 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     return () => clearTimeout(id);
   }, [size, send]);
 
-  const draw = async (data: Uint8Array, w: number, h: number) => {
+  const draw = async (seq: number, data: Uint8Array, w: number, h: number) => {
     const c = canvas.current;
     if (!c) return;
-    const bmp = await createImageBitmap(new Blob([data as BlobPart], { type: "image/jpeg" }));
-    if (c.width !== bmp.width || c.height !== bmp.height) {
-      c.width = bmp.width;
-      c.height = bmp.height;
+    const mime = frameImageMime(data);
+    if (!mime) return;
+    let bmp: ImageBitmap;
+    try {
+      bmp = await createImageBitmap(new Blob([data as BlobPart], { type: mime }));
+    } catch {
+      return;
     }
-    c.getContext("2d")?.drawImage(bmp, 0, 0);
-    bmp.close();
-    pageSize.current = { w, h };
-    setDrawn(true);
+    try {
+      if (seq < lastDrawnSeq.current) return;
+      lastDrawnSeq.current = seq;
+      if (c.width !== bmp.width || c.height !== bmp.height) {
+        c.width = bmp.width;
+        c.height = bmp.height;
+      }
+      c.getContext("2d")?.drawImage(bmp, 0, 0);
+      pageSize.current = { w, h };
+      setFrameMetrics((prev) =>
+        prev && prev.page.w === w && prev.page.h === h && prev.backing.w === bmp.width && prev.backing.h === bmp.height
+          ? prev
+          : { page: { w, h }, backing: { w: bmp.width, h: bmp.height } },
+      );
+      setDrawn(true);
+    } finally {
+      bmp.close();
+    }
   };
 
   const addShot = (png: Uint8Array) => {
@@ -616,10 +688,23 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
       case "copied":
         void navigator.clipboard?.writeText(m.text).catch(() => undefined);
         break;
+      case "select_open": {
+        const next = normalizeSelectOpen(m);
+        if (next) {
+          selectOpenRef.current = next;
+          setSelectOpen(next);
+        }
+        break;
+      }
+      case "select_close":
+        if (selectOpenRef.current?.id === m.id) dismissSelect(false, true);
+        break;
       case "error":
+        dismissSelect(false, false);
         setConn({ kind: "error", code: m.code, error: m.error });
         break;
       case "closed":
+        dismissSelect(false, false);
         setConn({ kind: "closed" });
         break;
     }
@@ -638,15 +723,46 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     moved.current = null;
     if (m) send({ t: "mouse", type: "move", x: m.x, y: m.y, buttons: m.buttons, mods: m.mods, button: m.buttons & 1 ? "left" : "none" });
   };
-  // The keys field is a real editable: focusing it raises a phone's keyboard, which shrinks the panel and so the page.
-  // On a touch screen only a tap that lands on the page focuses it (onPointerUp); a scroll, a pick or Go does not.
-  const focusKeys = () => keys.current?.focus({ preventScroll: true });
+
+  // Click / tap outside an open <select> popup dismisses it; clicks inside the preview box are swallowed so they don't hit the page.
+  useEffect(() => {
+    if (!selectOpen) return;
+    const onOutsideDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (target && selectPopupRef.current?.contains(target)) return;
+      const inBox = Boolean(target && box.current?.contains(target));
+      if (inBox) {
+        e.preventDefault();
+        e.stopPropagation();
+        suppressedPointer.current = e.pointerId;
+        dismissSelect(true, true);
+      } else {
+        dismissSelect(true, false);
+      }
+    };
+    const onOutsideWheel = (e: WheelEvent) => {
+      const target = e.target as Node | null;
+      if (target && selectPopupRef.current?.contains(target)) return;
+      if (target && box.current?.contains(target)) e.preventDefault();
+      dismissSelect(true, true);
+    };
+    window.addEventListener("pointerdown", onOutsideDown, true);
+    window.addEventListener("wheel", onOutsideWheel, { capture: true, passive: false });
+    return () => {
+      window.removeEventListener("pointerdown", onOutsideDown, true);
+      window.removeEventListener("wheel", onOutsideWheel, true);
+    };
+  }, [selectOpen, dismissSelect]);
 
   useEffect(() => {
     const el = canvas.current;
     if (!el) return;
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (selectOpenRef.current) {
+        dismissSelect(true, true);
+        return;
+      }
       const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
       const p = where(e);
       send({ t: "wheel", ...p, dx: e.deltaX * scale, dy: e.deltaY * scale, mods: modsOf(e) });
@@ -657,6 +773,12 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (conn.kind !== "open") return;
+    if (selectOpenRef.current) {
+      e.preventDefault();
+      suppressedPointer.current = e.pointerId;
+      dismissSelect(true, true);
+      return;
+    }
     e.preventDefault();
     const touch = e.pointerType === "touch";
     if (!touch) focusKeys();
@@ -667,6 +789,7 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
   };
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (conn.kind !== "open") return;
+    if (suppressedPointer.current === e.pointerId || selectOpenRef.current) return;
     const p = pointer.current;
     if (p?.touch && p.id === e.pointerId) {
       const dx = p.x - e.clientX;
@@ -684,9 +807,13 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
     if (!frame.current) frame.current = requestAnimationFrame(flushMove);
   };
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (suppressedPointer.current === e.pointerId) {
+      suppressedPointer.current = null;
+      return;
+    }
     const p = pointer.current;
     pointer.current = null;
-    if (conn.kind !== "open") return;
+    if (conn.kind !== "open" || selectOpenRef.current) return;
     if (frame.current) {
       cancelAnimationFrame(frame.current);
       flushMove();
@@ -707,6 +834,16 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>, type: "down" | "up") => {
     if (conn.kind !== "open") return;
+    if (selectOpenRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (type === "up" && swallowKeyUp.current.delete(e.key)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (type === "down" && e.key === "Escape" && picking) {
       e.preventDefault();
       e.stopPropagation();
@@ -732,6 +869,7 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
   };
 
   const togglePick = (on: boolean) => {
+    dismissSelect(true, false);
     setPicking(on);
     send({ t: "pick", on });
     // for Esc; a touch screen cancels with the bar's button instead of a keyboard
@@ -745,6 +883,7 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
   const go = (s: string) => {
     const v = s.trim();
     if (!v) return;
+    dismissSelect(true, false);
     setEditing(false);
     send({ t: "nav", url: v });
     // a touch screen puts its keyboard away instead
@@ -758,16 +897,16 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
   // the picture, letterboxed into the panel at the page's proportions (a phone's is narrower than the panel)
   const fit = useMemo(() => {
     if (!area || !size) return null;
-    const s = Math.min(area.w / size.w, area.h / size.h, 1);
-    return { w: Math.floor(size.w * s), h: Math.floor(size.h * s) };
-  }, [area, size]);
+    const css = frameMetrics?.page ?? size;
+    return canvasFit(area, css, { mobile: phone, dpr: window.devicePixelRatio || 1, backing: frameMetrics?.backing });
+  }, [area, size, frameMetrics, phone]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-2">
-        <IconButton icon="arrowLeft" label={t("preview.back")} onClick={() => send({ t: "back" })} disabled={!page.back || conn.kind !== "open"} />
-        <IconButton icon="arrowRight" label={t("preview.forward")} onClick={() => send({ t: "forward" })} disabled={!page.forward || conn.kind !== "open"} />
-        <IconButton icon="retry" label={t("preview.reload")} onClick={() => send({ t: "reload" })} disabled={conn.kind !== "open"} />
+        <IconButton icon="arrowLeft" label={t("preview.back")} onClick={() => { dismissSelect(true, false); send({ t: "back" }); }} disabled={!page.back || conn.kind !== "open"} />
+        <IconButton icon="arrowRight" label={t("preview.forward")} onClick={() => { dismissSelect(true, false); send({ t: "forward" }); }} disabled={!page.forward || conn.kind !== "open"} />
+        <IconButton icon="retry" label={t("preview.reload")} onClick={() => { dismissSelect(true, false); send({ t: "reload" }); }} disabled={conn.kind !== "open"} />
         <form
           className="min-w-0 flex-1"
           onSubmit={(e) => {
@@ -779,6 +918,7 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
             ref={addressField}
             value={address}
             onFocus={(e) => {
+              dismissSelect(true, false);
               setEditing(true);
               e.currentTarget.select();
             }}
@@ -801,7 +941,7 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
           />
         </form>
         {page.loading && conn.kind === "open" && <Spinner />}
-        <IconButton icon={phone ? "phone" : "monitor"} label={phone ? t("preview.size_phone") : t("preview.size_desktop")} active={phone} onClick={() => setPhone((p) => !p)} />
+        <IconButton icon={phone ? "phone" : "monitor"} label={phone ? t("preview.size_phone") : t("preview.size_desktop")} active={phone} onClick={() => { dismissSelect(true, false); setPhone((p) => !p); }} />
         <IconButton icon="target" label={t("preview.pick")} active={picking} onClick={() => togglePick(!picking)} disabled={conn.kind !== "open"} />
         <IconButton icon="image" label={t("preview.screenshot")} onClick={shotMenu.open} disabled={conn.kind !== "open"} />
         {shotMenu.anchor && (
@@ -827,7 +967,7 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
         </div>
       )}
       {bar && <PreviewBar bar={bar} onClose={() => setBar(null)} send={send} />}
-      <div ref={box} className={cx("relative flex min-h-0 flex-1 items-center justify-center overflow-hidden", phone ? "bg-inset p-4" : "bg-page")}>
+      <div ref={box} className={cx("relative flex min-h-0 flex-1 overflow-hidden", phone ? "items-center justify-center bg-inset p-4" : "items-start justify-start bg-page")}>
         <canvas
           ref={canvas}
           tabIndex={-1}
@@ -835,7 +975,10 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          onPointerCancel={() => (pointer.current = null)}
+          onPointerCancel={(e) => {
+            if (suppressedPointer.current === e.pointerId) suppressedPointer.current = null;
+            pointer.current = null;
+          }}
           onContextMenu={(e) => e.preventDefault()}
           className={cx(
             "block touch-none bg-white transition-opacity duration-200 select-none",
@@ -847,6 +990,23 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
           style={fit ? { width: fit.w, height: fit.h } : undefined}
           data-preview-canvas
         />
+        {selectOpen && (
+          <SelectListbox
+            select={selectOpen}
+            pageSize={frameMetrics?.page ?? pageSize.current}
+            fit={fit}
+            area={area}
+            boxRef={box}
+            canvasRef={canvas}
+            keysRef={keys}
+            popupRef={selectPopupRef}
+            label={t("preview.select_label")}
+            emptyLabel={t("preview.select_empty")}
+            onChoose={chooseSelect}
+            onDismiss={() => dismissSelect(true, true)}
+            onSwallowKeyUp={(k) => swallowKeyUp.current.add(k)}
+          />
+        )}
         {/* the keyboard's target: typed keys, an input method's text and a paste go to the page from here */}
         <textarea
           ref={keys}
@@ -858,17 +1018,26 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
           onKeyDown={(e) => onKey(e, "down")}
           onKeyUp={(e) => onKey(e, "up")}
           onPaste={(e) => {
+            if (selectOpenRef.current) return;
             const text = e.clipboardData.getData("text/plain");
             e.preventDefault();
             if (text) send({ t: "text", text });
           }}
           onCompositionEnd={(e) => {
+            if (selectOpenRef.current) {
+              e.currentTarget.value = "";
+              return;
+            }
             if (e.data) send({ t: "text", text: e.data });
             e.currentTarget.value = "";
           }}
           onInput={(e) => {
             // a phone's keyboard types without key codes: what landed here goes as text
             const el = e.currentTarget;
+            if (selectOpenRef.current) {
+              el.value = "";
+              return;
+            }
             if ((e.nativeEvent as InputEvent).isComposing || !el.value) return;
             send({ t: "text", text: el.value });
             el.value = "";

@@ -73,6 +73,17 @@ async function click(text: string) {
   expect(button).toBeDefined(); await act(async () => button.click()); await flushSnapshots();
 }
 describe("native navigation repairs", () => {
+  it.each(["desktop", "browser"])("opens the first streamed view in the %s web renderer", async (hostKind) => {
+    if (hostKind === "desktop") vi.stubGlobal("personaDesktop", { platform: "darwin" });
+    await mount();
+    expect(seam.entries).toHaveLength(1);
+    const entry = seam.entries[0];
+    expect.soft(entry.adapter.session.getState().error).toBeUndefined();
+    expect(entry.sent).toHaveLength(1);
+    expect(entry.sent).toMatchObject([{ request: "open", context: { platform: "web" } }]);
+    expect(top().textContent).toContain("Native entry");
+    expect(seam.draws).not.toHaveBeenCalled();
+  });
   it("mounts a chart-gap HTTP page exactly once", async () => {
     seam.views = [gapView()]; await mount();
     expect(seam.draws).toHaveBeenCalledTimes(1);

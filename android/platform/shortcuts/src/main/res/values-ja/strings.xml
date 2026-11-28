@@ -62,4 +62,19 @@
     <string name="shortcuts_main_chat_todo_stuck">停止中</string>
     <string name="shortcuts_main_chat_todo_working">進行中</string>
     <string name="shortcuts_main_chat_todo_planned">未開始</string>
+    <string name="shortcuts_widget_configure_title">会話を選択</string>
+    <string name="shortcuts_widget_configure_search_hint">会話を検索…</string>
+    <string name="shortcuts_widget_configure_section_main">メインチャット</string>
+    <string name="shortcuts_widget_configure_section_directions">常駐の方向性</string>
+    <string name="shortcuts_widget_configure_section_others">その他の会話</string>
+    <string name="shortcuts_widget_configure_main_chat">メインチャット</string>
+    <string name="shortcuts_widget_configure_main_chat_subtitle">常にメインの Persona 会話を表示します</string>
+    <string name="shortcuts_widget_configure_untitled">無題の会話</string>
+    <string name="shortcuts_widget_configure_selected">選択中</string>
+    <string name="shortcuts_widget_configure_offline_notice">オフラインです。キャッシュ済みの会話を表示しています。</string>
+    <string name="shortcuts_widget_configure_unpaired_notice">未ペアリングです。メインチャットを選んで後から接続できます。</string>
+    <string name="shortcuts_widget_configure_no_matches">一致する会話がありません</string>
+    <string name="shortcuts_widget_configure_no_matches_hint">別のキーワードを試すか検索をクリアしてください。</string>
+    <string name="shortcuts_widget_binding_missing_hint">この会話はアーカイブまたは削除されました。タップして再選択してください。</string>
+    <string name="shortcuts_widget_binding_missing_short">利用不可 · タップで再選択</string>
 </resources>

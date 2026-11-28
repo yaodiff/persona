@@ -1291,12 +1291,11 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
   request again sends nothing more), or starts the main conversation with it, and answers `{item, session}`; a work machine is refused, and a failed send records nothing (`apierr.Call`'s status, as for a new conversation).
   The item keeps the hand-off (`handoffs`: `machine_id`, `session_id`, `at`, the latest 5) and its chain gets one `handling` entry per conversation ("Handed to Persona's main chat",
   linked to it). Its processing conversation (`agent`, `handling`) is not touched, so the AI twin's sweep and timeouts never take the main conversation for one of its own.
-  When that conversation dispatches work with `task_plan`, an omitted `inbox_item` uses its sole eligible unarchived handed item
-  on the calling computer. Bot notifications and owner-bot handoffs are excluded before counting candidates; explicitly
-  naming them still fails the link policy. No eligible item leaves the task unlinked; several refuse planning and require an explicit
-  `inbox_item` on each task. Selection uses the manager's persisted handoff ledger, not an ID parsed from a message
-  or the latest item in a shared conversation.
-  The manager validates the conversation, machine, open item and link policy, records the handoff operation on the plan, and rechecks it at Start.
+  That conversation can pass an explicit `inbox_item` on each `task_plan` task. The manager validates the conversation,
+  machine, open item and link policy against its persisted handoff ledger, records the handoff operation on the plan,
+  and rechecks it at Start. Bot notifications and owner-bot handoffs fail this policy. Unrelated tasks omit the field.
+  When a plan omits the ID, [recent topic matching](#chat-created-tasks-and-recent-inbox-topics-15557) can infer a
+  source for new work.
   Admission persists the to-do's existing `inbox_item` back-reference and the item's `agent.todo_id`; an explicit handoff replaces an earlier inferred link
   without filing the item, changing its draft or sending a reply. New task rows include their source in the initial insert and stay reserved
   through binding and first start, so another plan cannot adopt a half-admitted task.
@@ -1305,9 +1304,8 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
   Reusing a to-do preserves its source; assigning it to a different item is refused. A failed item write rolls back the binding before any Agent starts.
   If a newer item write retains that target, admission instead keeps the to-do and its source, reports the failure without starting an Agent,
   and supplies the same `todo_id` for retry rather than deleting a target the newer write still references.
-  An existing task also keeps this context without `task_plan`: `agent_send` (with or without `task`) to one's own task
-  and `task_scope` use the same sole eligible open handoff, or their explicit `inbox_item`. Several eligible items
-  refuse the send or scope change before side effects. A successful send (including queueing) or scope change saves
+  An explicit `inbox_item` on `agent_send` (with or without `task`) or `task_scope` can add this context to an existing
+  task. Omission leaves Inbox links alone. With a valid ID, a successful send (including queueing) or scope change saves
   the item's task backlink and session link on its Agent chain; it creates no task or Agent and does not replace the
   task's original Inbox source or the item's processing conversation. A failed send claims no assignment.
   An item already linked to another task is refused. Rechecking the exact handoff before saving prevents a filed
@@ -1382,8 +1380,8 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
 
 ### Chat-created tasks and recent Inbox topics (#15557)
 
-For people turning a chat request or screenshot into a task, `task_plan` also looks for a recent matching group item
-when `inbox_item` is omitted. An explicit validated handoff takes priority; `inbox_item: "none"` disables this lookup.
+For people turning a chat request or screenshot into a task, `task_plan` looks for a recent matching group item when
+`inbox_item` is omitted. An explicit validated handoff takes priority. Continuations and `inbox_item: "none"` skip inference.
 Main chat, an explicit supervisor assignment and a direction receiving the owner's verified quote use the same path.
 Only the title, prompt and manager-verified original request are evidence; generated context and image pixels are not.
 
@@ -1398,7 +1396,8 @@ and timestamps within two minutes. Mere context overlap or a general Related lin
 verified topic uses a deterministic primary item and existing Related navigation; both reply routes and per-source
 processing states survive. Neither planning nor binding files the item or sends a source reply.
 
-The plan stores manager-owned evidence and a content fingerprint. Start checks freshness, visibility, ownership,
+The plan stores manager-owned evidence and a content fingerprint, even when a strongly matching item was already
+handed to the calling conversation. Start checks freshness, visibility, ownership,
 uniqueness and source changes again, including after a restart and card edits. An invalid soft link is removed and a
 localized notice is recorded in the conversation; the task can still start. Admission repeats the ownership check
 under the Inbox lock, so competing automatic links cannot replace a winner. The existing task/Inbox rollback handles

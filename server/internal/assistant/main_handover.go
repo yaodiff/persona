@@ -240,9 +240,7 @@ func (s *Service) handOverTask(ctx context.Context, t Todo, from, to string, hel
 				// A handover can keep the same external-PR review key. Its previous supervisor's
 				// early admission and delivery fingerprint do not acknowledge the new supervisor.
 				s.supervise.mu.Lock()
-				if s.supervise.sent[g.id()] == g.Key {
-					delete(s.supervise.sent, g.id())
-				}
+				s.supervise.forgetToldLocked(g)
 				s.supervise.mu.Unlock()
 				s.signal(g)
 			}

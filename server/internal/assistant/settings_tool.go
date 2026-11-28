@@ -422,6 +422,13 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "all, outcomes or off"},
 			get: func(ctx context.Context) (string, error) { return s.supervisionMode(ctx), nil },
 			set: s.setAutoSupervisionMode},
+		{Setting: Setting{Key: supervisionTriageSettingKey, Title: i18n.T(i18n.Default, "assistant-settings_tool.title_supervision_triage"), Actions: getSet,
+			About: "off (the default) sends eligible routine reminders through ordinary delivery. on asks the Sorting model " +
+				"whether each eligible reminder should wake the supervisor or wait for the morning and evening briefings. " +
+				"Applies to new decisions as soon as the owner approves the change",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.supervisionTriageOn(ctx)), nil },
+			set: s.setSupervisionTriage},
 		{Setting: Setting{Key: "assistant.auto_supervision_messages", Title: "Automatic supervision messages", Actions: getSet,
 			About: "older on/off form of assistant.auto_supervision_mode: reads true unless the mode is off; true sets the mode " +
 				"to all, false to off (withdrawing what was waiting once). Prefer assistant.auto_supervision_mode (all / outcomes / " +
@@ -898,6 +905,7 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.recording_days": "title_recording_days", "assistant.recording_audio_days": "title_recording_audio_days", "assistant.recording_text_days": "title_recording_text_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay", chatReplyMutedChatsKey: "title_chat_reply_relay_muted_chats",
 	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "assistant.auto_supervision_mode": "title_auto_supervision_mode", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", modelProfileBindingsKey: "title_model_bindings", "model_profiles.tiers": "title_model_tiers",
+	supervisionTriageSettingKey:               "title_supervision_triage",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
@@ -1512,6 +1520,13 @@ func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownC
 		return i18n.T(l, "assistant-settings_tool.change_inbox_signals", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.InboxSignals },
 		"assistant.inbox_signals is %v from the next new Inbox message on (signals already waiting go out only while it is on).")
+}
+
+func (s *Service) setSupervisionTriage(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.supervisionTriageOn, supervisionTriageSettingKey+" is unchanged",
+		func(l i18n.Lang, before, after string) string {
+			return i18n.T(l, "assistant-settings_tool.change_supervision_triage", i18n.Args{"before": before, "after": after})
+		}, func(v *Settings) **bool { return &v.SupervisionTriage }, supervisionTriageSettingKey+" is %v.")
 }
 
 // setAutoSupervisionMessages is the older on/off form: true is the mode all, false off. A value already in effect is a

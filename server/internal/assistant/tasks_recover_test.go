@@ -171,6 +171,42 @@ func TestRunRecoversTaskStarts(t *testing.T) {
 	}
 }
 
+func TestRecoverTaskStartsUsesWorkspaceBudgetAndKeepsLiveStart(t *testing.T) {
+	ctx := t.Context()
+	s, _ := newTaskService(t)
+	before := time.Now()
+	updated := before.Add(-6 * time.Minute)
+	p := &TaskPlan{ID: "plan_workspace_start", Conversation: "conv1", State: planStarted, CreatedAt: updated, UpdatedAt: updated}
+	interrupted := pendingRecoveryTask(t, s, p.ID)
+	live := pendingRecoveryTask(t, s, p.ID)
+	ordinary := pendingRecoveryTask(t, s, p.ID)
+	for _, pt := range []*PlanTask{&interrupted, &live} {
+		pt.Workspace = &TaskWorkspace{Mode: workspaceContainer}
+		pt.WorkspaceResolved = &TaskWorkspaceResolved{Repositories: []BackendLaunchRepository{{}}}
+	}
+	p.Tasks = []PlanTask{interrupted, live, ordinary}
+	if err := s.savePlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	claim, ok := s.claimTaskStart(live.TodoID)
+	if !ok {
+		t.Fatal("could not claim the live start")
+	}
+	t.Cleanup(func() { s.endTaskStart(live.TodoID, claim, proto.Session{}) })
+
+	if err := s.recoverTaskStarts(ctx, before); err != nil {
+		t.Fatal(err)
+	}
+	if todo := todoNow(s, interrupted.TodoID); todo.StartError == "" {
+		t.Error("interrupted workspace start was outside the recovery window")
+	}
+	for _, id := range []string{live.TodoID, ordinary.TodoID} {
+		if todo := todoNow(s, id); !unstartedTodo(todo) {
+			t.Errorf("recovery modified task %s: start error %q", id, todo.StartError)
+		}
+	}
+}
+
 func TestRecoverTaskStartsLeavesOtherTasksAlone(t *testing.T) {
 	ctx := context.Background()
 	database := taskRecoveryDatabase(t)

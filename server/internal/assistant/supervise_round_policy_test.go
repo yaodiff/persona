@@ -199,8 +199,8 @@ var pageToolMention = regexp.MustCompile("`page`|\\bpage (create|update|get|list
 // where: the description (and schema) of a tool it lists, or "context", the background supervisor's <persona-context>.
 // Each names one in passing (where an id comes from, what undoes or replaces a call, a step a round never takes: the
 // Agent presets agent_start takes beside task_plan, the questions ask_user turned into to-dos that are not to be asked
-// again, the main conversation's model profile, task_retry for a start that did not come up, which only the main
-// conversation's failed signal leads to) or beside the round's own way (task_plan with continues for a
+// again, the main conversation's model profile, task_retry for a failed start, which belongs to main or the
+// current supervising conversation) or beside the round's own way (task_plan with continues for a
 // replacement, task_review needs_user for the owner), so none sends a round to a tool it lacks. A new mention is worded
 // for the round's tools, or listed here when it is one of these.
 var roundPassingMentions = map[string][]string{

@@ -26,14 +26,42 @@ func New(database *db.DB) *Store {
 	return &Store{DB: database, Store: externalsourcestore.New(database)}
 }
 
+// The database carries link provenance alongside the existing wire fields.
+type storedTodoRepository struct {
+	repository.TaskRepository
+	Links []storedTodoRepositoryLink `json:"links"`
+}
+
+type storedTodoRepositoryLink struct {
+	repository.TaskLink
+	Provenance repository.LinkProvenance `json:"provenance,omitempty"`
+}
+
 func decodeTodoRepositories(id string, revision int64, raw []byte) (repository.TaskSet, error) {
 	out := repository.TaskSet{SchemaVersion: 1, TodoID: id, Revision: revision, Repositories: []repository.TaskRepository{}}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &out.Repositories); err != nil {
-			return out, err
+	if len(raw) == 0 {
+		return out, nil
+	}
+	var rows []storedTodoRepository
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return out, err
+	}
+	if rows == nil {
+		return out, repository.Problem("store_unavailable")
+	}
+	out.Repositories = make([]repository.TaskRepository, len(rows))
+	for i, row := range rows {
+		out.Repositories[i] = row.TaskRepository
+		if row.Links != nil {
+			out.Repositories[i].Links = make([]repository.TaskLink, len(row.Links))
 		}
-		if out.Repositories == nil {
-			return out, repository.Problem("store_unavailable")
+		for j, record := range row.Links {
+			link := record.TaskLink
+			switch record.Provenance {
+			case repository.LinkProvenanceUnbound, repository.LinkProvenanceExplicit:
+				link.Provenance = record.Provenance
+			}
+			out.Repositories[i].Links[j] = link
 		}
 	}
 	return out, nil
@@ -126,7 +154,17 @@ func ReadRepositoryCatalogTx(ctx context.Context, tx pgx.Tx) (repository.Catalog
 }
 
 func writeTodoRepositoriesTx(ctx context.Context, tx pgx.Tx, set repository.TaskSet) error {
-	raw, err := json.Marshal(set.Repositories)
+	rows := make([]storedTodoRepository, len(set.Repositories))
+	for i, row := range set.Repositories {
+		rows[i].TaskRepository = row
+		if row.Links != nil {
+			rows[i].Links = make([]storedTodoRepositoryLink, len(row.Links))
+		}
+		for j, link := range row.Links {
+			rows[i].Links[j] = storedTodoRepositoryLink{TaskLink: link, Provenance: link.Provenance}
+		}
+	}
+	raw, err := json.Marshal(rows)
 	if err != nil {
 		return err
 	}
@@ -208,7 +246,7 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 				if err != nil {
 					return err
 				}
-				repository.PreserveLinkTitles(row.Links, links, in.Links)
+				repository.ReconcileLinkEdits(row.Links, links, in.Links)
 				cur.Repositories[index].Links = links
 				cur.Revision++
 				out = cur
@@ -227,12 +265,12 @@ func (d *Store) SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL,
 		return repository.TaskSet{}, perr
 	}
 	// NormalizeLink stores the default delivery role as an empty string.
-	storedRole := ""
+	storedRole, provenance := "", repository.LinkProvenanceExplicit
 	if normalized == repository.LinkRoleReference {
-		storedRole = normalized
+		storedRole, provenance = normalized, repository.LinkProvenanceUnbound
 	}
 	return d.updateTodoRepositoryLink(ctx, id, canonicalURL, func(link *repository.TaskLink) {
-		link.Role = storedRole
+		link.Role, link.Provenance = storedRole, provenance
 	})
 }
 
@@ -355,12 +393,14 @@ func ImportTodoRepositoryLinkDetailsTx(ctx context.Context, tx pgx.Tx, id string
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return out, false, err
 	}
-	if source == "legacy" && legacy {
-		return out, false, nil
-	}
+	legacyReplay := source == "legacy" && legacy
+	saved := repositoryURLs(cur.Repositories)
 	pending := []repository.LinkInput{}
 	canonical := []string{}
 	for _, in := range input {
+		if legacyReplay && in.Role != repository.LinkRoleDelivery {
+			continue
+		}
 		_, link, err := repository.ParseTaskLinkInput(in)
 		if err != nil {
 			return out, false, err
@@ -391,12 +431,15 @@ func ImportTodoRepositoryLinkDetailsTx(ctx context.Context, tx pgx.Tx, id string
 			}
 		}
 		canonical = append(canonical, link.CanonicalURL)
-		if source == "explicit" || !slices.Contains(seen, link.CanonicalURL) {
+		// A delivery role can promote a saved mirror even when its URL has already been seen.
+		// Keep the receipt's protection for deleted links.
+		bindSaved := in.Role == repository.LinkRoleDelivery && slices.Contains(saved, link.CanonicalURL)
+		if source == "explicit" || bindSaved || !legacyReplay && !slices.Contains(seen, link.CanonicalURL) {
 			pending = append(pending, repository.LinkInput{URL: link.CanonicalURL, Title: link.Title, Role: in.Role, Resolved: in.Resolved})
 		}
 	}
 	if len(pending) == 0 {
-		if source == "legacy" {
+		if source == "legacy" && !legacy {
 			return out, false, rememberTodoRepositoryLinksTx(ctx, tx, id, canonical, true)
 		}
 		return out, false, nil
@@ -405,7 +448,11 @@ func ImportTodoRepositoryLinkDetailsTx(ctx context.Context, tx pgx.Tx, id string
 	if err != nil {
 		return out, false, err
 	}
-	rows, err := repository.MergeTaskLinkDetails(cur.Repositories, pending, catalog)
+	provenance := repository.LinkProvenanceUnbound
+	if source == "explicit" {
+		provenance = repository.LinkProvenanceExplicit
+	}
+	rows, err := repository.MergeTaskLinkDetails(cur.Repositories, pending, catalog, provenance)
 	if err != nil {
 		return out, false, err
 	}

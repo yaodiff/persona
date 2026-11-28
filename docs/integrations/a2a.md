@@ -87,6 +87,17 @@ JSON-RPC metadata uses `personaWaitingSince`, `personaWaitingSeconds`, and
 personad tool a2a_send '{"machine_id":"box","session_id":"runtime.session-1","message_id":"request-001","text":"Run the checks and return the failing cases."}'
 ```
 
+`personad tool` waits up to 30 minutes for a call, because `a2a_send` may
+wait for the owner's answer on the phone. A read (`a2a_sessions`, `a2a_get`,
+`a2a_read`, and `dispatch_read`, which adds its own `wait_seconds`) gets 30
+seconds. Without an answer by then it fails with exit code 3 and kind
+`unavailable`, and its error names the tool and what did not answer. A read
+changes nothing, so it can be tried again; a write that got no answer may still
+have run. On macOS, a call started in a folder that does not answer, such as a
+protected folder while the system service that checks access to it is stuck,
+moves to `/` after 2 seconds instead of waiting for the folder: Go programs
+otherwise wait for their folder before they start (`server/internal/startdir`).
+
 To start a new cross-machine or cross-harness subagent, provide the target
 `machine_id` (which may be the caller's own computer for cross-harness work such
 as Claude launching Codex) and `cwd`, with an optional `launcher` and optional

@@ -145,6 +145,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    GET /api/v1/agent-shares/{share_id}
 -                    GET /api/v1/agent-shares/{share_id}/messages
 agents.read          GET /api/v1/agents
+-                    GET /api/v1/agents/botmux-owner-candidates
 -                    GET /api/v1/agents/display-settings
 -                    GET /api/v1/agents/hidden
 -                    GET /api/v1/agents/outbox
@@ -189,6 +190,8 @@ assistant.entries.read GET /api/v1/assistant/entries
 -                    GET /api/v1/assistant/health/intake/changes
 -                    GET /api/v1/assistant/health/items
 -                    GET /api/v1/assistant/history
+-                    GET /api/v1/assistant/integrations
+-                    GET /api/v1/assistant/integrations/{kind}/{id}
 leaders.read         GET /api/v1/assistant/leaders
 machines.read        GET /api/v1/assistant/machine-resources
 -                    GET /api/v1/assistant/memory
@@ -359,6 +362,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/launchers/{name}/start-options
 -                    GET /api/v1/machines/{mid}/network
 -                    GET /api/v1/machines/{mid}/omp-settings
+-                    GET /api/v1/machines/{mid}/orca-chat-starts
 -                    GET /api/v1/machines/{mid}/panes
 -                    GET /api/v1/machines/{mid}/ports
 -                    GET /api/v1/machines/{mid}/ports/{port}
@@ -712,6 +716,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/panes/git
 -                    POST /api/v1/machines/{mid}/panes/split
 -                    POST /api/v1/machines/{mid}/ports/{port}/open
+-                    POST /api/v1/machines/{mid}/preview/grant
 -                    POST /api/v1/machines/{mid}/preview/start
 -                    POST /api/v1/machines/{mid}/processes/{pid}/kill
 -                    POST /api/v1/machines/{mid}/reconnect
@@ -753,6 +758,7 @@ push.grading         POST /api/v1/push/grading/preview
 -                    POST /api/v1/recordings/{id}/minutes/todos
 -                    POST /api/v1/recordings/{id}/photos
 -                    POST /api/v1/recordings/{id}/segments
+-                    POST /api/v1/recordings/{id}/speakers
 -                    POST /api/v1/resources/{action}
 -                    POST /api/v1/saved-agent-searches
 agents.control       POST /api/v1/sessions
@@ -924,6 +930,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/herdr/sessions/blocked
 -                    PUT /api/v1/machines/{mid}/iphone
 -                    PUT /api/v1/machines/{mid}/omp-settings
+-                    PUT /api/v1/machines/{mid}/orca-chat-starts
 -                    PUT /api/v1/model-config/purposes/{id}
 -                    PUT /api/v1/model-profiles/{id}
 -                    PUT /api/v1/mutes
@@ -937,6 +944,7 @@ push.grading         PUT /api/v1/push/grading/layer
 -                    PUT /api/v1/recordings/{id}
 -                    PUT /api/v1/recordings/{id}/audio
 -                    PUT /api/v1/recordings/{id}/private
+-                    PUT /api/v1/recordings/{id}/speakers/turns
 -                    PUT /api/v1/recordings/{id}/title
 -                    PUT /api/v1/resources
 -                    PUT /api/v1/settings/web-fonts

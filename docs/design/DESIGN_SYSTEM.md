@@ -4795,6 +4795,13 @@ through Configure runners, and saving an empty list disables polling.
 
 Center the Persona mark and title above the primary control. A phone opens its scanner. A browser takes a pairing link and submits it with the arrow inside the field group. Place the secondary actions in one centered row of icons with short labels. Keep the action and its label in a single tap target. Allow wrapping or stacking at larger text sizes. Help explains where to get a code or link. A warning about replacing an existing pairing stays beside the action.
 
+## Preview native `<select>` overlay (#17849)
+
+Audience: people previewing local dev servers inside an Agent session on the web (the Agents workspace). Because headless Chromium does not composite native `<select>` OS popups into the screencast canvas, `SelectListbox` (`web/src/ui/SelectListbox.tsx`, logic in `web/src/lib/preview.ts`) renders the bridged option list directly above the preview `<canvas>`.
+
+- **Reused tokens and grammar**: draws the same surface, elevation, corners, gliding active highlight, edge scroll fades (`data-menu-more`), motion (`EASE`, `pop-in`, reduced-motion aware), check icon (`Icon` `check` in `--accent-ink`), semantic colors (`bg-surface`, `bg-hover`, `text-ink`, `text-ink-3`, `border-line`), named type roles (`text-meta`, `text-label`, `text-submeta`), and 44 px coarse-pointer row target (`pointer-coarse:min-h-11`) as `Menu`. Adds no new color, font-size, radius, or motion tokens, and no settings.
+- **Why not `Menu` directly**: a bridged `<select>` popup requires `role="listbox"` / `role="option"` with `aria-selected`, `aria-disabled`, and `aria-activedescendant`; selection on `Space` as well as `Enter`; initial highlight and scroll to the selected option; as-written `optgroup` headings; canvas-scaled positioning with non-passthrough outside-click dismissal; and staying inside the lazy preview chunk off the first screen.
+
 ## Removable chips (#13500)
 
 A chip the user may take away (a space conversation's categories on iOS) is a `Chip` with the close mark whose tap opens
@@ -4911,6 +4918,8 @@ People connecting a service can find its account, delivery and sync settings und
 the selected assistant’s Integrations experiment on, each service appears once. The capability chips
 (All, Chat channels, Data sources, Tools & appearance) filter those rows. A service can match more
 than one chip. Each chip exposes its selection with `aria-pressed` and shows its matching count.
+When the assistant supplies the Integrations projection, the chips show its counts. A failed
+catalog or section read uses a `SettingsHint` alert and Retry in a `Group`. Sections that loaded remain usable.
 
 Opening a detail uses a single column on phones and narrow Settings hosts. On desktop the split
 starts at **740 CSS pixels of Settings content width**, measured after both sidebars. The
@@ -4923,3 +4932,18 @@ catalog or a full-width view of where data goes. A `SubscriptionAlertBadge` belo
 owns the subscription. A single alert names its state, multiple alerts show their count. The most
 severe state supplies the detail and tone (failure red, missing recipe, rate limit or disconnected
 source orange). Standalone push sources have their own rows. See [web Settings](../web/web.md#labs).
+
+Settings keeps the visited parent route, including its assistant and filter, for the phone header,
+narrow desktop Back, and split-pane drill-downs. Back from an upgrade returns to its extension.
+Back from a source returns to the list, detail, or Data Flow page that opened it. A bookmarked
+detail without a visited parent returns to the same assistant's directory. Conflicting assistant
+names in a link show an unavailable page with Back. Browsing a linked assistant keeps the sidebar
+selection. The explicit switch action changes it.
+
+All integration kinds — built-in services, standalone channels and connectors, extensions, and
+standalone push or subscription sources — share one capability-composed detail shell mounted by
+`(manager, kind, id)` so crossing the 740 px split breakpoint changes only layout, scroll container,
+and Back placement without losing drafts. Capability sections mount in one canonical order:
+Account & connection, Chat & delivery, Inbox & sync, External sources, Extension settings,
+Information access, and Extension management. Single-pane standalone source details provide a
+same-assistant **Data flow** row when the split-pane view switcher is not visible.

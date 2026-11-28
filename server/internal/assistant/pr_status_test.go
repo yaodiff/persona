@@ -14,7 +14,77 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
+	"github.com/nwverse/persona/server/internal/db"
 )
+
+func TestPRStatusPublishesAfterBlockerAndMergeTrainWrites(t *testing.T) {
+	st := todoTestDB(t)
+	s, _ := newQuietServiceOn(t, st)
+	ctx := t.Context()
+	setBlockersTodosV2Flag(t, s, true, false)
+	const pr = "https://github.com/example/repo/pull/61"
+	upstream := newMergeTrainTask(t, s, "Upstream PR", pr)
+	waiter, err := s.createTodo(ctx, "Wait for upstream", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddTodoBlocker(ctx, waiter.ID, todoBlockerKindExternalPR, pr, ""); err != nil {
+		t.Fatal(err)
+	}
+	todosTold(t, s)
+	type observed struct{ conflict, waiting int }
+	var pushes []observed
+	var mu sync.Mutex
+	s.tpush.mu.Lock()
+	s.tpush.after = func(_ time.Duration, send func()) {
+		train, trainErr := st.ListTodoBlockersByTodo(ctx, upstream.ID)
+		wait, waitErr := st.ListTodoBlockersByTodo(ctx, waiter.ID)
+		mu.Lock()
+		var state observed
+		for _, row := range train {
+			if row.State == db.TodoBlockerStateActive {
+				state.conflict++
+			}
+		}
+		for _, row := range wait {
+			if row.State == db.TodoBlockerStateActive {
+				state.waiting++
+			}
+		}
+		if trainErr != nil || waitErr != nil {
+			t.Errorf("read blockers when publishing: %v, %v", trainErr, waitErr)
+		}
+		pushes = append(pushes, state)
+		mu.Unlock()
+		send()
+	}
+	s.tpush.mu.Unlock()
+	t.Cleanup(func() {
+		s.tpush.mu.Lock()
+		s.tpush.after = nil
+		s.tpush.mu.Unlock()
+	})
+
+	now := time.Now()
+	for _, step := range []struct {
+		status TodoPRStatus
+		want   observed
+	}{
+		{TodoPRStatus{URL: pr, State: "open", HeadOID: "current", Conflicts: true, CheckedAt: now}, observed{1, 1}},
+		{TodoPRStatus{URL: pr, State: "closed", CheckedAt: now.Add(time.Second)}, observed{}},
+	} {
+		if err := s.applyPRStatus(ctx, upstream, step.status); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		got := append([]observed(nil), pushes...)
+		pushes = nil
+		mu.Unlock()
+		if len(got) == 0 || got[len(got)-1] != step.want {
+			t.Fatalf("final %s push did not see committed blockers: got %v, want %+v", step.status.State, got, step.want)
+		}
+	}
+}
 
 type statusForge struct {
 	fakeForge

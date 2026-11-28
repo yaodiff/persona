@@ -38,5 +38,6 @@
   "recorded_not_delivered": "記録しました。Agent に届かなかったため、監督役が引き継いで伝えます",
   "setup_head": "おすすめの設定",
   "setup_intro": "Persona 自身の過去 7 日間の記録から計算しました（期間を明記している項目を除く）。何も変更していません。以下はどれも、あなたが自分で変更するまで今のままです。",
-  "setup_open": "設定を開く"
+  "setup_open": "設定を開く",
+  "supervision_deferred": "ブリーフィングに回した進捗確認"
 }

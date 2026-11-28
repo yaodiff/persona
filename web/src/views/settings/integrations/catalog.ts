@@ -7,7 +7,8 @@ import { connectorSummary, connectorTone, storesData, type HubConnector } from "
 import { listAuthNote } from "../../../lib/extension-auth";
 import { channelOf, extensionState, extensionTone, type HubExtension } from "../../../lib/extensions";
 import { botSummary, botTone, type FeishuBotStatus } from "../../../lib/feishu-bot";
-import { defaultManager, otherManager, sameManager } from "../../../lib/manager-choice";
+import type { IntegrationOrigin, IntegrationRef } from "../../../lib/integrations-projection-wire";
+import { defaultManager, sameManager } from "../../../lib/manager-choice";
 import {
   isPushSubscription,
   isSubscriptionAlertState,
@@ -15,7 +16,7 @@ import {
   type HubSubscription,
   type SubscriptionAlertState,
 } from "../../../lib/subscriptions";
-import { formatIntegrationsSub, parseIntegrationsSub, type IntegrationFilter, type IntegrationsRoute } from "../integrations-route";
+import { integrationManager, type IntegrationFilter, type IntegrationsRoute, type IntegrationView } from "../integrations-route";
 import type { IntegrationTarget } from "./model";
 
 export type IntegrationCapability = "channels" | "data" | "tools";
@@ -38,6 +39,8 @@ export interface LarkGatewaySummary {
 
 export interface IntegrationItem {
   key: string;
+  ref?: IntegrationRef;
+  origin?: IntegrationOrigin;
   kind: "builtin" | "extension" | "source";
   /** True when an `extension` item ships built into Persona (`extension.source === "builtin"`). */
   builtinExtension?: boolean;
@@ -57,8 +60,7 @@ export interface IntegrationItem {
   subscription?: HubSubscription;
   /** Encoded declarative UI state passed to SourcesUI for standalone push sources. */
   sourceState?: string;
-  /** Canonical `?integration=` sub-value for opening this item. */
-  sub: string;
+  view: IntegrationView;
   /** Target passed to `<IntegrationDetail />` (absent for standalone push sources opened in SourcesUI). */
   target?: IntegrationTarget;
 }
@@ -264,7 +266,6 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
     const alertTone: "red" | "orange" | undefined = errorNote ? "red" : needs ? "orange" : undefined;
 
     const builtinExtension = ext.source === "builtin";
-    const sub = formatIntegrationsSub({ kind: "extension", id: ext.id, manager: extManager }) ?? `ext:${ext.id}`;
     return attachSubscriptions(
       {
         key: `ext:${extManager ?? ""}:${ext.id}`,
@@ -282,7 +283,7 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
         channel: primaryChannel,
         connector: primaryConnector,
         extension: ext,
-        sub,
+        view: { kind: "extension", id: ext.id },
         target: {
           kind: "extension",
           id: ext.id,
@@ -310,7 +311,6 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
     const statusText = accounts === null ? t("settings-connectors.status_unknown") : accounts
       ? (accounts.length > 0 ? mailSummary([...accounts]) : t("settings-integrations.status_not_configured"))
       : (mailConnector ? connectorSummary(mailConnector) : t("settings-integrations.status_not_configured"));
-    const sub = formatIntegrationsSub({ kind: "builtin", id: "mail", manager: owner }) ?? "builtin:mail";
     builtinItems.push(
       attachSubscriptions(
         {
@@ -326,7 +326,7 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
           subtitle: t("settings-integrations.mail_description"),
           alertTone: tone === "red" ? "red" : undefined,
           connector: mailConnector,
-          sub,
+          view: { kind: "builtin", id: "mail" },
           target: {
             kind: "builtin",
             id: "mail",
@@ -368,7 +368,6 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
       || feishuChannel?.account?.name
       || description;
     const caps: IntegrationCapability[] = larkcliConnector ? ["channels", "data"] : ["channels"];
-    const sub = formatIntegrationsSub({ kind: "builtin", id: "feishu-bot", manager: owner }) ?? "builtin:feishu-bot";
     builtinItems.push(
       attachSubscriptions(
         {
@@ -385,7 +384,7 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
           alertTone: tone === "red" ? "red" : undefined,
           channel: feishuChannel,
           connector: larkcliConnector,
-          sub,
+          view: { kind: "builtin", id: "feishu-bot" },
           target: {
             kind: "builtin",
             id: "feishu-bot",
@@ -412,7 +411,6 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
     const statusText = ls === null ? t("settings-connectors.status_unknown") : ls
       ? (ls.error ? t("settings-integrations.status_error") : ls.connected ? t("settings-integrations.status_connected") : t("settings-integrations.status_not_configured"))
       : (larkConnector ? connectorSummary(larkConnector) : t("settings-integrations.status_not_configured"));
-    const sub = formatIntegrationsSub({ kind: "builtin", id: "lark", manager: owner }) ?? "builtin:lark";
     builtinItems.push(
       attachSubscriptions(
         {
@@ -428,7 +426,7 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
           subtitle: ls?.error || ls?.name || t("settings-integrations.lark_gateway_description"),
           alertTone: ls?.error ? "red" : undefined,
           connector: larkConnector,
-          sub,
+          view: { kind: "builtin", id: "lark" },
           target: {
             kind: "builtin",
             id: "lark",
@@ -457,7 +455,6 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
     if (!caps.length) caps.push("data");
 
     const tone = worstTone(connectorTone(c), ...(matchedChannel ? [channelTone(matchedChannel)] : []));
-    const sub = formatIntegrationsSub({ kind: "builtin", id: c.id, manager: cManager }) ?? `builtin:${c.id}`;
     builtinItems.push(
       attachSubscriptions(
         {
@@ -473,7 +470,7 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
           alertTone: tone === "red" ? "red" : undefined,
           channel: matchedChannel,
           connector: c,
-          sub,
+          view: { kind: "builtin", id: c.id },
           target: {
             kind: "builtin",
             id: c.id,
@@ -492,7 +489,6 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
   for (const ch of installedChannels) {
     if (claimedChannels.has(ch.id)) continue;
     claimedChannels.add(ch.id);
-    const sub = formatIntegrationsSub({ kind: "channel", id: ch.id, manager: owner }) ?? `channel:${ch.id}`;
     const tone = channelTone(ch);
     builtinItems.push({
       key: `channel:${owner ?? ""}:${ch.id}`,
@@ -507,7 +503,7 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
       subtitle: channelSubtitle(ch),
       alertTone: ch.state === "error" ? "red" : undefined,
       channel: ch,
-      sub,
+      view: { kind: "channel", id: ch.id },
       target: {
         kind: "builtin",
         id: ch.id,
@@ -541,9 +537,6 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
       : s.source_name
         ? t("settings-integrations.push_source_device_hint", { device: s.source_name })
         : description;
-    const sub =
-      formatIntegrationsSub({ kind: "sources", state: sourceState, manager: owner }) ??
-      `-sources/${encodeURIComponent(sourceState)}`;
     pushSourceItems.push({
       key: `source:${owner ?? ""}:${s.id}`,
       kind: "source",
@@ -559,7 +552,7 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
       subscriptionAlert: alert,
       subscription: s,
       sourceState,
-      sub,
+      view: { kind: "source", state: sourceState },
     });
   }
 
@@ -579,65 +572,63 @@ export function filterIntegrationItems(items: readonly IntegrationItem[], filter
 export function resolveIntegrationTarget(
   route: IntegrationsRoute,
   items: readonly IntegrationItem[],
-  pickedManager: string | null | undefined,
+  currentManager: string | null | undefined,
 ): IntegrationTarget | null {
-  const effective = (named?: string) => named ?? otherManager(pickedManager ?? undefined);
+  const { view } = route;
+  const manager = integrationManager(route.scope);
+  const targetManager = manager ?? currentManager ?? undefined;
 
-  if (route.kind === "extension") {
-    const targetManager = effective(route.manager);
-    const matched = items.find((it) => it.kind === "extension" && it.id === route.id && sameManager(it.manager, targetManager));
+  if (view.kind === "extension") {
+    const matched = items.find((it) => it.kind === "extension" && it.id === view.id && sameManager(it.manager, targetManager));
     return matched?.target ?? {
       kind: "extension",
-      id: route.id,
-      ...(route.manager ? { manager: route.manager } : {}),
+      id: view.id,
+      ...(manager ? { manager } : {}),
     };
   }
 
-  if (route.kind === "builtin") {
-    const targetManager = effective(route.manager);
-    const matched = items.find((it) => it.kind === "builtin" && it.id === route.id && sameManager(it.manager, targetManager));
+  if (view.kind === "builtin") {
+    const matched = items.find((it) => it.kind === "builtin" && it.id === view.id && sameManager(it.manager, targetManager));
     return matched?.target ?? {
       kind: "builtin",
-      id: route.id,
-      ...(route.manager ? { manager: route.manager } : {}),
+      id: view.id,
+      ...(manager ? { manager } : {}),
     };
   }
 
-  if (route.kind === "channel") {
-    const targetManager = effective(route.manager);
-    const matched = items.find((it) => it.channel?.id === route.id && sameManager(it.manager, targetManager));
+  if (view.kind === "channel") {
+    const matched = items.find((it) => it.channel?.id === view.id && sameManager(it.manager, targetManager));
     if (matched?.target) return matched.target;
     return {
       kind: "builtin",
-      id: route.id,
-      channelId: route.id,
+      id: view.id,
+      channelId: view.id,
       connectorId: null,
-      ...(route.manager ? { manager: route.manager } : {}),
+      ...(manager ? { manager } : {}),
     };
   }
 
-  if (route.kind === "connector") {
-    const targetManager = effective(route.manager);
+  if (view.kind === "connector") {
     // Keep larkcli openable directly as its own connector detail when navigated via connector:larkcli.
-    if (route.id === "larkcli") {
+    if (view.id === "larkcli") {
       return {
         kind: "builtin",
         id: "larkcli",
         connectorId: "larkcli",
-        ...(route.manager ? { manager: route.manager } : {}),
+        ...(manager ? { manager } : {}),
       };
     }
     const matched = items.find(
       (it) =>
-        (it.connector?.id === route.id || it.extension?.contributes?.connectors?.includes(route.id)) &&
+        (it.connector?.id === view.id || it.extension?.contributes?.connectors?.includes(view.id)) &&
         sameManager(it.manager, targetManager),
     );
     if (matched?.target) return matched.target;
     return {
       kind: "builtin",
-      id: route.id,
-      connectorId: route.id,
-      ...(route.manager ? { manager: route.manager } : {}),
+      id: view.id,
+      connectorId: view.id,
+      ...(manager ? { manager } : {}),
     };
   }
 
@@ -655,45 +646,39 @@ function matchesSourceState(item: IntegrationItem, rawState: string): boolean {
   }
 }
 
-/** Finds the standalone push source item represented by a `kind: "sources"` detail route, if present. */
+/** Finds the standalone push source for this view, if the directory has it. */
 export function resolveSourceItem(
   route: IntegrationsRoute,
   items: readonly IntegrationItem[],
-  pickedManager: string | null | undefined,
+  currentManager: string | null | undefined,
 ): IntegrationItem | null {
-  if (route.kind !== "sources" || !route.state) return null;
-  const targetManager = route.manager ?? otherManager(pickedManager ?? undefined);
-  return items.find((it) => matchesSourceState(it, route.state!) && sameManager(it.manager, targetManager)) ?? null;
+  const { view } = route;
+  if (view.kind !== "source") return null;
+  const manager = integrationManager(route.scope) ?? currentManager ?? undefined;
+  return items.find((it) => matchesSourceState(it, view.state) && sameManager(it.manager, manager)) ?? null;
 }
 
-/** Whether `openSub` currently points to `item` (including via legacy channel/connector redirects and push sources). */
+/** Whether this view names the row, including legacy channel and connector links. */
 export function isIntegrationRowSelected(
-  openSub: string | null | undefined,
+  route: IntegrationsRoute,
   item: IntegrationItem,
-  pickedManager: string | null | undefined,
+  currentManager: string | null | undefined,
 ): boolean {
-  if (!openSub) return false;
-  const route = parseIntegrationsSub(openSub);
-  const effective = (named?: string) => named ?? otherManager(pickedManager ?? undefined);
-
-  if (route.kind === "extension") {
-    return item.kind === "extension" && item.id === route.id && sameManager(effective(route.manager), item.manager);
+  const { view } = route;
+  const manager = integrationManager(route.scope) ?? currentManager ?? undefined;
+  if (!sameManager(manager, item.manager)) return false;
+  switch (view.kind) {
+    case "builtin":
+    case "extension":
+      return item.kind === view.kind && item.id === view.id;
+    case "channel":
+      return item.channel?.id === view.id;
+    case "connector":
+      return view.id !== "larkcli" &&
+        (item.connector?.id === view.id || !!item.extension?.contributes?.connectors?.includes(view.id));
+    case "source":
+      return matchesSourceState(item, view.state);
+    default:
+      return false;
   }
-  if (route.kind === "builtin") {
-    return item.kind === "builtin" && item.id === route.id && sameManager(effective(route.manager), item.manager);
-  }
-  if (route.kind === "channel") {
-    return item.channel?.id === route.id && sameManager(effective(route.manager), item.manager);
-  }
-  if (route.kind === "connector") {
-    if (route.id === "larkcli") return false;
-    return (
-      (item.connector?.id === route.id || !!item.extension?.contributes?.connectors?.includes(route.id)) &&
-      sameManager(effective(route.manager), item.manager)
-    );
-  }
-  if (route.kind === "sources" && route.state) {
-    return matchesSourceState(item, route.state) && sameManager(effective(route.manager), item.manager);
-  }
-  return false;
 }

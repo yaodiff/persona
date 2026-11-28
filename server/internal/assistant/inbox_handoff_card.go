@@ -1,6 +1,9 @@
 package assistant
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // A hand-off conversation's write-back as a card in that conversation (#5932, docs/assistant/inbox.md "Item actions"):
 // when the conversation an item was handed to hands in a reply or a conclusion, the user sees it where they are
@@ -16,16 +19,17 @@ const feedInboxSuggestion = "inbox_suggestion"
 
 // handoffCard is what the card shows: the suggestion and enough of the item to draw it without the item.
 type handoffCard struct {
-	Version int    `json:"version"`
-	Kind    string `json:"kind"`              // reply | conclusion
-	Outcome string `json:"outcome,omitempty"` // a conclusion's: fyi | done
-	Text    string `json:"text"`
-	Note    string `json:"note,omitempty"`
-	Recap   string `json:"recap,omitempty"`
-	Title   string `json:"title"`
-	Source  string `json:"source"`
-	Account string `json:"account,omitempty"`
-	Sender  string `json:"sender,omitempty"`
+	Version  int            `json:"version"`
+	Kind     string         `json:"kind"`              // reply | conclusion
+	Outcome  string         `json:"outcome,omitempty"` // a conclusion's: fyi | done
+	Text     string         `json:"text"`
+	Mentions []InboxMention `json:"mentions,omitempty"`
+	Note     string         `json:"note,omitempty"`
+	Recap    string         `json:"recap,omitempty"`
+	Title    string         `json:"title"`
+	Source   string         `json:"source"`
+	Account  string         `json:"account,omitempty"`
+	Sender   string         `json:"sender,omitempty"`
 }
 
 // handoffCardOf is the card for suggestion g handed in from a conversation the item was handed to, with a
@@ -40,8 +44,8 @@ func handoffCardOf(it *InboxItem, g *InboxSuggestion, outcome string) *handoffCa
 	case g.Kind != SuggestConclusion:
 		return nil
 	}
-	return &handoffCard{Version: g.Version, Kind: g.Kind, Outcome: outcome, Text: g.Text, Note: g.Note, Recap: it.Recap,
-		Title: clip(oneLine(it.Title), 200), Source: it.Source, Account: it.AccountName, Sender: it.Sender}
+	return &handoffCard{Version: g.Version, Kind: g.Kind, Outcome: outcome, Text: g.Text, Mentions: slices.Clone(g.Mentions),
+		Note: g.Note, Recap: it.Recap, Title: clip(oneLine(it.Title), 200), Source: it.Source, Account: it.AccountName, Sender: it.Sender}
 }
 
 // postHandoffCard puts the card for item itemID into the conversation it came from. A failure is only logged: the

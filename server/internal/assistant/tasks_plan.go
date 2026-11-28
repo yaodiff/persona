@@ -244,6 +244,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			t.AttachFrom = machine
 		}
 		if t.Machine == "" {
+			if s.autoTaskUsesAssistantWorkspace(ctx, t) {
+				return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
+			}
 			if _, err := validateStartSpeed(map[string]any{"speed": t.Speed}); err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}

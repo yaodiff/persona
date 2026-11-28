@@ -114,3 +114,114 @@ func TestMinutesDebatesMarshalAndLenientUnmarshal(t *testing.T) {
 		t.Errorf("out-of-bounds decision should be nil: %+v", extra.Debates[1].Outcome)
 	}
 }
+
+func TestMinutesDebatesSpeakerAttributionRoundTripAndLenient(t *testing.T) {
+	// Positions without speaker fields omit every new attribution key.
+	plain := Minutes{
+		Title: "Sync",
+		Debates: []MinutesDebate{{
+			Question: "A or B?",
+			Status:   DebateOpen,
+			At:       10,
+			Positions: []MinutesDebatePosition{
+				{Stance: "A", At: 10, Who: "Ada"},
+				{Stance: "B", At: 20},
+			},
+		}},
+	}
+	plainRaw, err := json.Marshal(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{`"span"`, `"est"`, `"over"`, `"said_by"`, `"speaker"`, `"speaker_unsure"`, `"also"`} {
+		if strings.Contains(string(plainRaw), forbidden) {
+			t.Errorf("plain position serialized %s: %s", forbidden, plainRaw)
+		}
+	}
+
+	// Full attribution round-trip including span, est, over, said_by, speaker, speaker_unsure and also.
+	sp1 := SpeakerSpan{10.5, 19.0}
+	sp2 := SpeakerSpan{20.0, 31.5}
+	spAlso := SpeakerSpan{40.0, 48.2}
+	with := Minutes{
+		Title: "Sync",
+		Debates: []MinutesDebate{{
+			Question: "Per item or per recording?",
+			Status:   DebateOpen,
+			At:       10.5,
+			Positions: []MinutesDebatePosition{
+				{
+					Stance:        "Per item",
+					At:            10.5,
+					Span:          &sp1,
+					Over:          map[SpeakerID]float64{"s1": 7.8, "s2": 0.4},
+					SaidBy:        "s1",
+					Speaker:       "s1",
+					SpeakerUnsure: false,
+					Also: []MinutesDebateAlso{{
+						At:      40.0,
+						Span:    &spAlso,
+						Over:    map[SpeakerID]float64{"s3": 6.2},
+						SaidBy:  "s3",
+						Speaker: "s3",
+					}},
+					Who: "Ada",
+				},
+				{
+					Stance:        "Per recording",
+					At:            20.0,
+					Span:          &sp2,
+					Est:           true,
+					SaidBy:        "s2",
+					Speaker:       "s2",
+					SpeakerUnsure: true,
+				},
+			},
+		}},
+	}
+	raw, err := json.Marshal(with)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Minutes
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Debates) != 1 || len(got.Debates[0].Positions) != 2 {
+		t.Fatalf("round-trip debates: %+v", got.Debates)
+	}
+	p0, p1 := got.Debates[0].Positions[0], got.Debates[0].Positions[1]
+	if p0.Span == nil || *p0.Span != sp1 || p0.Over["s1"] != 7.8 || p0.SaidBy != "s1" || p0.Speaker != "s1" || p0.SpeakerUnsure {
+		t.Errorf("p0 mismatch: %+v", p0)
+	}
+	if len(p0.Also) != 1 || p0.Also[0].At != 40.0 || p0.Also[0].Span == nil || *p0.Also[0].Span != spAlso || p0.Also[0].Speaker != "s3" {
+		t.Errorf("p0.Also mismatch: %+v", p0.Also)
+	}
+	if p1.Span == nil || *p1.Span != sp2 || !p1.Est || p1.SaidBy != "s2" || p1.Speaker != "s2" || !p1.SpeakerUnsure {
+		t.Errorf("p1 mismatch: %+v", p1)
+	}
+
+	// Lenient decoding: malformed speaker fields drop only the bad fields, never the position or minutes.
+	badPayload := `{"title":"Sync","points":[{"text":"One","at":1}],"debates":[{"question":"Q","status":"open","at":10,"positions":[
+		{"stance":"Keep me","at":10,"span":[20,10],"est":"yes","over":{"bad":3,"s1":-1,"s2":4.5},"said_by":"bad","speaker":"S1","speaker_unsure":"true",
+		 "also":["not-obj",{"at":-5},{"at":30,"span":[30,35],"over":{"s3":4},"speaker":"s3"},{"at":40,"speaker":"s4"},{"at":50,"speaker":"s5"}]},
+		{"stance":"Keep me too","at":20,"span":"bad","over":"bad","also":"bad"}
+	]}]}`
+	var lenient Minutes
+	if err := json.Unmarshal([]byte(badPayload), &lenient); err != nil {
+		t.Fatalf("lenient unmarshal failed: %v", err)
+	}
+	if len(lenient.Debates) != 1 || len(lenient.Debates[0].Positions) != 2 {
+		t.Fatalf("lenient dropped valid positions: %+v", lenient.Debates)
+	}
+	lp0 := lenient.Debates[0].Positions[0]
+	if lp0.Span != nil || lp0.Est || lp0.SaidBy != "" || lp0.Speaker != "" || lp0.SpeakerUnsure {
+		t.Errorf("malformed fields were not dropped: %+v", lp0)
+	}
+	if len(lp0.Over) != 1 || lp0.Over["s2"] != 4.5 {
+		t.Errorf("expected only valid over entry s2=4.5, got %+v", lp0.Over)
+	}
+	if len(lp0.Also) != 2 || lp0.Also[0].At != 30 || lp0.Also[0].Speaker != "s3" || lp0.Also[1].At != 40 || lp0.Also[1].Speaker != "s4" {
+		t.Errorf("expected 2 valid also entries (capped at maxDebateAlso), got %+v", lp0.Also)
+	}
+}

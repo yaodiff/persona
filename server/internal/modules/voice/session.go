@@ -85,6 +85,11 @@ type conversation struct {
 	started    bool // the app got its ready
 	outRate    int
 	reconnects int
+	// wantTextOnly asks the upstream for text-only output (no output voice) when the dialect supports it and the
+	// provider has not refused it (set before connect when external TTS speaks the call; unset by default).
+	// textOnly records whether the current upstream session actually started with text-only output granted.
+	wantTextOnly bool
+	textOnly     bool
 	// down is the last session the service said it cannot serve (error upstream_unavailable, its model's backend is
 	// down) with its words, clipped: it closes that session right after (docs/lessons/voice.md "Errors"), so the
 	// session's loss is the service's, not the network's.

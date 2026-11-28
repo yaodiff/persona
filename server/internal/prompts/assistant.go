@@ -667,7 +667,6 @@ func RenderTaskEnded(n TaskEnded) string { return render("assistant/task_ended",
 type PRFollowupNotice struct {
 	ID, Title, PRURL string
 	Event            string
-	Realtime         bool
 	Language         string
 }
 

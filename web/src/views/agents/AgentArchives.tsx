@@ -1,10 +1,10 @@
 // "Archived agents" (`/agents/archived`, docs/web/web.md "Archived agents"; Android's AgentArchivesScreen): every agent
-// archived from the Agents list, newest activity first, searchable on its title, folder, computer, agent and last
-// words. A row opens its chat (read from its transcript); "Restore" puts it back in the Agents list. What the hub
-// lists is what is archived: a session with new activity comes back by itself and leaves this list.
-import { useCallback, useEffect, useMemo, useState } from "react";
+// archived from the Agents list, newest activity first. Search and filter locally, then reveal matches in batches.
+// A row opens its transcript. Restore returns it to Agents, as does new activity on its computer.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { appArchiveDeps, AGENT_ARCHIVES_FEATURE, listArchived, noteArchivedList, restoreAgent } from "../../lib/agent-archives";
-import { agentName, sessionAgent } from "../../lib/agent-kind";
+import { agentId, agentName, sessionAgent, sessionAgentName } from "../../lib/agent-kind";
 import { errorText } from "../../lib/api";
 import { ago, baseName, sessionTitle } from "../../lib/format";
 import { machineWithHub } from "../../lib/mesh";
@@ -13,18 +13,27 @@ import { useStore } from "../../lib/store";
 import type { Machine, Session } from "../../lib/types";
 import { SessionMark } from "../../ui/AgentMark";
 import { Button, IconButton, Loading, useNow } from "../../ui/atoms";
-import { Icon } from "../../ui/icons";
+import { SearchField } from "../../ui/SearchField";
 import { Empty } from "../assistant/parts";
 import { t } from "../../i18n";
 
-/** The rows whose title, folder, computer, agent or last words hold `query` (case-insensitive). */
-export function filterArchived(rows: Session[], query: string, machines: Machine[]): Session[] {
+const BATCH_SIZE = 40;
+const selectClass = "min-h-11 min-w-0 grow basis-36 rounded-control bg-inset px-2 py-1 text-xs text-ink shadow-hairline focus-visible:outline-accent";
+
+function runtimeId(s: Session): string {
+  return agentId(sessionAgent(s).agent);
+}
+
+/** Search within the exact computer and runtime, preserving the archive list's order. */
+export function filterArchived(rows: Session[], query: string, machines: Machine[], machine = "", runtime = ""): Session[] {
   const needle = query.trim().toLowerCase();
-  if (!needle) return rows;
-  return rows.filter((s) =>
-    [sessionTitle(s), s.cwd, machineWithHub(s.machine_id, machines), agentName(sessionAgent(s).agent, s.agent_label), s.last_text ?? ""]
-      .some((x) => x.toLowerCase().includes(needle)),
-  );
+  if (!needle && !machine && !runtime) return rows;
+  return rows.filter((s) => {
+    if (machine && s.machine_id !== machine) return false;
+    if (runtime && runtimeId(s) !== runtime) return false;
+    return !needle || [sessionTitle(s), s.cwd, machineWithHub(s.machine_id, machines), sessionAgentName(s), s.last_text ?? ""]
+      .some((x) => x.toLowerCase().includes(needle));
+  });
 }
 
 export function AgentArchives({ onToggleSidebar }: { onToggleSidebar: () => void }) {
@@ -34,9 +43,17 @@ export function AgentArchives({ onToggleSidebar }: { onToggleSidebar: () => void
   const [rows, setRows] = useState<Session[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState({ query: "", machine: "", runtime: "" });
+  const { query, machine, runtime } = filters;
+  const [limit, setLimit] = useState(BATCH_SIZE);
+  const list = useRef<HTMLDivElement>(null);
   const [restoring, setRestoring] = useState<Set<string>>(() => new Set());
   const nowMs = useNow(60_000);
+
+  const changeFilter = (key: keyof typeof filters, value: string) => {
+    setFilters((previous) => ({ ...previous, [key]: value }));
+    setLimit(BATCH_SIZE);
+  };
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -59,7 +76,26 @@ export function AgentArchives({ onToggleSidebar }: { onToggleSidebar: () => void
     return () => c.abort();
   }, [supported, load]);
 
-  const hits = useMemo(() => filterArchived(rows ?? [], query, machines), [rows, query, machines]);
+  const { machineIds, runtimes } = useMemo(() => {
+    const machineIds = new Set<string>();
+    const runtimes = new Map<string, string>();
+    for (const s of rows ?? []) {
+      machineIds.add(s.machine_id);
+      const id = runtimeId(s);
+      if (!runtimes.has(id)) runtimes.set(id, sessionAgentName(s));
+    }
+    // A refresh or restore can remove the last matching row. Keep the selected option clearable.
+    if (machine) machineIds.add(machine);
+    if (runtime && !runtimes.has(runtime)) runtimes.set(runtime, agentName(runtime));
+    return { machineIds, runtimes };
+  }, [rows, machine, runtime]);
+  const hits = useMemo(() => filterArchived(rows ?? [], query, machines, machine, runtime), [rows, query, machines, machine, runtime]);
+  const visible = hits.slice(0, limit);
+  const showMore = () => {
+    flushSync(() => setLimit((count) => count + BATCH_SIZE));
+    // Continue keyboard navigation from the first new row, including when the last batch removes the button.
+    list.current?.children.item(visible.length)?.querySelector("a")?.focus();
+  };
   const keyOf = (s: Session) => `${s.machine_id}/${s.session_id}`;
 
   const restore = async (s: Session) => {
@@ -96,18 +132,19 @@ export function AgentArchives({ onToggleSidebar }: { onToggleSidebar: () => void
             </Empty>
           ) : (
             <>
-              <label className="mb-2 flex h-9 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
-                <Icon name="search" size={13} stroke={2} className="text-ink-3" />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-                  placeholder={t("agents-archives.search_placeholder")}
-                  aria-label={t("agents-archives.search_placeholder")}
-                  className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
-                />
-                {query && <IconButton icon="x" label={t("agents-archives.clear_search")} size={22} iconSize={12} onClick={() => setQuery("")} />}
-              </label>
+              <SearchField value={query} onChange={(value) => changeFilter("query", value)} size="md" className="mb-2" placeholder={t("agents-archives.search_placeholder")} />
+              {rows && (rows.length > 0 || machine || runtime) && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  <select aria-label={t("agents-archives.computer")} className={selectClass} value={machine} onChange={(e) => changeFilter("machine", e.target.value)}>
+                    <option value="">{t("agents-archives.all_computers")}</option>
+                    {[...machineIds].map((id) => <option key={id} value={id}>{machineWithHub(id, machines)}</option>)}
+                  </select>
+                  <select aria-label={t("agents-archives.runtime")} className={selectClass} value={runtime} onChange={(e) => changeFilter("runtime", e.target.value)}>
+                    <option value="">{t("agents-archives.all_runtimes")}</option>
+                    {[...runtimes].map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                  </select>
+                </div>
+              )}
               <p className="mb-5 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("agents-archives.description")}</p>
 
               {rows === null && !error && (
@@ -125,12 +162,22 @@ export function AgentArchives({ onToggleSidebar }: { onToggleSidebar: () => void
                   {t("agents-archives.empty_body")}
                 </Empty>
               )}
-              {rows !== null && rows.length > 0 && hits.length === 0 && <Empty icon="search" title={t("agents-archives.no_results", { query: query.trim() })} />}
+              {rows !== null && rows.length > 0 && hits.length === 0 && <Empty icon="search" title={query.trim() ? t("agents-archives.no_results", { query: query.trim() }) : t("agents-archives.no_filter_results")} />}
+              {hits.length > 0 && (hits.length > BATCH_SIZE || machine || runtime || query.trim()) && (
+                <p role="status" className="mb-2 px-1 text-xs text-ink-3 tabular-nums">
+                  {t("agents-archives.showing", { shown: visible.length, matches: hits.length })}
+                </p>
+              )}
               {hits.length > 0 && (
-                <div data-agent-archives className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
-                  {hits.map((s) => (
+                <div ref={list} data-agent-archives className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
+                  {visible.map((s) => (
                     <ArchivedRow key={keyOf(s)} s={s} now={nowMs} machine={machineWithHub(s.machine_id, machines)} busy={restoring.has(keyOf(s))} onRestore={() => void restore(s)} />
                   ))}
+                </div>
+              )}
+              {visible.length < hits.length && (
+                <div className="mt-3 flex justify-center">
+                  <Button className="min-h-11" onClick={showMore}>{t("agents-archives.show_more")}</Button>
                 </div>
               )}
             </>
@@ -144,10 +191,10 @@ export function AgentArchives({ onToggleSidebar }: { onToggleSidebar: () => void
 function ArchivedRow({ s, now, machine, busy, onRestore }: { s: Session; now: number; machine: string; busy: boolean; onRestore: () => void }) {
   const route: Route = { name: "session", mid: s.machine_id, sid: s.session_id };
   const title = sessionTitle(s);
-  const where = [machine, baseName(s.cwd), agentName(sessionAgent(s).agent, s.agent_label)].filter(Boolean).join(" · ");
+  const where = [machine, baseName(s.cwd), sessionAgentName(s)].filter(Boolean).join(" · ");
   return (
     <div className="group relative flex items-center gap-2 pr-3 transition-colors hover:bg-hover">
-      <a href={href(route)} onClick={(e) => onLinkClick(e, route)} title={[title, s.cwd].filter(Boolean).join("\n")} className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 focus-visible:outline-none">
+      <a href={href(route)} onClick={(e) => onLinkClick(e, route)} title={[title, s.cwd].filter(Boolean).join("\n")} className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 focus-visible:-outline-offset-2 focus-visible:outline-accent">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-field">
           <SessionMark s={s} size={16} />
         </span>

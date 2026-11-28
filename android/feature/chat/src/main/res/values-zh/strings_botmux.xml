@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_botmux_via">从 %1$s 发送</string>
+    <string name="chat_botmux_triggered">外部触发</string>
+    <string name="chat_botmux_sent">已发送至飞书</string>
+    <string name="chat_botmux_sent_final">飞书最终回复</string>
+    <string name="chat_botmux_bot">%1$s（机器人）</string>
+    <string name="chat_botmux_quoted">引用了消息</string>
+    <string name="chat_botmux_topic">话题包含更早消息</string>
+    <plurals name="chat_botmux_attachments">
+        <item quantity="other">%1$d 个附件</item>
+    </plurals>
+    <string name="chat_botmux_voice">语音</string>
+    <string name="chat_botmux_truncated">已截断</string>
+    <string name="chat_botmux_original">原文</string>
+    <string name="chat_botmux_hide_original">收起原文</string>
+    <string name="chat_botmux_card_reply">已通过飞书卡片回复，未记录正文。</string>
+    <string name="chat_botmux_decode">按飞书中的样子显示</string>
+    <string name="chat_botmux_decode_note">消息和回复按飞书中的样子显示。关闭后显示会话原文，即 Agent 收到的内容。</string>
+</resources>

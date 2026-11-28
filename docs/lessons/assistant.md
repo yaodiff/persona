@@ -3,6 +3,12 @@
 - A channel topic may have two routing keys during a Labs rollback (#17664). Reserve both keys at admission, use the active
   binding under the other key on a lookup miss, and refresh both known bindings after delivery. A `/new` can supply only one
   key. Clear the other bindings for the same conversation so the next message starts fresh.
+  Keep the accepted routing reference through queued commands and delivery (#17762). Recomputing it after a Labs switch can
+  make a queued topic reset change the channel's default target. Use a synchronized clock in rollback tests because
+  background snapshots also read the clock, including from managers that have been reloaded.
+
+- A start failure awaiting retry is open for supervision handover even though the stored row has `done_at`
+  (#17273). Use `closedForGood` to distinguish it from completed or cancelled work.
 
 - Node preparation can call back into the hub for settings (#16065). Release the database connection before the RPC
   and use the existing durable start claim and candidate receipt to reconcile it. Recheck the epoch when mapping the
@@ -602,6 +608,12 @@ For an Agent's permission without an open to-do (#16093), use the active relay q
 in the app once its hold ends. Tie the queued message to the card's current route. A queued wake can outlive its card
 or the manager that routed it, so check the route before sending and drop stale wakes even if their target stays offline.
 
+For an internal question that outlives its manager (#17823), restore the task and its worker link before publishing
+the question in the restart fixture. The real store already has that assignment. Capture the relay while its send is
+blocked and again after the queue removal is durable. A pending card gets a fresh wake in both cases. Check the queued
+wake against the current route before looking for an earlier send in the transcript, so the previous route's retry
+timer cannot delay the fresh wake.
+
 ## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
 
 Every `{"type":"todos"}` makes every app read the whole `GET /api/v1/todos` (about 1 MB at ~500 to-dos), and one step of
@@ -871,6 +883,12 @@ keyed to the event that told of the turn, not to the turn.
 ## Reconciling a lost start needs an exact id, not a shape match (2026-11-13, #6908)
 
 When `session.start` never answers, the hub lists the machine and adopts the session its start probably created. The first version guessed from shape: not in the pre-start snapshot, `StartedByPersona`, same launcher and cwd, a fresh sign of life, newest wins. Three rows are indistinguishable by shape: a session the owner started by hand also carries `StartedByPersona` (the app's start path stamps it), and two workspace-none tasks run in the same directory with no workspace claim between them, so each could adopt the other's session — and nothing excluded a session already linked to another open todo. A heuristic over mutable, shared signals (`UpdatedAt`, cwd) cannot identify one specific start. The fix carries the identity instead: the hub generates a v4 UUID and sends it on the existing `session.start` `session_id`, the node starts Claude with `--session-id <id>` on every Claude path (the sync terminal path had been passing an empty id), and adoption matches that exact id first with no other condition. The heuristic is only the fallback for a node too old to honor the field, and even then it skips every session in `todos.activeBySession` and fails closed when the todo book cannot load. Lesson: when an action's result can be lost, make the request carry a unique correlation token and match on that; keep a heuristic only as a version-compatibility fallback, and have it exclude resources already claimed elsewhere rather than merely rank candidates.
+
+## A drifted workspace and its launch require separate checks (#17087)
+
+Retry replays a frozen operation, while a continuation with changed inputs can collide with the previous head. Confirm
+Git drift against the exact Node receipt, then let the Node decide whether its launch has stopped. Replace the manager
+head under the to-do lock and prepare a distinct directory, keeping the old checkout available for inspection.
 
 ## A hidden effective cadence overrides the interval the user configured (#7619)
 

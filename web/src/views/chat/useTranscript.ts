@@ -1,6 +1,6 @@
 import { conversationDeleted, onConversationDeleted } from "../../lib/conversation-deleted";
 // A session's items: the newest page over HTTP, then live over the WebSocket (docs/protocol/protocol.md "Continuity of items").
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError, errorText, isAbort, READ_TIMEOUT_MS, sessionHistoryNotFound, sessionPath } from "../../lib/api";
 import { sessionLoadError } from "../../lib/session-link";
 import { getState, listenSession, markConversationDeleted, send, type ItemsEvent } from "../../lib/store";
@@ -26,6 +26,8 @@ const EARLIER_RETRY_MS = 3000;
 const EARLIER_RETRY_MAX_MS = 30_000;
 /** Coalesce live push cache writes so WS bursts do not serialize the main-chat cache on every frame. */
 export const FEED_CACHE_SAVE_MS = 1000;
+/** Batches at or above this size commit in a React transition so large backlog frames do not block input. */
+const LARGE_ITEMS_BATCH_THRESHOLD = 100;
 
 // Independent newest-page reads still share one commit order across views of a session. Otherwise an older response
 // can land after a newer one and roll its own view and the shared page cache back to a stale snapshot.
@@ -206,6 +208,12 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
 
   const apply = useCallback((batch: Item[]) => {
     if (!batch.length) return;
+    if (batch.length >= LARGE_ITEMS_BATCH_THRESHOLD) {
+      startTransition(() => {
+        setItems((have) => mergeItems(have, batch));
+      });
+      return;
+    }
     setItems((have) => mergeItems(have, batch));
   }, []);
 

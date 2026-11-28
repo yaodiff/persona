@@ -108,4 +108,44 @@ struct WebViewPoolTests {
         let cookies = await preloaded.configuration.websiteDataStore.httpCookieStore.allCookies()
         #expect(cookies.contains { $0.name == name })
     }
+
+    @Test func selectableWebViewInstallsNavigationAndUIDelegatesAndHandlesProcessTermination() throws {
+        let view = SelectableWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        #expect(view.navigationDelegate != nil)
+        #expect(view.uiDelegate != nil)
+
+        view.navigationDelegate?.webViewWebContentProcessDidTerminate?(view)
+        #expect(view.pageState.loadError == .processTerminated)
+    }
+
+    @Test func jsDialogsAndExternalTargetBlankFollowInAppRules() async throws {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        let view = SelectableWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 480), configuration: config)
+        view.pageState.isPresented = true
+        defer { view.pageState.dismissPendingPrompts() }
+
+        // Alert / confirm / prompt dialogs enqueue cleanly and resolve with safe defaults on dismiss.
+        var alertDone = false
+        var confirmResult: Bool?
+        var promptResult: String?
+        view.pageState.enqueueDialog(WebDialog(.alert(message: "hi", done: { alertDone = true })))
+        view.pageState.enqueueDialog(WebDialog(.confirm(message: "sure?", done: { confirmResult = $0 })))
+        view.pageState.enqueueDialog(WebDialog(.prompt(message: "name?", defaultText: "ada", done: { promptResult = $0 })))
+        #expect(view.pageState.pendingDialog != nil)
+        view.pageState.pendingDialog?.finishAlert()
+        view.pageState.advanceDialog()
+        #expect(alertDone)
+        view.pageState.pendingDialog?.finishConfirm(true)
+        view.pageState.advanceDialog()
+        #expect(confirmResult == true)
+        view.pageState.pendingDialog?.finishPrompt("grace")
+        view.pageState.advanceDialog()
+        #expect(promptResult == "grace")
+        #expect(view.pageState.pendingDialog == nil)
+
+        // Loopback trust policy only accepts hosts+ports actively owned by PortForwarder.
+        #expect(!PortForwarder.shared.isForwardedLoopback(host: "example.com", port: 443))
+        #expect(!PortForwarder.shared.isForwardedLoopback(host: "localhost", port: 65534))
+    }
 }

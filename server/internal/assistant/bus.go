@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
@@ -119,6 +120,8 @@ type BusHub struct {
 
 	out      *outbox // nil: none (outbox.go)
 	reported *report // the current connection's report of the manager's state (outbox.go); guarded by mu
+	// speakerTurnsImport is kb.speaker_turns_import read once at manager start (ownconfig.go); never updated by setHello.
+	speakerTurnsImport bool
 }
 
 type busEvent struct {
@@ -154,6 +157,7 @@ func NewBusHub(o BusOptions) *BusHub {
 	if own, err := readOwnConfig(o.ConfigFile); err == nil { // it read as the manager started (moveConfig)
 		b.own = own
 	}
+	b.speakerTurnsImport = b.own.KB != nil && b.own.KB.SpeakerTurnsImport
 	reviewEnabled := b.own.ProjectReview.Enabled
 	reviewAppInputs := reviewEnabled && b.own.ProjectReview.AppInputs
 	host, _ := os.Hostname()
@@ -181,13 +185,15 @@ func NewBusHub(o BusOptions) *BusHub {
 			capabilities := []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
 				assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentSessionIdleArchive, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
 				assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
-				assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
+				assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription, assistantwire.CapabilityMeetingSpeakers,
 				assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthTell, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 				assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityCountsView, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-				assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability, devicewire.PublishedPackagesCapability}
+				assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability, devicewire.PublishedPackagesCapability,
+				assistantwire.CapabilityExtensionInfoAccessScoped}
 			if reviewEnabled {
 				capabilities = append(capabilities, assistantwire.CapabilityProjectReview)
 			}
+			capabilities = append(capabilities, assistantwire.CapabilityIntegrationsProjection)
 			b.mu.Lock()
 			svc := b.svc
 			b.mu.Unlock()
@@ -255,6 +261,9 @@ func (b *BusHub) Run(ctx context.Context, svc *Service) error {
 func (b *BusHub) Serve(ctx context.Context, svc *Service) error {
 	if svc.devs != nil {
 		b.opts.Devices = svc.devs
+	}
+	if b.speakerTurnsImport {
+		svc.speakerTurnsImport.Store(true)
 	}
 	if config := b.own.ProjectReview; config.Enabled {
 		store, ok := b.opts.Outbox.(*db.DB)
@@ -825,6 +834,15 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	}
 	if e := b.opts.Extensions; e != nil {
 		if out, ok, err := e.Request(ctx, method, params); ok { // extensions.* (extensions.go)
+			if method == extwire.MethodAuthorize && err == nil {
+				if a, ok := out.(extwire.Authorized); ok && a.Extension != "" {
+					a.Owner = extwire.OwnerThirdParty
+					if s.extensionIsOwner(ctx, a.Extension) {
+						a.Owner = extwire.OwnerConfirmed
+					}
+					return a, nil
+				}
+			}
 			return out, err
 		}
 	}

@@ -310,6 +310,8 @@
     <string name="agents_new_presets">エージェントプリセット</string>
     <string name="agents_new_preset_loading">このプリセットのモデル一覧の読み込みが完了するまで開始できません。</string>
     <string name="agents_new_preset_left_out">このプリセットの一部はここでは適用されません：</string>
+    <string name="agents_new_opens_orca_chat">%1$s で開きます。このコンピューターは新しい Agent を Orca チャットで開始する設定です。</string>
+    <string name="agents_new_opens_orca_chat_own">%1$s で、Orca 自身のモデルを使って開きます。このコンピューターは新しい Agent を Orca チャットで開始する設定です。</string>
     <string name="agents_new_preset_left_out_model">モデル「%1$s」はここでは使えません。ランチャーのモデルで実行します。</string>
     <string name="agents_new_preset_left_out_effort">思考の強さ「%1$s」はここでは使えません。ランチャーまたはモデル自身の設定で実行します。</string>
     <string name="agents_new_type_other">その他のエージェント</string>

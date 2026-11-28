@@ -56,8 +56,10 @@ class HttpAgentCreationService(
             catch (_: IllegalArgumentException) { emptyList() }
         val profile = try { JsonCodec.decodeFromJsonElement<PickerTierProfile?>(body["tiers_profile"] ?: JsonNull) }
             catch (_: IllegalArgumentException) { null }
+        val opens = try { JsonCodec.decodeFromJsonElement<DefaultOpens?>(body["default_opens"] ?: JsonNull) }
+            catch (_: IllegalArgumentException) { null }
         return AssistantLaunchers(JsonCodec.decodeFromJsonElement(body["launchers"] ?: JsonArray(emptyList())),
-            unavailable = unavailable, tiers = tiers, tiersProfile = profile)
+            unavailable = unavailable, tiers = tiers, tiersProfile = profile, defaultOpens = opens)
     }
     override suspend fun directories(machineId: String, path: String): AgentDirectories = JsonCodec.decodeFromJsonElement(read(
         request("api", "v1", "machines", machineId, "dirs")

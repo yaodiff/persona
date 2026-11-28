@@ -37,7 +37,8 @@ type session struct {
 	InputRate                  int
 	Tools                      []toolDecl
 	// Dictation: an unbound transcription session (dictation.go), with no delegation, voice or tools.
-	// DictationCaptions requests interim user captions; TextOnly requests output_modalities ["text"] until refused.
+	// DictationCaptions requests interim user captions; TextOnly requests text-only output (output_modalities
+	// ["text"], omitting any output voice) until refused, for dictation or calls using external TTS.
 	Dictation, DictationCaptions, TextOnly bool
 	// ReadAloud: the session only reads texts aloud (speak.go). The services are told so by Instructions alone; the
 	// fake dialect, which has no voice, answers such a session with a little silence.
@@ -76,7 +77,8 @@ type event struct {
 	args, code       string
 	param, eventID   string
 	rate             int
-	captions         bool // evStarted: the interim-caption extension was granted
+	captions         bool     // evStarted: the interim-caption extension was granted
+	modalities       []string // evStarted: output_modalities echoed by the service, if any
 }
 
 func newWire(dialect string) wire {
@@ -91,6 +93,16 @@ func newWire(dialect string) wire {
 	return liveWire{}
 }
 
+// supportsTextOnly reports whether dialect wire w can negotiate text-only output on the wire.
+// The codex dialect has no known text-only output field; calls on it drop upstream audio instead.
+func supportsTextOnly(w wire) bool {
+	switch w.(type) {
+	case liveWire, realtimeWire, fakeWire:
+		return true
+	}
+	return false
+}
+
 // liveWire is the public GPT-Live API (also served, with function tools as an extension, by deployments that speak
 // it for their own models).
 type liveWire struct{}
@@ -100,7 +112,7 @@ func (liveWire) header() http.Header                { return http.Header{} }
 
 func (liveWire) start(s session) any {
 	audio := map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": s.InputRate}}
-	if s.Voice != "" && !s.Dictation {
+	if s.Voice != "" && !s.Dictation && !s.TextOnly {
 		audio["output"] = map[string]any{"voice": s.Voice}
 	}
 	sess := map[string]any{"model": s.Model, "audio": audio}
@@ -108,11 +120,11 @@ func (liveWire) start(s session) any {
 		if s.DictationCaptions {
 			sess["extensions"] = map[string]any{trCaptionExtension: trCaptionExtensionVersion}
 		}
-		if s.TextOnly {
-			sess["output_modalities"] = []string{"text"}
-		}
 	} else {
 		sess["delegation"] = map[string]any{"type": "client"}
+	}
+	if s.TextOnly {
+		sess["output_modalities"] = []string{"text"}
 	}
 	if s.Instructions != "" {
 		sess["instructions"] = s.Instructions
@@ -164,8 +176,9 @@ func (liveWire) decode(raw []byte) []event {
 		Type    string `json:"type"`
 		Delta   string `json:"delta"`
 		Session struct {
-			Extensions map[string]any `json:"extensions"`
-			Audio      struct {
+			Extensions       map[string]any `json:"extensions"`
+			OutputModalities []string       `json:"output_modalities"`
+			Audio            struct {
 				Format struct {
 					Rate int `json:"rate"`
 				} `json:"format"`
@@ -200,7 +213,7 @@ func (liveWire) decode(raw []byte) []event {
 		if rate == 0 {
 			rate = f.Session.Audio.Format.Rate
 		}
-		return []event{{kind: evStarted, rate: rate, captions: captionExtensionGranted(f.Session.Extensions)}}
+		return []event{{kind: evStarted, rate: rate, captions: captionExtensionGranted(f.Session.Extensions), modalities: f.Session.OutputModalities}}
 	case "session.output_audio.delta":
 		pcm, err := base64.StdEncoding.DecodeString(f.Delta)
 		if err != nil || len(pcm) == 0 {
@@ -490,21 +503,27 @@ func (realtimeWire) header() http.Header                    { return http.Header
 
 // start is the GA session.update: type is required, the audio formats go under audio.input and audio.output, and the
 // voice only in audio.output (session.audio.format and session.voice are refused as unknown parameters).
+// With TextOnly, output_modalities is ["text"] and audio.output is omitted while audio.input and transcription stay.
 func (realtimeWire) start(s session) any {
 	rate := s.InputRate
 	if rate <= 0 {
 		rate = 24000
 	}
 	format := map[string]any{"type": "audio/pcm", "rate": rate}
-	output := map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": 24000}}
-	if s.Voice != "" {
-		output["voice"] = s.Voice
-	}
 	audio := map[string]any{
-		"input":  map[string]any{"format": format, "transcription": map[string]any{"model": "gpt-4o-mini-transcribe"}},
-		"output": output,
+		"input": map[string]any{"format": format, "transcription": map[string]any{"model": "gpt-4o-mini-transcribe"}},
+	}
+	if !s.TextOnly {
+		output := map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": 24000}}
+		if s.Voice != "" {
+			output["voice"] = s.Voice
+		}
+		audio["output"] = output
 	}
 	sess := map[string]any{"type": "realtime", "audio": audio}
+	if s.TextOnly {
+		sess["output_modalities"] = []string{"text"}
+	}
 	if s.Instructions != "" {
 		sess["instructions"] = s.Instructions
 	}
@@ -567,7 +586,11 @@ func (realtimeWire) decode(raw []byte) []event {
 		CallID     string `json:"call_id"`
 		Name       string `json:"name"`
 		Arguments  string `json:"arguments"`
-		Response   struct {
+		Session    struct {
+			OutputModalities []string `json:"output_modalities"`
+			Modalities       []string `json:"modalities"`
+		} `json:"session"`
+		Response struct {
 			ID string `json:"id"`
 		} `json:"response"`
 		Error struct {
@@ -581,7 +604,15 @@ func (realtimeWire) decode(raw []byte) []event {
 	}
 	switch f.Type {
 	case "session.created", "session.updated", "session.started":
-		return []event{{kind: evStarted, rate: 24000}}
+		mods := f.Session.OutputModalities
+		if len(mods) == 0 {
+			mods = f.Session.Modalities
+		}
+		name := ""
+		if f.Type == "session.created" {
+			name = "created"
+		}
+		return []event{{kind: evStarted, rate: 24000, name: name, modalities: mods}}
 	case "response.audio.delta", "response.output_audio.delta":
 		pcm, err := base64.StdEncoding.DecodeString(f.Delta)
 		if err != nil || len(pcm) == 0 {
@@ -594,6 +625,8 @@ func (realtimeWire) decode(raw []byte) []event {
 		return []event{{kind: evUser, text: f.Transcript, replace: true, final: true}}
 	case "response.audio_transcript.delta", "response.output_audio_transcript.delta":
 		return []event{{kind: evAssistant, text: f.Delta, name: "transcript"}}
+	case "response.text.delta", "response.output_text.delta":
+		return []event{{kind: evAssistant, text: f.Delta, name: "text"}}
 	// A response's id is in response.id (response_id is for the events within it).
 	case "response.created":
 		return []event{{kind: evReply, id: firstNonEmpty(f.Response.ID, f.ResponseID)}}

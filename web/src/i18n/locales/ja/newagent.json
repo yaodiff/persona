@@ -95,6 +95,8 @@
   "preset_left_out": "ここでは使えません：{what}。ランチャーやモデル自身の設定で動きます。",
   "follow_row": "モデル設定に従う",
   "carry_dropped": "{computer} では {name} を使えないため、このコンピューターのデフォルトに戻しました。",
+  "opens_orca_chat": "{name} で開きます。このコンピューターは新しい Agent を Orca チャットで開始する設定です。",
+  "opens_orca_chat_own": "{name} で、Orca 自身のモデルを使って開きます。このコンピューターは新しい Agent を Orca チャットで開始する設定です。",
   "preset_picked": "プリセット {name} · {what}",
   "typed_now": "今回入力したモデル ID",
   "temporary_session": "一時セッション",

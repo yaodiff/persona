@@ -13,7 +13,7 @@ func TestNewProviderRowsCloneWhereTheProviderSays(t *testing.T) {
 	source := SourceSnapshot{Identity: repo, CloneURL: "git@ssh.acme.test:team/app.git", TransportOrigin: "provider", ProviderName: "Acme Code"}
 	merge := func(src SourceSnapshot, catalog Catalog) SourceSnapshot {
 		t.Helper()
-		rows, err := MergeTaskLinkDetails(nil, []LinkInput{{URL: review.CanonicalURL, Resolved: &ResolvedLink{Source: src, Link: review}}}, catalog)
+		rows, err := MergeTaskLinkDetails(nil, []LinkInput{{URL: review.CanonicalURL, Resolved: &ResolvedLink{Source: src, Link: review}}}, catalog, LinkProvenanceUnbound)
 		if err != nil || len(rows) != 1 || len(rows[0].Links) != 1 {
 			t.Fatalf("%+v %v", rows, err)
 		}

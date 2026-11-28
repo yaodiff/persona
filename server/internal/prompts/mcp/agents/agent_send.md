@@ -29,7 +29,7 @@ Use `handoff` for your stopped to-do. A node ack starts its result wait. Resume 
     },
     "inbox_item": {
       "type": "string",
-      "description": "Inbox ID; for this conversation's eligible handoffs, omit for one, specify for several."
+      "description": "Inbox ID to link to the task. Omit to skip linking."
     },
     "resume": {
       "type": "boolean",

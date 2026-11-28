@@ -1,8 +1,8 @@
 // Pure data model and helpers for the lazy-loaded unified Integration Detail view (integrations_v2, #14847).
-import { t } from "../../../i18n";
+import { currentLanguage, t } from "../../../i18n";
 import { ApiError } from "../../../lib/api";
 import {
-  MAX_THREAD_IDLE_HOURS, normalizeThreadMode, supportsThreadRouting,
+  forgetChannels, MAX_THREAD_IDLE_HOURS, normalizeThreadMode, supportsThreadRouting, updateChannel,
   type ChannelDetail, type ChannelThreadMode, type ChannelUpdateBody,
 } from "../../../lib/channels";
 import {
@@ -11,8 +11,22 @@ import {
 } from "../../../lib/configuration/contract";
 import { fieldPath, type ExtensionField } from "../../../lib/extensions";
 import { sameManager } from "../../../lib/manager-choice";
+import type { ResourceConfiguration } from "./resourceConfiguration";
 
 export type BuiltinIntegrationId = "mail" | "feishu-bot" | "imessage" | "github" | "lark" | "larkcli" | (string & {});
+
+export type IntegrationResourceKind = "service" | "extension" | "channel" | "connector" | "push_source" | "subscription";
+
+export interface IntegrationResourceIdentity {
+  manager?: string;
+  kind: IntegrationResourceKind;
+  id: string;
+}
+
+/** Stable resource identity key `(manager, kind, id)` for mounting detail containers across layout changes. */
+export function integrationResourceKey(manager: string | undefined, kind: IntegrationResourceKind, id: string): string {
+  return JSON.stringify([manager ?? "", kind, id]);
+}
 
 export type IntegrationTarget =
   | {
@@ -32,6 +46,30 @@ export type IntegrationTarget =
       connectorId?: string;
       manager?: string;
     };
+
+/** Derives canonical `(manager, kind, id)` resource identity for a target and optional server projection. */
+export function resolveIntegrationResource(
+  target: IntegrationTarget,
+  manager: string | undefined,
+  projectedRef?: { manager: string; kind: IntegrationResourceKind; id: string },
+): IntegrationResourceIdentity {
+  if (projectedRef) {
+    return { manager: projectedRef.manager, kind: projectedRef.kind, id: projectedRef.id };
+  }
+  if (target.kind === "extension") {
+    return { manager, kind: "extension", id: target.id };
+  }
+  if (target.id === "mail" || target.id === "feishu-bot" || target.id === "lark") {
+    return { manager, kind: "service", id: target.id };
+  }
+  if (target.channelId && target.connectorId === null) {
+    return { manager, kind: "channel", id: target.id };
+  }
+  if (target.connectorId !== null) {
+    return { manager, kind: "connector", id: target.id };
+  }
+  return { manager, kind: "service", id: target.id };
+}
 
 export type IntegrationSectionId = "connection" | "channel" | "inbox" | "extension-settings" | "management";
 
@@ -143,7 +181,7 @@ export function channelRoutingDocument(d: ChannelDetail, saved = false): Configu
   return {
     schema_version: CONFIGURATION_VERSION,
     id: `channel-routing-${d.id}`,
-    revision: `${supported ? "v2" : "legacy"}:${mode}:${idleHours}:${editable ? "rw" : "ro"}`,
+    revision: `${supported ? "v2" : "legacy"}:${mode}:${idleHours}:${editable ? "rw" : "ro"}:${currentLanguage()}`,
     title: t("settings-integrations.routing_title"),
     groups: [
       {
@@ -219,23 +257,40 @@ export function channelRoutingDocument(d: ChannelDetail, saved = false): Configu
   };
 }
 
-/**
- * Adapts a channel's `thread_mode` and `thread_idle_hours` to ConfigurationForm.
- * `getDetail` reads the latest channel detail snapshot so saves always validate against fresh state.
- */
-export function channelRoutingSource(
-  channelId: string,
-  getDetail: () => ChannelDetail,
-  updateRouting: (body: Pick<ChannelUpdateBody, "thread_mode" | "thread_idle_hours">) => Promise<ChannelDetail | null>,
-  subscribe: ConfigurationSource["subscribe"],
-): ConfigurationSource {
+export function saveChannelFields(
+  resource: ResourceConfiguration<ChannelDetail>, label: string, body: ChannelUpdateBody,
+  check?: (remote: ChannelDetail) => void,
+) {
+  return resource.save({
+    label, key: JSON.stringify(body),
+    prepare: (remote) => {
+      check?.(remote);
+      return {
+        send: () => updateChannel(resource.id, body, resource.client),
+        matches: (d) =>
+          (body.enabled === undefined || d.enabled === body.enabled) &&
+          (!body.target || (d.target?.kind === body.target.kind && d.target.machine_id === body.target.machine_id && d.target.session_id === body.target.session_id)) &&
+          Object.entries(body.features ?? {}).every(([id, on]) => d.features?.some((f) => f.id === id && f.on === on)) &&
+          (body.thread_mode === undefined || d.thread_mode === body.thread_mode) &&
+          (body.thread_idle_hours === undefined || (supportsThreadRouting(d) && (d.thread_idle_hours ?? 0) === body.thread_idle_hours)),
+      };
+    },
+  });
+}
+
+/** The routing form edits one field at a time using the channel's partial PUT. */
+export function channelRoutingSource(resource: ResourceConfiguration<ChannelDetail>): ConfigurationSource {
+  const read = () => {
+    const remote = resource.snapshot().remote;
+    if (!remote) throw new ConfigurationError("configuration_unavailable");
+    return channelRoutingDocument(remote);
+  };
   return {
-    key: `integration:channel-routing:${channelId}`,
-    subscribe,
-    read: async () => channelRoutingDocument(getDetail()),
+    key: resource.client.key,
+    subscribe: resource.subscribeRemote,
+    read: async () => read(),
     update: async (update) => {
-      const current = getDetail();
-      const doc = channelRoutingDocument(current);
+      const doc = read();
       const refused = checkUpdate(doc, update);
       if (refused) throw refused;
       const body: { thread_mode?: ChannelThreadMode; thread_idle_hours?: number } = {};
@@ -250,8 +305,16 @@ export function channelRoutingSource(
         body.thread_idle_hours = Math.trunc(update.changes.thread_idle_hours);
       }
       try {
-        const next = await updateRouting(body);
-        if (!next) throw new ConfigurationError("configuration_conflict");
+        const next = await saveChannelFields(resource, "routing", body, (remote) => {
+          const latest = channelRoutingDocument(remote);
+          for (const [id, value] of Object.entries(body)) {
+            if (latest.values[id] !== doc.values[id] && latest.values[id] !== value) throw new ConfigurationError("configuration_conflict");
+          }
+          const refused = checkUpdate(latest, { ...update, revision: latest.revision });
+          if (refused) throw refused;
+        });
+        if (!next) throw new ConfigurationError("configuration_unavailable");
+        forgetChannels();
         return channelRoutingDocument(next, true);
       } catch (e) {
         if (e instanceof ApiError) throw ConfigurationError.fromBody(e.body, e.status);

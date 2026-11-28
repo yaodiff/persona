@@ -839,6 +839,9 @@ export interface UsageItem {
   id: string;
   name: string;
   hosts?: string[];
+  direct?: boolean;
+  remote_address?: string;
+  remote_key?: string;
 }
 
 export interface ProviderItem {

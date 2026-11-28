@@ -63,8 +63,17 @@ type Reader interface {
 	// knowledge base has none.
 	Project(slug ProjectSlug) (EarlierProject, bool)
 	// HubTranscriptLocked is recording id's hub_segments.json (an empty one when there is none); the caller holds
-	// Locks().Files. RenderTranscript is transcript.md of r with segs its transcript of record.
+	// Locks().Files. SpeakerTurnsLocked is recording id's speaker_turns.json (nil when there is none); the caller
+	// holds Locks().Files. RenderTranscript is transcript.md of r with segs its transcript of record.
 	HubTranscriptLocked(id ID) (HubTranscript, error)
+	SpeakerTurnsLocked(id ID) (*SpeakerTurnsFile, error)
+	// Pure speaker rules delegated through Core so the recording module never imports the domain adapter directly.
+	ImportSpeakerTimeline(in SpeakerImportInput) (SpeakerImportOutput, error)
+	RecomputeSpeakerStats(in SpeakerRecomputeInput) (SpeakerRecomputeOutput, error)
+	ApplySpeakerEdit(in SpeakerEditInput) (SpeakerEditOutput, error)
+	AlignTranscriptSpeakers(in SpeakerAlignInput) (SpeakerAlignOutput, error)
+	AttributeDebateSpeakers(in SpeakerDebatesAttrInput) (SpeakerDebatesAttrOutput, error)
+	ResolveDebateDisplays(in SpeakerDisplayInput) []SpeakerDisplayLabel
 	RenderTranscript(r *Recording, segs []kbwire.RecordingSegment) string
 	// CalendarItems is the calendar entries of kind a recording is matched to.
 	CalendarItems(kind CalendarKind) []CalendarItem
@@ -158,7 +167,8 @@ const (
 	FileRecapNotes      File = RecapNotesFile
 	FileTranscript      File = "transcript.md"
 	FileHubSegments     File = "hub_segments.json"
-	// FileMeeting is meeting.json (the room, the private mark, the follow-up, the transcription); FileLive the live
+	FileSpeakerTurns    File = "speaker_turns.json"
+	// FileMeeting is meeting.json (the room, the private mark, the follow-up, the transcription, the speakers); FileLive the live
 	// log of a meeting Persona attends or the hub transcribes.
 	FileMeeting File = "meeting.json"
 	FileLive    File = "live.json"
@@ -171,7 +181,7 @@ const (
 func (f File) Known() bool {
 	switch f {
 	case FileMeta, FileSegments, FileSummary, FileMinutes, FileMinutesMarkdown, FileRecap, FileRecapMarkdown, FileRecapNotes,
-		FileTranscript, FileHubSegments, FileMeeting, FileLive, DirAttachments:
+		FileTranscript, FileHubSegments, FileSpeakerTurns, FileMeeting, FileLive, DirAttachments:
 		return true
 	}
 	return false
@@ -208,13 +218,14 @@ const (
 	MeetingPartHighlights    MeetingPart = PartHighlights
 	MeetingPartTranscription MeetingPart = PartTranscription
 	MeetingPartInterim       MeetingPart = PartInterim
+	MeetingPartSpeakers      MeetingPart = PartSpeakers
 )
 
 // Known: p is one of the parts above.
 func (p MeetingPart) Known() bool {
 	switch p {
 	case MeetingPartPhotos, MeetingPartRoom, MeetingPartAsks, MeetingPartPrivate, MeetingPartFollowup, MeetingPartLines,
-		MeetingPartTopics, MeetingPartHighlights, MeetingPartTranscription, MeetingPartInterim:
+		MeetingPartTopics, MeetingPartHighlights, MeetingPartTranscription, MeetingPartInterim, MeetingPartSpeakers:
 		return true
 	}
 	return false

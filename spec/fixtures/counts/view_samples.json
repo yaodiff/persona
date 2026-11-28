@@ -26,10 +26,14 @@
                   ]
                 }
               ]
+            },
+            "persona_cards": {
+              "n": 0
             }
           },
           "totals": {
-            "agents_needs_you": 1
+            "agents_needs_you": 1,
+            "persona_cards": 0
           }
         }
       }
@@ -54,10 +58,14 @@
                   "id": "agent:macbook/s2"
                 }
               ]
+            },
+            "persona_cards": {
+              "n": 0
             }
           },
           "totals": {
-            "agents_needs_you": 1
+            "agents_needs_you": 1,
+            "persona_cards": 0
           }
         }
       }
@@ -91,10 +99,14 @@
                   ]
                 }
               ]
+            },
+            "persona_cards": {
+              "n": 0
             }
           },
           "totals": {
-            "agents_needs_you": 2
+            "agents_needs_you": 2,
+            "persona_cards": 0
           }
         }
       }
@@ -122,17 +134,21 @@
                   ]
                 }
               ]
+            },
+            "persona_cards": {
+              "n": 0
             }
           },
           "totals": {
-            "agents_needs_you": 1
+            "agents_needs_you": 1,
+            "persona_cards": 0
           }
         }
       }
     },
     {
       "name": "muted_rows_are_held_and_quiet_ones_absent",
-      "description": "Muted agents are listed in held as muted; a quiet task's agent is in neither list, since the live round never hands it in.",
+      "description": "Muted agents are listed in held as muted. The live round supplies quiet agents only for counting Persona cards.",
       "input": {
         "needs_you": "muted_and_quiet_agents_are_rows_but_not_on_the_badge"
       },
@@ -163,10 +179,14 @@
                   "why": "muted"
                 }
               ]
+            },
+            "persona_cards": {
+              "n": 0
             }
           },
           "totals": {
-            "agents_needs_you": 2
+            "agents_needs_you": 2,
+            "persona_cards": 0
           }
         }
       }
@@ -192,10 +212,14 @@
                   "why": "held"
                 }
               ]
+            },
+            "persona_cards": {
+              "n": 0
             }
           },
           "totals": {
-            "agents_needs_you": 0
+            "agents_needs_you": 0,
+            "persona_cards": 0
           }
         }
       }
@@ -224,10 +248,14 @@
                   ]
                 }
               ]
+            },
+            "persona_cards": {
+              "n": 0
             }
           },
           "totals": {
-            "agents_needs_you": 1
+            "agents_needs_you": 1,
+            "persona_cards": 0
           }
         }
       }
@@ -246,6 +274,9 @@
           "build": "1.0.0",
           "counts": {
             "agents_needs_you": {
+              "n": 0
+            },
+            "persona_cards": {
               "n": 0
             }
           }
@@ -282,11 +313,76 @@
             "todos_needs_you": {
               "n": 4,
               "more": 4
+            },
+            "persona_cards": {
+              "n": 0
             }
           },
           "totals": {
             "agents_needs_you": 1,
-            "todos_needs_you": 4
+            "todos_needs_you": 4,
+            "persona_cards": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "persona_counts_cards_one_at_a_time",
+      "description": "Persona lists its cards and the quiet task's card one at a time. Agents lists the worker and the sessionless card.",
+      "input": {
+        "persona_cards": "persona_conversations_and_quiet_tasks"
+      },
+      "expected": {
+        "view": {
+          "epoch": "b7e1c2a9",
+          "rev": 10,
+          "as_of": 1795593610000,
+          "build": "1.0.0",
+          "counts": {
+            "agents_needs_you": {
+              "n": 2,
+              "keys": [
+                {
+                  "id": "agent:studio/worker",
+                  "cards": [
+                    "ix-worker"
+                  ]
+                },
+                {
+                  "id": "card:ix-sessionless",
+                  "cards": [
+                    "ix-sessionless"
+                  ]
+                }
+              ]
+            },
+            "persona_cards": {
+              "n": 3,
+              "keys": [
+                {
+                  "id": "card:ix-permission",
+                  "cards": [
+                    "ix-permission"
+                  ]
+                },
+                {
+                  "id": "card:ix-form",
+                  "cards": [
+                    "ix-form"
+                  ]
+                },
+                {
+                  "id": "card:ix-quiet",
+                  "cards": [
+                    "ix-quiet"
+                  ]
+                }
+              ]
+            }
+          },
+          "totals": {
+            "agents_needs_you": 2,
+            "persona_cards": 3
           }
         }
       }
@@ -312,10 +408,15 @@
                 }
               ],
               "more": 2
+            },
+            "persona_cards": {
+              "n": 2,
+              "more": 2
             }
           },
           "totals": {
-            "agents_needs_you": 3
+            "agents_needs_you": 3,
+            "persona_cards": 2
           }
         }
       }

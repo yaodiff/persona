@@ -55,7 +55,7 @@ type repoMirrorManager struct {
 
 	// Test hooks (nil in production).
 	now          func() time.Time
-	fetchTimeout time.Duration
+	fetchTimeout time.Duration // Overrides both fetch budgets.
 	beforeFetch  func(ctx context.Context, repoID string) error
 }
 
@@ -76,9 +76,12 @@ func (m *repoMirrorManager) clock() time.Time {
 	return time.Now().UTC()
 }
 
-func (m *repoMirrorManager) timeout() time.Duration {
+func (m *repoMirrorManager) timeout(cold bool) time.Duration {
 	if m.fetchTimeout > 0 {
 		return m.fetchTimeout
+	}
+	if cold {
+		return repository.MirrorColdFetchTimeout
 	}
 	return repoMirrorFetchTimeout
 }
@@ -202,7 +205,8 @@ func (n *Node) ensureRepoMirror(ctx context.Context, req repository.MirrorEnsure
 		if m.flights == nil {
 			m.flights = map[string]*repoMirrorFlight{}
 		}
-		flightCtx, cancel := context.WithTimeout(context.Background(), m.timeout())
+		// The flight checks the mirror under its file lock before choosing the fetch budget.
+		flightCtx, cancel := context.WithTimeout(context.Background(), m.timeout(true))
 		f := &repoMirrorFlight{
 			done:    make(chan struct{}),
 			cancel:  cancel,
@@ -266,6 +270,9 @@ func (n *Node) runRepoMirrorEnsure(ctx context.Context, req repository.MirrorEns
 	now := n.repoMirrors.clock()
 	meta, hasMeta := readRepoMirrorMeta(metaPath)
 	exists := isValidBareRepo(ctx, mirrorDir)
+	if err := ctx.Err(); err != nil {
+		return repository.MirrorInfo{}, err
+	}
 
 	// Re-initialize cleanly if the bare repo is corrupt or belongs to a different identity.
 	if exists && hasMeta && meta.Identity != (repository.Identity{}) && meta.Identity != req.Identity {
@@ -295,8 +302,10 @@ func (n *Node) runRepoMirrorEnsure(ctx context.Context, req repository.MirrorEns
 		}, nil
 	}
 
+	fetchCtx, cancel := context.WithTimeout(ctx, n.repoMirrors.timeout(!exists))
+	defer cancel()
 	if hook := n.repoMirrors.beforeFetch; hook != nil {
-		if err := hook(ctx, req.RepoID); err != nil {
+		if err := hook(fetchCtx, req.RepoID); err != nil {
 			return repository.MirrorInfo{}, err
 		}
 	}
@@ -305,11 +314,11 @@ func (n *Node) runRepoMirrorEnsure(ctx context.Context, req repository.MirrorEns
 		if err := os.RemoveAll(mirrorDir); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return repository.MirrorInfo{}, err
 		}
-		if err := n.initRepoMirror(ctx, root, mirrorDir, hooksDir, req.CloneURL); err != nil {
+		if err := n.initRepoMirror(fetchCtx, root, mirrorDir, hooksDir, req.CloneURL); err != nil {
 			return repository.MirrorInfo{}, err
 		}
 	} else {
-		if err := n.fetchRepoMirror(ctx, mirrorDir, hooksDir, req.CloneURL); err != nil {
+		if err := n.fetchRepoMirror(fetchCtx, mirrorDir, hooksDir, req.CloneURL); err != nil {
 			return repository.MirrorInfo{}, err
 		}
 	}

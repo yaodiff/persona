@@ -1,6 +1,8 @@
 package persona.platform.shortcuts
 
+import android.appwidget.AppWidgetManager
 import android.content.Context
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,19 +48,46 @@ class AskPersonaWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val pairing = SurfacesDependencies.of(context).pairing()
-        pairing.restore()
-        // Read inside the composition so Glance sessions update when pairing or appearance changes.
+        val dependencies = SurfacesDependencies.of(context)
+        val feed = dependencies.fleet()
+        feed.settled()
+        val assistant = dependencies.assistant()
+        val sessions = dependencies.sessions()
+        // Read inside the composition so Glance sessions update when pairing, binding, or appearance changes.
         provideContent {
-            val paired by pairing.isPaired.collectAsState()
+            val paired by feed.paired.collectAsState()
+            val assistantSnapshot by assistant.assistant.collectAsState()
+            val sessionList by sessions.sessions.collectAsState()
             val revision by WidgetLook.revision.collectAsState()
             val look = remember(revision) { WidgetLook.current(context) }
-            Content(context, look, paired)
+            val activePairing = if (paired) feed.activePairing()?.takeIf(String::isNotBlank) else null
+            val appWidgetId = remember(id) {
+                runCatching { GlanceAppWidgetManager(context).getAppWidgetId(id) }
+                    .getOrDefault(AppWidgetManager.INVALID_APPWIDGET_ID)
+            }
+            val binding = remember(activePairing, appWidgetId, revision) {
+                ConversationWidgetPrefs.read(context, appWidgetId, activePairing)
+            }
+            val target = remember(paired, binding, assistantSnapshot, sessionList) {
+                AskWidgetTarget.resolve(
+                    paired = paired,
+                    binding = binding,
+                    assistant = assistantSnapshot,
+                    sessions = sessionList,
+                )
+            }
+            Content(context, look, paired, target, appWidgetId)
         }
     }
 
     @Composable
-    private fun Content(context: Context, look: WidgetLook, paired: Boolean) {
+    private fun Content(
+        context: Context,
+        look: WidgetLook,
+        paired: Boolean,
+        target: AskWidgetTarget,
+        appWidgetId: Int,
+    ) {
         val size = LocalSize.current
         val scale = context.resources.configuration.fontScale
         val spec = AskWidgetLayout.resolve(size.width.value, size.height.value, scale, paired)
@@ -69,18 +98,34 @@ class AskPersonaWidget : GlanceAppWidget() {
             AskWidgetPadding.CompactVertical -> Tokens.Space.xs
             AskWidgetPadding.FlushVertical -> Tokens.Space.flush
         }
-        val title = context.getString(if (paired) R.string.shortcuts_ask_label else R.string.shortcuts_not_paired_short)
-        val subtitle = context.getString(if (paired) R.string.shortcuts_ask_widget_subtitle else R.string.shortcuts_widget_scan)
+        val title = when {
+            !paired -> context.getString(R.string.shortcuts_not_paired_short)
+            !target.isMainChat && !target.title.isNullOrBlank() -> target.title
+            else -> context.getString(R.string.shortcuts_ask_label)
+        }
+        val subtitle = when {
+            !paired -> context.getString(R.string.shortcuts_widget_scan)
+            target.bindingMissing -> context.getString(R.string.shortcuts_widget_binding_missing_short)
+            !target.isMainChat -> context.getString(R.string.shortcuts_ask_label)
+            else -> context.getString(R.string.shortcuts_ask_widget_subtitle)
+        }
         val titleStyle = when (spec.titleScale) {
             AskWidgetTitleScale.Hero -> look.headline
             AskWidgetTitleScale.Section -> look.sectionTitle
             AskWidgetTitleScale.Compact -> look.itemTitle
         }
+        val tapIntent = when {
+            !paired -> SurfaceLinks.app(context)
+            target.bindingMissing -> ConversationWidgetConfigureActivity.reconfigureIntent(context, appWidgetId)
+            !target.isMainChat && target.sessionKey != null ->
+                SurfaceLinks.askConversation(context, target.sessionKey, assistant = target.assistant)
+            else -> SurfaceLinks.askWidget(context, paired = true)
+        }
         val container = GlanceModifier.fillMaxSize().appWidgetBackground()
             .widgetCornerRadius()
             .background(look.card)
             .padding(horizontal = horizontalPadding, vertical = verticalPadding)
-            .clickable(actionStartActivity(SurfaceLinks.askWidget(context, paired)))
+            .clickable(actionStartActivity(tapIntent))
         when (spec.mode) {
             AskWidgetMode.Row -> Row(container, verticalAlignment = Alignment.CenterVertically) {
                 Mark(look, spec.badge)
@@ -143,8 +188,62 @@ class AskPersonaWidget : GlanceAppWidget() {
     }
 }
 
+internal data class AskWidgetTarget(
+    val isMainChat: Boolean = true,
+    val sessionKey: persona.core.contracts.SessionKey? = null,
+    val title: String? = null,
+    val assistant: Boolean? = true,
+    val bindingMissing: Boolean = false,
+) {
+    companion object {
+        fun resolve(
+            paired: Boolean,
+            binding: ConversationWidgetBinding?,
+            assistant: persona.core.contracts.api.AssistantSnapshot,
+            sessions: List<persona.core.contracts.Session>,
+        ): AskWidgetTarget {
+            if (!paired || binding == null || binding.isMain) return AskWidgetTarget(isMainChat = true)
+            val key = binding.sessionKey ?: return AskWidgetTarget(isMainChat = false, bindingMissing = true)
+            val liveSession = sessions.firstOrNull { it.key == key }
+                ?: assistant.conversations.firstOrNull { it.key == key }
+            val direction = assistant.directionTree?.leaders?.firstOrNull { dir ->
+                dir.id == key.sessionId || dir.external?.target == key
+            }
+            val inventoryLoaded = sessions.isNotEmpty() || assistant.conversations.isNotEmpty() || assistant.directionTree != null
+            val missing = (inventoryLoaded && liveSession == null && direction == null) || liveSession?.archived == true
+            val title = direction?.name?.takeIf(String::isNotBlank)
+                ?: assistant.directionNames[key.sessionId]?.takeIf(String::isNotBlank)
+                ?: liveSession?.displayTitle?.takeIf(String::isNotBlank)
+                ?: binding.titleSnapshot.takeIf(String::isNotBlank)
+            val isAssistant = liveSession?.assistant ?: when {
+                direction?.external?.target == key -> false
+                direction != null || binding.kind == ConversationWidgetKind.Leader || binding.kind == ConversationWidgetKind.Assistant -> true
+                binding.kind == ConversationWidgetKind.Agent -> false
+                else -> null
+            }
+            return AskWidgetTarget(
+                isMainChat = false,
+                sessionKey = key,
+                title = title,
+                assistant = isAssistant,
+                bindingMissing = missing,
+            )
+        }
+    }
+}
+
 class AskPersonaWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = AskPersonaWidget()
+
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        ConversationWidgetPrefs.delete(context, appWidgetIds)
+        super.onDeleted(context, appWidgetIds)
+    }
+
+    override fun onRestored(context: Context, oldWidgetIds: IntArray?, newWidgetIds: IntArray?) {
+        ConversationWidgetPrefs.restore(context, oldWidgetIds, newWidgetIds)
+        super.onRestored(context, oldWidgetIds, newWidgetIds)
+    }
 }
 
 internal enum class AskWidgetMode { Row, Stacked }

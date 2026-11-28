@@ -177,3 +177,31 @@ func TestPutExtensionRecordingChecksTheWrite(t *testing.T) {
 		t.Fatal("a refused write stored a recording")
 	}
 }
+
+// Extension writes drop hub-owned segment fields including speaker and speaker_unsure (#17674).
+func TestPutExtensionRecordingDropsSpeakerFields(t *testing.T) {
+	e := goldenEngine(t, nil)
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, goldenZone)
+	id := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	w := RecordingWrite{
+		ID:        recordingwire.ID(id),
+		StartedAt: now.Add(-time.Hour),
+		Transcript: []RecordingSegment{
+			{Start: 0, End: 5, Text: "Hello everyone", N: 9, Source: "hub", Echo: true, Speaker: "s1", SpeakerUnsure: true},
+		},
+	}
+	if _, err := e.PutExtensionRecording(w, "minutes-ext", now); err != nil {
+		t.Fatal(err)
+	}
+	d, err := e.Get(KindRecording, id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Segments) != 1 {
+		t.Fatalf("got %d segments, want 1", len(d.Segments))
+	}
+	sg := d.Segments[0]
+	if sg.N != 0 || sg.Source != "" || sg.Echo || sg.Speaker != "" || sg.SpeakerUnsure {
+		t.Fatalf("hub-owned segment fields were not dropped: %+v", sg)
+	}
+}

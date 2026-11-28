@@ -66,6 +66,7 @@ function sidebarNodeState(
   sessions: readonly Session[],
 ): TreeState {
   if (section === "needs_you" || needsYouCount > 0) return "needs_you";
+  if (section === "can_wait") return "bg_waiting";
   if (section === "in_progress") {
     const states = sessions.map(agentTreeState);
     if (states.includes("needs_you")) return "needs_you";

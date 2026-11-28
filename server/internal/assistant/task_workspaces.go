@@ -19,7 +19,7 @@ import (
 
 type taskWorkspaceStore interface {
 	TaskWorkspace(context.Context, string, string) (*taskworkspace.Record, error)
-	BeginTaskWorkspace(context.Context, string, string, string) (*taskworkspace.Record, error)
+	BeginTaskWorkspace(context.Context, string, string, string, ...*taskworkspace.Record) (*taskworkspace.Record, error)
 	MutateTaskWorkspace(context.Context, string, string, int64, string, string) (*taskworkspace.Record, error)
 	SaveTaskWorkspaceResult(context.Context, string, string, int64, taskworkspace.Record) (*taskworkspace.Record, error)
 }
@@ -85,6 +85,10 @@ func (s *Service) backendWorkspaceCapabilities(ctx context.Context, machine, op,
 // PrepareBackendWorkspace consumes an already saved naming plan. It never
 // starts an Engine, edits a legacy workspace or changes the task's business stage.
 func (s *Service) PrepareBackendWorkspace(ctx context.Context, id, op string) (*taskworkspace.Record, error) {
+	return s.prepareBackendWorkspace(ctx, id, op)
+}
+
+func (s *Service) prepareBackendWorkspace(ctx context.Context, id, op string, replacing ...*taskworkspace.Record) (*taskworkspace.Record, error) {
 	st, err := s.backendWorkspaceStore()
 	if err != nil {
 		return nil, err
@@ -126,7 +130,7 @@ func (s *Service) PrepareBackendWorkspace(ctx context.Context, id, op string) (*
 			return settled, nil
 		}
 	}
-	r, err := st.BeginTaskWorkspace(ctx, id, op, s.managerIdentity())
+	r, err := st.BeginTaskWorkspace(ctx, id, op, s.managerIdentity(), replacing...)
 	if err != nil {
 		return nil, err
 	}

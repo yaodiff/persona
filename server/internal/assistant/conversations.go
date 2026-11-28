@@ -1340,6 +1340,12 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			// reported blocked (#4332): ask the task once more right before it would interrupt. A node that cannot
 			// be reached is not an answer, so its notice stays queued for a later drain.
 			stale, keep := msg.Withdrawn || s.chatReplyStale(ctx, msg), false
+			if !stale && msg.standalonePermission() {
+				// A restored card gets a fresh route. An old wake must leave before its
+				// transcript lookup can delay the current wake behind it.
+				_, pending := s.pendingStandalonePermission(id, msg, time.Now())
+				stale = !pending
+			}
 			if !stale && msg.Tool == noticeTool && msg.State == "needs" {
 				// The loading read covers a hub restart whose first drain runs before the todos were read in:
 				// an unreadable todo is unknown, so the notice is delivered as without the recheck.
@@ -1385,6 +1391,17 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 							retry = relayLookGap
 						}
 					}
+				}
+			}
+			if !stale && !keep && !landed && msg.Tool == prFollowupTool {
+				// Pre-upgrade queued follow-ups also become quiet. A delivery
+				// already in doubt was checked above under its original identity.
+				quiet := msg
+				quiet.OnceID = relayMsgID(id, original)
+				_, stale = s.keepRelayLater(id, quiet)
+				keep = !stale
+				if keep {
+					retry = relayRetryGap
 				}
 			}
 			if !stale && !keep && !landed {

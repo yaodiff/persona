@@ -249,12 +249,10 @@ func Check(t T, m *extension.Manifest, run Run, init extension.InitializeParams)
 
 	// Each shortcut runs (shortcut.run): it may refuse the empty values in words, never not know the method.
 	for _, s := range m.Shortcuts() {
-		var res struct {
-			Text string          `json:"text"`
-			View *extension.View `json:"view"`
-		}
-		err := hub.Call(ctx, "shortcut.run", map[string]any{"contribution": s.ID, "values": map[string]string{},
-			"ui_version": extension.UIVersion, "tz": "Asia/Shanghai", "locale": "zh-Hans-CN", "platform": "ios"}, &res)
+		res, err := buswire.Call(ctx, hub, extwire.ShortcutRunMethod, wire.ShortcutRunParams{
+			Contribution: s.ID, Values: map[string]string{}, UIVersion: extension.UIVersion,
+			TZ: "Asia/Shanghai", Locale: "zh-Hans-CN", Platform: "ios",
+		})
 		switch c := code(err); {
 		case c == extension.CodeUnknownMethod || c == extension.CodeNoContribution:
 			t.Fatalf("shortcut %s: shortcut.run answered %v", s.ID, err)

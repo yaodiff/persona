@@ -121,6 +121,9 @@ export interface VoiceAsk {
 /** The upstream model's connection as the extension reports it (`link` frame). */
 export type VoiceLink = "live" | "paused" | "waking" | "reconnecting" | (string & {});
 
+/** Explicit reply boundary emitted by protocol-2 extensions with the `reply` feature (docs/assistant/voice.md 3.3). */
+export type VoiceReplyState = "start" | "end";
+
 /** An `error` frame. `message` is the extension's (or the upstream's) own words: for Details, not the line on screen. */
 export interface VoiceFailure {
   code?: string;
@@ -164,6 +167,7 @@ export type VoiceFrame =
   | { type: "run"; run: VoiceRun }
   | { type: "ask"; ask: VoiceAsk }
   | { type: "link"; state: VoiceLink }
+  | { type: "reply"; state: VoiceReplyState }
   | { type: "error"; failure: VoiceFailure }
   | { type: "other"; name: string };
 

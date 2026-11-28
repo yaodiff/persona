@@ -6,10 +6,10 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExt
 import { t } from "../../i18n";
 import { BASE } from "../../lib/base";
 import { settingsHref } from "./nav";
-import { formatIntegrationsSub } from "./integrations-route";
+import { integrationHref, integrationScope } from "./integrations-route";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
-import { defaultManager, MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
+import { MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
 import { useInboxSourcesShown } from "../../lib/subscriptions";
 import { mainRuntimeDetails, type MainExecution } from "../../lib/main-runtime";
 import { PERMISSION_MODES } from "../../lib/session-actions";
@@ -107,6 +107,7 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   /** Which automatic supervision messages are sent (#16417, docs/assistant/unified-entry.md): "all" (default),
    *  "outcomes" (results and decisions, no routine check-ins) or "off"; unset from a hub before it. */
   auto_supervision_mode?: string;
+  supervision_triage?: boolean;
   /** Three-tier PR/Issue delivery closeout gate (#12034): "off", "merged" (default), or "live"; unset from a hub before it. */
   delivery_gate?: string;
   /** Days a closed session stays listed before it archives itself (#3618, docs/assistant/todos.md "Closed sessions
@@ -160,9 +161,9 @@ const RETENTION = {
 } as const;
 type Retention = keyof typeof RETENTION;
 
-export function AssistantSettings({ bare }: { /** Without its header (the profile page has its own). */ bare?: boolean } = {}) {
+export function AssistantSettings({ bare, manager }: { /** Without its header (the profile page has its own). */ bare?: boolean; manager?: string } = {}) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner);
-  return <ConfigurationManager>{(manager) => <AssistantSettingsForManager key={JSON.stringify([manager, owner])} manager={manager} owner={owner} bare={bare} />}</ConfigurationManager>;
+  return <ConfigurationManager manager={manager}>{(target) => <AssistantSettingsForManager key={JSON.stringify([target, owner])} manager={target} owner={owner} bare={bare} />}</ConfigurationManager>;
 }
 
 function AssistantSettingsForManager({ manager, owner, bare }: { manager: string; owner: string; bare?: boolean }) {
@@ -248,6 +249,18 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } catch (e) {
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setSupervisionBusy(false); }
+  };
+
+  const [supervisionTriageBusy, setSupervisionTriageBusy] = useState(false);
+  const setSupervisionTriage = async (on: boolean) => {
+    setSupervisionTriageBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { supervision_triage: on } });
+      if (r.manager !== manager || r.supervision_triage !== on) throw new Error(t("settings-assistantsettings.supervision_triage_unconfirmed"));
+      setInfo((i) => i ? { ...i, supervision_triage: r.supervision_triage } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setSupervisionTriageBusy(false); }
   };
 
   const [meetingBusy, setMeetingBusy] = useState(false);
@@ -506,12 +519,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const on = tasks?.filter((task) => task.enabled).length ?? 0;
   const next = tasks ? upcoming(tasks, 1)[0] : undefined;
   const deduplicateInboxForward = info?.integrations_v2 === true && hasInboxSources;
-  const nonDefaultManager = manager && manager !== (defaultId || defaultManager()) ? manager : undefined;
-  const inboxForwardSourcesHref = settingsHref(
-    "integrations",
-    formatIntegrationsSub({ kind: "sources", ...(nonDefaultManager ? { manager: nonDefaultManager } : {}) }),
-    false,
-  );
+  const inboxForwardSourcesHref = integrationHref({ scope: integrationScope(manager), view: { kind: "data-flow" }, filter: "all" });
 
   if (!info && !error) return <Loading />;
 
@@ -622,7 +630,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       )}
 
       {/* Who follows up the main chat's tasks (#5082), delivery closeout gate (#12034), following up agents, their tasks' new messages, stopping idle ones and tidying closed ones (#3617, #4293, #4754, #3618): each row only from a hub that has its setting */}
-      {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.delivery_gate === "string" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || supervisionMode !== undefined || typeof info?.inbox_todo_forward === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (
+      {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.delivery_gate === "string" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || supervisionMode !== undefined || typeof info?.supervision_triage === "boolean" || typeof info?.inbox_todo_forward === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (
         <Group anchor="agents" title={t("settings-assistantsettings.agents_title")}>
           {supportsAgentAutoNaming(info) && <AgentAutoNaming info={info} manager={manager} owner={owner}
             onSaved={(patch) => setInfo((current) => current ? { ...current, ...patch } : current)} />}
@@ -640,6 +648,11 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
                 {!supervisionChoices.includes(supervisionMode) && <option value={supervisionMode} disabled>{supervisionMode}</option>}
                 {supervisionChoices.map((m) => <option key={m} value={m}>{t(`settings-assistantsettings.auto_supervision_mode_${m}`)}</option>)}
               </select>
+            </Row>
+          )}
+          {typeof info.supervision_triage === "boolean" && (
+            <Row label={t("settings-assistantsettings.supervision_triage")} hint={t("settings-assistantsettings.supervision_triage_hint")} wrapHint anchor="supervision-triage">
+              <Switch on={info.supervision_triage} onChange={(on) => void setSupervisionTriage(on)} disabled={info.manager !== manager || supervisionTriageBusy} label={t("settings-assistantsettings.supervision_triage")} />
             </Row>
           )}
           {typeof info.delivery_gate === "string" && (

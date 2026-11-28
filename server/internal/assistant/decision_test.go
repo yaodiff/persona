@@ -1072,3 +1072,35 @@ func TestUndecidableUnderStopWaitsForTheUser(t *testing.T) {
 		return false
 	})
 }
+
+func TestUndeliveredDecisionBypassesSupervisionBatchAndCooldown(t *testing.T) {
+	ctx := t.Context()
+	s, _ := newQuietService(t)
+	todo := orphanTask(t, s)
+	s.supervise.mu.Lock()
+	s.supervise.stopped = true // inspect the scheduled signal without racing its timer
+	s.supervise.mu.Unlock()
+	now := time.Now()
+	reply := s.decisionNotDelivered(ctx, todo.ID, now, "Use the agreed option", errors.New("no Agent"))
+	if !reply.taken || reply.undelivered == nil {
+		t.Fatalf("decision handoff = %+v", reply)
+	}
+	s.supervise.mu.Lock()
+	g := s.supervise.pending[todo.ID+"|"+sigIdle]
+	s.supervise.mu.Unlock()
+	if !g.Handoff || !strings.Contains(g.Detail, "Use the agreed option") {
+		t.Fatalf("decision was not routed to supervision: %+v", g)
+	}
+	for _, batch := range []time.Duration{0, time.Hour} {
+		if wait, ok := digestWaitWithBatch(g.At, g.At, []superviseSignal{g}, s.superviseTimings(), batch); !ok || wait != 0 {
+			t.Fatalf("decision delayed by %s with batch %s", wait, batch)
+		}
+	}
+	s.supervise.mu.Lock()
+	s.supervise.told = map[string]time.Time{"conv1": g.At}
+	s.supervise.mu.Unlock()
+	groups := map[string][]superviseSignal{"conv1": {g}}
+	if got := s.gateDigestBatches([]string{"conv1"}, groups, g.At, time.Hour, time.Hour); len(got) != 1 || got[0] != "conv1" {
+		t.Fatalf("the recipient's digest still waits: %v", got)
+	}
+}

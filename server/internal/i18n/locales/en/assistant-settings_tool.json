@@ -59,6 +59,8 @@
   "change_auto_supervision_messages": "“Automatic supervision messages”: {before} → {after}",
   "title_auto_supervision_mode": "Automatic supervision messages",
   "change_auto_supervision_mode": "“Automatic supervision messages”: {before} → {after}",
+  "title_supervision_triage": "Review routine follow-ups in briefings",
+  "change_supervision_triage": "“Review routine follow-ups in briefings”: {before} → {after}",
   "auto_supervision_mode_all": "All",
   "auto_supervision_mode_outcomes": "Results and decisions only",
   "auto_supervision_mode_off": "Off",

@@ -8,6 +8,7 @@ package extwire
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/buswire"
@@ -148,6 +149,44 @@ type Authorized struct {
 	Name      string   `json:"name,omitempty"`
 	Scopes    []string `json:"scopes,omitempty"`
 	Scope     string   `json:"scope,omitempty"`
+	// Owner is the token's Assistant's current trust verdict, if reported.
+	Owner OwnerVerdict `json:"owner,omitzero"`
+}
+
+// OwnerVerdict retains all three states of the optional JSON owner boolean.
+type OwnerVerdict uint8
+
+const (
+	OwnerUnreported OwnerVerdict = iota // a legacy reply or an unknown token
+	OwnerThirdParty                     // owner: false
+	OwnerConfirmed                      // owner: true
+)
+
+func (v OwnerVerdict) MarshalJSON() ([]byte, error) {
+	switch v {
+	case OwnerUnreported:
+		return []byte("null"), nil
+	case OwnerThirdParty:
+		return []byte("false"), nil
+	case OwnerConfirmed:
+		return []byte("true"), nil
+	default:
+		return nil, fmt.Errorf("invalid extension owner verdict %d", v)
+	}
+}
+
+func (v *OwnerVerdict) UnmarshalJSON(data []byte) error {
+	switch string(data) {
+	case "null":
+		*v = OwnerUnreported
+	case "false":
+		*v = OwnerThirdParty
+	case "true":
+		*v = OwnerConfirmed
+	default:
+		return fmt.Errorf("extension owner verdict must be a boolean")
+	}
+	return nil
 }
 
 // Emit is EventEmit's params.

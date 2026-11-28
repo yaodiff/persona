@@ -404,4 +404,16 @@ describe("itemCoalescer coherency across page commits, replays, reads, rewrites,
     expect(tr.items.find((i) => i.id === "a9#0")?.text).toBe("Block three.");
     expect(tr.streaming).toBe("Block four.\n");
   });
+
+  it("renders large item batches via transition without dropping items or delaying subsequent live streaming", async () => {
+    await mount();
+    const bulk: Item[] = Array.from({ length: 120 }, (_, i) => said(10 + i, `bulk-${i}`));
+    items(bulk, 5);
+    expect(tr.items.filter((i) => i.id.startsWith("a") && i.text?.startsWith("bulk-"))).toHaveLength(120);
+
+    // Subsequent single live item after the coalesce window still lands immediately.
+    await act(async () => void vi.advanceTimersByTime(100));
+    items([said(130, "live-after-bulk")], 129);
+    expect(tr.items.find((i) => i.id === "a130#0")?.text).toBe("live-after-bulk");
+  });
 });

@@ -865,5 +865,6 @@ The other keys are `opus_model` and `fable_model`. For these starts and managed 
 omitted aliases keep non-Claude launcher values, then use the non-Claude default model (`deepseek-chat` if none
 is configured). Claude Code's own refusal fallback is disabled. A concrete Claude ID can still be named explicitly
 for this start. Overrides cannot set arbitrary environment variables and do not change the shared launcher or
-assistant model. Both the manager and the target node must support this option. To launch a Muster flow directly,
-pass the same object as `muster run --model-aliases '<json>'` instead.
+assistant model. Both the manager and the target node must support this option; a node without
+`session_start_model_aliases` is refused with `409 node_outdated` instead of starting on the launcher's models.
+To launch a Muster flow directly, pass the same object as `muster run --model-aliases '<json>'` instead.

@@ -7,6 +7,7 @@ import type { PromptQR } from "./connectors";
 import { extIdOf, extRoot } from "./extension-api";
 import type { AuthPrompt as WireAuthPrompt, AuthState } from "./extension-wire";
 import { messageManager } from "./manager-choice";
+import type { ScopedAssistantClient } from "./scoped-assistant-api";
 import { onHubEvent } from "./store";
 import { t } from "../i18n";
 
@@ -38,7 +39,7 @@ export type AuthPrompt = WireAuthPrompt & { qr?: PromptQR };
 
 const base = (id: string) => `${extRoot()}/${enc(id)}/-/auth`;
 
-export const getAuth = (id: string) => api<ExtensionAuth>(base(id));
+export const getAuth = (id: string, client?: ScopedAssistantClient) => (client?.request ?? api)<ExtensionAuth>(base(id));
 /** One step: "" starts over; a device code / QR step is asked again with no values. */
 export const authStep = (id: string, step: string, values: Record<string, string> = {}) =>
   api<AuthPrompt>(`${base(id)}/step`, { method: "POST", json: { step, values } });
