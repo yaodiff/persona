@@ -98,7 +98,6 @@ type OwnerPromise struct {
 	Model     bool          `json:"model,omitempty"`
 }
 
-type LarkChatID string
 type LarkTopicID string
 type LarkMessageID string
 
