@@ -178,6 +178,15 @@ func (runner *runner) briefCardWithHeader(f *modapi.BriefSnapshot, label, answer
 		room.section(c, &plain, l, i18n.T(l, "assistant-briefing.head_progress", i18n.Args{"n": f.ProgressTotal}), working, f.ProgressTotal)
 	}
 
+	if len(f.DeferredSupervision) > 0 {
+		rows := make([]briefBlock, 0, len(f.DeferredSupervision))
+		for _, row := range f.DeferredSupervision {
+			line := row.Title + " — " + row.Reason
+			rows = append(rows, briefBlock{md: botcard.EscapeMarkdown(line) + briefLink(l, deeplink.Web(f.Web, deeplink.Todo(row.TodoID.String()))), plain: line})
+		}
+		room.section(c, &plain, l, i18n.T(l, "assistant-briefing.supervision_deferred"), rows, len(rows))
+	}
+
 	// Quick capture (capture_brief.go): how many wait to be sorted and what was filed; a sensitive capture only counted.
 	if len(f.Captures) > 0 {
 		var captures []briefBlock

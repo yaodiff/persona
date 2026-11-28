@@ -5006,7 +5006,12 @@ can set addresses, keys and switches; admin has a switch too:
 | `models`, `default_model` | As above; omitted live-dialect values read the service's model list |
 | `input_rate` | 16000 / 24000 |
 | `owner`, `notes` | What to call you, extra instructions for the voice assistant; supplied values override manager.json |
+| `tts_url` | Optional OpenAI-compatible streaming TTS endpoint (`http://` or `https://`, base URL such as `https://tts.example.com` or full `…/v1/audio/speech`; #17843). Empty keeps the realtime upstream's own audio; also accepted in manager.json |
+| `tts_model` | Optional TTS `model` value; empty sends `"default"`. Also accepted in manager.json |
+| `tts_default_voice` | Optional fallback voice id (`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`), always included and marked default in `GET /voices` while TTS is configured. Also accepted in manager.json |
+| `tts_sample_rate` | Optional fallback PCM sample rate (`8000`–`48000` Hz) when the TTS response omits a rate header. Also accepted in manager.json |
 | Secret `key` | API key sent as `Authorization: Bearer`; encrypted with `secret.key` in `plugin_secrets`, write-only, endpoint reports only "set" |
+| Secret `tts_key` | Optional Bearer key sent only to `tts_url`; write-only secret in `plugin_secrets` (never manager.json), bound to `tts_url`'s origin like `key` is to `url` (#17843) |
 
 `ssh`, `key_file`, `key_command`, an explicit `tools` and additional upstreams are manager.json-only (`key_command` executes on the hub machine). Additional upstreams do not fit the deliberately restricted entry-list shape or its current web-only editing support, so the form still exposes the one upstream above.
 The form's upstream has no `tools` switch, so it is auto: it declares the function tools and drops them only if the service refuses them (#1420). To keep them off, configure that upstream in manager.json with `"tools": false` instead.
@@ -5019,7 +5024,7 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
   with a sentence such as "Real-time voice service address and key" in `needs_setup` (like `hubJSONWaitsForTriageModel`: running but needs configuration); the app only recognizes `running` voice extensions, so no voice entry appears.
 - **Keys are sent only to the address they were set for**: when config changes `url` to another origin (scheme + host + port; case, default port and path differences do not count),
   the hub **deletes the key before saving config**, responds with `secrets_cleared: ["key"]` and adds "Address changed; key cleared. Please enter it again" to `warnings`; clearing the address counts as a change too.
-  With an empty address, `PUT …/-/secrets/key` returns 400 `needs_url`. This prevents changing the address to an attacker's host and receiving the key as a Bearer token.
+  With an empty address, `PUT …/-/secrets/key` returns 400 `needs_url`. The optional `tts_key` follows `tts_url`'s origin independently under the same rule (`secrets_cleared: ["tts_key"]`, `PUT …/-/secrets/tts_key` returns 400 `needs_url` while `tts_url` is empty; #17843). This prevents changing an address to an attacker's host and receiving its Bearer token.
   - Implemented in the registry (`Registry.BoundSecrets` / `SecretNeeds`, hooks from `voice_extension.go`): applies to all `SetConfig` callers (assistant config changes, etc.), not just this endpoint;
     checking, key deletion, config save and key setting share one registry operation lock, so interleaved requests cannot pair a key with an address it was never set for.
   - **Prefer deletion on failure**: delete whether or not key-presence can be read (idempotent); unreadable presence still returns `secrets_cleared`. If deletion fails, save nothing, return 500 `secret_not_cleared`;
@@ -5032,9 +5037,10 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
 - **Meeting transcription** (#3862 phase 5): the manifest also contributes `transcription: [{"id": "gpt-live", "name": "GPT-Live"}]` beside its voice (its kind stays `voice`), with the same upstreams and key.
   It transcribes only through a GPT-Live (`live` dialect) upstream: the default model's when its upstream is one, else the first `live` upstream's default; with none,
   `GET /transcription/gpt-live/info` says `setup: "live_upstream"`. See "Transcription" above and [meeting-minutes.md](../assistant/meeting-minutes.md) "The built-in adapter".
-- **Extension env vars**: `PERSONA_EXTENSION_CONFIG` (form values with defaults), `PERSONA_EXTENSION_SECRETS` (`{"key": "…"}`, decrypted only in process environment),
+- **Extension env vars**: `PERSONA_EXTENSION_CONFIG` (form values with defaults), `PERSONA_EXTENSION_SECRETS` (`{"key": "…", "tts_key": "…"}`, decrypted only in process environment),
   `PERSONA_VOICE_HUB_CONFIG` (original `config` of the taken-over entry), entry `env`, and `PERSONA_HUB_URL` / `PERSONA_HUB_TOKEN` (manifest `hub_api`, as before);
   legacy `PERSONA_PLUGIN_*` names are also supplied and accepted.
+- **TTS voice list (#17843)**: while `tts_url` is configured, `GET /voices` reads the TTS endpoint's `GET …/v1/audio/voices` (sending `Authorization: Bearer` only when `tts_key` is set), caches good lists for 10 minutes, always includes `tts_default_voice` as default (else the endpoint's default, else the first), returns the last good list marked `stale: true` on failure, and falls back to `tts_default_voice` alone on `404` or when unreachable (`docs/assistant/voice.md` 5.10). Without `tts_url`, `GET /voices` behaves as before.
 
 ### Taking over manager.json entries
 

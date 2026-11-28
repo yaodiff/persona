@@ -538,11 +538,11 @@ func (c *coreChecks) accessorOK(fd *funcDecl) bool {
 // a constructor or a domain service that only hands a field out is a getter all the same.
 func (c *coreChecks) fieldReturn(fd *funcDecl) {
 	decl := fd.decl
-	if n := decl.Name.Name; n == "ID" || n == "Wire" || decl.Body == nil || len(decl.Body.List) != 1 {
+	if n := decl.Name.Name; n == "ID" || n == "Wire" {
 		return
 	}
-	ret, ok := decl.Body.List[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) == 0 {
+	results := soleReturn(decl)
+	if len(results) == 0 {
 		return
 	}
 	inputs := map[string]bool{}
@@ -554,12 +554,22 @@ func (c *coreChecks) fieldReturn(fd *funcDecl) {
 			inputs[n.Name] = true
 		}
 	}
-	for _, r := range ret.Results {
+	for _, r := range results {
 		if !fieldOf(r, inputs) {
 			return
 		}
 	}
-	c.at(fd.file, decl.Name, "core-accessor", fd.name()+"() hands state out, returning "+exprString(ret.Results[0]))
+	c.at(fd.file, decl.Name, "core-accessor", fd.name()+"() hands state out, returning "+exprString(results[0]))
+}
+
+// soleReturn gives the returned expressions when the body consists of one return.
+func soleReturn(decl *ast.FuncDecl) []ast.Expr {
+	if decl.Body != nil && len(decl.Body.List) == 1 {
+		if ret, ok := decl.Body.List[0].(*ast.ReturnStmt); ok {
+			return ret.Results
+		}
+	}
+	return nil
 }
 
 // fieldOf says whether e is a field reached from one of inputs (n.title, b.noteBuilder.title), parentheses and
@@ -1403,15 +1413,17 @@ func (c *coreChecks) mapField(fd *funcDecl, name string) bool {
 	return false
 }
 
-// seamRules is the seam-* rules: a seam exports no field or variable and takes no untyped value.
+// seamRules checks a seam's exported fields, variables, ports and direct field getters.
 func (c *coreChecks) seamRules() {
 	d := c.p.decls
+	types := seamTypes{}
 	for _, v := range d.values {
 		if v.tok == token.VAR && exported(v.name.Name) {
 			c.at(v.file, v.name, "seam-exported-field", v.name.Name+" is exported")
 		}
 	}
 	for _, t := range d.order {
+		types[t.name] = append(types[t.name], t)
 		if t.strct == nil {
 			c.seamPortType(t)
 			continue
@@ -1445,11 +1457,84 @@ func (c *coreChecks) seamRules() {
 	for _, fd := range d.funcs {
 		check(fd)
 	}
-	for _, t := range d.order {
-		for _, fd := range d.methods[t.name] {
+	for _, methods := range d.methods {
+		for _, fd := range methods {
 			check(fd)
+			if fd.decl.Name.IsExported() {
+				c.seamGetter(types, fd)
+			}
 		}
 	}
+}
+
+// seamGetter reports a direct return of a declared receiver field. A selector can also name a method.
+func (c *coreChecks) seamGetter(types seamTypes, fd *funcDecl) {
+	recv := receiverIdent(fd.decl)
+	for _, result := range soleReturn(fd.decl) {
+		sel, ok := ast.Unparen(result).(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		root := ast.Unparen(sel.X)
+		switch ptr := root.(type) {
+		case *ast.StarExpr:
+			root = ast.Unparen(ptr.X)
+		case *ast.UnaryExpr:
+			if ptr.Op == token.AND {
+				root = ast.Unparen(ptr.X)
+			}
+		}
+		id, ok := root.(*ast.Ident)
+		if !ok || id.Name != recv {
+			continue
+		}
+		if types.hasField(fd.recv, fd.file, sel.Sel.Name, false, nil) {
+			c.at(fd.file, fd.decl.Name, "core-accessor", fd.name()+"() hands state out, returning "+exprString(result))
+			return
+		}
+	}
+}
+
+// seamTypes keeps all build variants of a name. A declaration in the use's own file applies to that use;
+// elsewhere a field must be present in every possible declaration before a selector is known to read it.
+type seamTypes map[string][]*typeDecl
+
+func (types seamTypes) hasField(name string, file *File, field string, public bool, path []string) bool {
+	candidates := types[name]
+	if len(candidates) == 0 || contains(path, name) {
+		return false
+	}
+	for _, t := range candidates {
+		if t.file == file {
+			candidates = []*typeDecl{t}
+			break
+		}
+	}
+	public = public || ast.IsExported(name)
+	for _, t := range candidates {
+		// An alias shares its target's methods. A distinct private type does not acquire its base's public API.
+		if !public && !t.spec.Assign.IsValid() {
+			return false
+		}
+		if t.strct == nil {
+			pkg, base := baseType(t.spec.Type)
+			if pkg != "" || !types.hasField(base, t.file, field, public, append(path, name)) {
+				return false
+			}
+			continue
+		}
+		found := false
+		for _, f := range t.strct.Fields.List {
+			if contains(fieldNames(f), field) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // seamPortType checks the type a seam exports, leaving type parameter constraints outside the check.

@@ -118,6 +118,7 @@ struct PersonaApp: App {
                 model.retryRegistry() // launched in the background before the first unlock: the pairing reads now
                 PushRegistrar.shared.foreground() // notifications allowed in Settings since a denial: register now (#1861)
                 model.resumeLinks()
+                PortForwarder.shared.ensureReadyAll()
                 model.refreshExtensionSurfaces()
                 model.textLookup.foreground() // the lookup extension turned on or off elsewhere (#10977), at most once a minute
                 #if os(iOS)

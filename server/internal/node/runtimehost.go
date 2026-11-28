@@ -679,7 +679,7 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// to the runtime (codex_instance_claims.go), a runtime on the socket's only.
 		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces", "usage"}
 		if !h.isDaemon() {
-			features = append(features, "usage_windows", "leader_tools", "supervision_policy", "a2a_mcp", "remote_agent", "memory_tools", "codex_claims")
+			features = append(features, "usage_windows", "leader_tools", "supervision_policy", "a2a_mcp", "remote_agent", "memory_tools", "codex_claims", "input")
 			if hello.Caps.Assistant {
 				features = append(features, "assistant_pids")
 				if hello.Caps.AssistantEnvironment && !hello.Caps.RemoteAgent {
@@ -888,7 +888,11 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		}
 		var moved []string
 		var agyPaneBackground map[string][]proto.BackgroundTask
+		var waits map[runtimeInputKey]runtimeInputReport
 		if !h.isDaemon() { // a daemon's offline sessions are not resumed in this machine's terminal engine
+			if h.reportsInput() {
+				waits = runtimeInputReports(params)
+			}
 			x := runtimeRowExtras(params, len(p.Sessions))
 			if h.id() == agyRuntimeID {
 				agyPaneBackground = agyPaneBackgroundFromRows(params)
@@ -909,7 +913,7 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		if cap(list) > 2*len(list)+8 { // the list shrank: keep no array of the old size
 			list = append(make([]proto.Session, 0, len(list)), list...)
 		}
-		rewatch, driven := rh.reg.setSessionList(h, list, agyPaneBackground)
+		rewatch, driven := rh.reg.setSessionList(h, list, agyPaneBackground, waits)
 		for _, id := range driven { // started for the hub by another runtime: its cards go to the phone first here too
 			if h.peer != nil {
 				_ = h.peer.Notify("runtime.driven", map[string]any{"session_id": id})

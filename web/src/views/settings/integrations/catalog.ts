@@ -7,6 +7,7 @@ import { connectorSummary, connectorTone, storesData, type HubConnector } from "
 import { listAuthNote } from "../../../lib/extension-auth";
 import { channelOf, extensionState, extensionTone, type HubExtension } from "../../../lib/extensions";
 import { botSummary, botTone, type FeishuBotStatus } from "../../../lib/feishu-bot";
+import type { IntegrationOrigin, IntegrationRef } from "../../../lib/integrations-projection-wire";
 import { defaultManager, sameManager } from "../../../lib/manager-choice";
 import {
   isPushSubscription,
@@ -38,6 +39,8 @@ export interface LarkGatewaySummary {
 
 export interface IntegrationItem {
   key: string;
+  ref?: IntegrationRef;
+  origin?: IntegrationOrigin;
   kind: "builtin" | "extension" | "source";
   /** True when an `extension` item ships built into Persona (`extension.source === "builtin"`). */
   builtinExtension?: boolean;

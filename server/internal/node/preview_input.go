@@ -77,7 +77,20 @@ func (t *previewTab) navigate(u string) {
 
 // fromWeb does what the user did in the panel.
 func (t *previewTab) fromWeb(in *previewIn) {
+	if t.selectActivating {
+		switch in.T {
+		case "mouse", "key", "text", "select_choose", "select_close":
+			t.deferredInput = append(t.deferredInput, in)
+			return
+		}
+	}
 	switch in.T {
+	case "features":
+		t.applyFeatures(in.Select, in.PNG)
+	case "select_choose":
+		t.chooseSelect(in.ID, in.Index)
+	case "select_close":
+		t.closeSelectFromWeb(in.ID)
 	case "mouse":
 		if in.mouseSequence != 0 && in.mouseSequence <= t.dropMouseThrough {
 			return
@@ -119,13 +132,7 @@ func (t *previewTab) fromWeb(in *previewIn) {
 	case "cmd":
 		t.command(in.Name)
 	case "ack":
-		if t.unacked > 0 {
-			t.unacked--
-		}
-		if len(t.heldAck) > 0 {
-			t.cdp("Page.screencastFrameAck", map[string]any{"sessionId": t.heldAck[0]})
-			t.heldAck = t.heldAck[1:]
-		}
+		t.ackFrame(in.Seq)
 	case "nav":
 		t.navigate(t.resolve(in.URL))
 	case "reload":
@@ -149,6 +156,7 @@ func (t *previewTab) fromWeb(in *previewIn) {
 		if vp != t.vp {
 			ua := vp.mobile != t.vp.mobile
 			t.vp = vp
+			t.withdrawSelect()
 			t.applyViewport(true)
 			if ua { // the page asks who it is talking to as it loads
 				t.cdp("Page.reload", nil)

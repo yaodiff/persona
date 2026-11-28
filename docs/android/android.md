@@ -1127,6 +1127,16 @@ shrinking stays off (below), and debug builds are not shrunk.
   line to get a release through; split the method, unless it is a library's. It currently holds only zxing's
   `PDF417Common.<clinit>` (11,178, generated data).
 
+- **On every change, from the source**: this check needs a release build, which nothing runs on a PR, so two of its
+  failures used to reach `main` and stop the next release (#17578). Two count ratchets look for their causes in the
+  Kotlin sources in about a second each, in the Android lane, the scripts lane and check-fast (#17580):
+  `scripts/app/android_compose_budget.py` holds each `@Composable` function to 400 code lines, 30 `remember*` calls and
+  12 effects, and the larger ones listed in `scripts/app/android_compose_budget_baseline.json` to their counts, which
+  may only go down; `scripts/app/android_nested_throwables.py` fails when an exception nested in another class has an
+  outer class no `-keepnames` rule keeps (the ones still missing a rule are in its baseline). Split a page that fails
+  the first: state into a holder, effects into a side-effect composable, sheets and dialogs into their own composable.
+  The dex check stays the authority; a hosted release build is not run on PRs (it needs NDK 29 and the Rust core for
+  two ABIs, and hosted CI runs only on dispatch).
 - **Rollback**: `-dontoptimize` in `proguard-rules.pro` goes back to shrinking only (a 33 MB APK; the name rules can
   stay). `isMinifyEnabled = false` in `android/app/build.gradle.kts` turns R8 off. Either way, change the assertion that
   pins it in `scripts/release/test_check_android_shrink.py` in the same commit. The test runs in the scripts CI shard and in the

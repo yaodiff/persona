@@ -70,8 +70,9 @@ type Client struct {
 	// context (about 0.85 MB) and its largest compressed message. A hub only compresses when it is offered.
 	Uncompressed bool
 
-	// probeOver, probeEvery replace the constants of the same names (tests).
+	// probeOver, probeEvery, maxMessage replace the constants of the same names (tests).
 	probeOver, probeEvery time.Duration
+	maxMessage            int
 
 	mu   sync.Mutex
 	peer *rpc.Peer     // the connection that said its handshake; nil between connections
@@ -83,6 +84,13 @@ func orDefault(d, def time.Duration) time.Duration {
 		return d
 	}
 	return def
+}
+
+func (c *Client) maxMessageBytes() int {
+	if c.maxMessage > 0 {
+		return c.maxMessage
+	}
+	return MaxMessage
 }
 
 func (c *Client) logf(format string, args ...any) {
@@ -238,7 +246,8 @@ func (c *Client) session(ctx context.Context) (helloed bool, err error) {
 		return false, err
 	}
 	defer ws.CloseNow()
-	conn := NewConn(sctx, ws)
+	limit := c.maxMessageBytes()
+	conn := newConn(sctx, ws, int64(limit))
 	go func() {
 		err := Keepalive(sctx, ws, orDefault(c.PingEvery, PingEvery), orDefault(c.PingTimeout, PingTimeout))
 		if sctx.Err() == nil {
@@ -247,6 +256,11 @@ func (c *Client) session(ctx context.Context) (helloed bool, err error) {
 		}
 	}()
 	p := rpc.New("s", conn)
+	p.ReadLimit = limit
+	p.WriteLimit = limit
+	p.OnWriteRejected = func(kind, op string, size, max int) {
+		c.logf("bus: rejected outgoing %s %s: %d bytes (limit %d)", kind, op, size, max)
+	}
 	p.OnRequest, p.OnEvent, p.Cancels = c.OnRequest, c.OnEvent, c.Cancels
 	served := make(chan error, 1)
 	go func() { served <- p.Serve(sctx, conn) }()

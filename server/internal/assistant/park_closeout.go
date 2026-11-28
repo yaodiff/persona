@@ -394,7 +394,7 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 		}
 		p, ok = closeoutPark(reply, previous, now, s.location(ctx))
 	}
-	if !ok {
+	if !ok || verifyParkTarget(t.ID, p.Evidence) != nil {
 		return false
 	}
 	dependency := automaticDependency(p)

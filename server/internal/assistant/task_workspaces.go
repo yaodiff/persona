@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
@@ -55,7 +56,17 @@ func (s *Service) backendWorkspace(ctx context.Context, id, op string) (taskWork
 }
 func (s *Service) backendWorkspaceCall(ctx context.Context, method string, req taskworkspace.Request) (taskworkspace.Record, error) {
 	var result taskworkspace.Record
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	timeout := taskworkspace.RPCTimeout
+	if method == "prepare" {
+		remoteRepos := 0
+		for _, source := range req.Plan.Source.Repositories.Repositories {
+			if source.Local == nil {
+				remoteRepos++
+			}
+		}
+		timeout = taskworkspace.PrepareTimeout(remoteRepos)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := s.call(callCtx, req.Plan.Source.MachineID, taskworkspace.MethodPrefix+method, req, &result)
 	if err != nil {
@@ -413,7 +424,7 @@ func (s *Service) taskWorkspaceRoutes() {
 		}
 		apierr.WriteJSON(w, view)
 	})
-	s.handle("POST /api/v1/todos/{id}/backend-workspace/prepare", func(w http.ResponseWriter, r *http.Request) {
+	s.handle(assistantwire.RouteBackendWorkspacePrepare, func(w http.ResponseWriter, r *http.Request) {
 		var in namingRequest
 		if !namingBody(w, r, &in) {
 			return

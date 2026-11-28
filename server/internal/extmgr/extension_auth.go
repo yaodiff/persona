@@ -16,9 +16,12 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -64,6 +67,15 @@ type authStatus struct {
 	Account    string     `json:"account,omitempty"`
 	Message    string     `json:"message,omitempty"`
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+}
+
+func authStatusFromWire(status wire.AuthStatus) authStatus {
+	st := authStatus{State: status.State, Account: status.Account, Message: status.Message}
+	if !status.ExpiresAt.IsZero() {
+		expiresAt := status.ExpiresAt
+		st.ExpiresAt = &expiresAt
+	}
+	return st
 }
 
 // authPrompt is a sign-in step: the connectors' Prompt, and when its code or link stops working.
@@ -290,8 +302,9 @@ func (ps *extensions) askAuth(ctx context.Context, id string) (*ExtensionAuth, e
 	}
 	ctx, cancel := context.WithTimeout(ctx, authStatusWait)
 	defer cancel()
-	var st authStatus
-	if err := proc.Call(ctx, "auth.status", map[string]any{}, &st); err != nil {
+	status, err := buswire.Call(ctx, proc, extwire.AuthStatusMethod, buswire.None{})
+	st := authStatusFromWire(status)
+	if err != nil {
 		var remote *rpc.Error
 		st = authStatus{State: authError, Message: err.Error(), hubMessage: !errors.As(err, &remote) || errors.As(err, new(*i18n.Message))}
 	} else if !validAuthState(st.State) {
@@ -476,11 +489,12 @@ func (h *Manager) authRoutes(api *http.ServeMux, full func(f func(w http.Respons
 		epoch := ps().auth.epochOf(p.Record.ID)
 		ctx, cancel := context.WithTimeout(r.Context(), authStepWait)
 		defer cancel()
-		var st authStatus
-		if err := proc.Call(ctx, "auth.logout", map[string]any{}, &st); err != nil {
+		status, err := buswire.Call(ctx, proc, extwire.AuthLogoutMethod, buswire.None{})
+		if err != nil {
 			writeExtensionResponseErr(w, r, http.StatusBadGateway, err)
 			return
 		}
+		st := authStatusFromWire(status)
 		ps().reg.Audit(r.Context(), p.Record.ID, "auth_logout", actor(r), nil)
 		cur := ps().reg.Snapshot(p.Record.ID)
 		if cur != nil && cur.Full != nil && cur.Full.Auth != nil {

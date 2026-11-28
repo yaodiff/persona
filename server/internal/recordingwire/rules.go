@@ -33,6 +33,11 @@ const (
 	MinutesLineRunes = 4000
 	// MinutesHubWait is how long a hub-mode meeting's minutes wait for its final transcript after the complete upload.
 	MinutesHubWait = 45 * time.Minute
+	// SpeakersFinalWait is the minimum wait for speaker separation after the final transcript was stored (#17674).
+	SpeakersFinalWait = 10 * time.Minute
+	// SpeakersAudioDivisor and SpeakersAudioPad define the audio-proportional speaker wait limit: duration / 5 + 2 min.
+	SpeakersAudioDivisor = 5
+	SpeakersAudioPad     = 2 * time.Minute
 	// PhotoLabel marks a photo's line in photos.md and in the minutes' input.
 	PhotoLabel = "photo:"
 	// The kinds of knowledge-base entry the recordings' writers name.
@@ -222,6 +227,44 @@ func TranscriptionDone(r *Recording) bool {
 func TranscriptionHolds(r *Recording, now time.Time) bool {
 	t := HubTranscription(r)
 	return t != nil && !t.Done() && !t.CompleteAt.IsZero() && now.Before(t.CompleteAt.Add(MinutesHubWait))
+}
+
+// SpeakersWaitDeadline is the persisted UTC instant past which minutes stop waiting for speaker separation (#17674):
+// the later of FinalAt + SpeakersFinalWait and Since + (duration / SpeakersAudioDivisor + SpeakersAudioPad). Zero when
+// neither timestamp is recorded or r is not in waiting state after hub transcription ended. Because every input is
+// stored in meeting.json / meta.json, a restart never extends the deadline.
+func SpeakersWaitDeadline(r *Recording) time.Time {
+	if r == nil || r.Conv == nil || r.Conv.Speakers == nil || r.Conv.Speakers.State != SpeakerStateWaiting {
+		return time.Time{}
+	}
+	t := HubTranscription(r)
+	if t == nil || !t.Done() {
+		return time.Time{}
+	}
+	sp := r.Conv.Speakers
+	var d1, d2 time.Time
+	if !t.FinalAt.IsZero() {
+		d1 = t.FinalAt.Add(SpeakersFinalWait)
+	}
+	if !sp.Since.IsZero() {
+		dur := r.Duration
+		if dur <= 0 && r.EndedAt != nil && !r.StartedAt.IsZero() && r.EndedAt.After(r.StartedAt) {
+			dur = r.EndedAt.Sub(r.StartedAt).Seconds()
+		}
+		if dur < 0 || math.IsNaN(dur) || math.IsInf(dur, 0) {
+			dur = 0
+		}
+		audioWait := time.Duration(dur/float64(SpeakersAudioDivisor)*float64(time.Second)) + SpeakersAudioPad
+		d2 = sp.Since.Add(audioWait)
+	}
+	return later(d1, d2)
+}
+
+// SpeakersHolds: r's minutes wait for speaker separation: speakers.state is waiting, hub transcription has ended
+// (final or failed), and now is before SpeakersWaitDeadline(r) (#17674).
+func SpeakersHolds(r *Recording, now time.Time) bool {
+	deadline := SpeakersWaitDeadline(r)
+	return !deadline.IsZero() && now.Before(deadline)
 }
 
 // HourStart is the start of t's clock hour in zone, by the zone's offset at t, so every hour is an hour of absolute

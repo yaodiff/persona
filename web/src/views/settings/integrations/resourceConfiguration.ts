@@ -27,6 +27,8 @@ type PreparedSave<Remote, Draft> = {
 type ResourceSave<Remote, Draft> = {
   label: string;
   key?: string | object;
+  /** A single field this job writes without a separate Save action. */
+  immediateField?: string;
   refreshBefore?: boolean;
   prepare: (remote: Remote) => PreparedSave<Remote, Draft>;
 };
@@ -77,6 +79,10 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
   }) {}
 
   snapshot = () => this.state;
+
+  isSavingField(path: string) {
+    return this.queue.some((job) => job.save.immediateField === path);
+  }
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);

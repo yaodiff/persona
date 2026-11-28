@@ -766,6 +766,227 @@ func TestAgyBridgeRestartWaitsForAWorkingSession(t *testing.T) {
 	waitFor(t, "the companion started again", func() bool { m := starts(marks); return len(m) >= 3 && m[2] == "start" })
 }
 
+// A session whose turn ended keeps the companion working while finite background work it started still runs (#17200):
+// a command, workflow or subagent, as a Background entry or a running Subagents / Workflows entry. A standing schedule
+// (kind monitor) never ends and does not.
+func TestAgyWorkingCountsFiniteBackgroundWork(t *testing.T) {
+	idle := func(edit func(*proto.Session)) proto.Session {
+		s := proto.Session{SessionID: "s1", Status: proto.StatusIdle}
+		if edit != nil {
+			edit(&s)
+		}
+		return s
+	}
+	task := func(kind string) proto.BackgroundTask {
+		t := proto.BackgroundTask{ID: "s1/task-1", Kind: kind, StartedAt: time.Now()}
+		if kind == "shell" {
+			t.Command = "make test" // a matched run_command carries its command line
+		}
+		return t
+	}
+	for _, tc := range []struct {
+		name     string
+		sessions []proto.Session
+		want     bool
+	}{
+		{"no sessions", nil, false},
+		{"idle", []proto.Session{idle(nil)}, false},
+		{"working", []proto.Session{{SessionID: "s1", Status: proto.StatusWorking}}, true},
+		{"background command", []proto.Session{idle(func(s *proto.Session) { s.Background = []proto.BackgroundTask{task("shell")} })}, true},
+		{"background workflow", []proto.Session{idle(func(s *proto.Session) { s.Background = []proto.BackgroundTask{task("workflow")} })}, true},
+		{"background subagent", []proto.Session{idle(func(s *proto.Session) { s.Background = []proto.BackgroundTask{task("agent")} })}, true},
+		{"only monitor schedules", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{task("monitor"), {ID: "s1/task-2", Kind: "monitor"}}
+		})}, false},
+		{"cron schedule reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Cron: */5 * * * * Poll"}}
+		})}, false},
+		{"command described as cron", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Cron: rotate logs", Command: "./rotate.sh"}}
+		})}, true},
+		{"unmatched timer reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Timer: 60s"}}
+		})}, false},
+		{"unmatched task reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Check status"}}
+		})}, false},
+		{"one-shot timer (monitor)", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "monitor", Description: "Timer: 60s"}}
+		})}, false},
+		{"monitor beside a command", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{task("monitor"), {ID: "s1/task-2", Kind: "shell", Command: "./serve"}}
+		})}, true},
+		{"running subagent", []proto.Session{idle(func(s *proto.Session) { s.Subagents = []proto.Subagent{{ID: "a1", Running: true}} })}, true},
+		{"finished subagent", []proto.Session{idle(func(s *proto.Session) { s.Subagents = []proto.Subagent{{ID: "a1"}} })}, false},
+		{"running workflow", []proto.Session{idle(func(s *proto.Session) {
+			s.Workflows = []proto.Workflow{{TaskID: "w1", Status: proto.WorkflowRunning, Running: true}}
+		})}, true},
+		{"finished workflow", []proto.Session{idle(func(s *proto.Session) {
+			s.Workflows = []proto.Workflow{{TaskID: "w1", Status: proto.WorkflowCompleted}}
+		})}, false},
+		{"another session's command", []proto.Session{idle(nil), {SessionID: "s2", Status: proto.StatusDone,
+			Background: []proto.BackgroundTask{{ID: "s2/task-1", Kind: "shell", Command: "make test"}}}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &runtimeConn{sessions: tc.sessions}
+			if got := h.agyWorking(); got != tc.want {
+				t.Fatalf("agyWorking() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// agyWorking reads the companion's runtime.sessions as the node keeps them: the background rows the companion sends
+// (integrations/antigravity/lib/background.js backgroundRow) keep their kinds through normalizeRuntimeSessions, so a
+// command holds the drain and a schedule alone does not; a stopped session's tasks are dropped (#17200).
+func TestAgyWorkingReadsTheCompanionsList(t *testing.T) {
+	reg := newRuntimeRegistry()
+	h := reg.add(nil)
+	h.ready, h.hello.Runtime = true, agyRuntimeID
+	id := agyAgent + "-" + agyTestID
+	pushTasks := func(status string, tasks ...string) bool {
+		t.Helper()
+		raw := fmt.Sprintf(`{"sessions":[{"session_id":%q,"status":%q,"background":[%s]}]}`, id, status, strings.Join(tasks, ","))
+		var p struct {
+			Sessions []proto.Session `json:"sessions"`
+		}
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			t.Fatal(err)
+		}
+		reg.setSessions(h, normalizeRuntimeSessions(h, p.Sessions))
+		return h.agyWorking()
+	}
+	push := func(status string, kinds ...string) bool {
+		t.Helper()
+		var tasks []string
+		for i, kind := range kinds {
+			command := ""
+			if kind == "shell" {
+				command = `,"command":"make test"` // a matched run_command carries its command line
+			}
+			tasks = append(tasks, fmt.Sprintf(`{"id":"%s/task-%d","kind":%q%s,"started_at":"2026-11-28T09:00:00Z"}`, agyTestID, i+1, kind, command))
+		}
+		return pushTasks(status, tasks...)
+	}
+	if !push(proto.StatusIdle, "monitor", "shell") {
+		t.Error("an idle session with a background command does not hold the drain")
+	}
+	if !push(proto.StatusIdle, "workflow") || !push(proto.StatusIdle, "agent") {
+		t.Error("an idle session with a background workflow or subagent does not hold the drain")
+	}
+	if push(proto.StatusIdle, "monitor") {
+		t.Error("a standing schedule alone holds the drain")
+	}
+	if push(proto.StatusOffline, "shell") {
+		t.Error("a stopped session's tasks hold the drain")
+	}
+	if push(proto.StatusIdle) {
+		t.Error("an idle session with nothing running holds the drain")
+	}
+	// A cron schedule whose start notice the companion could not match to its call arrives as a shell (background.js
+	// extractBackground's default); its description still says it is one.
+	unmatchedCron := `{"id":"` + agyTestID + `/task-1","kind":"shell","description":"Cron: */30 * * * * Check status","started_at":"2026-11-28T09:00:00Z"}`
+	if pushTasks(proto.StatusIdle, unmatchedCron) {
+		t.Error("a cron schedule reported as a shell holds the drain")
+	}
+	command := `{"id":"` + agyTestID + `/task-2","kind":"shell","description":"Run the tests","command":"make test","started_at":"2026-11-28T09:00:00Z"}`
+	unmatchedCommand := `{"id":"` + agyTestID + `/task-3","kind":"shell","description":"Wait for ready","started_at":"2026-11-28T09:00:00Z"}`
+	if !pushTasks(proto.StatusIdle, unmatchedCron, command) {
+		t.Error("a background command beside a cron schedule does not hold the drain")
+	}
+	// Unmatched tasks (no command line) and schedules cannot be told apart from the row, so neither holds the drain:
+	// a misread one must never keep an upgrade waiting forever.
+	if pushTasks(proto.StatusIdle, unmatchedCommand) {
+		t.Error("an unmatched task without its command line holds the drain")
+	}
+}
+
+// A new agy waits for a background command a session left running, as it does for a working turn (#17200), and both
+// the restart and waitAgyIdle go ahead once only a standing schedule (monitor) is left.
+func TestAgyBridgeRestartWaitsForFiniteBackgroundWork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script fixture")
+	}
+	dir := t.TempDir()
+	bin, marks := filepath.Join(dir, "agy"), filepath.Join(dir, "marks")
+	writeAgy(t, bin, "v1")
+	oldFind, oldCmd, oldProbe := findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery
+	t.Cleanup(func() { findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery = oldFind, oldCmd, oldProbe })
+	agyBridgeProbeEvery = 10 * time.Millisecond
+	var probes atomic.Int32 // the bridge looks up agy once per probe, before it asks whether the companion is busy
+	findAgyExecutable = func() string {
+		probes.Add(1)
+		return bin
+	}
+	agyBridgeCommand = func(context.Context, *RuntimeHost, string, string) (*exec.Cmd, error) {
+		script := fmt.Sprintf("echo start >> %q; trap 'echo stopped >> %q; exit 0' TERM; while :; do sleep 0.02; done", marks, marks)
+		return exec.Command("/bin/sh", "-c", script), nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	host := NewRuntimeHost("test", filepath.Join(dir, "runtime.sock"))
+	logs := &syncBuffer{}
+	host.logger = log.New(logs, "", 0)
+	host.setAgyBridge(true)
+	defer host.setAgyBridge(false)
+	waitFor(t, "the companion started", func() bool { return slices.Equal(starts(marks), []string{"start"}) })
+
+	instance := host.builtinAgyInstance()
+	client, hello := startAgyHello(t, ctx, host, instance)
+	if err := <-hello; err != nil {
+		t.Fatal(err)
+	}
+	var builtin *runtimeConn
+	waitFor(t, "the companion registered", func() bool { builtin, _ = host.agyPeers(instance); return builtin != nil })
+	monitor := proto.BackgroundTask{ID: "s1/task-1", Kind: "monitor", Description: "Cron: */5 * * * *"}
+	background := func(tasks ...proto.BackgroundTask) {
+		builtin.mu.Lock()
+		builtin.sessions = []proto.Session{{SessionID: "s1", Status: proto.StatusIdle, Background: tasks}}
+		builtin.mu.Unlock()
+	}
+	command := proto.BackgroundTask{ID: "s1/task-2", Kind: "shell", Command: "make test"}
+
+	// waitAgyIdle (the external-runtime handoff's wait) holds while the command runs. Without it waitAgyIdle returns on
+	// its first look, with no tick to wait for, so the window below only has to outlast a goroutine start.
+	background(monitor, command)
+	idle := make(chan struct{})
+	go func() {
+		builtin.waitAgyIdle(ctx)
+		close(idle)
+	}()
+	select {
+	case <-idle:
+		t.Fatal("waitAgyIdle returned while a background command was running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	background(monitor)
+	select {
+	case <-idle:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitAgyIdle still waits with only a monitor schedule left")
+	}
+
+	// So does the restart on a new agy.
+	background(monitor, command)
+	writeAgy(t, bin, "v2")
+	waitFor(t, "the restart to wait for the background command", func() bool {
+		return strings.Contains(logs.String(), "agy at "+bin+" was replaced; restarting once no agy session is working or running background work") &&
+			host.agyDraining(instance)
+	})
+	// Two more probes found the command still running. Had one restarted, it would have stopped the companion (and its
+	// trap written "stopped") before the next lookup of agy, the one for the companion's next start.
+	seen := probes.Load()
+	waitFor(t, "two more probes", func() bool { return probes.Load() >= seen+2 })
+	if got := starts(marks); !slices.Equal(got, []string{"start"}) {
+		t.Fatalf("the companion was stopped while a background command was running: %v", got)
+	}
+
+	background(monitor)
+	waitFor(t, "the restart once only the monitor is left", func() bool { return slices.Contains(starts(marks), "stopped") })
+	_ = client.Close()
+	waitFor(t, "the companion started again", func() bool { m := starts(marks); return len(m) >= 3 && m[2] == "start" })
+}
+
 // What counts as a change: another path, another file at the path, none any more; the same one seen twice in a row.
 func TestAgyChangeSettlesOnTwoProbes(t *testing.T) {
 	dir := t.TempDir()

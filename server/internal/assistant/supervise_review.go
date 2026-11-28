@@ -171,6 +171,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		if err != nil {
 			return "", err
 		}
+		if err := verifyParkTarget(strings.TrimSpace(a.TodoID), p.Evidence); err != nil {
+			return "", err
+		}
 		park = p
 	} else if strings.TrimSpace(a.Until) != "" || strings.TrimSpace(a.WaitingOn) != "" || a.Evidence != nil {
 		return "", fmt.Errorf("until, waiting_on and evidence apply to parked only")
@@ -239,7 +242,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return fmt.Sprintf("Task %s is already accepted and closed.", t.ID) + terminalCleanupWords(terminalCleanupStatus(plan)), nil
 		}
 	}
-	if decided && slices.ContainsFunc(decision.Options, func(o DecisionOption) bool { return terminalResumeLabel(o.Label) }) {
+	if decided && slices.ContainsFunc(decision.Options, func(o DecisionOption) bool { return terminalResumeLabel(o.Label, t.Agents) }) {
 		return "", errors.New("Resume on a terminal page is an action only the owner can perform. Put that instruction in the reason and give options the supervisor can carry out, such as starting a replacement or waiting for the owner. A decision button cannot resume an Agent")
 	}
 	if err := restated(t, a.Verdict, decision); err != nil {
@@ -318,8 +321,6 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		if err := guard(ctx, t, note, reason, checks, a.AlsoDone); err != nil {
 			return "", err
 		}
-	}
-	if verdict == reviewAccepted && !withdraw {
 		scope := ""
 		if a.FollowUpTodoID != "" {
 			scope = a.DeferredScope // the linked to-do is checked inside the write boundary below
@@ -720,6 +721,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return "The owner already replied in the Agent conversation. The reply was handed to you for review and no card was sent. Verify the result or clarify the question.", nil
 		}
 		conclusion.Outcome, conclusion.Reason, conclusion.Recommend, conclusion.Decision = outcomeDecide, decision.Reason, decision.Recommend, decision
+		conclusion.Reviewer = self
 		conclusion.Check = scheduledCheckOf(ctx) // raised by a recurring check (escalateScheduledTodo), never by a model's call
 		reversible := false
 		switch {
@@ -845,7 +847,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		displayMax = maxReworkRounds
 	}
 	text := prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: v.Round, Max: displayMax, Checks: reworkChecks(checks), Note: note})
-	sent, err := s.sendToTask(ctx, t, text)
+	// The task's origin still owns delivery. Attribute an owner-only refusal to the supervisor who tried this rework.
+	sent, err := s.sendToTask(context.WithValue(ctx, reworkReviewerKey{}, beginResumeReview(self)), t, text)
 	if err != nil {
 		return "", fmt.Errorf("recorded rework round %d, but sending it to the agent failed: %v (send it with agent_send)", v.Round, err)
 	}
@@ -1298,7 +1301,8 @@ func (s *Service) resumeStoppedTaskAgent(ctx context.Context, t Todo, c proto.Se
 	if !ok {
 		return "", errors.New("its machine is offline")
 	}
-	if err := s.resumeAllowed(ctx, t.Origin, am, c, "rework of this task", nil); err != nil {
+	reviewer, _ := ctx.Value(reworkReviewerKey{}).(resumeReview)
+	if err := s.resumeAllowed(ctx, t.Origin, am, c, "rework of this task", nil, reviewer); err != nil {
 		return "", err
 	}
 	return s.resumeAndSend(ctx, t.Origin, am, c, map[string]any{"text": text}, "rework of this task", text, "", nil)

@@ -23,5 +23,7 @@
   "failed_hint": "Open the Inbox or the source to see what needs attention.",
   "retry": "Retry",
   "current_suggestion": "Current suggestion",
-  "retry_after": "The source suggests retrying after {seconds} seconds."
+  "retry_after": "The source suggests retrying after {seconds} seconds.",
+  "mentions_will": "Will @:",
+  "mentions_sent": "@ mentioned:"
 }

@@ -1,5 +1,19 @@
 # Lessons: hub / node and networking
 
+## A stale write gives way only to a newer one already written (2026-11-28, #17826)
+
+#17817 ordered the node's host refreshes so an older snapshot cannot replace a newer one (#2133): each refresh numbers
+its snapshot and its merge, and the lower number gives way. It gave way as soon as a higher number was taken, while that
+refresh was still running. The refresh that gave way returned success, and its caller (`sessions.list`, the list
+`engine.use` sends) read `n.agents` as they were before both refreshes: right after switching to Orca, none, in about
+half the runs of `TestOrcaEngineUse`.
+
+- Drop a write only for a newer one already done (`agentsCommitted` in `server/internal/node/placement.go`), never for
+  one that has only started; the newer one still replaces it when it lands.
+- A refresh whose own snapshot was superseded still merges what is current (the newer snapshots, never its own), so a
+  caller that reads after it gets state at least as new as what it asked for.
+- Test both orders: the older one finishing while the newer one is still merging, and the newer one finishing first.
+
 ## An IMAP retry that replays the step that ended the connection fails the same way (2026-11-22, #12808)
 
 go-imap/v2 completes a command when its tagged answer arrives, before it reads on. A server that hangs up right after

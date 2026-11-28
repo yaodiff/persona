@@ -12,6 +12,19 @@ import (
 // Mechanical waits are screened before routing, including before starting a background supervisor.
 // Restoring a scheduled wake's signal (rather than marking it told) keeps an expired or cancelled wake retryable.
 func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseSignal, now, prev time.Time) []superviseSignal {
+	var quiet []superviseSignal
+	list = slices.DeleteFunc(list, func(g superviseSignal) bool {
+		if !s.routineSignalSuppressed(g, now) {
+			return false
+		}
+		quiet = append(quiet, g)
+		return true
+	})
+	if len(quiet) > 0 {
+		s.turnsTold(ctx, quiet)
+		s.ackSupervisePending(quiet)
+		s.logf("supervise: %d routine signal(s) suppressed by task state or recent owner input", len(quiet))
+	}
 	actionable := map[string]bool{}
 	for _, g := range list {
 		switch g.Kind {

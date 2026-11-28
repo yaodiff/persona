@@ -2,9 +2,11 @@ package assistant
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -93,4 +95,21 @@ func TestNativeLoopNoopKeepsParkingAndDeadline(t *testing.T) {
 		t.Fatalf("native turn not recorded as no-change: %+v", turn)
 	}
 	checkPark()
+}
+
+func TestNativeLoopNoopSortsWithRoutineSignals(t *testing.T) {
+	entries := sortEntries([]prompts.SuperviseEntry{
+		{Kind: sigLoopNoop},
+		{Kind: sigDecide},
+		{Kind: sigReview},
+		{Kind: sigNoProgress},
+	})
+	var kinds []string
+	for _, entry := range entries {
+		kinds = append(kinds, entry.Kind)
+	}
+	want := []string{sigDecide, sigReview, sigLoopNoop, sigNoProgress}
+	if !slices.Equal(kinds, want) {
+		t.Fatalf("digest order = %v, want %v", kinds, want)
+	}
 }

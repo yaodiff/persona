@@ -544,10 +544,12 @@ def exercise_app(ctl, base, code, edition, shots, master):
         require(ctl, label="All Caught Up")
         values = {
             "lark_filter": bool(matches(elements(ctl), label="Lark")),
+            "mail_filter": bool(matches(elements(ctl), label="Mail")),
             "lark_mail_message": bool(matches(elements(ctl), label="New Lark messages and emails show up here.")),
             "generic_message": bool(matches(elements(ctl), label="New messages show up here.")),
         }
         check(values["lark_filter"] == full, f"{edition}/{style}: wrong Lark source-filter visibility")
+        check(values["mail_filter"] == full, f"{edition}/{style}: wrong Mail kind-filter visibility")
         check(values["lark_mail_message"] == full, f"{edition}/{style}: wrong Lark/mail empty-state wording")
         check(values["generic_message"] != full, f"{edition}/{style}: wrong generic empty-state wording")
         proof["inbox_styles"][style] = values
@@ -555,6 +557,7 @@ def exercise_app(ctl, base, code, edition, shots, master):
         capture_both(ctl, shots, edition, "inbox" if style == "glass" else "inbox-beautiful", proof)
     ctl.call("set-style", style="glass")
     proof["entries"]["inbox-lark-filter"] = proof["inbox_styles"]["glass"]["lark_filter"]
+    proof["entries"]["inbox-mail-filter"] = proof["inbox_styles"]["glass"]["mail_filter"]
     proof["entries"]["inbox-empty-lark-mail"] = proof["inbox_styles"]["glass"]["lark_mail_message"]
     proof["pages"]["inbox"] = "loaded empty"
 
@@ -705,7 +708,8 @@ def validate_proof(proof, edition, run_id, shots):
     styles = proof.get("inbox_styles") or {}
     for style in ("glass", "beautiful"):
         values = styles.get(style) or {}
-        check(values.get("lark_filter") is full and values.get("lark_mail_message") is full and
+        check(values.get("lark_filter") is full and values.get("mail_filter") is full and
+              values.get("lark_mail_message") is full and
               values.get("generic_message") is (not full), f"{edition}/{style}: the source-presence evidence is wrong")
     check(proof.get("app_alive_at_end") is True, f"{edition}: the app did not answer at the end")
     captures = proof.get("screenshots") or []
@@ -713,7 +717,7 @@ def validate_proof(proof, edition, run_id, shots):
           f"{edition}: expected light/dark captures are missing")
     for name in ("sidebar-health", "settings-live-screen", "settings-meetings", "settings-health",
                  "settings-mail", "connector-lark-bot", "channel-feishu", "voice-extension", "composer-menu-meeting",
-                 "inbox-lark-filter", "inbox-empty-lark-mail"):
+                 "inbox-lark-filter", "inbox-mail-filter", "inbox-empty-lark-mail"):
         check(proof.get("entries", {}).get(name) is full, f"{edition}: {name} has the wrong proof value")
     if not full:
         check(proof.get("entries", {}).get("connector-lark") is False,

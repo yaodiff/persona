@@ -293,7 +293,7 @@ func (s *Service) orphanWatch(ctx context.Context, now time.Time) {
 		listed[t.ID] = agents
 		o, orphaned := taskOrphan(t, agents, now)
 		if q, ok := queued[t.ID]; ok && len(agents) == 0 &&
-			!orphanWaitsOnDecision(t) && !s.taskStartOnWay(t.ID) {
+			!queuedStartWaits(t) && !s.taskStartOnWay(t.ID) {
 			found[t.ID] = q
 		} else if orphaned {
 			if group := workers[t.ID]; !group.incomplete && len(group.accepted) > 0 && slices.ContainsFunc(t.Agents, func(a TodoAgent) bool {
@@ -386,12 +386,22 @@ func (s *Service) orphanWatch(ctx context.Context, now time.Time) {
 	}
 }
 
+// orphanWaitsOnDecision says whether supervised task t waits on purpose, for its review or for the owner, so that
+// nobody is meant to work on it and an agent it no longer has is no orphan. The owner's check is not such a wait for
+// its agents: a worker gone during it is still an orphan, so the supervisor hears of it and can review findings that
+// went stale meanwhile (#15578).
 func orphanWaitsOnDecision(t Todo) bool {
 	switch t.Supervision.state(t) {
-	case reviewPending, reviewNeedsUser, reviewParked, reviewTimedOut, reviewClosing, reviewUserCheck:
+	case reviewPending, reviewNeedsUser, reviewParked, reviewTimedOut, reviewClosing:
 		return true
 	}
 	return false
+}
+
+// queuedStartWaits says whether a start still queued for t waits on purpose: as orphanWaitsOnDecision, and also while
+// the owner checks the result, when no start is due (#17090).
+func queuedStartWaits(t Todo) bool {
+	return orphanWaitsOnDecision(t) || t.Supervision.state(t) == reviewUserCheck
 }
 
 func queuedTaskOrphan(planID string, t PlanTask, now time.Time) (TodoOrphan, bool) {

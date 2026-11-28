@@ -18,6 +18,8 @@
     "build:development": "tsc -b && vite build --mode development-update && vite build --config vite.public.config.ts",
     "build:core-only": "PERSONA_WEB_MODULES=none vite build --outDir node_modules/.cache/persona-core-only --emptyOutDir",
     "test:core-only": "PERSONA_WEB_MODULES=none node scripts/process-group.mjs -- node scripts/run-tests.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:list": "playwright test --list",
     "build:public": "vite build --config vite.public.config.ts",
     "dev:public": "vite --config vite.public.config.ts",
     "typecheck": "tsc -b",
@@ -59,6 +61,7 @@
     "xlsx": "file:vendor/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.0",
     "@tailwindcss/vite": "4.1.16",
     "@types/node": "22.20.5",
     "@types/react": "19.2.2",

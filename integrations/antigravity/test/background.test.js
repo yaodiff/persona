@@ -330,3 +330,367 @@ test('AGY reconciles earliest event between manage_task(list) and server restart
     ])
   }
 })
+
+test('AGY TimerCondition early cancellation reconciles matching messages and guards active tasks', () => {
+  const received = '2026-06-01T10:00:02Z'
+  const sender = `${conversation}/task-2`
+  const subagent = '22222222-3333-4444-8555-666666666666'
+  const cases = [
+    { name: 'any sender (task finish)', args: { DurationSeconds: 180, TimerCondition: 'any' }, msgSender: sender, msgBody: `Task id "${sender}" finished with result: ok`, at: received, canceled: true },
+    { name: 'any sender (JSON-encoded compact args)', args: { DurationSeconds: '180', TimerCondition: JSON.stringify('any') }, msgSender: sender, msgBody: 'Done', at: received, canceled: true },
+    { name: 'any sender (subagent message)', args: { DurationSeconds: 60, TimerCondition: 'any' }, msgSender: subagent, msgBody: 'Subagent finished', at: received, canceled: true },
+    { name: 'specific subagent idle system notice', args: { DurationSeconds: 60, TimerCondition: subagent }, msgSender: 'system', msgBody: `Subagent ${subagent} has gone idle. This was the subagent's most recent response: Done`, at: received, canceled: true },
+    { name: 'specific full task sender', args: { DurationSeconds: 60, TimerCondition: sender }, msgSender: sender, msgBody: 'Ready', at: received, canceled: true },
+    { name: 'specific short task sender', args: { DurationSeconds: 60, TimerCondition: 'task-2' }, msgSender: sender, msgBody: 'Ready', at: received, canceled: true },
+    { name: 'different sender', args: { DurationSeconds: 60, TimerCondition: sender }, msgSender: `${conversation}/task-3`, msgBody: 'Ready', at: received, canceled: false },
+    { name: 'TimerCondition never', args: { DurationSeconds: 60, TimerCondition: 'never' }, msgSender: sender, msgBody: 'Ready', at: received, canceled: false },
+    { name: 'TimerCondition omitted', args: { DurationSeconds: 60 }, msgSender: sender, msgBody: 'Ready', at: received, canceled: false },
+    { name: 'message before timer start', args: { DurationSeconds: 60, TimerCondition: 'any' }, msgSender: sender, msgBody: 'Ready', at: '2026-06-01T09:59:59Z', canceled: false },
+    { name: 'message after timer deadline', args: { DurationSeconds: 60, TimerCondition: 'any' }, msgSender: sender, msgBody: 'Ready', at: '2026-06-01T10:01:01Z', canceled: false },
+    { name: 'own heartbeat does not cancel', args: { DurationSeconds: 60, TimerCondition: 'any' }, msgSender: id, msgBody: 'Task is still running', at: received, canceled: false },
+    { name: 'other task heartbeat does not cancel any', args: { DurationSeconds: 60, TimerCondition: 'any' }, msgSender: sender, msgBody: '[Notice] Task id "task-2" is still running', at: received, canceled: false },
+    { name: 'watched task heartbeat does not cancel', args: { DurationSeconds: 60, TimerCondition: 'task-2' }, msgSender: sender, msgBody: 'Task is STILL RUNNING', at: received, canceled: false },
+    { name: 'cron ignores TimerCondition', args: { CronExpression: '*/5 * * * *', TimerCondition: 'any' }, description: 'Cron: */5 * * * *', msgSender: sender, msgBody: 'Ready', at: received, canceled: false },
+  ]
+  for (const tc of cases) {
+    const desc = tc.description ?? 'Timer: 3m, Prompt: Check status'
+    const msg = `<SYSTEM_MESSAGE>\n[Message] timestamp=${tc.at} sender=${tc.msgSender} priority=MESSAGE_PRIORITY_HIGH content=${tc.msgBody}\n</SYSTEM_MESSAGE>`
+    const { running, ended } = extractBackground([
+      { step_index: 0, type: 'PLANNER_RESPONSE', created_at: started, tool_calls: [{ name: 'schedule', args: tc.args }] },
+      bgStep(1, 'RUNNING', started, 1, desc),
+      systemMessage(2, tc.at, msg),
+    ], conversation)
+    if (tc.canceled) {
+      assert.deepEqual(running, [], `${tc.name}: expected running empty`)
+      assert.deepEqual(ended.map(t => [t.id, t.status, t.ended_at]), [[id, 'killed', tc.at]], tc.name)
+    } else {
+      assert.deepEqual(running.map(t => t.id), [id], `${tc.name}: expected timer running`)
+      assert.deepEqual(ended, [], `${tc.name}: expected ended empty`)
+    }
+  }
+
+  // Later liveness proof (listed in manage_task(list)) prevents condition cancellation from falsely killing a live timer.
+  {
+    const listedAt = '2026-06-01T10:00:05Z'
+    const msg = `<SYSTEM_MESSAGE>\n[Message] timestamp=${received} sender=${sender} priority=MESSAGE_PRIORITY_HIGH content=Ready\n</SYSTEM_MESSAGE>`
+    const listJSON = `You have 1 background task(s) currently running:\n${JSON.stringify([{ taskId: id, toolName: 'schedule' }])}`
+    const { running, ended } = extractBackground([
+      { step_index: 0, type: 'PLANNER_RESPONSE', created_at: started, tool_calls: [{ name: 'schedule', args: { DurationSeconds: 60, TimerCondition: 'any' } }] },
+      bgStep(1, 'RUNNING', started, 1, 'Timer: 60s'),
+      systemMessage(2, received, msg),
+      { step_index: 3, type: 'PLANNER_RESPONSE', created_at: listedAt, tool_calls: [{ name: 'manage_task', args: { Action: 'list' } }] },
+      { step_index: 4, type: 'GENERIC', status: 'DONE', created_at: listedAt, content: listJSON },
+    ], conversation)
+    assert.deepEqual(running.map(t => t.id), [id])
+    assert.deepEqual(ended, [])
+  }
+
+  // Earliest event wins between TimerCondition and server restart.
+  {
+    const beforeRestart = '2026-06-01T10:01:00Z'
+    const restartAt = '2026-06-01T10:02:00Z'
+    const afterRestart = '2026-06-01T10:03:00Z'
+    const msg = (at, s, body) => `<SYSTEM_MESSAGE>\n[Message] timestamp=${at} sender=${s} priority=MESSAGE_PRIORITY_HIGH content=${body}\n</SYSTEM_MESSAGE>`
+    const { running, ended } = extractBackground([
+      {
+        step_index: 0,
+        type: 'PLANNER_RESPONSE',
+        created_at: started,
+        tool_calls: [
+          { name: 'schedule', args: { DurationSeconds: 600, TimerCondition: 'early' } },
+          { name: 'schedule', args: { DurationSeconds: 600, TimerCondition: 'late' } },
+        ],
+      },
+      bgStep(1, 'RUNNING', started, 1, 'Timer: 10m'),
+      bgStep(2, 'RUNNING', started, 2, 'Timer: 10m'),
+      systemMessage(3, beforeRestart, msg(beforeRestart, 'early', 'Ready')),
+      systemMessage(4, restartAt, msg(restartAt, 'system', '[Notice] All your subagents and background tasks have been stopped due to server restart.')),
+      systemMessage(5, afterRestart, msg(afterRestart, 'late', 'Ready')),
+    ], conversation)
+    assert.deepEqual(running, [])
+    assert.deepEqual(ended.map(t => [t.id, t.status, t.ended_at]), [
+      [`${conversation}/task-1`, 'killed', beforeRestart],
+      [`${conversation}/task-2`, 'killed', restartAt],
+    ])
+  }
+
+  // Out-of-order late-exported timer GENERIC step still reconciles against a later-timestamped condition message.
+  {
+    const msg = `<SYSTEM_MESSAGE>\n[Message] timestamp=${received} sender=${sender} priority=MESSAGE_PRIORITY_HIGH content=Ready\n</SYSTEM_MESSAGE>`
+    const { running, ended } = extractBackground([
+      { step_index: 0, type: 'PLANNER_RESPONSE', created_at: started, tool_calls: [{ name: 'schedule', args: { DurationSeconds: 60, TimerCondition: 'any' } }] },
+      systemMessage(2, received, msg),
+      bgStep(1, 'RUNNING', started, 1, 'Timer: 60s'),
+    ], conversation)
+    assert.deepEqual(running, [])
+    assert.deepEqual(ended.map(t => [t.id, t.status, t.ended_at]), [[id, 'killed', received]])
+  }
+})
+
+test('AGY manage_task(list) reconciles real JSON array inventories and rejects malformed JSON', () => {
+  const listed = '2026-06-01T10:00:02Z'
+  const later = '2026-06-01T10:00:03Z'
+  const dupHeaders = `Created At: ${listed}\nCompleted At: ${listed}\nCreated At: ${listed}\nCompleted At: ${listed}\n`
+  const oneJSON = `You have 1 background task(s) currently running:\n${JSON.stringify([{ taskId: `${conversation}/task-2`, toolName: 'run_command', description: 'npm test' }])}`
+  const shortJSON = `You have 1 background task(s) currently running:\n${JSON.stringify([{ taskId: 'task-2', toolName: 'run_command' }])}`
+  const twoJSON = `You have 2 background task(s) currently running:\n${JSON.stringify([{ taskId: `${conversation}/task-1` }, { taskId: 'task-2' }])}`
+
+  const cases = [
+    { name: 'JSON array with duplicated headers keeps listed task and ends omitted', content: dupHeaders + oneJSON, wantEnded: 1 },
+    { name: 'JSON array with short taskId', content: shortJSON, wantEnded: 1 },
+    { name: 'JSON array with all tasks listed', content: dupHeaders + twoJSON, wantEnded: 0 },
+    { name: 'malformed JSON array fails closed', content: 'You have 1 background task(s) currently running:\n[{"taskId":', wantEnded: 0 },
+    { name: 'JSON array count mismatch fails closed', content: oneJSON.replace('have 1', 'have 2'), wantEnded: 0 },
+    { name: 'JSON array duplicate taskId fails closed', content: `You have 2 background task(s) currently running:\n${JSON.stringify([{ taskId: 'task-2' }, { taskId: `${conversation}/task-2` }])}`, wantEnded: 0 },
+    { name: 'JSON array foreign taskId fails closed', content: `You have 1 background task(s) currently running:\n${JSON.stringify([{ taskId: 'other-conv/task-2' }])}`, wantEnded: 0 },
+    { name: 'JSON array missing taskId fails closed', content: `You have 1 background task(s) currently running:\n${JSON.stringify([{ toolName: 'run_command' }])}`, wantEnded: 0 },
+  ]
+  for (const tc of cases) {
+    const { running, ended } = extractBackground([
+      bgStep(0, 'RUNNING', started, 1, 'Ghost timer'),
+      bgStep(1, 'RUNNING', started, 2, 'Active command'),
+      { step_index: 2, type: 'PLANNER_RESPONSE', created_at: listed, tool_calls: [{ name: 'manage_task', args: { Action: JSON.stringify('list') } }] },
+      { step_index: 3, type: 'GENERIC', status: 'DONE', created_at: listed, content: tc.content },
+      bgStep(4, 'RUNNING', later, 3, 'Started after list'),
+    ], conversation)
+    assert.equal(ended.length, tc.wantEnded, `${tc.name}: ended count`)
+    assert.equal(running.length, 3 - tc.wantEnded, `${tc.name}: running count`)
+    if (tc.wantEnded === 1) {
+      assert.deepEqual(ended.map(t => [t.id, t.status, t.ended_at]), [[`${conversation}/task-1`, 'completed', listed]], tc.name)
+      assert.deepEqual(running.map(t => t.id), [`${conversation}/task-2`, `${conversation}/task-3`], tc.name)
+    }
+  }
+})
+
+test('AGY manage_task(status) reconciles terminal statuses and refreshes liveness for RUNNING', () => {
+  const checked = '2026-06-01T10:00:05Z'
+  const dupHeaders = `Created At: ${checked}\nCompleted At: ${checked}\nCreated At: ${checked}\nCompleted At: ${checked}\n`
+  const statusCases = [
+    { name: 'DONE ends requested task as completed', reported: 'DONE', wantStatus: 'completed' },
+    { name: 'ERROR ends requested task as failed', reported: 'ERROR', wantStatus: 'failed' },
+    { name: 'FAILED ends requested task as failed', reported: 'FAILED', wantStatus: 'failed' },
+    { name: 'CANCELED ends requested task as killed', reported: 'CANCELED', wantStatus: 'killed' },
+    { name: 'CANCELLED ends requested task as killed', reported: 'CANCELLED', wantStatus: 'killed' },
+    { name: 'RUNNING keeps task alive', reported: 'RUNNING', wantStatus: '' },
+  ]
+  for (const tc of statusCases) {
+    const { running, ended } = extractBackground([
+      bgStep(0, 'RUNNING', started, 1, 'Checked task'),
+      bgStep(1, 'RUNNING', started, 2, 'Unrelated task'),
+      { step_index: 2, type: 'PLANNER_RESPONSE', created_at: checked, tool_calls: [{ name: 'manage_task', args: { Action: JSON.stringify('status'), TaskId: JSON.stringify(id) } }] },
+      { step_index: 3, type: 'GENERIC', status: 'DONE', created_at: checked, content: `${dupHeaders}Task: ${id}\nStatus: ${tc.reported}\nLog: file:///tmp/task-1.log\nLog output:\nhello` },
+    ], conversation)
+    if (tc.wantStatus) {
+      assert.deepEqual(running.map(t => t.id), [`${conversation}/task-2`], tc.name)
+      assert.deepEqual(ended.map(t => [t.id, t.status, t.ended_at]), [[id, tc.wantStatus, checked]], tc.name)
+    } else {
+      assert.deepEqual(running.map(t => t.id), [id, `${conversation}/task-2`], tc.name)
+      assert.deepEqual(ended, [], tc.name)
+    }
+  }
+
+  // Mismatched Task line or errored status step fails closed.
+  for (const [name, step] of [
+    ['mismatched task id', { step_index: 2, type: 'GENERIC', status: 'DONE', created_at: checked, content: `Task: ${conversation}/task-2\nStatus: DONE` }],
+    ['errored status step', { step_index: 2, type: 'GENERIC', status: 'ERROR', created_at: checked, content: `Task: ${id}\nStatus: DONE` }],
+    ['older created header', { step_index: 2, type: 'GENERIC', status: 'DONE', created_at: checked, content: `Created At: ${started}\nCompleted At: ${checked}\nTask: ${id}\nStatus: DONE` }],
+  ]) {
+    const { running, ended } = extractBackground([
+      bgStep(0, 'RUNNING', started, 1, 'Checked task'),
+      { step_index: 1, type: 'PLANNER_RESPONSE', created_at: checked, tool_calls: [{ name: 'manage_task', args: { Action: 'status', TaskId: id } }] },
+      step,
+    ], conversation)
+    assert.deepEqual(running.map(t => t.id), [id], name)
+    assert.deepEqual(ended, [], name)
+  }
+
+  // Status: RUNNING refreshes lastSeen so an earlier list omission does not kill it.
+  {
+    const listed = '2026-06-01T10:00:02Z'
+    const { running, ended } = extractBackground([
+      bgStep(0, 'RUNNING', started, 1, 'Alive task'),
+      { step_index: 1, type: 'PLANNER_RESPONSE', created_at: listed, tool_calls: [{ name: 'manage_task', args: { Action: 'list' } }] },
+      { step_index: 2, type: 'GENERIC', status: 'DONE', created_at: listed, content: 'No background tasks are currently running.' },
+      { step_index: 3, type: 'PLANNER_RESPONSE', created_at: checked, tool_calls: [{ name: 'manage_task', args: { Action: 'status', TaskId: id } }] },
+      { step_index: 4, type: 'GENERIC', status: 'DONE', created_at: checked, content: `Task: ${id}\nStatus: RUNNING` },
+    ], conversation)
+    assert.deepEqual(running.map(t => t.id), [id])
+    assert.deepEqual(ended, [])
+  }
+})
+
+test('AGY one-shot timer expires after duration + grace while cron and shell stay running', () => {
+  const startMs = Date.parse(started)
+  const deadline60 = startMs + 60_000
+  const expiry60 = deadline60 + 60_000
+  const deadline90 = startMs + 90_000
+  const expiry90 = deadline90 + 60_000
+  const steps = [
+    {
+      step_index: 0,
+      type: 'PLANNER_RESPONSE',
+      created_at: started,
+      tool_calls: [
+        { name: 'schedule', args: { DurationSeconds: 60 } },
+        { name: 'schedule', args: { DurationSeconds: 60, CronExpression: '0 * * * *' } },
+        { name: 'run_command', args: { CommandLine: 'npm run watch' } },
+      ],
+    },
+    bgStep(1, 'RUNNING', started, 1, 'Timer: 60s, Prompt: Check CI'),
+    bgStep(2, 'RUNNING', started, 2, 'Cron: 0 * * * *'),
+    bgStep(3, 'RUNNING', started, 3, 'Watch build'),
+    // Fallback timer without planner args (e.g. truncated tool_calls): parses "Timer: 1m 30s" from description.
+    bgStep(9, 'RUNNING', started, 4, 'Timer: 1m 30s, Prompt: Follow up'),
+  ]
+
+  const before = extractBackground(steps, conversation, expiry60 - 1)
+  assert.deepEqual(before.running.map(t => t.id), [
+    `${conversation}/task-1`, `${conversation}/task-2`, `${conversation}/task-3`, `${conversation}/task-4`,
+  ])
+  assert.equal(before.nextExpiry, expiry60)
+
+  const atFirst = extractBackground(steps, conversation, expiry60)
+  assert.deepEqual(atFirst.running.map(t => t.id), [
+    `${conversation}/task-2`, `${conversation}/task-3`, `${conversation}/task-4`,
+  ])
+  assert.deepEqual(atFirst.ended.map(t => [t.id, t.status, Date.parse(t.ended_at)]), [
+    [`${conversation}/task-1`, 'completed', deadline60],
+  ])
+  assert.equal(atFirst.nextExpiry, expiry90)
+
+  const atSecond = extractBackground(steps, conversation, expiry90)
+  assert.deepEqual(atSecond.running.map(t => t.id), [
+    `${conversation}/task-2`, `${conversation}/task-3`,
+  ])
+  assert.deepEqual(atSecond.ended.map(t => [t.id, t.status, Date.parse(t.ended_at)]), [
+    [`${conversation}/task-1`, 'completed', deadline60],
+    [`${conversation}/task-4`, 'completed', deadline90],
+  ])
+  assert.equal(atSecond.nextExpiry, undefined)
+})
+
+test('AGY schedule MaxIterations completes on final iteration while unlimited cron keeps running', () => {
+  const t1 = '2026-06-01T10:05:00Z'
+  const t2 = '2026-06-01T10:10:00Z'
+  const iterMsg = (taskNum, at, n) => systemMessage(
+    10 + n,
+    at,
+    `<SYSTEM_MESSAGE>\n[Message] timestamp=${at} sender=${conversation}/task-${taskNum} priority=MESSAGE_PRIORITY_HIGH content=Poll status (iteration ${n})\n</SYSTEM_MESSAGE>`,
+  )
+  const baseSteps = [
+    {
+      step_index: 0,
+      type: 'PLANNER_RESPONSE',
+      created_at: started,
+      tool_calls: [
+        { name: 'schedule', args: { CronExpression: '*/5 * * * *', MaxIterations: '2' } },
+        { name: 'schedule', args: { CronExpression: '*/5 * * * *' } },
+      ],
+    },
+    bgStep(1, 'RUNNING', started, 1, 'Cron: */5 * * * * (max 2)'),
+    bgStep(2, 'RUNNING', started, 2, 'Cron: */5 * * * * (unlimited)'),
+    iterMsg(1, t1, 1),
+    iterMsg(2, t1, 1),
+  ]
+
+  const after1 = extractBackground(baseSteps, conversation)
+  assert.deepEqual(after1.running.map(t => t.id), [`${conversation}/task-1`, `${conversation}/task-2`])
+  assert.deepEqual(after1.ended, [])
+
+  const after2 = extractBackground([...baseSteps, iterMsg(1, t2, 2), iterMsg(2, t2, 2)], conversation)
+  assert.deepEqual(after2.running.map(t => t.id), [`${conversation}/task-2`])
+  assert.deepEqual(after2.ended.map(t => [t.id, t.status, t.ended_at]), [[`${conversation}/task-1`, 'completed', t2]])
+})
+
+test('AGY manage_subagents reconciles agent tasks without affecting shell, monitor, or workflow tasks', () => {
+  const actAt = '2026-06-01T10:02:00Z'
+  const afterAt = '2026-06-01T10:03:00Z'
+  const sub1 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1'
+  const sub2 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2'
+  const agentStep = (idx, num, subId, at = started) => ({
+    step_index: idx,
+    type: 'GENERIC',
+    status: 'RUNNING',
+    created_at: at,
+    content: `Created At: ${at}\nTool is running as a background task with task id: ${conversation}/task-${num}\nTask Description: Subagent ${subId}`,
+  })
+  const base = [
+    {
+      step_index: 0,
+      type: 'PLANNER_RESPONSE',
+      created_at: started,
+      tool_calls: [
+        { name: 'run_command', args: { CommandLine: 'npm test' } },
+        { name: 'schedule', args: { CronExpression: '*/5 * * * *' } },
+        { name: 'run_workflow' },
+        { name: 'invoke_subagent' },
+        { name: 'invoke_subagent' },
+      ],
+    },
+    bgStep(1, 'RUNNING', started, 1, 'Run tests'),
+    bgStep(2, 'RUNNING', started, 2, 'Cron: */5 * * * *'),
+    bgStep(3, 'RUNNING', started, 3, 'Workflow'),
+    agentStep(4, 4, sub1),
+    agentStep(5, 5, sub2),
+  ]
+
+  // kill_all kills only prior agent tasks.
+  {
+    const { running, ended } = extractBackground([
+      ...base,
+      { step_index: 6, type: 'PLANNER_RESPONSE', created_at: actAt, tool_calls: [{ name: 'manage_subagents', args: { Action: JSON.stringify('kill_all') } }] },
+      { step_index: 7, type: 'GENERIC', status: 'DONE', created_at: actAt, content: 'Successfully killed 2 subagent(s) and their descendants.' },
+      { step_index: 8, type: 'PLANNER_RESPONSE', created_at: afterAt, tool_calls: [{ name: 'invoke_subagent' }] },
+      agentStep(9, 6, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3', afterAt),
+    ], conversation)
+    assert.deepEqual(running.map(t => t.id), [
+      `${conversation}/task-1`, `${conversation}/task-2`, `${conversation}/task-3`, `${conversation}/task-6`,
+    ])
+    assert.deepEqual(ended.map(t => [t.id, t.status, t.ended_at]), [
+      [`${conversation}/task-4`, 'killed', actAt],
+      [`${conversation}/task-5`, 'killed', actAt],
+    ])
+  }
+
+  // kill with specific ConversationIds kills only matching agent task.
+  {
+    const { running, ended } = extractBackground([
+      ...base,
+      { step_index: 6, type: 'PLANNER_RESPONSE', created_at: actAt, tool_calls: [{ name: 'manage_subagents', args: { Action: 'kill', ConversationIds: [sub1] } }] },
+      { step_index: 7, type: 'GENERIC', status: 'DONE', created_at: actAt, content: 'Successfully killed 1 subagent(s).' },
+    ], conversation)
+    assert.deepEqual(running.map(t => t.id), [
+      `${conversation}/task-1`, `${conversation}/task-2`, `${conversation}/task-3`, `${conversation}/task-5`,
+    ])
+    assert.deepEqual(ended.map(t => [t.id, t.status, t.ended_at]), [
+      [`${conversation}/task-4`, 'killed', actAt],
+    ])
+  }
+
+  // list with 0 active subagents completes prior agent tasks without touching non-agent tasks.
+  {
+    const { running, ended } = extractBackground([
+      ...base,
+      { step_index: 6, type: 'PLANNER_RESPONSE', created_at: actAt, tool_calls: [{ name: 'manage_subagents', args: { Action: 'list' } }] },
+      { step_index: 7, type: 'GENERIC', status: 'DONE', created_at: actAt, content: `Created At: ${actAt}\nCompleted At: ${actAt}\nYou have 0 active subagent(s):\n[]` },
+    ], conversation)
+    assert.deepEqual(running.map(t => t.id), [
+      `${conversation}/task-1`, `${conversation}/task-2`, `${conversation}/task-3`,
+    ])
+    assert.deepEqual(ended.map(t => [t.id, t.status, t.ended_at]), [
+      [`${conversation}/task-4`, 'completed', actAt],
+      [`${conversation}/task-5`, 'completed', actAt],
+    ])
+  }
+
+  // Failed manage_subagents call leaves all tasks running.
+  {
+    const { running, ended } = extractBackground([
+      ...base,
+      { step_index: 6, type: 'PLANNER_RESPONSE', created_at: actAt, tool_calls: [{ name: 'manage_subagents', args: { Action: 'kill_all' } }] },
+      { step_index: 7, type: 'GENERIC', status: 'ERROR', created_at: actAt, content: 'permission denied' },
+    ], conversation)
+    assert.equal(running.length, 5)
+    assert.deepEqual(ended, [])
+  }
+})

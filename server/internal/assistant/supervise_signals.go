@@ -328,6 +328,7 @@ type superviseBook struct {
 	pendingLoadMu       sync.Mutex                   // one durable pending restoration at a time
 	pendingLoaded       bool                         // the durable pending has been merged into pending
 	sent                map[string]string            // todo|kind → the key last told
+	taken               map[string]string            // todo|kind → the key a running digest took and has not marked sent yet (#17838)
 	asks                map[string]string            // todo → what its agent last asked (InteractionRaised)
 	last                time.Time                    // when the last supervision message went out
 	queued              map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
@@ -376,6 +377,20 @@ func (b *superviseBook) init() {
 	}
 	if b.batch == nil {
 		b.batch = map[string]time.Time{}
+	}
+	if b.taken == nil {
+		b.taken = map[string]string{}
+	}
+}
+
+// forgetToldLocked lets key of g be told again: it is no longer the key last told (sent) nor the one a running digest
+// holds (taken). For a handover that tells the same key to its new supervisor on purpose. s.supervise.mu is held.
+func (b *superviseBook) forgetToldLocked(g superviseSignal) {
+	if b.sent[g.id()] == g.Key {
+		delete(b.sent, g.id())
+	}
+	if b.taken[g.id()] == g.Key {
+		delete(b.taken, g.id())
 	}
 }
 
@@ -1086,9 +1101,9 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 	// Source-backed events need a durable receipt. Their fingerprints deduplicate delivery even
 	// after the digest has dequeued the signal and the source retries its cursor write.
 	sourceBacked := g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" || g.PREventID != ""
-	if b.sent[g.id()] == g.Key && !sourceBacked && g.Key != "" {
+	if (b.sent[g.id()] == g.Key || b.taken[g.id()] == g.Key) && !sourceBacked && g.Key != "" {
 		b.mu.Unlock()
-		return false
+		return false // told, or being told by the digest that took it (#17838)
 	}
 	var absorbedIDs []string
 	if cur, ok := b.pending[g.id()]; ok {

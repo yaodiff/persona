@@ -117,6 +117,7 @@ type busState struct {
 	stopping bool
 	// Tests shorten these; zero is the protocol's (internal/bus).
 	pingEvery, pingTimeout, helloTimeout time.Duration
+	maxMessage                           int
 	// idents keeps the identities instead of h.store (tests without Postgres).
 	idents busStore
 	// storeErrLog throttles the line for a token lookup the store did not answer; storeDown is until when (UnixNano)
@@ -323,9 +324,15 @@ func (h *Hub) serveBus(w http.ResponseWriter, r *http.Request) {
 	// close frame.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	limit := h.busMaxMessage()
 	conn := bus.NewConn(ctx, ws)
 	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ") // the one busCaller took
 	c := &busConn{ident: ident, proofKey: extwire.ProofKey(tok), ws: ws, peer: rpc.New("h", conn), helloed: make(chan struct{})}
+	c.peer.ReadLimit = limit
+	c.peer.WriteLimit = limit
+	c.peer.OnWriteRejected = func(kind, op string, size, max int) {
+		h.logf("bus: [%s] rejected outgoing %s %s: %d bytes (limit %d)", ident.ID, kind, op, size, max)
+	}
 	// A card the hub's own feature asks (fleet.ask) is withdrawn when that feature stops waiting (a tool call whose
 	// caller went away, #2597). So is what the manager does for one of the hub's features (extensions.hub_call): a
 	// persona_settings change of one of its own settings is a card it holds and a change it makes, and untold it kept
@@ -369,6 +376,13 @@ func durationOr(d, def time.Duration) time.Duration {
 		return d
 	}
 	return def
+}
+
+func (h *Hub) busMaxMessage() int {
+	if h.bus.maxMessage > 0 {
+		return h.bus.maxMessage
+	}
+	return bus.MaxMessage
 }
 
 // busRequest is the connection's dispatcher: its handshake, then busMethods on the current connection only.

@@ -97,6 +97,51 @@ test('AGY companion publishes background lifecycles and clears running work when
   assert.deepEqual(stopped.agy_pane_background, finished.background)
 })
 
+test('AGY companion clears TimerCondition-cancelled and expired one-shot timers on quiet sessions', { timeout: 20_000 }, async (t) => {
+  const { node, directory } = await fixture(t)
+  const logs = join(directory, 'config', 'brain', RAW, '.system_generated', 'logs')
+  mkdirSync(logs, { recursive: true })
+  const file = join(logs, 'transcript.jsonl')
+  const row = () => node.last('runtime.sessions')?.sessions.find(session => session.session_id === SESSION)
+  const taskID = n => `${RAW}/task-${n}`
+  const append = (...steps) => appendFileSync(file, steps.map(record => JSON.stringify(record)).join('\n') + '\n')
+
+  // 1) TimerCondition="any" cancelled silently by another task's completion notice.
+  const started = new Date(Date.now() - 5_000).toISOString()
+  const finishedAt = new Date(Date.now() - 2_000).toISOString()
+  append(
+    { step_index: 0, type: 'PLANNER_RESPONSE', created_at: started, tool_calls: [
+      { name: 'run_command', args: { CommandLine: 'npm test' } },
+      { name: 'schedule', args: { DurationSeconds: '180', TimerCondition: JSON.stringify('any') } },
+    ] },
+    { step_index: 1, type: 'GENERIC', status: 'RUNNING', created_at: started, content: `Created At: ${started}\nTool is running as a background task with task id: ${taskID(1)}\nTask Description: Run tests` },
+    { step_index: 2, type: 'GENERIC', status: 'RUNNING', created_at: started, content: `Created At: ${started}\nTool is running as a background task with task id: ${taskID(2)}\nTask Description: Timer: 3m, Prompt: Recheck` },
+  )
+  await until('two tasks initially running', () => row()?.background?.length === 2, 5000)
+
+  append({
+    step_index: 3,
+    type: 'SYSTEM_MESSAGE',
+    created_at: finishedAt,
+    content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${finishedAt} sender=${taskID(1)} priority=MESSAGE_PRIORITY_HIGH content=Task id "${taskID(1)}" finished with result: ok\n</SYSTEM_MESSAGE>`,
+  })
+  const afterCancel = await until('TimerCondition timer cleared without manage_task(list)', () => row() && !row().background && row().background_ended?.length === 2 && row(), 5000)
+  assert.deepEqual(afterCancel.background_ended.map(task => [task.id, task.status]), [
+    [taskID(1), 'completed'],
+    [taskID(2), 'killed'],
+  ])
+
+  // 2) One-shot timer whose deadline + 60s grace passes with NO further transcript writes clears automatically.
+  const soonStart = new Date(Date.now() - 60_600).toISOString()
+  append(
+    { step_index: 4, type: 'PLANNER_RESPONSE', created_at: soonStart, tool_calls: [{ name: 'schedule', args: { DurationSeconds: 1 } }] },
+    { step_index: 5, type: 'GENERIC', status: 'RUNNING', created_at: soonStart, content: `Created At: ${soonStart}\nTool is running as a background task with task id: ${taskID(3)}\nTask Description: Timer: 1s, Prompt: Quiet expiry` },
+  )
+  await until('one-shot timer listed while inside grace window', () => row()?.background?.some(task => task.id === taskID(3)), 5000)
+  const afterExpiry = await until('expired one-shot timer clears without transcript update', () => row() && !row().background && row().background_ended?.some(task => task.id === taskID(3)) && row(), 5000)
+  assert.equal(afterExpiry.background_ended.find(task => task.id === taskID(3))?.status, 'completed')
+})
+
 test('AGY streams one assistant message at a time across tool calls', { timeout: 20_000 }, async (t) => {
   const { node, update, chunk, promptCount } = await fixture(t)
   await node.peer.call('session.send', { session_id: SESSION, text: 'Make the change.' })

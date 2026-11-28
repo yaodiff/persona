@@ -303,6 +303,224 @@ func ProjectDetail(in recordingwire.SpeakerDetailInput) (recordingwire.SpeakerDe
 	return recordingwire.SpeakerDetailOutput{Speakers: ds, Segments: outSegs}, nil
 }
 
+// AlignTranscript aligns transcript segments against the stored speaker timeline and roster for the minutes model.
+func AlignTranscript(in recordingwire.SpeakerAlignInput) (recordingwire.SpeakerAlignOutput, error) {
+	roster, err := restoreWireRoster(in.Speakers)
+	if err != nil {
+		return recordingwire.SpeakerAlignOutput{}, err
+	}
+	domTurns, err := parseWireTurns(in.Turns)
+	if err != nil {
+		return recordingwire.SpeakerAlignOutput{}, err
+	}
+	domCovered, err := parseWireCovered(in.Covered)
+	if err != nil {
+		return recordingwire.SpeakerAlignOutput{}, err
+	}
+	timing := parseTimingWord(string(in.Timing.Effective()))
+	env, f := outcome.Unpack(recordingspeakers.NewAlignEnv(domTurns, domCovered, timing))
+	if f != nil {
+		return recordingwire.SpeakerAlignOutput{}, wrapBadSpeakers(f)
+	}
+	quality := parseQualityWord(string(in.Speakers.Quality))
+	var zeroQuality recordingspeakers.Quality
+	if quality == zeroQuality {
+		quality = recordingspeakers.QualityOk()
+	}
+	domSegs := parseWireSegments(in.Segments)
+	labels := recordingspeakers.AlignSegments(domSegs, env, roster, quality)
+	var col lineLabelsCollector
+	labels.Accept(&col)
+	out := make([]recordingwire.AlignedSpeakerLine, len(in.Segments))
+	for i := range out {
+		if i >= len(col.items) {
+			break
+		}
+		if col.items[i].assigned {
+			out[i] = recordingwire.AlignedSpeakerLine{
+				Speaker: col.items[i].speaker,
+				Unsure:  col.items[i].unsure,
+			}
+		}
+	}
+	return recordingwire.SpeakerAlignOutput{Lines: out}, nil
+}
+
+// AttributeDebates computes speaker attribution on every disagreement position and its supporting `also` lines:
+//   - when untrimmed (turns present): layer 1 overlap from stored span + turns, layer 2 from merges/minor/quality;
+//   - when trimmed: layer 2 from stored over + current merges/minor/quality without reading a timeline or transcript;
+//   - followed by all three cross-checks (model said_by mismatch, same person on two positions of the same debate,
+//     and model who mismatching an owner-chosen name).
+//
+// Positions written without a span (Phase 1 minutes) are left untouched until regenerated.
+func AttributeDebates(in recordingwire.SpeakerDebatesAttrInput) (recordingwire.SpeakerDebatesAttrOutput, error) {
+	debates := cloneMinutesDebates(in.Debates)
+	if len(debates) == 0 {
+		return recordingwire.SpeakerDebatesAttrOutput{Debates: debates}, nil
+	}
+	roster, err := restoreWireRoster(in.Speakers)
+	if err != nil {
+		return recordingwire.SpeakerDebatesAttrOutput{}, err
+	}
+	quality := parseQualityWord(string(in.Speakers.Quality))
+	var zeroQuality recordingspeakers.Quality
+	if quality == zeroQuality {
+		quality = recordingspeakers.QualityOk()
+	}
+
+	var domTurns recordingspeakers.Turns
+	var domCovered recordingspeakers.Covered
+	var domTiming recordingspeakers.Timing
+	if !in.Trimmed {
+		domTurns, err = parseWireTurns(in.Turns)
+		if err != nil {
+			return recordingwire.SpeakerDebatesAttrOutput{}, err
+		}
+		domCovered, err = parseWireCovered(in.Covered)
+		if err != nil {
+			return recordingwire.SpeakerDebatesAttrOutput{}, err
+		}
+		domTiming = parseTimingWord(string(in.Timing.Effective()))
+	}
+
+	canonByID, nameByCanon := buildRosterLookups(in.Speakers.People)
+	canonOf := func(id recordingwire.SpeakerID) recordingwire.SpeakerID {
+		if c, ok := canonByID[id]; ok {
+			return c
+		}
+		return id
+	}
+
+	attributeCitation := func(span *recordingwire.SpeakerSpan, est *bool, over *map[recordingwire.SpeakerID]float64,
+		saidBy recordingwire.SpeakerID, who string, speaker *recordingwire.SpeakerID, unsure *bool) {
+		if span == nil {
+			return // Phase 1 position without span: untouched until regenerated
+		}
+		var domOver recordingspeakers.Overlaps
+		if !in.Trimmed {
+			// Unreliable timing (timing=spread on hub lines) was captured in *est when minutes were built;
+			// check covered holes against the current timeline for all non-spread-hub lines.
+			if in.Timing.Effective() == recordingwire.TimingSpread && *est {
+				*over = nil
+				*speaker = ""
+				*unsure = false
+				return
+			}
+			domSpan, ok := parseWireSpan(*span)
+			if !ok {
+				*over = nil
+				*speaker = ""
+				*unsure = false
+				return
+			}
+			seg, f := outcome.Unpack(recordingspeakers.NewSegment(domSpan, recordingspeakers.LineSourceDevice(),
+				recordingspeakers.EchoSpeech(), recordingspeakers.ParseLineText("")))
+			if f != nil || !recordingspeakers.CheckLine(seg, domTiming, domCovered).IsNone() {
+				*est = true
+				*over = nil
+				*speaker = ""
+				*unsure = false
+				return
+			}
+			*est = false
+			domOver = recordingspeakers.OverlapLine(domTurns, domSpan)
+			*over = extractWireOverlaps(domOver)
+		} else {
+			if *est {
+				*speaker = ""
+				*unsure = false
+				return
+			}
+			domOver = parseWireOverlaps(*over)
+		}
+
+		label := recordingspeakers.AlignOverlap(domOver, roster, quality)
+		var col lineLabelCollector
+		label.Accept(&col)
+		if !col.item.assigned {
+			*speaker = ""
+			*unsure = false
+			return
+		}
+		*speaker = col.item.speaker
+		*unsure = col.item.unsure
+
+		// Cross-check 1: model holder (said_by) disagrees with computed canonical speaker (skipped when absent).
+		if saidBy != "" && canonOf(saidBy) != *speaker {
+			*unsure = true
+		}
+		// Cross-check 3: model wrote who, computed speaker has an owner-chosen name, and the two differ.
+		if who != "" {
+			if ownerName := nameByCanon[*speaker]; ownerName != "" && !strings.EqualFold(strings.TrimSpace(who), strings.TrimSpace(ownerName)) {
+				*unsure = true
+			}
+		}
+	}
+
+	for di := range debates {
+		positions := debates[di].Positions
+		for pi := range positions {
+			pos := &positions[pi]
+			attributeCitation(pos.Span, &pos.Est, &pos.Over, pos.SaidBy, pos.Who, &pos.Speaker, &pos.SpeakerUnsure)
+			for ai := range pos.Also {
+				al := &pos.Also[ai]
+				attributeCitation(al.Span, &al.Est, &al.Over, al.SaidBy, "", &al.Speaker, &al.SpeakerUnsure)
+			}
+		}
+		// Cross-check 2: the same canonical person appears on two or more distinct positions of the same debate (also included).
+		posCount := map[recordingwire.SpeakerID]int{}
+		for pi := range positions {
+			seenInPos := map[recordingwire.SpeakerID]bool{}
+			if id := positions[pi].Speaker; id != "" {
+				seenInPos[id] = true
+			}
+			for _, al := range positions[pi].Also {
+				if al.Speaker != "" {
+					seenInPos[al.Speaker] = true
+				}
+			}
+			for id := range seenInPos {
+				posCount[id]++
+			}
+		}
+		for pi := range positions {
+			if id := positions[pi].Speaker; id != "" && posCount[id] >= 2 {
+				positions[pi].SpeakerUnsure = true
+			}
+			for ai := range positions[pi].Also {
+				if id := positions[pi].Also[ai].Speaker; id != "" && posCount[id] >= 2 {
+					positions[pi].Also[ai].SpeakerUnsure = true
+				}
+			}
+		}
+	}
+	return recordingwire.SpeakerDebatesAttrOutput{Debates: debates}, nil
+}
+
+// ResolveDebateDisplays applies recordingspeakers.ResolvePositionDisplay to one disagreement position so Markdown
+// rendering uses the exact same four-row display-name rule and `also` deduplication as clients and fixtures.
+func ResolveDebateDisplays(in recordingwire.SpeakerDisplayInput) []recordingwire.SpeakerDisplayLabel {
+	var roster recordingspeakers.Roster
+	if in.Speakers != nil {
+		if r, err := restoreWireRoster(*in.Speakers); err == nil {
+			roster = r
+		}
+	}
+	mainClaim, fallbackWho := buildWireClaim(in.Position.Speaker, in.Position.SpeakerUnsure, in.Position.Who)
+	var alsoClaims []recordingspeakers.Claim
+	for _, al := range in.Position.Also {
+		c, _ := buildWireClaim(al.Speaker, al.SpeakerUnsure, "")
+		alsoClaims = append(alsoClaims, c)
+	}
+	displays := recordingspeakers.ResolvePositionDisplay(mainClaim, recordingspeakers.NewAlsoClaims(alsoClaims), roster)
+	var col displayLabelsCollector
+	displays.Accept(&col)
+	if len(col.out) == 0 && fallbackWho != "" {
+		return []recordingwire.SpeakerDisplayLabel{{Kind: recordingwire.SpeakerDisplayWho, Value: fallbackWho}}
+	}
+	return col.out
+}
+
 // --- unexported conversion helpers ---
 
 type failMessageCollector struct {
@@ -770,4 +988,235 @@ func (l *lineLabelsCollector) VisitLineLabel(label recordingspeakers.LineLabel) 
 	l.one.item = lineLabelItem{}
 	label.Accept(&l.one)
 	l.items = append(l.items, l.one.item)
+}
+
+func cloneMinutesDebates(in []recordingwire.MinutesDebate) []recordingwire.MinutesDebate {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]recordingwire.MinutesDebate, len(in))
+	for i, d := range in {
+		cp := d
+		if d.Outcome != nil {
+			o := *d.Outcome
+			if d.Outcome.Decision != nil {
+				idx := *d.Outcome.Decision
+				o.Decision = &idx
+			}
+			cp.Outcome = &o
+		}
+		if len(d.Positions) > 0 {
+			cp.Positions = make([]recordingwire.MinutesDebatePosition, len(d.Positions))
+			for j, p := range d.Positions {
+				pp := p
+				if p.Span != nil {
+					sp := *p.Span
+					pp.Span = &sp
+				}
+				if p.Over != nil {
+					pp.Over = make(map[recordingwire.SpeakerID]float64, len(p.Over))
+					for k, v := range p.Over {
+						pp.Over[k] = v
+					}
+				}
+				if len(p.Also) > 0 {
+					pp.Also = make([]recordingwire.MinutesDebateAlso, len(p.Also))
+					for k, al := range p.Also {
+						ap := al
+						if al.Span != nil {
+							sp := *al.Span
+							ap.Span = &sp
+						}
+						if al.Over != nil {
+							ap.Over = make(map[recordingwire.SpeakerID]float64, len(al.Over))
+							for oid, v := range al.Over {
+								ap.Over[oid] = v
+							}
+						}
+						pp.Also[k] = ap
+					}
+				}
+				cp.Positions[j] = pp
+			}
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+func buildRosterLookups(people []recordingwire.SpeakerPerson) (map[recordingwire.SpeakerID]recordingwire.SpeakerID, map[recordingwire.SpeakerID]string) {
+	byID := make(map[recordingwire.SpeakerID]recordingwire.SpeakerPerson, len(people))
+	for _, p := range people {
+		byID[p.ID] = p
+	}
+	canon := make(map[recordingwire.SpeakerID]recordingwire.SpeakerID, len(people))
+	names := make(map[recordingwire.SpeakerID]string, len(people))
+	for _, p := range people {
+		cur := p.ID
+		for range len(people) + 1 {
+			entry, ok := byID[cur]
+			if !ok || entry.MergedInto == "" || entry.MergedInto == cur {
+				break
+			}
+			cur = entry.MergedInto
+		}
+		canon[p.ID] = cur
+		if p.MergedInto == "" && p.Name != "" {
+			names[p.ID] = p.Name
+		}
+	}
+	return canon, names
+}
+
+func parseWireSpan(sp recordingwire.SpeakerSpan) (recordingspeakers.Span, bool) {
+	var zero recordingspeakers.Span
+	st := sanitizeDuration(sp[0])
+	en := sanitizeDuration(sp[1])
+	if en < st {
+		en = st
+	}
+	s, fs := outcome.Unpack(recordingspeakers.ParseSeconds(st))
+	if fs != nil {
+		return zero, false
+	}
+	e, fe := outcome.Unpack(recordingspeakers.ParseSeconds(en))
+	if fe != nil {
+		return zero, false
+	}
+	out, f := outcome.Unpack(recordingspeakers.NewSpan(s, e))
+	if f != nil {
+		return zero, false
+	}
+	return out, true
+}
+
+func parseWireOverlaps(in map[recordingwire.SpeakerID]float64) recordingspeakers.Overlaps {
+	var zero recordingspeakers.Overlaps
+	if len(in) == 0 {
+		return zero
+	}
+	list := make([]recordingspeakers.Overlap, 0, len(in))
+	for id, sec := range in {
+		if math.IsNaN(sec) || math.IsInf(sec, 0) || sec <= 0 {
+			continue
+		}
+		sid, f := outcome.Unpack(recordingspeakers.ParseSpeakerID(string(id)))
+		if f != nil {
+			continue
+		}
+		s, f := outcome.Unpack(recordingspeakers.ParseSeconds(sec))
+		if f != nil {
+			continue
+		}
+		ov, f := outcome.Unpack(recordingspeakers.NewOverlap(sid, s))
+		if f != nil {
+			continue
+		}
+		list = append(list, ov)
+	}
+	if len(list) == 0 {
+		return zero
+	}
+	overs, f := outcome.Unpack(recordingspeakers.NewOverlaps(list))
+	if f != nil {
+		return zero
+	}
+	return overs
+}
+
+func extractWireOverlaps(over recordingspeakers.Overlaps) map[recordingwire.SpeakerID]float64 {
+	var col wireOverlapsCollector
+	over.Accept(&col)
+	if len(col.out) == 0 {
+		return nil
+	}
+	return col.out
+}
+
+type wireOverlapItemCollector struct {
+	id  recordingwire.SpeakerID
+	sec float64
+}
+
+func (c *wireOverlapItemCollector) VisitOverlap(speaker recordingspeakers.SpeakerID, seconds recordingspeakers.Seconds) {
+	c.id = recordingwire.SpeakerID(speaker.Wire())
+	c.sec = seconds.Wire()
+}
+
+type wireOverlapsCollector struct {
+	item wireOverlapItemCollector
+	out  map[recordingwire.SpeakerID]float64
+}
+
+func (c *wireOverlapsCollector) VisitOverlap(o recordingspeakers.Overlap) {
+	o.Accept(&c.item)
+	if c.out == nil {
+		c.out = map[recordingwire.SpeakerID]float64{}
+	}
+	c.out[c.item.id] = c.item.sec
+}
+
+func buildWireClaim(speaker recordingwire.SpeakerID, unsure bool, who string) (recordingspeakers.Claim, string) {
+	spk := opt.None[recordingspeakers.SpeakerID]()
+	cert := recordingspeakers.CertaintyUnsure()
+	if speaker != "" {
+		if sid, f := outcome.Unpack(recordingspeakers.ParseSpeakerID(string(speaker))); f == nil {
+			spk = opt.Some(sid)
+			if !unsure {
+				cert = recordingspeakers.CertaintySure()
+			}
+		}
+	}
+	whoOpt := opt.None[recordingspeakers.SpeakerName]()
+	fallbackWho := ""
+	if trimmed := strings.TrimSpace(who); trimmed != "" {
+		if wn, f := outcome.Unpack(recordingspeakers.ParseSpeakerName(trimmed)); f == nil {
+			whoOpt = opt.Some(wn)
+		} else {
+			fallbackWho = trimmed
+		}
+	}
+	c, f := outcome.Unpack(recordingspeakers.NewClaim(spk, cert, whoOpt))
+	if f != nil {
+		var zero recordingspeakers.Claim
+		return zero, fallbackWho
+	}
+	return c, fallbackWho
+}
+
+type displayLabelCollector struct {
+	out   recordingwire.SpeakerDisplayLabel
+	valid bool
+}
+
+func (c *displayLabelCollector) VisitNamed(name recordingspeakers.SpeakerName) {
+	c.out = recordingwire.SpeakerDisplayLabel{Kind: recordingwire.SpeakerDisplayName, Value: name.Wire()}
+	c.valid = true
+}
+
+func (c *displayLabelCollector) VisitNumbered(num recordingspeakers.SpeakerNumber) {
+	c.out = recordingwire.SpeakerDisplayLabel{Kind: recordingwire.SpeakerDisplayNumbered, Number: num.Wire()}
+	c.valid = true
+}
+
+func (c *displayLabelCollector) VisitWho(who recordingspeakers.SpeakerName) {
+	c.out = recordingwire.SpeakerDisplayLabel{Kind: recordingwire.SpeakerDisplayWho, Value: who.Wire()}
+	c.valid = true
+}
+
+func (c *displayLabelCollector) VisitNone() {
+	c.valid = false
+}
+
+type displayLabelsCollector struct {
+	item displayLabelCollector
+	out  []recordingwire.SpeakerDisplayLabel
+}
+
+func (c *displayLabelsCollector) VisitDisplay(d recordingspeakers.Display) {
+	c.item = displayLabelCollector{}
+	d.Accept(&c.item)
+	if c.item.valid {
+		c.out = append(c.out, c.item.out)
+	}
 }

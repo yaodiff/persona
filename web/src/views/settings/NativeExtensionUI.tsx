@@ -98,7 +98,15 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; onL
   useEffect(() => {
     if (props.page.legacy) return;
     setFallback(false);
-    const page = appUIStreamPage({ identity, state: props.page.state ?? "", context: { ...uiContext(props.context), locale: currentLanguage(), ui_version: NATIVE_UI_VERSION, stream: { protocol: 1, components: [...NATIVE_STREAM_COMPONENTS] } } }, props.manager,
+    const page = appUIStreamPage({
+      identity, state: props.page.state ?? "",
+      context: {
+        ...uiContext(props.context),
+        // Electron uses the web renderer for protocol 1. HTTP dashboards have a separate desktop context.
+        platform: "web", locale: currentLanguage(), ui_version: NATIVE_UI_VERSION,
+        stream: { protocol: 1, components: [...NATIVE_STREAM_COMPONENTS] },
+      },
+    }, props.manager,
       (result) => {
         if (result.toast) toast(result.toast, "ok");
         if (result.open_url) {

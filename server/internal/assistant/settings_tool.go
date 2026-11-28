@@ -156,7 +156,8 @@ func (s *Service) allOwnSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.startRequestedTasks(ctx)), nil },
 			set: s.setStartRequestedTasks},
 		{Setting: Setting{Key: "assistant.idle_auto_compact", Title: "Compact idle conversations", Actions: getSet,
-			About: "on (the default): compact an idle conversation when the idle time and context size thresholds are both reached",
+			About: "on (the default): compact an idle conversation when the idle time and context size thresholds are both reached. " +
+				"Antigravity assistant chats (the main chat and leader chats among them) follow it and the two settings below too",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompact(ctx)), nil },
 			set: s.setIdleAutoCompact},
@@ -173,17 +174,21 @@ func (s *Service) allOwnSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactTokens(ctx)), nil },
 			set: s.setIdleAutoCompactTokens},
 		{Setting: Setting{Key: "assistant.agy_idle_auto_compact", Title: "Compact idle Antigravity sessions", Actions: getSet,
-			About: "on (the default): proactively compact Persona-managed Antigravity sessions (task Agents and AGY assistant/direction chats) once both idle time and context size thresholds are reached",
+			About: "on (the default): proactively compact Persona-managed Antigravity sessions once both their idle time and context size thresholds are reached. " +
+				"Task agents use assistant.agy_idle_auto_compact_minutes and _tokens. Antigravity assistant chats (including the main chat and leader chats) " +
+				"use assistant.idle_auto_compact, assistant.idle_auto_compact_minutes and _tokens, like other main chats. Off stops both",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompact(ctx)), nil },
 			set: s.setAgyIdleAutoCompact},
-		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_minutes", Title: "Antigravity idle time before compaction", Actions: getSet,
-			About: "minimum idle time before automatic Antigravity session compaction; 10 minutes by default",
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_minutes", Title: "Antigravity task agent idle time before compaction", Actions: getSet,
+			About: "An Antigravity task agent must be idle for at least this long before automatic compaction. The default is 10 minutes. " +
+				"Antigravity assistant chats use assistant.idle_auto_compact_minutes instead",
 			Value: "a whole number from 1 to 1440"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompactMinutes(ctx)), nil },
 			set: s.setAgyIdleAutoCompactMinutes},
-		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_tokens", Title: "Antigravity context size before compaction", Actions: getSet,
-			About: "minimum context size before automatic Antigravity session compaction; 200000 tokens by default",
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_tokens", Title: "Antigravity task agent context size before compaction", Actions: getSet,
+			About: "An Antigravity task agent needs at least this much context before automatic compaction. The default is 200,000 tokens. " +
+				"Antigravity assistant chats use assistant.idle_auto_compact_tokens instead",
 			Value: "a whole number from 10000 to 10000000"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompactTokens(ctx)), nil },
 			set: s.setAgyIdleAutoCompactTokens},
@@ -422,6 +427,13 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "all, outcomes or off"},
 			get: func(ctx context.Context) (string, error) { return s.supervisionMode(ctx), nil },
 			set: s.setAutoSupervisionMode},
+		{Setting: Setting{Key: supervisionTriageSettingKey, Title: i18n.T(i18n.Default, "assistant-settings_tool.title_supervision_triage"), Actions: getSet,
+			About: "off (the default) sends eligible routine reminders through ordinary delivery. on asks the Sorting model " +
+				"whether each eligible reminder should wake the supervisor or wait for the morning and evening briefings. " +
+				"Applies to new decisions as soon as the owner approves the change",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.supervisionTriageOn(ctx)), nil },
+			set: s.setSupervisionTriage},
 		{Setting: Setting{Key: "assistant.auto_supervision_messages", Title: "Automatic supervision messages", Actions: getSet,
 			About: "older on/off form of assistant.auto_supervision_mode: reads true unless the mode is off; true sets the mode " +
 				"to all, false to off (withdrawing what was waiting once). Prefer assistant.auto_supervision_mode (all / outcomes / " +
@@ -898,6 +910,7 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.recording_days": "title_recording_days", "assistant.recording_audio_days": "title_recording_audio_days", "assistant.recording_text_days": "title_recording_text_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay", chatReplyMutedChatsKey: "title_chat_reply_relay_muted_chats",
 	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "assistant.auto_supervision_mode": "title_auto_supervision_mode", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", modelProfileBindingsKey: "title_model_bindings", "model_profiles.tiers": "title_model_tiers",
+	supervisionTriageSettingKey:               "title_supervision_triage",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
@@ -936,7 +949,7 @@ func (s *Service) setIdleAutoCompact(ctx context.Context, raw json.RawMessage) (
 	return s.setBoolSetting(ctx, raw, s.idleAutoCompact, i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_unchanged"), func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_idle_auto_compact", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.IdleAutoCompact },
-		"Idle compaction setting saved (%v); applies from the next unattended message.")
+		"Idle compaction setting saved (%v).")
 }
 
 func (s *Service) setIdleAutoCompactMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
@@ -1512,6 +1525,13 @@ func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownC
 		return i18n.T(l, "assistant-settings_tool.change_inbox_signals", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.InboxSignals },
 		"assistant.inbox_signals is %v from the next new Inbox message on (signals already waiting go out only while it is on).")
+}
+
+func (s *Service) setSupervisionTriage(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.supervisionTriageOn, supervisionTriageSettingKey+" is unchanged",
+		func(l i18n.Lang, before, after string) string {
+			return i18n.T(l, "assistant-settings_tool.change_supervision_triage", i18n.Args{"before": before, "after": after})
+		}, func(v *Settings) **bool { return &v.SupervisionTriage }, supervisionTriageSettingKey+" is %v.")
 }
 
 // setAutoSupervisionMessages is the older on/off form: true is the mode all, false off. A value already in effect is a

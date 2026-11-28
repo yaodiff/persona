@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 const (
@@ -240,6 +242,9 @@ func (c *Conn) Write(p []byte) (int, error) {
 func (c *Conn) send(line []byte) error {
 	if len(bytes.TrimSpace(line)) == 0 {
 		return nil
+	}
+	if c.limit > 0 && int64(len(line)) > c.limit {
+		return fmt.Errorf("bus: outgoing message is %d bytes (limit %d): %w", len(line), c.limit, rpc.ErrMessageTooLarge)
 	}
 	return c.ws.Write(c.ctx, websocket.MessageText, line)
 }

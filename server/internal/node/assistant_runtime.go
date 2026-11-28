@@ -181,7 +181,8 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 	}
 	var agyChannel *agyChannelSpec
-	if h.agent() == agyAgent {
+	isAgy := h.agent() == agyAgent
+	if isAgy {
 		var err error
 		agyChannel, err = n.agyChannelFor(ctx, launcher)
 		if err != nil {
@@ -257,11 +258,14 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if m := n.assistantModeOf(id); m != "" {
 		turn["mode"] = m
 	}
-	if !known || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") || (remote && !wasRemote) {
+	if !known || (isAgy && !st.RuntimeAssistant) || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") || (remote && !wasRemote) {
 		if st.StartedAt.IsZero() {
 			st.StartedAt = time.Now().UTC()
 		}
 		st.Launcher, st.Cwd = launcher, cwd
+		if isAgy {
+			st.RuntimeAssistant = true
+		}
 		if hasInput {
 			st.TaskExecution = strict
 		}
@@ -272,7 +276,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		awaitList(n.notifySessionsSoon())
 		return id, nil
 	}
-	if !startedNew && h.agent() == agyAgent {
+	if !startedNew && isAgy {
 		if err := n.agyIdleCompactBeforeInput(ctx, h, id, text, images, true, true); err != nil {
 			return "", err
 		}

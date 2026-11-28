@@ -4435,9 +4435,23 @@ type ConnectorInboxReply struct {
 	ItemID       string                  `json:"item_id,omitempty"`
 	Last         string                  `json:"last,omitempty"`
 	Text         string                  `json:"text,omitempty"`
+	Mentions     []ConnectorInboxMention `json:"mentions,omitempty"`
 	ClientID     string                  `json:"client_id,omitempty"`
 	Changes      []ConnectorStatusChange `json:"changes,omitempty"`
 }
+
+// ConnectorInboxMention: binds an exact @name in the reply's text to a verified external user id, for connectors that
+// support real @ mentions.
+type ConnectorInboxMention struct {
+	ID   ConnectorMentionUserID `json:"id"`
+	Name string                 `json:"name"`
+}
+
+// ConnectorMentionUserID: A person's user ID on the connector's own service, as verified for a real @ mention.
+type ConnectorMentionUserID string
+
+// String returns the ID as it is on the wire.
+func (v ConnectorMentionUserID) String() string { return string(v) }
 
 type ConnectorStatusChange struct {
 	Ref   string `json:"ref"`
@@ -8656,6 +8670,7 @@ var newDef = map[string]func() any{
 	"ConnectorThingGroup":           func() any { return new(ConnectorThingGroup) },
 	"ConnectorThingParent":          func() any { return new(ConnectorThingParent) },
 	"ConnectorInboxReply":           func() any { return new(ConnectorInboxReply) },
+	"ConnectorInboxMention":         func() any { return new(ConnectorInboxMention) },
 	"ConnectorStatusChange":         func() any { return new(ConnectorStatusChange) },
 	"ConnectorSettleParams":         func() any { return new(ConnectorSettleParams) },
 	"ConnectorSettled":              func() any { return new(ConnectorSettled) },

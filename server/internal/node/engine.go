@@ -47,6 +47,8 @@ type engineState struct {
 	// listed sessions without saying. botmuxSaid is the same "not nil", read without the lock (botmuxPending).
 	botmux     *bool
 	botmuxSaid atomic.Bool
+	// botmuxOwner is the BotMux Owner Union ID the hub handed (setBotmuxOwner), "" for none.
+	botmuxOwner proto.BotmuxOwnerUnionID
 }
 
 // configWait is how long a new connection waits for the hub to say which engine before it starts on herdr: a hub
@@ -249,6 +251,7 @@ func (n *Node) useEngineChoice(ctx context.Context, c proto.EngineChoice) error 
 	n.eng.mu.Lock()
 	n.hosts.Set(nodeHostsFor(c, n.eng.botmux != nil && *n.eng.botmux, n.logf)...)
 	n.syncHerdrHostBlocked()
+	n.syncBotmuxOwner()
 	n.resetSignals()
 	n.eng.name, n.eng.set = engine, &c
 	n.mu.Lock()

@@ -173,7 +173,9 @@ class ShellLaneTests(unittest.TestCase):
         self.hub_log = self.root / "android-hub-driver-arguments"
         for name in ("test_refract_about_version.py", "test_refract_about_build.py", "test_android_i18n_check.py", "test_android_token_baseline.py",
                      "test_android_motion_baseline.py", "test_android_slot_order.py", "android_i18n_check.py",
-                     "android_token_baseline.py", "android_motion_baseline.py", "android_slot_order.py"):
+                     "android_token_baseline.py", "android_motion_baseline.py", "android_slot_order.py",
+                     "test_android_compose_budget.py", "test_android_nested_throwables.py",
+                     "android_compose_budget.py", "android_nested_throwables.py"):
             (self.root / "scripts/app" / name).write_text("pass\n")
         (self.root / "scripts/app/refract_about_version.py").write_text("pass\n")  # pinned About Version regeneration (#9694)
         (self.root / "scripts/app/refract_about_build.py").write_text("pass\n")  # independent Build probe (#13001)

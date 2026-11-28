@@ -663,7 +663,7 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	restPath, err := url.PathUnescape("/" + rest)
+	restPath, err := validateGateProxyPath(rest)
 	if err != nil {
 		gateRefuse(w, http.StatusBadRequest, "路径不对："+err.Error())
 		return
@@ -776,6 +776,46 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	rp.ServeHTTP(sw, r)
+}
+
+// validateGateProxyPath validates and unescapes the escaped path after /<key>/
+// so every segment seen by gate rules, AgentAPIWriteGET, grant matching, and
+// the upstream or relayed server agrees unambiguously. It rejects empty
+// interior segments ("//"), dot segments (".", "..", literal or
+// percent-encoded), percent-encoded path separators ("%2f"), backslashes, URL
+// delimiters ("?", "#"), and ASCII control characters.
+func validateGateProxyPath(rawRest string) (string, error) {
+	if rawRest == "" {
+		return "/", nil
+	}
+	segs := strings.Split(rawRest, "/")
+	var b strings.Builder
+	b.Grow(len(rawRest) + 1)
+	for i, rawSeg := range segs {
+		if rawSeg == "" {
+			if i == len(segs)-1 && len(segs) > 1 {
+				b.WriteByte('/')
+				continue
+			}
+			return "", errors.New("empty path segment")
+		}
+		seg, err := url.PathUnescape(rawSeg)
+		if err != nil {
+			return "", err
+		}
+		if seg == "." || seg == ".." {
+			return "", errors.New("dot path segment")
+		}
+		for j := 0; j < len(seg); j++ {
+			ch := seg[j]
+			if ch < 0x20 || ch == 0x7f || ch == '/' || ch == '\\' || ch == '?' || ch == '#' {
+				return "", errors.New("disallowed character in path")
+			}
+		}
+		b.WriteByte('/')
+		b.WriteString(seg)
+	}
+	return b.String(), nil
 }
 
 // gateBody is a request's body on its way to the API: what is read of it, and the server's body to close.

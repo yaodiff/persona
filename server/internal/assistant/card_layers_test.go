@@ -343,7 +343,7 @@ func TestCardLedgerSkipsHeldPushes(t *testing.T) {
 	waitFor(t, "deliverCard held recorded", func() bool {
 		return cardsToday(t, s)[cardAgentDone].Held == 1
 	})
-	if sent, err := s.pushDecisionAbout(ctx, "todo_held", assistantwire.TodoPushDecide); err != nil || !sent {
+	if sent, err := s.pushDecisionErr(ctx, "todo_held"); err != nil || !sent {
 		t.Fatalf("pushDecisionAbout held: sent=%v err=%v", sent, err)
 	}
 	if _, err := (healthHost{s}).Notify(ctx, Notification{Kind: assistantwire.NotifyHealthWater, Title: "water", SessionID: "conv1"}); err != nil {
@@ -414,7 +414,7 @@ func TestCardLedgerSkipsHeldPushes(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for deliverCard error log")
 	}
-	if _, err := s.pushDecisionAbout(ctx, "todo_held", assistantwire.TodoPushDecide); err == nil {
+	if _, err := s.pushDecisionErr(ctx, "todo_held"); err == nil {
 		t.Fatal("expected pushDecisionAbout error")
 	}
 	if _, err := (healthHost{s}).Notify(ctx, Notification{Kind: assistantwire.NotifyHealthWater, Title: "water err", SessionID: "conv1"}); err == nil {
@@ -479,7 +479,7 @@ func TestDecisionAndEscalatedCategorizedByWhyOwner(t *testing.T) {
 	for i, tc := range cases {
 		todoID := "todo_why_" + strconv.Itoa(i)
 		seedDecisionForLedgerTest(s, todoID, tc.why)
-		if sent, err := s.pushDecisionAbout(ctx, todoID, assistantwire.TodoPushDecide); err != nil || !sent {
+		if sent, err := s.pushDecisionErr(ctx, todoID); err != nil || !sent {
 			t.Fatalf("why=%q pushDecisionAbout: sent=%v err=%v", tc.why, sent, err)
 		}
 		if got := decisionCardSource(tc.why); got != tc.wantDecisionSrc {

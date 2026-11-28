@@ -1,17 +1,27 @@
 const startPrefix = 'Tool is running as a background task with task id:'
 const endNotice = /\bTask id "([^"\n]+)" (?:was )?(finished|failed|canceled|cancelled|killed|stopped)\b/i
 const taskMessage = /^[ \t]*\[Message\] timestamp=(\S+) sender=(\S+) priority=\S+ content=([\s\S]*)/m
-const cronIteration = /\(iteration [0-9]+\)$/
+const cronIteration = /\(iteration ([0-9]+)\)$/
+const timerDescRe = /^Timer:\s*((?:\d+(?:\.\d+)?[hms]\s*)+)(?:,|$)/i
+const timerUnitRe = /(\d+(?:\.\d+)?)([hms])/gi
 const heartbeatNotice = /^(?:\[Notice\]\s+)?Task(?:\s+id\s+"[^"\n]+")?\s+is\s+still\s+running\b/i
 const serverRestartNotice = /^(?:\[Notice\]\s+)?All your subagents and background tasks have been stopped due to server restart\b/i
+const subagentIdleRe = /^Subagent ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) has gone idle\b/i
 const genericHeaderRe = /^(?:Created At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\r?\nCompleted At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})(?:\r?\n|$))+/
 const emptyTaskList = 'No background tasks are currently running.'
 const taskListHeader = /^You have ([1-9][0-9]*) background task\(s\) currently running:$/
 const taskListRow = /^- .* \(`([^`\s]+)`\)$/
+const taskStatusHeader = /^Task:\s*(\S+)\r?\nStatus:\s*([A-Za-z_]+)(?:\r?\n|$)/
+const emptySubagentList = /^You have 0 active subagent\(s\):(?:\s*\[\])?$/
+const embeddedUuidRe = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
+const exactUuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const terminalStatuses = new Map([
-  ['DONE', 'completed'], ['ERROR', 'failed'], ['CANCELED', 'killed'], ['CANCELLED', 'killed'],
+  ['DONE', 'completed'], ['COMPLETED', 'completed'], ['FINISHED', 'completed'],
+  ['ERROR', 'failed'], ['FAILED', 'failed'],
+  ['CANCELED', 'killed'], ['CANCELLED', 'killed'], ['KILLED', 'killed'], ['STOPPED', 'killed'],
 ])
 const kinds = new Map([['schedule', 'monitor'], ['run_workflow', 'workflow'], ['invoke_subagent', 'agent']])
+const timerExpiryGraceMs = 60_000
 const retainedForMs = 24 * 60 * 60 * 1000
 const endedLimit = 20
 const runningLimit = 50
@@ -46,6 +56,63 @@ function toolString(value) {
   return value
 }
 
+function toolNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : Number.NaN
+  if (typeof value !== 'string') return Number.NaN
+  const text = toolString(value).trim()
+  if (!text) return Number.NaN
+  const n = Number(text)
+  return Number.isFinite(n) ? n : Number.NaN
+}
+
+function toolStringArray(value) {
+  if (Array.isArray(value)) return value.filter(v => typeof v === 'string')
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      if (Array.isArray(parsed)) return parsed.filter(v => typeof v === 'string')
+    } catch { /* Ignore non-JSON string values. */ }
+  }
+  return []
+}
+
+function parseTimerDescriptionMs(description) {
+  if (typeof description !== 'string') return 0
+  const m = timerDescRe.exec(description.trim())
+  if (!m) return 0
+  let totalSec = 0
+  for (const unit of m[1].matchAll(timerUnitRe)) {
+    const n = Number(unit[1])
+    if (!Number.isFinite(n) || n <= 0) continue
+    const mult = unit[2].toLowerCase() === 'h' ? 3600 : unit[2].toLowerCase() === 'm' ? 60 : 1
+    totalSec += n * mult
+  }
+  return totalSec > 0 && totalSec < 1e9 ? Math.round(totalSec * 1000) : 0
+}
+
+function scheduleConfig(description, call, conversation) {
+  const args = call?.name === 'schedule' && call.args && typeof call.args === 'object' ? call.args : undefined
+  const rawMax = toolNumber(args?.MaxIterations)
+  const maxIterations = Number.isInteger(rawMax) && rawMax > 0 ? rawMax : 0
+  if (description?.startsWith('Cron:') || toolString(args?.CronExpression).trim()) {
+    return { oneShot: false, condition: '', durationMs: 0, maxIterations }
+  }
+  const hasDuration = args?.DurationSeconds != null
+  if (hasDuration || description?.startsWith('Timer:')) {
+    let condition = toolString(args?.TimerCondition).trim()
+    const lower = condition.toLowerCase()
+    if (lower === 'never') condition = ''
+    else if (lower === 'any') condition = 'any'
+    else if (condition) condition = exactUuidRe.test(lower) ? lower : qualifiedTaskId(conversation, condition)
+    const seconds = toolNumber(args?.DurationSeconds)
+    const durationMs = seconds > 0 && seconds < 1e9
+      ? Math.round(seconds * 1000)
+      : parseTimerDescriptionMs(description)
+    return { oneShot: true, condition, durationMs, maxIterations: 0 }
+  }
+  return { oneShot: false, condition: '', durationMs: 0, maxIterations }
+}
+
 function parseTime(value) {
   if (typeof value !== 'string' || !value) return Number.NaN
   return Date.parse(value)
@@ -53,6 +120,11 @@ function parseTime(value) {
 
 function qualifiedTaskId(conversation, id) {
   return taskName.test(id) ? `${conversation}/${id}` : id
+}
+
+function isOwnTaskId(conversation, id) {
+  const prefix = conversation + '/'
+  return id.startsWith(prefix) && taskName.test(id.slice(prefix.length))
 }
 
 function toolOutput(content) {
@@ -86,14 +158,29 @@ function serverRestartEvent(content, message, createdAt, order) {
   return { at: parseTime(createdAt), rawAt: createdAt, order }
 }
 
-// Accepts complete, unfiltered manage_task(Action="list") results for this conversation.
-function taskInventory(step, slot, calledAt, at, conversation) {
-  const call = slot?.tool
-  if (call?.name !== 'manage_task' || step.error || String(step.status ?? '').toUpperCase() !== 'DONE' ||
+function validToolResult(step, slot, calledAt, at) {
+  if (step.error || String(step.status ?? '').toUpperCase() !== 'DONE' ||
     !Number.isInteger(step.step_index) || step.step_index < 0 ||
     !Number.isInteger(slot.planner?.step_index) || slot.planner.step_index < 0 ||
     !Number.isFinite(calledAt) || !Number.isFinite(at) || at < calledAt ||
-    step.truncated_fields?.includes('content') || slot.planner.truncated_fields?.includes('tool_calls')) {
+    slot.planner.truncated_fields?.includes('tool_calls')) {
+    return false
+  }
+  // The tool's timestamp can predate the result step when an old result is exported late.
+  if (typeof step.content === 'string' && step.content.startsWith('Created At: ')) {
+    const newline = step.content.indexOf('\n')
+    const created = (newline < 0 ? step.content : step.content.slice(0, newline)).slice('Created At: '.length).trim()
+    const started = parseTime(created)
+    if (!Number.isFinite(started) || started < calledAt) return false
+  }
+  return true
+}
+
+// Accepts complete, unfiltered manage_task(Action="list") results for this conversation.
+function taskInventory(step, slot, calledAt, at, conversation) {
+  const call = slot?.tool
+  if (call?.name !== 'manage_task' || !validToolResult(step, slot, calledAt, at) ||
+    step.truncated_fields?.includes('content')) {
     return null
   }
   const args = call.args
@@ -107,13 +194,6 @@ function taskInventory(step, slot, calledAt, at, conversation) {
     if (key === 'TaskId' && (value == null || (typeof value === 'string' && toolString(value) === ''))) continue
     return null
   }
-  // The tool's timestamp can predate the result step when an old result is exported late.
-  if (typeof step.content === 'string' && step.content.startsWith('Created At: ')) {
-    const newline = step.content.indexOf('\n')
-    const created = (newline < 0 ? step.content : step.content.slice(0, newline)).slice('Created At: '.length).trim()
-    const started = parseTime(created)
-    if (!Number.isFinite(started) || started < calledAt) return null
-  }
   const output = toolOutput(step.content).trim()
   if (output === emptyTaskList) return new Set()
   const newline = output.indexOf('\n')
@@ -121,17 +201,72 @@ function taskInventory(step, slot, calledAt, at, conversation) {
   const header = taskListHeader.exec(output.slice(0, newline).trim())
   if (!header) return null
   const count = Number(header[1])
-  const prefix = conversation + '/'
+  const body = output.slice(newline + 1).trim()
   const ids = new Set()
-  for (const line of output.slice(newline + 1).split('\n')) {
+  if (body.startsWith('[')) {
+    let items
+    try { items = JSON.parse(body) } catch { return null }
+    if (!Array.isArray(items) || items.length !== count) return null
+    for (const item of items) {
+      if (!item || typeof item !== 'object' || typeof item.taskId !== 'string') return null
+      const id = qualifiedTaskId(conversation, item.taskId.trim())
+      if (!isOwnTaskId(conversation, id) || ids.has(id)) return null
+      ids.add(id)
+    }
+    return ids.size === count ? ids : null
+  }
+  for (const line of body.split('\n')) {
     const match = taskListRow.exec(line.trim())
     if (!match) return null
     const id = qualifiedTaskId(conversation, match[1])
-    if (!id.startsWith(prefix) || !taskName.test(id.slice(prefix.length))) return null
-    if (ids.has(id)) return null
+    if (!isOwnTaskId(conversation, id) || ids.has(id)) return null
     ids.add(id)
   }
   return ids.size === count ? ids : null
+}
+
+// Accepts authoritative manage_task(Action="status", TaskId=...) results matching the requested task.
+function taskStatusObservation(step, slot, calledAt, at, conversation) {
+  const call = slot?.tool
+  if (call?.name !== 'manage_task' || !validToolResult(step, slot, calledAt, at)) return null
+  const args = call.args
+  if (!args || typeof args !== 'object' || Array.isArray(args) ||
+    toolString(args.Action).toLowerCase() !== 'status') {
+    return null
+  }
+  const requested = qualifiedTaskId(conversation, toolString(args.TaskId).trim())
+  if (!isOwnTaskId(conversation, requested)) return null
+  const match = taskStatusHeader.exec(toolOutput(step.content).trimStart())
+  if (!match) return null
+  const reported = qualifiedTaskId(conversation, match[1].trim())
+  if (reported !== requested) return null
+  const rawStatus = match[2].toUpperCase()
+  if (liveStep.has(rawStatus)) return { id: requested, live: true }
+  const status = terminalStatuses.get(rawStatus)
+  return status ? { id: requested, status } : null
+}
+
+// Accepts successful manage_subagents actions scoped strictly to agent-kind background tasks.
+function subagentAction(step, slot, calledAt, at) {
+  const call = slot?.tool
+  if (call?.name !== 'manage_subagents' || !validToolResult(step, slot, calledAt, at)) return null
+  const args = call.args
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return null
+  const action = toolString(args.Action).trim().toLowerCase()
+  if (action === 'kill_all') return { kind: 'kill_all' }
+  if (action === 'kill') {
+    const ids = []
+    for (const raw of toolStringArray(args.ConversationIds)) {
+      const m = raw.trim().toLowerCase()
+      if (exactUuidRe.test(m)) ids.push(m)
+    }
+    return ids.length ? { kind: 'kill', ids } : null
+  }
+  if (action === 'list' && !step.truncated_fields?.includes('content') &&
+    emptySubagentList.test(toolOutput(step.content).trim())) {
+    return { kind: 'empty_list' }
+  }
+  return null
 }
 
 function recordSeen(task, at, order) {
@@ -147,6 +282,11 @@ function recordSeen(task, at, order) {
   }
 }
 
+function recordMapSeen(map, key, ev) {
+  const prev = map.get(key)
+  if (!prev || ev.at > prev.at || (ev.at === prev.at && ev.order > prev.order)) map.set(key, ev)
+}
+
 function compareEvents(a, b) {
   const aTimed = Number.isFinite(a.at)
   const bTimed = Number.isFinite(b.at)
@@ -154,11 +294,11 @@ function compareEvents(a, b) {
   return a.order - b.order
 }
 
-function restartAfterTask(restart, lastSeen, lastSeenOrder) {
-  if (Number.isFinite(restart.at) && Number.isFinite(lastSeen)) {
-    return restart.at > lastSeen || (restart.at === lastSeen && restart.order > lastSeenOrder)
+function eventAfterTask(ev, lastSeen, lastSeenOrder) {
+  if (Number.isFinite(ev.at) && Number.isFinite(lastSeen)) {
+    return ev.at > lastSeen || (ev.at === lastSeen && ev.order > lastSeenOrder)
   }
-  return restart.order > lastSeenOrder
+  return ev.order > lastSeenOrder
 }
 
 function finish(task, status, at, inferred = false) {
@@ -168,13 +308,28 @@ function finish(task, status, at, inferred = false) {
   task.inferred = inferred
 }
 
-export function extractBackground(steps, conversation) {
+function firstForeignUuid(text, conversation) {
+  if (typeof text !== 'string' || !text) return ''
+  const own = conversation.toLowerCase()
+  for (const m of text.matchAll(embeddedUuidRe)) {
+    const id = m[0].toLowerCase()
+    if (id !== own) return id
+  }
+  return ''
+}
+
+export function extractBackground(steps, conversation, now = Number.NaN) {
   const tasks = new Map()
-  const prefix = conversation + '/'
   const pending = new Map()
   const restarts = []
+  const messages = []
   const inventories = []
   const inventorySeen = new Map()
+  const statusSeen = new Map()
+  const statusEnds = new Map()
+  const subagentKillAlls = []
+  const subagentKills = new Map()
+  const subagentEmptyLists = []
   let index = -1
   let order = -1
   for (const step of steps) {
@@ -213,15 +368,38 @@ export function extractBackground(steps, conversation) {
           break
         }
         if (message) {
-          const sender = qualifiedTaskId(conversation, message[2])
+          const rawSender = message[2]
+          const sender = exactUuidRe.test(rawSender.toLowerCase()) ? rawSender.toLowerCase() : qualifiedTaskId(conversation, rawSender)
+          const body = message[3].trim().replace(/<\/SYSTEM_MESSAGE>\s*$/, '').trim()
+          const heartbeat = heartbeatNotice.test(body)
+          const msgAt = Number.isFinite(at) ? at : parseTime(message[1])
+          const msgRawAt = Number.isFinite(at) ? step.created_at : (Number.isFinite(msgAt) ? message[1] : step.created_at)
           const task = tasks.get(sender)
           if (task) {
-            recordSeen(task, at, order)
-            if (!notice && task.oneShot) {
-              const body = message[3].trim().replace(/<\/SYSTEM_MESSAGE>\s*$/, '').trim()
-              if (cronIteration.test(body)) task.oneShot = false
-              else if (!heartbeatNotice.test(body)) finish(task, 'completed', step.created_at)
+            recordSeen(task, msgAt, order)
+            if (!notice) {
+              const iter = cronIteration.exec(body)
+              if (iter) {
+                task.oneShot = false
+                task.condition = ''
+                task.deadline = Number.NaN
+                if (task.maxIterations > 0 && Number(iter[1]) >= task.maxIterations) {
+                  finish(task, 'completed', msgRawAt, true)
+                }
+              } else if (task.oneShot && !heartbeat) {
+                finish(task, 'completed', msgRawAt)
+              }
             }
+          }
+          if (!heartbeat && Number.isFinite(msgAt)) {
+            const idleMatch = sender === 'system' ? subagentIdleRe.exec(body) : null
+            messages.push({
+              at: msgAt,
+              rawAt: msgRawAt,
+              order,
+              sender,
+              subagentId: idleMatch ? idleMatch[1].toLowerCase() : '',
+            })
           }
         }
         break
@@ -233,13 +411,30 @@ export function extractBackground(steps, conversation) {
           if (!Number.isFinite(at) || !Number.isFinite(calledAt) || at >= calledAt) {
             call = slot.tool
           }
+          const ev = { at: calledAt, rawAt: slot.planner.created_at, order: slot.plannerOrder }
           const ids = taskInventory(step, slot, calledAt, at, conversation)
           if (ids) {
-            inventories.push({ at: calledAt, rawAt: slot.planner.created_at, order: slot.plannerOrder })
-            for (const id of ids) {
-              const prev = inventorySeen.get(id)
-              if (!prev || calledAt > prev.at || (calledAt === prev.at && slot.plannerOrder > prev.order)) {
-                inventorySeen.set(id, { at: calledAt, order: slot.plannerOrder })
+            inventories.push(ev)
+            for (const id of ids) recordMapSeen(inventorySeen, id, ev)
+          }
+          const obs = taskStatusObservation(step, slot, calledAt, at, conversation)
+          if (obs) {
+            if (obs.live) recordMapSeen(statusSeen, obs.id, ev)
+            else {
+              let list = statusEnds.get(obs.id)
+              if (!list) statusEnds.set(obs.id, list = [])
+              list.push({ ...ev, status: obs.status })
+            }
+          }
+          const subAct = subagentAction(step, slot, calledAt, at)
+          if (subAct) {
+            if (subAct.kind === 'kill_all') subagentKillAlls.push({ ...ev, status: 'killed' })
+            else if (subAct.kind === 'empty_list') subagentEmptyLists.push(ev)
+            else if (subAct.kind === 'kill') {
+              for (const subId of subAct.ids) {
+                let list = subagentKills.get(subId)
+                if (!list) subagentKills.set(subId, list = [])
+                list.push({ ...ev, status: 'killed' })
               }
             }
           }
@@ -248,21 +443,26 @@ export function extractBackground(steps, conversation) {
         if (!notice) break
         const [first, ...details] = notice.split('\n')
         const id = first.trim()
-        if (!id.startsWith(prefix) || !taskName.test(id.slice(prefix.length))) break
+        if (!isOwnTaskId(conversation, id)) break
         let task = tasks.get(id)
         if (!task) {
+          const detailText = details.join('\n')
           const description = details.map(line => line.trim()).find(line => line.startsWith('Task Description:'))
+          const kind = kinds.get(call?.name) ?? 'shell'
           task = {
             id,
-            kind: kinds.get(call?.name) ?? 'shell',
+            kind,
             started_at: step.created_at,
             lastSeen: Number.NaN,
             lastSeenOrder: order,
           }
           if (description) task.description = description.slice('Task Description:'.length).trim()
-          const schedule = call?.name === 'schedule' ? call.args : undefined
-          task.oneShot = !task.description?.startsWith('Cron:') && !toolString(schedule?.CronExpression).trim() &&
-            (schedule?.DurationSeconds != null || task.description?.startsWith('Timer:'))
+          const cfg = scheduleConfig(task.description, call, conversation)
+          task.oneShot = cfg.oneShot
+          task.condition = cfg.condition
+          task.maxIterations = cfg.maxIterations
+          task.deadline = cfg.oneShot && cfg.durationMs > 0 && Number.isFinite(at) ? at + cfg.durationMs : Number.NaN
+          if (kind === 'agent') task.subagentId = firstForeignUuid(detailText, conversation)
           if (call?.name === 'run_command') task.command = toolString(call.args?.CommandLine) || toolString(call.args?.command)
           tasks.set(id, task)
         }
@@ -276,36 +476,75 @@ export function extractBackground(steps, conversation) {
     }
   }
   inventories.sort(compareEvents)
+  subagentEmptyLists.sort(compareEvents)
   const running = [], ended = []
+  let nextExpiry = Number.NaN
+  const pickEarliest = (best, ev, status) => {
+    const candidate = status ? { ...ev, status } : ev
+    return !best || compareEvents(candidate, best) < 0 ? candidate : best
+  }
   for (const record of tasks.values()) {
     if (!record.status) {
       let lastSeen = record.lastSeen
       let lastSeenOrder = record.lastSeenOrder
-      const listed = inventorySeen.get(record.id)
-      if (listed && (!Number.isFinite(lastSeen) || listed.at > lastSeen ||
-        (listed.at === lastSeen && listed.order > lastSeenOrder))) {
-        lastSeen = listed.at
-        lastSeenOrder = listed.order
-      }
-      let restart
-      for (const ev of restarts) {
-        if (!restartAfterTask(ev, lastSeen, lastSeenOrder)) continue
-        if (!restart || compareEvents(ev, restart) < 0) restart = ev
+      for (const seenMap of [inventorySeen, statusSeen]) {
+        const seen = seenMap.get(record.id)
+        if (seen && (!Number.isFinite(lastSeen) || seen.at > lastSeen ||
+          (seen.at === lastSeen && seen.order > lastSeenOrder))) {
+          lastSeen = seen.at
+          lastSeenOrder = seen.order
+        }
       }
       const startedAt = parseTime(record.started_at)
-      const inventory = Number.isFinite(startedAt) && Number.isFinite(lastSeen)
-        ? inventories.find(ev => ev.at > lastSeen)
-        : undefined
-      if (restart && inventory) {
-        if (compareEvents(inventory, restart) < 0) finish(record, 'completed', inventory.rawAt, true)
-        else finish(record, 'killed', restart.rawAt, true)
-      } else if (restart) {
-        finish(record, 'killed', restart.rawAt, true)
-      } else if (inventory) {
-        finish(record, 'completed', inventory.rawAt, true)
+      let best
+      for (const ev of restarts) {
+        if (eventAfterTask(ev, lastSeen, lastSeenOrder)) best = pickEarliest(best, ev, 'killed')
+      }
+      if (Number.isFinite(startedAt) && Number.isFinite(lastSeen)) {
+        const inventory = inventories.find(ev => ev.at > lastSeen)
+        if (inventory) best = pickEarliest(best, inventory, 'completed')
+      }
+      if (record.oneShot && record.condition && Number.isFinite(startedAt)) {
+        for (const ev of messages) {
+          if (ev.sender === record.id) continue
+          if (record.condition !== 'any' && record.condition !== ev.sender &&
+            (!ev.subagentId || record.condition !== ev.subagentId)) continue
+          if (Number.isFinite(record.deadline) && ev.at >= record.deadline) continue
+          if (eventAfterTask(ev, lastSeen, lastSeenOrder)) best = pickEarliest(best, ev, 'killed')
+        }
+      }
+      for (const ev of statusEnds.get(record.id) ?? []) {
+        if (eventAfterTask(ev, lastSeen, lastSeenOrder)) best = pickEarliest(best, ev)
+      }
+      if (record.kind === 'agent') {
+        for (const ev of subagentKillAlls) {
+          if (eventAfterTask(ev, lastSeen, lastSeenOrder)) best = pickEarliest(best, ev)
+        }
+        if (record.subagentId) {
+          for (const ev of subagentKills.get(record.subagentId) ?? []) {
+            if (eventAfterTask(ev, lastSeen, lastSeenOrder)) best = pickEarliest(best, ev)
+          }
+        }
+        if (Number.isFinite(startedAt) && Number.isFinite(lastSeen)) {
+          const emptySub = subagentEmptyLists.find(ev => ev.at > lastSeen)
+          if (emptySub) best = pickEarliest(best, emptySub, 'completed')
+        }
+      }
+      if (best) finish(record, best.status, best.rawAt, true)
+    }
+    if (!record.status && record.oneShot && Number.isFinite(record.deadline) && Number.isFinite(now)) {
+      // Allow time for the timer's own completion message to reach the export.
+      const expiry = record.deadline + timerExpiryGraceMs
+      if (now >= expiry) {
+        finish(record, 'completed', new Date(record.deadline).toISOString(), true)
+      } else if (!Number.isFinite(nextExpiry) || expiry < nextExpiry) {
+        nextExpiry = expiry
       }
     }
-    const { inferred, oneShot, lastSeen, lastSeenOrder, ...task } = record
+    const {
+      inferred, oneShot, condition, maxIterations, deadline, subagentId,
+      lastSeen, lastSeenOrder, ...task
+    } = record
     if (task.status) {
       if (Number.isFinite(Date.parse(task.ended_at))) ended.push(task)
     } else if (running.length < runningLimit) {
@@ -313,7 +552,11 @@ export function extractBackground(steps, conversation) {
     }
   }
   ended.sort((a, b) => Date.parse(a.ended_at) - Date.parse(b.ended_at))
-  return { running, ended: ended.slice(-endedLimit) }
+  return {
+    running,
+    ended: ended.slice(-endedLimit),
+    ...(Number.isFinite(nextExpiry) ? { nextExpiry } : {}),
+  }
 }
 
 // The node attaches log paths from its own local transcript after validating

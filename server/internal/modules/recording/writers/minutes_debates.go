@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // Disagreements in meeting minutes (#16728, docs/assistant/meeting-minutes.md "Disagreements (#16728)"):
@@ -21,15 +22,59 @@ const (
 	minutesDebatesMax       = 6   // disagreements kept per meeting
 	minutesDebatePosMin     = 2   // fewer valid positions drops the disagreement
 	minutesDebatePosMax     = 4   // positions kept per disagreement
+	minutesDebateAlsoMax    = 2   // supporting lines kept per position (#17674)
 	minutesDebateQRunes     = 200 // question at most, as conclusions
 	minutesMergeDebateTotal = 24  // total debate notes budget across parts (separate from minutesMergeItems)
 )
 
+// answerDebateAlso is an additional transcript line where another person explicitly backs the same position (#17674).
+type answerDebateAlso struct {
+	Line   modelLine `json:"line"`
+	Holder modelText `json:"holder"`
+}
+
 // answerDebatePosition is one side of a disagreement in the model's answer.
 type answerDebatePosition struct {
-	Stance modelText `json:"stance"`
-	Line   modelLine `json:"line"`
-	Who    modelText `json:"who"`
+	Stance modelText                   `json:"stance"`
+	Line   modelLine                   `json:"line"`
+	Who    modelText                   `json:"who"`
+	Holder modelText                   `json:"holder"`
+	Also   modelList[answerDebateAlso] `json:"also"`
+}
+
+// parseModelHolder reads a model-written speaker number ("S2", "S1?", "s3") as a lowercase hub SpeakerID ("s2", "s1",
+// "s3"), or "" for anything else.
+func parseModelHolder(raw string) SpeakerID {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimSpace(strings.TrimSuffix(s, "?"))
+	if len(s) < 2 || len(s) > 10 {
+		return ""
+	}
+	if s[0] != 'S' && s[0] != 's' {
+		return ""
+	}
+	if s[1] < '1' || s[1] > '9' {
+		return ""
+	}
+	for i := 2; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return ""
+		}
+	}
+	return SpeakerID("s" + s[1:])
+}
+
+// formatPromptSpeaker renders a merged SpeakerID ("s2") as the uppercase label shown to the minutes model ("S2" or
+// "S2?"), or "" when absent.
+func formatPromptSpeaker(id SpeakerID, unsure bool) string {
+	if id == "" {
+		return ""
+	}
+	tag := strings.ToUpper(string(id))
+	if unsure {
+		return tag + "?"
+	}
+	return tag
 }
 
 // answerDebateOutcome is how a settled disagreement ended in the model's answer.
@@ -66,11 +111,14 @@ type answerDebate struct {
 	Outcome   modelDebateOutcome              `json:"outcome"`
 }
 
-// buildDebates checks the model's disagreements against lineAt (transcript lines read, never photos), links settled
+// buildDebates checks the model's disagreements against lineByN (transcript lines read, never photos), links settled
 // outcomes to kept decisions citing the same transcript line, checks who with named, sets each debate's At to its
 // earliest position's At, sorts by At, and caps at minutesDebatesMax (and minutesDebatePosMax positions each).
-// Disagreements never count towards the answer's usability citation check.
-func buildDebates(raw []answerDebate, lineAt map[int]float64, decisions []placed[MinutesItem], named func(string) string) []MinutesDebate {
+// When storeSpan is true (hub-transcribed meetings whose speakers are not cleared), each position keeps its cited
+// line's span and unreliable-timing flag so storeMinutes (or a later timeline) can compute speaker attribution under
+// the lock. When numbered is true (the model read speaker numbers), holder and up to minutesDebateAlsoMax supporting
+// lines are verified and stored as well. Disagreements never count towards the answer's usability citation check.
+func buildDebates(raw []answerDebate, lineByN map[int]minutesLine, decisions []placed[MinutesItem], named func(string) string, storeSpan, numbered bool) []MinutesDebate {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -103,16 +151,56 @@ func buildDebates(raw []answerDebate, lineAt map[int]float64, decisions []placed
 			if stance == "" || seenStance[stance] {
 				continue
 			}
-			sec, ok := lineAt[int(pos.Line)]
+			ml, ok := lineByN[int(pos.Line)]
 			if !ok {
 				continue
 			}
 			seenStance[stance] = true
-			positions = append(positions, MinutesDebatePosition{
+			mp := MinutesDebatePosition{
 				Stance: stance,
-				At:     sec,
+				At:     ml.At,
 				Who:    named(string(pos.Who)),
-			})
+			}
+			if storeSpan {
+				end := ml.End
+				if end < ml.At {
+					end = ml.At
+				}
+				mp.Span = &SpeakerSpan{ml.At, end}
+				mp.Est = ml.UnreliableTiming
+			}
+			if numbered {
+				mp.SaidBy = parseModelHolder(string(pos.Holder))
+				seenLines := map[int]bool{int(pos.Line): true}
+				for _, al := range pos.Also {
+					if len(mp.Also) == minutesDebateAlsoMax {
+						break
+					}
+					aln := int(al.Line)
+					if seenLines[aln] {
+						continue
+					}
+					aml, ok := lineByN[aln]
+					if !ok {
+						continue
+					}
+					seenLines[aln] = true
+					entry := MinutesDebateAlso{
+						At:     aml.At,
+						SaidBy: parseModelHolder(string(al.Holder)),
+					}
+					if storeSpan {
+						aEnd := aml.End
+						if aEnd < aml.At {
+							aEnd = aml.At
+						}
+						entry.Span = &SpeakerSpan{aml.At, aEnd}
+						entry.Est = aml.UnreliableTiming
+					}
+					mp.Also = append(mp.Also, entry)
+				}
+			}
+			positions = append(positions, mp)
 		}
 		if len(positions) < minutesDebatePosMin {
 			continue
@@ -127,8 +215,8 @@ func buildDebates(raw []answerDebate, lineAt map[int]float64, decisions []placed
 			if o := d.Outcome.val; o != nil {
 				text := cardLine(string(o.Text), minutesTextRunes)
 				outLine := int(o.Line)
-				if sec, ok := lineAt[outLine]; ok && text != "" {
-					outcome = &MinutesDebateOutcome{Text: text, At: sec}
+				if oml, ok := lineByN[outLine]; ok && text != "" {
+					outcome = &MinutesDebateOutcome{Text: text, At: oml.At}
 					if idx, ok := decisionByLine[outLine]; ok {
 						i := idx
 						outcome.Decision = &i
@@ -160,7 +248,7 @@ func buildDebates(raw []answerDebate, lineAt map[int]float64, decisions []placed
 // lines (never photos), ordered by earliest position and capped to limit (separate from the other sections' per-part
 // quota). A single-position candidate from one part is kept in the notes so the merging call can pair it with the
 // opposing side from another part; final verification in buildDebates still requires at least two positions.
-func debateNotesForMerge(a minutesAnswer, lines map[int]int, limit int) []prompts.KBMinutesDebate {
+func debateNotesForMerge(a minutesAnswer, lines map[int]int, lineByN map[int]minutesLine, limit int) []prompts.KBMinutesDebate {
 	if len(a.Debates) == 0 || limit <= 0 {
 		return nil
 	}
@@ -191,10 +279,37 @@ func debateNotesForMerge(a minutesAnswer, lines map[int]int, limit int) []prompt
 			if earliest < 0 || at < earliest {
 				earliest = at
 			}
+			ml := lineByN[int(pos.Line)]
+			var also []prompts.KBMinutesDebateAlso
+			if len(pos.Also) > 0 {
+				seenLines := map[int]bool{int(pos.Line): true}
+				for _, al := range pos.Also {
+					if len(also) == minutesDebateAlsoMax {
+						break
+					}
+					aln := int(al.Line)
+					if seenLines[aln] {
+						continue
+					}
+					if _, ok := lines[aln]; !ok {
+						continue
+					}
+					seenLines[aln] = true
+					aml := lineByN[aln]
+					also = append(also, prompts.KBMinutesDebateAlso{
+						Line:    aln,
+						Speaker: formatPromptSpeaker(aml.Speaker, aml.Unsure),
+						Holder:  strings.ToUpper(string(parseModelHolder(string(al.Holder)))),
+					})
+				}
+			}
 			positions = append(positions, prompts.KBMinutesDebatePosition{
-				Line:   int(pos.Line),
-				Stance: stance,
-				Who:    plainLine(string(pos.Who)),
+				Line:    int(pos.Line),
+				Stance:  stance,
+				Who:     plainLine(string(pos.Who)),
+				Speaker: formatPromptSpeaker(ml.Speaker, ml.Unsure),
+				Holder:  strings.ToUpper(string(parseModelHolder(string(pos.Holder)))),
+				Also:    also,
 			})
 		}
 		if len(positions) == 0 {
@@ -245,7 +360,9 @@ func (w *minutesMarkdown) debates(list []MinutesDebate) {
 		b.WriteByte('\n')
 		for _, p := range d.Positions {
 			b.WriteString("- " + w.at(p.At) + w.esc(p.Stance))
-			if p.Who != "" {
+			if w.debateWho != nil {
+				b.WriteString(w.debateWho(p, l, w.esc))
+			} else if p.Who != "" {
 				b.WriteString(i18n.T(l, "kb-minutes.who", i18n.Args{"who": w.esc(p.Who)}))
 			}
 			b.WriteByte('\n')
@@ -253,6 +370,115 @@ func (w *minutesMarkdown) debates(list []MinutesDebate) {
 		if d.Status == DebateSettled && d.Outcome != nil && d.Outcome.Text != "" {
 			b.WriteString("- " + w.at(d.Outcome.At) + i18n.T(l, "kb-minutes.debate_outcome") + w.esc(d.Outcome.Text) + "\n")
 		}
+	}
+}
+
+// clearDebateAttribution clears computed timeline attribution (over, speaker, speaker_unsure) while keeping span, est,
+// said_by and also so a later speaker timeline can still attribute positions without a model call.
+func clearDebateAttribution(m *Minutes) {
+	if m == nil {
+		return
+	}
+	for di := range m.Debates {
+		for pi := range m.Debates[di].Positions {
+			p := &m.Debates[di].Positions[pi]
+			p.Over = nil
+			p.Speaker = ""
+			p.SpeakerUnsure = false
+			for ai := range p.Also {
+				p.Also[ai].Over = nil
+				p.Also[ai].Speaker = ""
+				p.Also[ai].SpeakerUnsure = false
+			}
+		}
+	}
+}
+
+// clearDebateSpeakerData removes all speaker attribution fields from m's debate positions once speakers are cleared.
+func clearDebateSpeakerData(m *Minutes) {
+	if m == nil {
+		return
+	}
+	for di := range m.Debates {
+		for pi := range m.Debates[di].Positions {
+			p := &m.Debates[di].Positions[pi]
+			p.Span = nil
+			p.Est = false
+			p.Over = nil
+			p.SaidBy = ""
+			p.Speaker = ""
+			p.SpeakerUnsure = false
+			p.Also = nil
+		}
+	}
+}
+
+// attributeDebates computes speaker attribution on every disagreement position in m under the store lock.
+func (e *engine) attributeDebates(m *Minutes, speakers *MeetingSpeakers, turns *SpeakerTurnsFile, timing TranscriptTiming, trimmed bool) {
+	if m == nil || len(m.Debates) == 0 {
+		return
+	}
+	if speakers != nil && speakers.State == SpeakerStateCleared {
+		clearDebateSpeakerData(m)
+		return
+	}
+	if speakers == nil || speakers.State != SpeakerStateReady {
+		clearDebateAttribution(m)
+		return
+	}
+	in := recordingwire.SpeakerDebatesAttrInput{
+		Debates:  m.Debates,
+		Speakers: *speakers,
+		Timing:   timing,
+		Trimmed:  trimmed,
+	}
+	if !trimmed {
+		if turns == nil {
+			in.Trimmed = true
+		} else {
+			in.Turns = turns.Turns
+			in.Covered = turns.Covered
+		}
+	}
+	out, err := e.Store.core.AttributeDebateSpeakers(in)
+	if err != nil {
+		e.logf("minutes: attribute debate speakers: %v", err)
+		return
+	}
+	m.Debates = out.Debates
+}
+
+// debateWhoFunc returns the Markdown speaker-suffix formatter for disagreement positions when speakers is ready, or nil
+// otherwise (leaving no-timeline Markdown byte-for-byte unchanged).
+func (e *engine) debateWhoFunc(speakers *MeetingSpeakers) func(MinutesDebatePosition, i18n.Lang, func(string) string) string {
+	if speakers == nil || speakers.State != SpeakerStateReady {
+		return nil
+	}
+	return func(p MinutesDebatePosition, l i18n.Lang, esc func(string) string) string {
+		labels := e.Store.core.ResolveDebateDisplays(recordingwire.SpeakerDisplayInput{
+			Speakers: speakers,
+			Position: p,
+		})
+		if len(labels) == 0 {
+			return ""
+		}
+		names := make([]string, 0, len(labels))
+		for _, lb := range labels {
+			switch lb.Kind {
+			case recordingwire.SpeakerDisplayName, recordingwire.SpeakerDisplayWho:
+				if lb.Value != "" {
+					names = append(names, esc(lb.Value))
+				}
+			case recordingwire.SpeakerDisplayNumbered:
+				if lb.Number > 0 {
+					names = append(names, esc(i18n.T(l, "kb-minutes.speaker", i18n.Args{"n": lb.Number})))
+				}
+			}
+		}
+		if len(names) == 0 {
+			return ""
+		}
+		return i18n.T(l, "kb-minutes.who", i18n.Args{"who": strings.Join(names, i18n.T(l, "kb-minutes.list_sep"))})
 	}
 }
 

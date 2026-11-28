@@ -196,7 +196,7 @@ offers nothing on the lock screen (`lockscreen` `open_only`).
 
 | Ask | `kind` | `risk` |
 | --- | --- | --- |
-| The to-do's decision, or a conclusion that says it cannot be done | `decision` | the listed ask's `risk`: the manager's rule (`askRisk` in `server/internal/assistant/todo_ask.go`) makes it `open` when `why_owner` is `irreversible` or `visible_to_others`, or Persona would take it at a deadline that cannot be undone, also once that deadline was handled and the list no longer shows it; else `safe` |
+| The to-do's decision, or a conclusion that says it cannot be done | `decision` | the listed ask's `risk`: the manager's rule (`askRisk` in `server/internal/assistant/todo_ask.go`) makes it `open` when `why_owner` is `irreversible` or `visible_to_others`, its recommendation requires the owner’s terminal, or Persona would take it at a deadline that cannot be undone, also once that deadline was handled and the list no longer shows it; else `safe` |
 | A failed start's retry | `retry` | `safe` |
 | A run's card a notification may answer: one question with options (single or multiple choice), no fields, not `private` | `question` | `safe` |
 | The same card when its asker says going ahead cannot be undone (`reversible` false) | `question` | `open` |

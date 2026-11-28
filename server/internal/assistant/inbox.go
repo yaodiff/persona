@@ -335,7 +335,7 @@ func (it *InboxItem) listed() InboxItem {
 	}
 	if g := currentSuggestion(it); g != nil {
 		g := *g
-		g.Changes, g.Cwd = slices.Clone(g.Changes), ""
+		g.Mentions, g.Changes, g.Cwd = slices.Clone(g.Mentions), slices.Clone(g.Changes), ""
 		g.MailTarget = nil // the reply's internal conflict check, not a client's target to choose
 		g.Owner, g.SourceOf, g.ReplyInstruction = nil, "", ""
 		g.ReplyPublicationFailed = false

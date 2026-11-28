@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The Ask Persona home-screen widget (AskPersonaWidget.kt): opens the main chat with the composer focused. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:description="@string/shortcuts_ask_widget_description"
     android:initialLayout="@layout/glance_default_loading_layout"
     android:minWidth="110dp"
@@ -11,4 +12,7 @@
     android:minResizeHeight="40dp"
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="0"
-    android:widgetCategory="home_screen|keyguard" />
+    android:configure="persona.platform.shortcuts.ConversationWidgetConfigureActivity"
+    android:widgetFeatures="reconfigurable"
+    android:widgetCategory="home_screen|keyguard"
+    tools:targetApi="p" />

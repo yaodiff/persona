@@ -482,6 +482,22 @@ func runFakeAgyHelper(args []string) int {
 			case promptText == "TRIGGER_CRASH":
 				return 1
 
+			case promptText == "TRIGGER_QUOTA_LINE":
+				// agy streams an account error as one line and ends the turn normally (#17860).
+				send(map[string]any{
+					"jsonrpc": "2.0",
+					"method":  "session/update",
+					"params": map[string]any{
+						"sessionId": p.SessionID,
+						"update": map[string]any{
+							"sessionUpdate": "agent_message_chunk",
+							"content":       map[string]any{"type": "text", "text": "⚠ RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 118h."},
+						},
+					},
+				})
+				send(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"stopReason": "end_turn"}})
+				continue
+
 			case promptText == "TRIGGER_PERMISSION":
 				srvID := `"perm-1"`
 				ch := make(chan string, 1)

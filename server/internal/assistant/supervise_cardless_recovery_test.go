@@ -513,7 +513,12 @@ func (s *cardlessClaimStore) PutTodoSupervision(ctx context.Context, row db.Todo
 		}
 		return errors.New("injected lost reply after marker commit")
 	}
-	if fail && row.CardlessToldAt != nil {
+	told := row.CardlessToldAt != nil
+	if !told && len(row.Waits) > 0 {
+		var wait OwnerWait
+		told = json.Unmarshal(row.Waits, &wait) == nil && wait.CardlessToldAt != nil
+	}
+	if fail && told {
 		return errors.New("injected cardless marker failure")
 	}
 	return s.DB.PutTodoSupervision(ctx, row)
@@ -585,5 +590,43 @@ func TestCardlessClaimMarkerFailureKeepsRecoveryRecord(t *testing.T) {
 	}
 	if _, ok := storedSupervisePending(t, again)[todo.ID+"|"+sigCardlessWait]; ok {
 		t.Fatal("the delivered claim remained in the durable outbox")
+	}
+}
+
+func TestOwnerWaitCardlessClaimRecoversAfterMarkerFailure(t *testing.T) {
+	store := &cardlessClaimStore{DB: taskRecoveryDatabase(t)}
+	s, f, todo := newSupervisedServiceOn(t, store)
+	t.Cleanup(func() { stopCardlessManager(s) })
+	holdDigest(s)
+	ctx := context.Background()
+	stopOnOwner(t, s, f, todo.ID)
+	runCardlessManager(t, s)
+	store.mu.Lock()
+	store.failMarker = true
+	store.mu.Unlock()
+	wait := todoNow(s, todo.ID).Supervision.Waits
+	s.superviseWatch(ctx, wait.At.Add(cardlessSettle+time.Minute))
+	g := pendingCardlessSignal(t, s, todo.ID)
+	if w := todoNow(s, todo.ID).Supervision.Waits; w == nil || w.CardlessToldAt != nil {
+		t.Fatalf("the failed marker write still acknowledged the owner wait: %+v", w)
+	}
+	if _, ok := storedSupervisePending(t, s)[g.id()]; !ok {
+		t.Fatal("the failed marker write left no durable owner-wait claim")
+	}
+	stopCardlessManager(s)
+	store.mu.Lock()
+	store.failMarker = false
+	store.mu.Unlock()
+	again, nextHub := restartCardlessClaimWithManualDigest(t, store)
+	if valid, retry := again.completeCardlessClaim(ctx, g); !valid || retry {
+		t.Fatalf("owner-wait claim completion = valid %v retry %v", valid, retry)
+	}
+	if w := todoNow(again, todo.ID).Supervision.Waits; w == nil || w.CardlessToldAt == nil {
+		t.Fatalf("the recovered owner wait was not stamped: %+v", w)
+	}
+	setSuperviseTimings(again, shortSuperviseTimings)
+	flushCardlessClaim(again)
+	if got := cardlessNotices(nextHub); got != 1 {
+		t.Fatalf("the recovered owner-wait claim delivered %d messages, want 1", got)
 	}
 }

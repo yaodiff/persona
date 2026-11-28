@@ -350,6 +350,11 @@ func TestOutageHoldPreservesOwnerDecisionAndUnrelatedFailures(t *testing.T) {
 	// 4. Codex outage symptom while only claude is saturated must NOT be held.
 	s.taskNotice(ctx, codexTodo, "box", "interrupted", "", "503 Service Unavailable: no eligible upstream account")
 
+	waitFor(t, "unrelated signals delivered while the tasks are active", func() bool {
+		joined := strings.Join(f.notices(), "\n")
+		return strings.Contains(joined, "判定模型未配置") && strings.Contains(joined, "ambiguous result")
+	})
+
 	// 5. Explicit owner decision (verdictNeedsUser even with model error) must NOT be held.
 	s.superviseJudged(ctx, codexTodo, time.Now().Add(-time.Minute), taskDoneCheck{
 		Verdict: verdictNeedsUser,

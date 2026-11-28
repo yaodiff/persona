@@ -74,5 +74,14 @@
   "crashed": "The page crashed.",
   "leave": "The page asks whether to leave it.",
   "notice_file_chooser": "The page asked for a file. Previews can't pick files yet.",
-  "no_box": "This conversation takes no messages, so the element can't be sent as a comment."
+  "no_box": "This conversation takes no messages, so the element can't be sent as a comment.",
+  "select_label": "Select an option",
+  "select_empty": "No options",
+  "more": "More preview options",
+  "mode_stream": "View through the computer",
+  "mode_direct": "View directly",
+  "direct_fallback": "Couldn't show the page directly, so it's shown through the computer.",
+  "direct_connecting": "Opening the page…",
+  "switched_for_pick": "Switched to viewing through the computer to pick an element.",
+  "switched_for_shot": "Switched to viewing through the computer to take a screenshot."
 }

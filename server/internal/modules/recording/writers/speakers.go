@@ -151,6 +151,20 @@ func (e *engine) EditSpeakers(rawID string, rev int64, ops []SpeakerEditOp, owne
 			if err := os.Remove(st.path(KindRecording, id, speakerTurnsFile)); err != nil && !os.IsNotExist(err) {
 				return err
 			}
+			if _, err := e.rerenderMinutesLocked(r, &m, nil, "", r.Trimmed()); err != nil {
+				return err
+			}
+		} else if r.Trimmed() {
+			// Explicit trimmed re-render path: never reads transcript, hub segments, or speaker_turns.json.
+			if _, err := e.rerenderMinutesLocked(r, &m, nil, "", true); err != nil {
+				return err
+			}
+		} else if m.Speakers.State == SpeakerStateReady {
+			turns, _ := st.readSpeakerTurnsLocked(id)
+			hub, _ := st.readHubLocked(id)
+			if _, err := e.rerenderMinutesLocked(r, &m, turns, hub.EffectiveTiming(), false); err != nil {
+				return err
+			}
 		}
 		changed = true
 		undo = out.Undo
@@ -323,6 +337,9 @@ func (e *engine) ImportSpeakerTurns(rawID string, req SpeakerTurnsImportRequest,
 		if err := st.writeRecordingFile(st.path(KindRecording, id, meetingFile), append(meetingRaw, '\n')); err != nil {
 			return err
 		}
+		if _, err := e.rerenderMinutesLocked(r, &m, &turnsFile, hub.EffectiveTiming(), false); err != nil {
+			return err
+		}
 		changed = true
 		return nil
 	}()
@@ -337,19 +354,20 @@ func (e *engine) ImportSpeakerTurns(rawID string, req SpeakerTurnsImportRequest,
 	return changed, nil
 }
 
-// recomputeSpeakersLocked cuts turns/covered past trimTo (when trimTo > 0) and recomputes stats, minor marks and
-// quality against the current transcript of record. Caller holds recMu; acquires meetMu -> recFilesMu.
-func (e *engine) recomputeSpeakersLocked(r *Recording, trimTo float64) ([]string, error) {
-	if r == nil || !r.HubTranscribed() || r.Trimmed() {
-		return nil, nil
+// recomputeSpeakersLocked cuts turns/covered past trimTo (when trimTo > 0), recomputes stats, minor marks and
+// quality against the current transcript of record, and re-renders stored minutes without calling a model. Caller
+// holds recMu; acquires meetMu -> recFilesMu.
+func (e *engine) recomputeSpeakersLocked(r *Recording, trimTo float64) ([]string, bool, error) {
+	if r == nil || r.Trimmed() {
+		return nil, false, nil
 	}
 	st := e.Store
 	st.meetMu.Lock()
 	defer st.meetMu.Unlock()
 
 	mPtr, err := st.readMeeting(r.ID)
-	if err != nil || mPtr == nil || mPtr.Speakers == nil || mPtr.Speakers.State != SpeakerStateReady {
-		return nil, err
+	if err != nil || mPtr == nil || !hubMode(mPtr) || mPtr.Speakers == nil || mPtr.Speakers.State != SpeakerStateReady {
+		return nil, false, err
 	}
 	before := mPtr.Clone()
 	m := before.Clone()
@@ -357,11 +375,11 @@ func (e *engine) recomputeSpeakersLocked(r *Recording, trimTo float64) ([]string
 	st.recFilesMu.Lock()
 	defer st.recFilesMu.Unlock()
 	if st.tombstoned(r.ID) || !st.photosHereLocked(r.ID) || st.trimmedLocked(r.ID) {
-		return nil, nil
+		return nil, false, nil
 	}
 	turnsFile, err := st.readSpeakerTurnsLocked(r.ID)
 	if err != nil || turnsFile == nil {
-		return nil, err
+		return nil, false, err
 	}
 	hub, err := st.readHubLocked(r.ID)
 	if err != nil {
@@ -369,7 +387,7 @@ func (e *engine) recomputeSpeakersLocked(r *Recording, trimTo float64) ([]string
 	}
 	device, err := st.diskSegmentsLocked(r.ID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	record := st.TranscriptOfRecord(true, device, hub.Segments)
 	attendees := 0
@@ -387,10 +405,11 @@ func (e *engine) recomputeSpeakersLocked(r *Recording, trimTo float64) ([]string
 		Attendees: attendees,
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	turnsChanged := false
+	effectiveTurns := turnsFile
 	if trimTo > 0 {
 		updatedTurns := turnsFile.Clone()
 		updatedTurns.Turns = out.Turns
@@ -400,12 +419,13 @@ func (e *engine) recomputeSpeakersLocked(r *Recording, trimTo float64) ([]string
 		if !bytes.Equal(oldJSON, newJSON) {
 			turnsRaw, err := json.MarshalIndent(updatedTurns, "", "  ")
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if err := st.writeRecordingFile(st.path(KindRecording, r.ID, speakerTurnsFile), append(turnsRaw, '\n')); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			turnsChanged = true
+			effectiveTurns = &updatedTurns
 		}
 	}
 
@@ -414,19 +434,131 @@ func (e *engine) recomputeSpeakersLocked(r *Recording, trimTo float64) ([]string
 	m.Speakers.Quality = out.Quality
 	m.Speakers.QualityWhy = out.QualityWhy
 
-	if !turnsChanged && meetingSame(before, m) {
-		return nil, nil
+	var parts []string
+	if turnsChanged || !meetingSame(before, m) {
+		bumpRevs(&m, []string{PartSpeakers})
+		meetingRaw, err := json.MarshalIndent(&m, "", "  ")
+		if err != nil {
+			return nil, false, err
+		}
+		if err := st.writeRecordingFile(st.path(KindRecording, r.ID, meetingFile), append(meetingRaw, '\n')); err != nil {
+			return nil, false, err
+		}
+		r.Conv = &m
+		parts = []string{PartSpeakers}
 	}
-	bumpRevs(&m, []string{PartSpeakers})
-	meetingRaw, err := json.MarshalIndent(&m, "", "  ")
+	minChanged, err := e.rerenderMinutesLocked(r, &m, effectiveTurns, hub.EffectiveTiming(), false)
+	if err != nil {
+		return parts, false, err
+	}
+	return parts, minChanged, nil
+}
+
+// meetingSpeakersOf returns m.Speakers or nil.
+func meetingSpeakersOf(m *Meeting) *MeetingSpeakers {
+	if m == nil {
+		return nil
+	}
+	return m.Speakers
+}
+
+// rerenderMinutesLocked recomputes debate speaker attribution and re-renders minutes.json and minutes.md without
+// calling a model, without pushing, and without bumping minutes.version. Caller holds recMu -> meetMu -> recFilesMu.
+// When trimmed is true, it never touches transcript files and recomputes only from stored position overlaps and roster.
+func (e *engine) rerenderMinutesLocked(r *Recording, meeting *Meeting, turns *SpeakerTurnsFile, timing TranscriptTiming, trimmed bool) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	st := e.Store
+	raw, err := os.ReadFile(st.path(KindRecording, r.ID, "minutes.json"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var m Minutes
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false, err
+	}
+	beforeJSON, err := json.Marshal(&m)
+	if err != nil {
+		return false, err
+	}
+	speakers := meetingSpeakersOf(meeting)
+	e.attributeDebates(&m, speakers, turns, timing, trimmed)
+	m.Markdown = e.renderMinutes(&m, r.StartedAt, st.Zone(), speakers)
+	afterJSON, err := json.Marshal(&m)
+	if err != nil {
+		return false, err
+	}
+	wantMD := strings.TrimSpace(m.Markdown) + "\n"
+	if bytes.Equal(beforeJSON, afterJSON) {
+		if curMD, err := os.ReadFile(st.path(KindRecording, r.ID, "minutes.md")); err == nil && string(curMD) == wantMD {
+			return false, nil
+		}
+	}
+	return st.putMinutesLocked(r.ID, &m)
+}
+
+// expireSpeakersWaiting marks recording id's speakers state failed with reason timeout once the wait limit has passed,
+// only if meeting.json is still on the exact same waiting attempt (wantSince and wantTries), so a ready timeline stored
+// moments earlier is never overwritten. Returns the current Meeting state on disk.
+func (e *engine) expireSpeakersWaiting(id string, wantSince time.Time, wantTries int) (*Meeting, error) {
+	st := e.Store
+	changed := false
+	var current *Meeting
+	err := func() error {
+		st.recMu.Lock()
+		defer st.recMu.Unlock()
+		if st.tombstoned(id) || st.ReadOnly() {
+			return nil
+		}
+		if _, ok := st.Recording(id); !ok {
+			return nil
+		}
+		st.meetMu.Lock()
+		defer st.meetMu.Unlock()
+		m, err := st.readMeeting(id)
+		if err != nil || m == nil {
+			return err
+		}
+		current = m
+		if m.Speakers == nil || m.Speakers.State != SpeakerStateWaiting ||
+			!m.Speakers.Since.Equal(wantSince) || m.Speakers.Tries != wantTries {
+			return nil
+		}
+		next := m.Clone()
+		next.Speakers.State = SpeakerStateFailed
+		next.Speakers.Reason = SpeakerFailTimeout
+		next.Speakers.Done = 0
+		bumpRevs(&next, []string{PartSpeakers})
+		raw, err := json.MarshalIndent(&next, "", "  ")
+		if err != nil {
+			return err
+		}
+		st.recFilesMu.Lock()
+		defer st.recFilesMu.Unlock()
+		if st.tombstoned(id) {
+			return nil
+		}
+		if _, err := os.Stat(st.path(KindRecording, id)); err != nil {
+			return nil
+		}
+		if err := st.writeRecordingFile(st.path(KindRecording, id, meetingFile), append(raw, '\n')); err != nil {
+			return err
+		}
+		current = &next
+		changed = true
+		return nil
+	}()
 	if err != nil {
 		return nil, err
 	}
-	if err := st.writeRecordingFile(st.path(KindRecording, r.ID, meetingFile), append(meetingRaw, '\n')); err != nil {
-		return nil, err
+	if changed {
+		e.meetingChanged(id, []string{PartSpeakers})
 	}
-	r.Conv = &m
-	return []string{PartSpeakers}, nil
+	return current, nil
 }
 
 // afterSpeakerEdit and afterSpeakerTimelineStored are the post-commit hook points for PR 2-4 (minutes attribution

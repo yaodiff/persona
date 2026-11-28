@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/screen"
 )
 
 // Agents other than Claude Code that Persona starts without Claude's flags: a compatible CLI (on the PATH as traex), and a
@@ -179,11 +180,16 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	var grace time.Time // when a family start gives up on the extension reporting the session (pifamily.go)
+	answered := ""      // the last dialog screen answered, not answered again while it stays drawn
+	dialogLooks := 0
 	for {
 		select {
 		case <-ctx.Done():
-			screen, _ := n.readPane(context.Background(), pane, "recent-unwrapped", 30)
-			return nil, fmt.Errorf("wait for %s session: %w\n%s", kind, ctx.Err(), lastLines(screen, 12))
+			shown, _ := n.readPane(context.Background(), pane, "recent-unwrapped", 30)
+			if strings.TrimSpace(shown) == "" { // A dialog at the top of a tall pane leaves the recent rows blank (#2351).
+				shown, _ = n.readPane(context.Background(), pane, "visible", 30)
+			}
+			return nil, fmt.Errorf("wait for %s session: %w\n%s", kind, ctx.Err(), lastLines(shown, 12))
 		case <-ticker.C:
 		}
 		if err := n.refreshHosts(ctx); err != nil {
@@ -206,6 +212,34 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 		}
 		n.mu.Unlock()
 		if id == "" {
+			if kind != traexAgent || resume != "" || confirmed != "" {
+				continue
+			}
+			// TraeX waits for folder access before it creates a writer. Only answer that startup question.
+			text, err := n.readPane(ctx, pane, "visible", screen.DialogLines)
+			d := screen.ParseDialog(text)
+			if err != nil || d == nil || len(d.Options) < 2 {
+				dialogLooks = 0
+				continue
+			}
+			var keys []string
+			if strings.HasPrefix(d.Question, "Do you trust the contents of this directory?") {
+				_, keys = matchStartDialog(codexStartDialogs, text, false)
+			}
+			if keys != nil {
+				dialogLooks = 0
+				if text != answered {
+					if err := n.sendKeys(ctx, pane, keys...); err != nil {
+						return nil, n.startTabFailed(ctx, launch, created, ws, resume, err)
+					}
+					answered = text
+				}
+				continue
+			}
+			dialogLooks++
+			if dialogLooks >= unknownDialogLooks {
+				return nil, n.startTabFailed(ctx, launch, created, ws, resume, unknownDialogError(d))
+			}
 			continue
 		}
 		if piFamily(kind) && id == otherSession(agent) {

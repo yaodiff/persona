@@ -2,7 +2,9 @@
 # Siri's call intent to the app. Merged into project.yml by its `include:` (enable: ${PERSONA_SIRI_CALLS}), which
 # scripts/persona_config.py env sets to YES only when config.json app.siri_calls is true; the same switch adds SIRIKIT
 # plus this extension's App ID and profile to scripts/release/asc_signing.py. Off by default: no extension, no Siri
-# entitlement, no Siri purpose string, so the project, the signing preflight and the release are as they were.
+# entitlement, no PersonaSiriCalls flag, so the project, the signing preflight and the release are as they were
+# (NSSiriUsageDescription stays in project.yml for ITMS-90683 because the iOS app always links Intents, without
+# prompting for Siri when the switch is off).
 # Why it is opt-in: the extension needs its own App ID and App Store profile, and the app's App ID needs SIRIKIT, which
 # only the account's maintainer can set up (docs/operations/release.md「Siri calls」); merged on without them, the release
 # preflight (asc_signing.py --check) stops the unattended TestFlight build. The App Shortcut "Call Persona"
@@ -26,17 +28,15 @@ targets:
       path: PersonaSiriCalls.entitlements
       properties:
         com.apple.developer.siri: true
-    # Siri's purpose string (translated in InfoPlist.xcstrings) and PersonaSiriCalls (SiriCalls.builtIn: the build has
-    # the extension, so the app asks for Siri), put into the built Info.plist before it is signed, as the commit stamp
-    # is: the tracked Persona/Resources/Info.plist stays as it is, for the same reason.
+    # PersonaSiriCalls (SiriCalls.builtIn: the build has the extension, so the app asks for Siri), put into the built
+    # Info.plist before it is signed, as the commit stamp is: the tracked Persona/Resources/Info.plist stays as it is
+    # (and already carries NSSiriUsageDescription from project.yml).
     postBuildScripts:
       - name: Siri calls in the Info.plist
         basedOnDependencyAnalysis: false
         inputFiles: ["$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"]
         script: |
           plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
-          NSSiriUsageDescription="Persona uses Siri so you can call Persona by saying “Call Persona using Persona”. Siri passes the call to Persona, which calls the assistant on your hub; Persona shares nothing else with Siri."
-          plutil -replace NSSiriUsageDescription -string "$NSSiriUsageDescription" "$plist"
           plutil -replace PersonaSiriCalls -bool YES "$plist"
   PersonaCallIntents:
     type: app-extension

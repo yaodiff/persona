@@ -9,6 +9,8 @@ import Testing
         let shown = InboxSourceVisibility(larkOffered: true, mailOffered: true,
                                           stored: InboxStoredSources(lark: true, mail: true))
         #expect(shown.lark && shown.mail)
+        #expect(shown.shows(kind: "mail"))
+        #expect(shown.selection(forKind: "mail") == "mail")
         #expect(shown.caughtUpMessage == String(localized: "New Lark messages and emails show up here."))
     }
 
@@ -16,6 +18,8 @@ import Testing
         let shown = InboxSourceVisibility(larkOffered: true, mailOffered: true,
                                           stored: InboxStoredSources(lark: false, mail: false))
         #expect(shown.lark && shown.mail)
+        #expect(shown.shows(kind: "mail"))
+        #expect(shown.selection(forKind: "mail") == "mail")
         #expect(shown.caughtUpMessage == String(localized: "New Lark messages and emails show up here."))
     }
 
@@ -27,6 +31,8 @@ import Testing
         let mail = InboxSourceVisibility(larkOffered: false, mailOffered: false,
                                          stored: InboxStoredSources(lark: false, mail: true))
         #expect(!mail.lark && mail.mail)
+        #expect(mail.shows(kind: "mail"))
+        #expect(mail.selection(forKind: "mail") == "mail")
         #expect(mail.caughtUpMessage == String(localized: "New emails show up here."))
     }
 
@@ -34,14 +40,20 @@ import Testing
         let hidden = InboxSourceVisibility(larkOffered: false, mailOffered: false,
                                            stored: InboxStoredSources(lark: false, mail: false))
         #expect(!hidden.lark && !hidden.mail)
+        #expect(!hidden.shows(kind: "mail"))
+        #expect(hidden.selection(forKind: "mail") == "")
+        #expect(hidden.selection(forKind: "group") == "group")
         #expect(hidden.caughtUpMessage == String(localized: "New messages show up here."))
-        // @Me, DMs and Group are item-kind filters across sources, not Lark-only entries (#17399).
+        // @Me, DMs and Group are item-kind filters across sources, not Lark- or mail-only entries (#17399, #17814).
         #expect(InboxPage.kinds.map(\.0) == ["mention", "dm", "group", "mail", "agent"])
+        #expect(InboxPage.kinds.filter { hidden.shows(kind: $0.0) }.map(\.0) == ["mention", "dm", "group", "agent"])
     }
 
     @Test func missingPresenceKeepsTodaysBehavior() {
         let old = InboxSourceVisibility(larkOffered: false, mailOffered: false, stored: nil)
         #expect(old.lark && old.mail)
+        #expect(old.shows(kind: "mail"))
+        #expect(old.selection(forKind: "mail") == "mail")
         #expect(old.caughtUpMessage == String(localized: "New Lark messages and emails show up here."))
     }
 

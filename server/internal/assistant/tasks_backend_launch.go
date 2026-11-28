@@ -465,6 +465,8 @@ func (s *Service) admitPreparedTaskWorkspace(ctx context.Context, t *PlanTask, o
 }
 
 func (s *Service) startBackendTask(ctx context.Context, t *PlanTask, params map[string]any, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, taskStartTimeout)
+	defer cancel()
 	req := t.backendRequest
 	if req == nil {
 		return errors.New("backend workspace admission required")

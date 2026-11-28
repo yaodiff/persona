@@ -191,5 +191,8 @@
   "owner_approval_phrases": "批准短语（每行一条）",
   "owner_approval_phrases_hint": "可填写 1 至 8 条不重复的短语，每条长度为 1 至 32 个字符。匹配时忽略首尾空格和英文字母大小写，部分匹配或模糊匹配均不会触发批准。",
   "owner_approval_save_phrases": "保存短语",
-  "owner_approval_unconfirmed": "助手未能确认精确批准设置，请重新加载后再试。"
+  "owner_approval_unconfirmed": "助手未能确认精确批准设置，请重新加载后再试。",
+  "supervision_triage": "在早晚报里查看例行跟进",
+  "supervision_triage_hint": "信息筛选模型只在例行动态需要尽快处理时唤醒督办者。其余动态会列入早晚报。",
+  "supervision_triage_unconfirmed": "中枢未确认这项设置，请重新加载后再试。"
 }

@@ -25,8 +25,9 @@ include:
     enable: ${PERSONA_HOMEKIT}
   - path: meta-wearables.yml
     enable: ${PERSONA_META_WEARABLES}
-  # "Call Persona using Persona" through SiriKit (docs/apple/siri.md「Calling Persona」): the Intents extension and the Siri
-  # purpose string, merged in only when config.json app.siri_calls is true (PERSONA_SIRI_CALLS=YES, set by env).
+  # "Call Persona using Persona" through SiriKit (docs/apple/siri.md「Calling Persona」): the Intents extension,
+  # Siri entitlement and PersonaSiriCalls flag, merged in only when config.json app.siri_calls is true
+  # (PERSONA_SIRI_CALLS=YES, set by env). NSSiriUsageDescription stays in targets.Persona.info.properties below.
   - path: siri-calls.yml
     enable: ${PERSONA_SIRI_CALLS}
 # Bundle id and team come from Config.xcconfig, generated from the personal config by scripts/persona_config.py
@@ -276,6 +277,11 @@ targets:
         NSPhotoLibraryUsageDescription: "Persona shows your recent photos under the + button so you can attach them to a message, and lets Claude look at recent photos when you ask, for example to read a screenshot you took."
         NSPhotoLibraryAddUsageDescription: "Persona saves images Claude produces to your library when you ask, for example a chart it generated."
         NSMicrophoneUsageDescription: "Persona records audio when you start a recording or dictate a message, for example a meeting or a spoken note. Recordings are transcribed on your iPhone and only the text is saved to the knowledge base on your hub; the audio stays on your iPhone, except while Talk is on in a meeting: what is said then goes to the voice service. A meeting you choose to transcribe on the hub sends its audio, Talk included, through your hub to the speech service it is set up with, and the hub deletes it once the meeting's minutes are written. In a voice conversation or a call to Persona you start — on the phone, in CarPlay or with Siri — your voice is streamed through your hub to the realtime speech service it is set up with, only while it lasts. On an urgent call you answer, Persona listens on your iPhone and only the text of what you say goes to your hub."
+        # Kept in the base Info.plist like NSHomeKitUsageDescription: SiriCalls.swift and OwnerCall.swift always
+        # compile into the iOS app and link Intents (INPreferences / INStartCallIntent), so App Store Connect requires
+        # NSSiriUsageDescription even when app.siri_calls is off (ITMS-90683). Only used for Siri calls; default builds
+        # never embed PersonaCallIntents, sign com.apple.developer.siri, or prompt for Siri authorization.
+        NSSiriUsageDescription: "Persona uses Siri so you can call Persona by saying “Call Persona using Persona”. Siri passes the call to Persona, which calls the assistant on your hub; Persona shares nothing else with Siri."
         NSSpeechRecognitionUsageDescription: "Persona turns your voice into text when you use the mic button, for example to dictate a reply to Claude, and on an urgent call you answer, to hear what you decide. It does this on your iPhone when it can."
   # The native visionOS app (docs/apple/vision.md): the iOS app's logic and content views, compiled for visionOS (UIKit, so
   # most of it as is), inside a visionOS shell (Vision/): an ornament for the tabs, a window per conversation, the

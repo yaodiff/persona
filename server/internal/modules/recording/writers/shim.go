@@ -137,6 +137,7 @@ type (
 	DebateStatus               = recordingwire.DebateStatus
 	MinutesDebate              = recordingwire.MinutesDebate
 	MinutesDebatePosition      = recordingwire.MinutesDebatePosition
+	MinutesDebateAlso          = recordingwire.MinutesDebateAlso
 	MinutesDebateOutcome       = recordingwire.MinutesDebateOutcome
 	SpeakerID                  = recordingwire.SpeakerID
 	SpeakerState               = recordingwire.SpeakerState
@@ -203,6 +204,7 @@ const (
 	SpeakerStateReady   = recordingwire.SpeakerStateReady
 	SpeakerStateFailed  = recordingwire.SpeakerStateFailed
 	SpeakerStateCleared = recordingwire.SpeakerStateCleared
+	SpeakerFailTimeout  = recordingwire.SpeakerFailTimeout
 	SpeakerQualityOk    = recordingwire.SpeakerQualityOk
 	SpeakerQualityLow   = recordingwire.SpeakerQualityLow
 	SpeakerSourceHub    = recordingwire.SpeakerSourceHub
@@ -299,6 +301,7 @@ var (
 	recordingEnd        = recordingwire.RecordingEnd
 	transcriptionDone   = recordingwire.TranscriptionDone
 	transcriptionHolds  = recordingwire.TranscriptionHolds
+	speakersHolds       = recordingwire.SpeakersHolds
 	hubTranscription    = recordingwire.HubTranscription
 	settleTranscription = recordingwire.SettleTranscription
 	meetingSame         = recordingwire.MeetingSame
@@ -513,6 +516,11 @@ func (s *store) readHubLocked(id string) (HubTranscript, error) {
 }
 func (s *store) readSpeakerTurnsLocked(id string) (*SpeakerTurnsFile, error) {
 	return s.core.SpeakerTurnsLocked(recordingwire.ID(id))
+}
+func (s *store) speakerTurns(id string) (*SpeakerTurnsFile, error) {
+	s.recFilesMu.RLock()
+	defer s.recFilesMu.RUnlock()
+	return s.readSpeakerTurnsLocked(id)
 }
 func (s *store) renderTranscript(r *Recording, segs []RecordingSegment) string {
 	return s.core.RenderTranscript(r, segs)

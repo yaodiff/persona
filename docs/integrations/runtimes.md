@@ -65,6 +65,7 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `cursor(sessionId)` | The current `to_seq`, or `{to_seq, history}` (with history, a rewrite with the same item count can still be detected; if omitted, the `to_seq` and `history` of a `turns: 1` page are used) |
 | `image(params)` / `item(params)` | Raw image data / the full text of a truncated item |
 | `send({session_id, text, images, client_msg_id})` | Sending a message from the phone. **Dedup by `client_msg_id`**: the App resends on reconnect. Resolve to `{queued: true}` when the message only waits behind the running turn, so that nobody takes it for read (#8097) |
+| `input({session_id, task, wait_id, line})` | `caps.input` on the local runtime socket. Deliver one owner-supplied line to the waiting command. See "Commands waiting for input" below. |
 | `editQueue({session_id, keep})` | `caps.queue_edit`: keep the given queue indexes in that order. Return the original `{queue, images?}`; each `images` entry is the message's image array or `null`. Refuse an empty queue with `nothing_queued`, and invalid indexes with `queue_changed`. |
 | `sendNow({session_id})` | `caps.queue_send_now`: start delivering the waiting messages without waiting for the active turn to finish naturally. Refuse an empty queue with `nothing_queued`. The SDK answers `{sent: true}` on success. |
 | `interrupt({session_id})` | Stop the running turn. Resolve to `{settled: true}` once the turn has actually ended, and throw when it could not be stopped; resolving to nothing means "asked to stop, not confirmed" (#8097). A turn waiting on the user (a dialog, a card) must end too |
@@ -190,6 +191,32 @@ The list carries only recent sessions (`rt.recent`). A caller reading an older p
   A valid number outside float64 range, such as `1e1000`, is retried with `UseNumber` so its object is still clipped. Top-level
   arrays and other non-object inputs stay unchanged.
 - **Only what people need to see**: context injected for the model (time, skill list, system instructions) and internal scheduling events don't become items.
+
+## Commands waiting for input
+
+For a new session started by Persona, a local runtime that implements `start` and `input` can include a `waiting_inputs` array in each live session returned by
+`listSessions()`. For example, a command asking which workspace to use could report:
+
+```json
+{"session_id":"setup","waiting_inputs":[{"task":"setup-1","wait_id":"step-2","command":"example setup","prompt":"Workspace name?","output":"Choose a workspace.","masked":false}]}
+```
+
+The driver must honor the session ID requested by `start`. The SDK retains a node-issued proof in memory for that session and attaches it only to its negotiated live reports. This lets the node verify the destination again after a socket reconnect. A session discovered only through inventory, or returned under a different ID, has no binding and cannot request a protected input card. A new node or driver process needs a fresh bound start.
+
+Use a fresh `wait_id` for each occurrence, even if the task repeats the same question. Keep it stable in subsequent
+snapshots. Call `rt.sessionsChanged()` when a wait appears, changes or ends. Omit finished waits from the next snapshot.
+The node creates the standard command-input card for the current owner of the session. Use `rt.nodeHas("input")` to check support. The SDK omits waits when a node lacks the feature.
+
+In `input`, atomically verify and claim that exact session, task and wait before typing the line and pressing Enter.
+Preserve the line's whitespace. Resolve to `{typed:true}` only once delivery is confirmed. If the wait has moved on,
+throw an error with `code: "prompt_changed"`. A definitive refusal may also use `command_input_line`,
+`command_input_unreachable` or `command_input_refused`. If delivery is uncertain the SDK returns
+`command_input_unconfirmed`. Never route the line through a model, log it, store it or replay it after reconnecting.
+Keep any terminal echo of secret input out of reported output and chat history. The node masks recognized secret prompts, or any prompt marked `masked: true`. **Not now** dismisses this occurrence without calling the driver.
+
+The SDK exports the `WaitingInput`, `SessionInput` and `InputHandler` JSDoc types. In a driver test, use
+`startFakeNode(t)` and call `node.peer.call("session.start", {session_id, input_binding: randomUUID()})` to start a bound test session. Inspect its next `runtime.sessions` snapshot and call
+`node.input({session_id, task, wait_id, line})` to exercise the same wire request.
 
 ## Interactions
 
@@ -753,7 +780,16 @@ package and supervises `antigravity/companion.mjs` (passing `--no-update --paren
 generations or changes their `current`. The sibling layout also keeps built-in files out of legacy external-store pruning. Go writes and pruning use the same `.install.lock` and process-start identity format as JavaScript registration, so a reused PID cannot strand a lock or inherit a lease. The node reserves the generation with its own process lease before launching the companion; a cached launch refreshes that reservation and retries cleanup. Once the companion registers its own lease, it releases the node's reservation for that generation. Reserving a newly launched generation also removes this node's reservations from other generations, which is necessary after a Unix `exec` upgrade retains both PID and start identity. This closes the window before the companion can register its own lease, while idle generations and dead-process leases remain reclaimable. The node resolves `agy` when it starts the companion and
 looks again every 30 seconds while it runs (#14533): when the path or the file there changed (replaced by an update,
 installed elsewhere, removed) and two looks in a row agree, it restarts the companion on the `agy` found now, waiting
-while one of its sessions is working or a call to it is pending (the old file keeps running until then). You can also start
+while one of its sessions is working or a call to it is pending (the old file keeps running until then). A session whose
+turn ended still counts as working while finite background work it started runs in the companion's `agy acp` (a
+command, workflow or subagent the companion matched to its call, #17200); an agy `schedule` (kind `monitor`) does not,
+as a cron job never ends, and neither does a task the companion could not match to its call (kind `shell` with no
+command line), which the row cannot tell from a schedule, so a one-shot timer or an unmatched task is still stopped by
+the restart, as before. That wait has
+no deadline, so a background command that never exits holds the restart until it is stopped; the handoff to an external
+`agy` runtime waits for the same work at most 5 seconds, as for a working turn, then stops the companion. The node sees
+only the sessions the companion lists (its recent ones) and at most 50 running tasks each, so work outside those limits
+does not hold the restart yet; a drain signal from the companion is the follow-up. You can also start
 `node integrations/antigravity/companion.mjs` manually from the repository root, or install into the runtime package store
 with `node integrations/antigravity/install.mjs` and supervise
 `node ~/.persona/runtime-packages/persona-antigravity-runtime/current/antigravity/companion.mjs` under launchd / systemd.
@@ -792,6 +828,20 @@ arrive during a replacement wait for the old process to exit and start on the ne
 same model is not replaced again while the catalog stays the same. A successful discovery after one that found the CLI
 signed out replaces the ACP process the same way: at once when nothing uses it, otherwise before the next start, send,
 model change or check that finds it idle.
+
+A sign-in with another account while the CLI stays signed in triggers neither of those, and an `agy acp` process keeps
+the account it read at startup and writes it back at every hourly token refresh (#17860). Each native OAuth ACP process
+(shared, per-channel or assistant) therefore remembers the stamp of the CLI's sign-in it started under
+(`lib/sign-in.js`): the stat of `antigravity-oauth-token`, plus, on macOS, the dates of the login-keychain item
+`security find-generic-password -s gemini -a antigravity` prints without `-g` or `-w`. Nothing reads a token. The
+companion compares the stamp every 15 seconds while a process runs and before each call; a change makes the processes
+that started under the old stamp stale. A turn that fails with a quota or sign-in error (`RESOURCE_EXHAUSTED`,
+`usage_limit`, "please sign in") makes every running process stale too, at most once every five minutes, so a fresh
+process on an account that really is out of quota is not replaced again and again. A stale process is replaced by the
+reaper as soon as it is idle (no lease, request, permission card, running turn or background task), or before the
+next call that finds it idle; it is never replaced under a running turn. Interactive `agy` sessions in a terminal that
+are still on the old account keep writing it back; that is the CLI's behavior, and Persona follows whatever the CLI is
+signed in with at the time.
 
 Idle sessions can switch model, thinking level and permission mode through ACP. Native configuration updates determine
 the displayed model and effort. Each accepted field is published even if another field fails, and failures reach the caller.

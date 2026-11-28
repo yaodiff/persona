@@ -14,14 +14,16 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 type repoMirrorStore interface {
 	RepoMirror(ctx context.Context, machineID, repoID string) (*repository.RepoMirrorRecord, error)
 	ListRepoMirrors(ctx context.Context, machineID, repoID string) ([]repository.RepoMirrorRecord, error)
-	ListEnabledRepoMirrors(ctx context.Context, machineID string, repoIDs []string) ([]repository.RepoMirrorRecord, error)
+	CreateOnDemandRepoMirror(ctx context.Context, machineID, repoID string, now time.Time) (*repository.RepoMirrorRecord, error)
 	ListDueAutoSyncRepoMirrors(ctx context.Context, now time.Time) ([]repository.RepoMirrorRecord, error)
 	UpsertRepoMirrorConfig(ctx context.Context, cfg repository.RepoMirrorRecord) (repository.RepoMirrorRecord, error)
 	SaveRepoMirrorSyncResult(ctx context.Context, machineID, repoID string, res repository.RepoMirrorSyncUpdate) error
@@ -30,7 +32,7 @@ type repoMirrorStore interface {
 
 const (
 	repoMirrorLoopIdleWait   = time.Minute
-	repoMirrorCallTimeout    = 3 * time.Minute
+	repoMirrorCallTimeout    = repositorywire.MirrorEnsureTimeout
 	repoMirrorMaxBackoff     = 6 * time.Hour
 	repoMirrorErrorMaxRunes  = 300
 	repoMirrorJitterFraction = 0.15
@@ -346,7 +348,7 @@ func (s *Service) repoMirrorRoutes() {
 		apierr.WriteJSON(w, map[string]any{"manager": s.managerIdentity(), "mirror": saved})
 	})
 
-	s.handle("POST /api/v1/assistant/repositories/{id}/mirrors/{machine_id}/sync", func(w http.ResponseWriter, r *http.Request) {
+	s.handle(assistantwire.RouteRepoMirrorSync, func(w http.ResponseWriter, r *http.Request) {
 		repoID := r.PathValue("id")
 		machineID := r.PathValue("machine_id")
 		if !repository.ValidateMirrorRepoID(repoID) || !repository.ValidateMirrorMachineID(machineID) {
@@ -408,7 +410,7 @@ func (s *Service) repoMirrorRoutes() {
 	})
 }
 
-// EnsureRepoMirror triggers repo.mirror.ensure on machineID for an explicitly enabled mirror and persists sync status.
+// EnsureRepoMirror triggers repo.mirror.ensure on machineID for an enabled mirror and persists sync status.
 func (s *Service) EnsureRepoMirror(ctx context.Context, machineID, repoID string, ttlSeconds int, force bool) (repository.RepoMirrorRecord, repository.MirrorInfo, error) {
 	st, err := s.repoMirrorStore()
 	if err != nil {
@@ -527,42 +529,36 @@ func (s *Service) callAndRecordRepoMirrorEnsure(ctx context.Context, st repoMirr
 	return info, nil
 }
 
-// prepareEnabledMirrorsForWorkspace checks whether any repositories in a backend workspace plan have an
-// opt-in managed bare mirror enabled on the target machine, refreshes them within TTL, persists the
-// sync state, and returns the repo IDs that should be prepared from local mirrors. Any failure or
-// unsupported older Node falls back cleanly to the direct remote preparation path.
+// prepareEnabledMirrorsForWorkspace enrolls registered remote repositories on demand, honors saved
+// settings, and returns the IDs of mirrors ready within TTL. Workspaces can prepare directly when
+// a mirror is unavailable or the Node does not support the mirror RPC.
 func (s *Service) prepareEnabledMirrorsForWorkspace(ctx context.Context, r *taskworkspace.Record) []string {
-	if r == nil || len(r.Plan.Source.Repositories.Repositories) == 0 {
+	if ctx.Err() != nil || r == nil || len(r.Plan.Source.Repositories.Repositories) == 0 {
 		return nil
 	}
 	st, err := s.repoMirrorStore()
 	if err != nil {
 		return nil
 	}
-	repoIDs := make([]string, 0, len(r.Plan.Source.Repositories.Repositories))
-	byID := make(map[string]repository.PreparationRepository, len(r.Plan.Source.Repositories.Repositories))
-	for _, repo := range r.Plan.Source.Repositories.Repositories {
-		if repo.Local != nil {
+	machineID := r.Plan.Source.MachineID
+	var ready []string
+	for _, prep := range r.Plan.Source.Repositories.Repositories {
+		if ctx.Err() != nil {
+			break
+		}
+		if prep.Local != nil || !repository.ValidateMirrorRepoID(prep.RepoID) {
 			continue
 		}
-		repoIDs = append(repoIDs, repo.RepoID)
-		byID[repo.RepoID] = repo
-	}
-	if len(repoIDs) == 0 {
-		return nil
-	}
-	enabled, err := st.ListEnabledRepoMirrors(ctx, r.Plan.Source.MachineID, repoIDs)
-	if err != nil || len(enabled) == 0 {
-		return nil
-	}
-	ready := make([]string, 0, len(enabled))
-	for _, rec := range enabled {
-		prep, ok := byID[rec.RepoID]
-		if !ok {
+		rec, err := st.RepoMirror(ctx, machineID, prep.RepoID)
+		// Link-only repositories have no catalog revision in the saved source snapshot.
+		if err == nil && rec == nil && prep.SourceSnapshot.CatalogRevision > 0 && ctx.Err() == nil {
+			rec, err = st.CreateOnDemandRepoMirror(ctx, machineID, prep.RepoID, s.repoMirrors.clock())
+		}
+		if err != nil || rec == nil || !rec.Enabled || ctx.Err() != nil {
 			continue
 		}
 		info, ensureErr := s.callAndRecordRepoMirrorEnsure(
-			ctx, st, rec,
+			ctx, st, *rec,
 			prep.SourceSnapshot.Identity,
 			prep.SourceSnapshot.CloneURL,
 			repository.DefaultMirrorFetchTTLSeconds,

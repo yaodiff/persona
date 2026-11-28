@@ -71,6 +71,9 @@ type Reader interface {
 	ImportSpeakerTimeline(in SpeakerImportInput) (SpeakerImportOutput, error)
 	RecomputeSpeakerStats(in SpeakerRecomputeInput) (SpeakerRecomputeOutput, error)
 	ApplySpeakerEdit(in SpeakerEditInput) (SpeakerEditOutput, error)
+	AlignTranscriptSpeakers(in SpeakerAlignInput) (SpeakerAlignOutput, error)
+	AttributeDebateSpeakers(in SpeakerDebatesAttrInput) (SpeakerDebatesAttrOutput, error)
+	ResolveDebateDisplays(in SpeakerDisplayInput) []SpeakerDisplayLabel
 	RenderTranscript(r *Recording, segs []kbwire.RecordingSegment) string
 	// CalendarItems is the calendar entries of kind a recording is matched to.
 	CalendarItems(kind CalendarKind) []CalendarItem

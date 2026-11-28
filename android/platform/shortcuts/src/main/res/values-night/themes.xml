@@ -9,4 +9,5 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
+    <style name="Theme.Persona.Shortcut.Configure" parent="android:Theme.Material.NoActionBar" />
 </resources>

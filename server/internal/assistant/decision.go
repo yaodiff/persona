@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -74,45 +75,64 @@ type DecisionOption struct {
 	LeadsTo string `json:"leads_to"`
 }
 
-// terminalResumeLabel recognizes the existing terminal instruction in the three
-// supported languages. It can only offer navigation; it never authorizes a start.
-func terminalResumeLabel(label string) bool {
-	label = strings.ToLower(strings.TrimSpace(label))
-	return strings.HasPrefix(label, "resume ") && strings.Contains(label, "terminal") ||
-		strings.Contains(label, "终端") && strings.Contains(label, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
-		strings.Contains(label, "ターミナル") && strings.Contains(label, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+// Legacy terminal controls use either the action followed by its location or the terminal followed
+// by its Resume control. Match a complete instruction so an alternative, negation, or a different
+// operation (such as resuming a build) remains an executable decision option.
+const (
+	// Each rule captures a name after "Agent"/"session", or a bare name in its place.
+	// Only a name actually bound to the task can distinguish an unnamed Agent from a job such as "release-42".
+	terminalName    = `([a-z0-9_.:-]+)`
+	englishTarget   = `(?:(?:the |this )?(?:stopped )?(?:agent|session)(?: ` + terminalName + `)?|it|` + terminalName + `)`
+	englishTerminal = `(?:(?:a|its|the|the agent['’]s) )?terminal(?: page)?`
+	zhTarget        = `(?:(?:agent|会话)(?:\s+` + terminalName + `)?|它|` + terminalName + `)`         // i18n-ignore: stored option target
+	jaTarget        = `(?:(?:エージェント|セッション|agent)(?:\s+` + terminalName + `)?|` + terminalName + `)` // i18n-ignore: stored option target
+)
+
+var terminalResumeInstructions = []*lazyre.Regexp{
+	lazyre.New(`^(?:manually |use )?resume(?: ` + englishTarget + `)? (?:on|in|from|via) ` + englishTerminal + `$`),
+	lazyre.New(`^(?:open ` + englishTerminal + ` (?:and|to) (?:click |press |use )?|use ` + englishTerminal + ` )resume(?: there| ` + englishTarget + `)?$`),
+	lazyre.New(`^请?(?:(?:在|从|打开)\s*(?:(?:它|agent)\s*的\s*)?)?终端(?:页面|页)?(?:上|里|中)?\s*` + // i18n-ignore: stored terminal label
+		`并?(?:手动|点击?|选择)?\s*[「“]?(?:恢复|resume)[」”]?(?:\s*` + zhTarget + `)?$`), // i18n-ignore: stored resume control
+	lazyre.New(`^(?:エージェントの)?ターミナル(?:画面|ページ)?(?:で|から|の|を開いて)\s*(?:` + jaTarget + `\s*を\s*)?` + // i18n-ignore: stored terminal label
+		`[「“]?(?:再開|resume)[」”]?(?:する|してください|\s*を(?:押す|選択|使ってください|選んでください))?$`), // i18n-ignore: stored resume control
 }
 
-func terminalResumeMention(text string) bool {
-	text = strings.ToLower(text)
-	return strings.Contains(text, "resume") && strings.Contains(text, "terminal") ||
-		strings.Contains(text, "终端") && strings.Contains(text, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
-		strings.Contains(text, "ターミナル") && strings.Contains(text, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+// A legacy choice can name the full ID or the eight-character abbreviation that its card displayed.
+func terminalSessionMatches(session, name string) bool {
+	return name != "" && (strings.EqualFold(session, name) || len(session) >= 8 && strings.EqualFold(session[:8], name))
 }
 
-func soleDecisionAgent(t Todo, asked time.Time) *SessionRef {
-	var target *SessionRef
-	for _, a := range t.Agents {
-		if !a.active() || a.LinkedAt.After(asked) || a.MachineID == "" || a.SessionID == "" {
+func terminalResumeInstruction(label string, agents []TodoAgent) (manual bool, name string) {
+	label = strings.ToLower(optionAnswerText(label))
+	for _, instruction := range terminalResumeInstructions {
+		parts := instruction.FindStringSubmatch(label)
+		if parts == nil {
 			continue
 		}
-		if target != nil {
-			return nil
+		if parts[2] == "" {
+			return true, parts[1] // an instruction to resume, with or without an explicitly named Agent
 		}
-		target = &SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}
+		bound := slices.ContainsFunc(agents, func(a TodoAgent) bool { return terminalSessionMatches(a.SessionID, parts[2]) })
+		return bound, parts[2]
 	}
-	return target
+	return false, ""
+}
+
+func terminalResumeLabel(label string, agents []TodoAgent) bool {
+	manual, _ := terminalResumeInstruction(label, agents)
+	return manual
 }
 
 // decisionTerminal returns a task-owned target. An archived/released binding is
 // never used to redirect an owner's recovery action to another Agent.
-func decisionTerminal(t Todo, label string) *SessionRef {
-	if !terminalResumeLabel(label) {
+func decisionTerminal(t Todo, label string, asked time.Time) *SessionRef {
+	manual, name := terminalResumeInstruction(label, t.Agents)
+	if !manual || name == "" {
 		return nil
 	}
 	var match *SessionRef
 	for _, a := range t.Agents {
-		if !a.active() || len(a.SessionID) < 8 || !strings.Contains(strings.ToLower(label), strings.ToLower(a.SessionID[:8])) {
+		if !a.active() || a.LinkedAt.After(asked) || !terminalSessionMatches(a.SessionID, name) {
 			continue
 		}
 		if match != nil {
@@ -409,7 +429,8 @@ func (s *Service) chooseOptionLocked(ctx context.Context, id, asked, label strin
 		}
 		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: label}, false)
 	}
-	if terminalResumeLabel(label) && i >= 0 {
+	t, _ := s.todoNow(id)
+	if i >= 0 && terminalResumeLabel(label, t.Agents) {
 		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
 	}
 	switch {
@@ -418,7 +439,6 @@ func (s *Service) chooseOptionLocked(ctx context.Context, id, asked, label strin
 	case i < 0:
 		return acceptResult{}, errDecisionOption
 	}
-	t, _ := s.todoNow(id)
 	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
 	if err != nil {
 		return acceptResult{}, err
@@ -513,6 +533,37 @@ func (s *Service) answerDecisionText(ctx context.Context, id, asked, text string
 	return result, err
 }
 
+// unquoteOption removes one pair of quotation marks around a whole answer. Internal punctuation, including
+// an identifier's separators or the quotes around a terminal button's name, belongs to the option.
+func unquoteOption(s string) string {
+	for _, quotes := range [][2]string{{"\"", "\""}, {"'", "'"}, {"“", "”"}, {"‘", "’"}, {"「", "」"}, {"『", "』"}} { // i18n-ignore: quotation marks
+		inner, ok := strings.CutPrefix(s, quotes[0])
+		if ok {
+			if inner, ok = strings.CutSuffix(inner, quotes[1]); ok {
+				return strings.TrimSpace(inner)
+			}
+		}
+	}
+	return s
+}
+
+func optionAnswerText(text string) string {
+	const stops = ".!?。！？" // i18n-ignore: matches sentence punctuation
+	text = unquoteOption(strings.TrimRight(strings.TrimSpace(text), stops))
+	return strings.Join(strings.Fields(strings.TrimRight(text, stops)), " ")
+}
+
+func (a *acceptAsk) manualTerminalAnswer(text string, agents []TodoAgent) bool {
+	if !decideAsk(a) || a.OutsideID != "" {
+		return false
+	}
+	answer := optionAnswerText(text)
+	matches := func(label string) bool {
+		return strings.EqualFold(answer, optionAnswerText(label)) && terminalResumeLabel(label, agents)
+	}
+	return matches(a.Recommend) || slices.ContainsFunc(a.Options, func(o DecisionOption) bool { return matches(o.Label) })
+}
+
 // answerDecisionTextLocked answers task t's decision with text, its caller holding t's action lock: relayed to its
 // Agent in its origin conversation (none for a to-do no conversation opened, as chooseOption relays), recorded as a
 // manual decision whose source is the routed item, the round ended. undeliverable: words no Agent can take are
@@ -526,6 +577,9 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 	if a.OutsideID != "" {
 		result, err := s.answerOutside(ctx, id, asked, outsideAnswer{Text: decisionText(text)}, false)
 		return FeedItem{}, result, err
+	}
+	if a.manualTerminalAnswer(text, t.Agents) {
+		return FeedItem{}, acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
 	}
 	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
 	if err != nil {

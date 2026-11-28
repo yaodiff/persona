@@ -423,7 +423,7 @@ redesign changes them:
   not each device's own.
 - **Every ask says how risky answering it is** (#10465): `risk` `safe`, which a row, its card or a push may answer in
   place, or `open`, which the owner answers after a look, at its home, with `lockscreen` `open_only` so a push about it
-  offers nothing on the lock screen. A decision is `open` when it cannot be undone or other people will see it (the
+  offers nothing on the lock screen. A decision is `open` when it cannot be undone, other people will see it, or its recommendation requires the owner’s terminal (the
   manager's `askRisk`, also written on the list's `ask`, one rule for every place that answers it); a retry is
   `safe`; a run's ask is what its pending card asks (`question`, `plan`, `tool`, `form` or `secret`, the card's id as
   `interaction`; the session's own card before Persona's about its turn, then the oldest), `safe` only when a

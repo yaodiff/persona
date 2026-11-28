@@ -1061,13 +1061,17 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
     "owner":{"type":"string","title":"How voice addresses you"},
     "notes":{"type":"string","title":"Additional instructions for the voice assistant"},
     "archive_machine":{"type":"string","format":"machine","title":"Computer the calls are archived to"},
-    "archive_dir":{"type":"string","title":"Archive folder","pattern":"^(~/|/)"}}}
+    "archive_dir":{"type":"string","title":"Archive folder","pattern":"^(~/|/)"},
+    "tts_url":{"type":"string","title":"TTS Endpoint","pattern":"^https?://[^/?#@\\s]+(/[^?#\\s]*)?$"},
+    "tts_model":{"type":"string","title":"TTS Model","maxLength":128,"pattern":"^\\S+$"},
+    "tts_default_voice":{"type":"string","title":"TTS Default Voice","pattern":"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
+    "tts_sample_rate":{"type":"integer","title":"TTS Sample Rate","minimum":8000,"maximum":48000}}}
   ```
-- **`secrets`**: `[{name: "key", title: "API Key", description: "Sent to the service as Authorization: Bearer"}]`.
-- **Bind Key to service address**:
-  - If `key` is set and `PUT -/config` changes `url` origin (scheme + host + port), the manager deletes `key` in the same request and notes it in the response; App and admin UI say "Address changed; Key cleared, please enter it again".
-  - Empty `url` makes `PUT -/secrets/key` return 400.
-  - Prevents changing the address to an attacker's host and receiving the Bearer Key.
+- **`secrets`**: `[{name: "key", title: "API Key", description: "Sent to the service as Authorization: Bearer"}, {name: "tts_key", title: "TTS API Key", description: "Optional API key sent as Authorization: Bearer only to the TTS endpoint above; cleared if the host changes"}]`.
+- **Bind keys to service addresses**:
+  - If `key` is set and `PUT -/config` changes `url` origin (scheme + host + port), the manager deletes `key` in the same request and notes it in the response; App and admin UI say "Address changed; Key cleared, please enter it again". `tts_key` follows `tts_url`'s origin independently under the same rule (#17843).
+  - Empty `url` makes `PUT -/secrets/key` return 400 (`needs_url`); empty `tts_url` makes `PUT -/secrets/tts_key` return 400 (`needs_url`).
+  - Prevents changing an address to an attacker's host and receiving its Bearer key.
   - Generic manifest `bound_to` field comes later.
 - `ssh`, `key_file`, `key_command`, an explicit `tools`, and `fake` dialect **manager.json only**: `key_command` executes on the manager's machine (usually hub machine).
 - **The form's upstream declares the function tools automatically** (#1420): without a `tools` switch it is auto (`Provider.Tools` unset), like any live-dialect upstream whose manager.json entry leaves `tools` out.
@@ -1093,15 +1097,15 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
 | Environment variable | Contents |
 | --- | --- |
 | `PERSONA_EXTENSION_CONFIG` | Form config |
-| `PERSONA_EXTENSION_SECRETS` | `{"key": "…"}` (decrypted only in process environment) |
-| `PERSONA_VOICE_HUB_CONFIG` (new) | Adopted entry's original `config` (`providers`, `default`, `owner`, `notes`); entry `env` also retained |
+| `PERSONA_EXTENSION_SECRETS` | `{"key": "…", "tts_key": "…"}` (decrypted only in process environment) |
+| `PERSONA_VOICE_HUB_CONFIG` (new) | Adopted entry's original `config` (`providers`, `default`, `owner`, `notes`, `archive_*`, `tts_*` except `tts_key`); entry `env` also retained |
 | `PERSONA_HUB_URL` / `PERSONA_HUB_TOKEN` | Unchanged |
 
 ### 5.5 Merge (`voice.LoadConfig`)
 
 - If `PERSONA_EXTENSION_CONFIG` has `providers`, read old format for manual local-run compatibility.
 - Otherwise manager.json upstreams come first; form upstream with `url` appends as fixed id `custom`. Id collisions favor manager.json, with `/info.warnings` entry.
-- `owner` / `notes`: nonempty form values win.
+- `owner` / `notes` / `archive_*` / `tts_*`: nonempty form values win (`tts_key` is a secret only, never read from manager.json, and attaches only when the form supplies `tts_url`). Invalid TTS values emit warnings (`tts_url`, `tts_model`, `tts_default_voice`, `tts_sample_rate`), and a bad `tts_url` disables TTS without stopping the extension (#17843).
 - The form upstream has no `tools`: auto, declared unless its service refuses them (5.2, #1420).
 - **Start even without usable upstreams** (none, or form upstream missing Key and no `key_file` / `key_command`):
   - `/health` 200, `/info.setup` explains, `/ws` returns `no_upstream`;
@@ -1136,6 +1140,23 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
 - **Phase one**: with built-in schema/secrets, generic **Settings › Extensions › Realtime Voice** details on iOS / Mac, Android, web can configure address, protocol, models, Key, enabled state; admin `/admin` has switch too. Satisfies decision 3.
 - **Voice row (#2411, iOS)**: the voice extension's page has a "Voice Chat" section with the voice this device's calls speak with (6.7), drawn by the app, not the extension's form.
 - **Phase two**: dedicated realtime-voice settings (connection test, model selector); configure multiple upstreams in App once object arrays are supported.
+
+### 5.10 Streaming TTS (#17843)
+
+An optional OpenAI-compatible streaming TTS endpoint lets voice calls speak with any self-hosted or wrapped voice service while leaving calls unchanged when `tts_url` is empty (`server/internal/modules/voice/tts_config.go`, `models.go`):
+
+| Setting | Source | Rules |
+| --- | --- | --- |
+| `tts_url` | Form or manager.json | `http://` or `https://` base URL (`https://tts.example.com[:port][/prefix]`) or full `…/v1/audio/speech` URL (no userinfo, query or fragment). A base URL appends `/v1/audio/speech` and `/v1/audio/voices`; a full speech URL is used as is with sibling `…/v1/audio/voices`. A bad value disables TTS with warning `tts_url` and never stops the extension. |
+| `tts_model` | Form or manager.json | Sent as `model` in speech requests; empty sends `"default"`. Non-whitespace, up to 128 characters; invalid values warn (`tts_model`) and use `"default"`. |
+| `tts_default_voice` | Form or manager.json | Voice id (`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`) used when the app picks none or picks one the endpoint does not list; invalid values warn (`tts_default_voice`) and are ignored. |
+| `tts_sample_rate` | Form or manager.json | Optional fallback PCM rate in Hz (`8000`–`48000`) when the endpoint sends no rate header; out-of-range values warn (`tts_sample_rate`) and are ignored. |
+| Secret `tts_key` | Extension secret only | Optional key sent only as `Authorization: Bearer` to `tts_url`. Refused (`400 needs_url`) while `tts_url` is empty and deleted automatically when `tts_url` changes origin or is cleared (`voiceKeyFollowsURL` / `voiceKeyNeedsURL`). Only whether it is set is ever shown or logged. |
+
+- **Endpoint contract**:
+  - Required: `POST <speech URL>` with JSON `{"model", "input", "voice", "response_format": "pcm"}` streaming headerless signed 16-bit little-endian mono PCM (rate from `X-Audio-Sample-Rate` or `X-Persona-Audio-Rate`, else `tts_sample_rate`, else `24000`).
+  - Optional: `GET <voices URL>` returning either `{"voices": [{"id", "name", "languages"}], "default": "…"}` or `{"voices": ["a", "b"]}`.
+- **Voice list (`GET /voices`)**: while TTS is configured, `catalog.voices` queries `GET <voices URL>` with a short timeout (5 s) and sends `Authorization: Bearer` only when `tts_key` is set. `tts_default_voice` is always included and marked `default` (otherwise the endpoint's `default`, else the first voice). Good responses are cached 10 minutes; a `404` / `405` / `501` returns only `tts_default_voice` (not stale, cached); a transient or network failure serves the last good list marked `stale: true` (or `tts_default_voice` alone, marked `stale: true`, when no list was ever read). Without `tts_url`, `GET /voices` is unchanged.
 
 ## 6. iOS design
 

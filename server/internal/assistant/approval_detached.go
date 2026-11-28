@@ -281,15 +281,76 @@ func (s *Service) consumeDetachedGrant(ctx context.Context, ix proto.Interaction
 	return proto.Resolution{}, false, nil
 }
 
-// journaledDetachedReplay closes a recovered original before it can reach an
+// Older entries have only an update-time cutoff. The original node can replay
+// with a fresh display timestamp; use the creation time of its exact stored call.
+func (s *Service) detachedReplayJournal(ctx context.Context, ix proto.Interaction) (approvalJournalEntry, bool, error) {
+	entry, found, err := s.approvalJournalRecord(ctx, ix)
+	if found || err != nil {
+		return entry, found, err
+	}
+	legacy, found, err := s.findApprovalJournal(ctx, func(a approvalJournalEntry) bool {
+		return a.ID == ix.ID && a.MachineID == ix.MachineID && a.SessionID == ix.SessionID &&
+			a.CreatedAt.IsZero() && a.Fingerprint == ""
+	})
+	if !found || err != nil {
+		return approvalJournalEntry{}, false, err
+	}
+	st, ok := s.store().(interactionRecorder)
+	if !ok {
+		return approvalJournalEntry{}, false, nil
+	}
+	readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+	defer cancel()
+	rec, err := st.InteractionRecord(readCtx, ix.ID)
+	if err != nil || rec == nil || !sameApprovalOccurrence(ix, rec.Interaction) {
+		return approvalJournalEntry{}, false, err
+	}
+	return legacy, approvalJournalMatches(legacy, rec.Interaction), nil
+}
+
+// journaledDetachedReplay handles a recovered original before it can reach an
 // Always rule or register a fresh executable operation. An active process-local
 // prepared approval is not recovered: its reconnecting hook keeps the ordinary
 // prepared waiter. The returned resolution is always non-executing, even if an
 // older terminal database row contained an Allow.
 func (s *Service) journaledDetachedReplay(ctx context.Context, ix proto.Interaction) (proto.Resolution, bool, error) {
-	entry, found, err := s.approvalJournalRecord(ctx, ix)
+	entry, found, err := s.detachedReplayJournal(ctx, ix)
 	if err != nil || !found {
 		return proto.Resolution{}, false, err
+	}
+	// An original hook may reconnect before either startup pass. It has
+	// already released its turn and must never spend the continuation itself.
+	if !entry.live && entry.unansweredDetached() {
+		waiting, err := s.retainDetachedWaiting(ctx, entry)
+		if err == nil && waiting && !s.ownsDetachedWaiting(entry) {
+			// An original hook can arrive before either startup pass. Complete
+			// journal finalization before asking fleet restore to expose the card.
+			b := &s.approvals
+			b.mu.Lock()
+			ready := b.recoveryDone
+			b.mu.Unlock()
+			if ready {
+				s.restoreInteractions(ctx)
+			} else {
+				s.recoverManagerApprovalJournals()
+			}
+			// Restoration may have taken the card past its original deadline or
+			// observed a terminal row while finalizing the batch.
+			waiting, err = s.retainDetachedWaiting(ctx, entry)
+		}
+		if err != nil {
+			s.logf("defer restoring detached approval %s: %v", ix.ID, err)
+			s.approvals.mu.Lock()
+			s.retryApprovalRecoveryLocked()
+			s.approvals.mu.Unlock()
+		}
+		if err != nil || waiting {
+			if s.ownsDetachedWaiting(entry) {
+				return detachedWaitingResolution(ix.ID), true, nil
+			}
+			return proto.Resolution{Dismiss: true, Pending: true, ApprovalID: ix.ID,
+				Message: "The approval is being restored. The command has not executed. Wait for the owner’s decision."}, true, nil
+		}
 	}
 	if err := s.checkRecordedInteractionOccurrence(ctx, ix); err != nil {
 		return proto.Resolution{}, true, err
@@ -461,12 +522,46 @@ func (s *Service) detachedContinuationPendingLocked(ctx context.Context, id, dig
 	return !grant.CreatedAt.After(cutoff), nil
 }
 
-// waitDetachedCard uses the prepared-approval coordinator for its first-answer-
-// wins claim, clarification, durable result delivery and short initial wait.
-// Apply creates a continuation grant only after the original caller was
-// released. An immediate Allow returns through the original hook and leaves no
-// unused second execution behind.
-func (s *Service) waitDetachedCard(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+// A late release acknowledgement can arrive while the manager still has only
+// the durable card. Read the journal only for a pending detachable command.
+func (s *Service) detachedNodeEndAfterRelease(ctx context.Context, ix proto.Interaction) (bool, error) {
+	if !ix.Detachable || !ix.Resumable {
+		return false, nil
+	}
+	entry, found, err := s.approvalJournalRecord(ctx, ix)
+	return found && entry.matchesStored(ix) &&
+		(entry.canResumeDetached(ix) || entry.Status == "applying" || entry.Result != ""), err
+}
+
+// prepareRestoredDetached runs before the validated pending card is visible.
+// Journaled commands use their retained deadline and late-decision path. Leave
+// terminal and unreconstructable journal entries to the startup finalizer.
+func (s *Service) prepareRestoredDetached(p *pending, stored proto.Interaction, entry approvalJournalEntry) bool {
+	if !p.ix.Detachable || entry.ID == "" {
+		return true
+	}
+	if !entry.matchesStored(stored) {
+		return true // another pending occurrence reused the runtime ID
+	}
+	if !p.ix.CreatedAt.Equal(stored.CreatedAt) || !entry.canResumeDetached(stored) || !entry.WaitingUntil.After(time.Now()) {
+		return false
+	}
+	p.ix.ExpiresAt = stored.ExpiresAt
+	runCtx := s.runCtx()
+	a := s.detachedApproval(runCtx, p.ix)
+	a.clarified, a.waiting = true, true
+	a.decisionDeadline = p.ix.ExpiresAt
+	close(a.release)
+	p.prepared = a
+	a.decisionTimer = time.AfterFunc(time.Until(a.decisionDeadline), func() {
+		if runCtx.Err() == nil {
+			s.expirePreparedGen(p, 0)
+		}
+	})
+	return true
+}
+
+func (s *Service) detachedApproval(ctx context.Context, ix proto.Interaction) *preparedApproval {
 	state := &preparedApproval{caller: ctx, release: make(chan struct{}), deliveries: map[string]clarifyDelivery{}}
 	state.op = approvalops.Operation{
 		Denied:     "The owner denied this command. Nothing was executed. Do not retry it or create another approval for the same call.",
@@ -495,15 +590,25 @@ func (s *Service) waitDetachedCard(ctx context.Context, ix proto.Interaction) (p
 			return detachedContinuationText(ix, r), nil
 		},
 	}
+	return state
+}
+
+// waitDetachedCard uses the prepared-approval coordinator for its first-answer-
+// wins claim, clarification, durable result delivery and short initial wait.
+// Apply creates a continuation grant only after the original caller was
+// released. An immediate Allow returns through the original hook and leaves no
+// unused second execution behind.
+func (s *Service) waitDetachedCard(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+	state := s.detachedApproval(ctx, ix)
 	res, err := s.waitInteractionPrepared(ctx, ix, state)
 	if errors.Is(err, errApprovalClarifying) {
 		s.fleet.mu.Lock()
 		waiting := state.waiting
 		s.fleet.mu.Unlock()
-		text := approvalops.ClarifyingText
 		if waiting {
-			text = approvalops.WaitingText + " The command was not executed."
+			return detachedWaitingResolution(ix.ID), nil
 		}
+		text := approvalops.ClarifyingText
 		return proto.Resolution{Dismiss: true, Pending: true, ApprovalID: ix.ID, Message: text}, nil
 	}
 	if err != nil {
@@ -522,6 +627,10 @@ func (s *Service) waitDetachedCard(ctx context.Context, ix proto.Interaction) (p
 			Message: "The one-time continuation for this approval was already consumed or must be consumed by its exact retry; do not replay the original approval."}, nil
 	}
 	return res, nil
+}
+
+func detachedWaitingResolution(id string) proto.Resolution {
+	return proto.Resolution{Dismiss: true, Pending: true, ApprovalID: id, Message: approvalops.WaitingText + " The command was not executed."}
 }
 
 func detachedContinuationText(ix proto.Interaction, r proto.Resolution) string {

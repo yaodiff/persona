@@ -295,7 +295,7 @@ export default defineConfig({
     globalSetup: ["scripts/installed-deps.mjs"],
     setupFiles: ["src/i18n/test-setup.ts"],
     execArgv: ["--no-experimental-webstorage"],
-    ...(CORE_ONLY ? { exclude: [...configDefaults.exclude, "src/modules/**"] } : {}),
+    exclude: [...configDefaults.exclude, "e2e/ui/**", ...(CORE_ONLY ? ["src/modules/**"] : [])],
   },
   build: {
     target: "es2022",

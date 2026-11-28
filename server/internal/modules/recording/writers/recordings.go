@@ -307,13 +307,16 @@ func (e *engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 		if exists && prevDuration > 0 && r.Duration > 0 && r.Duration < prevDuration {
 			trimTo = r.Duration
 		}
-		if spParts, err := e.recomputeSpeakersLocked(r, trimTo); err != nil {
+		if spParts, minChanged, err := e.recomputeSpeakersLocked(r, trimTo); err != nil {
 			e.logf("recording %s: speakers recompute: %v", id, err)
-		} else if len(spParts) > 0 {
+		} else {
 			for _, p := range spParts {
 				if !slices.Contains(changedParts, p) {
 					changedParts = append(changedParts, p)
 				}
+			}
+			if minChanged {
+				st.notify(KindRecording, id, "summary")
 			}
 		}
 	}

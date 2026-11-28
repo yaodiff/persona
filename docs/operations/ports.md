@@ -62,26 +62,26 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
 
 | Option | Problem | Verdict |
 | --- | --- | --- |
-| One subdomain per port (`p5173-mac.<hub domain>`) | Needs wildcard DNS and a wildcard certificate, so DNS has to change | Rejected (a change the user would have to sign off on) |
+| One subdomain per port (`p5173-mac.<hub domain>`) | Needs wildcard DNS and a wildcard certificate, so DNS has to change | Optional opt-in for web previews (`preview.domain`, [preview.md](../web/preview.md) "Isolated preview origin"); not required for the App |
 | hub opens a separate port per forward | New public ports, each one has to be allowed through the firewall | Rejected |
 | Path prefix + rewriting (`/api/v1/…/ports/5173/…`) | SPA absolute paths (`/@vite/client`, `/_next/…`), the HMR ws address, Cookie Path and redirect Location all need rewriting; rewriting HTML / JS is unreliable | Rejected |
-| **The App listens on the phone's 127.0.0.1 / ::1, one WebSocket to the hub per connection** | Only the App (iOS, Mac) can do it, not the web version (browsers can't listen) | **Chosen** |
+| **The App listens on the phone's 127.0.0.1 / ::1, one WebSocket to the hub per connection** | Only the App (iOS, Mac) can do it, not the web version (browsers can't listen) | **Chosen (zero-config default for mobile)** |
 
 Same as Moshi: on the phone the page is `http://localhost:5173/`, exactly as on the computer. Bytes are forwarded untouched, so HTTP / WebSocket (HMR) /
 redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the hub address and device token the App already has.
 
 ### Phone (`apple/Persona/Code/PortForwarder.swift`)
 
-- One forward per (group, machine, port), since machine ids are only unique within a group: first bind the same port number on `127.0.0.1`; if it's taken (another forward on the phone, or an existing program on the Mac running the simulator), pick a random one.
-  Then bind the same number on `::1` (`localhost` resolves to ::1 first; without it WebKit falls back to 127.0.0.1 anyway). Only loopback is bound, so nobody on the LAN can connect.
-- Each incoming connection opens a `wss://<hub>/api/v1/machines/{mid}/ports/{port}/connect` (`Authorization: Bearer <device token>`).
+- One forward per (group, machine, port), since machine ids are only unique within a group: binds both `127.0.0.1` and `::1` at the same port number when both are free; if either is taken (another forward on the phone, or an existing program on the Mac running the simulator), it picks an ephemeral port free on both so `localhost` (which resolves `::1` first) never connects to an unrelated process. Only loopback is bound, so nobody on the LAN can connect.
+- Each incoming connection opens a `wss://<hub>/api/v1/machines/{mid}/ports/{port}/connect` (`Authorization: Bearer <device token>`) on a `URLSession` configured with `httpMaximumConnectionsPerHost = 64` (matching the hub's `maxPortStreams = 64`, avoiding iOS's default limit of 4 starving multi-module dev servers).
   The hub address, route and token are read when each connection arrives, not when the forward starts (#1886): the group's current hub
   (the one its socket is on), `HubTransport`'s tunnel route at that moment, and the current device token. After a switch between a tunnel
   and a direct address, to another hub of the group, or a re-pairing, a reload or HMR reconnect goes the new way. Disconnecting a group,
   removing its last hub or unpairing closes its forwards (`AppModel.forgetGroups` / `unpair`).
-  Each side "finishes sending the previous chunk before reading the next", so a slow side holds back a fast one instead of piling up in memory.
-- The listener stays up. If it breaks after the App is suspended, it is rebuilt on next open (reusing the old number when possible; the page's HMR reconnects by itself).
-- Before opening, ask the hub: if the port is in some Agent's `ports`, open it directly; otherwise `POST …/open` (the user explicitly tapped it). If nothing is listening, show "Nothing is listening on port :N anymore",
+  Each side "finishes sending the previous chunk before reading the next", so a slow side holds back a fast one instead of piling up in memory; client TCP half-close stops local reads while continuing to deliver remote response bytes until the remote side closes.
+- The listener stays up. If it breaks after the App is suspended, `ensureReady` rebuilds it when returning to the foreground, refreshing, or next opening (reusing the old number when possible; the page's HMR reconnects by itself).
+- WebSocket handshake failures (`401`/`403`/`404`/`429`/`502`/`503`/`504` or unreachable hub) are recorded per forward and surfaced in `LinkSheet` as a plain-language `EmptyStateView` error overlay with Retry instead of a blank WebView. Self-signed TLS certificates on loopback ports owned by `PortForwarder` prompt for explicit session-scoped confirmation (defaulting to untrusted), while all other hosts keep system default TLS verification.
+- Before opening, ask the hub: if the port is in some Agent's `ports`, open it directly (re-probing via `POST …/open` once if the first load fails, in case the 15-second scan cache is stale); otherwise `POST …/open` (the user explicitly tapped it). If nothing is listening, show "Nothing is listening on port :N anymore",
   and the badge turns gray.
 - The web card is the same one used for ordinary links (`LinkSheet`), with "machine name :port" under the title bar. Its menu has no **Open in Safari** or **Share**
   (an address on the phone's loopback means nothing to other apps). Dev server pages skip the disk cache (`reloadIgnoringLocalCacheData`). A port page's URL is the same every time, so `WebViewPool` hands back the previous WKWebView:
@@ -111,5 +111,5 @@ redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the
 - Exception: when the `cua` plugin is on for a Mac, that Mac's 5900 (macOS Screen Sharing) is permanently allowed, for "VNC" (see [computer-use.md](../extensions/computer-use.md), "Live view"); the WebSocket accepts the `binary` subprotocol (noVNC may send it).
 ## Not done yet
 
-- The web version can't use it (see the trade-off above); it shows a dev server through a headless browser on the computer instead ([preview.md](../web/preview.md)).
-- https dev servers: bytes are forwarded, but WKWebView rejects their self-signed certificates, so the page won't open.
+- Without `preview.domain` configured on the hub, the web version still shows a dev server through a headless browser on the computer ([preview.md](../web/preview.md)). When `preview.domain` is configured, the hub's isolated preview-origin proxy (`server/internal/hub/preview_origin.go`) reuses the same `port.dial` + `streams.Mux` tunnel, `portAllowed` rules, and 64-stream cap to serve HTTP and WebSocket (HMR) directly to an isolated web `<iframe>` ([preview.md](../web/preview.md) "Isolated preview origin").
+- Android https dev servers: bytes are forwarded, but Android WebView does not yet have the iOS loopback self-signed certificate confirmation prompt.

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -112,14 +113,21 @@ func TestAndroidAppFromTheRelease(t *testing.T) {
 // Without an update source there is nothing to look at, and nothing is asked.
 func TestAndroidAppWithoutUpdateSource(t *testing.T) {
 	h := newTestHub(t)
-	h.build = update.Make("v1", update.Release, "202611021500", "")
+	h.version = "v1"
+	h.build = update.Make(h.version, update.Release, "202611021500", "")
 	asked := false
 	h.upd.client = &http.Client{Transport: updateLoopTransport(func(r *http.Request) (*http.Response, error) {
 		asked = true
 		return nil, http.ErrHandlerTimeout
 	})}
 	h.upd.syncAndroid(context.Background())
+	if _, err := h.upd.check(context.Background()); !errors.Is(err, errNotRelease) {
+		t.Fatalf("check without a source: %v", err)
+	}
+	if v := h.upd.view(); v.CanUpdate || v.Auto || h.upd.wantsAuto() {
+		t.Fatalf("updates enabled without a source: %+v", v)
+	}
 	if asked {
-		t.Fatal("a hub with no update source asked for the Android app")
+		t.Fatal("a hub with no update source tried to fetch a release or Android APK")
 	}
 }

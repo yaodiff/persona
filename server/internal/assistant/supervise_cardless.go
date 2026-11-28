@@ -16,8 +16,11 @@ import (
 // never synthesizes a question from chat text and cannot tell an owner wait from a late review, so the rendered
 // message names the whole review vocabulary; the supervisor picks the verdict the work actually needs.
 
-// sigCardlessWait: a pending_review task has stayed with no card the owner can answer past the settle time.
+// sigCardlessWait: a pending_review task, or an owner wait held below Needs you, has stayed with no card the owner can
+// answer past the settle time.
 const sigCardlessWait = "cardless_wait"
+
+const ownerWaitCardlessKeyPrefix = "cardless-wait@"
 
 // cardlessSettle is how long a card-less review waits before the supervisor is told, matching decisionSettle: a card
 // being written or an answer on its way is not mistaken for a silent wait.
@@ -77,6 +80,61 @@ func cardlessRoundKey(t Todo, now time.Time) string {
 	return "cardless@" + since
 }
 
+func ownerWaitCardlessAnchor(w *OwnerWait) time.Time {
+	if w == nil {
+		return time.Time{}
+	}
+	if !w.Work.IsZero() {
+		return w.Work
+	}
+	return w.At
+}
+
+func ownerWaitCardlessKey(w *OwnerWait) string {
+	anchor := ownerWaitCardlessAnchor(w)
+	if anchor.IsZero() {
+		return ""
+	}
+	return ownerWaitCardlessKeyPrefix + anchor.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
+}
+
+func ownerWaitCardlessClaim(g superviseSignal) bool {
+	return strings.HasPrefix(g.Key, ownerWaitCardlessKeyPrefix)
+}
+
+// cardlessSignal builds the signal for whichever card-less shape the task is in now. The pending-review path keeps its
+// original round identity; an owner wait gets its own identity from the work stretch that stopped for the owner.
+func cardlessSignal(t Todo, now time.Time) (superviseSignal, bool) {
+	v := t.Supervision
+	if v == nil || t.DoneAt != nil {
+		return superviseSignal{}, false
+	}
+	if v.state(t) == reviewPending {
+		if v.CardlessToldAt != nil {
+			return superviseSignal{}, false
+		}
+		since := cardlessSince(t)
+		if since.IsZero() || now.Sub(since) < cardlessSettle {
+			return superviseSignal{}, false
+		}
+		return superviseSignal{
+			Todo: t.ID, Kind: sigCardlessWait, Key: cardlessRoundKey(t, now),
+			Minutes: int(now.Sub(since).Minutes()),
+		}, true
+	}
+	w := v.Waits
+	if w == nil || w.CardlessToldAt != nil || w.At.IsZero() || now.Sub(w.At) < cardlessSettle {
+		return superviseSignal{}, false
+	}
+	if st := v.state(t); st != "" && st != reviewRework {
+		return superviseSignal{}, false
+	}
+	return superviseSignal{
+		Todo: t.ID, Kind: sigCardlessWait, Key: ownerWaitCardlessKey(w),
+		Minutes: int(now.Sub(w.At).Minutes()), Detail: clip(oneLine(w.Reason), 200),
+	}, ownerWaitCardlessKey(w) != ""
+}
+
 func legacyCardlessClaim(g superviseSignal) (since, stamp time.Time, ok bool) {
 	raw, legacy := strings.CutPrefix(g.Key, "cardless-legacy@")
 	if !legacy {
@@ -89,60 +147,161 @@ func legacyCardlessClaim(g superviseSignal) (since, stamp time.Time, ok bool) {
 }
 
 func cardlessClaimMatches(t Todo, g superviseSignal) bool {
-	if t.Supervision == nil || t.DoneAt != nil || t.Supervision.state(t) != reviewPending {
+	v := t.Supervision
+	if v == nil || t.DoneAt != nil {
+		return false
+	}
+	if ownerWaitCardlessClaim(g) {
+		st := v.state(t)
+		return v.Waits != nil && (st == "" || st == reviewRework) && g.Key == ownerWaitCardlessKey(v.Waits)
+	}
+	if v.state(t) != reviewPending {
 		return false
 	}
 	if strings.HasPrefix(g.Key, "cardless-legacy@") {
 		since, stamp, ok := legacyCardlessClaim(g)
-		if !ok || t.Supervision.PendingSince != nil {
+		if !ok || v.PendingSince != nil {
 			return false
 		}
-		if told := t.Supervision.CardlessToldAt; told != nil {
+		if told := v.CardlessToldAt; told != nil {
 			return told.Truncate(time.Microsecond).Equal(stamp.Truncate(time.Microsecond))
 		}
-		return since.Truncate(time.Microsecond).Equal(t.Supervision.UpdatedAt.Truncate(time.Microsecond))
+		return since.Truncate(time.Microsecond).Equal(v.UpdatedAt.Truncate(time.Microsecond))
 	}
 	// Also accept an older queued key's nanoseconds, without weakening the review-round check.
 	at, err := time.Parse(time.RFC3339Nano, strings.TrimPrefix(g.Key, "cardless@"))
 	if err != nil || !strings.HasPrefix(g.Key, "cardless@") {
 		return false
 	}
-	if t.Supervision.PendingSince == nil && t.Supervision.CardlessToldAt != nil {
+	if v.PendingSince == nil && v.CardlessToldAt != nil {
 		// A pending signal from before recoverable claims used the round's pre-stamp UpdatedAt. Keep its existing
 		// marker semantics only for that legacy round; every subsequent round has a non-nil PendingSince.
-		return !at.After(*t.Supervision.CardlessToldAt)
+		return !at.After(*v.CardlessToldAt)
 	}
 	return at.Truncate(time.Microsecond).Equal(cardlessSince(t).Truncate(time.Microsecond))
 }
 
-// signalCardlessWait persists the pending hand-back before acknowledging its round. A crash or failed marker write
-// leaves the outbox able to finish the claim; an old completed stamp without a pending entry is never reconstructed.
-func (s *Service) signalCardlessWait(ctx context.Context, t Todo, agents []proto.Session, lists machineSessions, now time.Time) {
-	v := t.Supervision
-	if ctx.Err() != nil || v == nil || t.DoneAt != nil || v.state(t) != reviewPending || v.CardlessToldAt != nil {
-		return
+// cardlessClaimToldAt returns the marker belonging to this claim's shape. The two markers deliberately live on
+// different state: a pending-review hand-back belongs to its round, while an owner wait belongs to that work stretch.
+func cardlessClaimToldAt(v *Supervision, g superviseSignal) (*time.Time, bool) {
+	if ownerWaitCardlessClaim(g) {
+		if v == nil || v.Waits == nil {
+			return nil, false
+		}
+		return v.Waits.CardlessToldAt, true
 	}
-	since := cardlessSince(t)
-	if since.IsZero() || now.Sub(since) < cardlessSettle {
-		return
+	if strings.HasPrefix(g.Key, "cardless@") || strings.HasPrefix(g.Key, "cardless-legacy@") {
+		if v == nil {
+			return nil, false
+		}
+		return v.CardlessToldAt, true
 	}
-	// An acceptance/conclusion ask from the current review round that the owner has not answered already gives them
-	// something to answer. acceptAskStale covers asks of an earlier round (a reopened or re-reviewed task); the ended
-	// test (acceptAskEnded) is deliberately not used: a decision ask written while the task still waits for review is
-	// a live card even though its ledger is not needs_user yet.
-	if a, readable, ok := s.askCopyReadable(t.ID); !readable {
-		// The book could not be read: "no card found" is not "no card exists". Hold off without stamping, so a later
-		// pass retries once the ledger recovers instead of spending the round's one hand-back on an unknown state.
-		return
-	} else if ok && !acceptAskStale(&a, t) && a.AcceptedAt.IsZero() {
-		return
+	return nil, false
+}
+
+func (s *Service) stampCardlessClaimLocked(ctx context.Context, g superviseSignal, stamp time.Time) (Supervision, error) {
+	v, _, err := s.updateSupervisionLockedAt(ctx, g.Todo, time.Now().UTC(), func(v *Supervision) bool {
+		told, ok := cardlessClaimToldAt(v, g)
+		if !ok || told != nil {
+			return false
+		}
+		at := stamp.UTC()
+		if ownerWaitCardlessClaim(g) {
+			v.Waits.CardlessToldAt = &at
+			return true
+		}
+		if _, claimStamp, legacy := legacyCardlessClaim(g); legacy {
+			at = claimStamp
+		}
+		v.CardlessToldAt = &at
+		return true
+	})
+	return v, err
+}
+
+func (s *Service) cardlessAskStops(t Todo, readableRequired bool) (stops, retry bool) {
+	if readableRequired {
+		a, readable, ok := s.askCopyReadable(t.ID)
+		if !readable {
+			return false, true
+		}
+		return ok && !acceptAskStale(&a, t) && a.AcceptedAt.IsZero(), false
 	}
-	// An unreadable worker is not a stopped worker: hold the hand-back until its machine answers, rather than stamp
-	// the round on an unknown state.
+	a, ok := s.askCopy(t.ID)
+	return ok && !acceptAskStale(&a, t) && a.AcceptedAt.IsZero(), false
+}
+
+// cardlessConditions applies the current card and worker gates shared by admission and crash recovery.
+func (s *Service) cardlessConditions(t Todo, agents []proto.Session, lists machineSessions, readableAsk bool) (stale, retry bool) {
+	if stops, retry := s.cardlessAskStops(t, readableAsk); stops || retry {
+		return stops && !retry, retry
+	}
+	// An unreadable worker is not a stopped worker: hold the claim until its machine answers, rather than treat an
+	// unknown state as settled.
 	if !cardlessAgentsReachable(t, lists) {
-		return
+		return false, true
 	}
 	if !cardlessWorkersStopped(agents) {
+		return true, false
+	}
+	return false, false
+}
+
+// commitCardlessClaim is the one write boundary for both card-less shapes. It rechecks the claim after the worker read,
+// proves the outbox entry durable, and only then stamps the marker that prevents another delivery.
+func (s *Service) commitCardlessClaim(ctx context.Context, g superviseSignal, stamp time.Time, admit bool) (valid, retry bool) {
+	s.supervise.writeMu.Lock()
+	defer s.supervise.writeMu.Unlock()
+	current, ok := s.todoNow(g.Todo)
+	if ctx.Err() != nil {
+		return false, true
+	}
+	if !ok || !cardlessClaimMatches(current, g) {
+		return false, false
+	}
+	told, ok := cardlessClaimToldAt(current.Supervision, g)
+	if !ok {
+		return false, false
+	}
+	if told != nil {
+		return true, false
+	}
+	if admit {
+		// A failed or ambiguously committed marker write retries the same claim, including its prospective legacy
+		// stamp. Replacing that identity could strand an earlier committed stamp with a different pending signal.
+		r := &s.relays
+		r.mu.Lock()
+		if s.relayLocked(ctx) {
+			if pending, exists := r.st.SupervisePending[g.id()]; exists && cardlessClaimMatches(current, pending) {
+				g.Key = pending.Key
+			}
+		}
+		r.mu.Unlock()
+		s.queueSignal(g)
+	}
+	if ctx.Err() != nil || !s.supervisePendingDurably([]superviseSignal{g}) {
+		return false, true // no stamp until the pending signal has survived its durable write
+	}
+	v, err := s.stampCardlessClaimLocked(ctx, g, stamp)
+	if err != nil {
+		s.logf("task %s: card-less claim: %v (retried from the pending signal)", g.Todo, err)
+		return false, true
+	}
+	told, ok = cardlessClaimToldAt(&v, g)
+	return ok && told != nil, false
+}
+
+// signalCardlessWait persists the pending hand-back before acknowledging its round or owner wait. A crash or failed
+// marker write leaves the outbox able to finish the claim; an old completed stamp without an outbox entry is never
+// reconstructed.
+func (s *Service) signalCardlessWait(ctx context.Context, t Todo, agents []proto.Session, lists machineSessions, now time.Time) {
+	g, ok := cardlessSignal(t, now)
+	if ctx.Err() != nil || !ok {
+		return
+	}
+	// The acceptance book is three-state: "no card found" is not "no card exists". Hold off without stamping so a
+	// later pass retries once the ledger recovers.
+	if stale, retry := s.cardlessConditions(t, agents, lists, true); stale || retry {
 		return
 	}
 	// Match signalReplacing's stop gate. Restore before taking writeMu: restoration can acquire dedupMu, while the
@@ -151,47 +310,21 @@ func (s *Service) signalCardlessWait(ctx context.Context, t Todo, agents []proto
 		return
 	}
 	s.restoreSupervisePending(ctx)
-	g := superviseSignal{Todo: t.ID, Kind: sigCardlessWait, Key: cardlessRoundKey(t, now), Minutes: int(now.Sub(since).Minutes())}
-	s.supervise.writeMu.Lock()
-	defer s.supervise.writeMu.Unlock()
-	current, ok := s.todoNow(t.ID)
-	if ctx.Err() != nil || !ok || !cardlessClaimMatches(current, g) || current.Supervision.CardlessToldAt != nil {
-		return // another watch/digest or review changed the round after this watch's snapshot
-	}
-	// A failed or ambiguously committed marker write retries the same claim, including its prospective legacy
-	// stamp. Replacing that identity could strand an earlier committed stamp with a different pending signal.
-	r := &s.relays
-	r.mu.Lock()
-	if s.relayLocked(ctx) {
-		if pending, exists := r.st.SupervisePending[g.id()]; exists && cardlessClaimMatches(current, pending) {
-			g.Key = pending.Key
-		}
-	}
-	r.mu.Unlock()
-	s.queueSignal(g)
-	if ctx.Err() != nil || !s.supervisePendingDurably([]superviseSignal{g}) {
-		return // no stamp until the pending signal has survived its durable write
-	}
-	if _, _, err := s.updateSupervisionLockedAt(ctx, t.ID, time.Now().UTC(), func(v *Supervision) bool {
-		stamped := now.UTC()
-		if _, claimStamp, legacy := legacyCardlessClaim(g); legacy {
-			stamped = claimStamp
-		}
-		v.CardlessToldAt = &stamped
-		return true
-	}); err != nil {
-		s.logf("task %s: card-less claim: %v (retried from the pending signal)", t.ID, err)
-	}
+	s.commitCardlessClaim(ctx, g, now, true)
 }
 
-// completeCardlessClaim finishes only an existing pending claim. It never guesses whether an old marker without
-// an outbox entry was delivered. False/retry keeps transient failures pending instead of acknowledging them as moot.
+// completeCardlessClaim finishes only an existing pending claim. It never guesses whether an old marker without an
+// outbox entry was delivered. False/retry keeps transient failures pending instead of acknowledging them as moot.
 func (s *Service) completeCardlessClaim(ctx context.Context, g superviseSignal) (valid, retry bool) {
 	t, ok := s.todoNow(g.Todo)
 	if !ok || !cardlessClaimMatches(t, g) {
 		return false, false
 	}
-	if t.Supervision.CardlessToldAt != nil {
+	told, known := cardlessClaimToldAt(t.Supervision, g)
+	if !known {
+		return false, false
+	}
+	if told != nil {
 		return true, false
 	}
 	if ctx.Err() != nil || !s.supervisePendingDurably([]superviseSignal{g}) {
@@ -200,44 +333,11 @@ func (s *Service) completeCardlessClaim(ctx context.Context, g superviseSignal) 
 	if s.reporterStopped(ctx, t.Origin) {
 		return false, true
 	}
-	if a, ok := s.askCopy(t.ID); ok && !acceptAskStale(&a, t) && a.AcceptedAt.IsZero() {
-		return false, false
-	}
 	lists := machineSessions{}
 	agents := s.taskAgentsIn(ctx, t, lists)
-	if !cardlessAgentsReachable(t, lists) {
-		return false, true
+	stale, retry := s.cardlessConditions(t, agents, lists, ownerWaitCardlessClaim(g))
+	if stale || retry {
+		return false, retry
 	}
-	if !cardlessWorkersStopped(agents) {
-		return false, false
-	}
-	s.supervise.writeMu.Lock()
-	defer s.supervise.writeMu.Unlock()
-	current, ok := s.todoNow(t.ID)
-	if !ok || !cardlessClaimMatches(current, g) {
-		return false, false
-	}
-	if ctx.Err() != nil {
-		return false, true
-	}
-	// The worker read above can yield while another watch replaces or retires the pending claim. Never stamp the
-	// earlier snapshot after that write; restoreDigest keeps a newer outbox member when this old attempt retries.
-	if !s.supervisePendingDurably([]superviseSignal{g}) {
-		return false, true
-	}
-	v, _, err := s.updateSupervisionLockedAt(ctx, t.ID, time.Now().UTC(), func(v *Supervision) bool {
-		if v.CardlessToldAt != nil {
-			return false
-		}
-		stamped := time.Now().UTC()
-		if _, claimStamp, legacy := legacyCardlessClaim(g); legacy {
-			stamped = claimStamp
-		}
-		v.CardlessToldAt = &stamped
-		return true
-	})
-	if err != nil {
-		return false, true
-	}
-	return v.CardlessToldAt != nil, false
+	return s.commitCardlessClaim(ctx, g, time.Now().UTC(), false)
 }

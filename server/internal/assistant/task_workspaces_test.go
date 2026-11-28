@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,10 +14,63 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
+
+type workspaceCallDeadlineHub struct {
+	Hub
+	observe func(context.Context, DeviceCall)
+}
+
+func (h workspaceCallDeadlineHub) DeviceCall(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+	h.observe(ctx, call)
+	return h.Hub.DeviceCall(ctx, call)
+}
+
+func TestBackendWorkspaceCallAllowsColdFetchAndPreservesTimeoutCode(t *testing.T) {
+	f := newFakeHub().withMachine()
+	s := newKBService(t, f)
+	req := taskworkspace.Request{WorkspaceID: "ws_timeout", OperationID: "op_timeout"}
+	req.Plan.Source.MachineID = "server"
+	req.Plan.Source.Repositories.Repositories = []repositorywire.PreparationRepository{{RepoID: "first"}, {RepoID: "second"}}
+	f.answerNode(taskworkspace.MethodPrefix+"prepare", func(string, json.RawMessage) (any, error) {
+		return taskworkspace.Record{
+			WorkspaceID: req.WorkspaceID, OperationID: req.OperationID, State: "failed",
+			Error: taskworkspace.Failure("source_fetch_timeout", "source", req.OperationID, "second", ""),
+		}, nil
+	})
+	f.answerNode(taskworkspace.MethodPrefix+"inspect", func(string, json.RawMessage) (any, error) {
+		return taskworkspace.Record{WorkspaceID: req.WorkspaceID}, nil
+	})
+	setHub(s, workspaceCallDeadlineHub{Hub: f, observe: func(ctx context.Context, call DeviceCall) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Errorf("%s has no deadline", call.Method)
+			return
+		}
+		left := time.Until(deadline)
+		switch call.Method {
+		case taskworkspace.MethodPrefix + "prepare":
+			if left <= 20*time.Minute {
+				t.Errorf("prepare budget %v cannot cover two sequential cold fetches", left)
+			}
+		case taskworkspace.MethodPrefix + "inspect":
+			if left > 5*time.Minute {
+				t.Errorf("inspect budget increased to %v", left)
+			}
+		}
+	}})
+	got, err := s.backendWorkspaceCall(t.Context(), "prepare", req)
+	if err != nil || got.Error == nil || got.Error.Code != "source_fetch_timeout" || !slices.Contains(got.Error.Actions, "retry") {
+		t.Fatalf("prepare = %+v, %v; want retryable fetch timeout", got, err)
+	}
+	if _, err := s.backendWorkspaceCall(t.Context(), "inspect", req); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // Interleave another Manager call after registration, before the first prepare reaches Node.
 type heldWorkspacePrepareHub struct {

@@ -227,7 +227,7 @@ func TestCollectUsageWindowsReadsCodexAndTheClaudeDrop(t *testing.T) {
 		t.Fatalf("sources: %+v", got)
 	}
 	c := got["codex:"+codexUsageKey(realPath(n.codexHome()))]
-	if c.Name != "Codex Plus" || len(c.Windows) != 1 || c.Windows[0].UsedPercent != 33 || now.Sub(c.SampledAt) < time.Hour {
+	if c.ReadingSource != "rollout" || c.Name != "Codex Plus" || len(c.Windows) != 1 || c.Windows[0].UsedPercent != 33 || now.Sub(c.SampledAt) < time.Hour {
 		t.Errorf("codex = %+v", c)
 	}
 	cl := got["claude:claude.json"]
@@ -329,7 +329,7 @@ func TestCodexUsageRefreshPrefersAccountBoundWindowsAndFallsBackBySource(t *test
 				t.Errorf("app-server sample: %+v", account)
 			}
 		case codexUsageKey(realPath(legacyHome)):
-			if account.AccountKey != "" || account.Name != "Codex Plus" ||
+			if account.ReadingSource != "" || account.AccountKey != "" || account.Name != "Codex Plus" ||
 				len(account.Windows) != 1 || account.Windows[0].UsedPercent != 0 {
 				t.Errorf("legacy app-server sample: %+v", account)
 			}
@@ -370,7 +370,7 @@ func TestCodexUsageRefreshPrefersAccountBoundWindowsAndFallsBackBySource(t *test
 	delete(rolloutCaches.byHome, n.codexHome())
 	rolloutCaches.Unlock()
 	n.refreshUsageWindows(t.Context())
-	if account := current(); account.AccountKey != "" || account.Windows[0].UsedPercent != 11 {
+	if account := current(); account.ReadingSource != "rollout" || account.AccountKey != "" || account.Windows[0].UsedPercent != 11 {
 		t.Fatalf("new rollout did not become an unidentified source: %+v", account)
 	}
 
@@ -386,7 +386,7 @@ func TestCodexUsageRefreshPrefersAccountBoundWindowsAndFallsBackBySource(t *test
 	writeCodexUsageReply(t, n.codexHome(), fmt.Sprintf(`{"accountId":%q,
 		"rateLimits":{"limitId":"codex","planType":"team","primary":{"usedPercent":10,"windowDurationMins":300}}}`, id))
 	n.refreshUsageWindows(t.Context())
-	if account := current(); account.AccountKey != "" || account.Plan != "team" || account.Windows[0].UsedPercent != 10 {
+	if account := current(); account.ReadingSource != "" || account.AccountKey != "" || account.Plan != "team" || account.Windows[0].UsedPercent != 10 {
 		t.Fatalf("workspace ID was used as a personal quota ID: %+v", account)
 	}
 }

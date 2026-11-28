@@ -122,7 +122,13 @@ func TestTaskOrphan(t *testing.T) {
 		{"done", Todo{DoneAt: &done}, []orphanAgent{failed}, ""},
 		{"waits for its review", Todo{Supervision: &Supervision{State: reviewPending}}, []orphanAgent{failed}, ""},
 		{"waits for the user's decision", Todo{Supervision: &Supervision{State: reviewNeedsUser}}, []orphanAgent{failed}, ""},
+		{"timed out", Todo{Supervision: &Supervision{State: reviewTimedOut}}, []orphanAgent{failed}, ""},
+		{"closing", Todo{Supervision: &Supervision{State: reviewClosing}}, []orphanAgent{failed}, ""},
 		{"in rework", Todo{Supervision: &Supervision{State: reviewRework}}, []orphanAgent{failed}, orphanError},
+		// The owner's check waits on the owner, not on purpose for its agents: a gone one is still an orphan (#17878).
+		{"owner's check, its agent closed", Todo{Supervision: &Supervision{State: reviewUserCheck}}, []orphanAgent{gone("s1", nil)}, orphanClosed},
+		{"owner's check, its agent ended on an error", Todo{Supervision: &Supervision{State: reviewUserCheck}}, []orphanAgent{failed}, orphanError},
+		{"owner's check, its computer is away", Todo{Supervision: &Supervision{State: reviewUserCheck}}, []orphanAgent{away}, orphanOffline},
 	}
 	for _, c := range cases {
 		o, ok := taskOrphan(c.todo, c.agents, now)
@@ -558,4 +564,92 @@ func TestOrphanWatchCoversStalledStartupQueues(t *testing.T) {
 			}
 		})
 	}
+}
+
+// #17878: the owner's check hides neither a gone agent nor its reason. A to-do waiting for the owner's check whose
+// agent's tab closed, whose agent ended on an error, or whose computer went away is orphaned and its supervisor's
+// signal raised, so findings that went stale meanwhile can still be reviewed (#15578); when the digest tells a routine
+// signal during the owner's check is the routine filter's call (supervise_routine.go). A start still queued for such
+// a to-do is not orphaned: no start is due while the owner checks (#17090).
+func TestUserCheckOrphansGoneAgentsButNotAQueuedStart(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		gone  func(f *fakeHub, a TodoAgent, now time.Time)
+		after time.Duration // when orphanWatch looks, after the agent is gone
+		want  string
+	}{
+		{name: "tab closed", gone: func(f *fakeHub, a TodoAgent, now time.Time) {
+			f.setSessions(a.MachineID) // its computer is there and no longer lists the agent
+		}, after: orphanReconnectWait + time.Minute, want: orphanClosed},
+		{name: "ended on an error", gone: func(f *fakeHub, a TodoAgent, now time.Time) {
+			c := closedAgent(now.Add(-time.Hour))
+			c.MachineID, c.SessionID, c.TurnError = a.MachineID, a.SessionID, "API Error: 400 invalid request"
+			f.setSessions(a.MachineID, c)
+		}, want: orphanError},
+		{name: "computer offline", gone: func(f *fakeHub, a TodoAgent, now time.Time) {
+			f.mu.Lock()
+			f.devices = []Device{{ID: a.MachineID, Name: a.MachineID}} // not reachable
+			f.mu.Unlock()
+		}, after: orphanOfflineAfter + time.Minute, want: orphanOffline},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, f, todo := acceptedForUserCheck(t)
+			s.stopSuperviseTimers() // keep the supervisor's signal pending while the test reads it
+			if got := todo.Supervision.state(todo); got != reviewUserCheck || len(todo.Agents) == 0 {
+				t.Fatalf("fixture: state %q, agents %+v; want the owner's check of an agent's work", got, todo.Agents)
+			}
+			now := time.Now()
+			tc.gone(f, todo.Agents[0], now)
+			s.orphanWatch(ctx, now)
+			s.orphanWatch(ctx, now.Add(tc.after))
+			if o := listedOrphan(t, s, todo.ID); o == nil || o.Reason != tc.want {
+				t.Fatalf("orphaned during the owner's check = %+v, want %q", o, tc.want)
+			}
+			s.superviseWatch(ctx, now.Add(tc.after))
+			s.supervise.mu.Lock()
+			g, ok := s.supervise.pending[todo.ID+"|"+sigOrphaned]
+			s.supervise.mu.Unlock()
+			if !ok || g.Orphan != tc.want {
+				t.Fatalf("supervisor signal = %+v %v, want %q", g, ok, tc.want)
+			}
+		})
+	}
+
+	t.Run("queued start", func(t *testing.T) {
+		ctx := t.Context()
+		s, _ := newQuietService(t)
+		s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+		now := time.Now()
+		todo, err := s.createTodo(ctx, "Queued task", "Carry out the decision", "conv1", "plan_q")
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.superviseTodo(ctx, todo.ID, "conv1", []string{"Finish the task"}, 30)
+		at := now.Add(-orphanQueuedAfter)
+		queue := &TaskQueue{Key: workspaceQueueKey, Reason: "Waiting for the project", QueuedAt: at, NextAt: now.Add(time.Minute)}
+		p := &TaskPlan{ID: "plan_q", Conversation: "conv1", State: planStarted, CreatedAt: at, UpdatedAt: now,
+			Tasks: []PlanTask{{TodoID: todo.ID, Machine: "box", Queue: queue}}}
+		if err := s.savePlan(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		s.orphanWatch(ctx, now)
+		s.superviseWatch(ctx, now)
+		s.supervise.mu.Lock()
+		g := s.supervise.pending[todo.ID+"|"+sigOrphaned]
+		s.supervise.mu.Unlock()
+		if g.Orphan != orphanQueued {
+			t.Fatalf("fixture: the stalled queue was not escalated before the owner's check: %+v", g)
+		}
+		if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.State = reviewUserCheck; return true }); err != nil {
+			t.Fatal(err)
+		}
+		if e, ok := s.digestEntry(ctx, g, ""); ok {
+			t.Fatalf("the queued-start signal reached the digest during the owner's check: %+v", e)
+		}
+		s.orphanWatch(ctx, now.Add(time.Minute))
+		if o := listedOrphan(t, s, todo.ID); o != nil {
+			t.Fatalf("a queued start is orphaned during the owner's check: %+v", o)
+		}
+	})
 }

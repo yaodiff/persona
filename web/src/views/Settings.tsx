@@ -74,7 +74,7 @@ import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type La
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
 import { SeenRowsRow } from "./settings/SeenRowsSetting";
-import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, integrationChildState, integrationParent, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, INTEGRATIONS_SETTINGS_REGISTRATION, integrationChildState, integrationParent, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
 import { decodeIntegrationsRoute, integrationHref, integrationManager, integrationScope, isIntegrationDetailRoute, isIntegrationTab, isLegacyIntegrationTab, readIntegrationsAddress, type IntegrationsRoute, type IntegrationView } from "./settings/integrations-route";
 import { useOtherIntegrationsMode } from "./settings/integrations-mode";
 import { moduleFeaturesSource } from "../core/module-features";
@@ -290,10 +290,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Inbox Sources (#5278) only with a manager that draws them; a link to it still opens it
   const hasSources = useInboxSourcesShown();
   const shown = (k: Tab) => {
-    if (integrationsV2) return !isLegacyIntegrationTab(k);
-    if (k === "integrations") return false;
-    return (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels") &&
-      (k !== "sources" || hasSources || tab === "sources");
+    const visibility = { integrationsV2, activeTab: tab, hasChannels, hasExtensions, hasSources };
+    if (k === INTEGRATIONS_SETTINGS_REGISTRATION.id) return INTEGRATIONS_SETTINGS_REGISTRATION.isVisible(visibility);
+    if (isLegacyIntegrationTab(k)) return INTEGRATIONS_SETTINGS_REGISTRATION.isLegacyTabVisible(k, visibility);
+    return true;
   };
   const contentId = useId();
   const configurationOwner = useRef<string | null>(new URLSearchParams(location.search).get("manager"));

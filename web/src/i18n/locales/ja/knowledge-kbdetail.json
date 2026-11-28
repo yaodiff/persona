@@ -36,5 +36,17 @@
   "recording_transcript": "文字起こし",
   "recording_photos": "写真",
   "recording_photo_label": "写真{n}",
-  "recording_paused_module_off": "ハブのマシンで会議の録音がオフになっているため、議事録の作成と文字起こしは一時停止しています。すでに保存されている内容はそのまま閲覧できます。"
+  "recording_paused_module_off": "ハブのマシンで会議の録音がオフになっているため、議事録の作成と文字起こしは一時停止しています。すでに保存されている内容はそのまま閲覧できます。",
+  "recording_speakers": "話者",
+  "recording_speaker_n": "話者 {n}",
+  "recording_speaker_possibly": "おそらく",
+  "recording_speakers_waiting": "話者を分けています…",
+  "recording_speakers_waiting_done": "話者を分けています（{done}分完了）…",
+  "recording_speakers_waiting_progress": "話者を分けています（{done}/{total}分）…",
+  "recording_speakers_low_quality": "この会議の話者の区分はあまり正確でない可能性があります。",
+  "recording_speakers_failed_too_long": "この会議は長すぎたため、話者を分けませんでした。",
+  "recording_speakers_failed_timeout": "ハブが時間内に話者を分け終えられませんでした。",
+  "recording_speakers_failed_engine_unavailable": "この会議のときはハブで話者の分離が利用できませんでした。",
+  "recording_speakers_failed_no_audio": "ハブに届いた音声が少なすぎたため、話者を分けませんでした。",
+  "recording_speakers_failed_other": "ハブはこの会議の話者を分け終えられませんでした。"
 }

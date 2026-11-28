@@ -4,7 +4,7 @@
 import { useSidebarUsageShown } from "../lib/sidebar-usage";
 import { type ComponentType, useEffect, useRef, useState } from "react";
 import { t as tr } from "../i18n";
-import { isBalanceAccount, liveAccounts, protectReserve, remainingPercent, remainingTone, selectSidebarUsageItems, sidebarWindowTitle, sourceNames, tightestRemaining, usePinnedUsageAccounts, useUsageWindows, type RemainingTone, type UnconnectedProvider, type UsageAccount } from "../lib/usage-windows";
+import { isBalanceAccount, isHistoricalCodexReading, liveAccounts, protectReserve, remainingPercent, remainingTone, selectSidebarUsageItems, sidebarWindowTitle, sourceNames, tightestRemaining, usePinnedUsageAccounts, useUsageWindows, type RemainingTone, type UnconnectedProvider, type UsageAccount } from "../lib/usage-windows";
 import { cx } from "../ui/atoms";
 import { lazyDialog } from "./LazyOverlay";
 
@@ -58,7 +58,8 @@ export function UsageBars({ accounts, unconnected = EMPTY_UNCONNECTED, now = Dat
     };
   }, [open]);
 
-  if (!items.length && !notices.length && !unconnected.length) return null;
+  const showHistorical = !items.length && live.some(isHistoricalCodexReading);
+  if (!items.length && !notices.length && !unconnected.length && !showHistorical) return null;
   const barCount = items.reduce((n, item) => n + (item.kind === "balance" ? 0 : 1), 0);
   return (
     <div ref={ref} className="relative shrink-0 px-2.5 pb-2.5 pt-1" data-usage-bars>
@@ -95,6 +96,7 @@ export function UsageBars({ accounts, unconnected = EMPTY_UNCONNECTED, now = Dat
             </span>
           );
         })}
+        {showHistorical && <span className="text-left text-xs text-ink-2">{tr("usage.codex_local_reading")}</span>}
         {notices.map((a) => (
           <span key={a.id} data-usage-notice-strip={a.id} className={cx("flex items-baseline gap-2", a.stale && "opacity-60")}>
             <span className={ROW_NAME}>{a.name}</span>

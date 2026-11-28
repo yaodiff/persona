@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -32,10 +33,30 @@ type fakeT3Code struct {
 	sends       []string // "<thread> <message>"
 	starts      []string // "<project> <message>"
 	revoked     []string
+
+	threads   []map[string]any            // what t3_thread_list answers (t3codeFakeThreads when nil)
+	questions map[string][]string         // thread -> the user-input requests it waits on
+	countless map[string]bool             // threads whose read leaves pendingRequestCount out (an older server)
+	asked     map[string][]t3codeQuestion // request -> its questions
+	responds  []string                    // "<thread> <request> <answers as JSON>"
+	listCalls int                         // t3_thread_list calls: one a refresh
+}
+
+// t3codeFakeThreads are the threads a fake T3 Code lists unless a test gives its own.
+func t3codeFakeThreads() []map[string]any {
+	return []map[string]any{
+		{"threadId": "thr-1", "projectId": "proj-1", "title": "Tidy the build", "status": "running",
+			"providerInstanceId": "claudeAgent", "model": "claude-sonnet", "runtimeMode": "full-access",
+			"interactionMode": "default", "itemCount": 5, "updatedAt": "2026-11-20T10:00:00.000Z"},
+		{"threadId": "thr-2", "projectId": "proj-2", "title": "", "status": "waiting",
+			"providerInstanceId": "codex", "model": "gpt-5", "runtimeMode": "approval-required",
+			"interactionMode": "plan", "itemCount": 0, "updatedAt": "2026-11-20T09:00:00.000Z"},
+	}
 }
 
 func newFakeT3Code(t *testing.T) *fakeT3Code {
-	f := &fakeT3Code{t: t, token: "synthetic-t3-token"}
+	f := &fakeT3Code{t: t, token: "synthetic-t3-token", questions: map[string][]string{},
+		countless: map[string]bool{"thr-2": true}, asked: map[string][]t3codeQuestion{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -97,16 +118,18 @@ func (f *fakeT3Code) serve(w http.ResponseWriter, r *http.Request) {
 			{"id": "proj-2", "title": "Demo App Docs", "workspaceRoot": "/code/demo/docs"},
 		}, "nextCursor": nil})
 	case "t3_thread_list":
-		writeT3Tool(w, msg.ID, map[string]any{"threads": []map[string]any{
-			{"threadId": "thr-1", "projectId": "proj-1", "title": "Tidy the build", "status": "running",
-				"providerInstanceId": "claudeAgent", "model": "claude-sonnet", "runtimeMode": "full-access",
-				"interactionMode": "default", "itemCount": 5, "updatedAt": "2026-11-20T10:00:00.000Z"},
-			{"threadId": "thr-2", "projectId": "proj-2", "title": "", "status": "waiting",
-				"providerInstanceId": "codex", "model": "gpt-5", "runtimeMode": "approval-required",
-				"interactionMode": "plan", "itemCount": 0, "updatedAt": "2026-11-20T09:00:00.000Z"},
-		}, "nextCursor": nil, "total": 2})
+		f.mu.Lock()
+		threads := f.threads
+		f.listCalls++
+		f.mu.Unlock()
+		if threads == nil {
+			threads = t3codeFakeThreads()
+		}
+		writeT3Tool(w, msg.ID, map[string]any{"threads": threads, "nextCursor": nil, "total": len(threads)})
 	case "t3_thread_read":
 		f.read(w, msg.ID, args)
+	case "t3_pending_request":
+		f.pendingRequest(w, msg.ID, args)
 	case "t3_thread_interrupt":
 		tid, _ := args["threadId"].(string)
 		if tid == "thr-1" { // full access, above a CLI-issued session's ceiling
@@ -155,7 +178,14 @@ func (f *fakeT3Code) read(w http.ResponseWriter, id json.RawMessage, args map[st
 	if len(page) > 0 {
 		next = page[len(page)-1]["position"]
 	}
-	res := map[string]any{"thread": map[string]any{"threadId": args["threadId"], "itemCount": len(all)},
+	tid, _ := args["threadId"].(string)
+	thread := map[string]any{"threadId": tid, "itemCount": len(all)}
+	f.mu.Lock()
+	if !f.countless[tid] {
+		thread["pendingRequestCount"] = len(f.questions[tid])
+	}
+	f.mu.Unlock()
+	res := map[string]any{"thread": thread,
 		"recentRuns": []any{}, "items": page, "nextPosition": next,
 		"hasMore": len(page) > 0 && page[len(page)-1]["position"].(int) < len(all)-1}
 	raw, _ := json.Marshal(res)
@@ -164,6 +194,41 @@ func (f *fakeT3Code) read(w http.ResponseWriter, id json.RawMessage, args map[st
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{
 		"content": []map[string]any{{"type": "text", "text": string(raw)}}, "structuredContent": json.RawMessage(raw)}})
 	_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", body)
+}
+
+// pendingRequest answers t3_pending_request as T3 Code does for a session held to approval-required: it lists and reads
+// a thread's questions, and takes an answer only in a thread at that mode.
+func (f *fakeT3Code) pendingRequest(w http.ResponseWriter, id json.RawMessage, args map[string]any) {
+	tid, _ := args["threadId"].(string)
+	req, _ := args["requestId"].(string)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	waiting := slices.Contains(f.questions[tid], req)
+	switch args["action"] {
+	case "list":
+		writeT3Tool(w, id, map[string]any{"requestIds": append([]string{}, f.questions[tid]...)})
+	case "read":
+		if !waiting {
+			writeT3Failure(w, id, "invalid_request", "The pending user-input request was not found.")
+			return
+		}
+		writeT3Tool(w, id, map[string]any{"requestId": req, "questions": f.asked[req]})
+	case "respond":
+		if tid == "thr-1" { // full access, above the session's ceiling
+			writeT3Failure(w, id, "runtime_mode_escalation_denied", "This session's access is approval-required.")
+			return
+		}
+		if !waiting {
+			writeT3Failure(w, id, "invalid_request", "The user-input request was already answered.")
+			return
+		}
+		raw, _ := json.Marshal(args["answers"])
+		f.responds = append(f.responds, tid+" "+req+" "+string(raw))
+		f.questions[tid] = slices.DeleteFunc(f.questions[tid], func(s string) bool { return s == req })
+		writeT3Tool(w, id, map[string]any{"sequence": 7})
+	default:
+		writeT3Failure(w, id, "invalid_request", "unknown action")
+	}
 }
 
 func writeT3Result(w http.ResponseWriter, id json.RawMessage, result any) {
@@ -361,9 +426,30 @@ func TestT3CodeMappings(t *testing.T) {
 			t.Errorf("t3codeAgent(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if t3codeStatus("idle", 0) != proto.StatusIdle || t3codeStatus("idle", 3) != proto.StatusDone ||
-		t3codeStatus("waiting", 3) != proto.StatusBlocked || t3codeStatus("starting", 0) != proto.StatusWorking {
-		t.Error("t3codeStatus maps a status wrongly")
+	none, one := 0, 1
+	for _, c := range []struct {
+		status  string
+		items   int
+		pending *int
+		want    string
+	}{
+		{"idle", 0, nil, proto.StatusIdle},
+		{"idle", 3, nil, proto.StatusDone},
+		{"starting", 0, nil, proto.StatusWorking},
+		{"running", 4, &none, proto.StatusWorking},
+		// A run that asks keeps running in T3 Code: only the count says it waits on the user.
+		{"running", 4, &one, proto.StatusBlocked},
+		{"queued", 4, &one, proto.StatusBlocked},
+		// "waiting" is background work the run still holds, not the user's turn.
+		{"waiting", 4, &none, proto.StatusWorking},
+		{"waiting", 4, &one, proto.StatusBlocked},
+		// A server that does not count: "waiting" is the only sign left.
+		{"waiting", 3, nil, proto.StatusBlocked},
+		{"completed", 3, nil, proto.StatusDone},
+	} {
+		if got := t3codeStatus(c.status, c.items, c.pending); got != c.want {
+			t.Errorf("t3codeStatus(%q, %d, %v) = %q, want %q", c.status, c.items, c.pending, got, c.want)
+		}
 	}
 	if t3codeSessionID("") != "" || t3codeSessionID("bad id") != "" || t3codeSessionID("thr_1") != "t3code-thr_1" {
 		t.Error("t3codeSessionID")
@@ -484,5 +570,229 @@ func TestT3CodeImageInputIsExplicitlyUnsupported(t *testing.T) {
 		if !errors.As(err, &rpcErr) || rpcErr.Code != "image_input_unsupported" {
 			t.Fatalf("%s: %v, want image_input_unsupported", method, err)
 		}
+	}
+}
+
+// A dynamic_tool item shows under its own tool's name with its input, and a user-input request as its questions and
+// options (or its answers), never as the JSON T3 Code reads them out as.
+func TestT3CodeItemsShowToolsAndQuestionsReadably(t *testing.T) {
+	item := func(typ, text string) proto.Item {
+		t.Helper()
+		it, ok := t3codeItem(t3codeTimelineItem{Position: 3, ItemID: "i3", Type: typ, Status: "running", Text: &text,
+			UpdatedAt: "2026-11-20T09:59:03.000Z"})
+		if !ok {
+			t.Fatalf("%s item dropped", typ)
+		}
+		return it
+	}
+
+	ask := item("dynamic_tool", `{"toolName": "AskUserQuestion", "input": {"questions": [{"question": "Which folder should it scan?",
+		"header": "Folder", "options": [{"label": "A new one", "description": "Only what you save there"}], "multiSelect": false}]}}`)
+	if ask.Kind != proto.KindToolUse || ask.ToolName != "AskUserQuestion" || ask.Text != "" ||
+		!strings.Contains(string(ask.ToolInput), `"Which folder should it scan?"`) {
+		t.Fatalf("AskUserQuestion call = %+v", ask)
+	}
+	if it := item("dynamic_tool", `{"toolName": "ToolSearch", "input": {"query": "select:x"}, "output": "found x"}`); it.ToolName != "ToolSearch" ||
+		it.Text != "found x" || string(it.ToolInput) != `{"query": "select:x"}` {
+		t.Fatalf("call with a text output = %+v", it)
+	}
+	if it := item("dynamic_tool", `{"toolName": "mcp__docs__search", "input": {}, "output": {"hits": 2}}`); it.ToolName != "mcp__docs__search" ||
+		it.Text != "{\n  \"hits\": 2\n}" {
+		t.Fatalf("call with a structured output = %+v", it)
+	}
+	cut := `{"toolName": "Bash", "input": {"command": "ls`
+	if it := item("dynamic_tool", cut); it.ToolName != "Tool" || it.Text != cut || it.ToolInput != nil {
+		t.Fatalf("a page cut short = %+v", it)
+	}
+
+	questions := `[{"id": "q1", "header": "Folder", "question": "Which folder should it scan?", "options": [
+		{"label": "A new one (Recommended)", "description": "Only what you save there"}, {"label": "Default", "description": ""}],
+		"multiSelect": false}, {"id": "q2", "header": "Kinds", "question": "Kinds", "options": [{"label": "Video", "description": "Clips"}],
+		"multiSelect": true}]`
+	pending := item("user_input_request", questions)
+	want := "Folder\nWhich folder should it scan?\n· A new one (Recommended) — Only what you save there\n· Default\n\nKinds\n· Video — Clips"
+	if pending.Kind != proto.KindNotice || pending.Text != want {
+		t.Fatalf("waiting question = %q, want %q", pending.Text, want)
+	}
+	answered := item("user_input_request", `{"answers": {"q1": "A new one (Recommended)", "q2": ["Video", "Audio"]}, "questions": `+questions+`}`)
+	want = "Folder\nWhich folder should it scan?\n→ A new one (Recommended)\n\nKinds\n→ Video, Audio"
+	if answered.Text != want {
+		t.Fatalf("answered question = %q, want %q", answered.Text, want)
+	}
+	if it := item("user_input_request", `[{"id": "q1", "quest`); it.Text != `[{"id": "q1", "quest` {
+		t.Fatalf("a page cut short = %q", it.Text)
+	}
+}
+
+// A card's answers go back to T3 Code keyed by question id, as option values where an option has one, a multi-select
+// as a list, and typed text only where the question takes it.
+func TestT3CodeAnswersFromACard(t *testing.T) {
+	var questions []t3codeQuestion
+	if err := json.Unmarshal([]byte(`[
+		{"id": "q1", "question": "Which folder?", "options": [{"label": "A new one", "description": "", "value": "new"}, {"label": "Default", "description": ""}]},
+		{"id": "q2", "question": "Which kinds?", "multiSelect": true, "options": [{"label": "Video", "description": ""}, {"label": "Audio", "description": ""}]},
+		{"id": "q3", "question": "Keep the originals?", "allowCustomAnswer": false, "options": [{"label": "Yes", "description": ""}]},
+		{"id": "q4", "question": "Anything else?", "options": []},
+		{"id": "q5", "header": "Size", "question": "", "multiSelect": true, "options": [{"label": "Small", "description": ""}]},
+		{"id": "q6", "question": "Unanswered", "options": []}
+	]`), &questions); err != nil {
+		t.Fatal(err)
+	}
+	got := t3codeAnswers(questions, map[string]string{
+		"Which folder?":       "A new one",
+		"Which kinds?":        "Video, Audio",
+		"Keep the originals?": "Only the best ones",
+		"Anything else?":      "  Name it Saved  ",
+		"Size":                "Whatever fits",
+	})
+	raw, _ := json.Marshal(got)
+	if want := `{"q1":"new","q2":["Video","Audio"],"q4":"Name it Saved","q5":"Whatever fits"}`; string(raw) != want {
+		t.Fatalf("answers = %s, want %s", raw, want)
+	}
+	ix := t3codeInteraction("t3code-thr-3", questions)
+	if ix == nil || ix.Kind != proto.IxQuestion || len(ix.Questions) != 6 || ix.Questions[4].Question != "Size" ||
+		ix.Questions[4].Header != "" || !ix.Questions[1].MultiSelect || ix.Questions[0].Options[0].Label != "A new one" {
+		t.Fatalf("card = %+v", ix)
+	}
+	if t3codeInteraction("t3code-thr-3", nil) != nil {
+		t.Fatal("a card without questions")
+	}
+}
+
+// t3codeQuestionThreads: a full-access thread and an approval-required one, both running.
+func t3codeQuestionThreads() []map[string]any {
+	return []map[string]any{
+		{"threadId": "thr-1", "projectId": "proj-1", "title": "Tidy the build", "status": "running",
+			"providerInstanceId": "claudeAgent", "model": "claude-sonnet", "runtimeMode": "full-access",
+			"interactionMode": "default", "itemCount": 5, "updatedAt": "2026-11-20T10:00:00.000Z"},
+		{"threadId": "thr-3", "projectId": "proj-1", "title": "Save the clips", "status": "running",
+			"providerInstanceId": "claudeAgent", "model": "claude-sonnet", "runtimeMode": "approval-required",
+			"interactionMode": "default", "itemCount": 5, "updatedAt": "2026-11-20T10:00:00.000Z"},
+	}
+}
+
+func t3codeFakeQuestions() []t3codeQuestion {
+	var qs []t3codeQuestion
+	_ = json.Unmarshal([]byte(`[
+		{"id": "q1", "header": "Folder", "question": "Which folder should it scan?", "options": [
+			{"label": "A new one", "description": "Only what you save there", "value": "new"},
+			{"label": "Default", "description": "Everything you save"}]},
+		{"id": "q2", "header": "Kinds", "question": "Which kinds?", "multiSelect": true, "options": [
+			{"label": "Video", "description": ""}, {"label": "Audio", "description": ""}]}]`), &qs)
+	return qs
+}
+
+func startT3CodeQuestions(t *testing.T, f *fakeT3Code, resolve func(proto.Interaction) proto.Resolution) (*Node, *runtimeHub) {
+	t.Helper()
+	useFakeT3Code(t, f)
+	n, hub := runtimeNode(t)
+	hub.mu.Lock()
+	hub.resolve = resolve
+	hub.mu.Unlock()
+	if _, err := nodeCall(t, n, "engine.use", map[string]any{"engine": proto.EngineT3Code}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { n.runtimeHost.setT3CodeBridge(false) })
+	return n, hub
+}
+
+func (h *runtimeHub) askedCards() []proto.Interaction {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]proto.Interaction{}, h.asked...)
+}
+
+// A thread that asks shows as Needs you while it waits, though its run keeps running in T3 Code. In a thread at
+// approval-required the question becomes a card, and its answer goes back to T3 Code; a full-access thread's question
+// gets no card, since T3 Code would refuse the bridge's answer.
+func TestT3CodeQuestionsAreNeedsYouAndAnsweredFromACard(t *testing.T) {
+	f := newFakeT3Code(t)
+	f.threads = t3codeQuestionThreads()
+	f.questions["thr-1"], f.questions["thr-3"] = []string{"req-full"}, []string{"req-1"}
+	f.asked["req-full"], f.asked["req-1"] = t3codeFakeQuestions(), t3codeFakeQuestions()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	n, hub := startT3CodeQuestions(t, f, func(ix proto.Interaction) proto.Resolution {
+		<-release
+		return proto.Resolution{Answers: map[string]string{"Which folder should it scan?": "A new one", "Which kinds?": "Video, Audio"}}
+	})
+
+	waitFor(t, "both threads as Needs you", func() bool {
+		m := listed(t, n)
+		return m["t3code-thr-1"].Status == proto.StatusBlocked && m["t3code-thr-3"].Status == proto.StatusBlocked
+	})
+	waitFor(t, "the approval-required thread's card", func() bool { return len(hub.askedCards()) > 0 })
+	release <- struct{}{}
+	waitFor(t, "the answer in T3 Code", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return len(f.responds) > 0
+	})
+	waitFor(t, "the answered thread back at work", func() bool { return listed(t, n)["t3code-thr-3"].Status == proto.StatusWorking })
+
+	f.mu.Lock()
+	if want := `thr-3 req-1 {"q1":"new","q2":["Video","Audio"]}`; len(f.responds) != 1 || f.responds[0] != want {
+		t.Errorf("responds = %q, want %q", f.responds, want)
+	}
+	f.mu.Unlock()
+	cards := hub.askedCards()
+	if len(cards) != 1 {
+		t.Fatalf("cards = %+v, want only the approval-required thread's", cards)
+	}
+	if c := cards[0]; c.ID != t3codeAskID("thr-3", "req-1") || c.SessionID != "t3code-thr-3" || c.Kind != proto.IxQuestion ||
+		len(c.Questions) != 2 || c.Questions[0].Header != "Folder" || c.Questions[0].Options[1].Description != "Everything you save" {
+		t.Fatalf("card = %+v", c)
+	}
+	if s := listed(t, n)["t3code-thr-1"]; s.Status != proto.StatusBlocked {
+		t.Fatalf("the full-access thread still waits on T3 Code: %+v", s)
+	}
+}
+
+// A question answered in T3 Code takes its card back from the phone; one handed back to the computer is left to T3
+// Code and not asked again.
+func TestT3CodeQuestionCardWithdrawnOrHandedBack(t *testing.T) {
+	f := newFakeT3Code(t)
+	f.threads = t3codeQuestionThreads()[1:]
+	f.questions["thr-3"] = []string{"req-1"}
+	f.asked["req-1"] = t3codeFakeQuestions()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	n, hub := startT3CodeQuestions(t, f, func(ix proto.Interaction) proto.Resolution {
+		if ix.ID == t3codeAskID("thr-3", "req-1") {
+			<-release // the card stays up
+		}
+		return proto.Resolution{Dismiss: true}
+	})
+	waitFor(t, "the card", func() bool { return len(hub.askedCards()) == 1 })
+
+	f.mu.Lock()
+	f.questions["thr-3"] = []string{"req-2"} // req-1 answered in T3 Code; the run asks again
+	f.asked["req-2"] = t3codeFakeQuestions()
+	f.mu.Unlock()
+	id := t3codeAskID("thr-3", "req-1")
+	waitFor(t, "the answered card taken back", func() bool {
+		hub.mu.Lock()
+		defer hub.mu.Unlock()
+		return slices.Contains(hub.cancels, id)
+	})
+	waitFor(t, "the next question's card", func() bool { return len(hub.askedCards()) == 2 })
+	f.mu.Lock()
+	seen := f.listCalls
+	f.mu.Unlock()
+	waitFor(t, "a few more refreshes", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.listCalls >= seen+5
+	})
+	if cards := hub.askedCards(); len(cards) != 2 || cards[1].ID != t3codeAskID("thr-3", "req-2") {
+		t.Fatalf("a card handed back was asked again: %+v", cards)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.responds) != 0 {
+		t.Fatalf("answered in T3 Code for a card nobody answered: %q", f.responds)
+	}
+	if s := listed(t, n)["t3code-thr-3"]; s.Status != proto.StatusBlocked {
+		t.Fatalf("thr-3 = %+v, want Needs you while req-2 waits", s)
 	}
 }

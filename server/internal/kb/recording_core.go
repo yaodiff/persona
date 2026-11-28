@@ -88,6 +88,15 @@ func (c recordingCore) RecomputeSpeakerStats(in recordingwire.SpeakerRecomputeIn
 func (c recordingCore) ApplySpeakerEdit(in recordingwire.SpeakerEditInput) (recordingwire.SpeakerEditOutput, error) {
 	return recordingspeakersadapt.ApplyEdit(in)
 }
+func (c recordingCore) AlignTranscriptSpeakers(in recordingwire.SpeakerAlignInput) (recordingwire.SpeakerAlignOutput, error) {
+	return recordingspeakersadapt.AlignTranscript(in)
+}
+func (c recordingCore) AttributeDebateSpeakers(in recordingwire.SpeakerDebatesAttrInput) (recordingwire.SpeakerDebatesAttrOutput, error) {
+	return recordingspeakersadapt.AttributeDebates(in)
+}
+func (c recordingCore) ResolveDebateDisplays(in recordingwire.SpeakerDisplayInput) []recordingwire.SpeakerDisplayLabel {
+	return recordingspeakersadapt.ResolveDebateDisplays(in)
+}
 func (c recordingCore) RenderTranscript(r *Recording, segs []RecordingSegment) string {
 	return c.e.Store.renderTranscript(r, segs)
 }

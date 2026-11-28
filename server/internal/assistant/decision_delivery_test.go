@@ -102,6 +102,9 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 				mu.Unlock()
 				return map[string]any{}, nil
 			})
+			// An undelivered decision's handoff skips the gather (#17099), so the hour above no longer keeps it
+			// pending for the checks below: hold the digest timer itself. The explicit sendDigest below still runs.
+			s.stopSuperviseTimers()
 			before := len(sentToAgent(f))
 			raw, _ := json.Marshal(input)
 			rec := answerTodoAsk(s, todo.ID, askDecisionPrefix+a.AskedAt.Format(timeKeyLayout), string(raw))

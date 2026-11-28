@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { botStateText, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, domainChoice, featureEdit, livePairing, nudgeChoices, nudgeLabel, pairingLeft, withFeature, type FeishuBotStatus } from "./feishu-bot";
 import type { HubUpdateStatus } from "./hub-update";
-import { channelTitle, dockerSteps, DOCKER_COMMAND, latestWarning, recordTitle, recordTone, sourceBehindWarning, updateFinished, updateStateTitle, updateView, updateWorking } from "./hub-update-settings";
+import {
+  canCheckHubUpdate, channelTitle, dockerSteps, DOCKER_COMMAND, latestWarning, recordTitle, recordTone, runningChannelOf,
+  shouldAutoCheckAfterSourceSwitch, sourceBehindWarning, updateFinished, updateGuidance, updateStateTitle, updateView, updateWorking,
+} from "./hub-update-settings";
 
 const bot = (o: Partial<FeishuBotStatus> = {}): FeishuBotStatus => ({
   enabled: true, app_id: "cli_x", domain: "https://open.feishu.cn", has_secret: true, from_config: false,
@@ -158,5 +161,102 @@ describe("hub update", () => {
     expect(dockerSteps(newer).steps.map((s) => s.copy)).toEqual([DOCKER_COMMAND]);
     const pinned = { ...newer, image: { name: "ghcr.io/owner/x", tag: "0.3.0", pinned: true } };
     expect(dockerSteps(pinned)).toMatchObject({ headline: "新镜像 0.3.1", steps: [{ copy: "ghcr.io/owner/x:0.3.1" }, { copy: DOCKER_COMMAND }] });
+  });
+
+  it("derives running channel, check eligibility, and post-switch auto-check", () => {
+    expect(runningChannelOf(hub({ version: "web-dev-abc123", channel: "release" }))).toBe("web-dev");
+    expect(runningChannelOf(hub({ version: "v1.0.0", channel: "release" }))).toBe("release");
+    expect(runningChannelOf(hub({ version: "v1.0.0-beta.1", channel: "beta" }))).toBe("beta");
+
+    expect(canCheckHubUpdate(hub({ can_update: true, channel: "release" }))).toBe(true);
+    expect(canCheckHubUpdate(hub({ can_update: false, channel: "docker" }))).toBe(true);
+    expect(canCheckHubUpdate(hub({ can_update: false, channel: "release" }))).toBe(false);
+    expect(canCheckHubUpdate(hub({ can_update: false, channel: "dev" }))).toBe(false);
+
+    expect(shouldAutoCheckAfterSourceSwitch(hub({ source: "release", can_update: true, latest: undefined }))).toBe(true);
+    expect(shouldAutoCheckAfterSourceSwitch(hub({ source: "beta", can_update: true, latest: undefined }))).toBe(true);
+    expect(shouldAutoCheckAfterSourceSwitch(hub({ source: "web-dev", can_update: true, latest: undefined, supports_preview: true }))).toBe(true);
+    expect(shouldAutoCheckAfterSourceSwitch(hub({ source: "web-dev", can_update: true, latest: undefined, supports_preview: false }))).toBe(false);
+    expect(shouldAutoCheckAfterSourceSwitch(hub({ source: "release", can_update: false, latest: undefined }))).toBe(false);
+    expect(shouldAutoCheckAfterSourceSwitch(hub({ source: "release", can_update: true, latest: { version: "v1", build: 1, newer: false, bad: false } }))).toBe(false);
+    expect(shouldAutoCheckAfterSourceSwitch(hub({ source: "release", can_update: true, state: "checking", latest: undefined }))).toBe(false);
+    expect(shouldAutoCheckAfterSourceSwitch(hub({ source: "release", can_update: true, state: "downloading", latest: undefined }))).toBe(false);
+  });
+
+  it("builds structured guidance for ahead, cannot, and source_behind states", () => {
+    const latest = { version: "v1.0.0", build: 100, newer: false, bad: false };
+
+    const webDevAhead = updateGuidance(hub({ version: "web-dev-aaaaaaaaaaaa-20261125", build: 200, source: "release", latest }));
+    expect(webDevAhead).toMatchObject({ tone: "neutral" });
+    expect(webDevAhead?.title).toContain("Web 开发版");
+    expect(webDevAhead?.body).toContain("不支持降级");
+    expect(webDevAhead?.nextStep).toContain("更新来源");
+
+    const releaseAhead = updateGuidance(hub({ version: "v1.2.0-beta.1", channel: "beta", build: 200, source: "release", latest }));
+    expect(releaseAhead).toMatchObject({ tone: "neutral" });
+    expect(releaseAhead?.title).not.toContain("Web 开发版");
+    expect(releaseAhead?.body).toContain("不支持降级");
+    expect(releaseAhead?.nextStep).toContain("更新来源");
+
+    const privateCannot = updateGuidance(hub({
+      can_update: false,
+      source: "release",
+      why_not: "hub 已启用私有网络模式。在 hub.json 中将 update.url 设为内部发布源的地址，然后重启 hub。",
+      development: { configured: true, branch: "main" },
+    }));
+    expect(privateCannot).toMatchObject({
+      tone: "caution",
+      body: "hub 已启用私有网络模式。在 hub.json 中将 update.url 设为内部发布源的地址，然后重启 hub。",
+    });
+    expect(privateCannot?.nextStep).toContain("hub.json");
+    expect(privateCannot?.nextStep).toContain("切回");
+
+    const badSourceCannot = updateGuidance(hub({
+      can_update: false,
+      source: "release",
+      why_not: "hub.json 里的 update.url 用不了：only https:// and file:// addresses work",
+    }));
+    expect(badSourceCannot).toMatchObject({ tone: "caution" });
+    expect(badSourceCannot?.body).toContain("update.url");
+    expect(badSourceCannot?.nextStep).toContain("重启 hub");
+
+    const devBuildCannot = updateGuidance(hub({
+      can_update: false,
+      channel: "dev",
+      source: "release",
+      why_not: "开发版（dev）",
+    }));
+    expect(devBuildCannot?.nextStep).toContain("官方发布版本");
+
+    const devBuildWithWebDev = updateGuidance(hub({
+      can_update: false,
+      channel: "dev",
+      source: "release",
+      why_not: "开发版（dev）",
+      development: { configured: true, branch: "main" },
+    }));
+    expect(devBuildWithWebDev?.nextStep).toContain("Web 开发版");
+
+    const webDevCannot = updateGuidance(hub({
+      can_update: false,
+      source: "web-dev",
+      why_not: "开发版更新需要 Linux 或 macOS 上的 hub。",
+    }));
+    expect(webDevCannot?.nextStep).toContain("发布版");
+
+    const fallbackCannot = updateGuidance(hub({ can_update: false, why_not: undefined }));
+    expect(fallbackCannot?.body).toBe("此 hub 不支持自动更新。");
+
+    const stopped = hub({
+      build: 202611141806,
+      latest: { version: "v0.1.17", build: 202611071005, newer: false, bad: false },
+      update_url: "https://personaside.example/dl",
+      update_url_from: "build",
+      source_behind: true,
+    });
+    expect(updateGuidance(stopped)).toMatchObject({ tone: "caution", body: sourceBehindWarning(stopped) });
+
+    expect(updateGuidance(hub({ build: 100, latest }))).toBeNull();
+    expect(updateGuidance(hub({ channel: "docker", can_update: false }))).toBeNull();
   });
 });

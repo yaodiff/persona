@@ -13,6 +13,7 @@
   "original": "原文",
   "hide_original": "收起原文",
   "external_trigger_notice": "旧版 botmux：来自 Persona 的回复会作为外部事件而非本人身份送达。请升级至 3.59.23 及以上版本以获得完整支持。",
+  "owner_unset_notice": "未配置 BotMux Owner Union ID，当前按常规方式发送。可在「设置 › Agents」中填写，以主人身份发送。",
   "raw": "botmux · 原文",
   "show_raw": "显示 botmux 会话原文",
   "hide": "隐藏 botmux 会话",

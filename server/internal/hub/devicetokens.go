@@ -702,6 +702,7 @@ func (h *Hub) revoked(id string) {
 	}
 	// Registration holds h.mu while checking t.mu; release t.mu before taking h.mu.
 	t.mu.Unlock()
+	h.previewDeviceRevoked(id)
 	go func() {
 		_ = h.notifyManagers(bus.EventCredentialRevoked, bus.DeviceCredential{ID: id})
 	}()

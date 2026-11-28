@@ -216,13 +216,15 @@ type TaskReview struct {
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on a decision its agent
 // says is the owner's: when it was judged and the judge's reason. It goes to the supervisor, never straight to the
 // owner (noteOwnerWait). PushPending and NotifiedAt are what earlier versions recorded of their own push to the owner;
-// they are read and kept, never set.
+// they are read and kept, never set. CardlessToldAt records this wait's own card-less hand-back independently of the
+// pending_review round marker on Supervision.
 type OwnerWait struct {
-	Work        time.Time  `json:"work"`
-	At          time.Time  `json:"at"`
-	Reason      string     `json:"reason,omitempty"`
-	PushPending bool       `json:"push_pending,omitempty"`
-	NotifiedAt  *time.Time `json:"notified_at,omitempty"`
+	Work           time.Time  `json:"work"`
+	At             time.Time  `json:"at"`
+	Reason         string     `json:"reason,omitempty"`
+	PushPending    bool       `json:"push_pending,omitempty"`
+	NotifiedAt     *time.Time `json:"notified_at,omitempty"`
+	CardlessToldAt *time.Time `json:"cardless_told_at,omitempty"`
 }
 
 type ReviewCheck struct {
@@ -284,6 +286,14 @@ func (v *Supervision) clone() *Supervision {
 	}
 	if v.Waits != nil {
 		w := *v.Waits
+		if v.Waits.NotifiedAt != nil {
+			at := *v.Waits.NotifiedAt
+			w.NotifiedAt = &at
+		}
+		if v.Waits.CardlessToldAt != nil {
+			at := *v.Waits.CardlessToldAt
+			w.CardlessToldAt = &at
+		}
 		out.Waits = &w
 	}
 	if v.PendingSince != nil {

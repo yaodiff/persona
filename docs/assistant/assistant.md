@@ -1064,8 +1064,8 @@ Long assistant chats can grow to hundreds of thousands of tokens. After the prom
 
 The main chat can receive supervision, scheduled follow-ups and messages from other conversations while the user is
 away. Before delivering one of these non-user messages, a Claude node can compact the existing conversation in place
-(#8658). This does not change the launcher's window or replace the model's automatic compaction or the idle-process
-reclamation rule above. Other conversations, Codex and external runtimes keep their existing behavior.
+(#8658). This path leaves the launcher's window, the model's automatic compaction and the idle-process reclamation
+rule above in place. Antigravity uses the same idle settings for its assistant chats, as described below.
 
 Three advanced assistant settings are available through `persona_settings` (changes need the usual user approval),
 and through the assistant settings API:
@@ -1137,6 +1137,31 @@ finished or failed and preserves Claude Code's reason when available. Both relea
   and 75% of the window; a process with background tasks is still kept up to 12 hours; supervision rounds are still
   never compacted. A Codex main chat follows the release time but, as before, is not compacted before release. An
   older node ignores both fields; an older manager sends neither. Both must be updated to use it.
+
+### Antigravity idle compaction (#16604, #17260)
+
+The node checks Persona-managed Antigravity sessions (`server/internal/node/agy_idle_compact.go`) on its periodic sweep
+and before delivering a new message. Compaction requires both a large enough context and enough idle time. A turn,
+background work, a queued message, a question, or an attached terminal can keep the session from being idle.
+
+| Session | Switch | Idle time | Context |
+| --- | --- | --- | --- |
+| Task agent | `assistant.agy_idle_auto_compact` | `assistant.agy_idle_auto_compact_minutes`, 10 by default | `assistant.agy_idle_auto_compact_tokens`, 200,000 by default |
+| Assistant conversation (main, leader, scheduled or other chats) | `assistant.agy_idle_auto_compact` and `assistant.idle_auto_compact` | `assistant.idle_auto_compact_minutes`, 30 by default | `assistant.idle_auto_compact_tokens`, 300,000 by default |
+
+The prior defaults could compact the main chat during an ordinary pause after the prompt cache had already expired
+(#17260). Turning off `assistant.agy_idle_auto_compact` stops both groups. The node records which chats it runs as
+assistant conversations so that a restart preserves their policy even when they run from a project directory.
+
+The manager sends `agy_idle_compaction` in `node.configure` on connect and when policy changes. The `enabled` switch
+applies to both groups. `idle_minutes` and `context_tokens` carry the task agent thresholds. The optional
+`assistant_off`, `assistant_idle_minutes` and `assistant_context_tokens` carry the assistant settings. A new node uses
+the assistant defaults for missing assistant fields from an older manager. An older node reads the original fields
+for every session.
+
+After a failed attempt the node waits 5 minutes before retrying. The delay doubles after each consecutive failure,
+up to 4 hours. This also covers historical sessions the runtime can no longer load. New activity or context falling
+below the threshold clears the failure count and cooldown.
 
 ### Impossible gateway usage (2026-11-06, #3300)
 

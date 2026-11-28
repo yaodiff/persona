@@ -4,9 +4,10 @@
   "title": "Assistant integrations projection",
   "description": "The settings catalog and on-demand detail for one assistant.",
   "x-out": {
-    "go": "server/internal/assistantwire/integrations_projection_gen.go"
+    "go": "server/internal/assistantwire/integrations_projection_gen.go",
+    "ts": "web/src/lib/integrations-projection-wire.ts"
   },
-  "x-guard": ["ts", "swift", "kotlin", "arkts", "rust"],
+  "x-guard": ["swift", "kotlin", "arkts", "rust"],
   "$defs": {
     "IntegrationManagerID": { "type": "string", "x-id": "IntegrationManagerID" },
     "IntegrationResourceID": { "type": "string", "x-id": "IntegrationResourceID" },

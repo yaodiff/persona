@@ -38,5 +38,6 @@
   "recorded_not_delivered": "Recorded. It couldn't reach the Agent, so the supervisor will pass it on",
   "setup_head": "Recommended setup",
   "setup_intro": "From Persona's own records of the last 7 days, unless a line names its own period. Nothing was changed: each of these stays as it is until you change it yourself.",
-  "setup_open": "Open settings"
+  "setup_open": "Open settings",
+  "supervision_deferred": "Follow-ups saved for briefing"
 }

@@ -488,6 +488,9 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		KB:         &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
 		Trust: devs, AgentDirs: devs, HerdrSessions: devs, OrcaChats: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
 		RemoteImageCache: filepath.Join(home, "cache", "remote-images")})
+	// A node can reconnect before the scheduler starts. Its restored approval
+	// timers and storage retries belong to this manager's lifetime too.
+	svc.running.Store(&ctx)
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
 	// When the north star's recording began (north_star.go).
 	go svc.northStarStarted(ctx)

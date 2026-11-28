@@ -1,20 +1,29 @@
 package node
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/preview"
 )
 
 func writeLaunch(t *testing.T, dir, body string) string {
@@ -355,4 +364,354 @@ func TestPreviewStartWithNoTerminalEngine(t *testing.T) {
 	if rpcCode(err) != codePreviewNoTerminal {
 		t.Fatalf("no terminal engine: %v (code %q)", err, rpcCode(err))
 	}
+}
+
+func TestBrowserArgsForceDeviceScaleFactor(t *testing.T) {
+	args := browserArgs("/tmp/profile")
+	if !slices.Contains(args, "--force-device-scale-factor=2") {
+		t.Fatalf("browserArgs missing --force-device-scale-factor=2: %v", args)
+	}
+}
+
+func TestPreviewInParsesFeaturesAndSelectMessages(t *testing.T) {
+	var f previewIn
+	if err := json.Unmarshal([]byte(`{"t":"features","select":true,"png":true}`), &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.T != "features" || !f.Select || !f.PNG {
+		t.Fatalf("features parse = %+v", f)
+	}
+
+	var zero previewIn
+	if err := json.Unmarshal([]byte(`{"t":"select_choose","id":3,"index":0}`), &zero); err != nil {
+		t.Fatal(err)
+	}
+	if zero.T != "select_choose" || zero.ID != 3 || zero.Index == nil || *zero.Index != 0 {
+		t.Fatalf("select_choose index=0 parse = %+v", zero)
+	}
+
+	var missing previewIn
+	if err := json.Unmarshal([]byte(`{"t":"select_choose","id":3}`), &missing); err != nil {
+		t.Fatal(err)
+	}
+	if missing.Index != nil {
+		t.Fatalf("select_choose missing index = %v, want nil", *missing.Index)
+	}
+
+	var closed previewIn
+	if err := json.Unmarshal([]byte(`{"t":"select_close","id":7}`), &closed); err != nil {
+		t.Fatal(err)
+	}
+	if closed.T != "select_close" || closed.ID != 7 {
+		t.Fatalf("select_close parse = %+v", closed)
+	}
+}
+
+func readAllPanelFrames(t *testing.T, buf *bytes.Buffer) (texts []map[string]any, bins [][]byte) {
+	t.Helper()
+	br := bufio.NewReader(bytes.NewReader(buf.Bytes()))
+	for {
+		kind, p, err := preview.ReadFrame(br)
+		if err == io.EOF {
+			return texts, bins
+		}
+		if err != nil {
+			t.Fatalf("ReadFrame: %v", err)
+		}
+		if kind == preview.Text {
+			var m map[string]any
+			if err := json.Unmarshal(p, &m); err != nil {
+				t.Fatalf("Unmarshal text frame: %v", err)
+			}
+			texts = append(texts, m)
+		} else {
+			bins = append(bins, p)
+		}
+	}
+}
+
+func TestPreviewSelectValidationAndLifecycle(t *testing.T) {
+	in, browser := io.Pipe()
+	defer browser.Close()
+	wire, panel := &nopWriteCloser{}, &nopWriteCloser{}
+	cdp := newCDPConn(in, wire, nil)
+	tab := &previewTab{
+		b:    &previewBrowser{cdp: cdp},
+		conn: panel,
+		vp:   previewViewport{w: 400, h: 600, dpr: 2},
+	}
+
+	openPayload := func(tok uint32, opts []previewSelectOption) string {
+		b, _ := json.Marshal(previewSelectPayload{
+			Type:     "open",
+			Token:    tok,
+			Rect:     previewSelectRect{X: 10, Y: 20, W: 150, H: 30},
+			Selected: 0,
+			Options:  opts,
+		})
+		return string(b)
+	}
+
+	// Ignored before features {select: true}.
+	tab.onSelectBinding(42, openPayload(1, []previewSelectOption{{Index: 0, Label: "A"}}))
+	if panel.Len() != 0 {
+		t.Fatalf("emitted before features enabled: %s", panel.String())
+	}
+
+	// Enable select (no frame set so no async createIsolatedWorld needed here).
+	tab.fromWeb(&previewIn{T: "features", Select: true})
+	if !strings.Contains(wire.String(), "Runtime.addBinding") || !strings.Contains(wire.String(), previewSelectWorld) {
+		t.Fatalf("enableSelect did not register isolated-world binding: %s", wire.String())
+	}
+	wire.Reset()
+
+	// Oversized options list and long labels/groups are capped and whitespace-collapsed.
+	bigOpts := make([]previewSelectOption, 0, previewSelectMaxOptions+5)
+	bigOpts = append(bigOpts,
+		previewSelectOption{Index: 0, Label: "  First\t\nItem  ", Group: "  Grp   " + strings.Repeat("g", 250)},
+		previewSelectOption{Index: 1, Label: "Disabled", Disabled: true},
+		previewSelectOption{Index: 2, Label: strings.Repeat("x", 250)},
+	)
+	for i := 3; i < previewSelectMaxOptions+5; i++ {
+		bigOpts = append(bigOpts, previewSelectOption{Index: i, Label: "opt"})
+	}
+	tab.onSelectBinding(42, openPayload(1, bigOpts))
+	texts, _ := readAllPanelFrames(t, &panel.Buffer)
+	if len(texts) != 1 || texts[0]["t"] != "select_open" || texts[0]["id"] != float64(1) {
+		t.Fatalf("select_open = %#v", texts)
+	}
+	gotOpts := texts[0]["options"].([]any)
+	if len(gotOpts) != previewSelectMaxOptions {
+		t.Fatalf("options count = %d, want %d", len(gotOpts), previewSelectMaxOptions)
+	}
+	o0 := gotOpts[0].(map[string]any)
+	if o0["label"] != "First Item" || len([]rune(o0["group"].(string))) != previewSelectMaxLabel {
+		t.Fatalf("sanitized option 0 = %#v", o0)
+	}
+	o2 := gotOpts[2].(map[string]any)
+	if len([]rune(o2["label"].(string))) != previewSelectMaxLabel {
+		t.Fatalf("capped label len = %d, want %d", len([]rune(o2["label"].(string))), previewSelectMaxLabel)
+	}
+
+	// Stale id, zero id, missing index, negative index, disabled index, out-of-bounds index are all ignored.
+	intPtr := func(v int) *int { return &v }
+	for _, in := range []*previewIn{
+		{T: "select_choose", ID: 0, Index: intPtr(0)},
+		{T: "select_choose", ID: 99, Index: intPtr(0)},
+		{T: "select_choose", ID: 1, Index: nil},
+		{T: "select_choose", ID: 1, Index: intPtr(-1)},
+		{T: "select_choose", ID: 1, Index: intPtr(1)},    // disabled
+		{T: "select_choose", ID: 1, Index: intPtr(9999)}, // out of bounds
+	} {
+		tab.fromWeb(in)
+	}
+	if wire.Len() != 0 {
+		t.Fatalf("invalid select_choose should not talk to CDP: %s", wire.String())
+	}
+
+	// Valid index 0 runs Runtime.evaluate in contextId 42 and closes open state.
+	tab.fromWeb(&previewIn{T: "select_choose", ID: 1, Index: intPtr(0)})
+	if !strings.Contains(wire.String(), `"contextId":42`) || !strings.Contains(wire.String(), `choose(1, 0)`) {
+		t.Fatalf("valid select_choose wire = %s", wire.String())
+	}
+	// Duplicate choose with same id is now stale and ignored.
+	wire.Reset()
+	tab.fromWeb(&previewIn{T: "select_choose", ID: 1, Index: intPtr(0)})
+	if wire.Len() != 0 {
+		t.Fatalf("second select_choose on closed id sent CDP: %s", wire.String())
+	}
+
+	// Re-open -> id increments to 2; stale close is ignored; matching close clears state.
+	panel.Reset()
+	tab.onSelectBinding(42, openPayload(2, []previewSelectOption{{Index: 0, Label: "A"}}))
+	tab.fromWeb(&previewIn{T: "select_close", ID: 1}) // stale
+	if wire.Len() != 0 || tab.selectID != 2 {
+		t.Fatalf("stale select_close cleared state: id=%d wire=%s", tab.selectID, wire.String())
+	}
+	tab.fromWeb(&previewIn{T: "select_close", ID: 2})
+	if !strings.Contains(wire.String(), `close(2)`) || tab.selectID != 0 {
+		t.Fatalf("matching select_close failed: id=%d wire=%s", tab.selectID, wire.String())
+	}
+
+	// Node-initiated withdrawals: blur binding, executionContextDestroyed, Page.frameNavigated, size change.
+	for _, trigger := range []struct {
+		name string
+		fire func()
+	}{
+		{"blur", func() {
+			tab.onSelectBinding(42, `{"type":"close","token":3}`)
+		}},
+		{"contextDestroyed", func() {
+			tab.event("Runtime.executionContextDestroyed", json.RawMessage(`{"executionContextId":42}`))
+		}},
+		{"frameNavigated", func() {
+			tab.event("Page.frameNavigated", json.RawMessage(`{"frame":{"id":"f1","url":"http://localhost:5173/next"}}`))
+		}},
+		{"size", func() {
+			tab.fromWeb(&previewIn{T: "size", W: 500, H: 600, DPR: 2})
+		}},
+	} {
+		t.Run("withdraw_"+trigger.name, func(t *testing.T) {
+			panel.Reset()
+			tab.onSelectBinding(42, openPayload(3, []previewSelectOption{{Index: 0, Label: "A"}}))
+			wantID := tab.selectID
+			panel.Reset()
+			trigger.fire()
+			got, _ := readAllPanelFrames(t, &panel.Buffer)
+			var found bool
+			for _, m := range got {
+				if m["t"] == "select_close" && m["id"] == float64(wantID) {
+					found = true
+				}
+			}
+			if !found || tab.selectID != 0 {
+				t.Fatalf("%s did not withdraw select %d: selectID=%d msgs=%#v", trigger.name, wantID, tab.selectID, got)
+			}
+		})
+	}
+}
+
+func TestPreviewStillFrameAndAckAccounting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		in, browser := io.Pipe()
+		defer browser.Close()
+		wire, panel := &nopWriteCloser{}, &nopWriteCloser{}
+		cdp := newCDPConn(in, wire, nil)
+		tab := &previewTab{
+			b:    &previewBrowser{cdp: cdp},
+			conn: panel,
+			wake: make(chan struct{}, 1),
+			vp:   previewViewport{w: 300, h: 500, dpr: 2},
+		}
+		defer tab.stopStill()
+
+		drain := func() {
+			synctest.Wait()
+			for _, it := range tab.take() {
+				if it.fn != nil {
+					it.fn()
+				}
+			}
+			synctest.Wait()
+		}
+		replyCapture := func(id int64, data []byte) {
+			synctest.Wait()
+			b64 := base64.StdEncoding.EncodeToString(data)
+			if _, err := fmt.Fprintf(browser, "{\"id\":%d,\"result\":{\"data\":%q}}\x00", id, b64); err != nil {
+				t.Fatal(err)
+			}
+			drain()
+		}
+		advance := func(d time.Duration) {
+			<-time.After(d)
+			drain()
+		}
+		pushScreencast := func(sessionID int) {
+			params, _ := json.Marshal(map[string]any{
+				"data":      base64.StdEncoding.EncodeToString([]byte{0xff, 0xd8, 0xff, byte(sessionID)}),
+				"sessionId": sessionID,
+				"metadata":  map[string]any{"deviceWidth": 300, "deviceHeight": 500},
+			})
+			tab.event("Page.screencastFrame", params)
+		}
+
+		// 1. Screencast frame 1 arrives; web acks it; after 150ms without PNG feature, still frame uses JPEG Q92.
+		pushScreencast(1)
+		tab.fromWeb(&previewIn{T: "ack", Seq: 1})
+		wire.Reset()
+		panel.Reset()
+		advance(previewStillDelay)
+		if !strings.Contains(wire.String(), `"Page.captureScreenshot"`) || !strings.Contains(wire.String(), `"format":"jpeg"`) || !strings.Contains(wire.String(), `"quality":92`) {
+			t.Fatalf("still capture without png feature = %s", wire.String())
+		}
+		replyCapture(cdp.next.Load(), []byte{0xff, 0xd8, 0xff, 0xe0})
+		_, bins := readAllPanelFrames(t, &panel.Buffer)
+		if len(bins) != 1 || bins[0][0] != previewFrameMsg ||
+			binary.BigEndian.Uint32(bins[0][1:]) != 2 ||
+			binary.BigEndian.Uint16(bins[0][5:]) != 300 ||
+			binary.BigEndian.Uint16(bins[0][7:]) != 500 {
+			t.Fatalf("still JPEG frame = %x", bins)
+		}
+
+		// 2. While still frame seq=2 is unacked, screencast frame 2 (seq=3) fills window (inFlight=2 -> holds ack for session 2).
+		// Acking still frame seq=2 must drop inFlight to 1 and release held CDP ack for session 2.
+		wire.Reset()
+		pushScreencast(2)
+		if strings.Contains(wire.String(), "Page.screencastFrameAck") {
+			t.Fatalf("held ack should wait while still frame + screencast fill window: %s", wire.String())
+		}
+		tab.fromWeb(&previewIn{T: "ack", Seq: 2})
+		if !strings.Contains(wire.String(), `"sessionId":2`) {
+			t.Fatalf("acking still frame did not release held screencast ack: %s", wire.String())
+		}
+		// Acking seq=3 empties inFlight.
+		tab.fromWeb(&previewIn{T: "ack", Seq: 3})
+		if len(tab.inFlight) != 0 {
+			t.Fatalf("inFlight not empty: %v", tab.inFlight)
+		}
+
+		// 3. Enable PNG feature, let still capture start, then arrive a newer screencast frame BEFORE capture returns:
+		// stale still capture must be dropped, and after another 150ms a fresh PNG still frame must be sent.
+		tab.fromWeb(&previewIn{T: "features", PNG: true})
+		wire.Reset()
+		panel.Reset()
+		advance(previewStillDelay)
+		if !strings.Contains(wire.String(), `"format":"png"`) {
+			t.Fatalf("still capture with png feature = %s", wire.String())
+		}
+		staleCaptureID := cdp.next.Load()
+		// Newer screencast frame arrives while captureScreenshot is still in flight.
+		pushScreencast(3) // seq=4
+		tab.fromWeb(&previewIn{T: "ack", Seq: 4})
+		panel.Reset()
+		// Now the stale capture completes: must be dropped!
+		replyCapture(staleCaptureID, []byte("\x89PNG\r\n\x1a\nstale"))
+		if panel.Len() != 0 {
+			t.Fatalf("stale still frame was not dropped: %x", panel.Bytes())
+		}
+		// After another 150ms of stillness, fresh PNG capture runs. An identical phantom screencast frame
+		// (as Chrome emits during Page.captureScreenshot) must be acked immediately without cancelling it.
+		wire.Reset()
+		advance(previewStillDelay)
+		if !strings.Contains(wire.String(), `"format":"png"`) {
+			t.Fatalf("fresh PNG still capture did not fire: %s", wire.String())
+		}
+		freshCaptureID := cdp.next.Load()
+		wire.Reset()
+		panel.Reset()
+		pushScreencast(3) // identical bytes to session 3 -> phantom duplicate
+		if !strings.Contains(wire.String(), `"Page.screencastFrameAck"`) || panel.Len() != 0 {
+			t.Fatalf("duplicate screencast frame during capture: wire=%s panel=%x", wire.String(), panel.Bytes())
+		}
+		replyCapture(freshCaptureID, []byte("\x89PNG\r\n\x1a\nfresh"))
+		_, bins = readAllPanelFrames(t, &panel.Buffer)
+		if len(bins) != 1 || !bytes.HasPrefix(bins[0][9:], []byte("\x89PNG\r\n\x1a\nfresh")) {
+			t.Fatalf("fresh PNG still frame = %x", bins)
+		}
+
+		// 4. Stale ack from before applyViewport(true) must be ignored and never corrupt the new window.
+		oldSeq := binary.BigEndian.Uint32(bins[0][1:])
+		tab.applyViewport(true)
+		wire.Reset()
+		pushScreencast(4) // seq=6, inFlight={6} -> acked immediately
+		pushScreencast(5) // seq=7, inFlight={6,7} -> held
+		wire.Reset()
+		tab.fromWeb(&previewIn{T: "ack", Seq: oldSeq})
+		if strings.Contains(wire.String(), "Page.screencastFrameAck") || len(tab.inFlight) != 2 {
+			t.Fatalf("stale ack corrupted new viewport window: inFlight=%v wire=%s", tab.inFlight, wire.String())
+		}
+
+		// 5. When 2 frames are in flight and the still timer fires, capture defers until acks clear the window.
+		advance(previewStillDelay)
+		if strings.Contains(wire.String(), "Page.captureScreenshot") {
+			t.Fatalf("still capture should defer while in-flight window is full: %s", wire.String())
+		}
+		tab.fromWeb(&previewIn{T: "ack", Seq: 6})
+		drain()
+		if !strings.Contains(wire.String(), `"sessionId":5`) || !strings.Contains(wire.String(), "Page.captureScreenshot") {
+			t.Fatalf("acking frame 6 should release held ack and start deferred still capture: %s", wire.String())
+		}
+		replyCapture(cdp.next.Load(), []byte("\x89PNG\r\n\x1a\ndeferred"))
+		tab.fromWeb(&previewIn{T: "ack", Seq: 7})
+	})
 }

@@ -173,6 +173,54 @@ class AdaptiveShotsTest(unittest.TestCase):
                 with self.assertRaisesRegex(shots.AdaptiveFailure, "shell position has no route tab"):
                     runner.read_navigation()
 
+    def test_evidence_readers_reject_non_objects_like_invalid_json(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            shell = runner.adb.shell
+            readers = (
+                (shots.PROBE_PATH, lambda: runner.read_probe(42), "adaptive probe is corrupt"),
+                (shots.STACK_PROBE_PATH, lambda: runner.read_stack_probe(42), "Assistant stack probe is corrupt"),
+                ("shell-position.json", runner.read_navigation, "invalid shell-position.json"),
+            )
+            for path, read, message in readers:
+                for raw in ("{", "null", "[]", "true", '"text"'):
+                    with self.subTest(path=path, raw=raw):
+                        def evidence(*args, **kwargs):
+                            if args[:3] == ("run-as", APP_ID, "cat") and args[-1].endswith(path):
+                                return raw
+                            return shell(*args, **kwargs)
+
+                        with mock.patch.object(runner.adb, "shell", side_effect=evidence):
+                            with self.assertRaisesRegex(shots.AdaptiveFailure, message):
+                                read()
+
+    def test_readiness_retries_non_object_evidence(self):
+        with tempfile.TemporaryDirectory() as output:
+            adb = FakeAdb()
+            runner = make_runner(adb, output)
+            shell = adb.shell
+            no_composer = composer_probe()
+            no_composer["pages"]["chat:machine/session"]["composer"] = None
+            probes = iter(("null", json.dumps(no_composer), json.dumps(composer_probe())))
+
+            def evidence(*args, **kwargs):
+                if args == ("run-as", APP_ID, "cat", shots.PROBE_PATH):
+                    return next(probes)
+                return shell(*args, **kwargs)
+
+            with mock.patch.object(adb, "shell", side_effect=evidence), mock.patch.object(shots.time, "sleep"):
+                runner.wait_ready({"session": "machine/session", "conversationKind": "assistant", "timeout": 1})
+            self.assertEqual(list(probes), [])
+
+    def test_page_evidence_rejects_non_object_page_and_containers(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            now = 100_000_000_000
+            invalid = [[]] + [{"updatedAtNanos": now, part: "wrong"} for part in ("list", "composer", "bounds")]
+            for page in invalid:
+                with self.subTest(page=page), self.assertRaises(shots.AdaptiveFailure):
+                    runner.page_evidence({"pages": {"Agents": page}}, "Agents", now)
+
     def test_steps_never_restart_and_each_theme_may_clear_once(self):
         document = scenario([{"step": "launch"}, {"step": "open", "tab": "Agents"},
                              {"step": "rotate"}, {"step": "capture", "name": "one", "state": "flat"}])

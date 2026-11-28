@@ -42,3 +42,11 @@ type Store interface {
 
 type Events[T any] func(any T)
 type Payload map[string]string
+
+type LoopName struct{ name string }
+
+func (n LoopName) Matches(name string) bool { return n.name == name }
+
+func (r *Registry) HookCount() int { return len(r.settled) }
+
+func (r *Registry) OnSettle() func(context.Context, agentref.Ref) { return r.Settle }

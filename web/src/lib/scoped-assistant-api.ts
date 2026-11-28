@@ -31,7 +31,7 @@ const reads = new Map<string, Map<string, Read>>();
 const subscribers = new Map<string, Set<() => void>>();
 let legacyOwner: string | undefined;
 let rosterUsed = false;
-let retiredRoster: ManagerList | null = null;
+let retiredRoster: ManagerList | null | undefined;
 
 function detachReads(key: string) {
   const bucket = reads.get(key);
@@ -70,12 +70,17 @@ async function verifyRoster(owner: string): Promise<ManagerList | null> {
   }
 }
 
-/** Resolve the legacy default-only entry point before opening a resource with that owner. */
-export async function verifiedDefaultAssistant(): Promise<string> {
+/** A permission entry point must verify the roster again after a credential change. An older roster request may still finish. */
+export function currentScopedAssistantRoster(): ManagerList | null {
+  const roster = rosterForCredential();
+  return retiredRoster === undefined ? roster : null;
+}
+
+export async function verifyScopedAssistantRoster(): Promise<ManagerList | null> {
   const owner = credentialOwner();
-  const checked = rosterForCredential() ?? await verifyRoster(owner);
+  const checked = await verifyRoster(owner);
   assertCredential(owner);
-  return (rosterForCredential() ?? checked)?.default ?? BUILTIN_MANAGER;
+  return checked;
 }
 
 /** Resolve current once when opening a resource. A change of sidebar selection opens a new binding. */

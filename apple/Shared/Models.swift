@@ -2650,9 +2650,11 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     var usage: [TokenUsage]? = nil
     /// Declarative UI views returned out-of-band by folded tool results (`Fold.toolViews`, UI version 12).
     var toolViews: [FoldToolView]? = nil
+    /// Successful BotMux replies retained while their sending calls are folded away.
+    var botmux: [BotmuxMessage]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case items, tools, thoughts, until, images, tasks, changes, usage
+        case items, tools, thoughts, until, images, tasks, changes, usage, botmux
         case toolViews = "tool_views"
         case supervisionUser = "supervision_user"
         case throughSeq = "through_seq", throughID = "through_id"
@@ -2908,9 +2910,11 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var model: String? = nil
     /// kind == .toolResult: out-of-band declarative UI views (maps, routes, search pins) drawn in the chat, never shown to models.
     var toolViews: [ExtensionView]? = nil
+    /// Display-only BotMux metadata; text remains the original transcript.
+    var botmux: BotmuxMessage? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage, model
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage, model, botmux
         case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
         case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
@@ -2922,6 +2926,42 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var cutText: String {
         guard fullSize != nil, let text, let r = text.range(of: "\n…（已截断", options: .backwards) else { return text ?? "" } // i18n-ignore: matches the hub's text
         return String(text[..<r.lowerBound])
+    }
+}
+
+/// Safe display metadata from the node. Unknown kinds remain decodable and fall back to the original transcript.
+nonisolated struct BotmuxMessage: Codable, Hashable, Sendable {
+    var kind: String
+    var text: String
+    var sender: String?
+    var senderType: String?
+    var quoted: Bool?
+    var topicContext: Bool?
+    var thread: Bool?
+    var attachments: Int?
+    var attachmentMeta: [Attachment]?
+    var mentions: [String]?
+    var source: String?
+    var final: Bool?
+    var voice: Bool?
+    var truncated: Bool?
+
+    var isInbound: Bool { kind == "message" || kind == "trigger" }
+
+    enum CodingKeys: String, CodingKey {
+        case kind, text, sender, quoted, thread, attachments, mentions, source, final, voice, truncated
+        case senderType = "sender_type", topicContext = "topic_context", attachmentMeta = "attachment_meta"
+    }
+
+    nonisolated struct Attachment: Codable, Hashable, Sendable {
+        var kind: String
+        var name: String?
+        var mimeType: String?
+
+        enum CodingKeys: String, CodingKey {
+            case kind, name
+            case mimeType = "mime_type"
+        }
     }
 }
 

@@ -683,10 +683,13 @@ func TestDecisionAnsweredInWordsStaysDecidedWhenTheSendFails(t *testing.T) {
 		t.Fatalf("reply note %q", n)
 	}
 	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+	// digestMu: a digest that took the signal out of pending has marked it sent by the time it lets go (#17838).
+	s.supervise.digestMu.Lock()
 	s.supervise.mu.Lock()
 	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
 	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
 	s.supervise.mu.Unlock()
+	s.supervise.digestMu.Unlock()
 	if !(pending && g.Key == key && strings.Contains(g.Detail, "直接全量") && strings.Contains(g.Detail, "a dialog is open")) && !told {
 		t.Fatalf("supervisor not told: %+v (told %v)", g, told)
 	}

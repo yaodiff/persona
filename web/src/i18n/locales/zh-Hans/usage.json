@@ -1,5 +1,8 @@
 {
   "title": "订阅额度",
+  "edit_alias": "编辑「{name}」的别名",
+  "alias_prompt": "给「{name}」起个别名，最多 {limit} 个字符。留空可恢复原名。",
+  "alias_too_long": "别名最多可用 {limit} 个字符。",
   "stale_title": "数据已过期",
   "stale_age": "已过期 · {age}",
   "left_short": "剩 {percent}",
@@ -14,6 +17,8 @@
   "days": "{d} 天",
   "reset_in": "{countdown}后重置",
   "reset_at": "{time} 重置",
+  "codex_local_reading": "Codex 上次的本地读数",
+  "codex_local_explanation": "暂无更新的实时读数，以下数值来自本地保存的会话记录。",
   "source_local": "电脑",
   "sources_title": "来源：{sources}",
   "problem_unreachable": "暂时无法连接网关，当前显示的是上次获取的数据。",

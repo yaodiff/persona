@@ -649,6 +649,17 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_session_start_speed")}
 		}
 	}
+	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.SessionStartModelAliases) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			ModelAliases map[string]string `json:"model_aliases"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if len(fields.ModelAliases) != 0 {
+			// An older node would drop the per-start aliases and run the launcher's models.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_aliases")}
+		}
+	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.StartGoal) {
 		raw, _ := json.Marshal(params)
 		var fields struct {

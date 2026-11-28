@@ -323,6 +323,7 @@ type SessionSeen struct {
 var agentRoutes = []string{
 	"GET /api/v1/agents/display-settings",
 	"PUT /api/v1/agents/display-settings",
+	"GET /api/v1/agents/botmux-owner-candidates",
 	"GET /api/v1/agents/triage",
 	"PUT /api/v1/agents/triage",
 	"GET /api/v1/agents/work/stats",

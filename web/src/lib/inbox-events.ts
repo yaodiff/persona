@@ -30,10 +30,65 @@ export interface InboxHandling {
 
 export type SuggestionKind = "reply" | "handoff" | "agent" | "conclusion" | "todo";
 
+export interface InboxMention {
+  id: string;
+  name: string;
+}
+
+const MENTION_FENCE_OPEN_RE = /^```[a-zA-Z0-9_+#-]*\s*$/;
+const MENTION_FENCE_CLOSE_RE = /^```\s*$/;
+const MENTION_CODE_OR_LINK_RE = /`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s<>()]+\)/g;
+const MENTION_WORD_CHAR_RE = /^[\p{L}\p{N}_-]/u;
+
+function mentionPresentInSegment(segment: string, needle: string): boolean {
+  let offset = 0;
+  while (offset <= segment.length - needle.length) {
+    const idx = segment.indexOf(needle, offset);
+    if (idx < 0) return false;
+    const rest = segment.slice(idx + needle.length);
+    if (!rest || !MENTION_WORD_CHAR_RE.test(rest)) return true;
+    offset = idx + 1;
+  }
+  return false;
+}
+
+function mentionPresentInText(text: string, name: string): boolean {
+  if (!text || !name) return false;
+  const needle = `@${name}`;
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  for (let i = 0; i < lines.length; ) {
+    if (MENTION_FENCE_OPEN_RE.test(lines[i])) {
+      let j = i + 1;
+      while (j < lines.length && !MENTION_FENCE_CLOSE_RE.test(lines[j])) j++;
+      if (j < lines.length) {
+        i = j + 1;
+        continue;
+      }
+    }
+    const line = lines[i];
+    MENTION_CODE_OR_LINK_RE.lastIndex = 0;
+    let pos = 0;
+    let match: RegExpExecArray | null;
+    while ((match = MENTION_CODE_OR_LINK_RE.exec(line)) !== null) {
+      if (match.index > pos && mentionPresentInSegment(line.slice(pos, match.index), needle)) return true;
+      pos = match.index + match[0].length;
+    }
+    if (pos < line.length && mentionPresentInSegment(line.slice(pos), needle)) return true;
+    i++;
+  }
+  return false;
+}
+
+export function activeMentions(text: string, mentions?: InboxMention[]): InboxMention[] {
+  if (!text || !mentions?.length) return [];
+  return mentions.filter((m) => m.id && m.name && mentionPresentInText(text, m.name));
+}
+
 export interface InboxSuggestion {
   version: number;
   kind: SuggestionKind | string;
   text: string;
+  mentions?: InboxMention[];
   note?: string;
   /** A to-do suggestion's due: a day (2006-01-02, all day) or a moment (RFC 3339); absent: no due date. */
   due?: string;
@@ -57,6 +112,7 @@ export interface InboxSuggestionAttempt {
   code?: string;
   retry_after?: number;
   text: string;
+  mentions?: InboxMention[];
   at: string;
   conversation?: { machine_id: string; session_id: string };
 }

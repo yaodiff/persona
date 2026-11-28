@@ -1,8 +1,9 @@
 // Popover-only grouping, table-layout, overlap-hint, and browser-local display preferences for UsagePopover.
 // Kept out of usage-windows.ts so the cold first screen (UsageBars) never pays for popover logic (FIRST_SCREEN_BUDGET).
 import { useSyncExternalStore } from "react";
-import { planNote, sortedWindows, type ProviderGroup } from "./usage-popover";
+import { planNote, sortedWindows, type PopoverAccount, type ProviderGroup } from "./usage-popover";
 import {
+  canAliasUsageAccount,
   canonicalUsageProvider,
   isBalanceAccount,
   windowMinutes,
@@ -144,7 +145,7 @@ export function windowRowDisplay(w: UsageWindow, inlineModel?: string, groupCont
 /** Whether a single-account provider card has an account name identical to its provider title (case-insensitive),
  *  allowing the card header to merge account badges and pin controls without repeating the title row. */
 export function shouldMergeSingleAccountHeader(group: Pick<ProviderGroup, "accounts">, providerTitleText: string): boolean {
-  if (group.accounts.length !== 1) return false;
+  if (group.accounts.length !== 1 || group.accounts[0].alias) return false;
   return group.accounts[0].name.trim().toLowerCase() === providerTitleText.trim().toLowerCase();
 }
 
@@ -165,7 +166,7 @@ function explicitAccountEmail(name: string | undefined): string {
 /** Non-destructive detection of local-only rows whose active window reset times match an external/extension row (or,
  *  when the local row is stale, a live sibling row) under the same provider within 60s, returning a map of local
  *  account id -> matched peer account name. */
-export function detectLocalExternalOverlaps(accounts: readonly UsageAccount[], now: number): Map<string, string> {
+export function detectLocalExternalOverlaps(accounts: readonly UsageAccount[], now: number, aliases?: ReadonlyMap<string, string>): Map<string, string> {
   const out = new Map<string, string>();
   const byProvider = new Map<string, { locals: UsageAccount[]; externals: UsageAccount[]; reconciled: UsageAccount[] }>();
   for (const a of accounts) {
@@ -217,7 +218,7 @@ export function detectLocalExternalOverlaps(accounts: readonly UsageAccount[], n
           ),
         );
         if (matched) {
-          out.set(local.id, peer.name);
+          out.set(local.id, (canAliasUsageAccount(peer) && aliases?.get(peer.id)) || peer.name);
           break;
         }
       }
@@ -287,7 +288,7 @@ export interface UsageTableSort {
 
 export interface UsageTableRow {
   provider: string;
-  account: UsageAccount;
+  account: PopoverAccount;
   displayName: string;
   plan: string;
   cells: Record<string, UsageWindow[]>;
@@ -362,7 +363,7 @@ export function tableWindowSubLabel(
 /** Build a span-aligned comparison table across all provider groups (5h, 7d, and optional Other column),
  *  supporting 3-state column sorting with empty cells always anchored below populated rows. */
 export function buildUsageTable(groups: readonly ProviderGroup[], sort: UsageTableSort | null): UsageTableModel {
-  const flat: Array<{ order: number; provider: string; account: UsageAccount; windows: UsageWindow[] }> = [];
+  const flat: Array<{ order: number; provider: string; account: PopoverAccount; windows: UsageWindow[] }> = [];
   for (const g of groups) {
     for (const account of g.accounts) {
       flat.push({ order: flat.length, provider: g.provider, account, windows: sortedWindows(account) });
@@ -426,7 +427,7 @@ export function buildUsageTable(groups: readonly ProviderGroup[], sort: UsageTab
       order: entry.order,
       provider: entry.provider,
       account: entry.account,
-      displayName: stripProviderPrefix(entry.account.name, entry.provider),
+      displayName: entry.account.alias ?? stripProviderPrefix(entry.account.name, entry.provider),
       plan: planNote(entry.account),
       cells,
       other,
@@ -444,7 +445,7 @@ export function buildUsageTable(groups: readonly ProviderGroup[], sort: UsageTab
     const dir = validSort.dir === "desc" ? -1 : 1;
     rawRows.sort((a, b) => {
       if (validSort.key === "account") {
-        const cmp = a.account.name.localeCompare(b.account.name, undefined, { sensitivity: "base" });
+        const cmp = (a.account.alias ?? a.account.name).localeCompare(b.account.alias ?? b.account.name, undefined, { sensitivity: "base" });
         return cmp * dir || a.order - b.order;
       }
       const wa = a.cells[validSort.key] ?? [];
@@ -533,6 +534,7 @@ function createLocalPrefStore<T>(key: string, fallback: T, parse: (raw: string |
   };
 
   return {
+    getSnapshot,
     useValue: () => useSyncExternalStore(subscribe, getSnapshot, getSnapshot),
     set,
     reset: () => set(fallback),
@@ -560,3 +562,32 @@ export const resetUsageViewMode = viewModeStore.reset;
 export const useUsageTimelineOpen = timelineOpenStore.useValue;
 export const setUsageTimelineOpen = timelineOpenStore.set;
 export const resetUsageTimelineOpen = timelineOpenStore.reset;
+
+export const USAGE_ALIAS_MAX_LENGTH = 32;
+
+/** Use the same hub URL as the hub switcher (including its proxy path) and the selected manager. */
+export function createUsageAliasStore(hub: string, manager: string) {
+  const store = createLocalPrefStore<ReadonlyMap<string, string>>(
+    `persona.usage.codexAliases:${JSON.stringify([hub, manager])}`,
+    new Map(),
+    (raw) => {
+      if (!raw) return new Map();
+      try {
+        return new Map(Object.entries(JSON.parse(raw)).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+      } catch {
+        return new Map();
+      }
+    },
+    (aliases) => aliases.size ? JSON.stringify(Object.fromEntries(aliases)) : null,
+  );
+  return {
+    useValue: store.useValue,
+    setAlias(id: string, value: string) {
+      const next = new Map(store.getSnapshot());
+      const alias = value.trim();
+      if (alias) next.set(id, alias);
+      else next.delete(id);
+      store.set(next);
+    },
+  };
+}

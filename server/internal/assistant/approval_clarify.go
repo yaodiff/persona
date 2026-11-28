@@ -334,10 +334,13 @@ func (s *Service) detachPreparedGen(p *pending, gen uint64, expireOnError bool) 
 		ix := p.ix
 		s.fleet.mu.Unlock()
 
-		err := s.approvalJournalStarted(context.Background(), ix)
-		deadline := time.Time{}
+		deadline := time.Now().Add(approvalWaitingWindow).UTC()
+		var waitingUntil time.Time
+		if ix.Detachable && ix.Resumable {
+			waitingUntil = deadline
+		}
+		err := s.startApprovalJournal(context.Background(), ix, waitingUntil)
 		if err == nil {
-			deadline = time.Now().Add(approvalWaitingWindow).UTC()
 			err = s.updateInteractionDeadline(context.Background(), ix.ID, ix.CreatedAt, deadline)
 			if err != nil {
 				// approvalJournalStarted succeeded, so balance its new entry before
@@ -391,11 +394,11 @@ func (s *Service) detachPreparedGen(p *pending, gen uint64, expireOnError bool) 
 	}
 }
 
-// detachedApprovalWaitingLocked reports whether the original terminal call has
-// already received its non-final waiting result. Its later tool result and a
-// late node dismissal are not new decisions on the retained card. fleet.mu is held.
-func detachedApprovalWaitingLocked(p *pending) bool {
-	return p != nil && p.ix.Detachable && p.prepared != nil && p.prepared.waiting && !p.prepared.terminal
+// Both new questions and decisions claim this window under fleet.mu. A late
+// timer cannot extend a released command's deadline by accepting either one.
+func detachedWaitElapsedLocked(p *pending) bool {
+	a := p.prepared
+	return p.ix.Detachable && a.waiting && !a.paused && !a.decisionDeadline.After(time.Now())
 }
 
 type clarifyingCardKey struct{}
@@ -687,8 +690,18 @@ func (s *Service) clarifyAt(ctx context.Context, id, text, clientMsgID string, o
 		}
 		return s.clarifyAt(ctx, id, text, clientMsgID, origin, expected)
 	}
+	if detachedWaitElapsedLocked(p) {
+		gen := a.decisionGen
+		s.fleet.mu.Unlock()
+		s.expirePreparedGen(p, gen)
+		return errClarifyUnavailable
+	}
 	attempt := &clarifyAttempt{done: make(chan struct{}), first: !a.clarified,
 		clientMsgID: clientMsgID, text: text, originKey: originKey}
+	var waitingUntil time.Time
+	if p.ix.Detachable && a.waiting && a.questionSeq == 0 {
+		waitingUntil = a.decisionDeadline
+	}
 	a.attempt = attempt
 	s.fleet.mu.Unlock()
 
@@ -718,6 +731,13 @@ func (s *Service) clarifyAt(ctx context.Context, id, text, clientMsgID string, o
 			ReplyTo: origin.MessageID, Started: time.Now().UTC(), Base: s.lastSeq(ctx, p.ix.MachineID, p.ix.SessionID),
 			MsgIDs: []string{clientMsgID}, Ext: map[string]string{"clarify": id, "chat": origin.ChatID}}
 	}
+	// A clarification needs process-local turn and pause state. Clear the wait
+	// marker before sending it, and restore it after a definite rejection.
+	if !waitingUntil.IsZero() {
+		if err := s.approvalJournalStarted(ctx, p.ix); err != nil {
+			return s.finishClarifyAttempt(p, attempt, nil, err)
+		}
+	}
 	s.UserSpoke(ctx, SessionRef{MachineID: p.ix.MachineID, SessionID: p.ix.SessionID})
 	if p.ix.Private {
 		// The owner's question starts a new turn after the original Just me turn
@@ -729,6 +749,9 @@ func (s *Service) clarifyAt(ctx context.Context, id, text, clientMsgID string, o
 	s.fleet.mu.Unlock()
 	err = s.sendOnce(ctx, p.ix.MachineID, params)
 	if err != nil && !relayInDoubt(err) {
+		if !waitingUntil.IsZero() {
+			err = errors.Join(err, s.startApprovalJournal(context.Background(), p.ix, waitingUntil))
+		}
 		return s.finishClarifyAttempt(p, attempt, nil, err)
 	}
 	if err != nil {

@@ -677,6 +677,9 @@ func (u *updater) whyNotKey() (string, i18n.Args) {
 		if err := u.h.updateSource().urlErr; err != nil {
 			return "bad_source", i18n.Args{"error": err.Error()}
 		}
+		if u.h.cfg != nil && u.h.cfg.Security.PrivateNetworkOnly {
+			return "private_no_source", nil
+		}
 		return "no_source", nil
 	}
 	return "dev", i18n.Args{"version": u.h.version}
@@ -742,9 +745,8 @@ type updateView struct {
 
 	DevelopmentProgress *update.DevelopmentProgress `json:"development_progress,omitempty"`
 
-	// UpdateURL is where the hub looks for releases now (selfupdate_source.go), UpdateFrom whether hub.json's
-	// update.url or the build said so; UpdateProxy the proxy its checks and downloads go through (update.proxy), with
-	// no user or password. All three are left out when there is none.
+	// UpdateURL is where the hub looks for releases. UpdateFrom is "hub.json" for a configured source or "build"
+	// for an embedded or built-in source. UpdateProxy shows the proxy for checks and downloads without credentials.
 	UpdateURL   string `json:"update_url,omitempty"`
 	UpdateFrom  string `json:"update_url_from,omitempty"`
 	UpdateProxy string `json:"update_proxy,omitempty"`

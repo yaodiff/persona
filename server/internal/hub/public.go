@@ -27,6 +27,7 @@ type publicState struct {
 	port        int
 	fp          string
 	certificate *tls.Certificate
+	previewCert *tls.Certificate
 	server      *http.Server
 	listener    net.Listener
 	// testPlaintext is an already-bound listener injected by a test. serveHTTP takes ownership of it as it does of a
@@ -73,6 +74,9 @@ func (h *Hub) startPublic(ctx context.Context) error {
 		return err
 	}
 	if err := h.cfg.checkPlaintextLoopbackOnly(); err != nil {
+		return err
+	}
+	if err := h.cfg.checkPreview(); err != nil {
 		return err
 	}
 	proxy, err := h.cfg.Security.ProxyProtocol.policy()
@@ -126,9 +130,12 @@ func (h *Hub) startPublic(ctx context.Context) error {
 		h.public.server.ErrorLog = log.New(&handshakeNoise{logf: h.logf}, "", 0)
 		h.public.server.TLSConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
-			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 				h.public.mu.RLock()
 				defer h.public.mu.RUnlock()
+				if hello != nil && h.public.previewCert != nil && h.previewSNIMatch(hello.ServerName) {
+					return h.public.previewCert, nil
+				}
 				return h.public.certificate, nil
 			},
 		}
@@ -173,12 +180,40 @@ func (h *Hub) refreshTLS(now time.Time) error {
 		return fmt.Errorf("load hub TLS identity: %w", err)
 	}
 	h.public.mu.Lock()
-	defer h.public.mu.Unlock()
 	// A replacement key requires a restart and pairing again, never an unnoticed live rotation.
 	if h.public.fp != "" && h.public.fp != fp {
+		h.public.mu.Unlock()
 		return fmt.Errorf("TLS identity key changed; restart the hub and pair devices again")
 	}
 	h.public.certificate, h.public.fp = &cert, fp
+	h.public.mu.Unlock()
+	return h.refreshPreviewTLS()
+}
+
+// refreshPreviewTLS loads or reloads the optional wildcard TLS certificate for *.<preview.domain>.
+// Unlike the hub's pinned identity key, preview certificates are browser-trusted and may rotate keys on renewal.
+func (h *Hub) refreshPreviewTLS() error {
+	p := h.cfg.Preview
+	if p.CertFile == "" && p.KeyFile == "" {
+		return nil
+	}
+	if p.CertFile == "" || p.KeyFile == "" {
+		return fmt.Errorf("preview.cert_file and preview.key_file must be set together")
+	}
+	domain, err := previewDomainOf(p.Domain)
+	if err != nil || domain == "" {
+		return fmt.Errorf("preview.domain is required for preview.cert_file")
+	}
+	cert, _, err := loadTLSFiles(p.CertFile, p.KeyFile)
+	if err != nil {
+		return fmt.Errorf("load preview TLS certificate: %w", err)
+	}
+	if err := cert.Leaf.VerifyHostname("probe." + domain); err != nil {
+		return fmt.Errorf("preview TLS certificate does not cover *.%s: %w", domain, err)
+	}
+	h.public.mu.Lock()
+	h.public.previewCert = &cert
+	h.public.mu.Unlock()
 	return nil
 }
 

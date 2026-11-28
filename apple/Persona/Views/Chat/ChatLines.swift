@@ -76,6 +76,9 @@ struct ChatLines {
     /// Runs of tool calls the user opened; `openAllRuns` flips them all (DEBUG `-showRunsOpen`).
     var openRuns: Set<String> = []
     var openAllRuns = false
+    /// Display-only: Original keeps every transcript record; decoding never mutates the store.
+    var botmuxMode: BotmuxDisplayMode = .original
+    var botmuxSession = false
     /// BeautifulUI folds two or more tool calls in a row into a line of chips.
     var chipRuns = false
     /// Whether a call can join a run: a call that went to the background stays on its own line.
@@ -404,6 +407,8 @@ struct ChatLines {
         for block in blocks {
             switch block {
             case .row(let r):
+                if botmuxSession, botmuxMode == .decoded, case .assistant(let item) = r,
+                   BotmuxDisplay.hidesSentinel(item.text, role: item.role, mode: botmuxMode) { continue }
                 if !SubagentDelivery.isWake(r) { out.append(.row(r)) }
             case .turn(var t):
                 // Work a background task woke the agent for opens with that notice, where a message would be (a
@@ -418,7 +423,15 @@ struct ChatLines {
                 var segments = Self.segments(t.ordered)
                 // Woken and at work with nothing of it here yet: its work line.
                 if segments.isEmpty, woke != nil, t.id == liveID { segments = [(nil, [])] }
-                for (k, seg) in segments.enumerated() {
+                for (k, original) in segments.enumerated() {
+                    var seg = original
+                    let replies = botmuxMode == .decoded ? BotmuxPresentation.replies(seg.rows) : []
+                    if botmuxMode == .decoded, botmuxSession || seg.user?.userInput?.botmux != nil || !replies.isEmpty {
+                        seg.rows.removeAll { row in
+                            guard case .assistant(let item) = row else { return false }
+                            return BotmuxDisplay.hidesSentinel(item.text, role: item.role, mode: botmuxMode)
+                        }
+                    }
                     let firstLine = out.count
                     let live = t.id == liveID && k == segments.count - 1
                     // The work a wake opened is known by the wake: its line keeps its id from before its first step.
@@ -476,6 +489,9 @@ struct ChatLines {
                             out.append(.turnChanges(id: id, changes: changes))
                         }
                     }
+                    // Match the web: the model's final words precede the messages actually sent to Lark.
+                    out += replies.filter { !BotmuxDisplay.hidesSentinel($0.text, role: $0.role, mode: botmuxMode) }
+                        .map { .row(.assistant($0)) }
                     out += after.sorted().map { .row(seg.rows[$0]) }
                     if opening != nil, out.count > firstLine {
                         // A wake opens where a message would be, whether its notice is drawn or only its work/reply is.

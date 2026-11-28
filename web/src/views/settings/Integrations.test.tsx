@@ -6,6 +6,7 @@ import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setPairedToken } from "../../lib/api";
 
 const state = vi.hoisted(() => ({
   phone: false,
@@ -345,6 +346,7 @@ beforeEach(() => {
   state.assistant = "assistant";
   history.replaceState(null, "", "/settings?tab=integrations");
   localStorage.clear();
+  setPairedToken("");
   resetManagerChoice();
   resetRoster();
   host = document.createElement("div");
@@ -538,6 +540,125 @@ function stubFullHubFetch(overrides?: {
 }
 
 registerTestMailbox();
+
+describe("Integrations server catalog", () => {
+  const route = { scope: { kind: "current" }, view: { kind: "list" }, filter: "all" } as const;
+  const feishu = { manager: "assistant", kind: "service", id: "feishu-bot" };
+  const gateway = {
+    ref: { manager: "assistant", kind: "extension", id: "gateway" },
+    name: "Projected chat gateway", origin: "builtin_extension",
+    capabilities: ["channels", "tools", "future_capability"], availability: { state: "available" },
+  };
+
+  function serveProjection(catalog: () => Response, detail?: (path: string) => Response) {
+    const fetcher = vi.fn(async (input: string) => {
+      const path = new URL(input, "http://hub.example.com").pathname;
+      if (path === "/api/v1/managers") {
+        return json({ default: "assistant", managers: [
+          { id: "assistant", name: "Home", online: true, integrations_projection_v1: true },
+          { id: "work", name: "Work", online: true },
+        ] });
+      }
+      if (path === "/api/v1/assistant/integrations") return catalog();
+      if (path.startsWith("/api/v1/assistant/integrations/") && detail) return detail(path);
+      if (path.endsWith("/-/markets")) return json({ markets: [{ id: "official" }] });
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    return fetcher;
+  }
+
+  it("shows server counts, supported capability pills, and an independent gateway with the bot module off", async () => {
+    state.features = ["extension_manager", "channels", "connectors", "lark", "module.mail"];
+    const onOpen = vi.fn();
+    const fetcher = serveProjection(() => json({
+      items: [gateway, { ...gateway, ref: { ...gateway.ref, kind: "future_resource", id: "other" } }],
+      counts: { all: 2, channels: 1, data: 0, tools: 1 },
+      availability: [{ source: "service", ref: feishu, module_feature: "module.lark", availability: { state: "module_off" } }],
+    }));
+    await act(async () => root.render(<Integrations route={route} onOpen={onOpen} onBack={() => {}} />));
+    await flush();
+    expect(host.querySelectorAll("[data-integration-row]")).toHaveLength(1);
+    const row = host.querySelector<HTMLButtonElement>('[data-integration-id="gateway"]')!;
+    expect(row.textContent).toContain(t("settings-integrations.cap_channels"));
+    expect(row.textContent).toContain(t("settings-integrations.cap_tools"));
+    expect(row.textContent).not.toContain("future_capability");
+    expect(row.dataset.integrationSource).toBe("builtin_extension");
+    expect(host.querySelector('[data-integration-filter="all"]')?.textContent).toContain("2");
+    expect(host.querySelector('[data-integration-filter="channels"]')?.textContent).toContain("1");
+    expect(host.querySelector('[data-testid="integrations-market-entry"]')).not.toBeNull();
+    expect(fetcher.mock.calls.every(([url]) => /\/managers$|\/integrations$|\/-\/markets$/.test(url))).toBe(true);
+    await act(async () => row.click());
+    expect(onOpen).toHaveBeenCalledWith({ scope: { kind: "owned", manager: "assistant" }, view: { kind: "extension", id: "gateway" }, filter: "all" }, "push");
+  });
+
+  it("keeps successful rows and lets the user retry a partial capability failure", async () => {
+    let failed = true;
+    serveProjection(() => json({
+      items: [{ ...gateway, capability_availability: failed ? [{ capability: "channels", availability: { state: "unavailable", reason: "read_failed" } }] : [] }],
+      counts: { all: 1, channels: 1, data: 0, tools: 1 },
+      availability: [{ source: "channels", availability: failed ? { state: "unavailable", reason: "read_failed" } : { state: "available" } }],
+    }));
+    await act(async () => root.render(<Integrations route={route} onOpen={() => {}} onBack={() => {}} />));
+    await flush();
+    const alert = host.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain(t("settings-channels.title"));
+    expect(host.querySelector('[data-integration-id="gateway"]')?.textContent).toContain(t("settings-integrations.cap_tools"));
+    failed = false;
+    await act(async () => alert.parentElement?.querySelector("button")?.click());
+    await flush();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("retries a projection transport failure without falling back and only shows empty after success", async () => {
+    let failed = true;
+    const fetcher = serveProjection(() => failed ? json({ error: "temporarily unavailable", code: "unavailable" }, 503)
+      : json({ items: [], counts: { all: 0, channels: 0, data: 0, tools: 0 }, availability: [] }));
+    await act(async () => root.render(<Integrations route={route} onOpen={() => {}} onBack={() => {}} />));
+    await flush();
+    expect(host.querySelector("[data-integrations-empty]")).toBeNull();
+    const alert = host.querySelector('[role="alert"]')!;
+    expect(alert).not.toBeNull();
+    failed = false;
+    await act(async () => alert.parentElement?.querySelector("button")?.click());
+    await flush();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector("[data-integrations-empty]")).not.toBeNull();
+    expect(fetcher.mock.calls.every(([url]) => /\/managers$|\/integrations$|\/-\/markets$/.test(url))).toBe(true);
+  });
+
+  it("keeps the legacy catalog on a hub from before the roster", async () => {
+    const fetcher = vi.fn(async (input: string) => {
+      if (input.endsWith("/managers")) return json({ error: "Not found" }, 404);
+      if (input.endsWith("/plugins") || input.endsWith("/extensions")) return json({ extensions: SAMPLE_EXTENSIONS });
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    await act(async () => root.render(<Integrations route={route} onOpen={() => {}} onBack={() => {}} />));
+    await flush();
+    expect(host.querySelector('[data-integration-id="larkx"]')).not.toBeNull();
+    expect(fetcher.mock.calls.some(([url]) => url.includes("/assistant/integrations"))).toBe(false);
+  });
+
+  it("opens standalone subscription settings with the subscription ref", async () => {
+    const ref = { manager: "assistant", kind: "subscription", id: "standalone" };
+    const item = { ref, name: "Projected subscription", origin: "standalone_subscription", capabilities: ["data"], availability: { state: "available" } };
+    const fetcher = serveProjection(() => json({ items: [item], counts: { all: 1, channels: 0, data: 1, tools: 0 }, availability: [] }),
+      (path) => path.endsWith("/subscription/standalone") ? json({ item, sections: [], availability: [] }) : json({}, 404));
+    const onOpen = vi.fn();
+    await act(async () => root.render(<Integrations route={route} onOpen={onOpen} onBack={() => {}} />));
+    await flush();
+    const row = host.querySelector<HTMLButtonElement>('[data-integration-id="standalone"]')!;
+    expect(row.closest('section')?.querySelector('h2')?.textContent).toContain(t("subscriptions.title"));
+    await act(async () => row.click());
+    const opened = onOpen.mock.calls[0]![0];
+    expect(opened.scope).toEqual({ kind: "owned", manager: "assistant" });
+    await act(async () => root.render(<Integrations route={opened} onOpen={onOpen} onBack={() => {}} />));
+    await flush();
+    expect(host.querySelector('[data-integration-detail="standalone"] h1')?.textContent).toBe(item.name);
+    expect(fetcher.mock.calls.some(([url]) => url.endsWith("/push_source/standalone"))).toBe(false);
+  });
+});
 
 describe("buildIntegrationCatalog deduplication and capability classification", () => {
   it("deduplicates multi-capability extensions and built-in services into single canonical rows", () => {
@@ -1824,5 +1945,50 @@ describe("assistant isolation across integration routes", () => {
     await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
     await flush();
     expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+  });
+
+  it("adds a same-assistant Data Flow entry in single-pane standalone source detail without leaking global defaults or switching sidebar assistant", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = false;
+    state.phone = false;
+    stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS });
+    const measure = vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(600);
+    await act(async () => loadRoster());
+
+    try {
+      const pushState = subscriptionSourceState("sub_push_iphone");
+      history.replaceState(null, "", `/settings?tab=integrations&manager=work&integration=${encodeURIComponent(`-sources@work/${pushState}`)}`);
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      await flush();
+
+      const pushPane = host.querySelector<HTMLElement>('[data-integration-kind="source"]')!;
+      expect(pushPane).not.toBeNull();
+      // Single-source scope preserves #17677 boundary (no provider global defaults).
+      expect(pushPane.querySelector("[data-external-source-settings]")).toBeNull();
+
+      const dataFlowRow = pushPane.querySelector<HTMLButtonElement>('[data-settings-row="source-data-flow-entry"]')!;
+      expect(dataFlowRow).not.toBeNull();
+      expect(dataFlowRow.textContent).toContain(t("settings-integrations.view_sources"));
+
+      // Clicking opens the same assistant's Data Flow view without changing the sidebar's selected assistant.
+      await act(async () => dataFlowRow.click());
+      await flush();
+      expect(location.search).toContain("manager=work");
+      expect(location.search).toContain("integration=-sources%40work");
+      expect(host.querySelector("[data-integrations-sources-view]")).not.toBeNull();
+      expect(chosenManager()).toBeNull();
+
+      // In desktop split-pane (>=740px), the list header already owns the view switcher so the duplicate row is omitted.
+      measure.mockReturnValue(920);
+      state.twoCol = true;
+      await act(async () => root.render(null));
+      history.replaceState(null, "", `/settings?tab=integrations&integration=${encodeURIComponent(`-sources/${pushState}`)}`);
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      await flush();
+      expect(host.querySelector("[data-integrations-split]")).not.toBeNull();
+      expect(host.querySelector('[data-settings-row="source-data-flow-entry"]')).toBeNull();
+    } finally {
+      measure.mockRestore();
+    }
   });
 });

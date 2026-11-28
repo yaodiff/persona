@@ -1,4 +1,6 @@
 import BeautifulUI
+import CryptoKit
+import Security
 import SwiftUI
 import UIKit
 import WebKit
@@ -135,17 +137,27 @@ extension EnvironmentValues {
 struct LinkSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     let target: LinkTarget
     var key: SessionKey? = nil
     /// Opens another of the session's dev servers in the card (ChatView): a forwarded page's subtitle lists them (#150).
     var choosePreview: ((PreviewOption) -> Void)? = nil
+    @State private var activeURL: URL
     @State private var title = ""
     @State private var choosing = false
     @State private var chosen: PreviewOption?
+    @State private var childLink: LinkTarget?
     @State private var editing: ContextRef?
     @State private var instruction = ""
     /// Opens full screen (2026-10-28: half a screen was too little to read); pull down to 0.6 to see the chat again.
     @State private var detent: PresentationDetent = .large
+
+    init(target: LinkTarget, key: SessionKey? = nil, choosePreview: ((PreviewOption) -> Void)? = nil) {
+        self.target = target
+        self.key = key
+        self.choosePreview = choosePreview
+        _activeURL = State(initialValue: target.url)
+    }
 
     /// Feishu links with a native view (documents, company-feed posts), while the hub has them.
     private var feishuRoute: FeishuRoute? { FeishuLinks.route(target.url, lark: model.larkFeatures, manager: target.manager) }
@@ -166,7 +178,15 @@ struct LinkSheet: View {
                 #if os(iOS)
                 if let key, target.forwarded != nil {
                     // A machine's dev server from a chat: the preview's bar under it (#150).
-                    PreviewPage(url: target.url, key: key, title: $title) { selected, kind in pick(selected, kind: kind) }
+                    PreviewPage(
+                        url: activeURL,
+                        key: key,
+                        title: $title,
+                        forwardedLabel: target.forwarded,
+                        onRetry: { reloadPage() },
+                        onOpenExternal: { openExternalLink($0) },
+                        onReprobePort: { await model.reprobeForwardedPort($0) }
+                    ) { selected, kind in pick(selected, kind: kind) }
                 } else {
                     page
                 }
@@ -180,6 +200,12 @@ struct LinkSheet: View {
         .presentationBackground(Theme.pageBackground) // pages with a clear background let the chat show through
         .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.6))) // the chat stays usable behind
         .presentationContentInteraction(.resizes) // a swipe up grows the sheet before it scrolls the page
+        .onChange(of: target.url) { _, next in activeURL = next }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active, target.forwarded != nil {
+                Task { await ensureForwardedReady(reloadIfMoved: true) }
+            }
+        }
         #if os(iOS)
         .sheet(isPresented: $choosing, onDismiss: {
             if let o = chosen { chosen = nil; choosePreview?(o) }
@@ -189,6 +215,9 @@ struct LinkSheet: View {
             }
         }
         #endif
+        .sheet(item: $childLink) { child in
+            LinkSheet(target: child, key: key)
+        }
         .alert("Have an Agent Edit This", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
             TextField(String(localized: "How should it change?"), text: $instruction)
             Button("Cancel", role: .cancel) { instruction = "" }
@@ -199,7 +228,14 @@ struct LinkSheet: View {
     }
 
     private var page: some View {
-        PooledWebView(url: target.url, title: $title) { selected, kind in pick(selected, kind: kind) }
+        WebPageView(
+            url: activeURL,
+            forwardedLabel: target.forwarded,
+            title: $title,
+            onRetry: { reloadPage() },
+            onOpenExternal: { openExternalLink($0) },
+            onReprobePort: target.forwarded != nil ? { await model.reprobeForwardedPort($0) } : nil
+        ) { selected, kind in pick(selected, kind: kind) }
             .ignoresSafeArea(.container, edges: .bottom) // full screen: the page runs under the home indicator
     }
 
@@ -250,12 +286,12 @@ struct LinkSheet: View {
                     .accessibilityLabel("Add this document as context")
             }
             if feishuRoute == nil {
-                Button { Haptics.tap(); WebViewPool.shared.reload(target.url) } label: { ThemedIcon(Theme.Icon.reload) }
+                Button { Haptics.tap(); reloadPage() } label: { ThemedIcon(Theme.Icon.reload) }
                     .accessibilityLabel("Refresh")
                     .accessibilityIdentifier("link-reload")
             }
             Menu {
-                Button { UIPasteboard.general.url = target.url; Haptics.success() } label: { Label("Copy Link", systemImage: Theme.Icon.link) }
+                Button { UIPasteboard.general.url = activeURL; Haptics.success() } label: { Label("Copy Link", systemImage: Theme.Icon.link) }
                 if target.forwarded == nil { browserItems } // the phone's loopback means nothing to another app
             } label: { ThemedIcon(Theme.Icon.moreMenu) }
         }
@@ -299,9 +335,478 @@ struct LinkSheet: View {
         instruction = ""
         editing = nil
     }
+
+    /// Rebuilds an invalidated loopback forward listener if needed before reloading the page.
+    private func reloadPage() {
+        guard target.forwarded != nil || PortForwarder.shared.key(for: activeURL) != nil else {
+            WebViewPool.shared.reload(activeURL)
+            return
+        }
+        let currentURL = activeURL
+        Task {
+            PortForwarder.shared.clearError(for: currentURL)
+            do {
+                let readyURL = try await PortForwarder.shared.ensureReady(for: currentURL)
+                if readyURL != currentURL { activeURL = readyURL }
+                WebViewPool.shared.reload(currentURL, at: readyURL)
+            } catch {
+                WebViewPool.shared.existing(for: currentURL)?.pageState.loadError = .from(portError: .listenerFailed)
+            }
+        }
+    }
+
+    private func ensureForwardedReady(reloadIfMoved: Bool) async {
+        let currentURL = activeURL
+        guard let readyURL = try? await PortForwarder.shared.ensureReady(for: currentURL) else { return }
+        if readyURL != currentURL {
+            activeURL = readyURL
+            if reloadIfMoved { WebViewPool.shared.reload(currentURL, at: readyURL) }
+        }
+    }
+
+    /// Handles external links opened via `target="_blank"` or `window.open` using the existing in-app link rules.
+    private func openExternalLink(_ url: URL) {
+        if let opened = model.openOwnLink(url) {
+            if case .sheet(let page) = opened { model.linkSheet = page }
+            return
+        }
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
+        childLink = LinkTarget(url: url, manager: target.manager)
+    }
 }
 
 // MARK: - Web views
+
+/// Session-scoped in-memory trust for self-signed certificates on loopback ports forwarded by `PortForwarder`.
+/// Never persisted to disk; only matches the exact `(host, port)` and leaf certificate fingerprint the user confirmed.
+@MainActor
+final class LoopbackCertificateTrustStore {
+    static let shared = LoopbackCertificateTrustStore()
+    private var trusted: [String: Set<Data>] = [:]
+
+    func isTrusted(host: String, port: Int, trust: SecTrust) -> Bool {
+        guard let digest = Self.leafDigest(of: trust) else { return false }
+        return trusted[Self.key(host: host, port: port)]?.contains(digest) == true
+    }
+
+    func trust(host: String, port: Int, trust: SecTrust) {
+        guard let digest = Self.leafDigest(of: trust) else { return }
+        trusted[Self.key(host: host, port: port), default: []].insert(digest)
+    }
+
+    func reset() { trusted = [:] }
+
+    private static func key(host: String, port: Int) -> String { "\(host.lowercased()):\(port)" }
+
+    private static func leafDigest(of trust: SecTrust) -> Data? {
+        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let leaf = chain.first else { return nil }
+        let der = SecCertificateCopyData(leaf) as Data
+        return Data(SHA256.hash(data: der))
+    }
+}
+
+/// Evaluates system TLS trust off the main actor (docs/apple/performance.md P1) with network fetches disabled.
+private nonisolated func evaluateLoopbackTrustOffMain(_ trust: SecTrust) async -> Bool {
+    nonisolated(unsafe) let ref = trust
+    return await Task.detached(priority: .userInitiated) {
+        SecTrustSetNetworkFetchAllowed(ref, false)
+        return SecTrustEvaluateWithError(ref, nil)
+    }.value
+}
+
+/// User-facing error rendered over a failed or terminated WebView using `EmptyStateView`.
+struct WebPageError: Equatable {
+    var symbol: String
+    var title: String
+    var message: String
+
+    @MainActor static func from(portError: PortForwardError) -> WebPageError {
+        WebPageError(symbol: portError.symbol, title: portError.title, message: portError.message)
+    }
+
+    @MainActor static var declinedSelfSigned: WebPageError {
+        WebPageError(
+            symbol: Theme.Icon.error,
+            title: String(localized: "Untrusted Local Certificate"),
+            message: String(localized: "This dev server uses a self-signed certificate that wasn't trusted. Tap Retry if you want to trust it for this session.")
+        )
+    }
+
+    @MainActor static var processTerminated: WebPageError {
+        WebPageError(
+            symbol: Theme.Icon.error,
+            title: String(localized: "Page Reload Needed"),
+            message: String(localized: "The web page stopped unexpectedly. Tap Retry to load it again.")
+        )
+    }
+
+    @MainActor static func from(navigationError error: Error, forwardedKey: PortForwarder.Key?, declinedSelfSigned: Bool) -> WebPageError {
+        if declinedSelfSigned { return .declinedSelfSigned }
+        if let forwardedKey, let recorded = PortForwarder.shared.forward(forwardedKey)?.lastError {
+            return .from(portError: recorded)
+        }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain {
+            switch ns.code {
+            case NSURLErrorNotConnectedToInternet:
+                return WebPageError(
+                    symbol: Theme.Icon.offline,
+                    title: String(localized: "No Internet Connection"),
+                    message: String(localized: "Check your network connection and try again.")
+                )
+            case NSURLErrorTimedOut:
+                return WebPageError(
+                    symbol: Theme.Icon.error,
+                    title: String(localized: "Request Timed Out"),
+                    message: String(localized: "The page took too long to respond. Try again.")
+                )
+            case NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasUnknownRoot,
+                 NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateNotYetValid,
+                 NSURLErrorSecureConnectionFailed:
+                return WebPageError(
+                    symbol: Theme.Icon.error,
+                    title: String(localized: "Certificate Not Trusted"),
+                    message: String(localized: "This site's security certificate isn't trusted.")
+                )
+            case NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost:
+                if forwardedKey != nil {
+                    return WebPageError(
+                        symbol: Theme.Icon.error,
+                        title: String(localized: "Couldn't Open Preview"),
+                        message: String(localized: "Couldn't reach the server on your computer. Make sure it's still running and try again.")
+                    )
+                }
+                return WebPageError(
+                    symbol: Theme.Icon.error,
+                    title: String(localized: "Couldn't Load Page"),
+                    message: String(localized: "Couldn't connect to this page. Check your connection and try again.")
+                )
+            default:
+                break
+            }
+        }
+        return WebPageError(
+            symbol: Theme.Icon.error,
+            title: String(localized: "Couldn't Load Page"),
+            message: error.localizedDescription
+        )
+    }
+}
+
+/// Coalesces concurrent TLS challenges for one forwarded `host:port` and guarantees every WebKit completion handler runs
+/// once (defaulting to `.cancelAuthenticationChallenge` if dismissed unanswered).
+@MainActor
+final class LoopbackTrustPrompt: Identifiable {
+    let id = UUID()
+    let host: String
+    let port: Int
+    let displayLabel: String
+    let trust: SecTrust
+    private var completions: [@MainActor (URLSession.AuthChallengeDisposition, URLCredential?) -> Void]
+    private var resolved = false
+
+    init(host: String, port: Int, displayLabel: String, trust: SecTrust,
+         completion: @escaping @MainActor (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        self.host = host
+        self.port = port
+        self.displayLabel = displayLabel
+        self.trust = trust
+        self.completions = [completion]
+    }
+
+    func append(_ completion: @escaping @MainActor (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if resolved {
+            completion(.cancelAuthenticationChallenge, nil)
+        } else {
+            completions.append(completion)
+        }
+    }
+
+    func resolve(trust allow: Bool) {
+        guard !resolved else { return }
+        resolved = true
+        let pending = completions
+        completions = []
+        if allow {
+            LoopbackCertificateTrustStore.shared.trust(host: host, port: port, trust: trust)
+            let cred = URLCredential(trust: trust)
+            for done in pending { done(.useCredential, cred) }
+        } else {
+            for done in pending { done(.cancelAuthenticationChallenge, nil) }
+        }
+    }
+
+    deinit {
+        if !resolved {
+            let pending = completions
+            Task { @MainActor in
+                for done in pending { done(.cancelAuthenticationChallenge, nil) }
+            }
+        }
+    }
+}
+
+/// Safe single-shot completion wrappers for `WKUIDelegate` JavaScript dialogs so WebKit never crashes on sheet teardown.
+@MainActor
+final class WebDialog: Identifiable {
+    enum Kind {
+        case alert(message: String, done: () -> Void)
+        case confirm(message: String, done: (Bool) -> Void)
+        case prompt(message: String, defaultText: String, done: (String?) -> Void)
+    }
+
+    let id = UUID()
+    let kind: Kind
+    private var resolved = false
+
+    init(_ kind: Kind) { self.kind = kind }
+
+    func finishAlert() {
+        guard !resolved, case .alert(_, let done) = kind else { return }
+        resolved = true
+        done()
+    }
+
+    func finishConfirm(_ accepted: Bool) {
+        guard !resolved, case .confirm(_, let done) = kind else { return }
+        resolved = true
+        done(accepted)
+    }
+
+    func finishPrompt(_ value: String?) {
+        guard !resolved, case .prompt(_, _, let done) = kind else { return }
+        resolved = true
+        done(value)
+    }
+
+    func cancelWithDefault() {
+        guard !resolved else { return }
+        resolved = true
+        switch kind {
+        case .alert(_, let done): done()
+        case .confirm(_, let done): done(false)
+        case .prompt(_, _, let done): done(nil)
+        }
+    }
+
+    deinit {
+        if !resolved {
+            let k = kind
+            Task { @MainActor in
+                switch k {
+                case .alert(_, let done): done()
+                case .confirm(_, let done): done(false)
+                case .prompt(_, _, let done): done(nil)
+                }
+            }
+        }
+    }
+}
+
+/// Observable per-WebView error, TLS prompt, and JS dialog state bridged from `WKNavigationDelegate` and `WKUIDelegate`.
+@MainActor @Observable
+final class WebPageState {
+    var loadError: WebPageError?
+    var pendingTrustPrompt: LoopbackTrustPrompt?
+    var pendingDialog: WebDialog?
+    @ObservationIgnored var dialogQueue: [WebDialog] = []
+    @ObservationIgnored var initialURL: URL?
+    @ObservationIgnored var forwardedLabel: String?
+    @ObservationIgnored var isPresented = false
+    @ObservationIgnored var declinedSelfSigned = false
+    @ObservationIgnored var didReprobeCachedPort = false
+    @ObservationIgnored var onRetry: (() -> Void)?
+    @ObservationIgnored var onOpenExternalURL: ((URL) -> Void)?
+    @ObservationIgnored var onReprobePort: ((PortForwarder.Key) async -> PortPresence.ReprobeOutcome)?
+
+    func resetForReload() {
+        loadError = nil
+        declinedSelfSigned = false
+        didReprobeCachedPort = false
+    }
+
+    func enqueueDialog(_ dialog: WebDialog) {
+        if pendingDialog == nil {
+            pendingDialog = dialog
+        } else {
+            dialogQueue.append(dialog)
+        }
+    }
+
+    func advanceDialog() {
+        pendingDialog = dialogQueue.isEmpty ? nil : dialogQueue.removeFirst()
+    }
+
+    func dismissPendingPrompts() {
+        pendingTrustPrompt?.resolve(trust: false)
+        pendingTrustPrompt = nil
+        pendingDialog?.cancelWithDefault()
+        pendingDialog = nil
+        for queued in dialogQueue { queued.cancelWithDefault() }
+        dialogQueue = []
+    }
+}
+
+/// Navigation and UI delegate installed on every `SelectableWebView` to surface errors, confirm loopback self-signed
+/// certificates, route `_blank` links, and present native JS dialogs.
+@MainActor
+final class WebViewBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
+    weak var webView: SelectableWebView?
+    let state: WebPageState
+
+    init(webView: SelectableWebView, state: WebPageState) {
+        self.webView = webView
+        self.state = state
+    }
+
+    // MARK: WKNavigationDelegate
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        state.loadError = nil
+        state.declinedSelfSigned = false
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        state.loadError = nil
+        state.didReprobeCachedPort = false
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        state.loadError = nil
+        state.didReprobeCachedPort = false
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        handleNavigationFailure(webView, error: error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        handleNavigationFailure(webView, error: error)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        state.loadError = .processTerminated
+    }
+
+    func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
+                 completionHandler: @escaping @MainActor (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        let host = challenge.protectionSpace.host
+        let port = challenge.protectionSpace.port
+        // Security boundary: ONLY loopback ports owned by PortForwarder may prompt for self-signed cert trust.
+        // Every other host always follows system default TLS validation.
+        guard PortForwarder.shared.isForwardedLoopback(host: host, port: port) else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        if LoopbackCertificateTrustStore.shared.isTrusted(host: host, port: port, trust: serverTrust) {
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            return
+        }
+        nonisolated(unsafe) let trustRef = serverTrust
+        Task { @MainActor [weak self] in
+            if await evaluateLoopbackTrustOffMain(trustRef) {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+            guard let self, self.state.isPresented else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+                return
+            }
+            if LoopbackCertificateTrustStore.shared.isTrusted(host: host, port: port, trust: trustRef) {
+                completionHandler(.useCredential, URLCredential(trust: trustRef))
+                return
+            }
+            if let existing = self.state.pendingTrustPrompt,
+               existing.host.caseInsensitiveCompare(host) == .orderedSame,
+               existing.port == port {
+                existing.append(completionHandler)
+                return
+            }
+            let label = self.state.forwardedLabel ?? "\(host):\(port)"
+            self.state.pendingTrustPrompt = LoopbackTrustPrompt(
+                host: host,
+                port: port,
+                displayLabel: label,
+                trust: trustRef,
+                completion: completionHandler
+            )
+        }
+    }
+
+    private func handleNavigationFailure(_ webView: WKWebView, error: Error) {
+        let ns = error as NSError
+        if ns.domain == "WebKitErrorDomain" && ns.code == 102 { return } // Frame load interrupted by policy/redirect
+        if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled {
+            if state.declinedSelfSigned {
+                state.loadError = .declinedSelfSigned
+            }
+            return
+        }
+        let failingURL = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? webView.url ?? state.initialURL
+        let forwardedKey = failingURL.flatMap { PortForwarder.shared.key(for: $0) }
+        if let forwardedKey, !state.declinedSelfSigned, !state.didReprobeCachedPort, let reprobe = state.onReprobePort {
+            state.didReprobeCachedPort = true
+            let capturedError = error
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let outcome = await reprobe(forwardedKey)
+                if outcome == .live {
+                    self.state.onRetry?()
+                } else {
+                    self.state.loadError = WebPageError.from(
+                        navigationError: capturedError,
+                        forwardedKey: forwardedKey,
+                        declinedSelfSigned: self.state.declinedSelfSigned
+                    )
+                }
+            }
+            return
+        }
+        state.loadError = WebPageError.from(
+            navigationError: error,
+            forwardedKey: forwardedKey,
+            declinedSelfSigned: state.declinedSelfSigned
+        )
+    }
+
+    // MARK: WKUIDelegate
+
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard let url = navigationAction.request.url else { return nil }
+        if PortForwarder.shared.isLoopbackURL(url) {
+            webView.load(navigationAction.request)
+        } else {
+            state.onOpenExternalURL?(url)
+        }
+        return nil
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor () -> Void) {
+        guard state.isPresented else { completionHandler(); return }
+        state.enqueueDialog(WebDialog(.alert(message: message, done: completionHandler)))
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor (Bool) -> Void) {
+        guard state.isPresented else { completionHandler(false); return }
+        state.enqueueDialog(WebDialog(.confirm(message: message, done: completionHandler)))
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping @MainActor (String?) -> Void) {
+        guard state.isPresented else { completionHandler(nil); return }
+        state.enqueueDialog(WebDialog(.prompt(message: prompt, defaultText: defaultText ?? "", done: completionHandler)))
+    }
+}
 
 /// WKWebViews kept warm: the links of the latest answers load in the background, so opening one shows a finished
 /// page. A link the user opens loads in the default (on-disk) website data store, so its assets and logins carry over.
@@ -337,7 +842,10 @@ final class WebViewPool {
         let key = url.absoluteString
         if let v = views[key] {
             touch(key)
-            if Self.isLoopback(url), !v.isLoading { v.load(Self.request(url)) }
+            if Self.isLoopback(url), !v.isLoading {
+                v.pageState.resetForReload()
+                v.load(Self.request(url))
+            }
             return v
         }
         return make(url, configuration: config)
@@ -346,6 +854,7 @@ final class WebViewPool {
     private func make(_ url: URL, configuration: WKWebViewConfiguration) -> SelectableWebView {
         let key = url.absoluteString
         let v = SelectableWebView(frame: .zero, configuration: configuration)
+        v.pageState.initialURL = url
         v.scrollView.showsVerticalScrollIndicator = false
         v.scrollView.showsHorizontalScrollIndicator = false
         v.allowsBackForwardNavigationGestures = true
@@ -366,6 +875,10 @@ final class WebViewPool {
     /// (#4074). A machine's dev server is asked only when its page is opened, as before. A view the pool no longer
     /// holds (pushed out by newer links while it was shown) changes nothing.
     func release(_ v: WKWebView, for url: URL) {
+        if let selectable = v as? SelectableWebView {
+            selectable.pageState.isPresented = false
+            selectable.pageState.dismissPendingPrompts()
+        }
         let key = url.absoluteString
         guard views[key] === v else { return }
         // A sign-in done on a preloaded page is kept: its cookies go to the default store.
@@ -377,10 +890,24 @@ final class WebViewPool {
     }
 
     /// The sheet's Refresh: the page again from the server, not from the cache. A view that never got a page (its first
-    /// load failed: `url` is nil) loads it afresh.
-    func reload(_ url: URL) {
-        guard let v = views[url.absoluteString] else { return }
-        if v.url == nil { v.load(Self.request(url)) } else { v.reloadFromOrigin() }
+    /// load failed: `url` is nil or an error overlay is shown) loads it afresh; if a rebuilt listener moved to a new
+    /// local port (`newURL`), re-keys the pooled view and loads `newURL`.
+    func reload(_ url: URL, at newURL: URL? = nil) {
+        let oldKey = url.absoluteString
+        guard let v = views[oldKey] else { return }
+        let hadError = v.pageState.loadError != nil
+        v.pageState.resetForReload()
+        if let newURL, newURL != url {
+            let newKey = newURL.absoluteString
+            views[oldKey] = nil
+            order.removeAll { $0 == oldKey }
+            views[newKey] = v
+            touch(newKey)
+            v.pageState.initialURL = newURL
+            v.load(Self.request(newURL))
+            return
+        }
+        if v.url == nil || hadError { v.load(Self.request(url)) } else { v.reloadFromOrigin() }
     }
 
     /// A page seen before paints from disk at once; a machine's dev server (the phone's loopback) is always asked.
@@ -390,7 +917,9 @@ final class WebViewPool {
         return req
     }
 
-    private static func isLoopback(_ url: URL) -> Bool { ["localhost", "127.0.0.1"].contains(url.host() ?? "") }
+    private static func isLoopback(_ url: URL) -> Bool {
+        ["localhost", "127.0.0.1", "::1", "[::1]"].contains((url.host(percentEncoded: false) ?? "").lowercased())
+    }
 
     /// Starts loading links that may be opened soon (not the ones a native Feishu view opens).
     func preload(_ urls: [URL]) {
@@ -413,15 +942,29 @@ final class WebViewPool {
         order.append(key)
         while order.count > limit {
             let old = order.removeFirst()
+            views[old]?.pageState.dismissPendingPrompts()
             views[old]?.removeFromSuperview()
             views[old] = nil
         }
     }
 }
 
-/// A WKWebView whose selection menu has Edit with AI and Add as Context.
+/// A WKWebView whose selection menu has Edit with AI and Add as Context, with navigation/error/TLS/UI delegates attached.
 final class SelectableWebView: WKWebView {
     var onPick: ((String, String) -> Void)?
+    let pageState = WebPageState()
+    private var bridge: WebViewBridge?
+
+    override init(frame: CGRect, configuration: WKWebViewConfiguration) {
+        super.init(frame: frame, configuration: configuration)
+        let b = WebViewBridge(webView: self, state: pageState)
+        bridge = b
+        navigationDelegate = b
+        uiDelegate = b
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func buildMenu(with builder: any UIMenuBuilder) {
         super.buildMenu(with: builder)
@@ -441,27 +984,207 @@ final class SelectableWebView: WKWebView {
     }
 }
 
+/// Pooled WebView wrapped with its design-system error overlay, loopback self-signed certificate confirmation, and
+/// native JavaScript alert/confirm/prompt dialogs.
+struct WebPageView: View {
+    var url: URL
+    var forwardedLabel: String? = nil
+    @Binding var title: String
+    var nav: WebNav? = nil
+    var onRetry: () -> Void
+    var onOpenExternal: (URL) -> Void
+    var onReprobePort: ((PortForwarder.Key) async -> PortPresence.ReprobeOutcome)? = nil
+    var onPick: (String, String) -> Void
+    @State private var pageState: WebPageState?
+    @State private var promptInput = ""
+
+    private var activeAlertMessage: String? {
+        if case .alert(let msg, _) = pageState?.pendingDialog?.kind { return msg }
+        return nil
+    }
+
+    private var activeConfirmMessage: String? {
+        if case .confirm(let msg, _) = pageState?.pendingDialog?.kind { return msg }
+        return nil
+    }
+
+    private var activePromptMessage: String? {
+        if case .prompt(let msg, _, _) = pageState?.pendingDialog?.kind { return msg }
+        return nil
+    }
+
+    var body: some View {
+        ZStack {
+            PooledWebView(
+                url: url,
+                title: $title,
+                nav: nav,
+                forwardedLabel: forwardedLabel,
+                onRetry: onRetry,
+                onOpenExternal: onOpenExternal,
+                onReprobePort: onReprobePort,
+                onPick: onPick,
+                onState: { pageState = $0 }
+            )
+            if let error = pageState?.loadError {
+                ScrollView {
+                    EmptyStateView(
+                        symbol: error.symbol,
+                        title: error.title,
+                        message: error.message,
+                        action: (title: String(localized: "Retry"), run: onRetry),
+                        tint: Theme.caution
+                    )
+                    .containerRelativeFrame(.vertical)
+                }
+                .background(Theme.pageBackground)
+                .accessibilityIdentifier("webview-error-overlay")
+            }
+        }
+        .alert(
+            String(localized: "Untrusted Local Certificate"),
+            isPresented: Binding(
+                get: { pageState?.pendingTrustPrompt != nil },
+                set: { shown in
+                    if !shown, let p = pageState?.pendingTrustPrompt {
+                        pageState?.declinedSelfSigned = true
+                        pageState?.loadError = .declinedSelfSigned
+                        p.resolve(trust: false)
+                        pageState?.pendingTrustPrompt = nil
+                    }
+                }
+            )
+        ) {
+            Button(String(localized: "Don't Trust"), role: .cancel) {
+                if let p = pageState?.pendingTrustPrompt {
+                    pageState?.declinedSelfSigned = true
+                    pageState?.loadError = .declinedSelfSigned
+                    p.resolve(trust: false)
+                    pageState?.pendingTrustPrompt = nil
+                }
+            }
+            Button(String(localized: "Trust for This Session")) {
+                if let p = pageState?.pendingTrustPrompt {
+                    p.resolve(trust: true)
+                    pageState?.pendingTrustPrompt = nil
+                }
+            }
+        } message: {
+            Text("This certificate is self-signed by the development server on your computer (\(pageState?.pendingTrustPrompt?.displayLabel ?? "")). Trust it only if you started this server. Trust applies only to this port during this session.")
+        }
+        .background {
+            Color.clear
+                .alert(
+                    String(localized: "Page Message"),
+                    isPresented: Binding(
+                        get: { activeAlertMessage != nil },
+                        set: { if !$0 { pageState?.pendingDialog?.finishAlert(); pageState?.advanceDialog() } }
+                    )
+                ) {
+                    Button(String(localized: "OK [In App Tunnel View f867f3]"), role: .cancel) {
+                        pageState?.pendingDialog?.finishAlert()
+                        pageState?.advanceDialog()
+                    }
+                } message: {
+                    Text(activeAlertMessage ?? "")
+                }
+                .background {
+                    Color.clear
+                        .alert(
+                            String(localized: "Confirm"),
+                            isPresented: Binding(
+                                get: { activeConfirmMessage != nil },
+                                set: { if !$0 { pageState?.pendingDialog?.finishConfirm(false); pageState?.advanceDialog() } }
+                            )
+                        ) {
+                            Button(String(localized: "Cancel"), role: .cancel) {
+                                pageState?.pendingDialog?.finishConfirm(false)
+                                pageState?.advanceDialog()
+                            }
+                            Button(String(localized: "OK [Interactive Assistant View Card fac2a6]")) {
+                                pageState?.pendingDialog?.finishConfirm(true)
+                                pageState?.advanceDialog()
+                            }
+                        } message: {
+                            Text(activeConfirmMessage ?? "")
+                        }
+                        .background {
+                            Color.clear
+                                .alert(
+                                    String(localized: "Page Prompt"),
+                                    isPresented: Binding(
+                                        get: { activePromptMessage != nil },
+                                        set: { if !$0 { pageState?.pendingDialog?.finishPrompt(nil); pageState?.advanceDialog() } }
+                                    )
+                                ) {
+                                    TextField("", text: $promptInput)
+                                    Button(String(localized: "Cancel"), role: .cancel) {
+                                        pageState?.pendingDialog?.finishPrompt(nil)
+                                        pageState?.advanceDialog()
+                                    }
+                                    Button(String(localized: "OK [Interactive Assistant View Card fac2a6]")) {
+                                        let value = promptInput
+                                        pageState?.pendingDialog?.finishPrompt(value)
+                                        pageState?.advanceDialog()
+                                    }
+                                } message: {
+                                    Text(activePromptMessage ?? "")
+                                }
+                        }
+                }
+        }
+        .onChange(of: pageState?.pendingDialog?.id) { _, _ in
+            if case .prompt(_, let defaultText, _) = pageState?.pendingDialog?.kind {
+                promptInput = defaultText
+            }
+        }
+    }
+}
+
 struct PooledWebView: UIViewRepresentable {
     var url: URL
     @Binding var title: String
     /// Told where the page is (the preview's bar, #150).
     var nav: WebNav? = nil
+    var forwardedLabel: String? = nil
+    var onRetry: (() -> Void)? = nil
+    var onOpenExternal: ((URL) -> Void)? = nil
+    var onReprobePort: ((PortForwarder.Key) async -> PortPresence.ReprobeOutcome)? = nil
     var onPick: (String, String) -> Void
+    var onState: ((WebPageState) -> Void)? = nil
 
     func makeUIView(context: Context) -> SelectableWebView {
         let v = WebViewPool.shared.view(for: url)
         v.removeFromSuperview()
         v.onPick = onPick
+        configureState(v)
         context.coordinator.url = url
         context.coordinator.observe(v) { title = $0 }
         nav?.attach(v)
+        let state = v.pageState
+        Task { @MainActor in onState?(state) }
         return v
     }
 
-    func updateUIView(_ v: SelectableWebView, context: Context) { v.onPick = onPick }
+    func updateUIView(_ v: SelectableWebView, context: Context) {
+        v.onPick = onPick
+        context.coordinator.url = url
+        configureState(v)
+    }
+
+    private func configureState(_ v: SelectableWebView) {
+        v.pageState.isPresented = true
+        v.pageState.initialURL = url
+        v.pageState.forwardedLabel = forwardedLabel
+        v.pageState.onRetry = onRetry
+        v.pageState.onOpenExternalURL = onOpenExternal
+        v.pageState.onReprobePort = onReprobePort
+    }
 
     /// The sheet has closed: this opening's page and history go with it, and the next tap on the link starts fresh (#4074).
     static func dismantleUIView(_ v: SelectableWebView, coordinator: Coordinator) {
+        v.pageState.isPresented = false
+        v.pageState.dismissPendingPrompts()
         if let url = coordinator.url { WebViewPool.shared.release(v, for: url) }
     }
 

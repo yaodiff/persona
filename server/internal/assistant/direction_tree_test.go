@@ -324,7 +324,7 @@ func TestDirectionTreeNestsSpawnedAndSubAgents(t *testing.T) {
 	for _, k := range kids {
 		ids = append(ids, k.SessionID)
 	}
-	if !slices.Equal(ids, []string{"s-c", "s-p@a1", "s-cx"}) {
+	if !slices.Equal(ids, []string{"s-c", "s-p@a1", "s-p@a3", "s-cx"}) {
 		t.Fatalf("children: %+v", kids)
 	}
 	if kids[0].Title != "Spawned" || kids[0].State != proto.StateIdle {
@@ -334,8 +334,69 @@ func TestDirectionTreeNestsSpawnedAndSubAgents(t *testing.T) {
 		sub.Children[0].SessionID != "s-p@a2" || sub.Children[0].Title != "Read one file" {
 		t.Fatalf("sub-agents: %+v", sub)
 	}
-	if cx := kids[2]; cx.Title != "Codex child" || cx.Agent != "codex" || cx.State != proto.StateWorking {
+	if done := kids[2]; done.Title != "Done already" || done.State != proto.StateIdle {
+		t.Fatalf("stopped sub-agent: %+v", done)
+	}
+	if cx := kids[3]; cx.Title != "Codex child" || cx.Agent != "codex" || cx.State != proto.StateWorking {
 		t.Fatalf("codex child: %+v", cx)
+	}
+}
+
+func TestDirectionTreeStoppedSubagentSnapshot(t *testing.T) {
+	e := treeEnv(t)
+	e.task("Review", func(t *Todo) {
+		t.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+		t.Agents = []TodoAgent{{MachineID: "mac", SessionID: "root"}}
+	})
+	root := proto.Session{MachineID: "mac", SessionID: "root", State: proto.StateIdle}
+	read := func() treeDirection {
+		t.Helper()
+		e.f.setSessions("mac", root)
+		rec := httptest.NewRecorder()
+		e.s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assistant/directions/tree", nil))
+		var tree directionTree
+		if err := json.Unmarshal(rec.Body.Bytes(), &tree); err != nil || rec.Code != http.StatusOK || len(tree.Directions) == 0 {
+			t.Fatalf("direction tree: %d %s", rec.Code, rec.Body)
+		}
+		return tree.Directions[0]
+	}
+
+	// The child is reported before its stopped launcher.
+	for _, running := range []bool{true, false} {
+		root.Subagents = []proto.Subagent{
+			{ID: "child", ParentID: "parent", Running: running},
+			{ID: "parent"},
+		}
+		d := read()
+		if d.Running != running {
+			t.Fatalf("child running %v: direction running %v", running, d.Running)
+		}
+		kids := d.Tasks[0].Agents[0].Children
+		if len(kids) != 1 || kids[0].SessionID != "root@parent" || kids[0].State != proto.StateIdle {
+			t.Fatalf("expected the stopped parent under the root: %+v", kids)
+		}
+		wantState := proto.StateIdle
+		if running {
+			wantState = proto.StateWorking
+		}
+		if child := kids[0].Children; len(child) != 1 || child[0].SessionID != "root@child" || child[0].State != wantState {
+			t.Fatalf("expected %s child under the stopped parent: %+v", wantState, child)
+		}
+	}
+
+	// Two stopped launchers name each other. A repeated session still occupies one row.
+	root.Subagents = []proto.Subagent{
+		{ID: "a", ParentID: "b"}, {ID: "b", ParentID: "a"}, {ID: "a", ParentID: "b"},
+	}
+	kids := read().Tasks[0].Agents[0].Children
+	if len(kids) != 1 || kids[0].SessionID != "root@a" || len(kids[0].Children) != 1 ||
+		kids[0].Children[0].SessionID != "root@b" || len(kids[0].Children[0].Children) != 0 {
+		t.Fatalf("expected one row for each session in the cycle: %+v", kids)
+	}
+
+	root.Subagents = nil
+	if kids := read().Tasks[0].Agents[0].Children; len(kids) != 0 {
+		t.Fatalf("rows absent from the new snapshot: %+v", kids)
 	}
 }
 

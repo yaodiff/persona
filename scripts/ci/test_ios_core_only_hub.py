@@ -25,7 +25,7 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         entries = {name: full for name in (
             "sidebar-health", "settings-live-screen", "settings-meetings", "settings-health", "settings-mail",
             "connector-lark", "connector-lark-bot", "channel-feishu", "voice-extension", "composer-menu-meeting",
-            "inbox-lark-filter", "inbox-empty-lark-mail")}
+            "inbox-lark-filter", "inbox-mail-filter", "inbox-empty-lark-mail")}
         entries["sidebar-meeting-recording"] = True
         captures = [f"{edition}-{look}-{page}.png" for look in ("light", "dark") for page in (
             "assistant", "agents", "inbox", "inbox-beautiful", "todos", "drawer", "settings", "advanced", "connectors", "channels", "devices")]
@@ -39,7 +39,8 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
                          "off_by_hub": [] if full else ["health", "screen-share", "voice"]},
             "module_flags": ["modules"] + [f"module.{name}" for name in DRIVER.smoke.module_ids()] if full else ["modules"],
             "pages": {"agents": "loaded", "inbox": "loaded empty", "todos": "loaded empty"},
-            "inbox_styles": {style: {"lark_filter": full, "lark_mail_message": full, "generic_message": not full}
+            "inbox_styles": {style: {"lark_filter": full, "mail_filter": full, "lark_mail_message": full,
+                                     "generic_message": not full}
                              for style in ("glass", "beautiful")},
             "entries": entries, "app_alive_at_end": True, "screenshots": captures,
         }
@@ -77,6 +78,14 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         proof["inbox_styles"]["beautiful"]["lark_filter"] = True
         with self.assertRaises(DRIVER.Failed):
             DRIVER.validate_proof(proof, "core-only", "run", self.shots)
+        proof = self.proof("core-only")
+        proof["inbox_styles"]["glass"]["mail_filter"] = True
+        with self.assertRaises(DRIVER.Failed):
+            DRIVER.validate_proof(proof, "core-only", "run", self.shots)
+        proof = self.proof("full")
+        proof["inbox_styles"]["beautiful"]["mail_filter"] = False
+        with self.assertRaises(DRIVER.Failed):
+            DRIVER.validate_proof(proof, "full", "run", self.shots)
         proof = self.proof("full")
         proof["inbox_styles"]["glass"]["generic_message"] = True
         with self.assertRaises(DRIVER.Failed):

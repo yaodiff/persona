@@ -96,6 +96,7 @@ func TestPlacesThatSealAreKnown(t *testing.T) {
 		"internal/hub/secretkey.go":                            3, // the hub's own secret.key
 		"internal/hub/peer_pair.go":                            2, // the hub's key: linked hubs' tokens
 		"internal/hub/devices_service.go":                      1, // the hub's key: the computers' connector credentials
+		"internal/hub/preview_origin.go":                       1, // the hub's key: self-contained preview session cookies, never stored
 		"internal/hub/push_transport.go":                       1, // a phone's push key (pushcrypto)
 		"internal/pushcrypto/pushcrypto.go":                    1, // HPKE to a phone
 		"internal/webpush/webpush.go":                          1, // RFC 8291 to a browser's subscription keys: a message, never stored

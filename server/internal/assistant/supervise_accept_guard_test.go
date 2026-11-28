@@ -301,3 +301,22 @@ func TestCloseoutFollowUpRequiresDisposition(t *testing.T) {
 		})
 	}
 }
+
+func TestCloseoutFollowUpAllowsCannotOutcome(t *testing.T) {
+	for _, field := range []string{"Missing", "Waiting"} {
+		t.Run(field, func(t *testing.T) {
+			s, _, todo := guardedReviewTask(t, "The vendor has retired its API.\n\n### Persona 工作报告\n- Status: blocked\n- Merged: n/a\n- Deployed: n/a\n- Delivery: none\n- "+field+": Pending vendor access\n\n---")
+			raw := reviewRaw(t, todo.ID, map[string]any{
+				"verdict": reviewAccepted,
+				"outcome": outcomeCannot,
+				"reason":  "The vendor has retired its API.",
+			})
+			if _, err := s.runTool(t.Context(), "server", "conv1", "task_review", raw); err != nil {
+				t.Fatalf("terminal cannot review refused with Closeout %s: %v", field, err)
+			}
+			if current := todoNow(s, todo.ID); current.DoneAt == nil {
+				t.Fatal("terminal cannot review left the task open")
+			}
+		})
+	}
+}

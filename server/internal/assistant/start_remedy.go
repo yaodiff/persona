@@ -20,12 +20,13 @@ import (
 // A supervised task whose agent did not start because the new tab's shell stopped on a question (shell_waiting) or
 // the agent's own screen stopped before it was ready (agent_start_stalled) keeps that tab on its computer for a while
 // (node/shellsettle.go, #2570). Its start is not failed yet: the task is "remedying" (PlanTask.Start), the
-// supervising main conversation hears of it with the tab's screen, and it may read the tab (task_start_screen), type
-// into it (task_start_keys) and start again in it (task_retry), up to startRemedyRetries times. Only the hub retries
-// nothing by itself. The start fails for good, with its start_error and failed receipt, when the supervision turn
-// that saw it ends with no retry going, when the tab is no longer kept, or when a retry fails in a way that keeps no
-// tab. A turn that never told the user gets the hub's own notice and push (remedyTurnEnded). Every remedy step is a
-// start_remedy feed item, the data the live task cards (#2365) will show; the screen itself never goes in the feed.
+// supervising conversation hears of it with the tab's screen, and it or the main conversation (startRemedyAllowed)
+// may read the tab (task_start_screen), type into it (task_start_keys) and start again in it (task_retry), up to
+// startRemedyRetries times. The hub never retries by itself. The start fails for good, with its start_error and
+// failed receipt, when the supervision turn that saw it ends with no retry going, when the tab is no longer kept,
+// or when a retry fails without a kept tab. A turn that never told the user gets the hub's own notice and push
+// (remedyTurnEnded). Every remedy step is a start_remedy feed item for the live task cards (#2365). The screen
+// itself stays out of the feed.
 
 // startRemedyRetries is how many times the assistant may start a task again after its agent did not start.
 const startRemedyRetries = 3
@@ -150,23 +151,43 @@ func (s *Service) remedyOf(ctx context.Context, id string) (Todo, *TaskPlan, int
 	return todo, p, i, nil
 }
 
-// startRemedyAllowed limits start remedies to the main conversation or the task's current configured leader. Other
-// leaders, ordinary side conversations, former leaders and the background supervisor cannot operate this task.
+// startRemedyAllowed gives main the override and uses the task's recorded owner for other conversations (#17273).
+// Archive and former-main checks also deny old side conversations while a handover is pending.
 func (s *Service) startRemedyAllowed(ctx context.Context, self string, todo Todo) bool {
 	if s.isMain(ctx, self) {
 		return true
 	}
-	return todo.Supervision != nil && todo.Supervision.Supervisor == self && s.isLeader(ctx, self)
+	if self == "" || supervisorOf(todo) != self || s.isBackground(ctx, self) {
+		return false
+	}
+	_, _, agent := parseLeaderRef(self)
+	return !agent && (s.isLeader(ctx, self) || !isFormerMain(s.settings(ctx), self) && !s.isArchived(self))
 }
 
-// remedyTool is the task a remedy tool names, checked: the main conversation or its current leader, and its start being remedied.
-func (s *Service) remedyTool(ctx context.Context, self, id string) (Todo, *TaskPlan, int, *StartRemedy, error) {
+// remedyForTool checks the current supervisor after looking up the plan, which can overlap a handover.
+func (s *Service) remedyForTool(ctx context.Context, self, id string) (Todo, *TaskPlan, int, error) {
 	todo, p, i, err := s.remedyOf(ctx, strings.TrimSpace(id))
 	if err != nil {
-		return todo, nil, 0, nil, err
+		return todo, nil, 0, err
 	}
-	if !s.startRemedyAllowed(ctx, self, todo) {
-		return todo, nil, 0, nil, errors.New("only the main conversation or the task's current leader remedies its start")
+	current, ok := s.todoNow(todo.ID)
+	if !ok {
+		return Todo{}, nil, 0, db.ErrTodoNotFound
+	}
+	if s.startRemedyAllowed(ctx, self, current) {
+		return current, p, i, nil
+	}
+	if supervisor := supervisorOf(current); s.startRemedyAllowed(ctx, supervisor, current) && !s.isMain(ctx, supervisor) {
+		return current, nil, 0, errors.New("only the main conversation or the task's current supervising conversation can act on this failed start. Ask either conversation to do it")
+	}
+	return current, nil, 0, errors.New("only the main conversation can act on this failed start. Ask the main conversation to do it")
+}
+
+// remedyTool also checks that the task is in the state for kept-tab tools.
+func (s *Service) remedyTool(ctx context.Context, self, id string) (Todo, *TaskPlan, int, *StartRemedy, error) {
+	todo, p, i, err := s.remedyForTool(ctx, self, id)
+	if err != nil {
+		return todo, nil, 0, nil, err
 	}
 	r := p.Tasks[i].Start
 	if r == nil || r.State != remedying {
@@ -265,12 +286,9 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 	if err != nil {
 		return "", err
 	}
-	todo, p, i, err := s.remedyOf(ctx, strings.TrimSpace(a.TodoID))
+	todo, p, i, err := s.remedyForTool(ctx, self, a.TodoID)
 	if err != nil {
 		return "", err
-	}
-	if !s.startRemedyAllowed(ctx, self, todo) {
-		return "", errors.New("only the main conversation or the task's current leader retries its start")
 	}
 	pt := p.Tasks[i]
 	if pt.RequestGate != "" || s.planRequestGate(pt) != "" {

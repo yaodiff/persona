@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -44,6 +45,19 @@ func TestTaskDispatchPreparesWorkspaceOnNode(t *testing.T) {
 			t.Cleanup(database.Close)
 			st := repositorystore.New(database)
 			h := newWorkspaceTestHarness(t, st)
+			setHub(h.s, workspaceCallDeadlineHub{Hub: h.f, observe: func(ctx context.Context, call DeviceCall) {
+				if call.Method != taskworkspace.MethodPrefix+"prepare" {
+					return
+				}
+				deadline, ok := ctx.Deadline()
+				left := time.Until(deadline)
+				if !ok || tc.boundCount > 0 && left <= time.Duration(tc.boundCount)*taskworkspace.ColdFetchTimeout {
+					t.Errorf("prepare budget %v for %d bound repositories", left, tc.boundCount)
+				}
+				if tc.boundCount == 0 && left > taskworkspace.RPCTimeout {
+					t.Errorf("local prepare budget increased to %v", left)
+				}
+			}})
 			h.f.nodes["task.workspace.capabilities"] = func(string, json.RawMessage) (any, error) {
 				return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true, LocalGit: true, EmptyRepositories: true}, nil
 			}

@@ -155,6 +155,7 @@ func (n *Node) syncCodexCards(ctx context.Context) {
 	// (claudeoutside_ask.go). So do the commands waiting for input in agy panes (agyinput.go).
 	cards = append(cards, n.outsideAskCards()...)
 	cards = append(cards, n.commandInputCards(ctx)...)
+	cards = append(cards, n.runtimes.inputCards()...)
 	// Matching blocked folders may resolve a symlink on the filesystem.
 	cards = slices.DeleteFunc(cards, func(ix proto.Interaction) bool { return n.sessionBlocked(ix.SessionID, ix.Cwd) })
 	now := time.Now()
@@ -767,6 +768,9 @@ func (n *Node) codexAnswerAt(ctx context.Context, session, id string, createdAt 
 			}
 		}
 		return n.outsideAnswer(ctx, session, id, r) // a Claude session's question outside Persona's terminals
+	}
+	if strings.HasPrefix(id, runtimeInputPrefix) {
+		return n.runtimeInputAnswer(ctx, session, id, r)
 	}
 	if strings.HasPrefix(id, proto.CommandInputPrefix) {
 		return n.commandInputAnswer(ctx, session, id, r) // a command waiting for input in an agy pane

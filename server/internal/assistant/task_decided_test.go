@@ -194,12 +194,30 @@ func TestTaskDecidedUserCheckRecordsDecisionOnTodo(t *testing.T) {
 	}); isErr {
 		t.Fatalf("task_decided user_check pass: %s", got)
 	}
+	// The pass closes the task, so what it came to is recorded in the background as well (goRecordTaskOutcome, a
+	// decision of source outcome). Wait for it rather than read the store while it may still be writing: the owner's
+	// pass is the one manual decision, the completion's outcome the one outcome decision, whichever was written first
+	// (#17879).
+	s.tasks.outcomeRuns.Wait()
 	list, err := database.ListTodoDecisions(context.Background(), todo.ID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].Choice != "Pass" || list[0].Reason != said ||
-		list[0].Source != db.DecisionManual || list[0].SourceSession != "conv1" {
-		t.Fatalf("decisions %+v", list)
+	var manual, outcome []db.TodoDecisionRow
+	for _, d := range list {
+		switch d.Source {
+		case db.DecisionManual:
+			manual = append(manual, d)
+		case db.DecisionOutcome:
+			outcome = append(outcome, d)
+		default:
+			t.Fatalf("unexpected decision %+v", d)
+		}
+	}
+	if len(manual) != 1 || manual[0].Choice != "Pass" || manual[0].Reason != said || manual[0].SourceSession != "conv1" {
+		t.Fatalf("owner decisions %+v (all %+v)", manual, list)
+	}
+	if len(outcome) != 1 || !strings.HasPrefix(outcome[0].SourceMessage, "outcome:"+todo.ID+":") {
+		t.Fatalf("outcome decisions %+v (all %+v)", outcome, list)
 	}
 }

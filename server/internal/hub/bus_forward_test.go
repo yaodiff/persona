@@ -23,7 +23,9 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // Exercise authentication and the bus codec with in-memory tokens and an RPC pipe, without Postgres.
@@ -190,6 +192,8 @@ func TestBusForwardsTheAssistantRoutes(t *testing.T) {
 		{"POST", "/api/v1/todos/reorganize"},
 		{"POST", "/api/v1/todos/decisions/batch"},
 		{"POST", "/api/v1/todos/t1/blockers"},
+		{"POST", "/api/v1/todos/t1/backend-workspace/prepare"},
+		{"POST", "/api/v1/assistant/repositories/repo_web/mirrors/node1/sync"},
 		{"DELETE", "/api/v1/todos/t1/blockers/blk_1"},
 		{"PUT", "/api/v1/todos/t1/spaces/m1/group/alpha"}, {"GET", "/api/v1/assistant"}, {"PUT", "/api/v1/assistant"},
 		{"POST", "/api/v1/assistant/conversations"}, {"POST", "/api/v1/assistant/main/new"}, {"POST", "/api/v1/assistant/main/clear"},
@@ -220,6 +224,29 @@ func TestBusForwardsTheAssistantRoutes(t *testing.T) {
 	}
 	if resp, _ := do("GET", "/api/v1/machines", ""); resp.StatusCode != 200 {
 		t.Fatalf("the hub's own: %d", resp.StatusCode)
+	}
+}
+
+func TestBusForwardWorkspaceTimeouts(t *testing.T) {
+	mux := http.NewServeMux()
+	(&Hub{}).assistantRoutesRelayed(mux)
+	perRepo := repositorywire.MirrorEnsureTimeout + taskworkspace.GitTimeout + taskworkspace.ColdFetchTimeout
+	for _, tc := range []struct {
+		path string
+		want time.Duration
+	}{
+		{"/api/v1/task-plans/p1/start", 5 * time.Minute},
+		{"/api/v1/assistant/repositories/repo_web/mirrors/node1/sync", repositorywire.MirrorEnsureTimeout + time.Minute},
+		{"/api/v1/todos/t1/backend-workspace/prepare", repositorywire.MaxTaskRepositories*perRepo + taskworkspace.RPCTimeout + time.Minute},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, nil)
+		_, pattern := mux.Handler(req)
+		if pattern == "" {
+			t.Fatalf("no route registered for %s", tc.path)
+		}
+		if got := relayHTTPTimeout(pattern); got != tc.want {
+			t.Errorf("%s relay timeout = %v, want %v", tc.path, got, tc.want)
+		}
 	}
 }
 

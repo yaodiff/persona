@@ -390,8 +390,8 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 		ix.NoHandBack = s.permissionNoHandBack(ix, inAssistant)
 	}
 	if ix.Detachable && ix.Resumable {
-		// A journaled original is already an outcome, never a new operation. Do
-		// this before detachedOriginalReplay, Always and new-card registration so
+		// A journaled original is a retained request or outcome. Check it
+		// before detachedOriginalReplay, Always and new-card registration so
 		// even a replay ahead of restoreInteractions fails closed.
 		if r, ok, err := s.journaledDetachedReplay(ctx, ix); err != nil {
 			return proto.Resolution{}, err
@@ -439,6 +439,10 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 // registration, before announcements or waits; a completed occurrence can then
 // be replayed from its durable outcome instead of displacing its successor.
 func (s *Service) lockInteractionAdmission(id string) func() {
+	return s.acquireInteractionAdmission(id, true)
+}
+
+func (s *Service) acquireInteractionAdmission(id string, wait bool) func() {
 	s.fleet.mu.Lock()
 	if s.fleet.admissions == nil {
 		s.fleet.admissions = map[string]*interactionAdmission{}
@@ -448,10 +452,16 @@ func (s *Service) lockInteractionAdmission(id string) func() {
 		gate = &interactionAdmission{}
 		s.fleet.admissions[id] = gate
 	}
+	if !wait && !gate.mu.TryLock() {
+		s.fleet.mu.Unlock()
+		return nil
+	}
 	gate.refs++
 	s.fleet.mu.Unlock()
 
-	gate.mu.Lock()
+	if wait {
+		gate.mu.Lock()
+	}
 	return func() {
 		gate.mu.Unlock()
 		s.fleet.mu.Lock()
@@ -1299,16 +1309,6 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 	// Who answered, for the history (interactions.ended_by): the route the apps answer through says it came from a
 	// device (db.WithEndedBy); someone answering for the user, or a kept "Always", says so in the answer itself.
 	by := cmpOr(endedByOf("", &r), db.EndedBy(ctx))
-	s.fleet.mu.Lock()
-	prepared := s.fleet.interactions[id]
-	isPrepared := prepared != nil && prepared.prepared != nil
-	s.fleet.mu.Unlock()
-	if isPrepared {
-		if err := validateInteractionDecision(prepared.ix, r); err != nil {
-			return err
-		}
-		return s.resolvePreparedAnswerAt(ctx, prepared, r, remember, authorization, expected)
-	}
 	// A manager work card is answered in the manager, not by the stopped agent. Its local dismiss/defer choices remain
 	// valid, but an answer that would send text must be refused before the card is claimed and its answer is retried.
 	if ix, ok := s.pendingIx(id); ok && ix.ToolName == workCardTool && workResolutionSends(ix, r) {
@@ -1318,6 +1318,14 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 	}
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
+	if p != nil && p.prepared != nil {
+		ix := p.ix
+		s.fleet.mu.Unlock()
+		if err := validateInteractionDecision(ix, r); err != nil {
+			return err
+		}
+		return s.resolvePreparedAnswerAt(ctx, p, r, remember, authorization, expected)
+	}
 	if p != nil && !expected.matches(p.ix) {
 		s.fleet.mu.Unlock()
 		return fmt.Errorf("interaction %s is %w", id, errNotPending)
@@ -1646,26 +1654,32 @@ func (s *Service) finishExpiredPending(expected *pending) {
 // finished tells everyone an interaction, already out of the pending set, is over.
 func (s *Service) finished(p *pending) {
 	s.taskPlanApproval()
-	go s.urgentCardDone(p.ix.ID) // a call about it stops ringing (urgent_call_loop.go)
 	s.fleet.mu.Lock()
-	done := assistantwire.FleetResolved{ID: p.ix.ID, CreatedAt: p.ix.CreatedAt, AnsweredBy: p.answeredBy}
+	ix := p.ix
+	done := assistantwire.FleetResolved{ID: ix.ID, CreatedAt: ix.CreatedAt, AnsweredBy: p.answeredBy}
 	if done.AnsweredBy != "" {
 		done.Reason, done.Answers = p.answeredReason, p.answeredWith
 	}
 	var how *proto.Resolution
-	if p.expired && p.ix.ToolName == "ask_user" { // the assistant's question becomes a to-do (ask_todo.go): its card says so
+	if p.expired && ix.ToolName == "ask_user" { // the assistant's question becomes a to-do (ask_todo.go): its card says so
 		how = &proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
 	}
+	resyncScreen := p.expired && p.local == nil && !ix.NoHandBack &&
+		(ix.Kind == proto.IxPermission || ix.Kind == proto.IxQuestion && ix.ToolName == "AskUserQuestion")
 	s.fleet.mu.Unlock()
-	if how != nil && s.askLaterSpokeOf(p.ix.ID) {
+	go s.urgentCardDone(ix.ID) // a call about it stops ringing (urgent_call_loop.go)
+	if how != nil && s.askLaterSpokeOf(ix.ID) {
 		// Asked without waiting, and the owner wrote in the conversation meanwhile: it makes no to-do (ask_later.go).
 		how.Reason = proto.DismissedInChat
 	}
-	s.channelsEnded(p.ix, how)
+	s.channelsEnded(ix, how)
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
 	s.tellResolved(done)
-	s.publishSessions(p.ix.MachineID)
-	s.cardStateChanged(p.ix)
+	s.publishSessions(ix.MachineID)
+	s.cardStateChanged(ix)
+	if resyncScreen {
+		s.syncScreenAfterHookExpiry(ix.MachineID, ix.SessionID)
+	}
 }
 
 // The hub treats omissions from a reconnect inventory as resolutions. Order the read and the
@@ -2439,26 +2453,6 @@ func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInterac
 	for _, ix := range cancelled {
 		s.tellResolved(assistantwire.FleetResolved{ID: ix.ID, CreatedAt: ix.CreatedAt})
 	}
-	for i := range resumable {
-		if s.isInboxWholeBashAlways(ctx, resumable[i]) {
-			resumable[i].AlwaysKeys = nil
-			notKept := false
-			resumable[i].AlwaysHonored = &notKept
-		}
-		if resumable[i].Kind == proto.IxPermission {
-			inAssistant := false
-			if resumable[i].Cwd != "" {
-				inAssistant = s.ixInAssistant(ctx, resumable[i])
-			} else {
-				lookupCtx, cancel := context.WithTimeout(ctx, historyTimeout)
-				inAssistant = s.ixInAssistant(lookupCtx, resumable[i])
-				cancel()
-			}
-			if resumable[i].OwnerProposal || resumable[i].Detachable || s.permissionNoHandBack(resumable[i], inAssistant) {
-				resumable[i].NoHandBack = true
-			}
-		}
-	}
 	if recStore, ok := s.store().(interactionRecorder); ok && len(cancelled) > 0 {
 		for _, cancelledIX := range cancelled {
 			readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
@@ -2477,6 +2471,27 @@ func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInterac
 		}
 	}
 	s.restoreInteractionSnapshots(ctx, store, resumable, false)
+}
+
+func (s *Service) restoreInteractionPolicy(ctx context.Context, ix *proto.Interaction) {
+	if s.isInboxWholeBashAlways(ctx, *ix) {
+		ix.AlwaysKeys = nil
+		notKept := false
+		ix.AlwaysHonored = &notKept
+	}
+	if ix.Kind == proto.IxPermission {
+		inAssistant := false
+		if ix.Cwd != "" {
+			inAssistant = s.ixInAssistant(ctx, *ix)
+		} else {
+			lookupCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+			inAssistant = s.ixInAssistant(lookupCtx, *ix)
+			cancel()
+		}
+		if ix.OwnerProposal || ix.Detachable || s.permissionNoHandBack(*ix, inAssistant) {
+			ix.NoHandBack = true
+		}
+	}
 }
 
 // resumableInteractionReader is the non-mutating half of startup expiration.
@@ -2528,6 +2543,19 @@ func (s *Service) restoreInteractionSnapshots(ctx context.Context, store Store, 
 	}
 	var back, retry []proto.Interaction
 	for _, ix := range snapshot {
+		s.restoreInteractionPolicy(ctx, &ix)
+		var entry approvalJournalEntry
+		if ix.Detachable {
+			readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+			var err error
+			entry, _, err = s.approvalJournalRecord(readCtx, ix)
+			cancel()
+			if err != nil {
+				retry = append(retry, ix)
+				s.logf("read restored approval journal %s: %v", ix.ID, err)
+				continue
+			}
+		}
 		releaseAdmission := s.lockInteractionAdmission(ix.ID)
 		s.fleet.mu.Lock()
 		m := s.ixMapLocked()
@@ -2547,10 +2575,17 @@ func (s *Service) restoreInteractionSnapshots(ctx context.Context, store Store, 
 			continue
 		}
 		if rec != nil && rec.Status == "pending" && sameDurableApprovalOccurrence(ix, rec.Interaction) {
-			p := &pending{ix: ix, done: make(chan proto.Resolution, 1)} // not told: whether it rang is not kept
+			p := &pending{ix: ix, done: make(chan proto.Resolution, 1)}
+			if !s.prepareRestoredDetached(p, rec.Interaction, entry) {
+				s.fleet.mu.Unlock()
+				releaseAdmission()
+				continue
+			}
 			m[ix.ID] = p
-			s.orphanLocked(p)
-			back = append(back, ix)
+			if p.prepared == nil {
+				s.orphanLocked(p)
+			}
+			back = append(back, p.ix)
 		}
 		s.fleet.mu.Unlock()
 		releaseAdmission()

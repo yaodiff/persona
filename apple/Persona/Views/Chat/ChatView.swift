@@ -26,6 +26,9 @@ struct ChatView: View {
     /// The session on screen; the sibling strip can switch it to another agent in the same space.
     @State private var key: SessionKey
     var style: ChatStyle = .dev
+    @StoredValue(BotmuxDisplayMode.storageKey) private var botmuxMode: BotmuxDisplayMode = .decoded
+
+    private var isBotmuxSession: Bool { session?.host == "botmux" || session?.hostKind == "botmux" }
     @State private var position = ScrollPosition(edge: .top) // .top is the newest end of the flipped list
     /// Where the chat stands with its newest end: ↓, following and holding back all come from it (#1046). Changed
     /// through `setFollow` only.
@@ -921,7 +924,8 @@ struct ChatView: View {
                                        supervision: openSupervision, active: shownRoundActive, background: foldsBackground,
                                        foldRoutineRelayReplies: foldRoutineRelayReplies, latestReplyNeedsAttention: latestReplyNeedsAttention,
                                        closeout: shownCloseout != nil, children: childStamp, modes: modes.map { "\($0.kind)@\($0.at.timeIntervalSince1970)" },
-                                       turnChanges: showsTurnChanges, cwd: showsTurnChanges ? (session?.cwd ?? "") : "")
+                                       turnChanges: showsTurnChanges, cwd: showsTurnChanges ? (session?.cwd ?? "") : "",
+                                       botmuxMode: botmuxMode, botmuxSession: isBotmuxSession)
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -1023,7 +1027,8 @@ struct ChatView: View {
     /// What builds the lines from the blocks, with what is open now.
     private var lineBuilder: ChatLines {
         ChatLines(openWork: openWork, openAll: Self.debugOpenAll, openRuns: openRuns,
-                  openAllRuns: Self.debugOpenRuns, chipRuns: AppStyle.current.usesBeautifulUI,
+                  openAllRuns: Self.debugOpenRuns, botmuxMode: botmuxMode, botmuxSession: isBotmuxSession,
+                  chipRuns: AppStyle.current.usesBeautifulUI,
                   foldsIntoRun: foldsIntoRun, includeTurnChanges: showsTurnChanges,
                   turnChangesCwd: showsTurnChanges ? session?.cwd : nil,
                   foldSupervision: style == .assistant, foldBackground: foldsBackground,
@@ -3159,7 +3164,7 @@ struct ChatView: View {
             // Streamed text, the typing line and unsent messages sit at the newest end too: while you read
             // history they wait with the rest, as they were drawn then (`Frozen`).
             if drawsLive, !ChatLines.hidesLiveSupervision(lines, open: openSupervision, openAll: Self.debugOpenSupervision) {
-                ChatLiveText(store: store, held: frozen?.text)
+                ChatLiveText(store: store, held: frozen?.text, hidesBotmuxSentinel: isBotmuxSession && botmuxMode == .decoded)
             }
             // Sent, and the agent not on it yet: the line the new-conversation page showed under the first message
             // (`FirstMessagePending`), where the turn's work line comes in. Without it the chat that took over showed
@@ -3798,6 +3803,7 @@ struct ChatView: View {
     }
 
     @ViewBuilder private var moreMenuItems: some View {
+        if isBotmuxSession { BotmuxModePicker(mode: $botmuxMode) }
         #if os(iOS)
         if style == .dev, let host { hostedMenuItems(host) }
         if style == .dev, let session {
@@ -5470,7 +5476,9 @@ struct ChatView: View {
 
     /// A user's line: a bubble, or what stands for it (a message from a source, one Persona injected, a loop's tick, a peer's).
     @ViewBuilder private func userRow(_ i: Item, showsSource: Bool, hidesPrompt: Bool) -> some View {
-        if let source = MessageSource.of(i) {
+        if botmuxMode == .decoded, i.botmux?.isInbound == true {
+            BotmuxMessagesView(item: i).equatable()
+        } else if let source = MessageSource.of(i) {
             SourceMessage(item: i, source: source, showsSource: showsSource, hidesPrompt: hidesPrompt).equatable()
         } else if let n = Injected.of(i) {
             // Persona's message for the model: one line in its place, never its words (docs/protocol/protocol.md「Messages injected by Persona」).
@@ -5490,7 +5498,11 @@ struct ChatView: View {
         case .user(let i): userRow(i, showsSource: showsSource, hidesPrompt: hidesPrompt).chatMark("chat.user." + i.id)
         case .assistant(let i):
             VStack(alignment: .leading, spacing: 0) {
-                AssistantText(item: i).equatable().chatMark("chat.answer." + i.id)
+                if botmuxMode == .decoded, i.botmux?.kind == "reply" {
+                    BotmuxMessagesView(item: i).equatable().chatMark("chat.answer." + i.id)
+                } else {
+                    AssistantText(item: i).equatable().chatMark("chat.answer." + i.id)
+                }
                 ReplyUsageFooter(item: i)
             }
         case .thinking(let i):
@@ -8439,6 +8451,7 @@ private struct ChatLiveText: View {
     /// in a branch of its own beside this one (both rows `live`), the frozen words never showed, this view stayed in
     /// the lazy list and went on growing under the finger (2026-11-04, StreamingScrollTests: 9 to 30 pt every delta).
     var held: String?
+    var hidesBotmuxSentinel = false
     /// The new conversation layout: the answer streams in the box it settles in (#1666).
     @Environment(\.chatLayout) private var layout
 
@@ -8450,7 +8463,7 @@ private struct ChatLiveText: View {
         let text = held ?? (Self.shows(store) ? store.liveText : "")
         // Held, or the stream over: the words whole, not revealed further (#6651).
         let done = held != nil || store.liveDone
-        if !text.isEmpty {
+        if !text.isEmpty, !hidesBotmuxSentinel || !BotmuxDisplay.hidesSentinel(text, role: "assistant", mode: .decoded) {
             if layout.on {
                 StreamingText(text: text, done: done)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -8639,6 +8652,8 @@ final class ChatScratch {
         /// Whether completed Agent exchanges emit Changed Files cards (#12016), and the folder used for display paths.
         var turnChanges = false
         var cwd = ""
+        var botmuxMode: BotmuxDisplayMode = .decoded
+        var botmuxSession = false
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []

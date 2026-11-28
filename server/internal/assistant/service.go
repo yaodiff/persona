@@ -104,6 +104,7 @@ type Service struct {
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
 	agyNodePush     agyNodeConfigPush
+	botmuxOwnerPush botmuxOwnerPush // the BotMux Owner Union ID's pushes to the nodes (agents_botmux_owner.go)
 	// nodeRecovery tracks node online/boot timestamps to run recovery sweeps after outages or reboots (#14781).
 	nodeRecovery nodeRecoveryBook
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
@@ -452,6 +453,9 @@ type Service struct {
 	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
 	// taken up (tests).
 	sendsSettleHook func()
+	// digestTakenHook, when set, runs as a digest has taken its batch out of the gather and before it marks the batch
+	// sent (sendDigestLocked; tests: the same signal raised again in between).
+	digestTakenHook func()
 	// askRetryHook, when set, runs as the asks route's Retry has found the failed start its ask names, before the start
 	// reads the to-do again (tests: the to-do reopens or fails anew in between).
 	askRetryHook func(id string)
@@ -1399,6 +1403,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	if f := s.sessionsSeen; f != nil {
 		f(d)
 	}
+	s.todos.observeResumedSessions(d)
 	s.noteNodeOnline(d.MachineID, time.Now())
 	s.toolLoopsChanged(d)
 	s.progressSessions(d, time.Now()) // what the working agents do, for no_progress (supervise_progress.go)

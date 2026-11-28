@@ -76,7 +76,7 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
     /// An Agent working on a to-do, or one of its sub-Agents (`children`, same shape).
     nonisolated struct AgentNode: Codable, Hashable, Sendable, Identifiable {
         var machineID: String
-        /// A sub-Agent running inside a session is `<parent>@<id>`.
+        /// An in-session sub-Agent uses `<parent>@<id>`.
         var sessionID: String
         var title: String
         /// claude, codex…; may be empty.

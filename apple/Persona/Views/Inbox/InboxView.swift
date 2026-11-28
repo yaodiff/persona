@@ -82,6 +82,12 @@ nonisolated struct InboxSourceVisibility: Hashable, Sendable {
         mail = mailOffered || stored?.mail != false
     }
 
+    /// Only Mail's kind entry depends on mail; @Me, DMs, Group chat and Agent remain independent (#17814).
+    func shows(kind: String) -> Bool { kind != "mail" || mail }
+
+    /// All when the selected kind's entry disappeared; every still-visible selection stays as it was.
+    func selection(forKind kind: String) -> String { shows(kind: kind) ? kind : "" }
+
     var caughtUpMessage: String {
         switch (lark, mail) {
         case (true, true): String(localized: "New Lark messages and emails show up here.")
@@ -227,6 +233,7 @@ struct InboxPage: View {
                     // its Inbox opens on Needs You, as any Inbox entered (#9053)
                     bar.enter(query)
                 }
+                .onChange(of: sourceVisibility) { _, visibility in keepSelectedFilterVisible(visibility) }
                 // The section bar (#9053): text in the search shows All, clearing it brings the choice back.
                 .onChange(of: query) { _, text in bar.search(text) }
                 // The Inbox entered again while this page stayed up (the place in front chosen again, a widget, a quick
@@ -236,6 +243,7 @@ struct InboxPage: View {
                 // Entered for the first time beneath an item (a place's kept path brought back): the list opens on the
                 // item's choice, so Back lands where the item is. Later appearances keep the choice as it was.
                 .onAppear {
+                    keepSelectedFilterVisible(sourceVisibility)
                     guard !appeared else { return }
                     appeared = true
                     if let item = InboxBarLanding.shared.shown { land(on: item) }
@@ -1329,6 +1337,14 @@ struct InboxPage: View {
                               mailOffered: MailModule.access.offersMail, stored: store.storedSources)
     }
 
+    private func keepSelectedFilterVisible(_ visibility: InboxSourceVisibility) {
+        let selected = visibility.selection(forKind: kind)
+        guard selected != kind else { return }
+        // All is source + kind; do not leave another source active beneath the reset Mail kind.
+        source = ""
+        kind = selected
+    }
+
     /// Sources (all, Lark, each mail account) then kinds, as one row of chips; in the BeautifulUI style its filter chips,
     /// wrapping to a second row (no sideways scrolling at the top of a page, like the Agents list).
     @ViewBuilder private var filters: some View {
@@ -1345,7 +1361,9 @@ struct InboxPage: View {
                     filterChip(c.name, on: source == c.id) { source = source == c.id ? "" : c.id }
                 }
                 ForEach(Self.kinds, id: \.0) { k, title in
-                    filterChip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    if sourceVisibility.shows(kind: k) {
+                        filterChip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1377,7 +1395,9 @@ struct InboxPage: View {
                 }
                 Divider().scaledFrame(height: Theme.Size.badge)
                 ForEach(Self.kinds, id: \.0) { k, title in
-                    chip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    if sourceVisibility.shows(kind: k) {
+                        chip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    }
                 }
             }
             .padding(.horizontal, Theme.Space.l)

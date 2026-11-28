@@ -1343,6 +1343,9 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, e
 	if strings.Contains(route, "$") || strings.Contains(path, "$(") || strings.Contains(path, "`") || !resolved && method != "GET" {
 		return larkCall{}, "", false
 	}
+	if _, err := validateGateProxyPath(strings.TrimPrefix(route, "/")); err != nil {
+		return larkCall{}, "", false
+	}
 	c := larkCall{Method: method}
 	if g.PathPrefix != "" {
 		path = strings.TrimPrefix(path, g.PathPrefix)

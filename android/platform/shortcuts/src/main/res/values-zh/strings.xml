@@ -62,4 +62,19 @@
     <string name="shortcuts_main_chat_todo_stuck">已卡住</string>
     <string name="shortcuts_main_chat_todo_working">进行中</string>
     <string name="shortcuts_main_chat_todo_planned">待开始</string>
+    <string name="shortcuts_widget_configure_title">选择对话</string>
+    <string name="shortcuts_widget_configure_search_hint">搜索对话…</string>
+    <string name="shortcuts_widget_configure_section_main">主对话</string>
+    <string name="shortcuts_widget_configure_section_directions">常驻方向</string>
+    <string name="shortcuts_widget_configure_section_others">其他对话</string>
+    <string name="shortcuts_widget_configure_main_chat">主对话</string>
+    <string name="shortcuts_widget_configure_main_chat_subtitle">始终跟随你的 Persona 主对话</string>
+    <string name="shortcuts_widget_configure_untitled">未命名对话</string>
+    <string name="shortcuts_widget_configure_selected">当前</string>
+    <string name="shortcuts_widget_configure_offline_notice">当前离线，显示本地缓存对话；仍可选择主对话或已缓存对话。</string>
+    <string name="shortcuts_widget_configure_unpaired_notice">尚未配对，可先选择主对话，稍后再连接。</string>
+    <string name="shortcuts_widget_configure_no_matches">没有匹配的对话</string>
+    <string name="shortcuts_widget_configure_no_matches_hint">换个关键词试试，或清空搜索框。</string>
+    <string name="shortcuts_widget_binding_missing_hint">该对话已归档或移除，点击重新选择。</string>
+    <string name="shortcuts_widget_binding_missing_short">已失效 · 点击重选</string>
 </resources>

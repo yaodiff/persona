@@ -543,11 +543,19 @@ describe("a piece's Agent tree", () => {
     expect([subagentLink({ session_id: "L" }, "L", "a1"), subagentLink({ session_id: "" }, "L", "a1"), subagentLink(undefined, "L", "a1")]).toEqual(["L@a1", "L@a1", "L@a1"]);
   });
 
-  it("keeps a summary row's running subagents from the direction tree when no complete row is there", () => {
+  it("keeps a stopped parent and its running child from the direction tree when no complete row is available", () => {
     const todos = [todo("lead", { agents: [link("L")] })];
-    const tree = dir("lead", [{ machine_id: "mac", session_id: "L", title: "lead", state: "working", children: [{ machine_id: "mac", session_id: "L@a", title: "Explore the API", state: "working" }] }]);
+    const tree = dir("lead", [{ machine_id: "mac", session_id: "L", title: "lead", state: "working", children: [
+      { machine_id: "mac", session_id: "L@a", title: "Explore the API", state: "idle", children: [
+        { machine_id: "mac", session_id: "L@b", title: "Check one endpoint", state: "working" },
+      ] },
+    ] }]);
     const agents = buildGraph({ todos, plans: {}, data: { todos, tree, lookup: makeSessionLookup([session("L")]) } }).active[0].nodes[0].agents;
-    expect(agents.map((a) => [a.key, a.role, a.title, a.ended])).toEqual([["mac/L", "lead", "agent L", false], ["sub:mac/L/a", "subagent", "Explore the API", false]]);
+    expect(agents.map((a) => [a.key, a.role, a.title, a.parent, a.state, a.ended])).toEqual([
+      ["mac/L", "lead", "agent L", undefined, "working", false],
+      ["sub:mac/L/a", "subagent", "Explore the API", "mac/L", "", true],
+      ["sub:mac/L/b", "subagent", "Check one endpoint", "sub:mac/L/a", "working", false],
+    ]);
   });
 
   it("is drawn only when more than one Agent is on the piece, the earlier ones aside", () => {

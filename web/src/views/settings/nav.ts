@@ -8,9 +8,9 @@ import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
 import { SUB } from "./href";
+import { INTEGRATIONS_SETTINGS_REGISTRATION } from "./integrations-registration";
 import {
   integrationManager,
-  integrationQuery,
   isLegacyIntegrationTab,
   parseSettingsPath,
   readIntegrationsAddress,
@@ -18,6 +18,7 @@ import {
 } from "./integrations-route";
 
 export { settingsHref } from "./href";
+export { INTEGRATIONS_SETTINGS_REGISTRATION } from "./integrations-registration";
 
 export type CoreTab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "integrations" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "advanced" | "devices" | "hub" | "managers" | "knowledge" | "avatar" | "labs";
 /** A feature module's category (core/module-host.ts `settingsTabs`): its key, never a core one. */
@@ -106,9 +107,10 @@ export function tabInfo(k: Tab): { label: string; icon: IconName; hint: string }
  *  When `integrationsV2` is true, collapses `channels`, `connectors`, `extensions`, and `sources` into `integrations`. */
 export function navGroups(integrationsV2 = false): { key: NavGroup; tabs: Tab[] }[] {
   const extra = enabledSettingsTabs();
+  const unifiedVisible = INTEGRATIONS_SETTINGS_REGISTRATION.isVisible({ integrationsV2 });
   return NAV_GROUPS.map((g) => {
     const coreTabs = g.tabs.filter((k) =>
-      integrationsV2 ? !isLegacyIntegrationTab(k) : k !== "integrations",
+      unifiedVisible ? !isLegacyIntegrationTab(k) : k !== INTEGRATIONS_SETTINGS_REGISTRATION.id,
     );
     const modTabs = extra.filter((m) => m.group === g.key).map((m) => m.key);
     return { key: g.key, tabs: modTabs.length ? [...coreTabs, ...modTabs] : coreTabs };
@@ -148,12 +150,9 @@ export function redirectLegacySettings(
   integration = readIntegrationsAddress(search, path),
 ): string | null {
   if (integration?.route.view.kind === "unavailable") return null;
+  const redirected = INTEGRATIONS_SETTINGS_REGISTRATION.redirectAddress(search, hash, path, integrationsV2, integration);
+  if (redirected) return redirected;
   const q = new URLSearchParams(search);
-  if (integration && integrationsV2 !== "loading" && integrationsV2 !== (integration.tab === "integrations")) {
-    for (const key of ["tab", "manager", "integration", "filter", "channel", "connector", "extension", "plugin", "state", "set", "purpose"]) q.delete(key);
-    integrationQuery(integration.route, integrationsV2).forEach((value, key) => q.set(key, value));
-    return `/settings?${q.toString()}${hash}`;
-  }
   const pathRoute = parseSettingsPath(path);
   let changed = false;
   if (pathRoute) {

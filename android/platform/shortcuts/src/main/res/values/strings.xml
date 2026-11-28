@@ -66,4 +66,19 @@
     <string name="shortcuts_main_chat_todo_stuck">Stuck</string>
     <string name="shortcuts_main_chat_todo_working">In progress</string>
     <string name="shortcuts_main_chat_todo_planned">Not started</string>
+    <string name="shortcuts_widget_configure_title">Choose conversation</string>
+    <string name="shortcuts_widget_configure_search_hint">Search conversations…</string>
+    <string name="shortcuts_widget_configure_section_main">Main chat</string>
+    <string name="shortcuts_widget_configure_section_directions">Standing directions</string>
+    <string name="shortcuts_widget_configure_section_others">Other conversations</string>
+    <string name="shortcuts_widget_configure_main_chat">Main chat</string>
+    <string name="shortcuts_widget_configure_main_chat_subtitle">Always follow your primary Persona conversation</string>
+    <string name="shortcuts_widget_configure_untitled">Untitled conversation</string>
+    <string name="shortcuts_widget_configure_selected">Selected</string>
+    <string name="shortcuts_widget_configure_offline_notice">Offline — showing cached conversations. You can still pick Main chat or any listed conversation.</string>
+    <string name="shortcuts_widget_configure_unpaired_notice">Not paired yet — you can pick Main chat now and connect later.</string>
+    <string name="shortcuts_widget_configure_no_matches">No matching conversations</string>
+    <string name="shortcuts_widget_configure_no_matches_hint">Try another keyword or clear your search.</string>
+    <string name="shortcuts_widget_binding_missing_hint">This conversation was archived or removed. Tap to choose another.</string>
+    <string name="shortcuts_widget_binding_missing_short">Unavailable · Tap to reselect</string>
 </resources>

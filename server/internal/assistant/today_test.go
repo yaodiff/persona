@@ -204,7 +204,6 @@ func TestTodayCardReadsNoPlans(t *testing.T) {
 	loc := e.s.location(ctx)
 	now := time.Now().In(loc)
 	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	// task_plans and assistant_feed are not truncated between tests, so the names are fresh.
 	conversation := "today_" + randomHex(6)
 	planCard := func(i int, at time.Time) {
 		t.Helper()

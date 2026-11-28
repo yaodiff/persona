@@ -545,12 +545,13 @@ func (c *agyChange) describe(bin agyBinary) string {
 	return fmt.Sprintf("agy at %s was replaced", bin.path)
 }
 
-// logWait says once per change that the restart waits for the companion's work: an agy turn in flight, or a call the
-// node is waiting on, would be cut by it. The old file keeps running until then.
+// logWait says once per change that the restart waits for the companion's work: an agy turn in flight, finite
+// background work a session left running, or a call the node is waiting on, would be cut by it. The old file keeps
+// running until then, with no deadline: a background command that never ends holds the restart until it is stopped.
 func (c *agyChange) logWait(logger *log.Logger, bin agyBinary) {
 	if !c.logged {
 		c.logged = true
-		logger.Printf("agy runtime: %s; restarting once no agy session is working", c.describe(bin))
+		logger.Printf("agy runtime: %s; restarting once no agy session is working or running background work", c.describe(bin))
 	}
 }
 
@@ -577,6 +578,9 @@ func (rh *RuntimeHost) agyPeers(instance string) (builtin *runtimeConn, external
 	return builtin, external
 }
 
+// waitAgyIdle waits until no call to the companion is pending and agyWorking is false, the companion's connection
+// ends, or ctx does: the external-runtime handoff bounds it by its yield grace, so background work that runs longer is
+// cut then, as a long turn is.
 func (h *runtimeConn) waitAgyIdle(ctx context.Context) {
 	if h.peer.WaitPending(ctx) != nil {
 		return
@@ -599,13 +603,68 @@ func (h *runtimeConn) agyBusy() bool {
 	return h.peer.Pending() > 0 || h.agyWorking()
 }
 
+// agyWorking: one of the companion's sessions has a turn in flight, or its turn ended while finite background work it
+// started still runs in the companion's `agy acp` (agyFiniteBackground, #17200): stopping the companion now would cut
+// either one.
 func (h *runtimeConn) agyWorking() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, session := range h.sessions {
-		if session.Status == proto.StatusWorking {
+		if session.Status == proto.StatusWorking || agyFiniteBackground(session) {
 			return true
 		}
+	}
+	return false
+}
+
+// agyFiniteBackground: s lists background work the companion identified and that ends by itself, which a companion
+// restart would stop ("All your subagents and background tasks have been stopped due to server restart"): a Background
+// task agyIdentifiedFiniteTask accepts, or a running entry in Subagents or Workflows. Only identified work counts, so a
+// misread row can never hold an upgrade forever: integrations/antigravity/lib/background.js extractBackground calls a
+// task shell both for a matched run_command (with its command line) and for any start notice it could not match to its
+// tool call (none, or two calls claiming the step), and a description cannot tell an unmatched command from an
+// unmatched schedule in either direction (its own fixtures include a one-shot timer described "Check status" and a
+// cron schedule described "Timer: 60s"). Schedules (kind monitor: agy's `schedule`, cron or one-shot, which the row does
+// not tell apart) are left out too, so a one-shot timer, like an unmatched task, is still stopped by a restart, as
+// before #17200; closing that needs the companion to carry what it knows (its computed oneShot, whether a task was
+// matched), the companion-side follow-up.
+// The rows are the companion's runtime.sessions: Background lists only tasks running in a session its `agy acp` has
+// loaded (a terminal's tasks come separately, in agyPaneBackground, and a restart does not stop them), and the
+// hub-derived BackgroundWorking / BackgroundWaiting are not read, as they count a monitor too. Unlike
+// agySessionRowSafeIdle, which keeps idle compaction off every session with any background entry, this only decides
+// whether a restart must wait. The list is not a full inventory: the companion lists only its recent sessions
+// (rt.recent: up to 80 from the last 14 days, besides those with live work, assistants and ones the phone drove lately)
+// and at most 50 running tasks per session, which this node caps at 50 too, so a command in an unlisted idle session or
+// behind 50 schedules is missed. Closing that needs a drain signal the companion computes before those limits (#17200,
+// the companion-side follow-up).
+func agyFiniteBackground(s proto.Session) bool {
+	for _, task := range s.Background {
+		if agyIdentifiedFiniteTask(task) {
+			return true
+		}
+	}
+	for _, sub := range s.Subagents {
+		if sub.Running {
+			return true
+		}
+	}
+	for _, wf := range s.Workflows {
+		if wf.Running {
+			return true
+		}
+	}
+	return false
+}
+
+// agyIdentifiedFiniteTask: task is finite background work the companion matched to its tool call: a run_command (kind
+// shell with its command line; an unmatched notice has none), a run_workflow (kind workflow) or an invoke_subagent
+// (kind agent), the only kinds extractBackground gives a matched call besides schedules.
+func agyIdentifiedFiniteTask(task proto.BackgroundTask) bool {
+	switch task.Kind {
+	case "workflow", "agent":
+		return true
+	case "shell":
+		return task.Command != ""
 	}
 	return false
 }

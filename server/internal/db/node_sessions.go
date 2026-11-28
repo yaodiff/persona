@@ -96,6 +96,8 @@ type NodeSession struct {
 	StartOpID string `json:"start_op_id,omitempty"`
 	// RemoteAgent latches true once a session belongs to a remote assistant runtime (node/session_state.go).
 	RemoteAgent bool `json:"remote_agent,omitempty"`
+	// RuntimeAssistant records a node-owned assistant conversation even when its working directory is a project.
+	RuntimeAssistant bool `json:"runtime_assistant,omitempty"`
 	// SegmentInputs holds bounded accepted logical client_msg_id receipts for assistant.segment.input reconciliation.
 	SegmentInputs []string `json:"segment_inputs,omitempty"`
 }
@@ -145,7 +147,7 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 			'origin_known', $30::boolean, 'engine_runtime', $31::text, 'model_source', $32::jsonb,
 			'desktop_pending_model', $33::text, 'desktop_pending_effort', $34::text,
 			'app_mode_explicit', $35::boolean, 'ran_at', $36::bigint, 'start_op_id', $37::text, 'remote_agent', $38::boolean,
-			'segment_inputs', $39::jsonb, 'orca_terminal', $40::jsonb), now() FROM saved
+			'segment_inputs', $39::jsonb, 'orca_terminal', $40::jsonb, 'runtime_assistant', $41::boolean), now() FROM saved
 		ON CONFLICT (key) DO UPDATE SET value = (CASE
 			WHEN COALESCE((settings.value->>'stop_cause_at')::bigint, 0) > $26
 				OR (COALESCE((settings.value->>'stop_cause_at')::bigint, 0) = $26
@@ -153,9 +155,10 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 			THEN EXCLUDED.value || jsonb_build_object('stop_cause', settings.value->'stop_cause',
 				'stop_cause_at', settings.value->'stop_cause_at')
 			ELSE EXCLUDED.value END)
-			-- ran_at only moves forward; remote_agent is latch-only and never clears once set.
+			-- ran_at only moves forward; an older node omitting a role cannot clear it.
 			|| jsonb_build_object('ran_at', GREATEST(COALESCE((settings.value->>'ran_at')::bigint, 0), $36::bigint),
-				'remote_agent', COALESCE((settings.value->>'remote_agent')::boolean, false) OR $38::boolean)
+				'remote_agent', COALESCE((settings.value->>'remote_agent')::boolean, false) OR $38::boolean,
+				'runtime_assistant', COALESCE((settings.value->>'runtime_assistant')::boolean, false) OR $41::boolean)
 			-- start_op_id is immutable once recorded: a later update carrying "" keeps the original op id.
 			|| CASE WHEN COALESCE(settings.value->>'start_op_id', '') <> '' AND $37::text = ''
 				THEN jsonb_build_object('start_op_id', settings.value->'start_op_id')
@@ -189,7 +192,7 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch, engineHistory, pendingHandoff,
 		modelRecovery, s.FollowsSetting, string(s.StopCause), s.StopCauseAt, s.AwaitingFirstMessage, jsonOrNil(s.IdleCompaction), s.Origin, s.OriginKnown,
 		s.EngineRuntime, jsonOrNil(s.ModelSource), s.DesktopPendingModel, s.DesktopPendingEffort, s.AppModeExplicit, s.RanAt, s.StartOpID, s.RemoteAgent,
-		jsonOrNil(segmentInputs), jsonOrNil(s.OrcaTerminal))
+		jsonOrNil(segmentInputs), jsonOrNil(s.OrcaTerminal), s.RuntimeAssistant)
 	return err
 }
 
@@ -237,11 +240,12 @@ type nodeModel struct {
 	AwaitingFirstMessage bool `json:"awaiting_first_message"`
 	// EngineRuntime: the engine runtime whose start wrote the record ("" for a terminal's, and for a row written before
 	// it was kept).
-	EngineRuntime string          `json:"engine_runtime"`
-	StartOpID     string          `json:"start_op_id"`
-	RemoteAgent   bool            `json:"remote_agent"`
-	SegmentInputs []string        `json:"segment_inputs"`
-	OrcaTerminal  json.RawMessage `json:"orca_terminal"`
+	EngineRuntime    string          `json:"engine_runtime"`
+	StartOpID        string          `json:"start_op_id"`
+	RemoteAgent      bool            `json:"remote_agent"`
+	RuntimeAssistant bool            `json:"runtime_assistant"`
+	SegmentInputs    []string        `json:"segment_inputs"`
+	OrcaTerminal     json.RawMessage `json:"orca_terminal"`
 }
 
 // jsonOrNil is raw, or nil when it holds nothing (empty, or a JSON null).
@@ -284,6 +288,7 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		s.EngineRuntime = m.EngineRuntime
 		s.StartOpID = m.StartOpID
 		s.RemoteAgent = m.RemoteAgent
+		s.RuntimeAssistant = m.RuntimeAssistant
 		s.SegmentInputs = m.SegmentInputs
 		s.OrcaTerminal = jsonOrNil(m.OrcaTerminal)
 		s.StopCause, s.StopCauseAt = m.StopCause, m.StopCauseAt

@@ -91,6 +91,16 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     val draftError by (editor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
     val composer = storedComposer ?: rememberChatComposerState()
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val pendingChatFocus by persona.feature.chat.ChatComposerFocus.requests.collectAsStateWithLifecycle()
+    LaunchedEffect(key, pendingChatFocus, composer) {
+        val entry = pendingChatFocus ?: return@LaunchedEffect
+        if (!persona.feature.chat.ChatComposerFocus.take(key, entry)) return@LaunchedEffect
+        kotlinx.coroutines.delay(300)
+        composer.focusRequest++
+        kotlinx.coroutines.delay(100)
+        keyboard?.show()
+    }
     var pane by rememberSaveable { mutableStateOf<FilesPane?>(null) }
     // A path opened from a message or a tool card: the files pane opens straight on it.
     var openedPath by rememberSaveable { mutableStateOf<String?>(null) }

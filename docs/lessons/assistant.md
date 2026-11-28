@@ -7,6 +7,9 @@
   make a queued topic reset change the channel's default target. Use a synchronized clock in rollback tests because
   background snapshots also read the clock, including from managers that have been reloaded.
 
+- A start failure awaiting retry is open for supervision handover even though the stored row has `done_at`
+  (#17273). Use `closedForGood` to distinguish it from completed or cancelled work.
+
 - Node preparation can call back into the hub for settings (#16065). Release the database connection before the RPC
   and use the existing durable start claim and candidate receipt to reconcile it. Recheck the epoch when mapping the
   receipt and keep late candidate identities for cleanup. A batch larger than the pool should exercise a real
@@ -604,6 +607,12 @@ conversations' cards with the user, and the new route had to share that rule (`s
 For an Agent's permission without an open to-do (#16093), use the active relay queue and keep the card available
 in the app once its hold ends. Tie the queued message to the card's current route. A queued wake can outlive its card
 or the manager that routed it, so check the route before sending and drop stale wakes even if their target stays offline.
+
+For an internal question that outlives its manager (#17823), restore the task and its worker link before publishing
+the question in the restart fixture. The real store already has that assignment. Capture the relay while its send is
+blocked and again after the queue removal is durable. A pending card gets a fresh wake in both cases. Check the queued
+wake against the current route before looking for an earlier send in the transcript, so the previous route's retry
+timer cannot delay the fresh wake.
 
 ## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
 

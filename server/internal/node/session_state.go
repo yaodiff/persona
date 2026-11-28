@@ -50,6 +50,7 @@ type sessionState struct {
 	CodexStartTier          string          `json:"codex_start_tier,omitempty"`
 	ModelFromRecovery       bool            `json:"model_from_recovery,omitempty"` // Model came from automatic recovery, not an explicit pick (#15622)
 	TaskExecution           bool            `json:"task_execution,omitempty"`      // the last Assistant input used strict scheduled execution
+	RuntimeAssistant        bool            `json:"runtime_assistant,omitempty"`   // the node started or addressed it as an assistant conversation
 	Origin                  string          `json:"origin,omitempty"`              // manager-recorded conversation source, for model-call authorization
 	OriginKnown             bool            `json:"origin_known,omitempty"`        // manager explicitly decided origin; false on pre-upgrade records
 	ConfigDir               string          `json:"config_dir,omitempty"`

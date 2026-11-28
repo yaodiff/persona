@@ -39,6 +39,21 @@ func queuedDigestFixture(t *testing.T, titles ...string) (*Service, *fakeHub, []
 	return s, f, tasks
 }
 
+func TestQueuedRoutineSignalsStayQuietWhenTaskWaitsForUser(t *testing.T) {
+	s, f, tasks := queuedDigestFixture(t, "Waiting for owner", "Still active")
+	if _, _, err := s.updateSupervision(t.Context(), tasks[0].ID, func(v *Supervision) bool {
+		v.State = reviewNeedsUser
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	drainQueuedDigest(t, s, f)
+	got := strings.Join(f.noticesTo("conv1"), "\n")
+	if strings.Contains(got, "Waiting for owner") || !strings.Contains(got, "Still active") {
+		t.Fatalf("queued digest did not follow the current task states: %s", got)
+	}
+}
+
 func drainQueuedDigest(t *testing.T, s *Service, f *fakeHub) {
 	t.Helper()
 	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}

@@ -7,6 +7,7 @@ import { t } from "../../i18n";
 import { formatSpan, type MinutesPoint, type RecordingMinutes } from "../../lib/kb";
 import { boldParts, TOPIC_BULLETS_SHOWN, TOPIC_GLYPH, TOPIC_TINTS, type MinutesOverview, type OverviewBullet, type OverviewCite, type OverviewLine, type OverviewTopic } from "./minutes-overview";
 import { decisionAnchor, overviewDecisionTargets, type DebateStatus, type MinutesDebate } from "./minutes-debates";
+import { formatPositionDisplays, resolvePositionDisplays, type DetailSpeakers } from "./speakers";
 import { Button, cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Card, TonePill } from "../../views/knowledge/KBParts";
@@ -18,10 +19,11 @@ type Cite = (item: OverviewCite) => React.ReactNode;
 /** The summary card. `cite` draws a line's source as the page's items do (the photo it cites, else its transcript
  *  time); `time` draws a transcript timestamp for disagreement positions and outcomes; `actions` and `open` are the
  *  page's own action items and open-question list. */
-export function MinutesOverviewCard({ minutes, overview, debates = [], cite, time, actions, open, highlighted, onJump }: {
+export function MinutesOverviewCard({ minutes, overview, debates = [], speakers, cite, time, actions, open, highlighted, onJump }: {
   minutes: RecordingMinutes;
   overview: MinutesOverview;
   debates?: readonly MinutesDebate[];
+  speakers?: DetailSpeakers | null;
   cite: Cite;
   time: (at: number) => React.ReactNode;
   actions: React.ReactNode;
@@ -105,6 +107,7 @@ export function MinutesOverviewCard({ minutes, overview, debates = [], cite, tim
         <MinutesDebatesSection
           debates={debates}
           decisions={minutes.decisions}
+          speakers={speakers}
           time={time}
           onDecisionJump={onJump ? jumpToDecision : undefined}
           canJumpDecision={(idx) => decisionTargets.has(idx)}
@@ -174,6 +177,7 @@ function debateStatusLabel(status: DebateStatus): string | null {
 export function MinutesDebatesSection({
   debates,
   decisions,
+  speakers,
   time,
   onDecisionJump,
   canJumpDecision,
@@ -181,6 +185,7 @@ export function MinutesDebatesSection({
 }: {
   debates: readonly MinutesDebate[];
   decisions?: readonly MinutesPoint[] | null;
+  speakers?: DetailSpeakers | null;
   time: (at: number) => React.ReactNode;
   onDecisionJump?: (decisionIndex: number) => void;
   canJumpDecision?: (decisionIndex: number) => boolean;
@@ -189,6 +194,7 @@ export function MinutesDebatesSection({
   const base = useId();
   if (!debates.length) return null;
   const headingId = `${base}-debates`;
+  const activeSpeakers = speakers && speakers.state === "ready" && speakers.quality !== "unknown" ? speakers : null;
   return (
     <section aria-labelledby={headingId} data-minutes-debates className={className}>
       <h4 id={headingId} className="mb-2 flex items-center gap-1.5 text-meta font-semibold leading-snug text-ink">
@@ -225,7 +231,11 @@ export function MinutesDebatesSection({
                 )}
               </div>
               <ul className="mt-2 space-y-1.5">
-                {debate.positions.map((pos, p) => (
+                {debate.positions.map((pos, p) => {
+                  const attribution = activeSpeakers
+                    ? formatPositionDisplays(resolvePositionDisplays(activeSpeakers.people, pos, activeSpeakers.quality))
+                    : pos.who ?? "";
+                  return (
                   <li key={p} data-minutes-debate-position className="flex gap-2 text-meta leading-relaxed">
                     <span aria-hidden className="minutes-mark flex h-[1lh] shrink-0 items-center justify-center">
                       <span className="minutes-mark-dot rounded-full bg-ink-3" />
@@ -233,12 +243,13 @@ export function MinutesDebatesSection({
                     <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
                       <p className="minutes-words min-w-0 grow break-words text-ink">
                         {pos.stance}
-                        {pos.who && <>{" "}<span className="inline-block max-w-full break-words pl-0.5 text-label text-ink-3">{pos.who}</span></>}
+                        {attribution && <>{" "}<span className="inline-block max-w-full break-words pl-0.5 text-label text-ink-3">{attribution}</span></>}
                       </p>
                       {pos.at !== undefined && <Source>{time(pos.at)}</Source>}
                     </div>
                   </li>
-                ))}
+                  );
+                })}
                 {debate.outcome && (
                   <li data-minutes-debate-outcome className="minutes-debate-outcome flex gap-2 border-t border-line pt-2 text-meta leading-relaxed">
                     <span aria-hidden className="minutes-mark flex h-[1lh] shrink-0 items-center justify-center">

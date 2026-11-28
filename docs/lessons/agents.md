@@ -1533,6 +1533,13 @@ between two requests, or a native read over HTTP, has none. Hold a lease for eac
 no other lease is held, with no await between that check and the replacement, and make new users wait for it. Retry once,
 and test with a fake whose ACP side reads the account once at startup.
 
+Signals that only cover a sign-out or a missing model miss the common case (#17860): the user signs in with a second
+account because the first one ran out of quota, discovery never fails, and every turn fails with `RESOURCE_EXHAUSTED`.
+A caller that retries every few minutes keeps the stale process from ever idling out. On macOS the sign-in lives in the
+login keychain, so a check on `antigravity-oauth-token` never fires there. Stamp where the CLI keeps its sign-in by
+metadata only (file stat, keychain item dates), compare it per process, treat quota and sign-in errors as a reason to
+replace, rate-limit that, and remember that terminal `agy` sessions on the old account write it back too.
+
 ## Codex speed has separate native metadata (#3865)
 
 Reasoning effort and speed are independent. Read `serviceTiers` rather than deriving Fast support from a model name,

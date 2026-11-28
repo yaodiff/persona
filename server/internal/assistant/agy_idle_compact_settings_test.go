@@ -89,28 +89,43 @@ func TestAgyIdleCompactSettingsToolAndNodeConfig(t *testing.T) {
 	s.fleet.interactions["ix-agy-1"] = &pending{ix: proto.Interaction{ID: "ix-agy-1", MachineID: "server", SessionID: "agy-11111111-2222-3333-4444-555555555555"}}
 	s.fleet.mu.Unlock()
 
-	calls := s.nodeConnectCalls(ctx, "server")
-	var found bool
-	for _, call := range calls {
-		if call.Method != "node.configure" {
-			continue
+	connectedPolicy := func() assistantwire.AgyIdleCompaction {
+		t.Helper()
+		calls := s.nodeConnectCalls(ctx, "server")
+		for _, call := range calls {
+			if call.Method != "node.configure" || !strings.Contains(string(call.Params), `"agy_idle_compaction"`) {
+				continue // Other node.configure calls carry settings such as the BotMux Owner Union ID.
+			}
+			var payload struct {
+				Policy  *assistantwire.AgyIdleCompaction `json:"agy_idle_compaction"`
+				Pending []string                         `json:"pending_interaction_sessions"`
+			}
+			if err := json.Unmarshal(call.Params, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Policy == nil {
+				t.Fatal("node.configure did not include an Antigravity idle compaction policy")
+			}
+			if len(payload.Pending) != 1 || payload.Pending[0] != "agy-11111111-2222-3333-4444-555555555555" {
+				t.Fatalf("unexpected pending_interaction_sessions: %v", payload.Pending)
+			}
+			return *payload.Policy
 		}
-		var payload struct {
-			Policy  *assistantwire.AgyIdleCompaction `json:"agy_idle_compaction"`
-			Pending []string                         `json:"pending_interaction_sessions"`
-		}
-		if err := json.Unmarshal(call.Params, &payload); err != nil {
-			t.Fatal(err)
-		}
-		if payload.Policy == nil || !payload.Policy.Enabled || payload.Policy.IdleMinutes != 10 || payload.Policy.ContextTokens != 200000 {
-			t.Fatalf("unexpected agy_idle_compaction payload: %+v", payload.Policy)
-		}
-		if len(payload.Pending) != 1 || payload.Pending[0] != "agy-11111111-2222-3333-4444-555555555555" {
-			t.Fatalf("unexpected pending_interaction_sessions: %v", payload.Pending)
-		}
-		found = true
-	}
-	if !found {
 		t.Fatalf("nodeConnectCalls did not include node.configure for AGY idle compaction: %+v", calls)
+		return assistantwire.AgyIdleCompaction{}
+	}
+	want := assistantwire.AgyIdleCompaction{
+		Enabled: true, IdleMinutes: 10, ContextTokens: 200_000, AssistantIdleMinutes: 30, AssistantContextTokens: 300_000,
+	}
+	if got := connectedPolicy(); got != want {
+		t.Fatalf("default agy_idle_compaction = %+v, want %+v", got, want)
+	}
+	off, minutes, tokens := false, 45, 450_000
+	setSettings(t, s, func(v *Settings) {
+		v.IdleAutoCompact, v.IdleAutoCompactMinutes, v.IdleAutoCompactTokens = &off, &minutes, &tokens
+	})
+	want.AssistantOff, want.AssistantIdleMinutes, want.AssistantContextTokens = true, minutes, tokens
+	if got := connectedPolicy(); got != want {
+		t.Fatalf("configured agy_idle_compaction = %+v, want %+v", got, want)
 	}
 }

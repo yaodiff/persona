@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../lib/api";
+import { t } from "../../i18n";
 import { setBotmuxMode } from "../../lib/botmux-mode";
 import { segments } from "../../lib/turns";
 import type { Item, Session } from "../../lib/types";
@@ -115,6 +116,17 @@ describe("botmux sessions in the chat", () => {
     await act(async () => root.render(<AgentStatusLine session={session} />));
     expect(host.innerHTML).toContain('data-testid="botmux-external-trigger-note"');
     expect(host.textContent).toContain("3.59.23");
+    act(() => root.unmount());
+  });
+
+  it("says why when no BotMux Owner Union ID is set, not to upgrade", async () => {
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const session = { machine_id: "m", session_id: "s", title: "t", cwd: "/tmp", status: "idle", botmux_external_trigger: true,
+      botmux_external_trigger_reason: "owner_unset" } as Session;
+    await act(async () => root.render(<AgentStatusLine session={session} />));
+    expect(host.querySelector('[data-testid="botmux-external-trigger-note"]')?.textContent).toBe(t("chat-botmux.owner_unset_notice"));
+    expect(host.textContent).not.toContain("3.59.23");
     act(() => root.unmount());
   });
 

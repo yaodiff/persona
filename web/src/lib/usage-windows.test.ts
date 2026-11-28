@@ -586,6 +586,16 @@ describe("provider cards and the reset timeline (#13173)", () => {
     expect(rows[1].lanes.map((l) => [l.label, l.long, Number(l.end.toFixed(4)), l.remainingMs])).toEqual([["5h", false, 0.0375, 2 * H], ["7d", true, 0.45 + (24 / 144) * 0.55 > 0 ? Number((0.45 + (24 / 144) * 0.55).toFixed(4)) : 0, 48 * H]]);
     expect(rows[0].lanes[0].end).toBe(1); // beyond 7 days runs to the end of the axis
   });
+  it("moves a rollout past its stale deadline out of account timelines and pinned sidebar items", () => {
+    const windows = [win("5h", 300, 30, H)];
+    const live = acct("seat", "Seat", "codex", windows);
+    const file = { ...acct("file", "Codex", "codex", windows, at(-H)), reading_source: "rollout" as const, stale_at: at(-H / 2) };
+    const readings = liveAccounts([live, file], NOW);
+    expect(providerTimeline(readings, NOW).map((r) => r.account.id)).toEqual(["seat"]);
+    const { items, custom } = selectSidebarUsageItems(readings, ["file", usageWindowPinId("file", windows[0])]);
+    expect(custom).toBe(false);
+    expect(items.map((item) => item.account.id)).toEqual(["seat"]);
+  });
   it("merges multi-model windows of the same kind into one lane taking the earliest reset, while dropping missing/ended resets", () => {
     const empty = acct("e", "Empty", "claude", [win("5h", 300, 1), win("7d", 10080, 1, -H)]);
     expect(providerTimeline([empty], NOW)).toEqual([]);

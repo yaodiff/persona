@@ -37,6 +37,7 @@
   "contribution_off": "已关闭",
   "change_failed": "修改失败：{error}",
   "unsaved": "有未保存的更改",
+  "fields_to_save_other": "还有 {count} 项待保存",
   "reload": "重新加载",
   "loading": "正在加载…",
   "unavailable": "暂不可用",

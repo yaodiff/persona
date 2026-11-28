@@ -133,7 +133,7 @@ describe("an extension's page after an operation", () => {
     expect(hub.detailReads).toBe(1);
     expect(host.textContent).not.toContain("Network access");
     typeInto(input(), "typed");
-    expect(host.textContent).toContain("有未保存的更改");
+    expect(host.textContent).toContain("还有 1 项待保存");
 
     hub.detail = detail({ permissions: [{ key: "net", title: "Network access" }] as HubExtensionDetail["permissions"] });
     await pushOp("other-ext", "upgrade");
@@ -185,7 +185,7 @@ describe("an extension's page after an operation", () => {
     const [, preflight] = hub.held;
     await act(async () => preflight(detail({ config: { greeting: "hello" } })));
     await flush();
-    expect(host.textContent).not.toContain("有未保存的更改");
+    expect(save.isConnected).toBe(false);
     await act(async () => again(detail({ config: { greeting: "hello" } })));
     await flush();
     expect(input().value).toBe("typed");
@@ -234,7 +234,7 @@ describe("an extension's page after an operation", () => {
 
     expect(retries.value).toBe("03");
     expect(input().value).toBe("authoritative");
-    expect(host.textContent).toContain("有未保存的更改");
+    expect(host.textContent).toContain("还有 1 项待保存");
     expect(hub.saveSent).toHaveLength(1);
   });
 
@@ -249,7 +249,7 @@ describe("an extension's page after an operation", () => {
     const [finish] = hub.saveHeld;
     await act(async () => finish(detail({ config: { greeting: "submitted" } })));
     expect(input().value).toBe("hello");
-    expect(host.textContent).toContain("有未保存的更改");
+    expect(host.textContent).toContain("还有 1 项待保存");
     expect(hub.saveSent).toEqual([{ greeting: "submitted" }]);
   });
 

@@ -56,5 +56,15 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:theme="@style/Theme.Persona.Shortcut" />
+        <activity
+            android:name="persona.platform.shortcuts.ConversationWidgetConfigureActivity"
+            android:exported="true"
+            android:label="@string/shortcuts_widget_configure_title"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode"
+            android:theme="@style/Theme.Persona.Shortcut.Configure">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

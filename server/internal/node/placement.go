@@ -139,7 +139,7 @@ func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool
 	if n.hostAgentsSeq == nil {
 		n.hostAgentsSeq = map[string]uint64{}
 	}
-	answered, applied, snapped, firstErr := false, false, false, error(nil)
+	answered, snapped, firstErr := false, false, error(nil)
 	heard := map[string]bool{} // the hosts that answered: the merge asks only their panes what they run (setAgentsAt)
 	for _, o := range outs {
 		if o.err != nil && errors.Is(o.err, host.ErrNotRunning) {
@@ -154,36 +154,30 @@ func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool
 			}
 			continue
 		}
-		answered = true
+		answered, snapped = true, snapped || o.full
+		heard[o.kind] = true // its entry is this snapshot now, or a newer one
 		if o.seq < n.hostAgentsSeq[o.kind] {
-			continue // a newer snapshot for this host already committed (#2133)
+			continue // a newer snapshot of this host is in hostAgents already: it stays (#2133)
 		}
 		n.hostAgentsSeq[o.kind] = o.seq
 		n.hostAgents[o.kind] = o.agents
-		heard[o.kind] = true
-		applied = true
-		snapped = snapped || o.full
 	}
-	var (
-		union []host.Agent
-		gen   uint64
-	)
-	if applied {
-		n.agentsGen++
-		gen = n.agentsGen
-		union = make([]host.Agent, 0)
-		for _, agents := range n.hostAgents { // hosts not in this partial refresh keep what they gave last
-			union = append(union, agents...)
-		}
+	if !answered {
+		n.mu.Unlock()
+		return firstErr
+	}
+	// Merged even when every snapshot here was superseded: the refresh that superseded it may not have written agents
+	// yet, and this one's caller reads them next (sessions.list, the list engine.use sends). Before, it returned and its
+	// caller got the agents from before both, which right after an engine switch is none (#17826). The merge is of
+	// hostAgents as they are now, so of the newer snapshots, never of this refresh's older ones.
+	n.agentsGen++
+	gen := n.agentsGen
+	union := make([]host.Agent, 0)
+	for _, agents := range n.hostAgents { // hosts not in this partial refresh keep what they gave last
+		union = append(union, agents...)
 	}
 	n.mu.Unlock()
 
-	if !answered {
-		return firstErr
-	}
-	if !applied {
-		return nil
-	}
 	committed, epochChanged := n.setAgentsAtGen(union, epoch, gen, heard)
 	if epochChanged {
 		return errEngineChanged
@@ -240,15 +234,15 @@ func (n *Node) refreshHostForPaneStrict(ctx context.Context, h host.Host, paneID
 	if n.hostAgentsSeq == nil {
 		n.hostAgentsSeq = map[string]uint64{}
 	}
-	if seq < n.hostAgentsSeq[h.Kind()] {
-		n.mu.Unlock()
-		return nil
-	}
 	if n.hostAgents == nil {
 		n.hostAgents = map[string][]host.Agent{}
 	}
-	n.hostAgentsSeq[h.Kind()] = seq
-	n.hostAgents[h.Kind()] = agents
+	// A newer snapshot of this host already in hostAgents stays (#2133); the merge below still runs, so the caller reads
+	// agents at least as new as this snapshot (refreshHostInventoryWithFailures, #17826).
+	if seq >= n.hostAgentsSeq[h.Kind()] {
+		n.hostAgentsSeq[h.Kind()] = seq
+		n.hostAgents[h.Kind()] = agents
+	}
 	n.agentsGen++
 	gen := n.agentsGen
 	union := make([]host.Agent, 0)
@@ -478,6 +472,8 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	return committed
 }
 
+// setAgentsAtGen is setAgentsAt for merge gen of hostAgents (0: none). It sets nothing (committed false) when a newer
+// merge was written already, and says when the engine changed since (epochChanged).
 func (n *Node) setAgentsAtGen(agents []host.Agent, epoch, gen uint64, heard map[string]bool) (committed, epochChanged bool) {
 	fromProcess := func(pane string) string {
 		if heard == nil || heard[host.ParsePane(pane).Kind] {
@@ -721,8 +717,13 @@ func (n *Node) setAgentsAtGen(agents []host.Agent, epoch, gen uint64, heard map[
 	if n.engEpoch != epoch {
 		return false, true
 	}
-	if gen != 0 && n.agentsGen != gen {
-		return false, false
+	if gen != 0 {
+		// Only a newer merge already written wins. One still running does not: dropped for it, this refresh's caller
+		// would read the agents from before both (#17826).
+		if gen < n.agentsCommitted {
+			return false, false
+		}
+		n.agentsCommitted = gen
 	}
 	for id, a := range m {
 		if isCodexWaitID(id) && n.panes[a.PaneID] != id {

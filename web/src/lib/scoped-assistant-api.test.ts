@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api, setPairedToken, setToken } from "./api";
 import { chooseManager, MANAGER_HEADER, pinManager, resetManagerChoice } from "./manager-choice";
 import { resetRoster, setRoster, type ManagerList } from "./managers";
-import { AssistantScopeUnverified, bindScopedAssistant, currentAssistant, ownedAssistant } from "./scoped-assistant-api";
+import { AssistantScopeUnverified, bindScopedAssistant, currentAssistant, currentScopedAssistantRoster, ownedAssistant, verifyScopedAssistantRoster } from "./scoped-assistant-api";
 
 const home = { id: "assistant", name: "Home", online: true };
 const work = { id: "work", name: "Work", online: true };
@@ -192,4 +192,24 @@ it("retires reads, subscribers, and queued writes on re-pairing with the same to
   expect(fetcher.mock.calls.filter(([url]) => url.endsWith(path))).toHaveLength(2);
   expect(oldEvents).not.toHaveBeenCalled();
   expect(freshEvents).toHaveBeenCalledOnce();
+});
+
+it("verifies capability with the current credential when an earlier roster read is still pending", async () => {
+  setRoster({ ...roster });
+  // A live editor has used the roster when its credential is replaced.
+  currentScopedAssistantRoster();
+  const late = deferred<Response>();
+  const capable = { ...work, extension_info_access_scoped: true };
+  const previous = { ...roster, managers: [home, capable] };
+  let rosterReads = 0;
+  hub(() => ++rosterReads === 1 ? late.promise : json(roster));
+
+  const oldRead = verifyScopedAssistantRoster();
+  const oldResult = expect(oldRead).rejects.toMatchObject({ name: "AbortError" });
+  setPairedToken("test-scoped-credential");
+  setRoster(previous);
+  expect(currentScopedAssistantRoster()).toBeNull();
+  await expect(verifyScopedAssistantRoster()).resolves.toEqual(roster);
+  late.resolve(json(previous));
+  await oldResult;
 });

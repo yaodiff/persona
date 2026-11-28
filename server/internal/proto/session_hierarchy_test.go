@@ -421,24 +421,51 @@ func TestSessionBotmuxExternalTriggerWire(t *testing.T) {
 	if s.BotmuxExternalTrigger() || s.Hierarchy != nil {
 		t.Fatalf("zero session should have false flag and nil hierarchy")
 	}
-	s.SetBotmuxExternalTrigger(true)
+	s.SetBotmuxExternalTrigger(BotmuxTriggerOwnerUnset)
 	b, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"botmux_external_trigger":true`) {
-		t.Fatalf("missing top-level botmux_external_trigger: %s", b)
+	if !strings.Contains(string(b), `"botmux_external_trigger":true`) ||
+		!strings.Contains(string(b), `"botmux_external_trigger_reason":"owner_unset"`) {
+		t.Fatalf("missing top-level botmux_external_trigger and its reason: %s", b)
 	}
 	var back Session
-	if err := json.Unmarshal(b, &back); err != nil || !back.BotmuxExternalTrigger() || !reflect.DeepEqual(back, s) {
+	if err := json.Unmarshal(b, &back); err != nil || !back.BotmuxExternalTrigger() ||
+		back.BotmuxExternalTriggerReason() != BotmuxTriggerOwnerUnset || !reflect.DeepEqual(back, s) {
 		t.Fatalf("round trip mismatch: %+v vs %+v (err=%v)", back.Hierarchy, s.Hierarchy, err)
 	}
+	upgrade := s
+	upgrade.SetBotmuxExternalTrigger(BotmuxTriggerUpgrade)
+	if !upgrade.BotmuxExternalTrigger() || upgrade.BotmuxExternalTriggerReason() != BotmuxTriggerUpgrade ||
+		s.BotmuxExternalTriggerReason() != BotmuxTriggerOwnerUnset {
+		t.Fatalf("changing the reason must copy on write: upgrade=%+v orig=%+v", upgrade.Hierarchy, s.Hierarchy)
+	}
 	clone := s
-	clone.SetBotmuxExternalTrigger(false)
+	clone.SetBotmuxExternalTrigger("")
 	if clone.BotmuxExternalTrigger() || clone.Hierarchy != nil || !s.BotmuxExternalTrigger() {
 		t.Fatalf("clearing clone failed copy-on-write or empty cleanup: clone=%+v orig=%+v", clone.Hierarchy, s.Hierarchy)
 	}
 	if bFalse, _ := json.Marshal(clone); strings.Contains(string(bFalse), "botmux_external_trigger") {
 		t.Fatalf("false flag must be omitted on wire: %s", bFalse)
+	}
+}
+
+func TestParseBotmuxOwnerUnionID(t *testing.T) {
+	for in, want := range map[string]BotmuxOwnerUnionID{
+		"":                               "",
+		"  ":                             "",
+		" on_abc123 ":                    "on_abc123",
+		"on_A-b_9":                       "on_A-b_9",
+		"on_" + strings.Repeat("a", 125): BotmuxOwnerUnionID("on_" + strings.Repeat("a", 125)),
+	} {
+		if got, ok := ParseBotmuxOwnerUnionID(in); !ok || got != want {
+			t.Errorf("ParseBotmuxOwnerUnionID(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"on_", "ou_abc", "on_a b", "on_中文", "ON_abc", "on_abc@example.com", "on_" + strings.Repeat("a", 126)} {
+		if got, ok := ParseBotmuxOwnerUnionID(in); ok || got != "" {
+			t.Errorf("ParseBotmuxOwnerUnionID(%q) = %q, %v; want refused", in, got, ok)
+		}
 	}
 }

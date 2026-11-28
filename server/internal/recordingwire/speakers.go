@@ -410,3 +410,68 @@ type SpeakerDetailOutput struct {
 	Speakers *DetailSpeakers
 	Segments []kbwire.RecordingSegment
 }
+
+// SpeakerAlignInput bundles the stored speakers roster, timeline, timing reliability and transcript segments to align
+// before rendering numbered transcript lines for the minutes model.
+type SpeakerAlignInput struct {
+	Speakers MeetingSpeakers
+	Turns    []SpeakerTurn
+	Covered  []SpeakerSpan
+	Timing   TranscriptTiming
+	Segments []kbwire.RecordingSegment
+}
+
+// AlignedSpeakerLine is the aligned merged speaker id and certainty for one transcript segment (Speaker empty when unlabelled).
+type AlignedSpeakerLine struct {
+	Speaker SpeakerID
+	Unsure  bool
+}
+
+// SpeakerAlignOutput holds one AlignedSpeakerLine per input segment in order.
+type SpeakerAlignOutput struct {
+	Lines []AlignedSpeakerLine
+}
+
+// SpeakerDebatesAttrInput bundles the current debates, speaker roster, and (when untrimmed) timeline + timing to
+// compute layer-1 overlaps, layer-2 attributions and cross-checks on every disagreement position and its also entries.
+type SpeakerDebatesAttrInput struct {
+	Debates  []MinutesDebate
+	Speakers MeetingSpeakers
+	Turns    []SpeakerTurn
+	Covered  []SpeakerSpan
+	Timing   TranscriptTiming
+	Trimmed  bool
+}
+
+// SpeakerDebatesAttrOutput holds the attributed disagreements returned by AttributeDebateSpeakers.
+type SpeakerDebatesAttrOutput struct {
+	Debates []MinutesDebate
+}
+
+// SpeakerDisplayKind is one of the display-name outcomes for a disagreement position (docs/assistant/meeting-minutes.md
+// "Aligning lines to speakers" -> "Display names").
+type SpeakerDisplayKind string
+
+const (
+	SpeakerDisplayName     SpeakerDisplayKind = "name"
+	SpeakerDisplayNumbered SpeakerDisplayKind = "numbered"
+	SpeakerDisplayWho      SpeakerDisplayKind = "who"
+)
+
+// Valid reports whether k is a known speaker display label kind.
+func (k SpeakerDisplayKind) Valid() bool {
+	return k == SpeakerDisplayName || k == SpeakerDisplayNumbered || k == SpeakerDisplayWho
+}
+
+// SpeakerDisplayLabel is one resolved attribution label for a disagreement position.
+type SpeakerDisplayLabel struct {
+	Kind   SpeakerDisplayKind
+	Value  string
+	Number int
+}
+
+// SpeakerDisplayInput bundles the speaker roster (nil when none) and one disagreement position to resolve display labels for.
+type SpeakerDisplayInput struct {
+	Speakers *MeetingSpeakers
+	Position MinutesDebatePosition
+}

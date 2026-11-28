@@ -600,6 +600,11 @@ func TestDetachedWaitingRestartFinishesTheRestoredCard(t *testing.T) {
 					t.Fatalf("initial result = %+v, %v", got.res, got.err)
 				}
 
+				// Stop the previous manager's clock when simulating its process exit.
+				ft.s.fleet.mu.Lock()
+				ft.s.fleet.interactions[ix.ID].prepared.decisionTimer.Stop()
+				ft.s.fleet.mu.Unlock()
+
 				st := &restoreMem{fleetMem: ft.st}
 				restarted := newRestartedService(t, Options{Hub: ft.f, Store: func() Store { return st }, Logf: testLogf(t), Devices: ft.d})
 				if tc.recoverFirst {
@@ -609,19 +614,27 @@ func TestDetachedWaitingRestartFinishesTheRestoredCard(t *testing.T) {
 					restarted.restoreInteractions(context.Background())
 					restarted.recoverApprovalJournals(context.Background())
 				}
-				if got := len(restarted.pendingInteractions()); got != 0 {
-					t.Fatalf("restored waiting card survived its cancelled journal: pending=%d", got)
+				pending := restarted.pendingInteractions()
+				if len(pending) != 1 || pending[0].ID != ix.ID || !pending[0].CreatedAt.Equal(ix.CreatedAt) {
+					t.Fatalf("restored cards = %+v, want the original unanswered occurrence", pending)
 				}
-				if status, _, _ := st.InteractionOutcome(context.Background(), ix.ID); status != "cancelled" {
-					t.Fatalf("restored outcome = %q, want cancelled", status)
-				}
-				if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "cancelled") {
-					t.Fatalf("restart continuation = %q, want the durable cancellation", result)
+				if status, res, err := st.InteractionOutcome(context.Background(), ix.ID); err != nil || status != "pending" || res != nil {
+					t.Fatalf("restored outcome = %q, %+v, %v", status, res, err)
 				}
 				replayed, err := restarted.nodeInteraction(context.Background(), detachedTestCard(ix.ID))
-				if err != nil || (replayed.Allow != nil && *replayed.Allow) || !replayed.Dismiss {
-					t.Fatalf("original replay after restart = %+v, %v; want no execution", replayed, err)
+				if err != nil || !replayed.Pending || replayed.ApprovalID != ix.ID || replayed.Allow != nil {
+					t.Fatalf("original replay = %+v, %v; want the same pending request without execution", replayed, err)
 				}
+				retry := ix
+				retry.ID = "ix_unapproved_retry"
+				if res, granted, err := restarted.consumeDetachedGrant(context.Background(), retry); err != nil || granted || res.UserAllowed() {
+					t.Fatalf("restart issued an execution permit: %+v, %v, %v", res, granted, err)
+				}
+				allow := true
+				if err := restarted.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+					t.Fatal(err)
+				}
+				waitFakeApprovalResult(t, ft.f, ix.ID)
 			})
 		})
 	}
@@ -652,14 +665,16 @@ func TestDetachedRestoredReplayCannotAllowBeforeRecovery(t *testing.T) {
 				}()
 				elapse(0)
 				allow := true
-				_ = restarted.resolve(ix.ID, proto.Resolution{Allow: &allow})
+				if err := restarted.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+					t.Fatal(err)
+				}
 				got := awaitDetachedTest(t, replayed)
-				if got.err != nil || (got.res.Allow != nil && *got.res.Allow) || !got.res.Dismiss {
-					t.Fatalf("restored replay before recovery = %+v, %v; want no execution", got.res, got.err)
+				if got.err != nil || !got.res.Pending || got.res.Allow != nil || got.res.ApprovalID != ix.ID {
+					t.Fatalf("restored replay before recovery = %+v, %v; want the pending original", got.res, got.err)
 				}
 				restarted.recoverApprovalJournals(context.Background())
-				if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "cancelled") {
-					t.Fatalf("restart continuation = %q, want cancellation", result)
+				if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "approved") {
+					t.Fatalf("owner decision before scheduler recovery = %q", result)
 				}
 			})
 		})
@@ -688,8 +703,8 @@ func TestDetachedTerminalJournalClosesRestoredCard(t *testing.T) {
 	st := &restoreMem{fleetMem: ft.st}
 	restarted := newRestartedService(t, Options{Hub: ft.f, Store: func() Store { return st }, Logf: testLogf(t), Devices: ft.d})
 	restarted.restoreInteractions(context.Background())
-	if got := len(restarted.pendingInteractions()); got != 1 {
-		t.Fatalf("restored setup pending = %d, want 1", got)
+	if got := len(restarted.pendingInteractions()); got != 0 {
+		t.Fatalf("terminal journal exposed %d answerable cards", got)
 	}
 	restarted.recoverApprovalJournals(context.Background())
 	if got := len(restarted.pendingInteractions()); got != 0 {

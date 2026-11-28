@@ -105,7 +105,7 @@ export function AgentStatusLine({ session, source, assistant, items, onCompact, 
       </div>
       {externalTrigger && (
         <div role="status" data-testid="botmux-external-trigger-note" className="truncate pt-0.5 text-submeta text-ink-3">
-          {t("chat-botmux.external_trigger_notice")}
+          {t(session.botmux_external_trigger_reason === "owner_unset" ? "chat-botmux.owner_unset_notice" : "chat-botmux.external_trigger_notice")}
         </div>
       )}
     </div>

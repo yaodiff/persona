@@ -9,6 +9,11 @@ import (
 // is used. A node reads them from Codex app-server or from local files and answers usage.windows. The usage manager
 // groups the machines' answers. No credential or raw upstream account ID crosses this boundary.
 
+// UsageReadingSource describes how a node obtained a usage reading, when known.
+type UsageReadingSource string
+
+const UsageReadingRollout UsageReadingSource = "rollout"
+
 // UsageWindow is one rate-limit window of one account.
 type UsageWindow struct {
 	// Label is the window's length as people say it: "5h", "7d" (see WindowLabel).
@@ -59,6 +64,8 @@ type UsageAccount struct {
 	// account's SampledAt, Stale, StaleAt and Problem apply to it as they do to windows. A genuine zero is a Balance
 	// with amount "0.00"; a failed read is Problem with the previous Balance kept, or no Balance at all.
 	Balance *UsageBalance `json:"balance,omitempty"`
+	// ReadingSource is "rollout" when the node read a Codex rollout file. Omitted for other readings and by older nodes.
+	ReadingSource UsageReadingSource `json:"reading_source,omitempty"`
 	// SampledAt is when the source wrote the newest of these numbers (not when we read them).
 	SampledAt time.Time `json:"sampled_at"`
 	// Stale: the sample is older than the collector's schedule allows (its source has not been written to for a

@@ -1643,6 +1643,12 @@ Use a label linked by ID, with the select beside it. When a label wraps the nati
 include the option text in the label. Check the label in a real browser and attach any inherited-policy hint with
 `aria-describedby` so it stays available without changing the control's name.
 
+## Resolve Integrations support for the owning assistant (#17762)
+
+The roster announces the projection per assistant. Wait for that credential's roster before selecting the catalog
+reader. A failed projection read stays with its assistant and can be retried. A connector referenced by a detail
+section is loaded for that owner even when the sidebar shows another assistant with an identically named connector.
+
 ## A cached first screen is not evidence of an outcome (#16286)
 
 The chat draws its cached page at once and reads the hub's newest page behind it (`useTranscript`, `firstRead`). The

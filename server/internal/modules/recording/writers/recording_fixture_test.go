@@ -3,12 +3,14 @@ package writers
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/recordingwire"
-	"os"
-	"testing"
-	"time"
 )
 
 // The recordings the module gates start their hubs on (scripts/ci/core-only-smoke.py, scripts/ci/module-e2e.py):
@@ -29,7 +31,18 @@ const (
 
 type fixtureMinutesModel struct{}
 
-func (fixtureMinutesModel) JSONMax(_ context.Context, _, _ string, _ int, out any) error {
+func (fixtureMinutesModel) JSONMax(_ context.Context, _, user string, _ int, out any) error {
+	if strings.Contains(user, "Ada proposed keeping speaker timelines") {
+		return json.Unmarshal([]byte(`{"title": "Kept recording, speakers",
+			"points": [{"text": "Speaker timelines stay readable without the module", "line": 1}],
+			"decisions": [{"text": "Stored speaker names survive module switches", "line": 3}],
+			"debates": [{"question": "Keep timelines in the knowledge base or only in memory?", "status": "settled",
+				"positions": [
+					{"stance": "Keep timelines in the knowledge base", "line": 1, "holder": "S1"},
+					{"stance": "Keep names readable without the module", "line": 2, "holder": "S2"}
+				],
+				"outcome": {"text": "Stored speaker names survive module switches", "line": 3}}]}`), out)
+	}
 	return json.Unmarshal([]byte(`{"title": "Kept recording review", "points": [{"text": "The wombat checklist stays readable without the module", "line": 2}],
 		"decisions": [{"text": "Stored recordings are never hidden by a switch", "line": 3}]}`), out)
 }
@@ -138,7 +151,16 @@ func TestWriteRecordingFixture(t *testing.T) {
 	if _, err := st.ReadMinutes(fixtureRecording); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.ReadMinutes(fixtureSpeakersRecording); err != nil {
+	spMin, err := st.ReadMinutes(fixtureSpeakersRecording)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(spMin.Debates) != 1 || len(spMin.Debates[0].Positions) != 2 ||
+		spMin.Debates[0].Positions[0].Speaker != "s1" || spMin.Debates[0].Positions[0].SpeakerUnsure ||
+		spMin.Debates[0].Positions[1].Speaker != "s2" || spMin.Debates[0].Positions[1].SpeakerUnsure {
+		t.Fatalf("speakers fixture debates not attributed: %+v", spMin.Debates)
+	}
+	if !strings.Contains(spMin.Markdown, "(Ada)") || !strings.Contains(spMin.Markdown, "(Grace)") {
+		t.Fatalf("speakers fixture markdown lacks speaker names:\n%s", spMin.Markdown)
 	}
 }

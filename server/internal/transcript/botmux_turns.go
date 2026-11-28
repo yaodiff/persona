@@ -12,10 +12,13 @@ import (
 )
 
 // BotMux structured turn endpoint contract (deepcoldy/botmux#3597, #3599):
-// GET /api/sessions/:sessionId/turns?since=<cursor>&limit=<n> returns BotmuxTurnsResponse.
+// GET /api/sessions/:sessionId/turns?since=<cursor>&limit=<n> returns BotmuxTurnsResponse. BotmuxCapOwnerUnionID: its
+// /api/trigger also takes `actorUnionId` (a union_id) with `actor: "owner"`, and refuses one that is not the bot's owner
+// with 403 owner_unresolved / owner_mismatch.
 const (
-	BotmuxTurnsSchema   = "botmux.session-turns.v1"
-	BotmuxCapOwnerActor = "ownerActor"
+	BotmuxTurnsSchema     = "botmux.session-turns.v1"
+	BotmuxCapOwnerActor   = "ownerActor"
+	BotmuxCapOwnerUnionID = "ownerUnionId"
 )
 
 // BotmuxTurnsResponse is the JSON payload of BotMux's read-only GET /api/sessions/:id/turns endpoint.

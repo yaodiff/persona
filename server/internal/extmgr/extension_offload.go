@@ -21,8 +21,10 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -275,14 +277,14 @@ func (h *Manager) deleteOffloadJob(w http.ResponseWriter, r *http.Request, t off
 	cid, locale, m := h.offloadContext(r, t)
 	ctx, cancel := context.WithTimeout(r.Context(), offloadJobTimeout)
 	defer cancel()
-	err := t.hp.proc.Call(ctx, "offload.cancel", wire.OffloadJobParams{Contribution: cid, Locale: locale, Machine: m, Job: job}, &json.RawMessage{})
+	_, err := buswire.Call(ctx, t.hp.proc, extwire.OffloadCancelMethod, wire.OffloadJobParams{Contribution: cid, Locale: locale, Machine: m, Job: job})
 	var re *rpc.Error
 	if errors.As(err, &re) && re.Code == extension.CodeUnknownMethod {
 		writeJSON(w, map[string]bool{"canceled": false})
 		return
 	}
 	if err != nil {
-		h.writeOffloadCallErr(w, r, t, ctx, "offload.cancel", err)
+		h.writeOffloadCallErr(w, r, t, ctx, extwire.MethodOffloadCancel, err)
 		return
 	}
 	h.extensions.logf("plugin %s: offload.cancel on %s", t.p.Extension, m.ID)

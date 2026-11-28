@@ -59,6 +59,8 @@ type acceptAsk struct {
 	Outcome    string `json:"outcome,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	Recommend  string `json:"recommend,omitempty"`
+	// ResumeTerminal identifies the Agent whose resume was refused before this decision was raised.
+	ResumeTerminal *SessionRef `json:"resume_terminal,omitempty"`
 	// Deadline: a decision's deadline (#3127, decision_deadline.go); zero: none. Past it unanswered, a Reversible one
 	// takes Recommend by default (ByDefault), one that is not is reminded once and keeps waiting; DueAt is when the
 	// deadline was handled either way.

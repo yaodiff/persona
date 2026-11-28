@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -264,7 +266,8 @@ func (h *Manager) shortcutCall(ctx context.Context, id, sid string, in wire.Shor
 		Locale: ctxParams.Locale, Platform: ctxParams.Platform}
 	cctx, cancel := context.WithTimeout(ctx, uiTimeout)
 	defer cancel()
-	if err := hp.proc.Call(cctx, "shortcut.run", params, &out); err != nil {
+	out, err := buswire.Call(cctx, hp.proc, extwire.ShortcutRunMethod, params)
+	if err != nil {
 		var re *rpc.Error
 		if errors.As(err, &re) {
 			return out, errors.New(re.Message)

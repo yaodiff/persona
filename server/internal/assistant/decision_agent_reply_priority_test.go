@@ -137,7 +137,12 @@ func TestMixedDecisionDigestInterjectsWithOnlyCurrentEntries(t *testing.T) {
 	s, f, todo := decisionAgentReplyService(t)
 	g := pendingDecisionReply(t, s, todo)
 	setSupervisorWorking(f)
-	ordinary := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "fresh-stall", Detail: "no recent progress"}
+	active, err := s.createTodo(t.Context(), "Active task", "Check the example", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(t.Context(), active.ID, "conv1", []string{"Verified"}, 0)
+	ordinary := superviseSignal{Todo: active.ID, Kind: sigStalled, Key: "fresh-stall", Detail: "no recent progress"}
 	before := f.sent()
 	dispatchSupervisionNow(t, s, g, ordinary)
 	if f.sent() != before+1 {
@@ -195,7 +200,7 @@ func TestDecisionReplyInterjectRefusalRemainsRecoverable(t *testing.T) {
 }
 
 func TestNonDecisionSupervisionStillQueuesBehindWorkingSupervisor(t *testing.T) {
-	s, f, todo := decisionAgentReplyService(t)
+	s, f, todo := newSupervisedService(t)
 	setSupervisorWorking(f)
 	g := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "ordinary-stall", Detail: "no recent progress"}
 	before := f.sent()

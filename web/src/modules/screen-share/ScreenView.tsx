@@ -9,6 +9,7 @@ import { cx, Spinner } from "../../ui/atoms";
 import { t } from "../../i18n";
 import "../../views/theme"; // follows the system's light / dark while open (index.html picked the first one)
 import { ensureSubtleAES } from "./aes";
+import { guardScreenCursor, releaseNoVNCCapture } from "./cursor";
 import { displayChoice, framing, keepPointerIn, layoutDisplays, machineDisplays, setDisplayChoice, type MachineDisplay, type Rect, type Size } from "./displays";
 import { accountOf, keepLabel, keysymsOf, screenSocket, toApp, type ScreenTarget } from "./screen";
 import { newPair } from "./pair";
@@ -142,8 +143,16 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
     r.scaleViewport = true;
     r.resizeSession = false;
     r.background = "transparent";
+    r.showDotCursor = true;
     // noVNC sizes its canvas to the framebuffer (and again when the Mac's displays change); nothing else says the size.
     const canvas = screen.current.querySelector("canvas");
+    const stopCursor = canvas ? guardScreenCursor(canvas) : () => {};
+    const onWindowBlur = () => releaseNoVNCCapture();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") releaseNoVNCCapture();
+    };
+    window.addEventListener("blur", onWindowBlur);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     const sized = new MutationObserver(() => {
       const w = canvas?.width ?? 0, h = canvas?.height ?? 0;
       if (w > 0 && h > 0) setFb((f) => (f?.w === w && f.h === h ? f : { w, h }));
@@ -201,12 +210,17 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
       });
     });
     r.addEventListener("disconnect", (e) => {
+      releaseNoVNCCapture();
       const clean = (e as CustomEvent<{ clean: boolean }>).detail?.clean;
       setPhase((p) => (p.kind === "signin" && p.failed ? p : { kind: "closed", why: clean ? t("screen-share-screenview.disconnected") : t("screen-share-screenview.connection_lost") }));
     });
     rfb.current = r;
     setLink({ rfb: r, socket });
     return () => {
+      window.removeEventListener("blur", onWindowBlur);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      stopCursor();
+      releaseNoVNCCapture();
       sized.disconnect();
       clearTimeout(appSilent);
       answer.current = null;
@@ -219,6 +233,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
 
   useEffect(() => {
     if (rfb.current) rfb.current.viewOnly = !control;
+    if (!control) releaseNoVNCCapture();
   }, [control, phase.kind]);
 
   // The room for the picture: the page below its bar.
@@ -501,7 +516,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
       <main ref={stageRef} className="relative min-h-0 flex-1">
         {/* One display: a box as large as fits shows it, over the whole framebuffer drawn at the same scale (displays.ts). */}
         <div ref={clip} className={cx("absolute", frame ? "overflow-hidden" : "inset-0", !live && "invisible")} style={frame ? place(frame.clip) : undefined}>
-          <div ref={screen} className={cx("absolute", !frame && "inset-0")} style={frame ? place(frame.inner) : undefined} data-testid="screen" />
+          <div ref={screen} className={cx("absolute", !frame && "inset-0", !control && "pointer-events-none")} style={frame ? place(frame.inner) : undefined} data-testid="screen" />
         </div>
         {!target.embedded && Video && playable && link && (
           <Video.VideoChannel

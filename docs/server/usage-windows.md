@@ -90,6 +90,8 @@ A window from a usage extension may also carry the gateway's protection line:
 {"label": "7d", "window_minutes": 10080, "used_percent": 55.0, "resets_at": "2026-11-27T09:00:00Z", "protect_percent": 99.0}
 ```
 
+A separate Codex reading from a local rollout file carries `"reading_source": "rollout"`. When it is stale, Web Usage keeps its machine, sample time and quota values available as source details and excludes it from the account count and reset timeline. Existing matches between local readings and extension accounts retain their merged account row. Older nodes and managers omit the field. A live team seat may also lack a personal account key, so a missing key alone does not identify a file reading.
+
 `local` says the numbers were read on one of the computers. `machines` names those computers (their names in hub.json now, #1907), and `sources` names the account-pool gateways that reported it (below).
 
 With no data, `accounts` is `[]`; old hubs lack this route (404), and the web treats that as no data.

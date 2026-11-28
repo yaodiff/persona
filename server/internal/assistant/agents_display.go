@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The default manager keeps the paired hub's display preference, like navigation and
@@ -19,12 +20,15 @@ const agentsShowFilterKey = "agents.show_filter"
 
 // agentsDisplay is the answer of GET / PUT display-settings. SortByActivity and ShowFilter are the effective values: the
 // saved choice, else manager.json's agents.sort_by_activity / agents.show_filter, else off.
+// BotmuxOwnerUnionID is the BotMux Owner Union ID, "" for none (agents_botmux_owner.go); always sent, so a client knows
+// this manager takes it.
 type agentsDisplay struct {
-	ShowBotmux      bool `json:"show_botmux"`
-	Configured      bool `json:"configured"`
-	UseHerdrTabName bool `json:"use_herdr_tab_name"`
-	SortByActivity  bool `json:"sort_by_activity"`
-	ShowFilter      bool `json:"show_filter"`
+	ShowBotmux         bool                     `json:"show_botmux"`
+	Configured         bool                     `json:"configured"`
+	UseHerdrTabName    bool                     `json:"use_herdr_tab_name"`
+	SortByActivity     bool                     `json:"sort_by_activity"`
+	ShowFilter         bool                     `json:"show_filter"`
+	BotmuxOwnerUnionID proto.BotmuxOwnerUnionID `json:"botmux_owner_union_id"`
 }
 
 func (s *Service) readAgentsDisplay(ctx context.Context) (agentsDisplay, error) {
@@ -45,6 +49,9 @@ func (s *Service) readAgentsDisplay(ctx context.Context) (agentsDisplay, error) 
 	}
 	if err == nil {
 		_, err = st.Setting(ctx, agentsShowFilterKey, &out.ShowFilter)
+	}
+	if err == nil {
+		out.BotmuxOwnerUnionID, err = s.readBotmuxOwner(ctx)
 	}
 	return out, err
 }
@@ -89,7 +96,9 @@ func (s *Service) agentsDisplayRoutes() {
 			UseHerdrTabName *bool `json:"use_herdr_tab_name"`
 			SortByActivity  *bool `json:"sort_by_activity"`
 			ShowFilter      *bool `json:"show_filter"`
-			OnlyIfUnset     bool  `json:"only_if_unset"`
+			// BotmuxOwnerUnionID: a union_id (on_…, trimmed) or "" to clear it.
+			BotmuxOwnerUnionID *string `json:"botmux_owner_union_id"`
+			OnlyIfUnset        bool    `json:"only_if_unset"`
 		}
 		err := decodeBody(w, r, &in, 1<<16)
 		sent := 0
@@ -98,9 +107,20 @@ func (s *Service) agentsDisplayRoutes() {
 				sent++
 			}
 		}
+		if in.BotmuxOwnerUnionID != nil {
+			sent++
+		}
 		if err != nil || sent != 1 || in.OnlyIfUnset && in.ShowBotmux == nil {
-			writeBodyErr(w, err, errors.New("send one of show_botmux, use_herdr_tab_name, sort_by_activity or show_filter, with only_if_unset allowed for show_botmux"))
+			writeBodyErr(w, err, errors.New("send one of show_botmux, use_herdr_tab_name, sort_by_activity, show_filter or botmux_owner_union_id, with only_if_unset allowed for show_botmux"))
 			return
+		}
+		var owner proto.BotmuxOwnerUnionID
+		if in.BotmuxOwnerUnionID != nil {
+			var ok bool
+			if owner, ok = proto.ParseBotmuxOwnerUnionID(*in.BotmuxOwnerUnionID); !ok {
+				apierr.Write(w, http.StatusBadRequest, errBotmuxOwnerUnionID)
+				return
+			}
 		}
 		st := s.store()
 		if st == nil {
@@ -122,12 +142,17 @@ func (s *Service) agentsDisplayRoutes() {
 			err = st.PutSetting(r.Context(), agentsUseHerdrTabNameKey, *in.UseHerdrTabName)
 		} else if in.SortByActivity != nil {
 			err = st.PutSetting(r.Context(), agentsSortByActivityKey, *in.SortByActivity)
+		} else if in.BotmuxOwnerUnionID != nil {
+			err = st.PutSetting(r.Context(), agentsBotmuxOwnerKey, string(owner))
 		} else {
 			err = st.PutSetting(r.Context(), agentsShowFilterKey, *in.ShowFilter)
 		}
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
+		}
+		if in.BotmuxOwnerUnionID != nil {
+			s.syncBotmuxOwnerToNodes(r.Context())
 		}
 		out, err := s.readAgentsDisplay(r.Context())
 		if err != nil {

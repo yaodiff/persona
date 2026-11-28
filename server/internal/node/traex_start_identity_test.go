@@ -53,6 +53,91 @@ func TestTraexFreshStartRequiresCurrentWriterEvidence(t *testing.T) {
 	}
 }
 
+func TestTraexFreshStartAnswersFolderAccess(t *testing.T) {
+	n, f, home := traexIdentityNode(t, threadNew, false)
+	const pane = "w1:p2"
+	const trust = `  Folder access
+  /path/to/workspace
+
+  Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt
+  injection. Trusting the directory allows project-local config, hooks, and exec policies to load.
+
+❯ 1. Yes, continue
+  2. No, quit
+
+  enter continue  |  esc quit`
+	answered, looks := false, 0
+	f.after(func(c herdrCall) {
+		switch {
+		case c.Method == "pane.send_input":
+			f.setScreen(pane, trust)
+		case c.String() == sendKeys(pane, "enter"):
+			answered = true
+		case answered && c.Method == "pane.read" && c.Params["source"] == "visible":
+			// Keep returning the same prompt for two reads after Enter, before the writer is ready.
+			looks++
+			if looks == 2 {
+				writeTraexOwner(t, n.home, threadNew, os.Getpid())
+				cacheTraexOwnerPane(t, os.Getpid())
+				f.setScreen(pane, "")
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	s, err := n.start(ctx, home, traexAgent, "Inspect the export", "", "w1", "", "", "", "", "")
+	if err != nil || s == nil || s.SessionID != threadNew || s.Agent != traexAgent {
+		t.Fatalf("start did not return the new session: %+v (%v)", s, err)
+	}
+	if got := f.trace("pane.send_keys"); len(got) != 1 || got[0] != sendKeys(pane, "enter") {
+		t.Errorf("want Enter once, got %v", got)
+	}
+}
+
+func TestTraexFreshStartReportsUnknownDialog(t *testing.T) {
+	n, f, home := traexIdentityNode(t, threadNew, false)
+	const dialog = "Do you trust this command?\n\n❯ 1. Yes, proceed\n  2. No, cancel\n\nEnter to confirm · Esc to cancel"
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" {
+			f.setScreen("w1:p2", dialog)
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	s, err := n.start(ctx, home, traexAgent, "Inspect the export", "", "w1", "", "", "", "", "")
+	if s != nil || rpcCode(err) != proto.CodeAgentStartStalled {
+		t.Fatalf("want a stalled start, got %+v (%v)", s, err)
+	}
+	if !strings.Contains(err.Error(), `an unrecognized dialog blocks the start: "Do you trust this command?" (choices: Yes, proceed / No, cancel)`) {
+		t.Errorf("unclear start failure: %v", err)
+	}
+	if data := refusalData(t, err); !strings.Contains(data, `"pane":"w1:p2"`) ||
+		!strings.Contains(data, `"kept_until":`) || !strings.Contains(data, "Enter to confirm") {
+		t.Errorf("missing kept tab or dialog screen: %s", data)
+	}
+	if got := f.trace("pane.send_keys", "tab.close"); len(got) != 0 {
+		t.Errorf("acted on an unknown dialog: %v", got)
+	}
+}
+
+func TestTraexStartTimeoutUsesVisiblePane(t *testing.T) {
+	n, f, home := traexIdentityNode(t, threadNew, false)
+	const message = "Waiting for the agent to initialize"
+	f.handle("pane.read", func(p map[string]any) any {
+		text := " \n\n"
+		if p["source"] == "visible" {
+			text = message
+		}
+		return map[string]any{"read": map[string]any{"text": text}}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 1300*time.Millisecond)
+	defer cancel()
+	_, err := n.start(ctx, home, traexAgent, "Inspect the export", "", "w1", "", "", "", "", "")
+	if err == nil || !strings.Contains(err.Error(), "wait for traex session") || !strings.Contains(err.Error(), message) {
+		t.Fatalf("timeout did not report the visible pane: %v", err)
+	}
+}
+
 func TestTraexAsyncStartWaitsForActualThread(t *testing.T) {
 	for _, managed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "plain", true: "managed"}[managed], func(t *testing.T) {

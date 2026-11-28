@@ -84,16 +84,21 @@ func (e *engine) HubTranscriptPutWithTiming(rawID, pass string, timing Transcrip
 		return 0, err
 	}
 	if chars := recordChars(record); chars != r.Chars {
+		conv := r.Conv
 		r.Chars = chars
 		planMinutes(r)
 		if err := st.putEntity(KindRecording, r.ID, r, &r.Tagging, false); err != nil {
 			return h.Rev, err
 		}
+		r.Conv = conv
 	}
-	if parts, err := e.recomputeSpeakersLocked(r, 0); err != nil {
+	if parts, minChanged, err := e.recomputeSpeakersLocked(r, 0); err != nil {
 		e.logf("recording %s: speakers recompute after hub transcript: %v", id, err)
 	} else {
 		spParts = parts
+		if minChanged {
+			st.notify(KindRecording, id, "summary")
+		}
 	}
 	st.notify(KindRecording, id, "messages")
 	e.index(KindRecording, id, r.Name, r.Tagging, r.OneLine, r.StartedAt)

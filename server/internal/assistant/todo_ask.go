@@ -166,7 +166,8 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 	l, loc, web := s.botLang(ctx), s.location(ctx), s.webBase(ctx)
 	out := map[string]todoAsk{}
 	for _, w := range s.awaitingAcceptance(ctx) {
-		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask, w.delivery), AskedAt: w.ask.AskedAt, Risk: askRisk(&w.ask)}
+		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask, w.delivery), AskedAt: w.ask.AskedAt}
+		var agents []TodoAgent
 		if !w.ask.Conclusion {
 			a.Summary, a.Link = w.verificationDetails(web, a.Verdict)
 		} else {
@@ -176,16 +177,18 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 			a.Recommend = w.ask.Recommend
 			if w.ask.OutsideID == "" {
 				if task, ok := s.todoNow(w.todo); ok {
+					agents = task.Agents
 					for _, option := range w.ask.Options {
-						if target := decisionTerminal(task, option.Label); target != nil {
+						if target := decisionTerminal(task, option.Label, w.ask.AskedAt); target != nil {
 							a.Terminal, a.TerminalOption = target, option.Label
 							break
 						}
 					}
-					// A new card keeps the manual control out of its choices. The
-					// reason can still direct the owner to the one bound Agent.
-					if a.Terminal == nil && terminalResumeMention(w.ask.Reason) {
-						a.Terminal = soleDecisionAgent(task, w.ask.AskedAt)
+					if ref := w.ask.ResumeTerminal; a.Terminal == nil && ref != nil {
+						if ag, bound := findActiveLinkedAgent(task, ref.MachineID, ref.SessionID); bound && !ag.LinkedAt.After(w.ask.AskedAt) {
+							target := *ref
+							a.Terminal = &target
+						}
 					}
 				}
 			}
@@ -195,7 +198,7 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 			a.From, a.Stands, a.Background = w.ask.From, w.ask.Stands, backgroundText(l, loc, &w.ask)
 			a.Suggestion = s.askSuggestion(ctx, w.todo, &w.ask, l)
 			switch {
-			case !w.ask.Deadline.IsZero() && w.ask.Reversible && w.ask.DueAt.IsZero() && a.Recommend != "":
+			case !w.ask.Deadline.IsZero() && w.ask.Reversible && w.ask.DueAt.IsZero() && a.Recommend != "" && !w.ask.manualTerminalRecommendation(agents):
 				d := w.ask.Deadline
 				a.Deadline, a.Default = &d, defaultTaken
 			case w.ask.WhyOwner != "" || !w.ask.Deadline.IsZero():
@@ -207,18 +210,18 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 				}
 			}
 		}
+		a.Risk = askRisk(&w.ask, agents)
 		out[w.todo] = a
 	}
 	s.addExpiredQuestionAsks(ctx, out)
 	return out
 }
 
-// askRisk is how risky answering ask a is (assistantwire.OwnerAskRisk): open when it cannot be undone or other people
-// will see it (cannotUndo, from its raw deadline, which the list stops showing once the deadline was handled), else
-// safe. The list's ask carries it and the view's decision reads it from there (todo/projection), so whatever answers a
+// askRisk is open when answering requires the owner's terminal, cannot be undone, or is visible to others.
+// cannotUndo uses the raw deadline, including after the list stops showing it. The list's ask carries it and the view's decision reads it from there (todo/projection), so whatever answers a
 // decision, a row or a push about it, can keep this one rule.
-func askRisk(a *acceptAsk) string {
-	if a.OutsideID != "" && !a.Reversible || cannotUndo(a.WhyOwner, a.Deadline, a.Reversible) {
+func askRisk(a *acceptAsk, agents []TodoAgent) string {
+	if a.manualTerminalRecommendation(agents) || a.OutsideID != "" && !a.Reversible || cannotUndo(a.WhyOwner, a.Deadline, a.Reversible) {
 		return assistantwire.OwnerAskRiskOpen
 	}
 	return assistantwire.OwnerAskRiskSafe
@@ -246,18 +249,24 @@ func (s *Service) pushDecision(ctx context.Context, id string) bool {
 // pushDecisionErr is pushDecision that tells a push the hub did not take (the error: it may take it later) from one
 // that is not due (false, nil).
 func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) {
-	return s.pushDecisionAbout(ctx, id, assistantwire.TodoPushDecide)
+	return s.pushDecisionAbout(ctx, id, time.Time{})
 }
 
-// pushDecisionAbout is pushDecisionErr about reason (assistantwire.TodoPushDecide, or TodoPushDecideOverdue for the
-// reminder past its deadline): the hub rings one push per to-do and reason while the decision waits (TodoPushKey), and
-// takes it back once the decision is over (todoPushOver).
-func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (bool, error) {
+// pushDecisionAbout sends the current decision, or an overdue reminder for the exact round asked at overdueRound.
+// A direct to-do edit can end the decision after the sweep claimed its deadline.
+func (s *Service) pushDecisionAbout(ctx context.Context, id string, overdueRound time.Time) (bool, error) {
 	a, ok := s.askCopy(id)
 	t, found := s.todoNow(id)
 	if !ok || !found || !decideAsk(&a) || a.Recommend == "" || !a.AcceptedAt.IsZero() ||
 		a.OutsideID == "" && t.Origin == "" || !a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision) {
 		return false, nil
+	}
+	reason := assistantwire.TodoPushDecide
+	if !overdueRound.IsZero() {
+		if !a.AskedAt.Equal(overdueRound) || a.DueAt.IsZero() || a.AgentReply != nil || acceptAskEnded(&a, t) || acceptAskStale(&a, t) {
+			return false, nil
+		}
+		reason = assistantwire.TodoPushDecideOverdue
 	}
 	here := s.settings(ctx).MachineID
 	sessionID := t.Origin
@@ -277,7 +286,7 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 		// The ask and how its push may answer it: the view's (projection), so a notification never offers what the
 		// to-do's row would not answer in place.
 		Todo: &assistantwire.NotifyTodo{ID: id, AskedAt: a.AskedAt, Recommend: a.Recommend, Responses: ownerResponses,
-			Ask: projection.DecisionAskID(a.AskedAt), Lockscreen: projection.Lockscreen(askRisk(&a))},
+			Ask: projection.DecisionAskID(a.AskedAt), Lockscreen: projection.Lockscreen(askRisk(&a, t.Agents))},
 		// One push a to-do and reason while it waits, not one a round (todoPushOver lets the next one ring). The hub
 		// names its card (TodoAskCardID) as the push's card_id, never interaction_id: the iOS app clears a delivered
 		// push whose interaction_id is not in its card list as stale, and a decision is never in that list.
@@ -285,7 +294,7 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 	for _, o := range a.Options {
 		n.Todo.Options = append(n.Todo.Options, o.Label)
 	}
-	if d := deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now()); d != "" && a.AgentReply == nil {
+	if d := a.deadlineText(l, s.location(ctx), time.Now(), t.Agents); d != "" && a.AgentReply == nil {
 		n.Body += "\n" + d
 	}
 	// Self-contained (#3804): where it came from and stands, what each option leads to, what waiting costs.

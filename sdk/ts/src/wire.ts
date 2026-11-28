@@ -4782,8 +4782,27 @@ export interface ConnectorInboxReply {
   item_id?: string;
   last?: string;
   text?: string;
+  mentions?: ConnectorInboxMention[];
   client_id?: string;
   changes?: ConnectorStatusChange[];
+}
+
+/**
+ * Binds an exact @name in the reply's text to a verified external user id, for connectors that support real @
+ * mentions.
+ */
+export interface ConnectorInboxMention {
+  id: ConnectorMentionUserID;
+  name: string;
+}
+
+/**
+ * A person's user ID on the connector's own service, as verified for a real @ mention.
+ */
+export type ConnectorMentionUserID = string & { readonly __brand: "ConnectorMentionUserID" };
+/** A ConnectorMentionUserID from its raw string. */
+export function connectorMentionUserID(raw: string): ConnectorMentionUserID {
+  return raw as ConnectorMentionUserID;
 }
 
 export interface ConnectorStatusChange {

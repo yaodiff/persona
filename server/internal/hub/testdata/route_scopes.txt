@@ -145,6 +145,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    GET /api/v1/agent-shares/{share_id}
 -                    GET /api/v1/agent-shares/{share_id}/messages
 agents.read          GET /api/v1/agents
+-                    GET /api/v1/agents/botmux-owner-candidates
 -                    GET /api/v1/agents/display-settings
 -                    GET /api/v1/agents/hidden
 -                    GET /api/v1/agents/outbox
@@ -715,6 +716,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/panes/git
 -                    POST /api/v1/machines/{mid}/panes/split
 -                    POST /api/v1/machines/{mid}/ports/{port}/open
+-                    POST /api/v1/machines/{mid}/preview/grant
 -                    POST /api/v1/machines/{mid}/preview/start
 -                    POST /api/v1/machines/{mid}/processes/{pid}/kill
 -                    POST /api/v1/machines/{mid}/reconnect

@@ -219,6 +219,7 @@ export interface BriefBody {
    *  each line; nothing is turned on from here. A hub that does not know it leaves the list out. */
   setup: BriefSetup[];
   contributions: BriefContribution[];
+  deferred_supervision: { id: string; todo_id: string; title: string; reason: string }[];
 }
 
 /** One mechanism of a `brief` item's `setup`: `text` is the whole line (count, cost, where it is turned on). */

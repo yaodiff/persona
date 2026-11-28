@@ -464,10 +464,16 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 			platforms = u.developmentComputerPlatforms(false)
 		}
 	}
+	source := u.h.updateSource()
+	releaseURL := source.url
+	if releaseURL == "" && source.urlErr == nil && !u.h.cfg.Security.PrivateNetworkOnly {
+		// The first Web development build can also start from a hub with no release source.
+		releaseURL = officialReleaseUpdateURL
+	}
 	err := u.runDevelopment(ctx, operation, map[string]any{
 		"candidate": r.Development, "version": r.Manifest.Version, "build": r.Manifest.Build,
 		"backup_id": r.Development.BackupID, "runtime": u.h.cfg.dir,
-		"platform": runtime.GOOS + "-" + runtime.GOARCH, "platforms": platforms, "release_url": u.h.updateURL()}, &built, nil)
+		"platform": runtime.GOOS + "-" + runtime.GOARCH, "platforms": platforms, "release_url": releaseURL}, &built, nil)
 	if err != nil {
 		return err
 	}

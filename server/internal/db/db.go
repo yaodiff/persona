@@ -540,58 +540,61 @@ func renumberMigration(ctx context.Context, conn *pgxpool.Conn, from, to string)
 	})
 }
 
-// TruncateForTest clears tables in tests: those of them the database's sets have, with what refers to them.
+// TruncateForTest clears business tables in a test database and preserves its migration ledger.
 func (d *DB) TruncateForTest(ctx context.Context) error {
-	cascade, err := d.truncateCascade(ctx, []string{"workspace_board", "workspace_snapshots", "push_device_retirements", "devices",
-		"assistant_entries",
-		"device_tokens", "live_activities", "phone_tools", "phone_write_queue", "node_sessions", "session_views", "mail_accounts", "interactions",
-		"settings", "inbox_items", "assistant_external_inbox_events", "assistant_external_source_policies", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "sent_messages",
-		"todos", "todo_agents", "deleted_request_gates", "assistant_always", "machine_trust", "hub_settings", "manager_outbox", "handed_over",
-		"machine_audit", "sent_as_user", "session_work_events", "session_work", "hub_push_sent", "urgent_calls", "model_usage", "conversation_histories",
-		"project_review_state", "project_review_deliveries", "project_review_owner_relay", "project_review_owner_managers",
-		"assistant_conversation_spaces", "assistant_tracks", "assistant_track_kinds", "assistant_space_recordings", "assistant_info_categories", "assistant_captures", "assistant_extension_trust", "assistant_extension_grants", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates", "health_intake", "health_tells", "repo_mirrors", "file_transfer_audit"})
+	tables, err := d.tablesToTruncateForTest(ctx, false)
 	if err != nil {
-		return err
+		return fmt.Errorf("discover test tables: %w", err)
 	}
-	return d.truncateNonEmpty(ctx, cascade)
+	return d.truncateNonEmpty(ctx, tables)
 }
 
-// truncateCascade is what TRUNCATE tables CASCADE empties: those of tables the database has, and each table whose
-// foreign key refers to one of these, and so on.
-func (d *DB) truncateCascade(ctx context.Context, tables []string) ([]string, error) {
-	var out []string
-	err := d.pool.QueryRow(ctx, `WITH RECURSIVE c(rel) AS (
-			SELECT to_regclass(t) FROM unnest($1::text[]) AS t WHERE to_regclass(t) IS NOT NULL
-			UNION SELECT k.conrelid FROM pg_constraint k JOIN c ON k.confrelid = c.rel WHERE k.contype = 'f')
-		SELECT coalesce(array_agg(rel::regclass::text ORDER BY rel::regclass::text), '{}') FROM c`, tables).Scan(&out)
-	return out, err
+// tablesToTruncateForTest finds business tables independently of the search path.
+// A heap with no descendants and zero main-fork bytes has no rows to probe. Tables with
+// allocated pages, inheritance, partitioning, or a different access method still need EXISTS.
+// includeEmpty bypasses the physical check when testing migration coverage.
+func (d *DB) tablesToTruncateForTest(ctx context.Context, includeEmpty bool) ([]string, error) {
+	var tables []string
+	err := d.pool.QueryRow(ctx, `SELECT ARRAY(
+		SELECT pg_catalog.quote_ident(t.schemaname) || '.' || pg_catalog.quote_ident(t.tablename)
+		FROM pg_catalog.pg_tables t
+		JOIN pg_catalog.pg_namespace n ON n.nspname = t.schemaname
+		JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = t.tablename
+		WHERE left(t.schemaname, 3) <> 'pg_' AND t.schemaname <> 'information_schema'
+			AND t.tablename <> 'schema_migrations'
+			AND ($1 OR CASE WHEN c.relkind = 'r' AND NOT c.relhassubclass
+				AND c.relam = (SELECT oid FROM pg_catalog.pg_am WHERE amname = 'heap')
+				THEN pg_catalog.pg_relation_size(c.oid) > 0 ELSE true END)
+		ORDER BY t.schemaname, t.tablename)`, includeEmpty).Scan(&tables)
+	return tables, err
 }
 
-// truncateNonEmpty empties tables (truncateCascade's) with one TRUNCATE ... CASCADE of those that have a row. TRUNCATE
-// gives every table it names new files, a row in it or not: clearing two dozen tables, mostly empty, cost a test
-// more than most of what it then did. The tables left empty are the same.
+// truncateNonEmpty uses one TRUNCATE ... CASCADE for tables with rows and their foreign-key dependents.
+// Skipping unrelated empty tables saves their exclusive locks and file rewrites.
 //
-// The probe and the TRUNCATE are two statements: a row not yet committed when the probe looks, or written to a table it
-// found empty after it, stays, where one TRUNCATE of every table would wait for the writer's lock and clear it. So it is
-// for the start of a test, before anything it starts writes there.
+// Discovery and the row probe run before TRUNCATE. Call the reset at the start of a test,
+// before its writers start: a row committed after a probe observes an empty table can remain.
 func (d *DB) truncateNonEmpty(ctx context.Context, tables []string) error {
 	if len(tables) == 0 {
 		return nil
 	}
 	probe := make([]string, len(tables))
 	for i, t := range tables {
-		probe[i] = `SELECT ` + strconv.Itoa(i) + ` WHERE EXISTS (SELECT FROM ` + t + `)`
+		probe[i] = `EXISTS (SELECT FROM ` + t + `)`
 	}
-	var rowful []int
-	if err := d.pool.QueryRow(ctx, `SELECT coalesce(array_agg(i), '{}') FROM (`+strings.Join(probe, " UNION ALL ")+`) AS p(i)`).Scan(&rowful); err != nil {
+	var hasRows []bool
+	if err := d.pool.QueryRow(ctx, `SELECT ARRAY[`+strings.Join(probe, ", ")+`]`).Scan(&hasRows); err != nil {
 		return err
 	}
-	if len(rowful) == 0 {
-		return nil
+	// Keep catalog order when taking the truncate locks.
+	var names []string
+	for i, found := range hasRows {
+		if found {
+			names = append(names, tables[i])
+		}
 	}
-	names := make([]string, len(rowful))
-	for i, n := range rowful {
-		names[i] = tables[n]
+	if len(names) == 0 {
+		return nil
 	}
 	_, err := d.pool.Exec(ctx, `TRUNCATE `+strings.Join(names, ", ")+` CASCADE`)
 	return err

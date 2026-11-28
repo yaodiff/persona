@@ -790,6 +790,7 @@ type inboxReplyReq struct {
 	text string
 	// clientID: the app's id for the send (POST …/reply client_id); empty for one derived from the item and the text.
 	clientID string
+	mentions []InboxMention
 	changes  []DocChange
 	once     *inboxReply
 	// sendID names the send for the hub, which sends it once however often it is asked (InboxSent): a retry after
@@ -800,11 +801,15 @@ type inboxReplyReq struct {
 // replySendID names one reply: the app's id for the send when it gave one, else the item, the text and the status
 // moves (the same reply asked again is the same send). Not the message it answers: a retry after new messages came
 // into the item (it stayed open, replyInboxFrom) would go out again (#1828), as the derived Feishu clientId is.
-func replySendID(id, text, clientID string, changes []DocChange) string {
+func replySendID(id, text, clientID string, changes []DocChange, mentions ...InboxMention) string {
 	if validClientID(clientID) {
 		return namedClientID("send\n" + id + "\n" + strings.ToLower(clientID))
 	}
 	moves, _ := json.Marshal(changes)
+	if len(mentions) > 0 {
+		ms, _ := json.Marshal(mentions)
+		return namedClientID("send\n" + id + "\n" + text + "\n" + string(moves) + "\n" + string(ms))
+	}
 	return namedClientID("send\n" + id + "\n" + text + "\n" + string(moves))
 }
 
@@ -836,7 +841,12 @@ func (s *Service) replyInboxFromVersion(ctx context.Context, id, text, clientID 
 // replyInboxDo is replyInboxFrom; file false keeps the item open (a confirmed suggestion's reply: the event waits for
 // the other side), a repeat of the reply still being answered as sent.
 func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, fromCard, file bool, changes ...DocChange) (InboxItem, error) {
-	return s.replyInboxDoMode(ctx, id, text, clientID, fromCard, file, false, changes...)
+	return s.replyInboxDoFull(ctx, id, text, clientID, fromCard, file, false, 0, nil, changes...)
+}
+
+// replyInboxDoMentions is replyInboxDo with explicit bound mentions forwarded to the connector.
+func (s *Service) replyInboxDoMentions(ctx context.Context, id, text, clientID string, fromCard, file bool, mentions []InboxMention, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxDoFull(ctx, id, text, clientID, fromCard, file, false, 0, mentions, changes...)
 }
 
 // replyInboxDoMode adds the direct /reply route's waiting mode without changing the shared send-once path used by
@@ -1024,6 +1034,10 @@ func (s *Service) routeLegacyReplyConfirmation(ctx context.Context, id, text, cl
 }
 
 func (s *Service) replyInboxDoModeDirect(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, expectedVersion int, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxDoFull(ctx, id, text, clientID, fromCard, file, followDirect, expectedVersion, nil, changes...)
+}
+
+func (s *Service) replyInboxDoFull(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, expectedVersion int, mentions []InboxMention, changes ...DocChange) (InboxItem, error) {
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
@@ -1185,8 +1199,8 @@ func (s *Service) replyInboxDoModeDirect(ctx context.Context, id, text, clientID
 			return InboxItem{}, errInboxItemDone
 		}
 	}
-	req := inboxReplyReq{id: id, live: it, item: c, text: text, clientID: clientID, changes: changes, once: once,
-		sendID: replySendID(id, text, clientID, changes)}
+	req := inboxReplyReq{id: id, live: it, item: c, text: text, clientID: clientID, mentions: slices.Clone(mentions), changes: changes, once: once,
+		sendID: replySendID(id, text, clientID, changes, mentions...)}
 	var already bool
 	var err error
 	switch {

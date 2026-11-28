@@ -15,6 +15,19 @@ import type { ResourceConfiguration } from "./resourceConfiguration";
 
 export type BuiltinIntegrationId = "mail" | "feishu-bot" | "imessage" | "github" | "lark" | "larkcli" | (string & {});
 
+export type IntegrationResourceKind = "service" | "extension" | "channel" | "connector" | "push_source" | "subscription";
+
+export interface IntegrationResourceIdentity {
+  manager?: string;
+  kind: IntegrationResourceKind;
+  id: string;
+}
+
+/** Stable resource identity key `(manager, kind, id)` for mounting detail containers across layout changes. */
+export function integrationResourceKey(manager: string | undefined, kind: IntegrationResourceKind, id: string): string {
+  return JSON.stringify([manager ?? "", kind, id]);
+}
+
 export type IntegrationTarget =
   | {
       kind: "builtin";
@@ -33,6 +46,30 @@ export type IntegrationTarget =
       connectorId?: string;
       manager?: string;
     };
+
+/** Derives canonical `(manager, kind, id)` resource identity for a target and optional server projection. */
+export function resolveIntegrationResource(
+  target: IntegrationTarget,
+  manager: string | undefined,
+  projectedRef?: { manager: string; kind: IntegrationResourceKind; id: string },
+): IntegrationResourceIdentity {
+  if (projectedRef) {
+    return { manager: projectedRef.manager, kind: projectedRef.kind, id: projectedRef.id };
+  }
+  if (target.kind === "extension") {
+    return { manager, kind: "extension", id: target.id };
+  }
+  if (target.id === "mail" || target.id === "feishu-bot" || target.id === "lark") {
+    return { manager, kind: "service", id: target.id };
+  }
+  if (target.channelId && target.connectorId === null) {
+    return { manager, kind: "channel", id: target.id };
+  }
+  if (target.connectorId !== null) {
+    return { manager, kind: "connector", id: target.id };
+  }
+  return { manager, kind: "service", id: target.id };
+}
 
 export type IntegrationSectionId = "connection" | "channel" | "inbox" | "extension-settings" | "management";
 

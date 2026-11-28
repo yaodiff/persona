@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
@@ -1146,6 +1148,26 @@ func (s *Service) releaseTakenTodo(id string) {
 // (node's claudeStartWait, #1396).
 var taskStartTimeout = 5 * time.Minute
 
+func (t *PlanTask) planStartTimeout() time.Duration {
+	repositories := 0
+	if w := t.WorkspaceResolved; w != nil {
+		repositories = len(w.Repositories)
+	}
+	if t.containerWorkspace() {
+		repositories = max(repositories, len(t.Workspace.Container.SelectedRepoIDs))
+	}
+	if repositories == 0 && t.WorkspaceResolved == nil && t.backendOperationID() != "" {
+		// Admission loads an unresolved operation's frozen repository set after the start deadline is set.
+		repositories = repositorywire.MaxTaskRepositories
+	}
+	if repositories == 0 {
+		return taskStartTimeout
+	}
+	// Leave room for an old workspace's cancellation and the new workspace's acquisition,
+	// in addition to mirror preparation, direct checkout, and launching the agent.
+	return taskStartTimeout + assistantwire.BackendWorkspacePrepareTimeout(repositories) + 2*assistantwire.BackendWorkspaceRPCTimeout
+}
+
 // taskFailTimeout bounds recording a failed start (the todo, the plan, the receipt), after the start's own time.
 const taskFailTimeout = 30 * time.Second
 
@@ -1235,7 +1257,7 @@ func (s *Service) deferBlockedTaskStart(ctx context.Context, t PlanTask, blocked
 // runPlanTaskStart is the shared start body; its caller owns the idle reservation through every return path.
 func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTask, retry bool) {
 	t.planID, t.planIndex = planID, i
-	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), t.planStartTimeout())
 	defer cancel()
 	if t.RequestGate != "" {
 		queued := t.Queue
@@ -1276,7 +1298,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		// a whole start's time of its own (the first may have spent its own on the dead link). Not counted against
 		// the launcher (#7511).
 		s.logf("task %s: start: %v; the link to %s dropped and came back without the agent; starting once more", t.TodoID, err, t.Machine)
-		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartTimeout)
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), t.planStartTimeout())
 		defer rcancel()
 		ctx = rctx
 		mid, sid, err = s.startTaskAgent(ctx, &t, retry)

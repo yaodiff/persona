@@ -191,5 +191,8 @@
   "owner_approval_phrases": "承認フレーズ（1行に1件）",
   "owner_approval_phrases_hint": "重複しない1〜8件、各1〜32文字。前後の空白とラテン文字の大文字小文字は区別しません。部分一致や曖昧一致では承認しません。",
   "owner_approval_save_phrases": "フレーズを保存",
-  "owner_approval_unconfirmed": "アシスタントが完全一致承認の設定を確認しませんでした。再読み込みしてからもう一度お試しください。"
+  "owner_approval_unconfirmed": "アシスタントが完全一致承認の設定を確認しませんでした。再読み込みしてからもう一度お試しください。",
+  "supervision_triage": "定例の進捗確認をブリーフィングで見る",
+  "supervision_triage_hint": "振り分けモデルが、早めの対応が必要な進捗だけを監督役に通知します。それ以外は朝と夕方のブリーフィングに表示されます。",
+  "supervision_triage_unconfirmed": "ハブがこの設定を確認できませんでした。再読み込みしてからお試しください。"
 }

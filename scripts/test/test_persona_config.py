@@ -294,6 +294,10 @@ class ReleaseProjectGenerationTests(unittest.TestCase):
         shutil.copytree(self.APPLE, root / 'apple', ignore=shutil.ignore_patterns(
             '*.xcodeproj', 'build', 'DerivedData', '.build', 'Config.xcconfig', 'PersonaOptIn.entitlements',
             'PersonaSiriCalls.entitlements', 'PersonaCarPlay.entitlements'))
+        shared_about = Path('android/refract/about/AboutVersionRow.swift')
+        if (ROOT / shared_about).is_file():
+            (root / shared_about).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / shared_about, root / shared_about)
         cfg = {'app': {'bundle_id': self.BID, 'team_id': 'EXAMPLE', **app}}
         with patch.object(config, 'ROOT', str(root)):
             config.xcconfig(cfg)
@@ -462,13 +466,17 @@ class SiriCallsConfigTests(unittest.TestCase):
     def test_the_overlay_is_included_only_by_the_switch(self):
         project = (self.APPLE / 'project.yml').read_text()
         self.assertIn('  - path: siri-calls.yml\n    enable: ${PERSONA_SIRI_CALLS}\n', project)
+        self.assertIn('        NSSiriUsageDescription: ', project)
         overlay = (self.APPLE / 'siri-calls.yml').read_text()
         self.assertIn('PRODUCT_BUNDLE_IDENTIFIER: $(PERSONA_BUNDLE_ID).callintents\n', overlay)
         self.assertIn('INFOPLIST_FILE: PersonaCallIntents/Info.plist\n', overlay)
-        # Off by default: the tracked plist and entitlements XcodeGen writes have neither Siri key.
+        self.assertNotIn('plutil -replace NSSiriUsageDescription', overlay)
+        # NSSiriUsageDescription stays in project.yml and the tracked Info.plist (ITMS-90683: the iOS target always
+        # links Intents), while PersonaSiriCalls and the Siri entitlement remain off by default.
         with open(self.APPLE / 'Persona/Resources/Info.plist', 'rb') as f:
             info = plistlib.load(f)
-        self.assertNotIn('NSSiriUsageDescription', info)
+        self.assertTrue(info.get('NSSiriUsageDescription'))
+        self.assertNotEqual(info.get('NSSiriUsageDescription'), 'NSSiriUsageDescription')
         self.assertNotIn('PersonaSiriCalls', info)
         with open(self.APPLE / config.APP_ENTITLEMENTS, 'rb') as f:
             self.assertNotIn('com.apple.developer.siri', plistlib.load(f))
@@ -495,13 +503,20 @@ class SiriCallsConfigTests(unittest.TestCase):
                 self.assertTrue(all(e.count('Persona') == 2 for e in phrases[0]['IntentExamples']), phrases)
 
     def test_the_purpose_string_is_translated_as_info_plist_says_it(self):
-        overlay = (self.APPLE / 'siri-calls.yml').read_text()
-        line = next(l for l in overlay.splitlines() if l.strip().startswith('NSSiriUsageDescription='))
-        english = json.loads(line.split('=', 1)[1].strip())
+        project = (self.APPLE / 'project.yml').read_text()
+        line = next(l for l in project.splitlines() if l.strip().startswith('NSSiriUsageDescription:'))
+        project_english = json.loads(line.split(':', 1)[1].strip())
+        with open(self.APPLE / 'Persona/Resources/Info.plist', 'rb') as f:
+            plist_english = plistlib.load(f).get('NSSiriUsageDescription')
+        self.assertEqual(plist_english, project_english)
         catalog = json.loads((self.APPLE / 'Persona/Resources/InfoPlist.xcstrings').read_text())
         units = catalog['strings']['NSSiriUsageDescription']['localizations']
-        self.assertEqual(units['en']['stringUnit']['value'], english)
+        self.assertEqual(units['en']['stringUnit']['value'], project_english)
         self.assertEqual(set(units), {'en', 'zh-Hans', 'ja'})
+        for lang, entry in units.items():
+            value = entry['stringUnit']['value'].strip()
+            self.assertTrue(value, f'empty NSSiriUsageDescription for {lang}')
+            self.assertNotEqual(value, 'NSSiriUsageDescription')
 
     @unittest.skipUnless(shutil.which('xcodegen'), 'needs xcodegen')
     def test_xcodegen_adds_the_extension_only_when_on(self):
@@ -512,6 +527,8 @@ class SiriCallsConfigTests(unittest.TestCase):
             out = subprocess.run(['xcodegen', 'dump', '--spec', str(self.APPLE / 'project.yml'), '--type', 'json'],
                                  env=env, capture_output=True, text=True, timeout=120, check=True).stdout
             return json.loads(out)['targets']
+        with open(self.APPLE / 'Persona/Resources/Info.plist', 'rb') as f:
+            expected_purpose = plistlib.load(f)['NSSiriUsageDescription']
         for value in (None, 'NO'):
             with self.subTest(value=value):
                 targets = dump(value)
@@ -519,21 +536,28 @@ class SiriCallsConfigTests(unittest.TestCase):
                 self.assertNotIn({'target': 'PersonaCallIntents'}, targets['Persona']['dependencies'])
                 self.assertNotIn('com.apple.developer.siri', targets['Persona']['entitlements']['properties'])
                 self.assertEqual(targets['Persona']['entitlements']['path'], config.APP_ENTITLEMENTS)
-                self.assertEqual([s['name'] for s in targets['Persona']['postBuildScripts']], ['Stamp the commit'])
+                self.assertEqual(targets['Persona']['info']['properties'].get('NSSiriUsageDescription'),
+                                 expected_purpose)
+                self.assertNotIn('PersonaSiriCalls', targets['Persona']['info']['properties'])
+                script_names = [s['name'] for s in targets['Persona']['postBuildScripts']]
+                self.assertIn('Stamp the commit', script_names)
+                self.assertNotIn('Siri calls in the Info.plist', script_names)
         targets = dump('YES')
         self.assertEqual(targets['PersonaCallIntents']['type'], 'app-extension')
         self.assertIn({'target': 'PersonaCallIntents'}, targets['Persona']['dependencies'])
         # Signed with a generated, git-ignored copy of the app's entitlements plus Siri's: the tracked file is not
-        # rewritten, nor the tracked Info.plist (its keys go into the built one), so a release's worktree stays clean.
+        # rewritten, nor the tracked Info.plist (PersonaSiriCalls goes into the built one), so a release's worktree
+        # stays clean.
         entitlements = targets['Persona']['entitlements']
         self.assertEqual(entitlements['path'], 'PersonaSiriCalls.entitlements')
         self.assertIs(entitlements['properties']['com.apple.developer.siri'], True)
         self.assertIs(entitlements['properties']['com.apple.developer.usernotifications.time-sensitive'], True)
         ignored = subprocess.run(['git', '-C', str(ROOT), 'check-ignore', '-q', 'apple/PersonaSiriCalls.entitlements'])
         self.assertEqual(ignored.returncode, 0, 'the generated entitlements are git-ignored')
-        self.assertNotIn('NSSiriUsageDescription', targets['Persona']['info']['properties'])
+        self.assertEqual(targets['Persona']['info']['properties'].get('NSSiriUsageDescription'), expected_purpose)
+        self.assertNotIn('PersonaSiriCalls', targets['Persona']['info']['properties'])
         scripts = {s['name']: s['script'] for s in targets['Persona']['postBuildScripts']}
-        self.assertIn('plutil -replace NSSiriUsageDescription -string', scripts['Siri calls in the Info.plist'])
+        self.assertNotIn('NSSiriUsageDescription', scripts['Siri calls in the Info.plist'])
         self.assertIn('plutil -replace PersonaSiriCalls -bool YES', scripts['Siri calls in the Info.plist'])
         self.assertIn('Stamp the commit', scripts)
 

@@ -35,8 +35,11 @@ import (
 //     a thread in any mode takes them. A session issued with `t3 auth session issue` carries T3 Code's narrowest mode
 //     ceiling (approval-required), which would refuse sends to threads in the default full-access mode.
 //
-// What T3 Code does not expose to outside clients stays in T3 Code: permission approvals (its MCP tools cannot answer
-// one), rewinds, worktree management and mode changes. A thread waiting on one shows as blocked in Persona.
+//   - It reads what a live thread waits on, so a thread that asks shows as Needs you, and raises its questions as cards
+//     where T3 Code takes the bridge's answer (t3codebridge_questions.go).
+//
+// What T3 Code does not let the bridge do stays in T3 Code: approvals (its MCP tools cannot answer one), answers in a
+// thread above the bridge's mode ceiling, rewinds, worktree management and mode changes.
 
 // t3codeRuntimeID is the runtime id the T3 Code bridge registers with (and its sessions' space kind and host).
 const t3codeRuntimeID = proto.EngineT3Code
@@ -355,6 +358,7 @@ type t3codeBridge struct {
 	threadOf map[string]string             // Persona session_id -> T3 thread id
 	projects map[string]t3codeProject      // T3 project id -> project
 	threads  map[string]t3codeThreadListed // T3 thread id -> last listed
+	asks     map[string]*t3codeAsk         // "<thread id>/<request id>" -> a question's card (t3codebridge_questions.go)
 	pushed   string                        // last marshalled sessions list
 }
 
@@ -380,6 +384,10 @@ type t3codeThreadListed struct {
 	ItemCount          int    `json:"itemCount"`
 	Settled            bool   `json:"settled"`
 	UpdatedAt          string `json:"updatedAt"`
+
+	// pending is how many approvals and questions the thread waits on (its read's pendingRequestCount), read for live
+	// threads only; nil when not read or from a server that does not count them.
+	pending *int
 }
 
 func newT3CodeBridge(mcp *t3codeMCP, conn net.Conn, logf func(string, ...any)) *t3codeBridge {
@@ -391,6 +399,7 @@ func newT3CodeBridge(mcp *t3codeMCP, conn net.Conn, logf func(string, ...any)) *
 		threadOf: map[string]string{},
 		projects: map[string]t3codeProject{},
 		threads:  map[string]t3codeThreadListed{},
+		asks:     map[string]*t3codeAsk{},
 	}
 }
 
@@ -439,7 +448,8 @@ func (b *t3codeBridge) run(ctx context.Context, version string) error {
 	}
 }
 
-// refresh lists T3 Code's projects and threads and pushes them as sessions when they changed.
+// refresh lists T3 Code's projects and threads, with what the live ones wait on, pushes them as sessions when they
+// changed, and keeps the cards of their questions up to date.
 func (b *t3codeBridge) refresh(ctx context.Context) error {
 	projects, err := b.listProjects(ctx)
 	if err != nil {
@@ -449,6 +459,8 @@ func (b *t3codeBridge) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	b.readPending(ctx, threads)
+	defer b.syncQuestions(ctx, threads)
 	threadOf := map[string]string{}
 	byID := map[string]t3codeThreadListed{}
 	out := make([]map[string]any, 0, len(threads))
@@ -571,13 +583,22 @@ func t3codeMode(runtimeMode, interactionMode string) string {
 	return ""
 }
 
-// t3codeStatus is the Persona status of a thread's status (idle, or its latest run's).
-func t3codeStatus(status string, items int) string {
+// t3codeStatus is the Persona status of a thread's status (idle, or its latest run's) and the approvals and questions
+// it waits on (nil: not known). A run that asks keeps running in T3 Code, so only the count says it waits on the user;
+// "waiting" is background work the run still holds (T3 Code's threadStatus). From a server that does not count, the
+// count is nil and "waiting" stays the only sign of one.
+func t3codeStatus(status string, items int, pending *int) string {
+	if pending != nil && *pending > 0 {
+		return proto.StatusBlocked
+	}
 	switch status {
 	case "preparing", "queued", "starting", "running":
 		return proto.StatusWorking
 	case "waiting":
-		return proto.StatusBlocked // an approval or a question, answered in T3 Code
+		if pending != nil {
+			return proto.StatusWorking
+		}
+		return proto.StatusBlocked
 	case "interrupted", "cancelled":
 		return proto.StatusInterrupted
 	case "completed", "failed", "rolled_back":
@@ -607,7 +628,7 @@ func mapT3CodeThread(th t3codeThreadListed, p t3codeProject) (map[string]any, st
 		"session_id": sid,
 		"title":      title,
 		"cwd":        cwd,
-		"status":     t3codeStatus(th.Status, th.ItemCount),
+		"status":     t3codeStatus(th.Status, th.ItemCount, th.pending),
 		"updated_at": updated,
 		"rev":        updated.UnixMilli(),
 		"agent":      t3codeAgent(th.ProviderInstanceID),

@@ -241,11 +241,13 @@ only the prompt and the answer travel.
     When the installed `agy` advertises native per-session `systemPrompt.append` over `agy acp`, the node reuses at most
     one on-demand isolated warm `agy acp` worker (`--include-default-customizations=false --disable-telemetry`, `mcpServers: []`,
     per-session `session/new._meta.antigravity.systemPrompt.append`, immediate per-session cleanup after `session/close`,
-    120s idle eviction, and 50-request rotation), transparently falling back to cold `agy -p` on slash-command prompts,
+    120s idle eviction, and 50-request rotation; its reuse key includes the stat of `antigravity-oauth-token` and, on macOS,
+    the dates of the login-keychain sign-in item, so a new sign-in starts a new worker, #17860), transparently falling back to cold `agy -p` on slash-command prompts,
     conflicting model/effort arguments, concurrent second requests, missing capabilities, or transient startup failures;
     unexpected permission, elicitation, or tool requests fail closed and destroy the worker (any error or abnormal
     `stopReason` such as `cancelled` or unknown also destroys the worker, while normal terminal stops—omitted/empty,
-    `end_turn`, `max_tokens`, `max_turn_requests`, or `refusal`—preserve the answer and warm worker).
+    `end_turn`, `max_tokens`, `max_turn_requests`, or `refusal`—preserve the answer and warm worker, except that an answer which
+    is only agy's quota or sign-in error line drops the worker).
 - **Concurrency and time**: at most two runs at a time on one computer; others wait for a slot within their own time.
   The call's deadline goes along as `timeout_ms` (2 minutes without one, at most 10); when the manager stops waiting it
   sends `rpc.cancel` and the node kills the run. Each run pays a CLI start (seconds) on top of the answer, so this suits

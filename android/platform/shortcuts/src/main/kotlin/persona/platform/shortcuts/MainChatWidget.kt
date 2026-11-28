@@ -1,6 +1,8 @@
 package persona.platform.shortcuts
 
+import android.appwidget.AppWidgetManager
 import android.content.Context
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import android.content.res.Configuration
 import android.os.Build
 import androidx.compose.runtime.Composable
@@ -92,12 +94,21 @@ class MainChatWidget : GlanceAppWidget() {
             val pendingList by interactions.pending.collectAsState()
             val settledPairing by runtime.mainChatLivePairing.collectAsState()
             val activePairing = if (paired) feed.activePairing()?.takeIf(String::isNotBlank) else null
+            val appWidgetId = remember(id) {
+                runCatching { GlanceAppWidgetManager(context).getAppWidgetId(id) }
+                    .getOrDefault(AppWidgetManager.INVALID_APPWIDGET_ID)
+            }
+            val binding = remember(activePairing, appWidgetId, revision) {
+                ConversationWidgetPrefs.read(context, appWidgetId, activePairing)
+            }
+            val conversationKey = binding?.conversationKey ?: ConversationWidgetPrefs.MAIN_CONVERSATION_KEY
             val live = MainChatWidgetState.build(
                 paired = paired,
                 assistant = assistantSnapshot,
                 sessions = sessionList,
                 interactions = pendingList,
                 resources = context.resources,
+                targetBinding = binding,
             )
             val liveSettled = MainChatWidgetState.isLiveSettled(
                 paired = paired,
@@ -107,20 +118,20 @@ class MainChatWidget : GlanceAppWidget() {
                 sessions = sessionList,
                 interactions = pendingList,
             )
-            val persisted = remember(paired, activePairing, liveSettled, revision) {
-                if (paired && !liveSettled) MainChatWidgetStore.read(context, activePairing) else null
+            val persisted = remember(paired, activePairing, conversationKey, liveSettled, revision) {
+                if (paired && !liveSettled) MainChatWidgetStore.read(context, activePairing, conversationKey) else null
             }
             val snapshot = MainChatWidgetState.selectSnapshot(
                 live = live,
                 persisted = persisted,
                 liveSettled = liveSettled,
             )
-            Content(context, look, snapshot)
+            Content(context, look, snapshot, appWidgetId)
         }
     }
 
     @Composable
-    private fun Content(context: Context, look: MainChatWidgetLook, snapshot: MainChatWidgetSnapshot) {
+    private fun Content(context: Context, look: MainChatWidgetLook, snapshot: MainChatWidgetSnapshot, appWidgetId: Int) {
         val size = LocalSize.current
         val fontScale = context.resources.configuration.fontScale
         val phase = snapshot.phase
@@ -145,7 +156,13 @@ class MainChatWidget : GlanceAppWidget() {
             plan.compactPadding -> Tokens.Space.Standard.xs
             else -> Tokens.Space.Standard.sm
         }
-        val cardIntent = if (snapshot.paired) SurfaceLinks.mainChat(context, snapshot.mainSession) else SurfaceLinks.app(context)
+        val cardIntent = when {
+            !snapshot.paired -> SurfaceLinks.app(context)
+            snapshot.bindingMissing -> ConversationWidgetConfigureActivity.reconfigureIntent(context, appWidgetId)
+            snapshot.isMainChat -> SurfaceLinks.mainChat(context, snapshot.mainSession)
+            snapshot.mainSession != null -> SurfaceLinks.conversation(context, snapshot.mainSession, assistant = snapshot.targetAssistant)
+            else -> SurfaceLinks.mainChat(context, null)
+        }
         val isDark = look.isDark(context)
         val faceDp = if (plan.compactHeader) Tokens.Size.icon else Tokens.Size.wellXS
         val density = context.resources.displayMetrics.density.coerceAtLeast(1f)
@@ -181,6 +198,16 @@ class MainChatWidget : GlanceAppWidget() {
                 return@Column
             }
 
+            if (snapshot.bindingMissing) {
+                Spacer(GlanceModifier.height(sectionGap))
+                Text(
+                    text = context.getString(R.string.shortcuts_widget_binding_missing_hint),
+                    style = look.mutedBody,
+                    maxLines = plan.summaryMaxLines.coerceAtLeast(2),
+                )
+                return@Column
+            }
+
             if (plan.showPendingBanner && snapshot.pending != null) {
                 Spacer(GlanceModifier.height(sectionGap))
                 PendingBanner(context, look, snapshot.pending, snapshot.pendingCount, plan.compactPendingBanner)
@@ -208,7 +235,7 @@ class MainChatWidget : GlanceAppWidget() {
             if (plan.showActionBar) {
                 Spacer(GlanceModifier.defaultWeight())
                 Spacer(GlanceModifier.height(Tokens.Space.Standard.s))
-                QuickActionBar(context, look, plan.expandedActionBar)
+                QuickActionBar(context, look, plan.expandedActionBar, snapshot)
             }
         }
     }
@@ -252,7 +279,7 @@ class MainChatWidget : GlanceAppWidget() {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = context.getString(R.string.shortcuts_main_chat_header_title),
+                    text = if (snapshot.isMainChat || snapshot.title.isNullOrBlank()) context.getString(R.string.shortcuts_main_chat_header_title) else snapshot.title,
                     style = if (plan.compactHeader) look.compactTitle else look.headerTitle,
                     maxLines = 1,
                 )
@@ -379,10 +406,20 @@ class MainChatWidget : GlanceAppWidget() {
     }
 
     @Composable
-    private fun QuickActionBar(context: Context, look: MainChatWidgetLook, expanded: Boolean) {
+    private fun QuickActionBar(
+        context: Context,
+        look: MainChatWidgetLook,
+        expanded: Boolean,
+        snapshot: MainChatWidgetSnapshot,
+    ) {
         val askHint = context.getString(R.string.shortcuts_main_chat_ask_hint)
         val newTodoLabel = context.getString(R.string.shortcuts_new_todo_label)
         val buttonSize = if (expanded) Tokens.MinTouch.android else Tokens.Size.slimBar
+        val askIntent = if (!snapshot.isMainChat && snapshot.mainSession != null) {
+            SurfaceLinks.askConversation(context, snapshot.mainSession, assistant = snapshot.targetAssistant)
+        } else {
+            SurfaceLinks.ask(context)
+        }
         Row(
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -395,7 +432,7 @@ class MainChatWidget : GlanceAppWidget() {
                 }
                 .cornerRadius(Tokens.Radius.Standard.panel)
                 .background(look.inputFill)
-                .clickable(actionStartActivity(SurfaceLinks.ask(context)))
+                .clickable(actionStartActivity(askIntent))
                 .semantics { contentDescription = askHint }
             Row(
                 modifier = askModifier,
@@ -455,6 +492,16 @@ class MainChatWidget : GlanceAppWidget() {
 
 class MainChatWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = MainChatWidget()
+
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        ConversationWidgetPrefs.delete(context, appWidgetIds)
+        super.onDeleted(context, appWidgetIds)
+    }
+
+    override fun onRestored(context: Context, oldWidgetIds: IntArray?, newWidgetIds: IntArray?) {
+        ConversationWidgetPrefs.restore(context, oldWidgetIds, newWidgetIds)
+        super.onRestored(context, oldWidgetIds, newWidgetIds)
+    }
 }
 
 /**

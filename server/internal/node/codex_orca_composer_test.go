@@ -195,7 +195,7 @@ func TestSetAgentsAtGenDropsSupersededCommit(t *testing.T) {
 	n, _, _ := herdrNode(t)
 	n.mu.Lock()
 	epoch := n.engEpoch
-	n.agentsGen = 2
+	n.agentsGen, n.agentsCommitted = 2, 2
 	n.agents[cxID] = host.Agent{Agent: "codex", PaneID: "orca:tab1:leaf1", Cwd: orcaCwd}
 	n.mu.Unlock()
 
@@ -208,6 +208,93 @@ func TestSetAgentsAtGenDropsSupersededCommit(t *testing.T) {
 	n.mu.Unlock()
 	if got.PaneID != "orca:tab1:leaf1" {
 		t.Fatalf("superseded setAgentsAtGen overwrote newer live binding: %+v", got)
+	}
+}
+
+// A merge taken before a newer one that is still running commits: dropped for it, its refresh's caller would read the
+// agents from before both, none right after an engine switch (#17826). The newer one, written next, still wins, and
+// the older one after it is dropped.
+func TestSetAgentsAtGenCommitsBeforeANewerRunningMerge(t *testing.T) {
+	n, _, _ := herdrNode(t)
+	n.mu.Lock()
+	epoch := n.engEpoch
+	n.agentsGen = 2 // merges 1 and 2 are taken; neither is written
+	n.agents[cxID] = host.Agent{Agent: "codex", PaneID: "orca:tab1:leaf1", Cwd: orcaCwd}
+	n.mu.Unlock()
+	heard := map[string]bool{host.Orca: true}
+
+	if committed, changed := n.setAgentsAtGen(nil, epoch, 1, heard); !committed || changed {
+		t.Fatalf("merge 1 before a running merge 2: committed=%v epochChanged=%v, want true, false", committed, changed)
+	}
+	if _, ok := n.agent(cxID); ok {
+		t.Fatal("merge 1 did not replace the agents from before it")
+	}
+	if committed, _ := n.setAgentsAtGen(nil, epoch, 2, heard); !committed {
+		t.Fatal("merge 2 after merge 1 was dropped")
+	}
+	if committed, changed := n.setAgentsAtGen(nil, epoch, 1, heard); committed || changed {
+		t.Fatalf("merge 1 after merge 2: committed=%v epochChanged=%v, want false, false", committed, changed)
+	}
+}
+
+// A refresh whose snapshot a newer one superseded, while that newer one is still merging, returns with the newer
+// snapshot's agents listed, never its own older ones: its caller (sessions.list, the list engine.use sends) reads the
+// agents next, and before #17826 it got the ones from before both refreshes, none right after an engine switch.
+func TestRefreshHostsSupersededSnapshotListsTheNewerOne(t *testing.T) {
+	ctx := context.Background()
+	n, _, o, procs, home := orcaNode(t)
+	writeOrcaCodexRollout(t, home, orcaCwd, cxUserLine("hello"))
+	procs.set("tab1:leaf1", orcaProc{pid: 5153, agent: "codex"})
+	n.mu.Lock()
+	n.panes["orca:tab1:leaf1"] = cxID
+	n.mu.Unlock()
+	o.SetWorktrees(orcarttest.Worktree("repo::"+orcaCwd, orcaCwd, "refs/heads/feature-x",
+		orcarttest.Agent("tab1:leaf1", "codex", "done")))
+	o.SetTerminals() // nothing listed yet; the layout cache primed, so the older refresh lists once
+	if err := n.refreshHosts(ctx); err != nil {
+		t.Fatalf("prime refreshHosts: %v", err)
+	}
+
+	codexTerm := orcaTerm("term_1", "tab1", "leaf1", "codex")
+	olderStarted, releaseOlder := make(chan struct{}), make(chan struct{})
+	var listCalls atomic.Int32
+	o.Handle("terminal.list", func(map[string]any) any {
+		if listCalls.Add(1) == 1 {
+			close(olderStarted)
+			<-releaseOlder
+			return map[string]any{"terminals": []any{}}
+		}
+		return map[string]any{"terminals": []any{codexTerm}}
+	})
+	errCh := make(chan error, 1)
+	go func() { errCh <- n.refreshHosts(ctx) }()
+	<-olderStarted
+
+	// A newer refresh's first half (refreshHostInventoryWithFailures): its snapshot is in hostAgents and its merge is
+	// taken, not yet written.
+	h := n.hosts.Get(host.Orca)
+	n.mu.Lock()
+	epoch, seq := n.engEpoch, n.nextHostSnapSeqLocked(host.Orca)
+	n.mu.Unlock()
+	agents, _, err := n.lookAtSnapshot(ctx, h, epoch, seq, false, "")
+	if err != nil || len(agents) == 0 {
+		t.Fatalf("newer snapshot: %v, %d agents", err, len(agents))
+	}
+	n.mu.Lock()
+	n.hostAgentsSeq[host.Orca], n.hostAgents[host.Orca] = seq, agents
+	n.agentsGen++
+	n.mu.Unlock()
+
+	close(releaseOlder)
+	if err := <-errCh; err != nil {
+		t.Fatalf("older refreshHosts: %v", err)
+	}
+	assertCodexLiveWritable(t, n, "orca:tab1:leaf1")
+	n.mu.Lock()
+	kept := len(n.hostAgents[host.Orca])
+	n.mu.Unlock()
+	if kept == 0 {
+		t.Fatal("the older empty snapshot replaced the newer one in hostAgents")
 	}
 }
 

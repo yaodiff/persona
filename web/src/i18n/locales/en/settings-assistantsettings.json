@@ -193,5 +193,8 @@
   "owner_approval_phrases": "Approval phrases, one per line",
   "owner_approval_phrases_hint": "1–8 unique phrases, 1–32 characters each. Surrounding whitespace is ignored and Latin letter case does not matter; partial or fuzzy matches never approve.",
   "owner_approval_save_phrases": "Save phrases",
-  "owner_approval_unconfirmed": "The assistant did not confirm the exact-approval settings. Reload before trying again."
+  "owner_approval_unconfirmed": "The assistant did not confirm the exact-approval settings. Reload before trying again.",
+  "supervision_triage": "Review routine follow-ups in briefings",
+  "supervision_triage_hint": "The Sorting model wakes the supervisor only when a routine update needs attention soon. Other updates appear in the morning and evening briefings.",
+  "supervision_triage_unconfirmed": "The hub did not confirm this setting. Reload before trying again."
 }

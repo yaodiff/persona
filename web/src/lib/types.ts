@@ -342,9 +342,12 @@ export interface Session {
    *  once its turn is over, resuming the same conversation (#6476, node/mode_restart.go); `permission_mode` is the mode
    *  it still runs in until then. */
   bypass_pending?: boolean;
-  /** On a botmux session whose botmux instance does not advertise ownerActor, sends go through the untrusted
-   *  external-event trigger; the composer shows a one-line notice. */
+  /** On a botmux session whose sends go through the untrusted external-event trigger (botmux does not advertise
+   *  ownerActor, or no BotMux Owner Union ID is set), the composer shows a one-line notice. */
   botmux_external_trigger?: boolean;
+  /** Why, when `botmux_external_trigger` is set: `upgrade` (botmux before 3.59.23) or `owner_unset` (Settings › Agents
+   *  has no BotMux Owner Union ID). Absent from an older node: the upgrade notice. */
+  botmux_external_trigger_reason?: "upgrade" | "owner_unset";
   /** What the model saw in the latest reply and the model's window, in tokens (#2430); omitted while the node cannot tell. */
   context_tokens?: number;
   context_restart_recommended?: boolean;

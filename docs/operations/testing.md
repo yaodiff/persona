@@ -12,6 +12,7 @@ cd apple/Packages/PersonaKit && swift test                             # Persona
 cd apple/Packages/PersonaWire && swift test -Xswiftc -warnings-as-errors # PersonaWire unit tests, warnings as errors as CI runs them
 cd apple/Packages/PersonaModuleAPI && swift test -Xswiftc -warnings-as-errors # module contract and registry (#13432, docs/apple/ios.md "Modules")
 python3 -B scripts/test/test_sim_boot.py                               # sim-boot.sh (fake xcrun / simslim, no simulator)
+(cd web && npm run build && npm run test:e2e)                          # P0 Playwright UI suite against local vite preview
 n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do grep -q unittest "$f" || continue; n=$((n + 1)); (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"; done; echo "$n suites, failed:${failed:- none}"; [ -z "$failed" ]   # all Python suites in scripts/, like CI (it skips files that never mention unittest); any failure exits nonzero
 ```
 
@@ -35,6 +36,7 @@ gh workflow run ci.yml --ref main -f full=true                       # full suit
 gh workflow run ci.yml --ref main -f lanes=all -f full=false         # equivalent explicit lane choice
 gh workflow run ci.yml --ref <branch> -f full=false -f lanes=server,web
 gh workflow run ci.yml --ref <branch> -f full=false -f lanes=auto -f base=<commit>
+gh workflow run web-ui-e2e.yml --ref <branch>                        # P0 Playwright Web UI suite (manual only, never runs on PRs)
 gh workflow run apple-test.yml --ref main -f lane=ios                # iOS and embedded Watch
 gh workflow run apple-test.yml --ref main -f lane=macos
 gh workflow run pr-needs-issue.yml --ref main -f pr_number=<number>  # metadata enforcement
@@ -137,7 +139,7 @@ setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 | --- | --- | --- | --- | --- |
 | Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, the programs and tunnel tests with `server/build-tags.txt`, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
 | Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest in two disjoint native file shards, production build and privacy; the core-only build and suite use the same two shards | ubuntu-latest, two lanes | 2–4 / 4–7 min |
-| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion checker tests, translations/literals, token and motion ratchets, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056); each shard's job timeout is 90 minutes, while individual checks retain their own timeout and final verdict |
+| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion/Compose-budget/nested-exception checker tests, translations/literals, token, motion and Compose budget ratchets, nested exception name rules, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056); each shard's job timeout is 90 minutes, while individual checks retain their own timeout and final verdict |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests, and in the iOS lane the isolation lint with its own tests (`scripts/test/isolation-lint.sh`; `docs/apple/performance.md`, "Isolation lint") and the no-CallKit check of the device and simulator apps (`scripts/release/check_no_callkit.py`; `docs/operations/release.md`, "No CallKit"); synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
 | iOS 18.6 compatibility / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios18` | offline `PersonaTests` at the deployment floor, with iPhone 16 Pro and iPad layout coverage, separate HTML batches and a test-host restart check | macos-15 (arm64), Xcode 26.3 | one runner for up to 150 minutes per manual dispatch, about 8.86 GB to download a missing runtime |
 | Scripts/docs / `.github/workflows/scripts-tests.yml` | `scripts/ci/scripts.sh` | every Python script test, doc/code paths and index, layout/shell/Python compatibility, privacy-rule regression, catalog/translation/token checks, actionlint, issue-link logic, website worker | ubuntu-latest | 2–4 / 4–7 min |
@@ -333,6 +335,8 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
 | Android tokens | hard-coded values and Material 3 components per file | `android/core/designsystem/tools/token-baseline.json` | `scripts/app/android_token_baseline.py` (Android lane, check-fast) | `--update-baseline` |
 | Android motion | literal animation specs per file | `android/core/designsystem/tools/motion-baseline.json` | `scripts/app/android_motion_baseline.py` (Android lane, check-fast) | `--update-baseline` |
 | Android slot order | design-system components that end after their slot | `android/core/designsystem/tools/slot-order-baseline.json` | `scripts/app/android_slot_order.py` (Android lane, check-fast) | `--update-baseline` |
+| Android Compose budget | per `@Composable` function, its code lines, `remember*` calls and effects over the caps (400, 30, 12); a count the baseline does not list is held to its cap | `scripts/app/android_compose_budget_baseline.json` | `scripts/app/android_compose_budget.py` (Android lane, scripts lane, check-fast) | `--update-baseline` |
+| Android nested exception names | nested Throwables whose outer class no `-keepnames` / `-keep` rule names, so R8 drops their simple name (`docs/android/android.md`, "Release shrinking") | `scripts/app/android_nested_throwables_baseline.json` | `scripts/app/android_nested_throwables.py` (Android lane, scripts lane, check-fast) | `--update-baseline` |
 
 - **Only a rise fails.** A count at or under its baseline passes; under it, the check says so and how to lower the baseline.
   A change that takes sleeps, font sizes or hard-coded text out need not touch the baseline at all, which keeps baseline files out
@@ -608,7 +612,7 @@ Path mapping (a new mapping is a rule in check-fast's per-path table, `scripts/c
 | `spec/fixtures/**`, `schema/<dir>/**` (each schema family: `extension`, `wire`, `configuration`), `integrations/**`, `docs/<file>`, `scripts/test/server_test_env.py` | In addition to other checks in this table, `go test ./internal/<package>/...` for server packages reading these files (repository inputs covered by `server-test.yml` filters). At runtime, `git grep` finds packages referencing the path in `server/**/*_test.go` (strings or `filepath.Join` components; `//` comment lines excluded), so new readers need no script changes; other `spec/` files remain unmapped |
 | `apple/**`, `android/**` | In addition to other checks in this table, `go test` on the server packages whose tests name the changed file whole, in quotes (`internal/proto` reads `"apple/Shared/Models.swift"` for its Swift contract checks; a longer string such as a wire sample's `"apple/Shared/Models.swift: Fold"` does not count). One search lists every client path the server tests name, and the changed paths are matched against it, so a change of thousands of client files costs the same (#11250). CI's server lane covers these client sources too (`SERVER_CLIENT_INPUTS` in `scripts/ci/paths.py`) |
 | `spec/**`, `schema/**` read by a runtime package | In addition to other checks in this table, the tests of each `integrations/<pkg>` and of `sdk/ts` whose files name the changed path or a directory it is in, outside a comment line (`integrations/runtime-sdk` reads `spec/fixtures/input-clip/cases.json`, `sdk/ts` reads `schema/extension/examples/`). Found at run time with `git grep`; CI's runtimes lane runs for all of `spec/` and `schema/` |
-| `android/**`, `scripts/app/*android*` (including the `test_android_*` self-tests) | `scripts/app/android_i18n_check.py` and Android checker unittests (i18n, token and motion baselines; no Gradle build) |
+| `android/**`, `scripts/app/*android*` (including the `test_android_*` self-tests) | `scripts/app/android_i18n_check.py`, the token, motion, slot order, Compose budget and nested exception name checks, and Android checker unittests (i18n, token and motion baselines; no Gradle build) |
 | `.github/**` | `scripts/test/pr_needs_issue_test.mjs` |
 | `.github/workflows/*.yml`, `scripts/ci/*.sh`, `scripts/ci/*.py`, `scripts/operations/*.py`, `scripts/operations/*watch*.json`, `scripts/operations/*watch*.service`, `.claude/skills/pr-review-merge-loop/**`, `.claude/skills/main-verify-fix-loop/**` (not `test_*` files) | Also `scripts/test/test_heavy_slot.py`: a CI lane or a watcher step that names a script taking a heavy slot must set `PERSONA_HEAVY_SLOTS=0` ("Heavy build slots" above). A new lane script once broke it with nothing local running it (#11026) |
 | `schema/**` | `scripts/test/test_extension_schema.py`, `scripts/test/test_sdk_bundle.py`, plus `go test ./...` in sdk/go (the same three checks as CI's Extension schema job) |
@@ -834,9 +838,9 @@ For each edition the app receives a real single-use `jp_…` code from `POST /ap
 `-openPairLink`, without `-pairURL` (whose presence would skip the credential exchange). The driver reads the fresh sessions,
 Inbox and To-dos API responses before pairing, then drives the actual app through the DEBUG Runtime CLI: active pairing, the
 real hello's module registry, Agents with its synthetic offline computer, the empty Inbox / To-dos pages, the drawer, Settings home and Advanced, Connectors,
-Channels, Extensions, Devices and the main-chat composer. Both Inbox styles check the shared retained-source rule (#17399):
-a fresh core-only hub has no Lark chip or Lark/mail empty-state wording and uses the generic message, while the full hub keeps
-its current chip and wording; @Me / DM / Group filters remain unchanged. The current device must be marked in Devices, a second exchange of
+Channels, Extensions, Devices and the main-chat composer. Both Inbox styles check the shared retained-source rule (#17399, #17814):
+a fresh core-only hub has no Lark or Mail chip or Lark/mail empty-state wording and uses the generic message, while the full hub keeps
+its current chips and wording; @Me / DM / Group filters remain unchanged. The current device must be marked in Devices, a second exchange of
 the pair code must answer 401, and the app must still answer at the end. Health, Screen Share, Voice, recording-write,
 Mail and Lark entry assertions are checked against the full-hub positive control. The recording archive's read entry remains
 available in both editions. Each hub declares only a synthetic offline computer named `Fixture Computer`. After the initial

@@ -174,6 +174,11 @@ export function useExtensionConfiguration(id: string, binding: ExtensionBinding,
   const typed = state.draft?.typed ?? NO_TYPED;
   const dirty = state.draft?.dirty ?? false;
   const problems = useMemo(() => numberProblems(typed), [typed]);
+  const edits = useMemo(() => detail && state.draft?.dirty
+    ? draftEdits(state.draft.draft, state.draft.base, requiredLists(detail)) : [], [detail, state.draft]);
+  const pendingCount = edits.filter(({ path }) => !resource.isSavingField(fieldPath(path))).length;
+  const saveBarLabel = Object.keys(problems).length ? t("settings-extensions.not_a_number")
+    : pendingCount > 0 ? t("settings-extensions.fields_to_save", { count: pendingCount }) : undefined;
   const editable = !!detail && canEdit(detail);
   const error = state.saveError?.label === "config" ? state.saveError.error : null;
   const refused = configError(error);
@@ -263,7 +268,7 @@ export function useExtensionConfiguration(id: string, binding: ExtensionBinding,
     const submitted: Draft = { base: config, draft: before, typed: NO_TYPED, dirty: true };
     try {
       await resource.save({
-        label: "config", refreshBefore: true,
+        label: "config", immediateField: fieldPath(path), refreshBefore: true,
         prepare: (remote) => prepareWrite(resource, remote, submitted, { path, previous, value }),
       });
     } catch (error) {
@@ -277,7 +282,7 @@ export function useExtensionConfiguration(id: string, binding: ExtensionBinding,
   };
 
   return {
-    detail, draft, typed, dirty, problems, editable, fieldErrors, checkFailed,
+    detail, draft, typed, saveBarLabel, problems, editable, fieldErrors, checkFailed,
     error: state.readError && !isAbort(state.readError) ? errorText(state.readError) : "",
     loading: state.loading, saving: state.saving === "config", toggling: state.saving !== null && state.saving !== "config",
     canSave: editable && dirty && !Object.keys(problems).length && !state.saving && !state.unconfirmed,

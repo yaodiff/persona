@@ -558,6 +558,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.SupervisionBatchMinutes != nil {
 			v.SupervisionBatchMinutes = in.SupervisionBatchMinutes
 		}
+		if in.SupervisionTriage != nil {
+			v.SupervisionTriage = in.SupervisionTriage
+		}
 		if in.AutoSupervisionMode != "" {
 			// The mode wins over the older switch in the same body, and keeps it in step for older readers.
 			on := in.AutoSupervisionMode != supervisionModeOff

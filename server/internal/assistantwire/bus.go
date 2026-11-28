@@ -281,9 +281,10 @@ type HTTPResponse struct {
 }
 
 const (
-	StarredImportPath        = "/api/v1/assistant/starred/import"
-	StarredImportPreviewPath = StarredImportPath + "/preview"
-	StarredImportBodyMax     = 8 << 20
+	StarredImportPath            = "/api/v1/assistant/starred/import"
+	StarredImportPreviewPath     = StarredImportPath + "/preview"
+	StarredImportBodyMax         = 8 << 20
+	RouteBackendWorkspacePrepare = "POST /api/v1/todos/{id}/backend-workspace/prepare"
 )
 
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
@@ -398,7 +399,7 @@ var Routes = []string{
 	"GET /api/v1/todos/{id}/repositories",
 	"GET /api/v1/todos/{id}/backend-workspace",
 	"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}",
-	"POST /api/v1/todos/{id}/backend-workspace/prepare",
+	RouteBackendWorkspacePrepare,
 	"POST /api/v1/todos/{id}/backend-workspace/start",
 	"POST /api/v1/todos/{id}/backend-workspace/cancel",
 	"POST /api/v1/todos/{id}/backend-workspace/cleanup",

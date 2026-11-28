@@ -868,36 +868,40 @@ func (tb *treeBuild) sessionNode(machine, id, title, agent string) treeAgent {
 	return n
 }
 
-// sessionKids are the Agents under session machine/id that are not to-do Agents: its running in-session sub-agents
+// sessionKids are the Agents under session machine/id that are not to-do Agents: its reported in-session sub-agents
 // (nested by the sub-agent that launched each) and its Codex sub-agent sessions still going.
 func (tb *treeBuild) sessionKids(machine, id, agent string, seen map[[2]string]bool) []treeAgent {
 	var out []treeAgent
 	if c, ok := tb.sessions[[2]string{machine, id}]; ok {
-		running := map[string]bool{}
+		reported := map[string]bool{}
+		byParent := map[string][]int{}
+		for i, a := range c.Subagents {
+			reported[a.ID] = true
+			byParent[a.ParentID] = append(byParent[a.ParentID], i)
+		}
+		var appendNode func([]treeAgent, proto.Subagent) []treeAgent
+		appendNode = func(nodes []treeAgent, a proto.Subagent) []treeAgent {
+			sid := cmp.Or(a.SessionID, id+"@"+a.ID)
+			key := [2]string{machine, sid}
+			if seen[key] {
+				return nodes
+			}
+			seen[key] = true
+			n := treeAgent{MachineID: machine, SessionID: sid, Title: cmp.Or(a.Description, a.Type),
+				Agent: cmp.Or(agent, c.Agent), State: cond(a.Running, proto.StateWorking, proto.StateIdle)}
+			for _, i := range byParent[a.ID] {
+				n.Children = appendNode(n.Children, c.Subagents[i])
+			}
+			return append(nodes, n)
+		}
 		for _, a := range c.Subagents {
-			if a.Running {
-				running[a.ID] = true
+			if a.ParentID == "" || a.ParentID == a.ID || !reported[a.ParentID] {
+				out = appendNode(out, a)
 			}
 		}
-		launcher := func(a proto.Subagent) string { // "": the session itself
-			return cond(a.ParentID != a.ID && running[a.ParentID], a.ParentID, "")
+		for _, a := range c.Subagents { // launched by one another in a loop: at the top, so none is lost
+			out = appendNode(out, a)
 		}
-		var under func(parent string, all bool) []treeAgent
-		under = func(parent string, all bool) []treeAgent {
-			var kids []treeAgent
-			for _, a := range c.Subagents {
-				sid := cmp.Or(a.SessionID, id+"@"+a.ID)
-				if !a.Running || seen[[2]string{machine, sid}] || !all && launcher(a) != parent {
-					continue
-				}
-				seen[[2]string{machine, sid}] = true
-				kids = append(kids, treeAgent{MachineID: machine, SessionID: sid, Title: cmp.Or(a.Description, a.Type),
-					Agent: cmp.Or(agent, c.Agent), State: proto.StateWorking, Children: under(a.ID, false)})
-			}
-			return kids
-		}
-		out = append(out, under("", false)...)
-		out = append(out, under("", true)...) // launched by one another in a loop: at the top, so none is lost
 	}
 	for _, kid := range tb.codexKid[[2]string{machine, id}] {
 		k := [2]string{machine, kid.SessionID}

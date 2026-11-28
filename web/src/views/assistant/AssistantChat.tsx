@@ -4,7 +4,7 @@
 // model is the composer's model pill (views/chat/ModelPill.tsx AssistantModelPill, #5033).
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { assistantInfoText, conversationKey, effectiveLauncher, shortModel, usePickedLauncher } from "../../lib/assistant-chat";
-import { isBackgroundSupervisor } from "../../lib/background-supervisor";
+import { isBackgroundSupervisor, isBackgroundSupervisorInteraction } from "../../lib/background-supervisor";
 import { COMPACT_FEATURE, COMPACT_REQUESTED_EVENT, compactionView, NEW_MAIN_FEATURE, type CompactionView } from "../../lib/compaction";
 import { runtimeFallbackText } from "../../lib/runtime-fallback";
 import { personaState } from "../../lib/persona";
@@ -31,7 +31,14 @@ export function AssistantFace({ session, last }: { session?: Session; last?: Pic
   const persona = usePersona();
   const conn = useStore((s) => s.conn);
   const machineOnline = useStore((s) => s.machines.find((m) => m.id === (session?.machine_id ?? s.assistant?.machine_id))?.online);
-  const waiting = useStore((s) => (session ? s.interactions.filter((i) => i.machine_id === session.machine_id && i.session_id === session.session_id).length : 0));
+  const waiting = useStore((s) => {
+    if (!session) return 0;
+    const isMainSession = Boolean(s.assistant?.main && s.assistant.main === session.session_id);
+    return s.interactions.filter((i) =>
+      (i.machine_id === session.machine_id && i.session_id === session.session_id) ||
+      (isMainSession && isBackgroundSupervisorInteraction(s.assistant, i, session.manager)),
+    ).length;
+  });
   if (!persona.info && !persona.mochi) return null;
   const state = personaState({ online: conn === "online", machineOnline, state: session?.state, interactions: waiting, last });
   return <PersonaDot size={30} state={state} fallback={null} className="-my-1" />;
